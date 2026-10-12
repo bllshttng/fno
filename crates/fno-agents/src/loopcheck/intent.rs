@@ -93,6 +93,16 @@ fn valid_watch_task_id(task_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
+pub(crate) fn declared_recovery_hold(text: &str) -> Option<String> {
+    match detect_intent_from_text(text) {
+        Intent::Promise => Some("mission_complete".into()),
+        Intent::Aborted { .. } => Some("mission_aborted".into()),
+        Intent::Watching { reason, .. } => Some(format!("{reason}_watch")),
+        Intent::None if text.contains("<help") => Some("declared_help".into()),
+        Intent::None => None,
+    }
+}
+
 pub(crate) fn parse_xml_attr(tag_text: &str, attr: &str) -> Option<String> {
     let pattern = format!(r#"{attr}=""#);
     let start = tag_text.find(&pattern)? + pattern.len();
@@ -229,7 +239,7 @@ fn enough_entries(lines: &[String]) -> bool {
 /// The last `cap` bytes of the file as complete lines, oldest first. A window
 /// that starts mid-line drops that torn line; a window covering the whole
 /// file keeps its first line.
-fn read_tail_lines(path: &Path, cap: u64) -> Vec<String> {
+pub(crate) fn read_tail_lines(path: &Path, cap: u64) -> Vec<String> {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut file) = std::fs::File::open(path) else {
         return Vec::new();

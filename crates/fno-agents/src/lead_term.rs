@@ -1,4 +1,4 @@
-//! A team's term: the bound a lead declares at coronation so a healthy
+//! A team's term: the bound a lead declares at promotion so a healthy
 //! board can no longer wait forever. Pure reading logic only; the Stop-hook
 //! gate (`loopcheck::lead_decide`) and the declaration verb
 //! (`lead_state::run_lead_term`) call into this module rather than
@@ -215,7 +215,7 @@ pub(crate) fn gate<F: Fn(&str, &str, i64, u64) -> (i32, String)>(
 fn gate_reading_and_message(reading: &TermReading, scope: &str) -> Option<(String, String)> {
     let scope = if scope.is_empty() { "<scope>" } else { scope };
     let handoff = format!(
-        "Hand off: fno agents spawn --crown {scope} --succeed. Or extend with a written \
+        "Hand off: fno agents spawn --promote {scope} --hand-off. Or extend with a written \
          reason: fno agents org term <spec> --reason \"...\"."
     );
     match &reading.state {

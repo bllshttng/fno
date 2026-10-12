@@ -87,15 +87,13 @@ DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
 
 # Default secondary model for routed roles. glm-4.5-air is too weak for
 # reasoning-bearing work; a current flagship GLM does real work. Pin a cheaper
-# model per role via the roles map. Kept in lockstep with the schema default
-# (drift-guarded by test_config_defaults_match_module_constants).
+# model per role via the roles map.
 DEFAULT_SECONDARY_MODEL = "glm-5.3"
 
 # Cheaper model for the background (haiku) tier of the built-in zai provider.
 # Claude Code runs background tasks on haiku; routing the haiku tier to this
 # cheaper GLM keeps judgment-light background traffic cheap while opus/sonnet
-# stay on the role model. Kept in lockstep with the schema default
-# (drift-guarded by test_config_defaults_match_module_constants). glm-4.7 is
+# stay on the role model. glm-4.7 is
 # the vendor's recommended background model; glm-4.5-air left the coding-plan
 # supported set and now fails with a model-not-found error.
 DEFAULT_ZAI_HAIKU_MODEL = "glm-4.7"
@@ -104,8 +102,8 @@ DEFAULT_ZAI_HAIKU_MODEL = "glm-4.7"
 # compaction THRESHOLD, not a window selector: the [1m] variant already selects
 # the 1M context, Claude Code caps the threshold at the model window, and a
 # threshold of 1000000 (the old value) is identical to setting nothing, i.e. no
-# compaction before the ceiling. The king compact nudge fires at ~40%
-# (target.handoff.king_used_pct_trigger) so the agent prepares and compacts
+# compaction before the ceiling. The lead compact nudge fires at ~40%
+# (target.handoff.lead_used_pct_trigger) so the agent prepares and compacts
 # while it still has decision runway; this 80%
 # threshold is the BACKSTOP that catches a worker that ignored it, could not
 # act, or was mid-loop. 800k leaves ~200k runway for the compaction request
@@ -1024,7 +1022,7 @@ def _route_for_target(
     # Item 2: a [1m]-routed worker gets an auto-compact backstop. The [1m]
     # variant selects the 1M context; this threshold (capped at the model
     # window, and precedence over /autocompact/--autocompact/setting) is the
-    # backstop above the king nudge. Injected before extra_env so an explicit
+    # backstop above the lead nudge. Injected before extra_env so an explicit
     # extra_env value still wins.
     if model.endswith("[1m]"):
         route["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = ONE_M_AUTO_COMPACT_WINDOW

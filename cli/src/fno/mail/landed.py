@@ -10,8 +10,10 @@ from typing import Optional
 
 from fno.bus.log import (
     Envelope,
+    CROSS_SESSION_DELIVERY,
     HOSTED_DELIVERY,
     TYPED_DELIVERY,
+    dedupe_by_id,
     iter_messages,
     landed_ids,
     record_landed,
@@ -177,14 +179,15 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
     from fno.config import load_settings
 
     now = _dt.now(tz=_tz.utc)
-    all_msgs = list(iter_messages())
+    all_msgs = dedupe_by_id(iter_messages(), last=True)
     retracted = withdrawn_ids(all_msgs)
     already_landed = landed_ids(all_msgs)
     abandon_ttl = load_settings().inbox.landed_abandon_ttl
     sent = [
         m for m in all_msgs
         if m.kind == "send" and m.from_ == handle and m.id not in retracted
-        and m.id not in already_landed and m.delivery != TYPED_DELIVERY
+        and m.id not in already_landed
+        and m.delivery not in (TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
         and not _age_exceeds(m.ts, abandon_ttl, now)
     ]
     if not sent:

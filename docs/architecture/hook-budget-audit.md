@@ -57,13 +57,11 @@ The table lists every distinct configured command variant. A command used by bot
 
 | Command variant | Registered event(s) | Action |
 |---|---|---|
-| `graph-write-protect.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | Refuses direct writes to the managed graph store. |
-| `claude-config-write-guard.sh` | Claude PreToolUse (`Edit|Write|Bash`) | Refuses protected Claude configuration edits. |
 | `worktree-write-protect.sh` | Claude and Codex PreToolUse (`Edit|Write`) | Refuses edits outside the session's permitted worktree. |
-| `generated-write-guard.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | Refuses writes to generated copies and names their source. |
+| `write-gate.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | One gate for the three write surfaces: refuses direct writes to the graph store, protected Claude configuration edits, and writes to generated copies (naming their source). Policy in `crates/fno-agents/src/hook/write_gate.rs`; the shell file only resolves the binary. |
 | `join-partition-write-guard.sh` | Claude PreToolUse (`Edit|Write`) | Refuses writes to a partition owned by another join participant. |
 | `plan-location-guard.sh` | Claude and Codex PreToolUse (`Write`) / (`Edit|Write`) | Refuses plan writes outside the configured plans directory. |
-| `king-delegation-guard.sh` | Claude PreToolUse (`Edit|Write|NotebookEdit|Bash`) | Refuses a crowned king's direct implementation writes. |
+| `lead-delegation-guard.sh` | Claude PreToolUse (`Edit|Write|NotebookEdit|Bash`) | Refuses a titled lead's direct implementation writes. |
 | `pretooluse-bash-dispatch.sh` | Claude and Codex PreToolUse (`Bash` / `^Bash$`) | Runs Git protection, deployed-binary copy protection, background-process protection, pipe-result protection, recursive-grep protection, and raw-test protection in their previous order. |
 | `session-state.sh claude PreToolUse` | Claude PreToolUse (no matcher) | Marks the session as working. |
 | `session-state.sh claude UserPromptSubmit` | Claude UserPromptSubmit | Marks the session as working. |
@@ -122,7 +120,7 @@ The DeepSeek search was `RIPGREP_CONFIG_PATH= rg -uu -n -g '!.git/**' -g '!**/ta
 
 ## Recorded Guard Decisions
 
-The decision rate is `block / (allow + block)` among rows that carry `type=guard_decision`. The raw project-space logs cover 2026-09-20 20:53:55Z through 2026-09-23 06:14:55Z. The current worktree log covers 2026-09-27 16:47:33Z through 17:42:37Z. These are partial samples, not lifetime rates.
+The decision rate is `block / (allow + block)` among rows that carry `type=guard_decision`. The raw project-space logs cover 2026-09-20 20:53:55Z through 2026-09-23 06:14:55Z. The current worktree log covers 2026-09-27 16:47:33Z through 17:42:37Z. These are partial samples, not lifetime rates. The store now keeps allow rows for 24 hours and block rows for 7 days. A rerun over raw rows counts both inside the last 24 hours. For a longer window, add the `pruned` counts from `fno doctor event signals` to the live rows, so allows and blocks cover the same days.
 
 | Guard | Observed allow | Observed block | Recorded block rate | Coverage |
 |---|---:|---:|---:|---|
@@ -133,7 +131,7 @@ The decision rate is `block / (allow + block)` among rows that carry `type=guard
 | Pipe guard | 0 | 0 | Unknown | No matching rows in the scanned project files; incomplete coverage prevents a zero-fire claim. |
 | Binary-install guard | 0 | 0 | Unknown | No matching rows in the scanned project files; incomplete coverage prevents a zero-fire claim. |
 | Graph-write protection | 47,542 | 1 | 0.0021% | Retained project files only; partial. |
-| King-delegation guard | 355 | 13 | 3.533% | Retained project files only; partial. |
+| Lead-delegation guard | 355 | 13 | 3.533% | Retained project files only; partial. |
 | Join-partition, generated-write, and worktree-write guards | 98 each | 0 each | 0% observed | Retained project files only; partial. |
 | Plan-location guard | 22 | 0 | 0% observed | Retained project files only; partial. |
 
@@ -158,7 +156,7 @@ The capability table's `hooks.<job>` rows, one cell per declared state (`support
 | codex | supported | supported | supported |
 | opencode | supported | supported | supported |
 | pi | supported | supported | supported |
-| agy | supported | impossible (no compaction event; crown lands at session start) | supported |
+| agy | supported | impossible (no compaction event; role lands at session start) | supported |
 | footnote | supported | impossible (in-process compaction fires no hook event) | supported (native: the harness writes fno's own records) |
 | gemini | missing | missing | missing |
 | cursor-agent | missing | missing | missing |

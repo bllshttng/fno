@@ -177,6 +177,9 @@ pub(crate) fn classify_planned_unclaimed(
         if !offerable {
             continue;
         }
+        if crate::backlog_ready::dispatch_hold_verdict(entry, &by_id).is_some() {
+            continue;
+        }
         let facts = json!({
             "status_ready": status_ready,
             "plan_finalized": plan_finalized,
@@ -348,6 +351,8 @@ pub fn run(args: &[String]) -> i32 {
                     .chain([
                         "size",
                         "model",
+                        "provider",
+                        "effort",
                         "dispatch_verb",
                         "dispatch_brief",
                         "mission_id",

@@ -20,7 +20,7 @@
 use crate::identity::session_handle_tier;
 use crate::AgentStatus;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -73,15 +73,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 // keys are `skip_serializing` so they never round-trip. A pre-v10 reader must reject
 // a v10 store rather than mis-read a harness-only row. Accepted set widens to 1..=10.
 //
-// v11 (US9) adds the crown fields (`crown_level`/`crown_scope`/`crown_grantor`),
+// v11 (US9) adds the role fields (`role_level`/`role_scope`/`role_grantor`),
 // mirrored here as additive-optional passthrough so the daemon preserves a
-// spawn-stamped crown across a read-modify-write (a Python-only field would be
+// spawn-stamped role across a read-modify-write (a Python-only field would be
 // dropped when the daemon re-serializes the row). Python's asdict emits them on
 // every written row, so a pre-v11 reader must reject a v11 store rather than
 // TypeError on the unknown keys. Accepted set widens to 1..=11.
 //
 // v12 adds `route_settings_path` - the route-settings file a routed
-// worker was launched with - mirrored here for the same reason as the crown
+// worker was launched with - mirrored here for the same reason as the role
 // fields: a Python-only field is dropped when the daemon re-serializes the row,
 // which would leave the relaunch guard reading None on every row the daemon has
 // touched. Python's asdict emits the key on every written row, so a pre-v12
@@ -187,7 +187,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 //
 // v28 adds `adopted_by_session` - the session that VOUCHED for an
 // adopted row, split out so `spawned_by_session` keeps one meaning and
-// crowning cannot re-attribute a row's cost.
+// promoting cannot re-attribute a row's cost.
 //
 // v29 adds `resolved_sandbox` / `granted_writable_roots` - what a codex thread
 // row's sandbox RESOLVED to server-side and the roots it carries, beside the
@@ -755,8 +755,16 @@ pub fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
 /// Python's `AgentEntry` as `mux: Optional[dict]` (X3 rule).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MuxRef {
+    /// Defaulted so a structurally impossible `{}` ref still decodes; the
+    /// reconcile pass is what clears it.
+    #[serde(default)]
     pub session: String,
+    #[serde(default)]
     pub pane_id: u64,
+}
+
+fn legacy_row_status() -> AgentStatus {
+    AgentStatus::Live
 }
 
 /// One registry row. Optional fields default to `None`; fields not modeled
@@ -825,6 +833,15 @@ pub struct RegistryEntry {
     pub context_used_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u64>,
+    /// Cumulative tool-call counts the sideline activity ramp reads: every
+    /// tool call the session transcript records, and how many results read
+    /// as failures. Written only by the incremental tail scan (`scan_pass`
+    /// in `tool_activity`); the byte offset lives in the daemon's fold, not
+    /// here, so a daemon restart re-reads its transcripts once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_errors: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_measured_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1014,9 +1031,13 @@ pub struct RegistryEntry {
     /// skip when absent (Codex P1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cc_session_id: Option<String>,
+    /// Pre-v2 rows carry no status; Python reads them as `live`.
+    #[serde(default = "legacy_row_status")]
     pub status: AgentStatus,
     #[serde(default)]
     pub last_message_at: Option<String>,
+    /// Python's `AgentEntry` defaults it, so a hand-seeded row may omit it.
+    #[serde(default)]
     pub created_at: String,
     /// Daemon-set PTY field, mirrored in Python's `AgentEntry` as
     /// `pid: Optional[int]`: skip when absent so a round-tripped
@@ -1110,20 +1131,20 @@ pub struct RegistryEntry {
     /// `screen_state: Optional[dict]` (X3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen_state: Option<ScreenStateReport>,
-    /// Crown fields (US9, v11): who holds an orchestrator crown and at what
+    /// Role fields (US9, v11): who holds an orchestrator role and at what
     /// altitude. The Python spawn path is the sole writer (grantor-stamped,
     /// never self-declared); the daemon only custodies them so a spawn-stamped
-    /// crown round-trips losslessly across a read-modify-write - the same X3
+    /// role round-trips losslessly across a read-modify-write - the same X3
     /// passthrough treatment as `inside_leg`/`screen_state`. Skip-when-`None`
-    /// keeps a Rust-authored uncrowned row slim; Python's `asdict` always emits
-    /// the keys, so a crowned Python row round-trips fine. Crown liveness ==
+    /// keeps a Rust-authored unpromoted row slim; Python's `asdict` always emits
+    /// the keys, so a promoted Python row round-trips fine. Role liveness ==
     /// this row's liveness (no separate lifecycle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crown_level: Option<u32>,
+    pub role_level: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crown_scope: Option<String>,
+    pub role_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crown_grantor: Option<String>,
+    pub role_grantor: Option<String>,
     /// Route-settings path (v12): the `route-settings/<sha16>.json`
     /// this worker was launched with, or `None` when it was never routed. The
     /// Python spawn seams are the sole writers and the Python relaunch paths
@@ -1131,7 +1152,7 @@ pub struct RegistryEntry {
     /// survives a read-modify-write - without this mirror the daemon's next GC
     /// or screen-state write would drop it and the relaunch guard would read
     /// `None` on every row it had touched. Same X3 passthrough treatment as
-    /// `crown_*`. A path, never route contents: that file is 0600 and carries a
+    /// `role_*`. A path, never route contents: that file is 0600 and carries a
     /// live `ANTHROPIC_AUTH_TOKEN`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_settings_path: Option<String>,
@@ -1234,8 +1255,8 @@ pub struct RegistryEntry {
     ///
     /// FROZEN at its first real value: the resume write-back stamps the
     /// column only while it holds `None`/`unknown`, so the name never moves
-    /// after the crowning resolution. It is the baseline the lead check-in's
-    /// drift judge reads, and a mid-reign refresh would mask the drift a
+    /// after the promoting resolution. It is the baseline the lead check-in's
+    /// drift judge reads, and a mid-term refresh would mask the drift a
     /// narrowed resolution caused.
     ///
     /// Distinct from `sandbox_posture`, which records what the spawn REQUESTED
@@ -1630,9 +1651,9 @@ impl RegistryEntry {
         branch.harness_session_id = Some(successor_session_id.to_string());
         branch.predecessor_session_ids.clear();
         branch.forked_from_session_id = Some(predecessor_session_id.to_string());
-        branch.crown_level = None;
-        branch.crown_scope = None;
-        branch.crown_grantor = None;
+        branch.role_level = None;
+        branch.role_scope = None;
+        branch.role_grantor = None;
         branch.short_id.clear();
         branch.session_id = None;
         branch.claude_session_uuid = None;
@@ -1961,46 +1982,14 @@ pub fn load_registry(path: &Path) -> Result<Registry, StateError> {
 /// partial read) must refuse to serve, never publish the dropped subset as the
 /// complete roster.
 pub fn load_registry_with_counts(path: &Path) -> Result<(Registry, usize), StateError> {
-    // Lock the SAME sidecar `update_registry` locks (shared mode here), not the
-    // data file. Python `fno` writers use `<agents>/locks/_registry.lock`; Rust
-    // must use that exact path or the two implementations can read and replace
-    // snapshots concurrently. Locking the data file directly would not exclude
-    // either sidecar-based writer and would reintroduce the rename-invalidates-
-    // fd footgun.
-    // Acquire the lock FIRST, then decide existence: a `!path.exists()` check
-    // before the lock could race a concurrent writer creating registry.json and
-    // return a stale empty registry (Codex P2). The open-after-lock below is the
-    // authoritative existence check.
-    let lock = acquire_shared(&registry_lock_path(path))?;
-    let result = match OpenOptions::new().read(true).open(path) {
-        Ok(file) => read_registry_tolerant(path, &file),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let _ = lock.unlock();
-            return Ok((Registry::default(), 0));
-        }
-        Err(e) => {
-            let _ = lock.unlock();
-            return Err(e.into());
-        }
-    };
-    let _ = lock.unlock();
-    result
+    decode_registry_value(path, crate::registry_store::read(path)?)
 }
 
 /// Best-effort registry read for metadata that must not hold up delivery.
 /// A writer owning the lock never blocks the read: publishes are atomic
 /// (tempfile + rename), so the unlocked read still sees one whole registry.
 pub fn try_load_registry(path: &Path) -> Result<Option<Registry>, StateError> {
-    let lock = try_acquire_shared(&registry_lock_path(path))?;
-    let result = match OpenOptions::new().read(true).open(path) {
-        Ok(file) => read_registry_tolerant(path, &file),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((Registry::default(), 0)),
-        Err(error) => Err(error.into()),
-    };
-    if let Some(lock) = lock {
-        let _ = lock.unlock();
-    }
-    result.map(|(registry, _)| Some(registry))
+    load_registry(path).map(Some)
 }
 
 /// The raw on-disk row count the typed decode is reconciled against:
@@ -2047,13 +2036,11 @@ pub fn registry_row_divergence_msg(path: &Path, raw_rows: usize, decoded_rows: u
 /// successful empty roster. The one exception stays the forward-schema retry
 /// below, where every dropped row is announced; the daemon's startup assertion
 /// still refuses that partial read before serving.
-fn read_registry_tolerant(path: &Path, mut file: &File) -> Result<(Registry, usize), StateError> {
-    let mut buf = String::new();
-    file.read_to_string(&mut buf)?;
-    if buf.trim().is_empty() {
-        return Ok((Registry::default(), 0));
-    }
-    let probe: serde_json::Value = serde_json::from_str(&buf)?;
+pub(crate) fn decode_registry_value(
+    path: &Path,
+    probe: serde_json::Value,
+) -> Result<(Registry, usize), StateError> {
+    let buf = serde_json::to_string(&probe)?;
     let raw_rows = registry_raw_row_count(&probe);
     let mut reg: Registry = match serde_json::from_str::<Registry>(&buf) {
         Ok(reg) => {
@@ -2072,87 +2059,17 @@ fn read_registry_tolerant(path: &Path, mut file: &File) -> Result<(Registry, usi
             reg
         }
         Err(typed_err) => {
-            // A newer writer can widen a field's VALUES, not only add keys, and
-            // `AgentStatus` has no catch-all variant -- so one row carrying a
-            // status this binary has never heard of failed the WHOLE file at
-            // serde and took the daemon's registry reads down with it. Tolerating
-            // added keys alone left that door open.
-            //
-            // Retry per row, keeping the ones this binary can represent, but ONLY
-            // when the store says it is newer than us. At or below our own schema
-            // an unparseable row is a writer bug and stays fatal -- and since
-            // it is fatal BY NAME when rows were on disk: the error
-            // carries the raw and decoded counts so a lost roster can never read
-            // as a valid empty one downstream.
-            let on_disk = probe
-                .get("schema_version")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            if on_disk <= REGISTRY_SCHEMA_VERSION as u64 {
-                if raw_rows > 0 {
-                    // Keep the count-bearing refusal (AC3) but carry the typed
-                    // error too: a decode failure that lost no rows (a bad
-                    // top-level type) still names its field instead of
-                    // masquerading as a pure count divergence (PR 924 review).
-                    let mut msg = registry_row_divergence_msg(path, raw_rows, 0);
-                    msg.push_str(&format!("; typed error: {typed_err}"));
-                    return Err(StateError::InvariantViolation(msg));
-                }
-                return Err(typed_err.into());
-            }
-            let rows = probe
-                .get("agents")
-                .or_else(|| probe.get("entries"))
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let mut entries = Vec::with_capacity(rows.len());
-            let mut skipped: Vec<usize> = Vec::new();
-            for (i, row) in rows.into_iter().enumerate() {
-                match serde_json::from_value::<RegistryEntry>(row) {
-                    Ok(entry) => entries.push(entry),
-                    Err(_) => skipped.push(i),
-                }
-            }
-            if !skipped.is_empty() {
-                eprintln!(
-                    "fno agents: registry: skipped row(s) {skipped:?} this fno cannot \
-                     represent at schema_version={on_disk}. Those agents are invisible \
-                     to this process until it is upgraded."
-                );
-            }
-            // Forward-schema partial read: divergence is allowed HERE (every
-            // dropped row is announced above), so this arm is exempt from the
-            // count guard the Ok arm runs; the daemon's startup assertion is
-            // what refuses to serve a partial roster as complete.
-            let min_writer_version = probe
-                .get("min_writer_version")
-                .and_then(serde_json::Value::as_u64)
-                .map(|version| u32::try_from(version).unwrap_or(u32::MAX));
-            let writer_rev = probe
-                .get("writer_rev")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            let mut extra = probe.as_object().cloned().unwrap_or_default();
-            for key in [
-                "schema_version",
-                "min_writer_version",
-                "writer_rev",
-                "agents",
-                "entries",
-            ] {
-                extra.remove(key);
-            }
-            Registry {
-                // Saturate rather than `as u32`. A truncating cast can wrap an
-                // absurd version DOWN to one at or below ours, and the write
-                // guard keys on that number -- so the one store we must never
-                // overwrite would be the one that looks safe to overwrite.
-                schema_version: u32::try_from(on_disk).unwrap_or(u32::MAX),
-                entries,
-                min_writer_version,
-                writer_rev,
-                extra,
+            // One row carrying an undecodable OPTIONAL enrichment block must
+            // not zero the decode: a role succession reown once forked an
+            // owner-only spawn_provenance (no `origin`) onto a
+            // provenance-less adopted row, and that row failed the WHOLE
+            // typed file (raw_rows=28, decoded_rows=0). Heal rows whose only
+            // failure is that block; anything the heal cannot fully absorb
+            // still takes the paths below unchanged.
+            if let Some(reg) = repaired_spawn_provenance_registry(&probe, raw_rows) {
+                reg
+            } else {
+                decode_registry_after_typed_failure(path, &probe, typed_err, raw_rows)?
             }
         }
     };
@@ -2224,6 +2141,174 @@ fn read_registry_tolerant(path: &Path, mut file: &File) -> Result<(Registry, usi
     Ok((reg, raw_rows))
 }
 
+/// Heal rows whose ONLY typed-decode failure is the optional
+/// `spawn_provenance` block: strip the block, keep the row, name the drop.
+/// A role succession reown once forked an owner-only block (no `origin`)
+/// onto a provenance-less adopted row, and that one optional block failed
+/// the WHOLE typed file (raw_rows=28, decoded_rows=0), every Rust registry
+/// read with it. Returns None when no row is repairable or the healed file
+/// still fails its count guard, so every other damage keeps the
+/// same-schema/forward-schema paths unchanged.
+fn repaired_spawn_provenance_registry(
+    probe: &serde_json::Value,
+    raw_rows: usize,
+) -> Option<Registry> {
+    let (repaired_probe, notes) = strip_undecodable_spawn_provenance(probe)?;
+    let candidate = serde_json::from_value::<Registry>(repaired_probe).ok()?;
+    if candidate.entries.len() != raw_rows {
+        return None;
+    }
+    // The heal is in memory until the next registry write, so this note
+    // would repeat on every load: a non-fatal note, said only on FNO_VERBOSE=1.
+    if std::env::var_os("FNO_VERBOSE").is_some_and(|v| v == "1") {
+        for note in &notes {
+            eprintln!("fno agents: registry {note}");
+        }
+    }
+    Some(candidate)
+}
+
+/// The strip half of [`repaired_spawn_provenance_registry`]: a row that
+/// fails its typed decode but decodes cleanly once `spawn_provenance` is
+/// removed comes back repaired (block gone) plus a note naming the row.
+fn strip_undecodable_spawn_provenance(
+    probe: &serde_json::Value,
+) -> Option<(serde_json::Value, Vec<String>)> {
+    let rows = probe
+        .get("agents")
+        .or_else(|| probe.get("entries"))?
+        .as_array()?
+        .clone();
+    let mut repaired_rows = Vec::with_capacity(rows.len());
+    let mut notes = Vec::new();
+    for row in rows {
+        if serde_json::from_value::<RegistryEntry>(row.clone()).is_ok() {
+            repaired_rows.push(row);
+            continue;
+        }
+        let mut stripped = row.clone();
+        if let Some(object) = stripped.as_object_mut() {
+            object.remove("spawn_provenance");
+        }
+        if serde_json::from_value::<RegistryEntry>(stripped.clone()).is_ok() {
+            notes.push(format!(
+                "row {:?}: undecodable spawn_provenance dropped, row kept",
+                row.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?")
+            ));
+            repaired_rows.push(stripped);
+        } else {
+            repaired_rows.push(row);
+        }
+    }
+    if notes.is_empty() {
+        return None;
+    }
+    let mut repaired_probe = probe.clone();
+    let key = if probe.get("agents").is_some() {
+        "agents"
+    } else {
+        "entries"
+    };
+    if let Some(object) = repaired_probe.as_object_mut() {
+        object.insert(key.to_owned(), serde_json::Value::Array(repaired_rows));
+    }
+    Some((repaired_probe, notes))
+}
+
+/// The pre-heal typed-failure handling, unchanged: same-schema damage is
+/// fatal by name; a newer store degrades per row with an announcement.
+fn decode_registry_after_typed_failure(
+    path: &Path,
+    probe: &serde_json::Value,
+    typed_err: serde_json::Error,
+    raw_rows: usize,
+) -> Result<Registry, StateError> {
+    // A newer writer can widen a field's VALUES, not only add keys, and
+    // `AgentStatus` has no catch-all variant -- so one row carrying a
+    // status this binary has never heard of failed the WHOLE file at
+    // serde and took the daemon's registry reads down with it. Tolerating
+    // added keys alone left that door open.
+    //
+    // Retry per row, keeping the ones this binary can represent, but ONLY
+    // when the store says it is newer than us. At or below our own schema
+    // an unparseable row is a writer bug and stays fatal -- and since
+    // it is fatal BY NAME when rows were on disk: the error
+    // carries the raw and decoded counts so a lost roster can never read
+    // as a valid empty one downstream.
+    let on_disk = probe
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if on_disk <= REGISTRY_SCHEMA_VERSION as u64 {
+        if raw_rows > 0 {
+            // Keep the count-bearing refusal (AC3) but carry the typed
+            // error too: a decode failure that lost no rows (a bad
+            // top-level type) still names its field instead of
+            // masquerading as a pure count divergence (PR 924 review).
+            let mut msg = registry_row_divergence_msg(path, raw_rows, 0);
+            msg.push_str(&format!("; typed error: {typed_err}"));
+            return Err(StateError::InvariantViolation(msg));
+        }
+        return Err(typed_err.into());
+    }
+    let rows = probe
+        .get("agents")
+        .or_else(|| probe.get("entries"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut entries = Vec::with_capacity(rows.len());
+    let mut skipped: Vec<usize> = Vec::new();
+    for (i, row) in rows.into_iter().enumerate() {
+        match serde_json::from_value::<RegistryEntry>(row) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => skipped.push(i),
+        }
+    }
+    if !skipped.is_empty() {
+        eprintln!(
+            "fno agents: registry: skipped row(s) {skipped:?} this fno cannot \
+             represent at schema_version={on_disk}. Those agents are invisible \
+             to this process until it is upgraded."
+        );
+    }
+    // Forward-schema partial read: divergence is allowed HERE (every
+    // dropped row is announced above), so this arm is exempt from the
+    // count guard the Ok arm runs; the daemon's startup assertion is
+    // what refuses to serve a partial roster as complete.
+    let min_writer_version = probe
+        .get("min_writer_version")
+        .and_then(serde_json::Value::as_u64)
+        .map(|version| u32::try_from(version).unwrap_or(u32::MAX));
+    let writer_rev = probe
+        .get("writer_rev")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let mut extra = probe.as_object().cloned().unwrap_or_default();
+    for key in [
+        "schema_version",
+        "min_writer_version",
+        "writer_rev",
+        "agents",
+        "entries",
+    ] {
+        extra.remove(key);
+    }
+    Ok(Registry {
+        // Saturate rather than `as u32`. A truncating cast can wrap an
+        // absurd version DOWN to one at or below ours, and the write
+        // guard keys on that number -- so the one store we must never
+        // overwrite would be the one that looks safe to overwrite.
+        schema_version: u32::try_from(on_disk).unwrap_or(u32::MAX),
+        entries,
+        min_writer_version,
+        writer_rev,
+        extra,
+    })
+}
+
 /// The repo root when `exe` is a binary built inside a source checkout, else
 /// `None`. Pure over the path so it is testable without a real install.
 ///
@@ -2247,12 +2332,7 @@ fn source_root_for_exe(exe: &Path, home: Option<&Path>) -> Option<PathBuf> {
     // `.git`. A cargo marker on an ancestor proves the tree is a build tree
     // (deployed binaries have none), and the compile-time manifest dir then
     // names the crate it was built from, so the guard stays armed.
-    let build_tree = exe
-        .ancestors()
-        .skip(1)
-        .take(6)
-        .any(|p| p.join("CACHEDIR.TAG").is_file() || p.join(".rustc_info.json").is_file());
-    if !build_tree {
+    if !in_build_tree(exe) {
         return None;
     }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2263,15 +2343,26 @@ fn source_root_for_exe(exe: &Path, home: Option<&Path>) -> Option<PathBuf> {
     Some(root.to_path_buf())
 }
 
+fn in_build_tree(exe: &Path) -> bool {
+    exe.ancestors()
+        .skip(1)
+        .take(6)
+        .any(|p| p.join("CACHEDIR.TAG").is_file() || p.join(".rustc_info.json").is_file())
+}
+
 /// Recover the source root for a build whose binary a path walk cannot place:
 /// a build-dir override (cargo's build.build-dir, e.g. the machine pool)
 /// detaches the exe from its checkout, so [`source_root_for_exe`] finds no
 /// `.git`. When this build's own OUT_DIR was likewise detached, the exe is a
-/// dev build and the manifest dir - baked in at compile time, present only on
-/// the build machine - recovers the root. A deployed binary never takes this
-/// arm: its OUT_DIR sat inside its build checkout, and on a user machine
-/// neither baked path exists.
-fn source_root_for_detached_build() -> Option<PathBuf> {
+/// dev build and the manifest dir - baked in at compile time - recovers the
+/// root. The baked paths cannot tell an install apart on the machine that
+/// built it: `fno doctor update` builds in the shared build base, so the
+/// installed binary also has a detached OUT_DIR and a live manifest dir. Only
+/// an exe still inside its build tree takes this arm.
+fn source_root_for_detached_build(exe: &Path) -> Option<PathBuf> {
+    if !in_build_tree(exe) {
+        return None;
+    }
     let out_dir = Path::new(env!("FNO_AGENTS_BUILD_OUT_DIR"));
     if out_dir.ancestors().any(|p| p.join(".git").exists()) {
         return None;
@@ -2368,7 +2459,7 @@ fn refuse_source_ahead_schema_bump(path: &Path, found: u32) -> Result<(), StateE
         // consult build-time baked facts.
         .or_else(|| {
             if found < REGISTRY_SCHEMA_VERSION && resolved == shared.as_path() {
-                source_root_for_detached_build()
+                source_root_for_detached_build(&exe)
             } else {
                 None
             }
@@ -2388,7 +2479,7 @@ fn refuse_source_ahead_schema_bump(path: &Path, found: u32) -> Result<(), StateE
 /// the session uuid (the register path once wrote it that way): the
 /// transport key is the uuid's own leading 8-hex segment, and a full uuid
 /// refuses `claude attach`. Rewrites ONLY `short_id` - name, aliases and
-/// crown fields are untouched - under the registry lock, skips the write
+/// role fields are untouched - under the registry lock, skips the write
 /// entirely when nothing matches, and never touches a short id that is an
 /// independent transport key (not a copy of the row's own session id).
 pub fn heal_full_uuid_short_ids(path: &Path) -> Result<usize, StateError> {
@@ -2462,8 +2553,17 @@ fn newest_snapshot(snapshots: &Path) -> Option<(std::time::Duration, u64)> {
 /// `<dir>/registry-snapshots/` and rotate. A failure anywhere never fails the
 /// write: a missing snapshot is the status quo, and the 2026-09-27 overwrite
 /// showed what recovering from a month-old backup costs instead.
-fn snapshot_registry(path: &Path) {
-    let Ok(bytes) = std::fs::read(path) else {
+pub(crate) fn snapshot_registry(path: &Path, document: &serde_json::Value) {
+    // A registry with no rows has nothing to recover. Snapshotting it would
+    // also set the size baseline the collapse check divides by.
+    let rows = document.get("agents").or_else(|| document.get("entries"));
+    if !rows
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|r| !r.is_empty())
+    {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(document) else {
         return;
     };
     let Some(dir) = path.parent() else {
@@ -2519,18 +2619,8 @@ pub fn update_registry<F, T>(path: &Path, f: F) -> Result<T, StateError>
 where
     F: FnOnce(&mut Registry) -> T,
 {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // Lock on a stable sidecar so the rename of the data file never invalidates
-    // the lock fd (renaming the locked file out from under a held flock is the
-    // classic footgun; locking the sidecar sidesteps it entirely).
-    let lock_path = registry_lock_path(path);
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let lock = acquire_exclusive(&lock_path)?;
-    let (mut registry, raw_rows) = read_existing_registry(path)?;
+    let transaction = crate::registry_store::begin(path)?;
+    let (mut registry, raw_rows) = decode_registry_value(path, transaction.document.clone())?;
     let min_writer = effective_min_writer(&registry);
     // A read-forward writer may update additive schemas when it can preserve
     // unknown keys. Refuse when the declared floor is newer or row decoding
@@ -2556,8 +2646,8 @@ where
     let before_entries = registry.entries.clone();
     let before = before_entries
         .iter()
-        .map(|entry| (entry.name.clone(), identity_signature(entry)))
-        .collect::<BTreeMap<_, _>>();
+        .map(identity_signature)
+        .collect::<BTreeSet<_>>();
     let out = f(&mut registry);
     // Every transition into Exited carries its date, whichever closure wrote
     // it. A row already Exited with no stamp stays unstamped: a stamp written
@@ -2650,7 +2740,7 @@ where
     // pre-write `before` snapshot already built above for identity checks --
     // a pre-existing violating row is never re-validated (AC3-FR).
     for entry in &registry.entries {
-        if !before.contains_key(&entry.name) {
+        if !before_entries.iter().any(|b| b.name == entry.name) {
             if let Err(msg) = validate_resolvable_handle(entry) {
                 return Err(StateError::InvariantViolation(msg));
             }
@@ -2669,14 +2759,12 @@ where
     // Rolling snapshot of the bytes this write replaces, under the lock so a
     // racing writer cannot snapshot a half-read state. Best effort: never
     // fails the write.
-    snapshot_registry(path);
-    write_json_atomic(path, &registry)?;
+    transaction.commit(serde_json::to_value(&registry)?)?;
     // Removal accounting runs AFTER the write persisted: a removal
     // that failed to persist never happened, and announcing it would be a
     // false alarm. Within the accounting the receipt still precedes its own
     // event.
     account_for_removed_rows(path, &before_entries, &registry.entries);
-    let _ = lock.unlock();
     // The store projection runs WITHOUT the registry flock: a slow or
     // fenced graph.db must never stall the fleet's registry writes behind
     // it, and rows whose identity did not change project nothing.
@@ -2739,23 +2827,31 @@ fn project_identity(registry_path: &Path, before: &[RegistryEntry], entries: &[R
 /// resolving. `token` resolves through the same tiers the sibling verbs accept
 /// (`find_name_or_full_session_id`: label, full session id + canonical handle,
 /// related/predecessor ids) plus the transport short id and a prior label held
-/// as an alias.
+/// as an alias. A label held only by terminal rows is vacated and taken; a
+/// live, orphaned or failed holder refuses.
 pub fn rename_agent(
     path: &Path,
     token: &str,
     new_name: &str,
     node: Option<&str>,
 ) -> Result<(String, String), String> {
-    rename_agent_displacing(path, token, new_name, node, |_, _| false)
+    rename_agent_displacing(path, token, new_name, node, |row, _| row_is_terminal(row))
+}
+
+/// A terminal row (Exited, PermanentDead) never answers to any label again,
+/// so its label is free for the taking. Orphaned and Failed keep blocking -
+/// restart policy may still revive them.
+pub(crate) fn row_is_terminal(row: &RegistryEntry) -> bool {
+    matches!(row.status, AgentStatus::Exited | AgentStatus::PermanentDead)
 }
 
 /// [`rename_agent`] with label displacement: when the target label is held
 /// only by rows that satisfy `may_displace`, the label and alias move off
 /// those rows inside this SAME transaction instead of refusing. The predicate
 /// receives the row and the transaction's own entries, so its verdict reads
-/// the state under the lock, not a pre-transaction snapshot. The crown
+/// the state under the lock, not a pre-transaction snapshot. The role
 /// check-in takes a carried label back from a predecessor row that holds no
-/// live crown; every other caller keeps the plain refusal.
+/// live role; plain [`rename_agent`] displaces only terminal rows.
 pub fn rename_agent_displacing(
     path: &Path,
     token: &str,
@@ -3118,7 +3214,7 @@ fn identity_signature(entry: &RegistryEntry) -> IdentitySignature {
 }
 
 fn validate_changed_identities(
-    before: &BTreeMap<String, IdentitySignature>,
+    before: &BTreeSet<IdentitySignature>,
     entries: &[RegistryEntry],
 ) -> Result<(), String> {
     use crate::identity::{canonical_handle, legacy_suffix_handle, session_handle_tier};
@@ -3147,7 +3243,9 @@ fn validate_changed_identities(
     };
 
     for (index, candidate) in entries.iter().enumerate() {
-        if before.get(&candidate.name) == Some(&identity_signature(candidate)) {
+        // Keyed by the whole signature, not the name: duplicate names in a
+        // legacy document must each stay exempt while unchanged.
+        if before.contains(&identity_signature(candidate)) {
             continue;
         }
         let mut chosen = BTreeSet::from([candidate.name.clone()]);
@@ -3196,14 +3294,6 @@ pub fn effective_min_writer(registry: &Registry) -> u32 {
     registry
         .min_writer_version
         .unwrap_or(registry.schema_version)
-}
-
-fn read_existing_registry(path: &Path) -> Result<(Registry, usize), StateError> {
-    match OpenOptions::new().read(true).open(path) {
-        Ok(file) => read_registry_tolerant(path, &file),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Registry::default(), 0)),
-        Err(e) => Err(e.into()),
-    }
 }
 
 /// Load a per-agent `state.json`. `Ok(None)` when the file is absent (recovery
@@ -3293,13 +3383,6 @@ pub(crate) fn lock_path(path: &Path) -> PathBuf {
 /// Lock shared with Python's `fno.agents.registry._registry_lock_path`.
 /// Registry readers and writers use this one path across languages; per-file
 /// state records continue to use [`lock_path`].
-fn registry_lock_path(path: &Path) -> PathBuf {
-    path.parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("locks")
-        .join("_registry.lock")
-}
-
 /// Open (creating if needed) the lock sidecar and take an exclusive advisory
 /// lock, blocking until acquired. The returned `File` holds the lock until it
 /// is unlocked or dropped.
@@ -3349,23 +3432,6 @@ fn acquire_shared(lock_file: &Path) -> Result<File, StateError> {
         .open(lock_file)?;
     file.lock_shared()?;
     Ok(file)
-}
-
-fn try_acquire_shared(lock_file: &Path) -> Result<Option<File>, StateError> {
-    if let Some(parent) = lock_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_file)?;
-    match file.try_lock_shared() {
-        Ok(()) => Ok(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
-    }
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(mut file: &File) -> Result<T, StateError> {
@@ -3511,3 +3577,37 @@ mod substitution_tests {
 #[cfg(test)]
 #[path = "state_lookup_tests.rs"]
 mod lookup_tests;
+
+pub(crate) fn validate_registry_document_change(
+    path: &Path,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> Result<(), StateError> {
+    let (before, before_count) = decode_registry_value(path, before.clone())?;
+    let (after, after_count) = decode_registry_value(path, after.clone())?;
+    if before_count != before.entries.len()
+        || after_count != after.entries.len()
+        || effective_min_writer(&before) > REGISTRY_SCHEMA_VERSION
+    {
+        return Err(StateError::InvariantViolation(
+            "registry write cannot preserve every row at this writer version".into(),
+        ));
+    }
+    refuse_source_ahead_schema_bump(path, before.schema_version)?;
+    crate::registry_guard::check_env(
+        path,
+        crate::registry_guard::count_live(&before.entries),
+        crate::registry_guard::count_live(&after.entries),
+    )
+    .map_err(StateError::WriteGuard)?;
+    let identities = before.entries.iter().map(identity_signature).collect();
+    validate_changed_identities(&identities, &after.entries)
+        .map_err(StateError::InvariantViolation)?;
+    for entry in &after.entries {
+        validate_single_live_ref(entry).map_err(StateError::InvariantViolation)?;
+        if !before.entries.iter().any(|old| old.name == entry.name) {
+            validate_resolvable_handle(entry).map_err(StateError::InvariantViolation)?;
+        }
+    }
+    Ok(())
+}

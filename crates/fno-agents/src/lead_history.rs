@@ -14,7 +14,7 @@
 //! a second normalizer here could only disagree with it; a stored row whose
 //! `data.scope` was not canonical carries `scope IS NULL` and reaches the
 //! legacy classifier through the same query. Legacy rows (the refused
-//! `crown_scope`/`team`/`result` aliases, or a missing canonical key)
+//! `role_scope`/`team`/`result` aliases, or a missing canonical key)
 //! stay byte-preserved evidence: counted in `rejected`, listed in
 //! `rejected_legacy` by store and `ts`, because a line number does not
 //! survive rotation. The output is read-back, never a generated summary; a
@@ -37,7 +37,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub(crate) const LEAD_CHECKIN: &str = "lead_checkin";
-pub(crate) const FORBIDDEN_ALIASES: [&str; 3] = ["crown", "crown_scope", "result"];
+pub(crate) const FORBIDDEN_ALIASES: [&str; 3] = ["role", "role_scope", "result"];
 
 fn s_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
@@ -151,8 +151,10 @@ pub(crate) fn scan_scopes(events_paths: &[PathBuf], scope: Option<&str>) -> Resu
     let mut duplicates: u64 = 0;
     for live in &lives {
         let receipt = crate::event_store::import_all(live)?;
-        let store = crate::event_store::open_read(&crate::event_store::store_path(live))?;
-        let rows = lead_rows(&store, scope)?;
+        let store_path = crate::event_store::store_path(live);
+        let store = crate::event_store::open_read(&store_path)?;
+        let rows =
+            lead_rows(&store, scope).map_err(|e| format!("{}: {e}", store_path.display()))?;
         let mut scanned = 0u64;
         let mut matched = 0u64;
         let mut rejected = 0u64;
@@ -347,31 +349,83 @@ pub(crate) fn previous_beat(
     holder_session: Option<&str>,
     loop_only: bool,
 ) -> Result<Option<Value>, String> {
-    if let Some(session) = holder_session.filter(|s| !s.trim().is_empty()) {
-        let payload = scan_scopes(events_paths, None)?;
-        let found = payload["events"].as_array().and_then(|events| {
-            events.iter().find(|r| {
-                r.get("data")
-                    .and_then(|d| d.get("holder_session"))
-                    .and_then(Value::as_str)
-                    == Some(session)
-                    && (!loop_only || s_str(r, "source") == Some("loop"))
-            })
-        });
-        // No row of this holder yet (or pre-holder rows only): the scope's
-        // own newest row is the baseline, exactly the pre-holder read.
-        if let Some(row) = found {
-            return Ok(Some(row.clone()));
+    Ok(previous_beat_with_source(events_paths, scope, holder_session, loop_only)?.row)
+}
+
+/// The beat row plus the live journal that held it, so a caller can say
+/// where its beat was read.
+pub(crate) struct BeatSource {
+    pub row: Option<Value>,
+    pub journal: Option<PathBuf>,
+}
+
+/// `previous_beat` plus the row's journal. One scan per journal, keeping
+/// the global newest winner: the same row a merged scan returns, now
+/// carrying the file it was read from. `scan_scopes` errors the WHOLE
+/// list when one store cannot be opened, so the error semantics are
+/// unchanged.
+pub(crate) fn previous_beat_with_source(
+    events_paths: &[PathBuf],
+    scope: &str,
+    holder_session: Option<&str>,
+    loop_only: bool,
+) -> Result<BeatSource, String> {
+    fn keep_newer(winner: &mut Option<(Value, PathBuf)>, row: Value, journal: PathBuf) {
+        // Journal order is not recency order, so the ts picks the winner;
+        // an equal ts keeps the first journal's copy, the row a merged
+        // scan's stable sort surfaces first.
+        let newer = match winner {
+            None => true,
+            Some((best, _)) => s_str(&row, "ts").unwrap_or("") > s_str(best, "ts").unwrap_or(""),
+        };
+        if newer {
+            *winner = Some((row, journal));
         }
     }
-    let payload = scan(events_paths, scope)?;
-    Ok(payload["events"]
-        .as_array()
-        .and_then(|e| {
+    let mut winner: Option<(Value, PathBuf)> = None;
+    if let Some(session) = holder_session.filter(|s| !s.trim().is_empty()) {
+        for path in events_paths {
+            let payload = scan_scopes(std::slice::from_ref(path), None)?;
+            // No row of this holder in this journal: the next one may
+            // still hold it, so the scope fallback only fires after every
+            // journal came up empty.
+            let Some(row) = payload["events"].as_array().and_then(|events| {
+                events.iter().find(|r| {
+                    r.get("data")
+                        .and_then(|d| d.get("holder_session"))
+                        .and_then(Value::as_str)
+                        == Some(session)
+                        && (!loop_only || s_str(r, "source") == Some("loop"))
+                })
+            }) else {
+                continue;
+            };
+            let journal = crate::event_store::live_journal(path);
+            keep_newer(&mut winner, row.clone(), journal);
+        }
+        if let Some((row, journal)) = winner.take() {
+            return Ok(BeatSource {
+                row: Some(row),
+                journal: Some(journal),
+            });
+        }
+    }
+    for path in events_paths {
+        let payload = scan_scopes(std::slice::from_ref(path), Some(scope))?;
+        let Some(row) = payload["events"].as_array().and_then(|e| {
             e.iter()
                 .find(|r| !loop_only || s_str(r, "source") == Some("loop"))
-        })
-        .cloned())
+        }) else {
+            continue;
+        };
+        let journal = crate::event_store::live_journal(path);
+        keep_newer(&mut winner, row.clone(), journal);
+    }
+    let (row, journal) = match winner {
+        Some((row, journal)) => (Some(row), Some(journal)),
+        None => (None, None),
+    };
+    Ok(BeatSource { row, journal })
 }
 
 fn render(payload: &Value) -> String {
@@ -852,7 +906,7 @@ fn scan_readings(
                         });
                     }
                 }
-                LEAD_CONTEXT_NUDGE if s_str(&data, "crown_scope") == Some(scope) => {
+                LEAD_CONTEXT_NUDGE if s_str(&data, "role_scope") == Some(scope) => {
                     r.nudges += 1;
                 }
                 _ => {}
@@ -1018,7 +1072,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.respawn_ceiling = manifest.respawn_ceiling;
     readings.compaction_ceiling = Some(inputs.compaction_ceiling);
     readings.checkins_expected =
-        matches!(manifest.shape.as_str(), "org" | "court") && team_age_secs > checkin_interval_secs;
+        matches!(manifest.shape.as_str(), "org" | "team") && team_age_secs > checkin_interval_secs;
     readings.checkins_stale = checkins_stale(
         &readings,
         now.timestamp(),
@@ -1056,12 +1110,18 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.inherited_closed_in_window = inputs.inherited_closed_in_window;
     let (v, bounds) = verdict(&readings);
     let summary = bound_summary(v, &bounds);
+    if let Some(note) = &inputs.harness_disagreement {
+        eprintln!("lead-history --verdict: harness disagreement: {note}");
+    }
     let payload = json!({
         "scope": inputs.scope,
         "verdict": v,
         "summary": summary,
         "bounds": bounds,
         "lifetime": if lifetime_partial { "partial" } else { "measured" },
+        "harness": inputs.harness,
+        "harness_source": inputs.harness_source,
+        "harness_disagreement": inputs.harness_disagreement,
         "coverage": json!({
             "status": cov_status,
             "complete_since": complete_since_ms.map(ms_to_rfc3339),
@@ -1208,7 +1268,7 @@ fn hygiene_reading(
             "applicable": 0,
             "declared": 5,
             "violations": [],
-            "crown": team,
+            "role": team,
         });
     };
     let entries = match crate::lead_hygiene::entries_from_transcript(harness, transcript) {
@@ -1221,7 +1281,7 @@ fn hygiene_reading(
                 "applicable": 0,
                 "declared": 5,
                 "violations": [],
-                "crown": team,
+                "role": team,
             });
         }
     };
@@ -1245,7 +1305,7 @@ fn hygiene_reading(
         "applicable": applicable,
         "declared": checks.len(),
         "violations": violations,
-        "crown": team,
+        "role": team,
     })
 }
 
@@ -1285,9 +1345,9 @@ fn render_hygiene_line(hygiene: &Value) -> String {
             .join(", ");
         line.push_str(&format!(" ({details})"));
     }
-    match hygiene["crown"]["inherited"].as_bool() {
+    match hygiene["role"]["inherited"].as_bool() {
         Some(true) => {
-            if let Some(session) = hygiene["crown"]["from_session"].as_str() {
+            if let Some(session) = hygiene["role"]["from_session"].as_str() {
                 line.push_str(&format!("; team inherited from {session}"));
             } else {
                 line.push_str("; team inherited");
@@ -1673,7 +1733,7 @@ mod verdict_tests {
             json!({"ts": "2026-09-10T10:05:00Z", "type": "loop_check_config", "source": "loop",
                    "data": {"session_id": "kg1", "block_cap": 9, "block_cap_source": "default"}}),
             json!({"ts": "2026-09-10T10:06:00Z", "type": "lead_context_nudge", "source": "hook",
-                   "data": {"used_pct": 60, "trigger": 40, "crown_level": 0, "crown_scope": "x-bbbb"}}),
+                   "data": {"used_pct": 60, "trigger": 40, "role_level": 0, "role_scope": "x-bbbb"}}),
         ];
         for row in rows {
             writeln!(fh, "{row}").unwrap();
@@ -1862,7 +1922,7 @@ mod verdict_tests {
             ],
         )
         .unwrap();
-        let manifest = root.join("kings/x-bbbb.md");
+        let manifest = root.join("leads/x-bbbb.md");
         std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
         std::fs::write(
             &manifest,
@@ -1915,7 +1975,7 @@ mod verdict_tests {
         std::fs::write(
             &store,
             json!({"version": 1, "teams": {"x-bbbb": {
-                "name": "warden", "regnal": 1, "holder_session": "hs1",
+                "name": "warden", "generation": 1, "holder_session": "hs1",
                 "nodes": [], "updated_at": "2026-09-05T00:00:00Z",
                 "lead": {"session": "hs1", "scope": "x-old",
                           "armed_at": "2026-09-10T00:00:00Z",
@@ -2132,7 +2192,7 @@ mod tests {
             ),
             checkin(
                 "2026-09-10T10:00:00Z",
-                json!({"crown": "fno", "change": "legacy"}),
+                json!({"role": "fno", "change": "legacy"}),
             ),
         ]);
         let payload = scan_scopes(std::slice::from_ref(&path), None).unwrap();
@@ -2170,6 +2230,60 @@ mod tests {
     }
 
     #[test]
+    fn previous_beat_names_the_journal_that_held_the_row() {
+        let (_old_dir, old_path) = journal(&[checkin(
+            "2026-09-10T08:00:00Z",
+            json!({"scope": "x-aaaa", "change": "older beat", "holder_session": "sess-k"}),
+        )]);
+        let (_new_dir, new_path) = journal(&[checkin(
+            "2026-09-10T09:00:00Z",
+            json!({"scope": "x-bbbb", "change": "newer beat", "holder_session": "sess-k"}),
+        )]);
+        let source = previous_beat_with_source(
+            &[old_path.clone(), new_path.clone()],
+            "x-aaaa",
+            Some("sess-k"),
+            false,
+        )
+        .unwrap();
+        // The holder walk crosses journals, so the newest row wins even
+        // though the older journal is listed first.
+        let row = source.row.expect("the newest row across both journals");
+        assert_eq!(row["data"]["change"], json!("newer beat"));
+        // live_journal canonicalizes the recorded path, so the expectation
+        // is spelled the same way, never against the raw tempdir path.
+        assert_eq!(
+            source.journal,
+            Some(crate::event_store::live_journal(&new_path))
+        );
+        // No row of this session anywhere: the scope fallback wins and
+        // still names its journal.
+        let source = previous_beat_with_source(
+            &[old_path.clone(), new_path.clone()],
+            "x-bbbb",
+            Some("sess-none"),
+            false,
+        )
+        .unwrap();
+        let row = source.row.expect("the scope's newest row");
+        assert_eq!(row["data"]["change"], json!("newer beat"));
+        assert_eq!(
+            source.journal,
+            Some(crate::event_store::live_journal(&new_path))
+        );
+        // The delegating wrapper keeps the row and drops the journal.
+        let row = previous_beat(
+            &[old_path.clone(), new_path.clone()],
+            "x-aaaa",
+            Some("sess-k"),
+            false,
+        )
+        .unwrap()
+        .expect("the wrapper returns the same row");
+        assert_eq!(row["data"]["change"], json!("newer beat"));
+    }
+
+    #[test]
     fn newest_first_with_evidence_intact() {
         let (_dir, path) = journal(&[
             checkin(
@@ -2200,7 +2314,7 @@ mod tests {
         let (_dir, path) = journal(&[
             checkin(
                 "2026-09-10T08:00:00Z",
-                json!({"crown_scope": "x-aaaa", "change": "old"}),
+                json!({"role_scope": "x-aaaa", "change": "old"}),
             ),
             checkin(
                 "2026-09-10T08:30:00Z",
@@ -2213,7 +2327,7 @@ mod tests {
         assert_eq!(payload["rejected"], json!(3));
         let legacy = payload["rejected_legacy"].as_array().unwrap();
         assert_eq!(legacy.len(), 2);
-        assert_eq!(legacy[0]["forbidden"], json!(["crown_scope"]));
+        assert_eq!(legacy[0]["forbidden"], json!(["role_scope"]));
         assert_eq!(legacy[0]["missing"], json!(["scope"]));
         assert_eq!(legacy[1]["forbidden"], json!(["result"]));
     }
@@ -2338,7 +2452,7 @@ mod tests {
             "{}",
             checkin(
                 "2026-09-10T08:00:00Z",
-                json!({"crown_scope": "x-aaaa", "change": "old"}),
+                json!({"role_scope": "x-aaaa", "change": "old"}),
             )
         )
         .unwrap();
@@ -2361,6 +2475,59 @@ mod tests {
         std::fs::create_dir(dir.path().join("events.db")).unwrap();
         let err = scan(std::slice::from_ref(&live), "x-aaaa").unwrap_err();
         assert!(err.contains("events.db"), "err: {err}");
+
+        for (index, append) in [
+            ("ingest_cursor", false),
+            ("events_type_ts", true),
+            ("events_scope_type_ts", false),
+        ] {
+            let (_dir, live) = journal(&[checkin(
+                "2026-09-10T12:00:00Z",
+                json!({"scope": "x-aaaa", "change": "beat"}),
+            )]);
+            let receipt = crate::event_store::import_all(&live).unwrap();
+            let conn = Connection::open(&receipt.store).unwrap();
+            let page: usize = conn
+                .query_row(
+                    "SELECT rootpage FROM sqlite_master WHERE name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let page_size: usize = conn
+                .query_row("PRAGMA page_size", [], |row| row.get(0))
+                .unwrap();
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            drop(conn);
+            let mut bytes = std::fs::read(&receipt.store).unwrap();
+            bytes[(page - 1) * page_size] = 0xff;
+            std::fs::write(&receipt.store, bytes).unwrap();
+            if append {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&live)
+                    .unwrap();
+                writeln!(
+                    file,
+                    "{}",
+                    checkin(
+                        "2026-09-10T12:01:00Z",
+                        json!({"scope": "x-aaaa", "change": "next beat"}),
+                    )
+                )
+                .unwrap();
+            }
+            let error = scan(std::slice::from_ref(&live), "x-aaaa").unwrap_err();
+            assert!(
+                error.contains("database disk image is malformed"),
+                "{error}"
+            );
+            assert!(
+                error.contains(&receipt.store.display().to_string()),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -2584,8 +2751,8 @@ mod tests {
         assert_eq!(hygiene["applicable"], 4);
         assert_eq!(hygiene["declared"], 5);
         assert!(hygiene["violations"].as_array().unwrap().is_empty());
-        assert_eq!(hygiene["crown"]["inherited"], true);
-        assert_eq!(hygiene["crown"]["from_session"], "grantor-session");
+        assert_eq!(hygiene["role"]["inherited"], true);
+        assert_eq!(hygiene["role"]["from_session"], "grantor-session");
 
         let rendered = render_verdict(&verdict_payload(hygiene));
         let term_at = rendered.find("term:").expect("term line present");

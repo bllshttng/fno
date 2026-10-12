@@ -710,7 +710,7 @@ def _run_tick(
     from fno.graph._reconcile import ReconcileError
     from fno.paths import graph_json as default_graph_json
     from fno.pr_watch import decide
-    from fno.pr_watch._king_wake import graph_entries
+    from fno.pr_watch._lead_wake import graph_entries
     from fno.pr_watch._state import WatermarkStore, make_watermark_key
 
     gpath = graph_path or default_graph_json()
@@ -722,7 +722,7 @@ def _run_tick(
     # backend has no equivalent yet, so this tick degrades to "nothing to
     # sweep" rather than reading the wrong store (mirrors _catchup_roots'
     # existing no-graph degrade for the same daemon). graph_entries is the
-    # tick's one ident-keyed memo: sweep discovery and king_wake share a
+    # tick's one ident-keyed memo: sweep discovery and lead_wake share a
     # single real read of the 15 MB store instead of queueing on it twice.
     entries = graph_entries(gpath)
     candidates = discover_fn(entries)
@@ -1060,6 +1060,8 @@ def _run_tick(
                     _mark_handled(delivery_state, key, "CLOSED")
                 continue
 
+            # An outside merge mints no request; the watch mints it before the parked check.
+            _default_ensure_merge_cleanup(cand, obs.state)
             # Suppression only. A parked entry synthesized from the delivery
             # sidecar (a retries-exhausted merge) must not dispatch again.
             # Parked STATE entries never reach here; the batch loop above
@@ -1396,18 +1398,13 @@ def run_execute_queue(
                 _grant("held", pr, cand, grant_fields, reason=reason)
                 if bare.startswith(("checks are red", WORKTREE_HEAD_MISMATCH, WORKTREE_DIRTY)):
                     entry["parked"] = park = "checks-red" if bare.startswith("checks are red") else bare.split(":", 1)[0]
-                    entry["parked_head"] = None
+                    entry["parked_head"] = _merge.LAST_RECEIPT.get("observed_head")
                     store.set(key, entry)
                     emit("pr_watch_parked", {"pr": pr, "reason": park})
                     _notify_parked_pr(
                         notify, pr, cand.repo_slug, prior_retries,
                         "durable-grant merge",
                     )
-                    try:
-                        entry["parked_head"] = _merge._pr_head_oid(pr, str(cand.repo_dir))
-                    except Exception as exc:  # noqa: BLE001 - a failed read still parks
-                        log.warning("pr-watch: PR #%d head read failed while parking: %s", pr, exc)
-                    store.set(key, entry)
             else:
                 counts["failed"] += 1
                 _grant("failed", pr, cand, grant_fields, exit_code=rc, reason=reason)
@@ -1532,6 +1529,33 @@ def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> An
         node_id=getattr(cand, "node_id", None),
         repo_slug=getattr(cand, "repo_slug", None),
     )
+
+
+def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
+    """Mint the reap order for a merged PR with none standing (once per merge, journal-gated)."""
+    try:
+        if obs_state != "MERGED" or getattr(cand, "repo_dir", None) is None \
+                or not Path(str(cand.repo_dir), ".git").exists():
+            return
+        from fno.agents.events import daemon_lifecycle_log
+        from fno.pr._merge import _emit_merge_cleanup_request, _manifest_file, \
+            _merge_request_repo_and_project
+        repo, _ = _merge_request_repo_and_project(str(cand.repo_dir))
+        for line in daemon_lifecycle_log().read_text(errors="replace").splitlines():
+            if '"merge_cleanup_requested"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            data = record.get("data") if isinstance(record, dict) else None
+            if isinstance(data, dict) and record.get("type") == "merge_cleanup_requested" \
+                    and data.get("repo") == repo and data.get("pr") == cand.pr_number:
+                return
+        _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
+            _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])
+    except Exception as exc:  # noqa: BLE001 - a mint never fails the tick
+        log.warning("pr-watch: merge-cleanup mint for PR #%d failed: %s", cand.pr_number, exc)
 
 
 def _default_read_pr_state(

@@ -1,5 +1,5 @@
 {
-  "description": "Codex plugin hooks for footnote context injection, safety gates, and target loops. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh; their timeout entries here are backstops just above that internal budget. Gates that decide keep their own budgets; docs/hooks-fail-open.md owns the list.",
+  "description": "Codex plugin hooks for footnote context injection, safety gates, and target loops. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide keep their own budgets; docs/hooks-fail-open.md owns the list.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/hooks/graph-write-protect.sh",
-            "statusMessage": "checking fno do state surfaces"
+            "command": "bash ${PLUGIN_ROOT}/hooks/write-gate.sh",
+            "statusMessage": "checking protected write surfaces"
           }
         ]
       },
@@ -19,16 +19,6 @@
             "type": "command",
             "command": "bash ${PLUGIN_ROOT}/hooks/worktree-write-protect.sh",
             "statusMessage": "checking worktree location"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/hooks/generated-write-guard.sh",
-            "statusMessage": "checking generated copies"
           }
         ]
       },
@@ -67,8 +57,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/hooks/king-delegation-guard.sh",
-            "statusMessage": "checking crown delegation"
+            "command": "bash ${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh",
+            "statusMessage": "checking role delegation"
           }
         ]
       },

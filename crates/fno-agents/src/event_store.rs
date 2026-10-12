@@ -19,7 +19,7 @@
 //! ever dropped at import: the first parse failure lands in `reject_reason`
 //! and the row stays queryable verbatim.
 //!
-//! ponytail: sync reads a whole file into memory, so one sync's memory scales
+//! Sync reads a whole file into memory, so one sync's memory scales
 //! with the file size. Bounded in practice by the rotation threshold; only a
 //! long deferred-rotation window (broken store) grows past it, and that window
 //! already screams on stderr per emit. Upgrade path: stream from the cursor
@@ -66,9 +66,36 @@ pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[
 /// as positive evidence. They never auto-expire.
 pub const GATE_EVENT_TYPES: &[&str] = &["review_attestation", "review_coverage"];
 
+/// Event types the schema declares `retention: telemetry`: high-volume
+/// readouts whose readers fold only recent rows. They stay in the main
+/// store (no sibling journal) and expire after [`TELEMETRY_TTL_HOURS`].
+/// Kept equal to `schema.yaml` by the parity test.
+pub const TELEMETRY_EVENT_TYPES: &[&str] = &[
+    "codex_thread_inside_leg",
+    "control_plane_tick",
+    "guard_decision",
+    "inside_leg_report",
+    "store_seat_lock_unlinked",
+    "store_socket_unlinked",
+];
+
 /// Retention floor for `ephemeral` rows (`schema.yaml`:
 /// `retention.minimum_ephemeral_ttl_hours`).
 pub const MINIMUM_EPHEMERAL_TTL_HOURS: i64 = 672;
+
+/// Retention horizon for `telemetry` rows (`schema.yaml`:
+/// `retention.telemetry_ttl_hours`).
+pub const TELEMETRY_TTL_HOURS: i64 = 168;
+
+/// Retention horizon for `guard_decision` allow rows. They only prove a
+/// guard still runs, so a day of them is enough; block rows keep the
+/// telemetry horizon.
+pub const GUARD_ALLOW_TTL_HOURS: i64 = 24;
+
+/// Retention horizon for `control_plane_tick` rows of the `machine_watch`
+/// arm. They carry the load readings `fno-agents intel --fleet` folds over
+/// its 30-day window.
+pub const MACHINE_WATCH_TTL_HOURS: i64 = 720;
 
 /// Marks a judged refusal inside `append_envelope`'s error string. The
 /// door strips it and answers exit 3, the class Python maps to
@@ -88,26 +115,17 @@ pub fn is_gate_event(kind: &str) -> bool {
     GATE_EVENT_TYPES.contains(&kind)
 }
 
+/// Whether an event kind belongs to the schema-declared telemetry class.
+pub fn is_telemetry_event(kind: &str) -> bool {
+    TELEMETRY_EVENT_TYPES.contains(&kind)
+}
+
 /// The permanent old->new spellings of the role-event rename. Stored rows
 /// are never rewritten (events.db, rotated archives and exports are
 /// append-only history), so queries expand a kind to its old spelling and
 /// readers canonicalize the row type through [`event_type_alias`]. This
 /// table never shrinks.
-pub const EVENT_TYPE_ALIASES: &[(&str, &str)] = &[
-    ("agent_crown_vacated", "agent_team_vacated"),
-    ("crown_succession_reverted", "team_succession_reverted"),
-    ("king_action", "lead_action"),
-    ("king_context_nudge", "lead_context_nudge"),
-    ("king_drain_reserve", "lead_drain_reserve"),
-    ("king_goal_resumed", "lead_goal_resumed"),
-    ("king_loop_check", "lead_loop_check"),
-    ("king_orphan_block", "lead_orphan_block"),
-    ("king_term", "lead_term"),
-    ("king_wake", "lead_wake"),
-    ("reign_armed", "lead_armed"),
-    ("reign_checkin", "lead_checkin"),
-    ("reign_dispatch_exception", "lead_dispatch_exception"),
-];
+pub const EVENT_TYPE_ALIASES: &[(&str, &str)] = &[("agent_role_vacated", "agent_team_vacated")];
 
 /// The canonical (new) spelling of an event kind: an old stored spelling
 /// maps to its replacement, anything else is itself.
@@ -139,13 +157,15 @@ fn query_types_with_aliases(types: &[String]) -> Vec<String> {
     out
 }
 
-/// The retention class a kind belongs to: `ephemeral`, `gate`, or `durable`
-/// (the schema default).
+/// The retention class a kind belongs to: `ephemeral`, `gate`, `telemetry`,
+/// or `durable` (the schema default).
 pub fn retention_class(kind: &str) -> &'static str {
     if is_ephemeral_event(kind) {
         "ephemeral"
     } else if is_gate_event(kind) {
         "gate"
+    } else if is_telemetry_event(kind) {
+        "telemetry"
     } else {
         "durable"
     }
@@ -189,17 +209,37 @@ pub fn live_journal(journal: &Path) -> PathBuf {
 /// The store beside a journal: the live journal's `.jsonl` stem plus `.db`.
 /// A state-root journal (`events`, `decisions`, `questions`) resolves through
 /// the layout table instead, so a migrated root answers the `db/` store.
+/// An empty or name-less journal is refused (panic naming the call site);
+/// `try_store_path` is the degrading form.
+#[track_caller]
 pub fn store_path(journal: &Path) -> PathBuf {
+    match try_store_path(journal) {
+        Ok(store) => store,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+/// [`store_path`] for callers that degrade instead of crashing: an empty or
+/// name-less journal comes back as an error naming the input, so a misused
+/// placeholder emitter fails its append instead of materializing `.db` in
+/// whatever directory the process happened to run from.
+pub fn try_store_path(journal: &Path) -> Result<PathBuf, String> {
     let live = live_journal(journal);
     let stem = live
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    if stem.is_empty() {
+        return Err(format!(
+            "empty or name-less journal path {:?}: refusing to derive a cwd-relative store",
+            journal
+        ));
+    }
     let stem = stem.strip_suffix(".jsonl").unwrap_or(&stem);
     if let Some(routed) = route_state_root_store(&live, stem) {
-        return routed;
+        return Ok(routed);
     }
-    live.with_file_name(format!("{stem}.db"))
+    Ok(live.with_file_name(format!("{stem}.db")))
 }
 
 /// The canonical state root, cached per env fingerprint: an emit pays one
@@ -312,28 +352,38 @@ pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
 
 fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
     let store = store_path(live);
+    let result = import_sources(&store, sources);
+    match result {
+        Ok(receipt) => Ok(receipt),
+        Err(error) if corrupt_image(&error) => Err(refuse_corrupt_store(&store, &error)),
+        Err(error) => Err(error),
+    }
+}
+
+fn import_sources(store: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
     if let Some(parent) = store.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", store.display()))?;
     }
-    let mut conn = open_store(&store)?;
+    let mut conn = open_store(store)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("{}: {e}", store.display()))?;
     let mut total = FileTally::default();
     for source in sources {
-        let tally = import_file(&tx, source, now_ms)?;
+        let tally = import_file(&tx, source, store, now_ms)?;
         total.ingested += tally.ingested;
         total.corrupt += tally.corrupt;
         total.coalesced += tally.coalesced;
         total.read_bytes += tally.read_bytes;
     }
-    observation::sweep_expired_windows(&tx, now_ms)?;
+    observation::sweep_expired_windows(&tx, now_ms)
+        .map_err(|e| format!("{}: {e}", store.display()))?;
     tx.commit()
         .map_err(|e| format!("{}: {e}", store.display()))?;
-    prune(&mut conn, now_ms)?;
+    prune(&mut conn, now_ms).map_err(|e| format!("{}: {e}", store.display()))?;
     Ok(SyncReceipt {
-        store,
+        store: store.to_path_buf(),
         ingested: total.ingested,
         corrupt: total.corrupt,
         coalesced: total.coalesced,
@@ -345,13 +395,73 @@ fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
 /// schema ensured (v2 created, or v1 migrated) before the connection is
 /// handed out.
 fn open_store(store: &Path) -> Result<Connection, String> {
+    crate::live_store_fence::refuse_worktree_build_on_operator_store(store)?;
+    // No integrity sweep here. quick_check walks every page, so per-open it is
+    // O(store size), and this opener sits on the per-fire hook append path: a
+    // 673 MB store scanned 4-5 times per Bash call drove the fleet load storm.
+    // SQLite surfaces page damage as statement errors instead, and
+    // `refuse_corrupt_store` turns those into the same loud refusal.
     let mut conn = crate::store_conn::open_write(store)?;
     ensure_schema(&mut conn, store)?;
-    observation::ensure_observation_tables(&conn)?;
+    observation::ensure_observation_tables(&conn)
+        .map_err(|e| format!("{}: {e}", store.display()))?;
     Ok(conn)
 }
 
+/// The SQLite diagnostics that mean stored pages are unreadable. Distinct
+/// from busy/locked: a corrupt image must never be written again, so the
+/// caller refuses instead of retrying.
+fn corrupt_image(error: &str) -> bool {
+    error.contains("database disk image is malformed")
+        || error.contains("file is not a database")
+        || error.contains("malformed database schema")
+}
+
+/// File the operator attention row for a corrupt store and decorate the
+/// error with the refusal. The question id hashes the store identity, so
+/// every door that hits the damage dedupes into one attention item.
+fn refuse_corrupt_store(store: &Path, error: &str) -> String {
+    let parent = store.parent().unwrap_or_else(|| Path::new("."));
+    let root = if parent.file_name().is_some_and(|name| name == "db") {
+        parent.parent().unwrap_or(parent)
+    } else {
+        parent
+    };
+    let attention = root.join("questions.jsonl");
+    let mut identity = Sha256::new();
+    identity.update(store.as_os_str().as_encoded_bytes());
+    if let Ok(meta) = store.metadata() {
+        identity.update(meta.dev().to_le_bytes());
+        identity.update(meta.ino().to_le_bytes());
+    }
+    let id = format!("q-store-{:x}", identity.finalize());
+    let row = serde_json::json!({"ts": chrono::Utc::now().to_rfc3339(), "type": "operator_question", "source": "rust", "data": {"question_id": id, "question": error, "ask": "Recover an offline copy of the event store; pause writers before any separately approved installation.", "asker": "event-store", "node": "none", "context": {"blocked_because": error, "unknowns": "The original corruption interleaving and live installation safety have not been verified."}, "subject": "event-store-integrity", "blocks": []}});
+    use std::io::Write;
+    let notice = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&attention)
+        .and_then(|mut file| writeln!(file, "{row}"));
+    match notice {
+        Ok(()) => format!("{error}; write refused; attention: {}", attention.display()),
+        Err(e) => format!(
+            "{error}; write refused; attention {} failed: {e}",
+            attention.display()
+        ),
+    }
+}
+
 /// Read-only handle for history readers; a failure names the store path.
+pub(crate) fn upgrade_role_store(store: &Path) -> Result<(), String> {
+    open_store(store).map(|_| ()).map_err(|error| {
+        if corrupt_image(&error) {
+            refuse_corrupt_store(store, &error)
+        } else {
+            error
+        }
+    })
+}
+
 pub fn open_read(store: &Path) -> Result<Connection, String> {
     let conn = crate::store_conn::open_read(store)?;
     refuse_newer_schema(&conn, store)?;
@@ -413,6 +523,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
     let already_v2: bool = current >= SCHEMA_VERSION && events_table_has_event_id(conn);
     if already_v2 {
         migrate_caused_by(conn)?;
+        crate::role_migration::upgrade_event_store(conn)?;
         return stamp_coverage_epoch(conn, store);
     }
     let has_events: bool = conn
@@ -460,6 +571,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
     tx.commit()
         .map_err(|e| format!("{}: migration: {e}", store.display()))?;
     migrate_caused_by(conn)?;
+    crate::role_migration::upgrade_event_store(conn)?;
     stamp_coverage_epoch(conn, store)
 }
 
@@ -684,18 +796,19 @@ pub fn extract_identity(line: &str) -> EventIdentity {
 /// source works here - rotated, live, ephemeral sibling, an agents lifecycle
 /// journal, or shell-writer fragments - because the `row_hash` key dedupes
 /// overlap and the class comes from the event type, never the file.
-fn import_file(tx: &Transaction, path: &Path, now_ms: i64) -> Result<FileTally, String> {
+fn import_file(
+    tx: &Transaction,
+    path: &Path,
+    store: &Path,
+    now_ms: i64,
+) -> Result<FileTally, String> {
+    let sql_error = |error: &dyn std::fmt::Display| {
+        format!("{}: importing {}: {error}", store.display(), path.display())
+    };
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FileTally::default()),
         Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    // Offsets are BYTE offsets into the raw file, never into a lossy string:
-    // a conversion that resizes bytes would desync the stored cursor.
-    let head_hash: Vec<u8> = {
-        let first = bytes.split(|&b| b == b'\n').next().unwrap_or(&[]);
-        Sha256::digest(first).to_vec()
     };
     let (dev, ino, len) = (meta.dev() as i64, meta.ino() as i64, meta.len());
     let resume: Option<(Vec<u8>, i64)> = tx
@@ -704,7 +817,30 @@ fn import_file(tx: &Transaction, path: &Path, now_ms: i64) -> Result<FileTally, 
             params![dev, ino],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .ok();
+        .optional()
+        .map_err(|e| sql_error(&e))?;
+    // A frozen journal is read on every import. When the cursor already sits
+    // at EOF under the same head line, a bounded head read proves there is
+    // nothing new; only the cursor's age is refreshed so prune keeps it.
+    if let Some((head, offset)) = &resume {
+        if u64::try_from(*offset).is_ok_and(|o| o == len)
+            && read_head_hash(path).as_ref() == Some(head)
+        {
+            tx.execute(
+                "UPDATE ingest_cursor SET updated_ms = ?3 WHERE dev = ?1 AND ino = ?2",
+                params![dev, ino, now_ms],
+            )
+            .map_err(|e| sql_error(&e))?;
+            return Ok(FileTally::default());
+        }
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Offsets are BYTE offsets into the raw file, never into a lossy string:
+    // a conversion that resizes bytes would desync the stored cursor.
+    let head_hash: Vec<u8> = {
+        let first = bytes.split(|&b| b == b'\n').next().unwrap_or(&[]);
+        Sha256::digest(first).to_vec()
+    };
     // Resume only when the head line still hashes equal AND the file has not
     // shrunk under the cursor; anything else re-reads from zero and lets
     // row_hash dedupe the overlap.
@@ -762,7 +898,7 @@ fn import_file(tx: &Transaction, path: &Path, now_ms: i64) -> Result<FileTally, 
                     continue;
                 }
                 Ok(observation::ObservationGate::Insert) => {}
-                Err(e) => return Err(format!("{}: {e}", path.display())),
+                Err(e) => return Err(sql_error(&e)),
             }
         }
         let inserted = insert_v2_row(
@@ -779,7 +915,7 @@ fn import_file(tx: &Transaction, path: &Path, now_ms: i64) -> Result<FileTally, 
                 line,
             },
         )
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|e| sql_error(&e))?;
         tally.ingested += inserted as u64;
     }
     tx.execute(
@@ -796,7 +932,7 @@ fn import_file(tx: &Transaction, path: &Path, now_ms: i64) -> Result<FileTally, 
             now_ms
         ],
     )
-    .map_err(|e| format!("{}: {e}", path.display()))?;
+    .map_err(|e| sql_error(&e))?;
     Ok(tally)
 }
 
@@ -866,7 +1002,7 @@ fn is_valid_event_scope(event_type: &str, _data: &serde_json::Value, scope: &str
         return is_canonical_team_scope(scope);
     }
     // A stop_decision with no team scope remains an auditable event: the
-    // correlated session row is what lead admission reads, and a fresh heir
+    // correlated session row is what lead admission reads, and a fresh successor
     // journals exactly there - before init writes the manifest that would
     // carry its scope.
     event_type == "stop_decision"
@@ -902,42 +1038,252 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Once a day: `ephemeral` rows older than the schema's TTL floor leave the
-/// store. `durable`, `gate`, rejected, and migration receipt rows never
-/// auto-expire; stale ingest cursors still fall off on the same cadence.
+/// store, and stale ingest cursors fall off. `telemetry` rows expire on their
+/// own gate ([`prune_telemetry_due`]). `durable`, `gate`, rejected, and
+/// migration receipt rows never auto-expire.
 fn prune(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
-    let last: i64 = conn
-        .query_row(
-            "SELECT value FROM events_meta WHERE key = 'last_prune_ms'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    if now_ms.saturating_sub(last) < DAY_MS {
+    if now_ms.saturating_sub(meta_ms(conn, "last_prune_ms")) >= DAY_MS {
+        let cutoff = now_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        // Re-read under the write lock: a concurrent sync that already claimed
+        // this pass wins, so two processes never prune at once.
+        if now_ms.saturating_sub(meta_ms(&tx, "last_prune_ms")) >= DAY_MS {
+            tx.execute(
+                "DELETE FROM events WHERE retention_class = 'ephemeral' AND ts_ms < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "DELETE FROM ingest_cursor WHERE updated_ms < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+            stamp_meta(&tx, "last_prune_ms", now_ms)?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+    }
+    // Best-effort: the ingest already committed, so a busy store here never
+    // fails the sync. A pass that errors keeps its backlog mark and retries.
+    let _ = prune_telemetry_due(conn, now_ms);
+    Ok(())
+}
+
+/// An integer `events_meta` value, 0 when absent or unreadable.
+fn meta_ms(conn: &Connection, key: &str) -> i64 {
+    conn.query_row(
+        "SELECT value FROM events_meta WHERE key = ?1",
+        params![key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0)
+}
+
+fn stamp_meta(conn: &Connection, key: &str, value: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO events_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![key, value.to_string()],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The true start of the last telemetry pass. Coverage reads its cutoff from
+/// here, so it never claims a range a pass already deleted from.
+const TELEMETRY_PRUNED_KEY: &str = "telemetry_pruned_ms";
+
+/// 1 while a telemetry pass has rows left (it spent its budget or failed).
+const TELEMETRY_BACKLOG_KEY: &str = "telemetry_backlog";
+
+/// Rows per telemetry delete. Each batch commits on its own and stays well
+/// inside the 5s busy wait an append rides, so the first pass over a large
+/// backlog never starves a live writer.
+const TELEMETRY_PRUNE_BATCH: i64 = 1_000;
+
+/// Wall-clock cap on one pass's telemetry deletes. The sync caller pays it,
+/// so a large backlog costs any one command a few seconds at most.
+const TELEMETRY_PRUNE_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How soon a pass that left a backlog runs again.
+const PRUNE_RETRY_MS: i64 = 5 * 60_000;
+
+fn telemetry_due(conn: &Connection, now_ms: i64) -> bool {
+    let wait = if meta_ms(conn, TELEMETRY_BACKLOG_KEY) != 0 {
+        PRUNE_RETRY_MS
+    } else {
+        DAY_MS
+    };
+    now_ms.saturating_sub(meta_ms(conn, TELEMETRY_PRUNED_KEY)) >= wait
+}
+
+/// Run a telemetry pass when one is due: daily, or every
+/// [`PRUNE_RETRY_MS`] while a backlog is left. The pass is claimed under
+/// the write lock with the backlog mark already set, so a pass that dies
+/// midway is retried rather than forgotten for a day.
+fn prune_telemetry_due(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
+    if !telemetry_due(conn, now_ms) {
         return Ok(());
     }
-    let cutoff = now_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM events WHERE retention_class = 'ephemeral' AND ts_ms < ?1",
-        params![cutoff],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM ingest_cursor WHERE updated_ms < ?1",
-        params![cutoff],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "INSERT INTO events_meta (key, value) VALUES ('last_prune_ms', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = ?1",
-        params![now_ms.to_string()],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    if !telemetry_due(&tx, now_ms) {
+        return Ok(());
+    }
+    stamp_meta(&tx, TELEMETRY_PRUNED_KEY, now_ms)?;
+    stamp_meta(&tx, TELEMETRY_BACKLOG_KEY, 1)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    if prune_telemetry(conn, now_ms, TELEMETRY_PRUNE_BUDGET)? {
+        stamp_meta(conn, TELEMETRY_BACKLOG_KEY, 0)?;
+    }
+    Ok(())
+}
+
+/// Daily counts of the telemetry rows a prune deleted. The row is gone, but
+/// the fact that it happened is not: each delete batch adds its rows here
+/// in the same transaction, keyed by UTC day, kind, and subject.
+const ROLLUP_DDL: &str = "CREATE TABLE IF NOT EXISTS event_rollup (
+         day TEXT NOT NULL,
+         type TEXT NOT NULL,
+         subject TEXT NOT NULL,
+         stored INTEGER NOT NULL,
+         occurrences INTEGER NOT NULL,
+         PRIMARY KEY (day, type, subject)
+     )";
+
+/// The rollup subject of one row: the arm of a tick, `guard:decision` of a
+/// guard row, the state of an inside-leg row, and empty for the rest.
+const ROLLUP_SUBJECT_SQL: &str = "CASE type \
+     WHEN 'control_plane_tick' THEN coalesce(json_extract(line, '$.data.arm'), '') \
+     WHEN 'guard_decision' THEN coalesce(json_extract(line, '$.data.guard'), '') \
+         || ':' || coalesce(json_extract(line, '$.data.decision'), '') \
+     WHEN 'inside_leg_report' THEN coalesce(json_extract(line, '$.data.state'), '') \
+     WHEN 'codex_thread_inside_leg' THEN coalesce(json_extract(line, '$.data.state'), '') \
+     ELSE '' END";
+
+/// Rollup totals for one kind and subject: what prunes deleted from the
+/// first day in range on. `occurrences` sums each row's `occurrence_count`
+/// (default 1), so a coalesced poll counts every poll it stood for.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RollupRow {
+    pub since_day: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub subject: String,
+    pub stored: i64,
+    pub occurrences: i64,
+}
+
+/// Rollup totals per kind and subject over the days at or after
+/// `since_day` (`YYYY-MM-DD`), most occurrences first. A store no prune has
+/// touched has no table and reads empty.
+pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>, String> {
+    let has_table: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_rollup'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if has_table == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT min(day), type, subject, sum(stored), sum(occurrences) FROM event_rollup \
+             WHERE day >= ?1 GROUP BY type, subject \
+             ORDER BY sum(occurrences) DESC, type, subject",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![since_day], |r| {
+            Ok(RollupRow {
+                since_day: r.get(0)?,
+                kind: r.get(1)?,
+                subject: r.get(2)?,
+                stored: r.get(3)?,
+                occurrences: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+/// Delete telemetry rows past their horizon, oldest first within each
+/// kind, until none are left (`true`) or `budget` is spent (`false`). The
+/// match is by kind, not class: rows stored before their kind joined the
+/// class still read `durable`. Rejected rows stay. `guard_decision` allow
+/// rows go on their shorter [`GUARD_ALLOW_TTL_HOURS`] horizon, and
+/// `machine_watch` ticks on their longer [`MACHINE_WATCH_TTL_HOURS`] one.
+/// Each batch counts its rows into `event_rollup` in the transaction that
+/// deletes them, so a crash never drops a count or counts a row twice.
+fn prune_telemetry(
+    conn: &mut Connection,
+    now_ms: i64,
+    budget: std::time::Duration,
+) -> Result<bool, String> {
+    let started = std::time::Instant::now();
+    conn.execute_batch(ROLLUP_DDL).map_err(|e| e.to_string())?;
+    let cutoff = now_ms.saturating_sub(TELEMETRY_TTL_HOURS * HOUR_MS);
+    let allow_cutoff = now_ms.saturating_sub(GUARD_ALLOW_TTL_HOURS * HOUR_MS);
+    let machine_cutoff = now_ms.saturating_sub(MACHINE_WATCH_TTL_HOURS * HOUR_MS);
+    let arm = "coalesce(json_extract(line, '$.data.arm'), '')";
+    let passes = TELEMETRY_EVENT_TYPES
+        .iter()
+        .map(|kind| match *kind {
+            "control_plane_tick" => (*kind, cutoff, format!(" AND {arm} <> 'machine_watch'")),
+            _ => (*kind, cutoff, String::new()),
+        })
+        .chain([
+            (
+                "control_plane_tick",
+                machine_cutoff,
+                format!(" AND {arm} = 'machine_watch'"),
+            ),
+            (
+                "guard_decision",
+                allow_cutoff,
+                " AND json_extract(line, '$.data.decision') = 'allow'".to_string(),
+            ),
+        ]);
+    for (kind, cutoff_ms, filter) in passes {
+        let batch = format!(
+            "SELECT seq FROM events WHERE type = ?1 AND ts_ms < ?2 \
+             AND reject_reason IS NULL{filter} ORDER BY ts_ms, seq LIMIT ?3"
+        );
+        let count_sql = format!(
+            "INSERT INTO event_rollup (day, type, subject, stored, occurrences) \
+             SELECT date(ts_ms / 1000, 'unixepoch'), type, {ROLLUP_SUBJECT_SQL}, count(*), \
+             sum(coalesce(json_extract(line, '$.data.occurrence_count'), 1)) \
+             FROM events WHERE seq IN ({batch}) GROUP BY 1, 2, 3 \
+             ON CONFLICT (day, type, subject) DO UPDATE SET \
+             stored = stored + excluded.stored, \
+             occurrences = occurrences + excluded.occurrences"
+        );
+        let delete_sql = format!("DELETE FROM events WHERE seq IN ({batch})");
+        loop {
+            if started.elapsed() >= budget {
+                return Ok(false);
+            }
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            tx.execute(&count_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
+                .map_err(|e| e.to_string())?;
+            let deleted = tx
+                .execute(&delete_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            if (deleted as i64) < TELEMETRY_PRUNE_BATCH {
+                break;
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// One acknowledged append: the positive readback the caller may trust.
@@ -971,7 +1317,7 @@ pub fn append_envelope(
     envelope_json: &str,
     requested_event_id: Option<&str>,
 ) -> Result<AppendReceipt, String> {
-    let store = store_path(journal);
+    let store = try_store_path(journal)?;
     let line = envelope_json.trim();
     if line.contains('\n') || line.contains('\r') {
         return Err(format!(
@@ -1035,12 +1381,89 @@ pub fn append_envelope(
     let row_hash = Sha256::digest(line.as_bytes()).to_vec();
     let class = retention_class(&ty);
 
+    // Python's door client already retries the same policy
+    // (store_client.py:213): the store's 5s busy wait expires under
+    // fork-heavy contention, and one expired wait must not lose the row.
+    // The event id is the sha256 of the line, so a retried append reads
+    // back as an idempotent hit, never a duplicate.
+    let mut last_error = String::new();
+    for attempt in 0..APPEND_ATTEMPTS {
+        match commit_envelope(&store, line, &event_id, &row_hash, &ty, class, obj, ts_ms) {
+            Ok(receipt) => return Ok(receipt),
+            Err(error) => {
+                let settled = !lock_busy(&error) || attempt + 1 == APPEND_ATTEMPTS;
+                last_error = error;
+                if settled {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250 * (attempt as u64 + 1)));
+            }
+        }
+    }
+    report_lost_row(&store, &ty, &last_error);
+    if corrupt_image(&last_error) {
+        return Err(refuse_corrupt_store(&store, &last_error));
+    }
+    Err(last_error)
+}
+
+/// How many commit attempts [`append_envelope`] makes before the row is
+/// reported lost. Python's store_client carries the same bound.
+const APPEND_ATTEMPTS: usize = 3;
+
+/// The diagnostic SQLite answers when the busy wait expired. Python's
+/// store_client matches the same string at store_client.py:232.
+fn lock_busy(error: &str) -> bool {
+    error.contains("database is locked")
+}
+
+/// The dead-letter line a finally-lost row leaves behind: every commit
+/// attempt failed, the row exists nowhere, and a plain file append is the
+/// only trace that does not contend with the store that refused the write.
+/// Best-effort by design: a failed sidecar write eprintlns, and the
+/// original error still returns to the caller.
+fn report_lost_row(store: &Path, type_name: &str, error: &str) {
+    use std::io::Write;
+    let sidecar = PathBuf::from(format!("{}.lost.jsonl", store.display()));
+    let row = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": type_name,
+        "store": store.display().to_string(),
+        "error": error,
+    });
+    let write = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&sidecar)
+        .and_then(|mut file| writeln!(file, "{row}"));
+    if let Err(e) = write {
+        eprintln!(
+            "event store: lost {type_name:?} row and could not record it in {}: {e}",
+            sidecar.display()
+        );
+    }
+}
+
+/// One commit attempt: the exact body `append_envelope` ran before the
+/// retry loop existed, from the directory create through the positive
+/// readback. Deterministic ids make any attempt after a half-landed
+/// predecessor an idempotent hit.
+fn commit_envelope(
+    store: &Path,
+    line: &str,
+    event_id: &str,
+    row_hash: &[u8],
+    ty: &str,
+    class: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    ts_ms: i64,
+) -> Result<AppendReceipt, String> {
     // The commit creates the directory it needs; the caller-side guards
     // (Python's hermetic fence, the shell's opt-in parent guard) already ran.
     if let Some(parent) = store.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", store.display()))?;
     }
-    let mut conn = open_store(&store)?;
+    let mut conn = open_store(store)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("{}: {e}", store.display()))?;
@@ -1059,8 +1482,8 @@ pub fn append_envelope(
         tx.commit()
             .map_err(|e| format!("{}: {e}", store.display()))?;
         return Ok(AppendReceipt {
-            store,
-            event_id: event_id.clone(),
+            store: store.to_path_buf(),
+            event_id: event_id.to_string(),
             seq,
             retention_class: class.to_string(),
             inserted: false,
@@ -1099,8 +1522,8 @@ pub fn append_envelope(
             tx.commit()
                 .map_err(|e| format!("{}: {e}", store.display()))?;
             return Ok(AppendReceipt {
-                store,
-                event_id,
+                store: store.to_path_buf(),
+                event_id: event_id.to_string(),
                 seq: 0,
                 retention_class: class.to_string(),
                 inserted: false,
@@ -1154,8 +1577,8 @@ pub fn append_envelope(
     tx.commit()
         .map_err(|e| format!("{}: {e}", store.display()))?;
     Ok(AppendReceipt {
-        store,
-        event_id,
+        store: store.to_path_buf(),
+        event_id: event_id.to_string(),
         seq,
         retention_class: class.to_string(),
         inserted: inserted > 0,
@@ -1198,6 +1621,10 @@ pub struct EventQuery {
     /// asked for by name; a gate never satisfies itself on one.
     pub include_rejected: bool,
     pub limit: Option<u32>,
+    /// Commit-order window `after_seq < seq <= until_seq`: an incremental
+    /// reader keeps `after_seq` as its cursor and reads only newer rows.
+    pub after_seq: Option<i64>,
+    pub until_seq: Option<i64>,
 }
 
 impl EventQuery {
@@ -1240,6 +1667,12 @@ impl EventQuery {
         if let Some(v) = self.until_ms {
             push("ts_ms <= ?".into(), Box::new(v));
         }
+        if let Some(v) = self.after_seq {
+            push("seq > ?".into(), Box::new(v));
+        }
+        if let Some(v) = self.until_seq {
+            push("seq <= ?".into(), Box::new(v));
+        }
         if let Some(v) = self.scope.clone() {
             push("(scope = ? OR scope IS NULL)".into(), Box::new(v));
         }
@@ -1271,7 +1704,7 @@ impl EventQuery {
         };
         let limit_sql = self
             .limit
-            .map(|n| format!(" LIMIT {n}"))
+            .map(|n| format!(" ORDER BY seq LIMIT {n}"))
             .unwrap_or_default();
         let history = if recovery {
             "EXISTS(SELECT 1 FROM recovery_history h WHERE h.event_id = events.event_id)"
@@ -1283,7 +1716,28 @@ impl EventQuery {
         } else {
             "NULL"
         };
-        (format!("SELECT seq, event_id, ts_ms, type, source, scope, retention_class, reject_reason, line, {history}, {batch} FROM events{where_sql} ORDER BY seq{limit_sql}"), args)
+        let columns = format!("seq, event_id, ts_ms, type, source, scope, retention_class, reject_reason, line, {history}, {batch}");
+        // An indexed filter reads rows out of commit order. The filter then
+        // picks seqs in a subquery, so the sort holds integers only. Sorting
+        // the selected rows sorted every `line` in a temp B-tree, which
+        // spilled gigabytes to disk on each daemon tick. With no indexed
+        // filter, a plain scan is already in seq order.
+        let indexed = !self.types.is_empty()
+            || self.scope.is_some()
+            || self.session_id.is_some()
+            || self.node_id.is_some()
+            || self.pr_number.is_some()
+            || self.head_sha.is_some();
+        let sql = if indexed {
+            format!("SELECT {columns} FROM events WHERE seq IN (SELECT seq FROM events{where_sql}{limit_sql}) ORDER BY seq")
+        } else {
+            let limit = self
+                .limit
+                .map(|n| format!(" LIMIT {n}"))
+                .unwrap_or_default();
+            format!("SELECT {columns} FROM events{where_sql} ORDER BY seq{limit}")
+        };
+        (sql, args)
     }
 }
 
@@ -1312,6 +1766,14 @@ pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, Str
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+/// The newest committed seq, or 0 for an empty store: the high-water mark an
+/// incremental reader bounds one pass by and stores as its next cursor.
+pub fn max_seq(journal: &Path) -> Result<i64, String> {
+    let conn = open_read(&store_path(journal))?;
+    conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))
         .map_err(|e| e.to_string())
 }
 
@@ -1508,14 +1970,23 @@ pub fn coverage(journal: &Path, since_ms: Option<i64>, types: &[String]) -> Cove
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     // The proven start per asked kind: durable and gate kinds are kept
-    // forever since the epoch; an ephemeral kind only proves back to the
-    // last prune's retention cutoff. A mixed list takes the later start.
+    // forever since the epoch; an ephemeral or telemetry kind only proves
+    // back to the last prune's cutoff for its class. A mixed list takes the
+    // later start.
     let ephemeral_cutoff = last_prune_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
+    let telemetry_pruned_ms = meta_ms(&conn, TELEMETRY_PRUNED_KEY);
+    let telemetry_cutoff = telemetry_pruned_ms.saturating_sub(TELEMETRY_TTL_HOURS * HOUR_MS);
+    let guard_cutoff = telemetry_pruned_ms.saturating_sub(GUARD_ALLOW_TTL_HOURS * HOUR_MS);
     let proven_start = types
         .iter()
         .map(|t| {
             if is_ephemeral_event(t) {
                 epoch.max(ephemeral_cutoff)
+            } else if t.as_str() == "guard_decision" {
+                // Its allow rows only prove back one day.
+                epoch.max(guard_cutoff)
+            } else if is_telemetry_event(t) {
+                epoch.max(telemetry_cutoff)
             } else {
                 epoch
             }
@@ -1686,10 +2157,22 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         Err(err) => return Err(format!("{}: {err}", live.display())),
     };
     let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    // The tail filter the loop below applies per line: the query's types
+    // expanded the way the store side expands them, plus whether typeless
+    // rows pass (they do only when the query asked for the empty type).
+    let tail_allowed = if q.types.is_empty() {
+        None
+    } else {
+        Some(query_types_with_aliases(&q.types))
+    };
+    let tail_typeless_ok = q.types.iter().any(|t| t.is_empty());
     // ponytail: a pre-store line no import took reads as newest; any import fixes it.
     for line_bytes in tail[..complete_end].split(|&b| b == b'\n') {
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
         if line_bytes.is_empty() {
+            continue;
+        }
+        if !tail_line_wanted(line_bytes, tail_allowed.as_deref(), tail_typeless_ok) {
             continue;
         }
         let hash = Sha256::digest(line_bytes).to_vec();
@@ -1731,6 +2214,87 @@ fn read_range(path: &Path, start: u64) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     fh.read_to_end(&mut out)?;
     Ok(out)
+}
+
+/// True when an uncommitted tail line can matter to the query. The store half
+/// of this read filters `type IN (...)`; the tail half hashed and store-probed
+/// every line, so a cursor-less journal put its whole file through sha256 plus
+/// two EXISTS probes per status read even when the fold wanted none of it. The
+/// tail now runs the store's own filter: no `types` filter keeps everything;
+/// otherwise a line survives when any `"type"` key in it carries one of the
+/// query's expanded types, and a line whose type is present but unwanted drops
+/// even when typeless rows pass. The scan is bytes, not a parse: a false keep
+/// only costs what the unfiltered path paid.
+fn tail_line_wanted(line: &[u8], allowed: Option<&[String]>, typeless_ok: bool) -> bool {
+    let Some(allowed) = allowed else {
+        return true;
+    };
+    let mut saw_type_value = false;
+    let mut rest = line;
+    loop {
+        let Some(pos) = find_bytes(rest, b"\"type\"") else {
+            return !saw_type_value && typeless_ok;
+        };
+        rest = &rest[pos + b"\"type\"".len()..];
+        if let Some(value) = json_string_value_after_key(rest) {
+            saw_type_value = true;
+            if allowed.iter().any(|t| t.as_bytes() == value) {
+                return true;
+            }
+        }
+    }
+}
+
+/// First-byte-anchored needle search. Tail lines can be hundreds of KB and a
+/// windows-per-offset scan compares at every position, so advance on the
+/// needle's first byte instead.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let last = haystack.len().checked_sub(needle.len())?;
+    let first = needle[0];
+    let mut at = 0;
+    loop {
+        while at <= last && haystack[at] != first {
+            at += 1;
+        }
+        if at > last {
+            return None;
+        }
+        if &haystack[at..at + needle.len()] == needle {
+            return Some(at);
+        }
+        at += 1;
+    }
+}
+
+/// The byte value of the JSON string literal that begins after an
+/// optional-space colon at `rest`, or None. Escapes pass through byte-wise:
+/// the comparison targets are plain type identifiers, so an escaped byte
+/// simply fails the equality.
+fn json_string_value_after_key(rest: &[u8]) -> Option<&[u8]> {
+    let mut i = 0;
+    while i < rest.len() && (rest[i] == b' ' || rest[i] == b'\t') {
+        i += 1;
+    }
+    if rest.get(i) != Some(&b':') {
+        return None;
+    }
+    i += 1;
+    while i < rest.len() && (rest[i] == b' ' || rest[i] == b'\t') {
+        i += 1;
+    }
+    if rest.get(i) != Some(&b'"') {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while i < rest.len() {
+        match rest[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(&rest[start..i]),
+            _ => i += 1,
+        }
+    }
+    None
 }
 /// Write every committed row, in commit order, to `out` as JSONL - atomically
 /// (tmp file + rename), labeled by the caller as the snapshot it is. Returns
@@ -1781,10 +2345,19 @@ pub struct GcReceipt {
 /// store is not created.
 pub fn gc_ephemeral(journal: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcReceipt, String> {
     let store = store_path(journal);
+    let result = gc_ephemeral_inner(&store, cutoff_ms, dry_run);
+    match result {
+        Ok(receipt) => Ok(receipt),
+        Err(error) if corrupt_image(&error) => Err(refuse_corrupt_store(&store, &error)),
+        Err(error) => Err(error),
+    }
+}
+
+fn gc_ephemeral_inner(store: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcReceipt, String> {
     if !store.exists() {
         return Ok(GcReceipt::default());
     }
-    let conn = open_store(&store)?;
+    let conn = open_store(store)?;
     let named = |e: rusqlite::Error| format!("{}: {e}", store.display());
     let (scanned, malformed) = conn
         .query_row(

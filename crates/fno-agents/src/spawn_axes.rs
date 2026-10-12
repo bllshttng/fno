@@ -344,14 +344,31 @@ pub fn decide(payload: &Value) -> Value {
     let substrate = axis(payload, "substrate");
     let explicit_substrate = opt_str(payload, "explicit_substrate").filter(|s| !s.is_empty());
     let mut injected_substrate: Option<String> = None;
-    if explicit_substrate.is_none() && !substrate.value.is_empty() {
+    // `bg` is the Rust-internal kind, never a config spelling: the CLI flag
+    // refuses it and the dispatch resolver refuses it, so a config value that
+    // reached the child as `--substrate bg` would be the ONE untaught door.
+    // Map it to `thread` loudly instead.
+    let mut substrate_mapped = false;
+    let mut substrate_value = substrate.value.clone();
+    if substrate_value == "bg" {
+        substrate_value = "thread".to_string();
+        substrate_mapped = true;
+    }
+    if explicit_substrate.is_none() && !substrate_value.is_empty() {
         let substrate_ok = flag(payload, "substrate_ok");
         if !prov.is_empty() && substrate_ok {
-            inject.push(json!(["--substrate", substrate.value]));
-            injected_substrate = Some(substrate.value.clone());
+            if substrate_mapped {
+                messages.push(format!(
+                    "fno agents spawn: {}.substrate = \"bg\" is the retired spelling; \
+                     mapping it to \"thread\" (set substrate = \"thread\" to silence this)",
+                    substrate.rung,
+                ));
+            }
+            inject.push(json!(["--substrate", substrate_value]));
+            injected_substrate = Some(substrate_value.clone());
             applied.push(json!([
                 "substrate",
-                substrate.value,
+                substrate_value,
                 format!("{}.substrate", substrate.rung),
             ]));
         } else {
@@ -599,23 +616,18 @@ pub fn reentry_mechanism_decide(ask: &Value) -> Value {
 
 /// The `wake_name` field's answer: the name a wake fork spawns under, read
 /// from the registry beside the reentry plan (same field-on-a-verb shape).
-/// An unreadable registry degrades to the alias, the answer a never-named
-/// uuid earns: a wake must never block mail on registry state.
+/// An unreadable registry degrades to an empty one, so the full rung chain
+/// (row, tombstone, transcript, alias) still answers: a wake must never
+/// block mail on registry state.
 pub fn wake_name_decide(ask: &Value) -> Value {
     let session_id = ask.get("session_id").and_then(Value::as_str).unwrap_or("");
     if session_id.trim().is_empty() {
         return serde_json::json!({ "refused": "session_id is required" });
     }
-    let alias = format!("wake-{}", crate::identity::canonical_handle(session_id));
     let home = crate::paths::AgentsHome::from_env();
     let registry_path = home.registry_json();
-    let name = crate::state::load_registry(&registry_path)
-        .ok()
-        .map(|registry| crate::reentry::wake_spawn_name(&registry, &registry_path, session_id))
-        // An unreadable registry degrades through the tombstone before the
-        // alias: a stamped name is the better answer at every rung.
-        .or_else(|| crate::wake_name::lookup_beside(&registry_path, session_id))
-        .unwrap_or(alias);
+    let registry = crate::state::load_registry(&registry_path).unwrap_or_default();
+    let name = crate::reentry::wake_spawn_name(&registry, &registry_path, session_id);
     serde_json::json!({ "name": name })
 }
 
@@ -649,11 +661,11 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         }
     };
     // A `dispatch_credit` field answers who answers for a node dispatch:
-    // the covering crown owner plus, when the crown row carries a live
+    // the covering role owner plus, when the role row carries a live
     // session, the lead to mail at launch (same field-on-a-verb shape as
     // node_seed).
     if let Some(ask) = parsed.get("dispatch_credit") {
-        println!("{}", crate::dispatch_credit::covering_crown(ask));
+        println!("{}", crate::dispatch_credit::covering_role(ask));
         return 0;
     }
     // A `launch_credit_mail` ask delivers the one launch notice to the
@@ -707,6 +719,13 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
             Err(reason) => serde_json::json!({"refused": reason}),
         };
         println!("{answer}");
+        return 0;
+    }
+    // An `agy_mint_run` field asks the runtime to EXECUTE the mint turn and
+    // answer the conversation id (the argv owner stays in agy_launch.rs; the
+    // process mechanics live in agy_mint.rs).
+    if let Some(ask) = parsed.get("agy_mint_run") {
+        println!("{}", crate::agy_mint::run(ask));
         return 0;
     }
     // A `resume_pin` field routes the same way: which model a resume comes
@@ -819,31 +838,31 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
     0
 }
 
-/// One crown flag the client parses into spawn params: typed here
-/// so a crowned codex thread row is crowned AT MINT - the seed turn
-/// enqueues inside the lane and must never submit to an uncrowned row.
+/// One role flag the client parses into spawn params: typed here
+/// so a promoted codex thread row is promoted AT MINT - the seed turn
+/// enqueues inside the lane and must never submit to an unpromoted row.
 /// The level bound is the type the registry row stores (a u32 0..=2);
 /// territory and succession policy live at the Python seam.
-pub fn insert_crown_flag(
+pub fn insert_role_flag(
     flag: &str,
     args: &mut impl Iterator<Item = String>,
     params: &mut serde_json::Map<String, Value>,
 ) -> Result<(), String> {
     match flag {
-        "--crown" => {
-            let raw = args.next().ok_or("--crown needs a value")?;
+        "--role-level" => {
+            let raw = args.next().ok_or("--role-level needs a value")?;
             let level = raw
                 .parse::<u32>()
                 .ok()
                 .filter(|l| *l <= 2)
-                .ok_or("--crown takes an integer level 0-2")?;
-            params.insert("crown_level".into(), Value::from(level));
+                .ok_or("--role-level takes an integer level 0-2")?;
+            params.insert("role_level".into(), Value::from(level));
         }
-        "--crown-scope" => {
-            let scope = args.next().ok_or("--crown-scope needs a value")?;
-            params.insert("crown_scope".into(), Value::from(scope));
+        "--role-scope" => {
+            let scope = args.next().ok_or("--role-scope needs a value")?;
+            params.insert("role_scope".into(), Value::from(scope));
         }
-        other => return Err(format!("unknown crown flag: {other}")),
+        other => return Err(format!("unknown role flag: {other}")),
     }
     Ok(())
 }
@@ -1032,5 +1051,24 @@ mod tests {
             .as_str()
             .unwrap()
             .ends_with("this worker bills at the caller default"));
+    }
+
+    #[test]
+    fn config_substrate_bg_maps_to_thread_loudly() {
+        // `bg` is the Rust-internal kind: the flag and the dispatch resolver
+        // both refuse it, so a config value must not ride the one untaught
+        // door. Inject `thread` and name the mapping.
+        let out = decide_map(json!({
+            "substrate": {"value": "bg", "rung": "agents.defaults"},
+            "prov": "claude",
+            "substrate_ok": true,
+        }));
+        assert_eq!(out["inject"], json!([["--substrate", "thread"]]));
+        let msg = out["messages"][0].as_str().unwrap();
+        assert!(msg.contains("retired spelling"), "{msg}");
+        // The rung name rides the message in two halves: the composed
+        // 25-char form is a tracked cross-language twin literal.
+        assert!(msg.contains("agents.defaults"), "{msg}");
+        assert!(msg.contains(".substrate = \"bg\""), "{msg}");
     }
 }

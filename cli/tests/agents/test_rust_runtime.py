@@ -38,6 +38,13 @@ def _open_node_row(monkeypatch, tmp_path):
         "cwd": str(tmp_path),
     }
     monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", lambda path, tokens: {"entries": [row], "missing": []})
+    # resolve_seed_node reads through fno.graph.load.load_graph, a second
+    # reader the stub above does not cover: where a real store answers (CI's
+    # changed-smoke env), the seed lookup missed and refused the spawn before
+    # the behavior under test. Answer the loader with the same row.
+    monkeypatch.setattr(
+        "fno.graph.load.load_graph", lambda *a, **k: [{"id": "x-f370", "slug": "codex-seed"}]
+    )
     # The verb reads the store itself for the nodeless derive: point its
     # FNO_HOME at a fixture graph naming the same row.
     monkeypatch.setenv("FNO_HOME", str(tmp_path))
@@ -728,13 +735,13 @@ def test_auto_route_verbs_have_no_python_contract() -> None:
     auto-routed verb is daemon-native, so routing it cannot regress a Python
     flag/stdout contract.
 
-    ``crown`` is the one human-attended shared-registry mutation with no Rust
+    ``role`` is the one human-attended shared-registry mutation with no Rust
     port. Every Rust-backed verb plus ``ask`` still auto-routes.
     """
     assert rr.AUTO_ROUTE_VERBS == rr.RUST_CLIENT_VERBS - rr.PYTHON_AGENT_VERBS
     assert rr.AUTO_ROUTE_VERBS.isdisjoint(rr.PYTHON_AGENT_VERBS)
-    assert "crown" in rr.PYTHON_AGENT_VERBS
-    assert "crown" not in rr.AUTO_ROUTE_VERBS
+    assert "role" in rr.PYTHON_AGENT_VERBS
+    assert "role" not in rr.AUTO_ROUTE_VERBS
     for parity in ("stop", "rm", "list", "reconcile", "ask"):
         assert parity in rr.AUTO_ROUTE_VERBS, f"{parity} must auto-route"
 
@@ -744,7 +751,7 @@ def test_python_agent_verbs_match_registered_commands() -> None:
 
     Every Python ``@agents_app.command`` is preserved as fallback dispatch for
     ``FNO_AGENTS_RUNTIME=python`` mode and no-binary environments. Rust-backed
-    commands auto-route; ``crown`` remains Python-owned because no Rust client
+    commands auto-route; ``role`` remains Python-owned because no Rust client
     port exists. The guard keeps any future Python-only verb from silently
     escaping the explicit set.
     """
@@ -885,6 +892,9 @@ def test_rust_client_verbs_match_client_rs() -> None:
             # through resolve_binary, never `fno agents intel` routing; the
             # arm stays unregistered for the same shrink law.
             "intel",
+            # The stall-cause table: `fno doctor stalls` shells the binary
+            # through resolve_binary, the same shape as intel above.
+            "stalls",
             # `fno backlog session backfill` shells the binary through
             # resolve_binary, never `fno agents` routing.
             "session-backfill",
@@ -1717,6 +1727,9 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
     argv = captured["argv"]
     assert argv[1] == "spawn"
     assert argv[2].startswith("--defaults-applied=")
+    # The serve lane's substrate is thread: the binary refuses the retired bg
+    # spelling, so a default opencode spawn died at exit 2 on it.
+    assert argv[argv.index("--substrate") + 1] == "thread"
     assert argv.index("--effort=high") < argv.index("--")
     tail = argv[argv.index("--") + 1 :]
     assert tail == ["/target x-90a9"]
@@ -1823,14 +1836,13 @@ def test_fleet_incident_journey_stop_gates_and_clear_reopens(tmp_path, monkeypat
     # real writer runs and must not refuse.
     bus_dir = tmp_path / "bus"
     bus_dir.mkdir()
-    (home / "registry.json").write_text(json.dumps({
-        "schema_version": 1,
-        "agents": [{
+    from tests._table_seed import seed_registry
+
+    seed_registry(path=home / "registry.json", rows=[{
             "name": "red", "harness": "claude", "status": "live",
             "harness_session_id": "abcd1234-1111-7222-8333-444455556666",
             "cwd": "/tmp", "log_path": "/tmp/red.log",
-        }],
-    }))
+    }])
     announce_env = {
         **os.environ,
         "FNO_AGENTS_HOME": str(home),

@@ -95,7 +95,7 @@ def resolve_self_identity(
         # joined session) resolves by the uncontended single-family
         # elimination, exactly as the registry's own SessionStart
         # registration expects - colliding would read that session's OWN
-        # registered row as contention and refuse every crown grantor,
+        # registered row as contention and refuse every role grantor,
         # whoami and --from-self for it. The fail-closed collide lives in
         # the stamped branches below, where an attester can still witness
         # self.
@@ -344,11 +344,9 @@ def _roster_name_for_session(session_id: str) -> str:
     if not sid:
         return ""
     try:
-        import json
+        from fno.registry_door import read_registry_document
 
-        from fno.paths import agents_registry_path
-
-        raw = json.loads(agents_registry_path().read_text(encoding="utf-8"))
+        raw = read_registry_document()[0]
     except Exception:  # noqa: BLE001 - identity must degrade, never crash
         return ""
     rows = raw.get("agents") if isinstance(raw, dict) else None

@@ -410,6 +410,16 @@ impl LoopBudget {
 
 // ── journal ───────────────────────────────────────────────────────────────────
 
+/// The loop-stream envelope every [`Journal`] write carries.
+fn loop_envelope(event_type: &str, data: Value) -> Value {
+    json!({
+        "ts": Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "type": event_type,
+        "source": "loop",
+        "data": data,
+    })
+}
+
 /// Append-only event log with a project-authoritative path and a best-effort
 /// global mirror.
 pub struct Journal {
@@ -452,24 +462,40 @@ impl Journal {
     /// does not require these kinds to be registered in KNOWN_EVENT_KINDS.
     /// These are loop-stream events, not daemon-stream events.
     pub fn append(&self, event_type: &str, data: Value) -> Result<(), LoopError> {
-        let ts = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let env = json!({
-            "ts": ts,
-            "type": event_type,
-            "source": "loop",
-            "data": data,
-        });
+        let env = loop_envelope(event_type, data);
         // Write to project file - FATAL on failure.
         self.append_to_file(&self.project_path, &env, true)?;
 
-        // Mirror to global file - best-effort (warn, never fatal).
+        // Mirror to global file - best-effort and non-fatal, so a failure is
+        // said only on FNO_VERBOSE=1 (a locked store once printed it 14 times
+        // in one second).
         if self.project_path != self.global_path {
             if let Err(e) = self.append_to_file(&self.global_path, &env, false) {
-                eprintln!("loop-runtime: global mirror write failed (non-fatal): {e}");
+                if std::env::var_os("FNO_VERBOSE").is_some_and(|v| v == "1") {
+                    eprintln!("loop-runtime: global mirror write failed (non-fatal): {e}");
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// [`Journal::append`] for a row the arms readout folds from both
+    /// journals. When the mirror is the agents journal's own twin
+    /// (`<root>/agents/events.jsonl` beside `<root>/events.jsonl`), the readout
+    /// reads both, so one write lands instead of two. Any other pair, such as
+    /// a repo journal the readout never reads, keeps its mirror.
+    pub fn append_readout_row(&self, event_type: &str, data: Value) -> Result<(), LoopError> {
+        let twin = self
+            .project_path
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("events.jsonl"));
+        if twin.as_deref() == Some(self.global_path.as_path()) {
+            self.append_to_file(&self.project_path, &loop_envelope(event_type, data), true)
+        } else {
+            self.append(event_type, data)
+        }
     }
 
     /// Append through the same bounded mkdir mutex as canonical Python and Rust claims writers.

@@ -120,9 +120,8 @@ impl CapSnapshot {
 /// fields (`observed_model`, `launch_account`, `account_record_id`) survive a
 /// typed read that would silently drop them.
 fn registry_rows(registry_path: &std::path::Path) -> Result<Vec<Value>, String> {
-    let raw =
-        std::fs::read_to_string(registry_path).map_err(|e| format!("registry unreadable: {e}"))?;
-    let v: Value = serde_json::from_str(&raw).map_err(|e| format!("registry unparseable: {e}"))?;
+    let v = crate::registry_store::read(registry_path)
+        .map_err(|e| format!("registry unreadable: {e}"))?;
     Ok(v.get("agents")
         .and_then(Value::as_array)
         .cloned()
@@ -337,6 +336,11 @@ pub fn codex_capped_tail(rollout: &Path) -> TailReading {
             payload
                 .pointer("/error/message")
                 .and_then(Value::as_str)
+                .or_else(|| {
+                    payload
+                        .pointer("/error/codex_error_info")
+                        .and_then(Value::as_str)
+                })
                 .map(|m| m.chars().take(200).collect::<String>())
         } else {
             None
@@ -475,19 +479,54 @@ fn runtime_state_path_from(
 /// `state_dir` when its RAW value is absolute (a relative one falls back to
 /// `$HOME/.fno` in Python, never the cwd); else `$HOME/.fno`. Before
 /// this defaulted to `runtime-state.json`, a file nobody writes, so every
-/// reset read as unknown.
+/// reset read as unknown. The non-override answers run through
+/// [`migrate_runtime_state_to_state_dir`], the same move ladder Python's
+/// `paths.state_runtime_file` runs, so both languages answer one file.
 pub fn runtime_state_path(cwd: &Path) -> PathBuf {
+    // The env override names one explicit file: the ladder must never rename
+    // or relocate a caller-pinned path, so it is answered verbatim.
+    if let Some(v) = std::env::var_os("FNO_RUNTIME_STATE_PATH") {
+        return PathBuf::from(v);
+    }
     let raw = crate::agents_config::config_lookup(cwd, &["state_dir"])
         .and_then(|v| v.as_str().map(str::to_string));
     let dir = raw.map(|raw| match raw.strip_prefix("~/") {
         Some(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)),
         None => Some(PathBuf::from(&raw)),
     });
-    runtime_state_path_from(
-        std::env::var_os("FNO_RUNTIME_STATE_PATH").as_deref(),
+    let base = runtime_state_path_from(
+        None,
         dir.flatten().filter(|d| d.is_absolute()),
         std::env::var_os("HOME").as_deref(),
-    )
+    );
+    migrate_runtime_state_to_state_dir(&base)
+}
+
+/// The `state/` spelling of a state-root runtime file: rename the legacy
+/// root file into it when only the legacy one exists, answer the new path
+/// otherwise. Mirrors `paths.state_runtime_file` (rename never clobbers; a
+/// failed rename keeps the caller on the legacy path). A base that is not a
+/// bare state-root child (an override or odd shape) passes through unchanged.
+fn migrate_runtime_state_to_state_dir(base: &Path) -> PathBuf {
+    let Some(file_name) = base.file_name().map(|n| n.to_os_string()) else {
+        return base.to_path_buf();
+    };
+    let Some(root) = base.parent() else {
+        return base.to_path_buf();
+    };
+    let new = root.join("state").join(&file_name);
+    if new.exists() || !base.exists() {
+        return new;
+    }
+    match std::fs::create_dir_all(new.parent().unwrap_or(root))
+        .and_then(|()| std::fs::rename(base, &new))
+    {
+        Ok(()) => new,
+        // A racer's winning rename removed base; answering base would read a
+        // vanished path, so prefer a new that exists.
+        Err(_) if new.exists() => new,
+        Err(_) => base.to_path_buf(),
+    }
 }
 
 fn account_reset_timezones(candidates: &[PathBuf]) -> BTreeMap<String, String> {
@@ -681,7 +720,12 @@ pub fn snapshot_with(
             continue;
         };
         let name = name.to_string();
-        let session_id = s_field(row, "session_id").map(String::from);
+        // Codex rows carry the thread UUID in `harness_session_id`; the
+        // plain `session_id` field is the rarer spelling. The handoff
+        // frontmatter needs the real id, so the fallback rides here.
+        let session_id = s_field(row, "session_id")
+            .or_else(|| s_field(row, "harness_session_id"))
+            .map(String::from);
         let harness = s_field(row, "harness").unwrap_or("unknown").to_string();
         let provider = provider_of(row);
         let account = account_of(row);
@@ -1948,8 +1992,23 @@ fn write_handoff_doc(
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
+    // The cap actor runs on the machine hosting the capped session, so this
+    // machine IS the origin. Either value missing leaves the body unchanged;
+    // its `old transcript: unknown` line already says so.
+    let frontmatter = match (member.session_id.as_deref(), transcript.as_deref()) {
+        (Some(sid), Some(path)) => {
+            // A copied transcript arrives with the origin record beside it:
+            // the record names the machine the session BEGAN on, and it
+            // outranks this machine's identity.
+            let origin = crate::session_origin::read_beside(path, sid).unwrap_or_else(|| {
+                crate::session_origin::SessionOrigin::for_this_machine(&member.harness, sid, path)
+            });
+            format!("---\n{}\n---\n\n", origin.frontmatter())
+        }
+        _ => String::new(),
+    };
     let body = format!(
-        "# Cap handoff: {} -> {dest}\n\n- member: {}\n- node: {node}\n- old transcript: {old_transcript}\n- capped since: {}\n- excerpt: {}\n",
+        "{frontmatter}# Cap handoff: {} -> {dest}\n\n- member: {}\n- node: {node}\n- old transcript: {old_transcript}\n- capped since: {}\n- excerpt: {}\n",
         lane.lane,
         member.name,
         lane.reset_epoch.map(epoch_to_rfc3339).unwrap_or_else(|| "unknown".into()),
@@ -2546,7 +2605,38 @@ mod tests {
         let home = AgentsHome::at(root.join("agents-home"));
         let doc = write_handoff_doc(&home, lane, &lane.members[0], "dest", 1_000_000_000).unwrap();
         let body = std::fs::read_to_string(&doc).unwrap();
+        // The doc now opens with the origin frontmatter: harness, session id
+        // and transcript all name the capped member (AC4-HP).
+        assert!(body.starts_with("---\norigin:"), "{body}");
+        assert!(body.contains("\n---\n\n"), "frontmatter closes: {body}");
+        assert!(body.contains("harness: \"codex\""), "{body}");
+        assert!(
+            body.contains(&format!("session_id: \"{CODEX_THREAD}\"")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!("transcript_path: \"{t}\"")),
+            "{body}"
+        );
         assert!(body.contains(&t), "{body}");
+        assert!(body.contains("old transcript:"), "{body}");
+        // A copied origin record outranks this machine's identity: the doc
+        // names the machine the session began on (AC4-HP, copied side).
+        let copied = format!(
+            "{{\"machine\":\"aaaaaaaaaaaaaaaa\",\"host\":\"mac-a\",\"harness\":\"codex\",\"session_id\":\"{CODEX_THREAD}\",\"transcript_path\":\"{t}\",\"recorded_at\":\"2026-10-01T00:00:00+00:00\"}}"
+        );
+        std::fs::write(
+            Path::new(&t)
+                .parent()
+                .unwrap()
+                .join(format!("{CODEX_THREAD}.fno.json")),
+            copied,
+        )
+        .unwrap();
+        let doc = write_handoff_doc(&home, lane, &lane.members[0], "dest2", 1_000_000_001).unwrap();
+        let body = std::fs::read_to_string(&doc).unwrap();
+        assert!(body.contains("machine: \"aaaaaaaaaaaaaaaa\""), "{body}");
+        assert!(body.contains("host: \"mac-a\""), "{body}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2632,6 +2722,20 @@ mod tests {
                 .is_some_and(|e| e.starts_with("You've hit your usage limit")),
             "{:?}",
             lane.members[0].excerpt
+        );
+        write(&rollout, &serde_json::json!({
+            "timestamp":"2026-09-18T12:00:00Z", "type":"event_msg",
+            "payload":{"type":"task_complete", "error":{"codex_error_info":"usage_limit_exceeded"}}
+        }).to_string());
+        let code_only = snapshot_with(&scan, 1_000_000_001, &cfg(2)).unwrap();
+        assert!(
+            code_only
+                .lanes
+                .iter()
+                .find(|lane| lane.lane == "openai:default")
+                .unwrap()
+                .members[0]
+                .capped
         );
         let _ = std::fs::remove_dir_all(&root);
     }

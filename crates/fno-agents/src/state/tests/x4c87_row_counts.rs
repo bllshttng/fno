@@ -3,47 +3,27 @@
 use super::*;
 
 #[test]
-fn registry_update_uses_python_shared_lock() {
-    let dir = tmpdir("python-shared-lock");
+fn a_rust_registry_write_moves_the_revision_python_compares() {
+    // Python and Rust writers no longer share a flock: a Python commit names
+    // the revision it read, so every Rust write that changes the registry
+    // must move that revision. A write that changes nothing must not.
+    let dir = tmpdir("revision-cas");
     let path = dir.join("agents/registry.json");
-    let python_lock_path = path.parent().unwrap().join("locks").join("_registry.lock");
-
-    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let writer_path = path.clone();
-    let writer = std::thread::spawn(move || {
-        update_registry(&writer_path, |_registry| {
-            entered_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-        })
-        .unwrap();
-    });
-    entered_rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("Rust registry update entered its locked closure");
-    assert!(
-        python_lock_path.parent().unwrap().is_dir(),
-        "Rust update creates the Python lock directory for a fresh registry"
-    );
-
-    let python_lock_probe = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .open(&python_lock_path)
-        .unwrap();
-    let python_lock_is_held = matches!(
-        python_lock_probe.try_lock(),
-        Err(std::fs::TryLockError::WouldBlock)
-    );
-    drop(python_lock_probe);
-
-    release_tx.send(()).unwrap();
-    writer.join().unwrap();
-    assert!(
-        python_lock_is_held,
-        "Rust update must hold the same sidecar as Python update_registry"
-    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let (_, before) = crate::registry_store::read_versioned(&path).unwrap();
+    update_registry(&path, |r| r.entries.push(sample_entry("w1"))).unwrap();
+    let (_, after) = crate::registry_store::read_versioned(&path).unwrap();
+    assert!(after > before, "revision {before} -> {after}");
+    update_registry(&path, |_| {}).unwrap();
+    let (_, unchanged) = crate::registry_store::read_versioned(&path).unwrap();
+    assert_eq!(unchanged, after);
+    // The other write door stamps its own writer_rev; that alone is no change.
+    let write = crate::registry_store::begin(&path).unwrap();
+    let mut doc = write.document.clone();
+    doc["writer_rev"] = serde_json::json!("other/registry-commit");
+    assert!(!write.commit(doc).unwrap());
+    let (_, still) = crate::registry_store::read_versioned(&path).unwrap();
+    assert_eq!(still, after);
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -58,19 +38,23 @@ fn registry_update_uses_python_shared_lock() {
 
 /// A sanitized 3-row registry whose middle row the typed reader cannot
 /// represent. Keys and value types mirror a real worker row; names, ids,
-/// and paths are synthetic.
+/// and paths are synthetic. The broken row CARRIES a well-formed provenance
+/// block, so the provenance-strip heal must refuse it: the failure is
+/// elsewhere, and the same-schema read stays fatal.
 fn divergent_registry_fixture() -> String {
-    let row = |name: &str, status: &str| {
+    // One session id per row: the table keys rows on it.
+    let row = |name: &str, status: &str, extra: &str| {
         format!(
-            r#"{{"name":"{name}","cwd":"/tmp/proj","harness":"claude","harness_session_id":"11111111-2222-3333-4444-555555555555","status":"{status}","created_at":"2026-08-16T00:00:00Z"}}"#
+            r#"{{"name":"{name}","cwd":"/tmp/proj","harness":"claude","harness_session_id":"11111111-2222-3333-4444-{name:0>12}","status":"{status}","created_at":"2026-08-16T00:00:00Z"{extra}}}"#
         )
     };
+    let valid_provenance = r#","spawn_provenance":{"origin":{"kind":"session","parent":{"harness":"claude","session_id":"p-sess","cwd":"/w"},"invocation":null},"owner":{"kind":"session","harness":"claude","session_id":"p-sess","cwd":"/w"}}"#;
     format!(
         r#"{{"schema_version":{},"agents":[{},{},{}]}}"#,
         REGISTRY_SCHEMA_VERSION,
-        row("worker-alpha", "live"),
-        row("worker-beta", "hibernating"),
-        row("worker-gamma", "live")
+        row("worker-alpha", "live", ""),
+        row("worker-beta", "hibernating", valid_provenance),
+        row("worker-gamma", "live", "")
     )
 }
 
@@ -93,7 +77,7 @@ fn registry_with_unrepresentable_row_errors_naming_both_counts() {
     let dir = tmpdir("divergent-row");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("registry.json");
-    std::fs::write(&path, divergent_registry_fixture()).unwrap();
+    crate::registry_store::seed_raw(&path, divergent_registry_fixture());
 
     let err = load_registry(&path).expect_err("unrepresentable row must fail the read");
     let msg = err.to_string();
@@ -176,7 +160,7 @@ fn registry_missing_agents_key_is_a_valid_empty() {
     let dir = tmpdir("no-array-key");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("registry.json");
-    std::fs::write(&path, r#"{"schema_version":14}"#).unwrap();
+    crate::registry_store::seed_raw(&path, r#"{"schema_version":14}"#);
     let (reg, raw) = load_registry_with_counts(&path).unwrap();
     assert!(reg.entries.is_empty());
     assert_eq!(raw, 0);
@@ -196,12 +180,12 @@ fn registry_true_empty_states_stay_successful_zeros() {
     assert!(reg.entries.is_empty(), "missing file is a valid empty");
     assert_eq!(raw, 0);
 
-    std::fs::write(&path, "   \n\t ").unwrap();
+    crate::registry_store::seed_raw(&path, "   \n\t ");
     let (reg, raw) = load_registry_with_counts(&path).unwrap();
     assert!(reg.entries.is_empty(), "whitespace file is a valid empty");
     assert_eq!(raw, 0);
 
-    std::fs::write(&path, r#"{"schema_version":14,"agents":[]}"#).unwrap();
+    crate::registry_store::seed_raw(&path, r#"{"schema_version":14,"agents":[]}"#);
     let (reg, raw) = load_registry_with_counts(&path).unwrap();
     assert!(reg.entries.is_empty(), "an empty array is a valid empty");
     assert_eq!(raw, 0);
@@ -216,7 +200,7 @@ fn registry_typed_failure_without_rows_keeps_the_parse_error() {
     let dir = tmpdir("no-rows-failure");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("registry.json");
-    std::fs::write(&path, r#"{"schema_version":"fourteen","agents":[]}"#).unwrap();
+    crate::registry_store::seed_raw(&path, r#"{"schema_version":"fourteen","agents":[]}"#);
     let err = load_registry(&path).expect_err("wrong-typed schema_version must fail");
     assert!(
         !matches!(err, StateError::InvariantViolation(_)),

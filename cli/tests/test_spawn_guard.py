@@ -25,13 +25,6 @@ from typer.testing import CliRunner
 
 from fno.agents.cli import agents_app
 from fno.claims.core import acquire_claim, claim_status
-from fno.claims.io import (
-    claim_path,
-    global_claims_root as _global_claims_root,
-    read_claim_file,
-    serialize_claim,
-)
-from fno.claims.types import now_ms
 
 runner = CliRunner()
 
@@ -109,14 +102,12 @@ def test_live_claim_already_running_no_reservation(claims_tmp):
 
 
 def test_corrupted_claim_verdict_no_reservation(claims_tmp):
-    # Write a garbage lock file at the node:<id> path so the probe classifies it
-    # corrupted (claim_status returns state=corrupted, never raises).
-    from fno.claims.core import claim_path
-    from fno.claims.io import global_claims_root
+    # An unreadable row at node:<id> classifies corrupted (claim_status
+    # returns state=corrupted, never raises).
+    from tests._table_seed import update_claim
 
-    path = claim_path("node:x-dddd", root=global_claims_root())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ this is not valid claim yaml :::", encoding="utf-8")
+    acquire_claim("node:x-dddd", "h0")
+    update_claim("node:x-dddd", schema_version=999)
 
     res = _invoke("x-dddd", "--holder", "h", "--json")
     assert res.exit_code == 0  # corrupted is a clean verdict
@@ -205,44 +196,6 @@ def test_no_reserve_live_claim_still_already_running(claims_tmp):
     assert json.loads(res.output)["verdict"] == "already-running"
 
 
-def test_dead_failure_limit_refuses_spawn_guard_path(claims_tmp, monkeypatch: pytest.MonkeyPatch):
-    """The shell dispatch choke consumes the family-2 failure-limit decision."""
-    from fno.config import SettingsModel
-    from fno.graph import failure
-
-    settings = SettingsModel(active_backlog={"failure_limit": 2})
-    monkeypatch.setattr("fno.config.load_settings", lambda: settings)
-    monkeypatch.setattr(
-        failure,
-        "read_events",
-        lambda *_a, **_k: [
-            {"type": "node_failed", "data": {"unit_id": "x-dead"}},
-            {"type": "node_failed", "data": {"unit_id": "x-dead"}},
-        ],
-    )
-    monkeypatch.setattr(
-        "fno.target_cli._classify_node_claim",
-        lambda _node: ("free", None),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "fno.agents.truth_status.resolve_truth_status",
-        lambda *_a, **_k: {"state": "unknown"},
-    )
-    monkeypatch.setattr(
-        "fno.backlog.advance.subprocess.run",
-        lambda *_a, **_k: type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
-    )
-    monkeypatch.setattr("fno.agents.events.emit", lambda *_a, **_k: None)
-    monkeypatch.setattr("fno.notify._impl.send_notification", lambda *_a, **_k: (0, ""))
-
-    res = _invoke("x-dead", "--holder", "dispatch-node:me", "--json")
-
-    assert res.exit_code == 0
-    obj = json.loads(res.output)
-    assert obj["verdict"] == "refused"
-    assert obj["reason"] == "auto-deferred"
-    assert claim_status("dispatch:x-dead")["state"] == "free"
 
 
 def test_direct_node_spawn_crosses_shared_guard_before_spawn(
@@ -396,6 +349,8 @@ def test_expired_dead_dispatch_reservation_reaped(claims_tmp):
     SUSPECT-arm behavior is asserted by
     test_suspect_claim_already_running_no_reservation above."""
     import psutil
+
+    from tests._table_seed import update_claim
     dead_pid = 999_999
     while psutil.pid_exists(dead_pid):
         dead_pid += 1
@@ -405,9 +360,7 @@ def test_expired_dead_dispatch_reservation_reaped(claims_tmp):
     acquire_claim(
         "dispatch:x-7777", "dispatch-node:orphan", pid=dead_pid, ttl_ms=60_000
     )
-    path = claim_path("dispatch:x-7777")
-    claim = read_claim_file(path)
-    path.write_text(serialize_claim(claim.model_copy(update={"expires_at": now_ms() - 1})))
+    update_claim("dispatch:x-7777", expires_at=1)
     assert claim_status("dispatch:x-7777")["state"] == "stale"
 
     res = _invoke("x-7777", "--holder", "dispatch-node:fresh", "--json")
@@ -452,7 +405,7 @@ def test_a_held_claim_with_no_target_init_reads_unproven(claims_tmp):
 
     `fno backlog next --claim <holder> --external` and a bare `fno agents claim
     acquire` both write this key with nobody launched. Calling that a live
-    worker tells a king the opposite of the truth at the moment it decides
+    worker tells a lead the opposite of the truth at the moment it decides
     whether to staff the node.
     """
     import os
@@ -559,17 +512,17 @@ def test_a_worked_authority_outage_names_itself_not_a_running_worker(
     claims_tmp, monkeypatch: pytest.MonkeyPatch
 ):
     """When the worked overlay refuses, a FREE claim must not render as
-    `already-running reason=unproven-claim`: the block_reason token is the
-    honest reason (x-ae54 - peers refused as already-running while free)."""
-    def _raise(**_kw):
-        raise RuntimeError("roster timeout")
-
-    monkeypatch.setattr("fno.graph.statuses.live_worked_node_ids", _raise)
+    `already-running`: the guard could not check, and that is not occupancy
+    (three free nodes were refused as already-running while their leads fell
+    back to a costlier lane). The verdict says unknown and the detail carries
+    the reader failure verbatim."""
+    _native_worker_observation(monkeypatch, "", worked_error="roster timeout")
     res = _invoke("x-9999", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.output)
-    assert obj["verdict"] == "already-running"
+    assert obj["verdict"] == "unknown"
     assert obj["reason"] == "worked-authority-unavailable"
+    assert "roster timeout" in obj["detail"]
 
 
 def test_a_worker_row_block_with_no_claim_names_the_row(
@@ -579,24 +532,38 @@ def test_a_worker_row_block_with_no_claim_names_the_row(
     occupant, so the reason is its own token, `worker` rides the payload, and
     no claim holder is named - `unproven-claim` asserted a claim that does not
     exist and dropped the only actionable field."""
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-8888": ["king-a792-control"]},
-    )
+    _native_worker_observation(monkeypatch, "lead-a792-control")
     res = _invoke("x-8888", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.output)
     assert obj["verdict"] == "already-running"
     assert obj["reason"] == "worker-row"
-    assert obj["worker"] == "king-a792-control"
+    assert obj["worker"] == "lead-a792-control"
     assert "holder" not in obj
     assert obj["remedy"] == (
-        "fno agents peek king-a792-control; if its run is finished, "
-        "fno agents stop king-a792-control"
+        "fno agents peek lead-a792-control; if its run is finished, "
+        "fno agents stop lead-a792-control"
     )
 
 
 # --- x-c08a: the refusal names the worker ROW, never the claim ----------------
+
+
+def _native_worker_observation(monkeypatch, worker, *, worked_error=None, warning=None):
+    from fno import rust_binary
+
+    call = rust_binary.verb_call
+
+    def observe(verb, payload, *args, **kwargs):
+        if verb == ["backlog", "advance", "--stdin"] and payload.get("op") == "claim":
+            return {"holder": "unknown", "truth_status": "unknown", "worker": worker,
+                    "action": "blocked", "blocks_dispatch": True,
+                    "block_reason": "worked-authority-unavailable" if worked_error else f"held: worked overlay: {worker}",
+                    "verdict": "dead_predecessor", "worked_error": worked_error,
+                    "warning": warning}
+        return call(verb, payload, *args, **kwargs)
+
+    monkeypatch.setattr(rust_binary, "verb_call", observe)
 
 
 def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
@@ -608,6 +575,9 @@ def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
     followed it to a claim `fno agents claim status` read as UNCLAIMED."""
     import psutil
 
+    from fno.claims.io import global_claims_root as _global_claims_root
+    from tests._table_seed import update_claim
+
     dead_pid = 999_999
     while psutil.pid_exists(dead_pid):
         dead_pid += 1
@@ -615,15 +585,10 @@ def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
         "node:x-6f98", "spawn-handover:bp-6f98-locked-decision",
         pid=dead_pid, ttl_ms=60_000,
     )
-    path = claim_path("node:x-6f98", root=_global_claims_root())
-    claim = read_claim_file(path)
-    path.write_text(serialize_claim(claim.model_copy(update={"expires_at": now_ms() - 1})))
+    update_claim("node:x-6f98", expires_at=1)
     assert claim_status("node:x-6f98", root=_global_claims_root())["state"] == "stale"
 
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-6f98": ["bp-6f98-locked-decision"]},
-    )
+    _native_worker_observation(monkeypatch, "bp-6f98-locked-decision")
     res = _invoke("x-6f98", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.stdout)
@@ -644,19 +609,16 @@ def test_the_contested_dispatch_warning_leads_with_the_worker_row(
     while the row was the occupant."""
     import psutil
 
+    from tests._table_seed import update_claim
+
     dead_pid = 999_999
     while psutil.pid_exists(dead_pid):
         dead_pid += 1
     acquire_claim(
         "node:x-6f99", "spawn-handover:bp-6f99-planner", pid=dead_pid, ttl_ms=60_000
     )
-    path = claim_path("node:x-6f99", root=_global_claims_root())
-    claim = read_claim_file(path)
-    path.write_text(serialize_claim(claim.model_copy(update={"expires_at": now_ms() - 1})))
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-6f99": ["bp-6f99-planner"]},
-    )
+    update_claim("node:x-6f99", expires_at=1)
+    _native_worker_observation(monkeypatch, "bp-6f99-planner", warning="dispatch blocked for x-6f99: worker row bp-6f99-planner is on the node")
     res = _invoke("x-6f99", "--holder", "dispatch-node:444", "--json")
     assert res.exit_code == 0
     assert json.loads(res.stdout)["reason"] == "worker-row"

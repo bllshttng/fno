@@ -5,7 +5,7 @@ a durable envelope; `mail unread`/`ack` are the per-recipient cursor consume;
 `mail rebuild-render` regenerates the derived markdown from the log. The old
 `fno inbox` namespace (mail's alias for `mail unread`) was retired clean (no
 pointer, no shim). x-afa6 later minted a real `fno inbox` root for an
-unrelated purpose (approvals/notify/outstanding/the king board); mail's old
+unrelated purpose (approvals/notify/outstanding/the lead board); mail's old
 `unread` leaf never came back under it.
 """
 from __future__ import annotations
@@ -113,12 +113,17 @@ def test_named_send_ruling_appends_dated_node_block_before_transport(
         app,
         [
             "agents", "mail", "send", "worker-one", marker,
-            "--from-name", "king", "--ruling", "x-511a",
+            "--from-name", "lead", "--ruling", "x-511a",
         ],
     )
 
     assert sent.exit_code == 0, sent.output
-    assert sent.stdout == "msg-ruling1 delivered (hosted)\n"
+    import json as _json
+
+    receipt = _json.loads(sent.stdout)
+    assert set(receipt) == {"msg_id", "subject", "to", "status"}
+    assert receipt["msg_id"] == "msg-ruling1"
+    assert receipt["status"] == "delivered (hosted)"
     assert len(calls) == 1
     import os as _os
     import subprocess as _sp
@@ -189,7 +194,7 @@ def test_named_send_ruling_uses_explicit_cwd_graph(
         app,
         [
             "agents", "mail", "send", "worker-one", marker,
-            "--from-name", "king", "--cwd", str(nested_workdir),
+            "--from-name", "lead", "--cwd", str(nested_workdir),
             "--ruling", "x-511a",
         ],
     )
@@ -209,7 +214,7 @@ def test_send_ruling_unknown_node_refuses_before_mail(
         app,
         [
             "agents", "mail", "send", "worker-one",
-            "This ruling names no real node.", "--from-name", "king",
+            "This ruling names no real node.", "--from-name", "lead",
             "--ruling", "x-dead",
         ],
     )
@@ -416,7 +421,11 @@ def test_project_anycast_send_delivers_repeated_bodies_without_a_ledger(runner, 
     second = runner.invoke(app, args)
 
     assert first.exit_code == 0, first.output
-    assert "queued (durable) for project web" in first.stdout
+    import json as _json
+
+    receipt = _json.loads(first.stdout.strip())
+    assert receipt["to"] == "web"
+    assert "queued (durable)" in receipt["status"]
     assert second.exit_code == 0, second.output
     assert not (paths.bus_dir() / "word-budget").exists()
 
@@ -881,6 +890,80 @@ def test_us8_codex_live_inject_hosted_short_circuits_durable(
     assert payload == []
 
 
+def test_plain_send_delivers_header_and_body(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    # A plain peer send (no --kind) delivers the header line and then the
+    # body: no live turn arrives as the header alone. The bus row keeps the
+    # same body, so the id the header names resolves to it.
+    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
+    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
+    injected: list[str] = []
+
+    def _capture(recipient, text, **_k):
+        injected.append(text)
+        return True
+
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _capture)
+
+    sent = runner.invoke(
+        app,
+        ["mail", "send", "9a063cd3", "secret body words", "--from-name", "web"],
+    )
+    assert sent.exit_code == 0, sent.output
+    assert len(injected) == 1
+    # Without a subject the header's third field is the body's first sentence
+    # (AC10-HP). A body that is only that sentence still follows the header.
+    lines = injected[0].splitlines()
+    assert len(lines) == 2, injected[0]
+    header = lines[0]
+    assert header.startswith("`@web · fmail-")
+    assert lines[1] == "secret body words", injected[0]
+    msg_id = header.split(" · ")[1].rstrip("`")
+
+    # The bus copy the id points at holds the full body.
+    from fno.bus.log import iter_messages
+
+    row = next(m for m in iter_messages() if m.id == msg_id)
+    assert "secret body words" in row.body
+
+
+def test_interrupted_live_send_keeps_the_stored_copy(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    # Write first: the stored copy lands before the live attempt, so a sender
+    # killed between the two steps still leaves the mail `mail show` reads.
+    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
+    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
+    typed: list[str] = []
+
+    def _interrupted(recipient, text, **_k):
+        typed.append(text)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _interrupted)
+    runner.invoke(
+        app, ["mail", "send", "9a063cd3", "kept body words", "--from-name", "web"]
+    )
+    assert len(typed) == 1
+    msg_id = typed[0].splitlines()[0].split(" · ")[1].rstrip("`")
+
+    from fno.rust_binary import chats_verb
+
+    stored = chats_verb(["show", msg_id, "--all", "--json"], {})
+    assert stored["id"] == msg_id
+    assert "kept body words" in stored["body"]
+
+    # The same staging writes the bus row first, so the killed send is also
+    # drainable: the body's only home is on the bus before any inject.
+    from fno.bus.log import iter_messages
+
+    staged = [m for m in iter_messages() if m.id == msg_id]
+    assert len(staged) == 1
+    assert staged[0].delivery is None
+    assert "kept body words" in staged[0].body
+
+
 # ---------------------------------------------------------------------------
 # a2a US7b / AC3-HP: the mux PaneSend live rung. A resolved session that is
 # mux-hosted (fno owns its PTY) delivers live through its pane instead of
@@ -944,7 +1027,11 @@ def test_us7b_mux_pane_rung_delivers_live_when_socket_inject_misses(
     assert "delivered (hosted)" in sent.output
     assert "queued (durable)" not in sent.output
     assert len(calls) == 1
-    assert "ping" in calls[0][1]  # the wrapped <fno_mail> envelope, not raw text
+    # The live turn is the header line, then the body.
+    lines = calls[0][1].splitlines()
+    assert len(lines) == 2, calls[0][1]
+    assert lines[0].startswith("`@web · fmail-")
+    assert lines[1] == "ping"
 
     monkeypatch.setenv("CODEX_THREAD_ID", sid)
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
@@ -1274,7 +1361,9 @@ def test_project_send_no_peer_warns_deferred(runner, mailbox):
         app, ["mail", "send", "--to-project", "web", "--from-name", "etl", "quiet?"]
     )
     assert res.exit_code == 0, res.output
-    assert "queued (durable) for project web" in res.stdout
+    receipt = json.loads(res.stdout.strip())
+    assert receipt["to"] == "web"
+    assert "queued (durable)" in receipt["status"]
     assert "project inbox web has no live drain" in (res.stderr or "")
 
 
@@ -1382,3 +1471,4 @@ def test_live_discovered_ambient_self_queues_canonical_without_inject_or_mux(
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
     payload = json.loads(drained.stdout.strip().splitlines()[-1])
     assert payload and payload[0]["to"] == "019fb417"
+

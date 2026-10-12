@@ -84,6 +84,12 @@ pub(crate) fn chats_dir() -> PathBuf {
             return crate::backlog::settings::expand_home(trimmed);
         }
     }
+    // A declared agents home rules the store the same way it rules the bus:
+    // a test that pins FNO_AGENTS_HOME gets its chats beside its bus, never
+    // the operator's ~/.fno/chats.
+    if let Some(dot_fno) = declared_dot_fno() {
+        return dot_fno.join("chats");
+    }
     let mut dir = crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno);
     dir.push("chats");
     dir
@@ -92,10 +98,29 @@ pub(crate) fn chats_dir() -> PathBuf {
 /// The derived index. Always under the state dir, never under the (possibly
 /// synced) chats dir.
 pub(crate) fn index_path() -> PathBuf {
+    if let Some(dot_fno) = declared_dot_fno() {
+        return dot_fno.join("db").join("chats.db");
+    }
     let mut dir = crate::backlog::settings::state_dir().unwrap_or_else(default_dot_fno);
     dir.push("db");
     dir.push("chats.db");
     dir
+}
+
+/// `<FNO_AGENTS_HOME>/..` when a home is declared alone; `None` keeps the
+/// `state_dir()` ladder (and the undeclared test process honest).
+///
+/// A set `FNO_STATE_DIR` wins: tests pin both vars to one tempdir (the flat
+/// shape, where the agents root IS the state root), and the store they write
+/// is `FNO_STATE_DIR/chats` - the ladder's answer. Re-deriving from the
+/// agents home's parent there would read one level above the fixtures.
+fn declared_dot_fno() -> Option<PathBuf> {
+    if std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty()) {
+        return None;
+    }
+    let home = crate::paths::AgentsHome::from_env_opt()?;
+    let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
+    Some(dot_fno.to_path_buf())
 }
 
 fn default_dot_fno() -> PathBuf {
@@ -140,10 +165,7 @@ fn recipient_key(to: &str) -> String {
         return to.to_string();
     }
     let home = crate::paths::AgentsHome::from_env();
-    let Ok(text) = std::fs::read_to_string(home.registry_json()) else {
-        return to.to_string();
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(&text) else {
+    let Ok(parsed) = crate::registry_store::read(&home.registry_json()) else {
         return to.to_string();
     };
     for row in parsed
@@ -173,10 +195,7 @@ fn sender_key(from: &str, from_session: &str) -> String {
         return from.to_string();
     }
     let home = crate::paths::AgentsHome::from_env();
-    let Ok(text) = std::fs::read_to_string(home.registry_json()) else {
-        return from_session.to_string();
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(&text) else {
+    let Ok(parsed) = crate::registry_store::read(&home.registry_json()) else {
         return from_session.to_string();
     };
     for row in parsed
@@ -351,6 +370,12 @@ pub(crate) fn record_at(
         let Some((chat_id, rec)) = message_line(line) else {
             return Ok(Recorded::Skipped);
         };
+        // A send stored before its live attempt that then missed reaches
+        // here again as the durable copy: one id records one message line.
+        let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+        if chat_holds_message(&chats_dir.join(&chat_id), id) {
+            return Ok(Recorded::Skipped);
+        }
         append_chat_line(&chats_dir.join(&chat_id), &rec)?;
         Ok(Recorded::Message { chat_id })
     } else if is_message_kind(kind) {
@@ -446,24 +471,27 @@ fn scan_chat_files_for_id(chats_dir: &Path, id: &str) -> Result<Option<String>, 
         Err(_) => return Ok(None),
     };
     for entry in rd.flatten() {
-        let file = entry.path().join("messages.jsonl");
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        for line in text.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if v.get("type").and_then(Value::as_str) == Some("message")
-                && v.get("id").and_then(Value::as_str) == Some(id)
-            {
-                if let Some(chat) = entry.file_name().to_str() {
-                    return Ok(Some(chat.to_string()));
-                }
+        if chat_holds_message(&entry.path(), id) {
+            if let Some(chat) = entry.file_name().to_str() {
+                return Ok(Some(chat.to_string()));
             }
         }
     }
     Ok(None)
+}
+
+/// Whether the chat at `chat_dir` already holds a message line for `id`.
+fn chat_holds_message(chat_dir: &Path, id: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(chat_dir.join("messages.jsonl")) else {
+        return false;
+    };
+    text.lines()
+        .filter(|line| line.contains(id))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|v| {
+            v.get("type").and_then(Value::as_str) == Some("message")
+                && v.get("id").and_then(Value::as_str) == Some(id)
+        })
 }
 
 /// The sender name the store row for `id` carries: the bus envelope's
@@ -737,6 +765,14 @@ fn ensure_index(conn: &Connection, chats_dir: &Path) -> Result<(), String> {
             continue;
         };
         let chat_file = entry.path().join("messages.jsonl");
+        // A dir with no messages.jsonl is not a chat - the envelope-backup
+        // dirs the migration leaves behind (.backup-envelopes-*) name one,
+        // and scanning one died every later show with a NotFound. The
+        // vanished-file sweep below still drops any index row that points
+        // at a deleted chat.
+        if !chat_file.is_file() {
+            continue;
+        }
         let stored: Option<(i64, Option<String>)> = conn
             .query_row(
                 "SELECT msg_count, last_line_hash FROM chats WHERE chat_id = ?1",
@@ -1192,14 +1228,15 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                     .unwrap_or("unknown")
                     .to_string();
                 // The whole inner rides under the header: display and
-                // render_message regenerate their own view of the body, so a
-                // delivered-body sentence drop here would lose the sentence.
+                // render_message regenerate their own view of the body at
+                // read time, so nothing is dropped here.
+                let third = crate::mail_header::header_third_field(None, &inner);
                 Some((
                     crate::mail_header::render_header(
                         crate::mail_header::HeaderForm::Mention,
                         &sender,
                         &id,
-                        &crate::mail_header::header_subject(None, &inner),
+                        third.as_deref(),
                     ),
                     inner,
                 ))
@@ -1272,20 +1309,31 @@ pub(crate) struct ShowQuery {
     pub caller: Option<String>,
 }
 
-fn participant_key(v: &Value, session: &str, fallback: &str) -> String {
-    v.get(session)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| v.get(fallback).and_then(Value::as_str).unwrap_or("unknown"))
-        .to_string()
-}
-
 /// The privacy rule a body prints under: the caller is the message's sender
-/// or recipient; `--all` is the operator override.
+/// or recipient; `--all` is the operator override. The caller resolves to a
+/// full session id. A side that stores a full id matches it exactly; a side
+/// that stores only the 8-character handle matches the head of the caller's
+/// id, since sessions in one clock bucket share that head.
 fn caller_in_message(line: &Value, caller: &str) -> bool {
+    fn text(v: Option<&Value>) -> Option<&str> {
+        v.and_then(Value::as_str).filter(|s| !s.is_empty())
+    }
     let norm = crate::mail_hold::identity_key;
-    norm(&participant_key(line, "from_session", "from")) == norm(caller)
-        || norm(&participant_key(line, "to_key", "to")) == norm(caller)
+    let caller = norm(caller);
+    let side =
+        |full: Option<&str>, handles: [Option<&str>; 2]| match full {
+            Some(full) => norm(full) == caller,
+            None => handles.into_iter().flatten().map(norm).any(|handle| {
+                handle == caller || (handle.len() == 8 && caller.starts_with(&handle))
+            }),
+        };
+    side(
+        text(line.get("from_session")),
+        [text(line.get("from")), None],
+    ) || side(
+        text(line.get("to_session")).or(text(line.pointer("/meta/to_session"))),
+        [text(line.get("to_key")), text(line.get("to"))],
+    )
 }
 
 fn message_body(line: &Value) -> &str {
@@ -1293,9 +1341,10 @@ fn message_body(line: &Value) -> &str {
 }
 
 /// One message as the reader sees it: the delivered header line, then the
-/// full body. The header carries the sender, the id - what the receiver
-/// answers and resolves with - and the row's subject, else the body's first
-/// sentence.
+/// full body. The header carries the sender and the id - what the receiver
+/// answers and resolves with. User law d-b720d23c: a bodied message's
+/// header carries no subject; a header-only one keeps the row's subject,
+/// else the summary.
 fn render_message(line: &Value) -> String {
     let raw = message_body(line);
     let subject = line
@@ -1303,12 +1352,11 @@ fn render_message(line: &Value) -> String {
         .and_then(|m| m.get("subject"))
         .and_then(Value::as_str);
     // The read/show surface renders the same body the Messages tab does:
-    // legacy framed rows are cleaned, and a subjectless whole first sentence
-    // is not printed twice under the header's echo of it. The header's third
+    // legacy framed rows are cleaned, and a stored three-field header's
+    // summary echo is stripped at read time. The header's optional third
     // field reads the pre-strip body, exactly as the envelope render does.
     let cleaned = crate::mail_header::display_body(raw);
-    let third = crate::mail_header::header_subject(subject, &cleaned);
-    let body = crate::mail_header::delivered_body(subject, &cleaned);
+    let third = crate::mail_header::header_third_field(subject, &cleaned);
     format!(
         "{}\n{}",
         crate::mail_header::render_header(
@@ -1317,9 +1365,9 @@ fn render_message(line: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
             line.get("id").and_then(Value::as_str).unwrap_or(""),
-            &third,
+            third.as_deref(),
         ),
-        body,
+        cleaned,
     )
 }
 
@@ -1377,7 +1425,40 @@ pub(crate) fn show_at(
         ));
     }
     if q.json {
-        return Ok(msg.to_string());
+        // The machine view layers the sender identity the reply needs over the
+        // stored row: the registry-resolved name and short_id (a row renamed
+        // after the send still answers under its current name), the
+        // collision-safe session id, and the fmail id. No command strings: the
+        // receiver answers with its usual send verb. The stored row stays
+        // verbatim underneath.
+        let mut view = msg.clone();
+        let from_session = msg
+            .get("from_session")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let stored_from = msg.get("from").and_then(Value::as_str).unwrap_or("unknown");
+        let rows = crate::mail_threads::registry_rows();
+        let row = crate::mail_threads::registry_lookup(
+            &rows,
+            if from_session.is_empty() {
+                stored_from
+            } else {
+                from_session
+            },
+        );
+        let name = row
+            .and_then(|r| r.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or(stored_from);
+        let short_id = row.and_then(|r| r.get("short_id")).and_then(Value::as_str);
+        let id = msg.get("id").and_then(Value::as_str).unwrap_or("");
+        if let Value::Object(map) = &mut view {
+            map.insert("name".into(), json!(name));
+            map.insert("short_id".into(), json!(short_id));
+            map.insert("session_id".into(), json!(from_session));
+            map.insert("fno_mail_id".into(), json!(id));
+        }
+        return Ok(view.to_string());
     }
     if !q.thread {
         return Ok(render_message(msg));
@@ -1460,13 +1541,28 @@ fn valid_chat_id(id: &str) -> bool {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: fno-agents chats <append|bus-append|migrate|rebuild|list|read|resolve|show> ..."
+        "usage: fno-agents chats <append|bus-append|stage|migrate|rebuild|list|read|resolve|show> ..."
     );
     eprintln!(
         "  migrate --envelopes: one-time rewrite of stored legacy <fno_mail> bodies \
          to the delivered-header form, with a backup; run once after upgrading"
     );
     2
+}
+
+/// The read verb for an `fmail-<id>` header, spelled once here so the
+/// teaching line and the dispatch arm cannot drift apart: a rename edits this
+/// const and every carrier that prints the line follows.
+pub const MAIL_READ_VERB: &str = "show";
+
+/// The one-line lesson carried once per session at session start and again
+/// after each compaction. Every carrier prints THIS string, so no carrier
+/// hardcodes the verb.
+pub fn teach_line() -> String {
+    format!(
+        "mail: an `fmail-<id>` header in a delivered turn is unread mail on the bus; \
+         read it with `fno agents mail {MAIL_READ_VERB} <id>`"
+    )
 }
 
 /// Verb entrypoint reached from bin/client.rs's direct dispatch. `pub`: the
@@ -1553,13 +1649,137 @@ pub fn run_chats(args: &[String]) -> i32 {
                 .get(1)
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(bus_append_live_path);
-            match crate::announce::append_line_open(&live, &line) {
+            match crate::announce::append_line_open(&live, &line, &dir) {
                 Ok(()) => {
                     println!("{{\"appended\":true}}");
                     0
                 }
                 Err(e) => {
                     eprintln!("chats bus-append: {e}");
+                    1
+                }
+            }
+        }
+        "stage" => {
+            // The pre-live body row: the caller sends RAW fields on
+            // stdin, this mints the envelope with no delivery mark and rides
+            // the same door as bus-append, so the chats record lands
+            // fail-closed before the bus write. The envelope contract lives
+            // here; the Python caller stays a thin call. The id is the
+            // caller's: the receipt row (record_hosted_delivery) must share
+            // it, so nothing is minted on this side.
+            let mut input = String::new();
+            if std::io::stdin().read_to_string(&mut input).is_err() {
+                eprintln!("chats stage: could not read the fields from stdin");
+                return 1;
+            }
+            let fields: Value = match serde_json::from_str(input.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("chats stage: not a JSON object: {e}");
+                    return 1;
+                }
+            };
+            let obj = match fields.as_object() {
+                Some(o) => o,
+                None => {
+                    eprintln!("chats stage: expected a JSON object of envelope fields");
+                    return 1;
+                }
+            };
+            // The record vocabulary rides both spellings: the Python send
+            // paths hold msg_id/sender/recipient, the envelope says
+            // id/from/to.
+            let id = match obj
+                .get("id")
+                .or_else(|| obj.get("msg_id"))
+                .and_then(Value::as_str)
+            {
+                Some(s) if !s.is_empty() => s,
+                _ => {
+                    eprintln!("chats stage: id is required (the receipt row shares it)");
+                    return 1;
+                }
+            };
+            let from = obj
+                .get("from")
+                .or_else(|| obj.get("sender"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let to = obj
+                .get("to")
+                .or_else(|| obj.get("recipient"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let body = obj.get("body").and_then(Value::as_str).unwrap_or("");
+            if from.is_empty() || to.is_empty() {
+                eprintln!("chats stage: from and to are required");
+                return 1;
+            }
+            let mut line = serde_json::Map::new();
+            line.insert("v".into(), json!(1));
+            line.insert("id".into(), json!(id));
+            line.insert("ts".into(), json!(crate::announce::now_iso()));
+            line.insert("thread".into(), json!(id));
+            line.insert("from".into(), json!(from));
+            line.insert("to".into(), json!(to));
+            line.insert("kind".into(), json!("send"));
+            // Optional tags ride the envelope's additive shape; absent stays
+            // absent so lines stay scannable. to_session/to_harness fold into
+            // meta, the copy the landed check reads.
+            for tag in [
+                "from_harness",
+                "to_harness",
+                "request_id",
+                "in_reply_to",
+                "from_session",
+                "from_model",
+                "to_kind",
+                "word_count",
+                "subject",
+            ] {
+                if let Some(v) = obj.get(tag) {
+                    if !v.is_null() {
+                        line.insert(tag.into(), v.clone());
+                    }
+                }
+            }
+            let to_session = obj.get("to_session").and_then(Value::as_str);
+            let to_harness_tag = obj.get("to_harness").and_then(Value::as_str);
+            if to_session.is_some() || to_harness_tag.is_some() {
+                let mut meta = serde_json::Map::new();
+                if let Some(s) = to_session {
+                    meta.insert("to_session".into(), json!(s));
+                }
+                if let Some(h) = to_harness_tag {
+                    meta.insert("to_harness".into(), json!(h));
+                }
+                line.insert("meta".into(), Value::Object(meta));
+            }
+            if let Ok(s) = std::env::var("FNO_MAIL_SUBJECT") {
+                let s = s.trim();
+                if !s.is_empty() {
+                    if let Some(m) = line
+                        .entry("meta")
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                    {
+                        m.insert("subject".into(), json!(s));
+                    }
+                }
+            }
+            line.insert("body".into(), json!(body));
+            let live = args
+                .get(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(bus_append_live_path);
+            match crate::announce::append_line_open(&live, &Value::Object(line), &dir) {
+                Ok(()) => {
+                    println!("{{\"staged\":true,\"id\":\"{id}\"}}");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("chats stage: {e}");
                     1
                 }
             }
@@ -1670,7 +1890,7 @@ pub fn run_chats(args: &[String]) -> i32 {
                 }
             }
         }
-        "show" => {
+        MAIL_READ_VERB => {
             let mut id: Option<String> = None;
             let mut q = ShowQuery {
                 thread: false,
@@ -1832,6 +2052,23 @@ pub(crate) fn resolve_prefix(prefix: &str) -> Result<Resolved, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn show_admits_the_recipient_whose_handle_the_row_stores() {
+        // A hosted row stores the recipient as its 8-character handle; the
+        // caller resolves to the full session id and still reads its mail.
+        let row = serde_json::json!({
+            "from": "e78df019", "from_session": "e78df019-1d40-4132-b6f5-8704d38c0fc9",
+            "to": "aa2f99d7", "to_key": "aa2f99d7",
+            "meta": {"to_session": "aa2f99d7-9155-4fca-9eca-adf9ca1aafb2"}
+        });
+        let reads = |caller: &str| caller_in_message(&row, caller);
+        assert!(reads("aa2f99d7-9155-4fca-9eca-adf9ca1aafb2"));
+        assert!(reads("e78df019-1d40-4132-b6f5-8704d38c0fc9"));
+        assert!(!reads("bb2eb475-0000-4000-8000-000000000000"));
+        // A sibling in the same clock bucket shares the head, not the full id.
+        assert!(!reads("aa2f99d7-0000-4000-8000-000000000000"));
+    }
+
     /// One temp root per test; env-mutating tests share the process, so the
     /// mutex keeps FNO_* pins from racing.
     static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
@@ -1853,23 +2090,74 @@ mod tests {
     fn bus_line(id: &str, from: &str, to: &str, kind: &str) -> Value {
         serde_json::json!({
             "v": 1, "id": id, "ts": "2026-10-01T19:00:00Z", "thread": id,
-            "from": from, "to": to, "kind": kind, "body": "hello",
+            "from": from, "from_session": from, "to": to, "kind": kind, "body": "hello",
         })
     }
 
     #[test]
+    fn chats_dir_honors_a_declared_agents_home() {
+        // The store follows the declared home (FNO_AGENTS_HOME), the same
+        // pin the bus follows, so a pinned test's mirror never lands in the
+        // operator's ~/.fno/chats.
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home_pin = temp_root("home-pin").join("agents");
+        std::fs::create_dir_all(&home_pin).unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", &home_pin);
+        assert_eq!(
+            chats_dir(),
+            home_pin.parent().unwrap().join("chats"),
+            "chats follow the declared home, not the state_dir ladder"
+        );
+        assert_eq!(
+            index_path(),
+            home_pin.parent().unwrap().join("db").join("chats.db"),
+            "the index follows the declared home too"
+        );
+        std::env::remove_var("FNO_AGENTS_HOME");
+        assert_ne!(
+            chats_dir(),
+            home_pin.parent().unwrap().join("chats"),
+            "without the pin the ladder returns (never the pinned dir)"
+        );
+    }
+
+    #[test]
+    fn ensure_index_skips_a_dir_that_is_not_a_chat() {
+        // A `.backup-envelopes-*` dir the envelope migration leaves behind
+        // holds no messages.jsonl; scanning one turned every later show into
+        // a NotFound (the live 2026-10-08 report). A non-chat dir is
+        // skipped, and the real chat beside it still indexes.
+        let pin = temp_root("ensure-index");
+        let chats = pin.join("chats");
+        std::fs::create_dir_all(chats.join(".backup-envelopes-20261005T175648Z")).unwrap();
+        std::fs::create_dir_all(chats.join("chat-0badc0de1234abcd")).unwrap();
+        std::fs::write(
+            chats
+                .join("chat-0badc0de1234abcd")
+                .join("messages.jsonl"),
+            "{\"type\":\"message\",\"id\":\"fmail-0badc0de1234\",\"from\":\"folio\",\"from_session\":\"folio\",\"to\":\"quill\",\"kind\":\"send\",\"ts\":\"2026-10-08T15:00:00Z\",\"body\":\"hello\"}\n",
+        )
+        .unwrap();
+        let conn = open_index(&pin.join("index.db")).unwrap();
+        ensure_index(&conn, &chats).expect("a backup dir must not kill the scan");
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM chats", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "only the real chat indexes");
+    }
+
+    #[test]
     fn chats_store_contracts() {
-        // The read/show surface renders what the Messages tab delivers: a
-        // subjectless whole first sentence shows once, under the header's
-        // echo of it; a sentence the summary cut stays whole; a legacy
-        // framed body is cleaned before render.
+        // The read/show surface renders what the Messages tab delivers: the
+        // law form shows the body once, whole, under a two-field header; a
+        // legacy framed body is cleaned before render.
         let dup = render_message(&serde_json::json!({
             "type": "message", "from": "folio", "id": "fmail-0badc0de1234",
             "body": "Fix the gate. Details follow."
         }));
         assert_eq!(
             dup,
-            "`@folio \u{b7} fmail-0badc0de1234 \u{b7} Fix the gate.`\nDetails follow."
+            "`@folio · fmail-0badc0de1234`\nFix the gate. Details follow."
         );
         let cut = render_message(&serde_json::json!({
             "type": "message", "from": "folio", "id": "fmail-0badc0de1234",
@@ -1960,6 +2248,11 @@ mod tests {
             panic!()
         };
         assert_eq!(fallback_id, chat_id_for_pair("sess-a", "stranger@nowhere"));
+        assert_eq!(
+            record_at(&chats, &db, &bus, &stranger).unwrap(),
+            Recorded::Skipped,
+            "a send stored before its live attempt records once"
+        );
         let mut withdraw = bus_line("msg-000002", "a", "b", "withdraw");
         withdraw["meta"] = serde_json::json!({"withdraws": "msg-000003"});
         assert_eq!(
@@ -2136,7 +2429,7 @@ mod tests {
         };
         let shown = show_at(&chats, &db, "fmail-444444444444", &q(Some("sess-a"), false)).unwrap();
         assert!(
-            shown.starts_with("`@sess-a · fmail-444444444444 · "),
+            shown.starts_with("`@sess-a · fmail-444444444444`\n"),
             "{shown}"
         );
         assert!(
@@ -2149,14 +2442,36 @@ mod tests {
         assert!(stranger
             .unwrap_err()
             .contains("not addressed to or from the caller"));
+        // show --json layers the reply identity over the stored row: the
+        // registry-resolved name and short_id, the session id, and the fmail
+        // id. The row's fields stay verbatim underneath.
+        crate::registry_store::seed_raw(
+            home_pin.join("registry.json"),
+            r#"{"schema_version":1,"agents":[{"name":"rowan","cwd":"/x","session_id":"sess-a","harness_session_id":"sess-a","harness":"claude","short_id":"rowan-short"}]}"#,
+        );
+        let jq = |caller: &str| ShowQuery {
+            thread: false,
+            json: true,
+            all: false,
+            limit: 50,
+            caller: Some(caller.to_string()),
+        };
+        let view: Value = serde_json::from_str(
+            &show_at(&chats, &db, "fmail-444444444444", &jq("sess-a")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(view["name"], "rowan", "a registry row names its sender");
+        assert_eq!(view["short_id"], "rowan-short");
+        assert_eq!(view["session_id"], "sess-a");
+        assert_eq!(view["fno_mail_id"], "fmail-444444444444");
+        assert_eq!(view["body"], "hello", "the stored row rides underneath");
         // A send addressed to a registry name records the resolved session
         // key as to_key, so the recipient reads their mail by their own
         // session id.
-        std::fs::write(
+        crate::registry_store::seed_raw(
             home_pin.join("registry.json"),
-            r#"{"agents":[{"name":"rowan","session_id":"sess-b-uuid","harness":"claude"}]}"#,
-        )
-        .unwrap();
+            r#"{"schema_version":1,"agents":[{"name":"rowan","cwd":"/x","harness_session_id":"sess-b-uuid","harness":"claude"}]}"#,
+        );
         let named = bus_line("fmail-777777777777", "sess-a", "rowan", "send");
         let Recorded::Message {
             chat_id: named_chat,
@@ -2289,7 +2604,7 @@ mod tests {
         let rec: Value = serde_json::from_str(migrated.trim()).unwrap();
         assert_eq!(
             rec["body"].as_str().unwrap(),
-            "`@candor \u{b7} msg-1 \u{b7} Build green.`\nBuild green. Details."
+            "`@candor \u{b7} msg-1`\nBuild green. Details."
         );
         // The backup holds the original bytes.
         let backup_dir = receipt

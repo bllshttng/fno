@@ -83,12 +83,13 @@ from fno.agents.registry import (
     resolve_registered_agent_across_sources,
     update_registry,
 )
-from fno.agents.crown import (
+from fno.agents.role import (
+    adopt_drawn_name,
     calling_agent_row,
-    crown_validation_error,
-    journal_spawn_crown,
-    plan_spawn_crown,
-    settle_spawn_crown,
+    role_validation_error,
+    journal_spawn_role,
+    plan_spawn_role,
+    settle_spawn_role,
 )
 from fno.harness_identity import (
     canonical_handle,
@@ -822,23 +823,7 @@ def _codex_create_path(
 
 
 # Moved to fno.agents.spawn_lineage (file budget); re-exported here.
-from fno.agents.spawn_lineage import _capture_parent_edge, _report_unlinked_parent, build_spawn_provenance  # noqa: E402
-
-
-def _reign_typed_message(
-    message: str,
-    crown_level: Optional[int],
-    crown_scope: Optional[str],
-    revive: bool,
-) -> tuple[str, bool]:
-    """A crowned spawn's payload opens with the plugin-qualified reign verb.
-
-    A revival keeps its own payload (the session already knows what it is);
-    the receipt names the not-typed case with the remedy.
-    """
-    if crown_level is not None and crown_scope and not revive:
-        return f"/fno:lead {crown_scope}\n{message}", True
-    return message, False
+from fno.agents.spawn_lineage import _capture_parent_edge, _parent_edge, _report_unlinked_parent, build_spawn_provenance  # noqa: E402
 
 
 def _capture_spawn_trigger() -> Optional[str]:
@@ -1414,10 +1399,10 @@ def _claude_create_path(
     route_provider_id: Optional[str] = None,
     model_name: Optional[str] = None,
     account_record_id: Optional[str] = None,
-    crown_level: Optional[int] = None,
-    crown_scope: Optional[str] = None,
-    crown_plan: Optional[dict] = None,
-    crown_caller_name: Optional[str] = None,
+    role_level: Optional[int] = None,
+    role_scope: Optional[str] = None,
+    role_plan: Optional[dict] = None,
+    role_caller_name: Optional[str] = None,
     route_provider: Optional[str] = None,
     sandbox_settings: Optional[Mapping[str, object]] = None,
     node: Optional[str] = None,
@@ -1571,9 +1556,12 @@ def _claude_create_path(
     # _capture_spawn_trigger's own docstring for what that mislabels).
     spawn_trigger = _capture_spawn_trigger()
 
-    # A crowned spawn TYPES the reign verb as the payload's first line, so the
-    # king's first turn is the skill itself, not a hand-improvised ritual.
-    message, reign_typed = _reign_typed_message(message, crown_level, crown_scope, revive)
+    # A promoted spawn TYPES the term verb as the payload's first line, so the
+    # lead's first turn is the skill itself, not a hand-improvised ritual.
+    from fno.agents.team_thread import lead_typed_message
+
+    message, term_typed = (lead_typed_message(message, role_level, role_scope, revive)
+                            if role_level is not None else (message, False))
 
     try:
         result: ProviderResult = claude_mod.bg_create(
@@ -1694,14 +1682,14 @@ def _claude_create_path(
 
     # Best-effort ambient capture; never raises. The
     # spawn_trigger was already popped before bg_create above.
-    spawned_by_session, spawned_by_harness, spawned_by_cwd = parent_edge or _capture_parent_edge()
+    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, lineage_row)
     lineage_reason = _report_unlinked_parent(spawned_by_session)
 
-    # Crown stamp (US9), same contract as the pane path: the grantor is the
+    # Role stamp (US9), same contract as the pane path: the grantor is the
     # spawning session captured just above, or "human" for a direct human spawn
     # with no session env. Never a caller-supplied value - a row that could name
     # its own grantor proves nothing.
-    crown_grantor_val = (spawned_by_session or "human") if crown_level is not None else None
+    role_grantor_val = (spawned_by_session or "human") if role_level is not None else None
 
     # Registry write. Create the file the row records (AC4): a
     # log_path pointing at nothing is a claim, not evidence, and the
@@ -1774,75 +1762,75 @@ def _claude_create_path(
         # the SPAWNING session's node.
         node=node,
         account_record_id=account_record_id,
-        crown_level=crown_level,
-        crown_scope=crown_scope,
-        crown_grantor=crown_grantor_val,
+        role_level=role_level,
+        role_scope=role_scope,
+        role_grantor=role_grantor_val,
     )
 
-    crown_declined = False
-    crown_succeeded = False
-    crown_outcome: Optional[str] = None
-    crown_cleared: list = []
-    king_loop_armed: Optional[bool] = None
-    king_unarmed_reason = ""
+    role_declined = False
+    role_succeeded = False
+    role_outcome: Optional[str] = None
+    role_cleared: list = []
+    lead_loop_armed: Optional[bool] = None
+    lead_unarmed_reason = ""
 
     # Fix 3: a revival REPLACES the existing exited same-name row in place
     # (never appends a duplicate name). The load-modify-write is atomic under
     # update_registry's own lock, so a concurrent reader sees the old exited row
     # or the new live row, never a torn/absent state.
     def _write(entries: list) -> list:
-        nonlocal crown_declined, crown_succeeded
-        nonlocal crown_outcome, crown_cleared
-        nonlocal king_loop_armed, king_unarmed_reason
+        nonlocal role_declined, role_succeeded
+        nonlocal role_outcome, role_cleared
+        nonlocal lead_loop_armed, lead_unarmed_reason
         entry = new_entry
-        # One-live-crown guard, inside the write lock so the check and
+        # One-live-role guard, inside the write lock so the check and
         # the stamp are atomic against a racing spawn. If a non-terminal row
-        # already reigns over this scope, decline the crown and spawn UNCROWNED
-        # rather than refuse the spawn: an uncrowned worker can still be given the
-        # crown later, two live crowns over one scope cannot be undone.
+        # already terms over this scope, decline the role and spawn UNPROMOTED
+        # rather than refuse the spawn: an unpromoted worker can still be given the
+        # role later, two live roles over one scope cannot be undone.
         #
-        # UNLESS the sitting king is the caller, which is SUCCESSION. An
-        # abdicating king cannot hand off after it exits (a dead session spawns
-        # nothing), so the handoff has to happen while it still reigns. The crown
-        # moves in this one write: the caller's row is vacated as the heir is
-        # stamped, so no reader sees two live crowns over the scope, and none sees
+        # UNLESS the sitting lead is the caller, which is SUCCESSION. An
+        # stepping_down lead cannot hand off after it exits (a dead session spawns
+        # nothing), so the handoff has to happen while it still terms. The role
+        # moves in this one write: the caller's row is vacated as the successor is
+        # stamped, so no reader sees two live roles over the scope, and none sees
         # zero.
         #
         # A revive is checked the same way, with the row being replaced excluded:
-        # a king reviving its own exited session must not be blocked by the
+        # a lead reviving its own exited session must not be blocked by the
         # corpse it is about to overwrite.
-        if crown_level is not None and crown_scope:
-            assert crown_plan is not None  # set by the pre-launch call above
-            entries, crown_outcome, crown_cleared = settle_spawn_crown(
-                entries, scope=crown_scope, plan=crown_plan,
-                exclude_name=name if revive else None, heir=name,
-                heir_harness=new_entry.harness,
-                heir_session=new_entry.harness_session_id,
-                heir_cwd=new_entry.cwd,
+        if role_level is not None and role_scope:
+            assert role_plan is not None  # set by the pre-launch call above
+            entries, role_outcome, role_cleared = settle_spawn_role(
+                entries, scope=role_scope, plan=role_plan,
+                exclude_name=name if revive else None, successor=name,
+                successor_harness=new_entry.harness,
+                successor_session=new_entry.harness_session_id,
+                successor_cwd=new_entry.cwd,
             )
-            if crown_outcome == "succeeded":
-                crown_succeeded = True
-            elif crown_outcome == "declined":
+            if role_outcome == "succeeded":
+                role_succeeded = True
+            elif role_outcome == "declined":
                 entry = replace(
-                    new_entry, crown_level=None, crown_scope=None, crown_grantor=None
+                    new_entry, role_level=None, role_scope=None, role_grantor=None
                 )
-                crown_declined = True
-        if entry.crown_level is not None and entry.crown_scope:
-            from fno.king.state import arm_king_manifest
+                role_declined = True
+        if entry.role_level is not None and entry.role_scope:
+            from fno.lead.state import arm_lead_manifest
 
             try:
-                king_loop_armed = arm_king_manifest(
-                    entry.crown_scope,
+                lead_loop_armed = arm_lead_manifest(
+                    entry.role_scope,
                     entry.harness_session_id or "",
                     row=entry,
                 ) is not None
             except ValueError as exc:
                 # Arming with a short_id/row-name fallback would write a
                 # manifest the stop hook's owner guard always rejects, so the
-                # gate arms dead. Record the crown, refuse the dead manifest,
+                # gate arms dead. Record the role, refuse the dead manifest,
                 # and tell the operator below.
-                king_loop_armed = False
-                king_unarmed_reason = str(exc)
+                lead_loop_armed = False
+                lead_unarmed_reason = str(exc)
         if revive:
             # One row per session id: the revival replaces its own row, or the
             # adopted row reached through the resumed uuid (never None here).
@@ -1856,49 +1844,49 @@ def _claude_create_path(
 
     try:
         update_registry(_write)
-        if crown_scope:
-            journal_spawn_crown(
-                crown_outcome,
-                crown_cleared,
+        if role_scope:
+            journal_spawn_role(
+                role_outcome,
+                role_cleared,
                 name=name,
-                level=crown_level,
-                scope=crown_scope,
-                grantor=crown_grantor_val,
+                level=role_level,
+                scope=role_scope,
+                grantor=role_grantor_val,
             )
-        if crown_declined:
+        if role_declined:
             print(
-                f"spawn: crown declined (scope {crown_scope!r} already held by a "
-                "live row); spawned uncrowned. The worker launched without a crown.",
+                f"spawn: role declined (scope {role_scope!r} already held by a "
+                "live row); spawned unpromoted. The worker launched without a role.",
                 file=sys.stderr,
             )
-        elif crown_succeeded:
-            vacated = sorted({row.name for row, cause in crown_cleared if cause == "succession"})
-            noted = crown_caller_name in vacated
+        elif role_succeeded:
+            vacated = sorted({row.name for row, cause in role_cleared if cause == "succession"})
+            noted = role_caller_name in vacated
             print(
-                f"spawn: crown over {crown_scope!r} transferred from {', '.join(vacated)} "
+                f"spawn: role over {role_scope!r} transferred from {', '.join(vacated)} "
                 f"to {name} (succession)." + (" You no longer hold it." if noted else ""),
                 file=sys.stderr,
             )
-        if crown_scope and not crown_declined and king_loop_armed is False:
+        if role_scope and not role_declined and lead_loop_armed is False:
             why = (
-                f": {king_unarmed_reason}; the manifest arms when this worker self-identifies"
-                if king_unarmed_reason
-                else "; king loop disabled, no scope manifest armed"
+                f": {lead_unarmed_reason}; the manifest arms when this worker self-identifies"
+                if lead_unarmed_reason
+                else "; lead loop disabled, no scope manifest armed"
             )
             print(
-                f"spawn: crown over {crown_scope!r} recorded, but the king loop "
+                f"spawn: role over {role_scope!r} recorded, but the lead loop "
                 f"manifest was NOT armed{why}",
                 file=sys.stderr,
             )
-        if crown_scope and not crown_declined:
+        if role_scope and not role_declined:
             # Typed or not rides the receipt either way, never inferred from silence.
             tail = (
-                "reign typed"
-                if reign_typed
+                "term typed"
+                if term_typed
                 else "NOT typed (revived session keeps its own payload; send "
-                f"'/fno:lead {crown_scope}' by raw mail if it should reign)"
+                f"'/fno:lead {role_scope}' by raw mail if it should term)"
             )
-            print(f"spawn: crown over {crown_scope!r} recorded; {tail}", file=sys.stderr)
+            print(f"spawn: role over {role_scope!r} recorded; {tail}", file=sys.stderr)
     except (AgentResolutionError, OSError, ValueError, RegistryVersionError) as exc:
         # Birth's failure counterpart (Wave 6): the supervisor launched
         # but no registry row names it, so without this the orphan's later
@@ -2314,8 +2302,8 @@ def dispatch_spawn(
     route_provider_id: Optional[str] = None,
     model_name: Optional[str] = None,
     account_record_id: Optional[str] = None,
-    crown_level: Optional[int] = None,
-    crown_scope: Optional[str] = None,
+    role_level: Optional[int] = None,
+    role_scope: Optional[str] = None,
     succession: bool = False,
     route_provider: Optional[str] = None,
     provider_gate: object | None = None,
@@ -2449,32 +2437,21 @@ def dispatch_spawn(
     # approvals, so warn on every reachable path, not just the CLI seam.
     emit_env_scrub_warning(harness, permission_pinned=bool(permission_mode or yolo))
 
-    # Crown eligibility, checked HERE rather than only at the CLI seam: this
-    # function is the in-process entry point too, and only the claude bg branch
-    # below reaches `_claude_create_path`, the one route that stamps the fields.
-    # Every other route builds its AgentEntry elsewhere and would drop the crown
-    # while reporting a successful spawn - a silently uncrowned king is the
-    # failure this refusal exists to make impossible. Fail closed before anything
-    # is created, so a refusal launches nothing and leaves the node dispatchable.
-    crown_problem = crown_validation_error(crown_level, crown_scope)
-    if crown_problem is not None:
-        raise DispatchAskError(crown_problem, exit_code=2)
-    # Bound for every path, not just the crowned one: the create call below
-    # reads it unconditionally, and an uncrowned spawn must not crash on a
-    # plan only the crown block ever assigns.
-    crown_plan: Optional[dict] = None
-    crown_caller_name: Optional[str] = None
-    if crown_level is not None:
+    # In-process callers bypass the CLI parser. Validate requested stamps
+    # before any carrier launches; an ordinary worker has no stamp to validate.
+    role_problem = role_validation_error(role_level, role_scope) if role_level is not None or role_scope is not None else None
+    if role_problem is not None:
+        raise DispatchAskError(role_problem, exit_code=2)
+    # Bound for every path, not just the promoted one: the create call below
+    # reads it unconditionally, and an unpromoted spawn must not crash on a
+    # plan only the role block ever assigns.
+    role_plan: Optional[dict] = None
+    role_caller_name: Optional[str] = None
+    if role_level is not None:
         if once or headless:
             raise DispatchAskError(
-                "--crown needs a session that outlives the grant; a one-shot "
-                "exits after one answer. Use the pane or bg substrate.",
-                exit_code=2,
-            )
-        if harness != "claude":
-            raise DispatchAskError(
-                f"--crown on the bg substrate is claude-only; got harness "
-                f"{harness!r}. Use --substrate pane, which maps every harness.",
+                "--promote needs a session that outlives the grant; a one-shot "
+                "exits after one answer. Use --substrate pane or --substrate thread.",
                 exit_code=2,
             )
 
@@ -2515,6 +2492,16 @@ def dispatch_spawn(
             exit_code=2,
         )
 
+    from fno.agents.team_thread import plan_thread_promotion, settle_thread_promotion
+
+    promotion = None
+    if role_level is not None and harness != "claude":
+        promotion = plan_thread_promotion(
+            message, role_level, role_scope, succession, harness, parent_edge,
+            name=name, revive=bool(resume_session_id))
+        message = promotion["message"]
+        name = adopt_drawn_name(succession, promotion.get("plan"), name)
+
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
     # The spawn front door already demoted every flag the thread lane cannot
@@ -2542,7 +2529,10 @@ def dispatch_spawn(
             passthrough=list(passthrough) if passthrough else None,
             account_env=account_env,
             route_env=route_env,
+            role_level=role_level, role_scope=role_scope,
         )
+        if promotion is not None:
+            settle_thread_promotion(promotion, name=name, cwd=cwd, session_id=session_id)
         _emit_ev(
             "agent_ask_done",
             stage="dispatch",
@@ -2576,6 +2566,7 @@ def dispatch_spawn(
             "deny_tools": deny_tools, "permission_mode": permission_mode,
             "resume_session_id": resume_session_id,
             "passthrough": list(passthrough) if passthrough else None,
+            "promotion": promotion,
         },
         lock_timeout=lock_timeout,
     )
@@ -2632,18 +2623,19 @@ def dispatch_spawn(
                     exit_code=2,
                 )
 
-            if crown_level is not None:
+            if role_level is not None and harness == "claude":
                 # Refuses BEFORE launch - nothing exists as a result of an
                 # authority error. caller_row is read once and its name
-                # threaded to the write as crown_caller_name, so the receipt
+                # threaded to the write as role_caller_name, so the receipt
                 # need not re-resolve it.
-                crown_caller_name = getattr((caller_row := calling_agent_row()), "name", None)
-                crown_refusal, crown_plan = plan_spawn_crown(
-                    crown_scope or "", caller_row, succession,
-                    exclude_name=name if revive else None,
+                role_caller_name = getattr((caller_row := calling_agent_row()), "name", None)
+                role_refusal, role_plan = plan_spawn_role(
+                    role_scope or "", caller_row, succession,
+                    exclude_name=name if revive else None, proposed_name=name,
                 )
-                if crown_refusal is not None:
-                    raise DispatchAskError(f"--crown: {crown_refusal}", exit_code=2)
+                if role_refusal is not None:
+                    raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
+                name = adopt_drawn_name(succession, role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -2885,10 +2877,10 @@ def dispatch_spawn(
                         route_provider_id=route_provider_id,
                         model_name=model_name,
                         account_record_id=account_record_id,
-                        crown_level=crown_level,
-                        crown_scope=crown_scope,
-                        crown_plan=crown_plan,
-                        crown_caller_name=crown_caller_name,
+                        role_level=role_level,
+                        role_scope=role_scope,
+                        role_plan=role_plan,
+                        role_caller_name=role_caller_name,
                         route_provider=route_provider,
                         node=node,
                         route_model=route_model,
@@ -2915,7 +2907,7 @@ def dispatch_spawn(
                 # exists because node dispatch forces spawn onto the
                 # Python parser, and without the arm an opencode bg spawn died
                 # on the retired-gemini fallthrough. The resolved node is
-                # carried explicitly into the Rust serve lane; role, resume, and crown
+                # carried explicitly into the Rust serve lane; role, resume, and role
                 # have no carrier on the serve row yet, so they are refused
                 # here rather than silently lost.
                 if harness == "opencode":
@@ -2936,6 +2928,8 @@ def dispatch_spawn(
                         name=name, message=message, cwd=cwd,
                         from_name=from_name, model=model, node=node, effort=effort,
                     )
+                    if promotion is not None:
+                        settle_thread_promotion(promotion, name=name, cwd=cwd, session_id=short_id)
                     _emit_ev(
                         "agent_ask_done",
                         stage="dispatch",
@@ -3965,6 +3959,7 @@ def reconcile_agents(
     # the false-orphan storm is the worst kind of silent failure — it
     # rewrites the registry on insufficient evidence).
     from fno.agents.harnesses import codex as codex_mod
+    from fno.agents.codex_pane import codex_backfill_stamp_applies
 
     # Tri-state per-codex-side capability: True (readable + present),
     # False (file missing — fresh install), None (file present but
@@ -4592,17 +4587,11 @@ def reconcile_agents(
                         and other.harness_session_id == hsid
                         for other in current_entries
                     )
-                    # ONE guard, branch inside. These were two near-identical eight
-                    # conjunct conditions differing only in `duplicate`; a term added
-                    # to one and not the other would silently drop the update and
-                    # report it as a race.
-                    if (
-                        e.harness == "codex"
-                        and e.pid == expected_pid
-                        and e.pid_start_time == expected_start
-                        and e.mux == probed_mux
-                        and not e.harness_session_id
-                        and e.status not in _TERMINAL_AGENT_STATUSES
+                    # ONE guard, branch inside; the conjuncts are the shared
+                    # codex_pane.codex_backfill_stamp_applies helper the spawn-time
+                    # late-bind stamp uses, so the two stampers cannot drift.
+                    if codex_backfill_stamp_applies(
+                        e, e.name, hsid, expected_pid, expected_start, probed_mux
                     ):
                         if duplicate:
                             updates["status"] = "spawning"
@@ -4874,27 +4863,13 @@ def _daemon_rpc(
 # off-thread and wants the full ceiling for its own reason: a genuine multi-hop
 # stream exchange. The first hop needs the same number for the reason below.
 _SWITCHBOARD_READ_TIMEOUT = 130.0
-# The FIRST hop's read budget. SYNCHRONOUS -- the sender blocks on it -- so a
-# tighter value than the relay's is tempting, and a 15s one shipped here. It is
-# unsafe, and the ceiling is not ours to pick: `agent.switchboard_v2` does not
-# ack and return. `handle_switchboard` drives B's WHOLE turn before it answers,
-# bounded by SWITCHBOARD_TURN_TIMEOUT_MS (120s) + SWITCHBOARD_DRIVE_GRACE_S (5s).
-# Reading for less than 125s abandons a turn the daemon is still driving: the
-# body already reached B, `_switchboard_exchange` returns None, and
-# `_deliver_live` falls through and injects the SAME body a second time under a
-# receipt that says durable. Most real model turns run past 15s, so that was the
-# common case, not the edge.
-#
-# Capping the daemon instead (`timeout_ms` in params) is worse: a drive that
-# misses its deadline stamps B orphaned, so a short cap marks every slow-but-
-# healthy peer dead.
-#
-# The complaint behind the 15s is real -- a wedged daemon held a sender for the
-# full budget, twice killed by hand at 90s and 120s. The fix belongs on the
-# daemon side (ack first, drive after), not in a client read cap. Until that
-# lands, the sender pays the daemon's own ceiling. The common non-stream case
-# still fast-fails in about a second: every pre-drive check is bounded, the
-# stream probe at STREAM_PROBE_TIMEOUT_S = 2s.
+# The FIRST hop's read budget. SYNCHRONOUS: `agent.switchboard_v2` does not
+# ack and return; `handle_switchboard` drives B's WHOLE turn before it answers
+# (SWITCHBOARD_TURN_TIMEOUT_MS + SWITCHBOARD_DRIVE_GRACE_S). Reading under
+# 125s abandons a turn the daemon still drives and injects the SAME body a
+# second time under a durable receipt. Capping the daemon instead stamps every
+# slow-but-healthy peer orphaned; the wedged-daemon fix belongs daemon-side,
+# so the sender pays this ceiling.
 _SWITCHBOARD_FIRST_HOP_READ_TIMEOUT = _SWITCHBOARD_READ_TIMEOUT
 # A SHORT connect timeout: every claude send now tries the switchboard first, so
 # a DOWN/wedged daemon must not tax the common (non-stream) path — it should fail
@@ -5188,7 +5163,7 @@ def _a2a_first_use_gate(
 
     from fno import paths
 
-    marker = paths.state_dir() / ".a2a-confirmed"
+    marker = paths.state_runtime_file("a2a-confirmed", legacy_name=".a2a-confirmed")
     if marker.exists():
         return True  # answered once already; honor the persisted setting.
 
@@ -6894,28 +6869,20 @@ def _deliver_live(
     generic live-miss. A side-channel, not a second return value, so callers
     and test mocks that read this as a plain bool are unaffected.
 
-    ``family1_state`` (node, change 2) is the caller's ALREADY-COMPUTED
-    :func:`_registered_family1_state` classification for ``entry`` -- passed in
-    rather than recomputed here, since ``dispatch_send`` already resolves it
-    before calling this function and a second call would re-read the recipient
-    transcript for no new information. ``"working"`` (mid-turn, per
-    :func:`_registered_family1_state`) scales the claude control.sock confirm
-    budget so a long tool call has room to yield before we give up.
+    ``family1_state`` is the caller's already-computed registered-state class
+    for ``entry``, passed in so the recipient transcript is not re-read;
+    ``"working"`` scales the claude confirm budget.
 
     When ``mail`` is set the body is wrapped in the paired ``<fno_mail>`` envelope
     so the recipient sees agent-to-agent structure and the delivered turn is
     self-recording (``grep <fno_mail>`` reconstructs a2a history). Every live
     transport below carries the same wrapped turn, ``agy`` mux entries included.
 
-    For claude peers: the ``control.sock`` inject via the ``fno-agents
-    mail-inject`` verb (G1) is the live primitive for adopted
-    ``claude --bg`` sessions, replacing the dead per-worker messaging socket; the
-    switchboard / MCP fast lanes still apply first for stream-json / MCP-routed
-    peers.
-
-    For codex/gemini peers: the daemon ``agent.deliver`` RPC, now carrying the
-    ``<fno_mail>`` envelope. Daemon-down or any failure demotes to durable with a
-    stderr notice; the durable envelope the caller writes is the recovery record.
+    For claude peers the ``control.sock`` inject via the ``fno-agents
+    mail-inject`` verb (G1) is the live primitive (the switchboard / MCP fast
+    lanes still apply first for stream-json / MCP-routed peers); for
+    codex/gemini peers the daemon ``agent.deliver`` RPC carries the envelope,
+    and its failure demotes to durable with a stderr notice.
     """
     wrapped = body
     if mail is not None:
@@ -6931,6 +6898,7 @@ def _deliver_live(
             from_session=mail.from_session,
             origin=mail.origin,
             to_session=mail.to_session,
+            subject=mail.subject,
         )
 
     # Dual-run dispatch on the row's live ref (4a-G2): a mux-hosted agent gets
@@ -7119,20 +7087,11 @@ def _deliver_live(
     ):
         return True
 
-    # Live inject over control.sock (adopted `claude --bg`, the fno-agents
-    # mail-inject verb, G1; node). This is the SOLE claude live lane: the
-    # PTY worker.sock lane retired with daemon PTY hosting, and
-    # the redundant MCP-channel fast lane retired here (US5) because it reported
-    # hosted on an unconfirmed bytes-written push (Locked Decision 4) while
-    # reaching no peer the control.sock lane cannot. The mail-inject verb resolves
-    # the handle itself via ClaudeRoster (accepts the full session uuid or 8-hex
-    # short id) and confirms transcript growth before reporting delivered.
-    #
-    # Recipient resolution guarantees no former MCP recipient is stranded:
-    # mcp_channel_id is minted 1:1 from short_id, so it IS a roster-resolvable
-    # id. Live rows can carry
-    # an empty plain `short_id`, so mcp_channel_id is the load-bearing
-    # fallback for an MCP-registered row whose short_id field was since cleared.
+    # Live inject over control.sock: the SOLE claude live lane since the
+    # PTY worker.sock and MCP-channel lanes retired. The mail-inject verb
+    # resolves the handle via ClaudeRoster (uuid or 8-hex short id) and
+    # confirms transcript growth before reporting delivered; mcp_channel_id
+    # (minted 1:1 from short_id) stays the fallback for a cleared short_id.
     recipient = entry.harness_session_id or entry.short_id or entry.mcp_channel_id
     if not recipient:
         _record("no-recipient")
@@ -7183,6 +7142,7 @@ def _queue_durable_fallback(
     mail_ctx: "Optional[_MailCtx]" = None,
     owner: Optional[str] = None,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> "tuple[str, str]":
     """Write the <fno_mail> envelope to the durable bus.
 
@@ -7237,6 +7197,7 @@ def _queue_durable_fallback(
             id=msg_id,
             origin=origin,
             to_session=entry.harness_session_id,
+            subject=subject,
         )
     else:
         # The envelope body and the thread row must name the same sender.
@@ -7252,6 +7213,7 @@ def _queue_durable_fallback(
         id=mail_ctx.id,
         from_session=mail_ctx.from_session,
         origin=mail_ctx.origin,
+        subject=mail_ctx.subject,
     )
     from fno import rust_binary
 
@@ -7272,6 +7234,7 @@ def _queue_durable_fallback(
             owner=owner or DurableOwner.WAKE_DAEMON.value,
             origin=mail_ctx.origin,
             word_count=rust_binary.style_word_count(message),
+            subject=mail_ctx.subject,
         )
     except (OSError, ValueError, RuntimeError) as exc:
         events.emit(
@@ -7416,6 +7379,7 @@ def dispatch_send(
     *,
     registry_stamp_timeout_seconds: float = 1.0,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> "DispatchSendResult":
     """Dispatch an async ``send`` to an already-registered agent.
 
@@ -7425,28 +7389,9 @@ def dispatch_send(
     (``hosted``) send is self-recording in the transcript and is NOT also queued;
     its bus row is audit-only, while the durable bus remains the offline fallback
     tier. Both the live turn and the bus record carry the same ``<fno_mail>``
-    envelope.
-
-    Orchestration:
-
-    1. Validate name / message / from_name (the shared _validate_inputs rules).
-    2. Reject bodies over 1 MiB (exit 2) BEFORE any store write.
-    3. Resolve the address to its registry primary key, then acquire that
-       per-agent flock (hold_agent_lock) with timeout. A timeout retries the
-       acquire on a short grace window and queues the message durable when it
-       wins (delivery="durable", reason=LOCK_TIMEOUT_REASON, exit 0); only
-       sustained contention, which leaves the recipient unverified, exits 11
-       with nothing written.
-    4. INSIDE the flock:
-       a. Reload and re-resolve; unknown or changed identity refuses.
-       b. Provider mismatch -> exit 2.
-       c. Capture sender provenance + build the <fno_mail> ctx; generate msg_id.
-       d. Attempt live delivery via _deliver_live (fire-and-forget).
-       e. On non-hosted, write the durable fallback envelope (the <fno_mail>
-          body), kind=send, addressed to the selected session's canonical handle.
-       f. Emit agent_send_started / agent_send_done (delivery field).
-       g. Bump last_message_at + status stamps via update_registry.
-    5. Return DispatchSendResult(msg_id, delivery).
+    envelope. The steps run in the numbered order the body's inline comments
+    carry; the lock-timeout retry lands durable (exit 0) and only sustained
+    contention exits 11 with nothing written.
 
     Raises:
         DispatchAskError: every documented failure mode.  send never
@@ -7478,6 +7423,8 @@ def dispatch_send(
 
     registry_path = paths.agents_registry_path()
     requested_name = name
+    # One discovery sweep per send; a lock wait clears it (a new owner may appear).
+    discovered: dict[str, list] = {}
 
     def _load_and_resolve_target(
         expected_identity: Optional[RecipientIdentity] = None,
@@ -7514,16 +7461,14 @@ def dispatch_send(
 
             registry_id = resolved_identity[2]
             registry_key = (resolved_identity[1], registry_id)
-            live_foreign = {
-                (session.agent, session_identity_key(session.session_id)): session
-                for session in discovery_address_matches(
+            if "matches" not in discovered:
+                discovered["matches"] = discovery_address_matches(
                     requested_name, registry_path=registry_path
                 )
-                if (
-                    session.agent,
-                    session_identity_key(session.session_id),
-                )
-                != registry_key
+            live_foreign = {
+                (session.agent, session_identity_key(session.session_id)): session
+                for session in discovered["matches"]
+                if (session.agent, session_identity_key(session.session_id)) != registry_key
             }
             if live_foreign:
                 candidates = [
@@ -7574,11 +7519,8 @@ def dispatch_send(
     canonical_identity = _recipient_identity_key(initial)
 
     def _on_wait() -> None:
-        print(
-            f"Waiting for agent {canonical_name!r} lock...",
-            file=sys.stderr,
-            flush=True,
-        )
+        discovered.clear()
+        print(f"Waiting for agent {canonical_name!r} lock...", file=sys.stderr, flush=True)
 
     # 3. Per-agent flock. Confirmed (node, change 6): this `with` block
     # spans the ENTIRE rest of the send, including the live-delivery attempt
@@ -7590,11 +7532,8 @@ def dispatch_send(
     # second sender addressing the SAME busy recipient serializes behind the
     # whole first attempt rather than just the identity check -- the specimen
     # measured delivering this plan's own report ("Waiting for agent
-    # 'king-footnote-g3' lock..." with no progress until killed). Narrowing
-    # this to cover only the registry mutation is a real fix but a nontrivial
-    # restructuring of a concurrency-sensitive 300-line function under time
-    # pressure is the wrong place to guess; filed as a carveout rather than
-    # rushed here.
+    # 'lead-footnote-g3' lock..." with no progress until killed). Narrowing
+    # it to the registry mutation alone is a separate, larger restructuring.
     try:
         with hold_agent_lock(
             canonical_name,
@@ -7680,6 +7619,7 @@ def dispatch_send(
                 id=msg_id,
                 origin=origin,
                 to_session=existing.harness_session_id,
+                subject=subject,
             )
             reservation = _reserve_send_budget(
                 sender=mail_ctx.from_,
@@ -7712,6 +7652,7 @@ def dispatch_send(
                         msg_id=msg_id,
                         mail_ctx=mail_ctx,
                         owner=durable_owner,
+                        subject=subject,
                     )
                 except Exception:
                     if not live_attempted:
@@ -7756,11 +7697,10 @@ def dispatch_send(
                 # so it cannot drain during a live window, and there is no live
                 # window to crash in. Write its durable placeholder BEFORE
                 # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live stays
-                # live-first: it can drain at its next SessionStart while the live
-                # turn is still in flight, before the id lands in its transcript,
-                # so W2 cannot skip a write-ahead placeholder there and the
-                # message would double-deliver.
+                # not lose the message. A recipient we WILL attempt live gets its
+                # body row staged just before the inject (stage_before_live
+                # below): the bus row is the body's only home. A drain firing
+                # mid-inject can print a duplicate; a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -7774,56 +7714,54 @@ def dispatch_send(
                 if not family1_attemptable:
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
-                    live_attempted = True
-                    _live_delivered = _deliver_live(
-                        existing,
-                        message,
-                        from_name,
-                        mail_ctx,
-                        sender_entry=sender_entry,
-                        reason_out=_live_reason,
-                        family1_state=family1_state,
-                    )
-                    if _live_delivered:
-                        delivery = "hosted"
-                        from fno.bus.log import record_hosted_delivery
-                        from fno.mail.envelope import wrap_fno_mail
+                    from fno import rust_binary
+                    from fno.bus.log import record_hosted_delivery, stage_before_live
+                    from fno.mail.envelope import wrap_fno_mail
 
-                        hosted_body = wrap_fno_mail(
-                            message,
-                            from_=mail_ctx.from_,
-                            harness=mail_ctx.harness,
-                            node=mail_ctx.node,
-                            to=mail_ctx.to,
-                            id=mail_ctx.id,
+                    record: dict[str, Any] = dict(
+                        msg_id=msg_id, sender=mail_ctx.from_,
+                        recipient=durable_recipient or existing.short_id,
+                        body=wrap_fno_mail(
+                            message, from_=mail_ctx.from_, harness=mail_ctx.harness,
+                            node=mail_ctx.node, to=mail_ctx.to, id=mail_ctx.id,
                             from_session=mail_ctx.from_session,
-                            to_session=mail_ctx.to_session,
-                        )
-                        from fno import rust_binary
-                        try:
-                            record_hosted_delivery(
-                                msg_id=msg_id,
-                                sender=mail_ctx.from_,
-                                recipient=durable_recipient or existing.short_id,
-                                body=hosted_body,
-                                from_harness=from_harness,
-                                to_harness=existing.harness,
-                                to_session=mail_ctx.to_session,
-                                from_session=from_session,
-                                from_model=mail_ctx.model,
-                                to_kind="session",
-                                word_count=rust_binary.style_word_count(message),
-                            )
-                        except Exception as exc:  # noqa: BLE001 - delivery already succeeded
-                            print(
-                                "delivery succeeded; outbox record failed; "
-                                f"do not retry: {exc}",
-                                file=sys.stderr,
-                            )
+                            to_session=mail_ctx.to_session, subject=mail_ctx.subject,
+                        ),
+                        from_harness=from_harness, to_harness=existing.harness,
+                        to_session=mail_ctx.to_session, from_session=from_session,
+                        from_model=mail_ctx.model, to_kind="session",
+                        word_count=rust_binary.style_word_count(message),
+                        subject=mail_ctx.subject,
+                    )
+                    # Stage before the inject; a staging failure demotes to the
+                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    try:
+                        if record["recipient"]:
+                            stage_before_live(**record)
+                    except Exception as exc:  # noqa: BLE001 - demote to durable
+                        print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
+                        live_miss_reason = "stage-failed"
                     else:
-                        live_miss_reason = ";".join(_live_reason) if _live_reason else None
-                        if live_miss_reason and existing.mux:
-                            live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
+                        live_attempted = True
+                        _live_delivered = _deliver_live(
+                            existing,
+                            message,
+                            from_name,
+                            mail_ctx,
+                            sender_entry=sender_entry,
+                            reason_out=_live_reason,
+                            family1_state=family1_state,
+                        )
+                        if _live_delivered:
+                            delivery = "hosted"
+                            try:
+                                record_hosted_delivery(**record)
+                            except Exception as exc:  # noqa: BLE001 - delivery already succeeded
+                                print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
+                        else:
+                            live_miss_reason = ";".join(_live_reason) if _live_reason else None
+                            if live_miss_reason and existing.mux:
+                                live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
                 if _bus_only:
                     live_miss_reason = BUS_ONLY_POLICY
                 if not _live_delivered and (durable_recipient is None or family1_attemptable):
@@ -8019,6 +7957,7 @@ def dispatch_send(
                     to=timeout_recipient,
                     id=msg_id,
                     origin=origin,
+                    subject=subject,
                 )
                 reservation = _reserve_send_budget(
                     sender=timeout_mail_ctx.from_,
@@ -8043,6 +7982,7 @@ def dispatch_send(
                             msg_id=msg_id,
                             reason=queue_reason,
                             mail_ctx=timeout_mail_ctx,
+                            subject=subject,
                         )
                     except Exception:
                         from fno.mail import budget
@@ -8279,6 +8219,7 @@ def dispatch_send_to_project(
     any_: bool = False,
     lock_timeout: float = _DEFAULT_LOCK_TIMEOUT,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> "DispatchSendResult":
     """Async send addressed to a project (anycast over the registry).
 
@@ -8322,6 +8263,7 @@ def dispatch_send_to_project(
             lock_timeout=lock_timeout,
             from_name=from_name,
             origin=origin,
+            subject=subject,
         )
         return replace(result, recipient=res.recipient, to_project=project)
 
@@ -8371,6 +8313,7 @@ def dispatch_send_to_project(
             # project-inbox lane; the project's own drain owns it.
             owner=DurableOwner.INBOX_DRAIN.value,
             origin=origin,
+            subject=subject,
         )
     except (OSError, ValueError, RuntimeError) as exc:
         budget.release(reservation)

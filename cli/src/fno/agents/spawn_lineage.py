@@ -87,6 +87,27 @@ def _report_unlinked_parent(session_id: Optional[str]) -> Optional[str]:
     return reason
 
 
+def _parent_edge(
+    parent_edge: Optional[tuple],
+    lineage_row: object | None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """The triple a created row records: the caller's explicit edge, else the
+    ambient capture. A relaunch keeps the SOURCE row's edge, so its original
+    spawner still sees it in the orphan check; the source record only fills
+    a miss."""
+    captured = parent_edge or _capture_parent_edge()
+    if captured[0] or lineage_row is None:
+        return captured
+    inherited = (
+        getattr(lineage_row, "spawned_by_session", None),
+        getattr(lineage_row, "spawned_by_harness", None),
+        getattr(lineage_row, "spawned_by_cwd", None),
+    )
+    if inherited[0]:
+        return inherited
+    return captured
+
+
 def build_spawn_provenance(
     *,
     explicit_origin: Optional[dict] = None,
@@ -95,7 +116,7 @@ def build_spawn_provenance(
 ) -> Optional[dict]:
     """The Python half of the one spawn door (v33): the validated origin+owner
     record. ``None`` when a session caller cannot be proven. Explicit producers
-    MUST name a mission/crown owner; ``cause`` speaks the vocabulary minus ``sob``."""
+    MUST name a mission/role owner; ``cause`` speaks the vocabulary minus ``sob``."""
     if explicit_origin is not None and explicit_owner is not None:
         _validate_explicit_provenance(explicit_origin, explicit_owner, cause)
         return {"origin": explicit_origin, "owner": explicit_owner}
@@ -142,9 +163,9 @@ def _validate_explicit_provenance(origin: dict, owner: dict, cause: Optional[str
         return
     if source.get("kind") not in ("daemon", "launch_agent"):
         return
-    if owner.get("kind") not in ("mission", "crown"):
+    if owner.get("kind") not in ("mission", "role"):
         raise ValueError(
-            "daemon/launch-agent origin requires a mission or crown owner; "
+            "daemon/launch-agent origin requires a mission or role owner; "
             "the daemon starter is never substituted"
         )
     declared = source.get("cause")
@@ -307,49 +328,24 @@ def _stamp_launch_edge(node: "str | None") -> None:
 
     The sibling of :func:`_stamp_spawned_session_row`, which records who WORKED
     it. Refuses rather than half-writes: no node, no write; no proven parent
-    session, no write; launch is the FIRST launch, never overwritten.
+    session, no write; launch is the FIRST launch, never overwritten. The
+    write itself is the Rust stamp the SessionStart launch claim also uses.
     """
     if not node:
         return
     session_id, harness, parent_cwd = _capture_parent_edge()
     if not session_id:
         return
-
-    # Read before paying the locked write; say when nothing was written, or
-    # a graph missing the node commits an unchanged snapshot and exits 0.
+    argv = ["fno", "backlog", "provenance", node, "--stamp-launch", "--session", session_id]
+    if harness:
+        argv += ["--harness", harness]
+    if parent_cwd:
+        argv += ["--cwd", parent_cwd]
     try:
-        from fno.graph.api import wire_rows
-        from fno.graph.store import commit_rows_via_store
-        from fno.paths import graph_json
-        from fno.tracker import active_backend_name
+        import subprocess
 
-        if active_backend_name() != "graph":
-            # Under an external tracker this graph.json is not the record.
-            return
-
-        existing = next((r for r in wire_rows(path=graph_json()) if r.get("id") == node), None)
-        if existing is None:
-            print(f"spawn: launch edge not recorded on {node} (node not in graph); "
-                  f"the edge was not written. Skipped.", file=sys.stderr)
-            return
-        if existing.get("spawned_by_session"):
-            who = existing["spawned_by_session"]
-            print(f"spawn: launch edge on {node} already names {who}; kept.",
-                  file=sys.stderr)
-            return
-
-        def mutator(entries: "list[dict]") -> "list[dict]":
-            for row in entries:
-                # Re-check under the lock: the read above is a snapshot, and a
-                # racing spawn may have landed the first launch since.
-                if row.get("id") != node or row.get("spawned_by_session"):
-                    continue
-                row["spawned_by_session"] = session_id
-                row["spawned_by_harness"] = harness
-                row["spawned_by_cwd"] = parent_cwd
-            return entries
-
-        commit_rows_via_store(graph_json(), mutator)
+        # stdout carries the spawn's JSON receipt; the stamp must not write there.
+        subprocess.run(argv, timeout=10, check=False, stdout=subprocess.DEVNULL)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 - never fail the spawn
         print(f"spawn: launch edge not recorded on {node}: {exc}", file=sys.stderr)
 

@@ -5,11 +5,11 @@
 # session is actively working, gated on being the recorded holder and throttled
 # to at most once per window. It must never block a tool call.
 #
-# Tests (stubbed `fno` on PATH):
-#   T1  AC3-HP    holder == us, aged stamp   -> `fno agents claim refresh` is called
+# Tests (stubbed `fno` and `fno-agents` on PATH):
+#   T1  AC3-HP    holder == us, aged stamp   -> `fno-agents claim refresh` is called
 #   T2  AC3-EDGE  holder == other session    -> refresh NOT called
 #   T3  AC3-ERR   refresh returns non-zero   -> hook still exits 0
-#   T4  AC3-UI    fresh stamp (throttled)    -> exits 0, `fno agents claim status` NOT called
+#   T4  AC3-UI    fresh stamp (throttled)    -> exits 0, `fno-agents claim status` NOT called
 #   T5           no manifest                 -> stamps activity, `fno` never called
 #   T6  AC3-UI    not-holder no-op is silent -> no stdout
 #   T7/T8         Claude owner identity match/mismatch
@@ -28,16 +28,20 @@ fail() { FAIL=$((FAIL+1)); printf '[heartbeat] FAIL: %s\n' "$*" >&2; }
 [[ -f "$HOOK" ]] || { fail "hook not found at $HOOK"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "[heartbeat] SKIP: jq not on PATH"; exit 77; }
 
-# setup_env: build a tmp project with a manifest + a stubbed `fno` on PATH.
-# Env knobs read by the stub: STUB_HOLDER/STATE/STATUS_JSON, STUB_REFRESH_RC,
-# STUB_BIND_RC/OUTPUT. Every `fno` call is
-# appended to $CALLLOG. Sets: TMP_DIR CWD CALLLOG (and prepends the stub to PATH).
+# setup_env: build a tmp project with a manifest + stubbed `fno`/`fno-agents`
+# on PATH. The hook's claim traffic runs through the native `fno-agents` leaf;
+# its PR binder still runs through `fno`. Env knobs read by the
+# stubs: STUB_HOLDER/STATE/STATUS_JSON, STUB_REFRESH_RC, STUB_BIND_RC/OUTPUT.
+# Every claim call (either binary) is appended to $CALLLOG; the state-path
+# reads go to $AGENTSLOG. Sets: TMP_DIR CWD CALLLOG (and prepends the stubs
+# to PATH).
 setup_env() {
   TMP_DIR="$(mktemp -d)"
   CWD="${TMP_DIR}/proj"
   mkdir -p "${CWD}/.fno"
   git init -q "$CWD"
   LIVE_DIR="$(git -C "$CWD" rev-parse --absolute-git-dir)/fno/live"
+  HANDOVER_STAMP="${LIVE_DIR%/live}/claim-handover-heartbeat.stamp"
   CALLLOG="${TMP_DIR}/fno-calls.log"
   : > "$CALLLOG"
 
@@ -58,37 +62,7 @@ EOF
   cat > "${bindir}/fno" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "${CALLLOG}"
-if [[ "\${1:-} \${2:-}" == "agents claim" ]]; then
-  shift
-fi
 case "\$1 \$2" in
-  "claim status")
-    if [[ -n "\${STUB_STATUS_JSON+x}" ]]; then
-      printf '%s' "\$STUB_STATUS_JSON"
-    else
-      if [[ -f "${TMP_DIR}/refresh-observed" ]]; then
-        printf '{"holder":"%s","state":"%s","expires_at":%s}\n' \
-          "\${STUB_HOLDER_AFTER:-\${STUB_HOLDER:-}}" \
-          "\${STUB_STATE_AFTER:-\${STUB_STATE:-live}}" \
-          "\${STUB_EXPIRES_AFTER:-200}"
-      else
-        printf '{"holder":"%s","state":"%s","expires_at":%s}\n' \
-          "\${STUB_HOLDER:-}" "\${STUB_STATE:-live}" "\${STUB_EXPIRES_BEFORE:-100}"
-      fi
-    fi
-    exit "\${STUB_STATUS_RC:-0}"
-    ;;
-  "claim refresh")
-    if [[ "\${STUB_REFRESH_RC:-0}" -eq 0 ]]; then
-      touch "${TMP_DIR}/refresh-observed"
-      if [[ -n "\${STUB_REFRESH_JSON+x}" ]]; then
-        printf '%s\n' "\$STUB_REFRESH_JSON"
-      else
-        printf '{"refreshed": true, "expires_at": %s}\n' "\${STUB_EXPIRES_AFTER:-200}"
-      fi
-    fi
-    exit "\${STUB_REFRESH_RC:-0}"
-    ;;
   "do pr")
     [[ "\${3:-}" == "bind-created" ]] || exit 0
     printf '%s\n' "\${STUB_BIND_OUTPUT:-{\"outcome\":\"bound\"}}"
@@ -104,23 +78,61 @@ exit 0
 EOF
   chmod +x "${bindir}/fno"
 
-  # The heartbeat resolves the manifest through `fno-agents state path
-  # target-state`; stub that binary too so tests never invoke the real one.
+  # The hook resolves the manifest through `fno-agents state path target-state`
+  # and runs its claim traffic through the same binary's `claim status|refresh`
+  # leaf, so stub both shapes here and never invoke the real binary. State-path
+  # calls go to $AGENTSLOG; claim calls go to $CALLLOG (the log every
+  # claim-traffic grep reads), keeping one log per concern.
   # Knobs: STUB_STATE_PATH (path to print; unset prints none), STUB_STATE_PATH_RC
-  # (exit code, default 0). Calls go to $AGENTSLOG so $CALLLOG stays about fno
-  # claim traffic only.
+  # (exit code, default 0), plus the STUB_HOLDER/STATE/STATUS_JSON and
+  # STUB_REFRESH_RC/JSON knobs the claim cases below serve.
   AGENTSLOG="${TMP_DIR}/fno-agents-calls.log"
   : > "$AGENTSLOG"
   cat > "${bindir}/fno-agents" <<EOF
 #!/usr/bin/env bash
-echo "\$*" >> "${AGENTSLOG}"
 if [[ "\${1:-} \${2:-} \${3:-}" == "state path target-state" ]]; then
+  echo "\$*" >> "${AGENTSLOG}"
   [[ -n "\${STUB_STATE_PATH:-}" ]] && printf '%s\n' "\${STUB_STATE_PATH}"
   exit "\${STUB_STATE_PATH_RC:-0}"
+fi
+if [[ "\${1:-} \${2:-}" == "claim status" || "\${1:-} \${2:-}" == "claim refresh" ]]; then
+  echo "\$*" >> "${CALLLOG}"
+  case "\$1 \$2" in
+    "claim status")
+      if [[ -n "\${STUB_STATUS_JSON+x}" ]]; then
+        printf '%s' "\$STUB_STATUS_JSON"
+      else
+        if [[ -f "${TMP_DIR}/refresh-observed" ]]; then
+          printf '{"holder":"%s","state":"%s","expires_at":%s}\n' \
+            "\${STUB_HOLDER_AFTER:-\${STUB_HOLDER:-}}" \
+            "\${STUB_STATE_AFTER:-\${STUB_STATE:-live}}" \
+            "\${STUB_EXPIRES_AFTER:-200}"
+        else
+          printf '{"holder":"%s","state":"%s","expires_at":%s}\n' \
+            "\${STUB_HOLDER:-}" "\${STUB_STATE:-live}" "\${STUB_EXPIRES_BEFORE:-100}"
+        fi
+      fi
+      exit "\${STUB_STATUS_RC:-0}"
+      ;;
+    "claim refresh")
+      if [[ "\${STUB_REFRESH_RC:-0}" -eq 0 ]]; then
+        touch "${TMP_DIR}/refresh-observed"
+        if [[ -n "\${STUB_REFRESH_JSON+x}" ]]; then
+          printf '%s\n' "\$STUB_REFRESH_JSON"
+        else
+          printf '{"refreshed": true, "expires_at": %s}\n' "\${STUB_EXPIRES_AFTER:-200}"
+        fi
+      fi
+      exit "\${STUB_REFRESH_RC:-0}"
+      ;;
+  esac
 fi
 exit 0
 EOF
   chmod +x "${bindir}/fno-agents"
+  # The hook resolves the binary through the shared resolver; pin the override
+  # to the stub so a checkout build in the worktree can never bypass it.
+  export FNO_AGENTS_BIN="${bindir}/fno-agents"
   export PATH="${bindir}:${PATH}"
 }
 
@@ -130,6 +142,7 @@ teardown_env() {
   unset STUB_HOLDER_AFTER STUB_STATE_AFTER STUB_EXPIRES_BEFORE STUB_EXPIRES_AFTER
   unset STUB_BIND_OUTPUT STUB_BIND_RC STUB_BIND_SLEEP STUB_REFRESH_JSON
   unset STUB_STATE_PATH STUB_STATE_PATH_RC
+  unset FNO_AGENTS_BIN
 }
 
 mtime_of() {
@@ -496,7 +509,7 @@ export STUB_HOLDER="spawn-handover:some-other-worker"
 run_hook_sid "182b29c8-owner-uuid" >/dev/null 2>&1
 if grep -q "claim refresh" "$CALLLOG"; then
   fail "T22 pre-init handover refreshed another holder"
-elif [[ ! -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+elif [[ ! -f "$HANDOVER_STAMP" ]]; then
   fail "T22 verified foreign holder did not throttle the positive no-op"
 else
   pass "T22 pre-init handover mismatch does not acquire or steal and throttles"
@@ -579,7 +592,7 @@ export STUB_HOLDER="$FNO_NODE_CLAIM_HOLDER" STUB_STATE="stale"
 run_hook_sid "owner" >/dev/null 2>&1
 if grep -q "claim refresh" "$CALLLOG"; then
   fail "T28 stale exact-holder claim refreshed"
-elif [[ ! -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+elif [[ ! -f "$HANDOVER_STAMP" ]]; then
   fail "T28 verified stale state did not throttle its positive no-op"
 else
   pass "T28 non-live exact holder never refreshes"
@@ -595,7 +608,7 @@ export STUB_STATUS_JSON='{"holder":"spawn-handover:build-x-a166"}'
 err="$(run_hook_sid "owner" 2>&1 >/dev/null)"
 if grep -q "claim refresh" "$CALLLOG"; then
   fail "T29 status without a live state refreshed"
-elif [[ -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+elif [[ -f "$HANDOVER_STAMP" ]]; then
   fail "T29 malformed status incorrectly throttled the retry"
 elif [[ "$err" != *"status unreadable"* ]]; then
   fail "T29 malformed status emitted no diagnostic: [$err]"
@@ -611,7 +624,7 @@ rm -f "${CWD}/.fno/target-state.md"
 export FNO_NODE="x-a166" FNO_NODE_CLAIM_HOLDER="spawn-handover:build-x-a166"
 export STUB_HOLDER="$FNO_NODE_CLAIM_HOLDER" STUB_STATE="live" STUB_REFRESH_RC=1
 err="$(run_hook_sid "owner" 2>&1 >/dev/null)"
-if [[ -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+if [[ -f "$HANDOVER_STAMP" ]]; then
   fail "T30 failed refresh incorrectly throttled the retry"
 elif [[ "$err" != *"refresh failed"* ]]; then
   fail "T30 failed refresh emitted no diagnostic: [$err]"
@@ -700,7 +713,7 @@ export STUB_STATUS_JSON='{"key":"node:x-a166","state":"free"}'
 run_hook_sid "owner" >/dev/null 2>&1
 if grep -q "claim refresh" "$CALLLOG"; then
   fail "T35 missing claim was refreshed"
-elif [[ ! -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+elif [[ ! -f "$HANDOVER_STAMP" ]]; then
   fail "T35 positive free result was not throttled"
 else
   pass "T35 missing claim never refreshes and throttles the positive no-op"
@@ -770,7 +783,7 @@ export FNO_NODE="x-a166" FNO_NODE_CLAIM_HOLDER="spawn-handover:build-x-a166"
 export STUB_HOLDER="$FNO_NODE_CLAIM_HOLDER" STUB_STATE="suspect"
 export STUB_EXPIRES_BEFORE=100 STUB_EXPIRES_AFTER=100 STUB_STATE_AFTER="stale"
 err="$(run_hook_sid "owner" 2>&1 >/dev/null)"
-if [[ -f "${CWD}/.fno/.claim-handover-heartbeat.stamp" ]]; then
+if [[ -f "$HANDOVER_STAMP" ]]; then
   fail "T40 unconfirmed exit-zero refresh incorrectly throttled later repair"
 elif [[ "$err" != *"ownership-lost/refresh-not-confirmed"* ]]; then
   fail "T40 unconfirmed refresh emitted no ownership diagnostic: [$err]"
@@ -883,19 +896,6 @@ else
 fi
 teardown_env
 
-# ── T48: any outcome ledger still throttles the next window ────────────────
-setup_env
-export STUB_HOLDER="target-session:20260707T203700Z-cl55246-f3fe72"
-run_hook >/dev/null 2>&1
-: > "$CALLLOG"
-run_hook >/dev/null 2>&1
-if [[ ! -s "$CALLLOG" ]]; then
-  pass "T48 a written ledger throttles the next window like the touch did"
-else
-  fail "T48 ledger cycle did not throttle: $(cat "$CALLLOG")"
-fi
-teardown_env
-
 # ── T49: non-JSON status output is status_unreadable, never no_claim ───────
 setup_env
 export STUB_STATUS_JSON='Traceback (most recent call last): boom'
@@ -959,15 +959,18 @@ setup_env
 SHARED_DIR="${TMP_DIR}/shared"
 mkdir -p "$SHARED_DIR"
 mv "${CWD}/.fno/target-state.md" "${SHARED_DIR}/target-state.md"
+# A linked worktree has no checkout-local .fno at all.
+rm -rf "${CWD}/.fno"
 export STUB_HOLDER="target-session:20260707T203700Z-cl55246-f3fe72"
 export STUB_STATE_PATH="${SHARED_DIR}/target-state.md"
 export STUB_EXPIRES_BEFORE=100 STUB_EXPIRES_AFTER=200
 run_hook >/dev/null 2>&1
-stamp="${CWD}/.fno/.claim-heartbeat.stamp"
-if grep -q "claim refresh node:x-a166 --holder target-session:20260707T203700Z-cl55246-f3fe72 --ttl 2h" "$CALLLOG" \
+run_hook >/dev/null 2>&1
+stamp="${SHARED_DIR}/.claim-heartbeat.stamp"
+if [[ "$(grep -c "claim refresh node:x-a166 --holder target-session:20260707T203700Z-cl55246-f3fe72 --ttl 2h" "$CALLLOG")" -eq 1 ]] \
       && [[ -f "$stamp" ]] && grep -q '^outcome=renewed$' "$stamp" \
       && grep -q '^expires_at=200$' "$stamp"; then
-  pass "T53 state-path-resolved shared manifest renews the claim"
+  pass "T53 shared manifest renews once, ledger beside it throttles the next call"
 else
   fail "T53 shared-space renewal wrong: calls=$(cat "$CALLLOG") ledger=$(cat "$stamp" 2>/dev/null || echo missing)"
 fi

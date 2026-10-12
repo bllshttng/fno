@@ -39,6 +39,7 @@ class Meta:
 
 # Every leaf maps to exactly one Meta. Keep in rough model order for scanning.
 FIELD_META: dict[str, Meta] = {
+    "agents.first_check_minutes": Meta("advanced", "Minutes after spawn before the daemon checks worker progress (default 10, range 1 to 60). With no progress it mails the spawning lead and checks once more after the same interval.", default_source="default"),
     "schema_version": Meta("never", "Settings schema version; managed by fno, not hand-set."),
     # --- config.paths.* (all defaulted; advanced) ---
     "state_dir": Meta("advanced", "Root dir for global fno do state.", default_source="default"),
@@ -114,8 +115,9 @@ FIELD_META: dict[str, Meta] = {
     # --- config.blueprint.* ---
     "blueprint.max_prs_per_epic": Meta("advanced", "Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it."),
     "blueprint.python_repair_added_lines": Meta("advanced", "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."),
+    "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---
-    "backlog.page_reload_s": Meta("advanced", "Seconds an open local board, fleet.html or reign.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."),
+    "backlog.page_reload_s": Meta("advanced", "Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."),
     "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before an idea is flagged stale."),
     "backlog.maintain.max_failed_attempts": Meta("advanced", "Consecutive failures before a node auto-defers."),
     "backlog.maintain.validity_days": Meta("advanced", "Age (days) before a stale idea enters the validity sweep."),
@@ -289,7 +291,7 @@ FIELD_META: dict[str, Meta] = {
     "target.dedupe_dead_duplicates": Meta("never", "Opt-in cleanup of provably-dead duplicate state files."),
     "target.handoff.enabled": Meta("advanced", "Enable explicit target capability escalation."),
     "target.handoff.used_pct_trigger": Meta("never", "Context-used %% that triggers a general-session compact nudge."),
-    "target.handoff.king_used_pct_trigger": Meta("advanced", "Context-used %% that triggers an earlier king compact nudge."),
+    "target.handoff.lead_used_pct_trigger": Meta("advanced", "Context-used %% that triggers an earlier lead compact nudge."),
     "target.blast.enabled": Meta("never", "Enable blast-radius routing."),
     "target.blast.downgrade": Meta("never", "Allow token-saving downgrades in blast routing."),
     "target.blast.reuse_loc_manifest": Meta("never", "Include loc-ratchet globs in the blast map."),
@@ -330,7 +332,7 @@ FIELD_META: dict[str, Meta] = {
     "agents.single_flight_join_budget_seconds": Meta("advanced", "Seconds a later caller waits for the in-flight holder's answer before running its own (default 30). Set over the 23.2 s worst-measured roster read: load is when the latch has to hold. An exhausted budget spawns and says so, because a latch that can wedge a caller is worse than the fan-out it prevents.", default_source="default"),
     "agents.orphan_reap_after_seconds": Meta("advanced", "Age at which an fno child that init inherited is reaped (default 5400). Three times `do pr wait --timeout 30m`, the longest detached child allowed to be running. The sweep also needs parent pid 1 and a pid no registry row names live.", default_source="default"),
     "agents.max_live": Meta("advanced", "Backstop cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3). Sized from RAM, because every live row holds RAM whether or not it works: floor((RAM_GB - 4 GB OS reserve - your desktop apps) / 1 GB per worker). The 1 GB planning figure is generous on purpose (a build or a test suite bursts past the measured 430 MB a quiet worker holds); the CPU axis (max_fleet_cpu_share) binds first on any machine with real headroom, so raise this instead of tuning it.", default_source="default"),
-    "agents.max_live_per_territory": Meta("advanced", "Per-territory team cap: the max live workers whose node is contained in one crown scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (kings, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).", default_source="default"),
+    "agents.max_live_per_territory": Meta("advanced", "Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).", default_source="default"),
     "process_admission.max_processes": Meta("advanced", "Maximum fno-attributed OS processes admitted by the native pre-spawn gate; counts processes, not agents or panes (default 400).", default_source="default"),
     "agents.provider_limits": Meta("advanced", "Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.", default_source="default"),
     "agents.min_free_gb": Meta("advanced", "Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB box, 3 on 16 GB, 4 above.", default_source="default"),
@@ -339,6 +341,8 @@ FIELD_META: dict[str, Meta] = {
     "agents.max_fleet_cpu_share": Meta("advanced", "Share of CPU capacity the fleet may hold, checked on EVERY spawn (default 0.5). An attribution gap widens the share to an interval bounded above by the whole machine's measured CPU: over by its own attributed work the gate holds and re-samples; the ceiling inside the interval refuses and names both bounds plus the gap; above the interval the gate admits and says the reading was an upper bound. Leave 0.5 unless the box is dedicated, then 0.6.", default_source="default"),
     "agents.footprint_sustained_cpu_cores": Meta("advanced", "Absolute override for the doctor footprint sustained-CPU threshold, in cores. Unset, the threshold derives from measured CPU capacity (a fraction per core) instead of an absolute constant that asked a 12-core machine's fleet to idle at 8%.", default_source="default"),
     "agents.worker_qos": Meta("advanced", "Worker CPU/IO priority: utility (background QoS, default) or off.", default_source="default"),
+    "agents.claude.beat": Meta("advanced", "What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."),
+    "agents.codex.beat": Meta("advanced", "What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."),
     "agents.codex.headless_yolo": Meta("advanced", "Use full-yolo (drop sandbox) for headless codex workers."),
     "agents.gemini.headless_yolo": Meta("advanced", "Use full-yolo (drop sandbox) for headless gemini workers."),
     # --- config.dispatch.* (harness-capability map overlay; resolve_node_spawn reads it) ---
@@ -350,7 +354,7 @@ FIELD_META: dict[str, Meta] = {
     "dispatch.auto_merge": Meta("advanced", "DEPRECATED: reads as auto_merge.grant for one release ('dispatch' when true); migrate with `fno config set auto_merge.grant <none|dispatch>`. Formerly the per-project merge posture for autonomous dispatch.", default_source="default"),
     "dispatch.on_exhaustion": Meta("advanced", "On provider exhaustion during autonomous dispatch: 'defer' (default; a fresh install is unchanged) waits for headroom; 'failover' rotates to the next non-exhausted provider in the active combo. A full-combo exhaustion falls back to defer; any unknown value degrades to 'defer'.", default_source="default"),
     "dispatch.cutover_low_after_minutes": Meta("advanced", "Minutes after which a LOW (not yet exhausted) quota window whose reset is FARTHER out than this arms a cross-harness cutover instead of a wait. Default 0 = off (a fresh install is unchanged). The predicate is inverted from the defer horizon on purpose: for deferring a distant reset means wait, for cutover it means leave now. Needs dispatch.on_exhaustion='failover' and a healthy candidate in the active combo; any non-integer or negative value degrades to 0.", default_source="default"),
-    "dispatch.blueprint_floor": Meta("advanced", "The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The reign check-in routes each unplanned row through the same table: blueprint candidates against the one-per-king ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.", default_source="default"),
+    "dispatch.blueprint_floor": Meta("advanced", "The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The lead check-in routes each unplanned row through the same table: blueprint candidates against the one-per-lead ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.", default_source="default"),
     # --- config.autonomy.* ---
     "autonomy.enabled": Meta("never", "The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled."),
     # --- config.auto_continue.* ---
@@ -436,12 +440,15 @@ FIELD_META: dict[str, Meta] = {
     "mux.restore.hold_workers": Meta("advanced", "Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).", default_source="default"),
     "mux.restore.policy": Meta("advanced", "Startup restore policy for worker members: hold (rebuild named held panes, resume on focus, skip tabs whose every slot binds a done worker, default), idle (members stay idle rows), or resume (relaunch every member that is not tombstoned, gone, or reap-retired, finished work included). The policy never decides the tab count by itself: tabs rebuild from the stored tab trees under every value, so no value restores zero tabs. Overrides hold_workers when set.", default_source="default"),
     "mux.status_row": Meta("advanced", "Show the mux status row at the bottom of the terminal (default on).", default_source="default"),
+    "mux.card_graph": Meta("advanced", "What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start.", default_source="default"),
     "mux.load_readout": Meta("advanced", "How the mux shows machine load: simple (default) says it in plain words, e.g. 'CPU 80% busy: agents 58%, everything else 22%'; detailed shows the raw numbers (cores, load averages, GB). Both draw a CPU graph. Latched at mux client start.", default_source="default"),
     "mux.theme": Meta(
         "advanced",
         "Mux chrome theme: footnote-superscript (default, the brand dark palette) | footnote-paper (auto-picked on a light terminal background) | terminal (no-op, inherits the emulator colors) | catppuccin | tokyo-night | gruvbox. A named palette recolors the chrome while the body stays the emulator's inverse block. Set from the settings picker. Role overrides: quote-dotted keys in [mux] - \"theme.brand\", \"theme.needs_you\" and \"theme.border\" take #rrggbb values that hold under any theme, and every role also takes `default` to pin that role to the terminal's own text color (white on a dark ground, black on paper); theme.border recolors every border at once (the pane frame, the modal outlines). The tab-bar mark's stamp takes no override.",
         default_source="default",
     ),
+    # --- config.split.* ---
+    "split.opens": Meta("advanced", "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.", default_source="default"),
     # --- config.dev.* (: maintainer local-dev) ---
     "dev.source": Meta("never", "Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default)."),
     # --- config.context.* (: project-supplied context artifacts) ---
@@ -577,22 +584,22 @@ FIELD_META: dict[str, Meta] = {
     ),
     "worktree.auto_install": Meta(
         "advanced",
-        "Run dependency install when a new worktree is set up (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Run dependency install when a new worktree is set up (read by hooks/worktree-setup.sh and worktree-manager.sh); "
         "set false to skip it. Default true.",
     ),
     "worktree.setup_command": Meta(
         "advanced",
         "Explicit setup command run after a new worktree is created, whatever auto_install says "
-        "(read by skills/speculate/scripts/worktree-setup.sh). Default empty.",
+        "(read by hooks/worktree-setup.sh and worktree-manager.sh). Default empty.",
     ),
     "worktree.skip_verification": Meta(
         "advanced",
         "Skip the post-setup verification step in a new worktree (read by "
-        "skills/speculate/scripts/worktree-setup.sh). Default false.",
+        "hooks/worktree-setup.sh). Default false.",
     ),
     "worktree.test_command": Meta(
         "advanced",
-        "Verification command for a new worktree (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Verification command for a new worktree (read by hooks/worktree-setup.sh); "
         "falls back to the script's own detection when empty. Default empty.",
     ),
     "guards.preset": Meta(
@@ -601,6 +608,10 @@ FIELD_META: dict[str, Meta] = {
         "two destructive-write guards stay on), or off. Read in Rust by "
         "guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.",
     ),
+    # --- config.store.* (global config only; read in Rust by store_remote.rs) ---
+    "store.remote_url": Meta("never", "The sqld primary every machine dials out to (an http:// URL on a private network). Set, the claim keys that decide dispatch run on the primary. Read from the global config only. Unset = local store, no socket. Default unset."),
+    "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
+    "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "
@@ -650,7 +661,7 @@ FIELD_META: dict[str, Meta] = {
         "advanced", "Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = \"orange\"). A row's own `color` field outranks this table for the same row.",
     ),
     "sideline.layout": Meta(
-        "advanced", "The sideline's row shape: \"card\" renders each session as a padded two-line card (state glyph, name, PR, then harness, king, message, age); \"list\" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach.",
+        "advanced", "The sideline's row shape: \"card\" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); \"list\" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach.",
     ),
     # --- config.model_routing.* (role-based per-spawn model routing) ---
     "model_routing.enabled": Meta(
@@ -673,20 +684,20 @@ FIELD_META: dict[str, Meta] = {
     "status_fanout.interval_secs": Meta("advanced", "Seconds between status-fanout ticks per project (daemon host)."),
     "status_fanout.http_timeout_secs": Meta("advanced", "Bounded per-webhook HTTP timeout for a status sink."),
     "status_fanout.retries": Meta("advanced", "Retry budget per webhook dispatch before drop/short-circuit."),
-    # --- config.king.* (the king loop; both default false) ---
-    "king.enabled": Meta("advanced", "Arm the king loop: hold a king session open while its board names work it can shrink. Defaults false."),
-    "king.autonomous_merge": Meta("advanced", "Let the king merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the king's own work."),
-    "king.wake_enabled": Meta("advanced", "Arm the pr-watch tick's wake phase: respawn a king whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."),
-    "king.wake_ceiling": Meta("advanced", "Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived reign."),
-    "king.wake_debounce_seconds": Meta("advanced", "Minimum gap between billed wakes (default 900): a king woken inside the window is still working under its own in-session arm."),
-    "king.wake_backstop_seconds": Meta("advanced", "Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement."),
-    "king.blocked_child_grace_minutes": Meta("advanced", "Minutes a blocked distress row may sit unanswered before the blocked_child board queue surfaces it (default 30). An answer is mail to that session, a claim release on the node, or the node closing."),
-    "king.implementation_guard": Meta("advanced", "What a crowned court session may write through the king-delegation-guard hook. refuse (default) denies a write whose target resolves inside the repo, outside its .fno state tree, build output and any king.write_roots entry, and names the rejected path. warn prints the refusal on stderr and allows, so a reign adopts the guard without a surprise. off silences the guard. An unknown value degrades to refuse."),
-    "king.write_roots": Meta("advanced", "In-repo paths a crowned court session may still write through the king-delegation-guard hook. A relative entry resolves against the repo root, and a leading ~/ against $HOME. The match is by realpath, so a symlinked entry covers its target. Default empty: every in-repo path outside .fno and build output is source and refused. A blank entry is dropped. '.' allows the whole repo, the same as implementation_guard = off. Paths outside the repo always allow and need no entry."),
+    # --- config.lead.* (the lead loop; both default false) ---
+    "lead.enabled": Meta("advanced", "Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false."),
+    "lead.autonomous_merge": Meta("advanced", "Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work."),
+    "lead.wake_enabled": Meta("advanced", "Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."),
+    "lead.wake_ceiling": Meta("advanced", "Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead."),
+    "lead.wake_debounce_seconds": Meta("advanced", "Minimum gap between billed wakes (default 900): a lead woken inside the window is still working under its own in-session arm."),
+    "lead.wake_backstop_seconds": Meta("advanced", "Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement."),
+    "lead.blocked_child_grace_minutes": Meta("advanced", "Minutes a blocked distress row may sit unanswered before the blocked_child board queue surfaces it (default 30). An answer is mail to that session, a claim release on the node, or the node closing."),
+    "lead.implementation_guard": Meta("advanced", "What a titled org session may write through the lead-delegation-guard hook. refuse (default) denies a write whose target resolves inside the repo, outside its .fno state tree, build output and any lead.write_roots entry, and names the rejected path. warn prints the refusal on stderr and allows, so a lead adopts the guard without a surprise. off silences the guard. An unknown value degrades to refuse."),
+    "lead.write_roots": Meta("advanced", "In-repo paths a titled org session may still write through the lead-delegation-guard hook. A relative entry resolves against the repo root, and a leading ~/ against $HOME. The match is by realpath, so a symlinked entry covers its target. Default empty: every in-repo path outside .fno and build output is source and refused. A blank entry is dropped. '.' allows the whole repo, the same as implementation_guard = off. Paths outside the repo always allow and need no entry."),
     # --- config.auto_heal.* (the pr-watch tick's heal drive loop; default off) ---
     "auto_heal.enabled": Meta("advanced", "Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true."),
-    "king.checkin_interval": Meta("advanced", "The /loop interval a reign self-injects on Claude (default 55m, under the one-hour prompt cache). Fail-safe: a value that is not <digits>[smhd] degrades to 55m at load, never raises."),
-    "king.checkin_text": Meta("advanced", "The /loop prompt text a reign self-injects at each check-in (default: run fno agents king checkin, which gathers the readings, diffs the last beat, and journals reign_checkin; print 'no change' when idle)."),
+    "lead.checkin_interval": Meta("advanced", "The /loop interval a lead self-injects on Claude (default 55m, under the one-hour prompt cache). Fail-safe: a value that is not <digits>[smhd] degrades to 55m at load, never raises."),
+    "lead.checkin_text": Meta("advanced", "The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."),
     # --- config.accounts.* (account rotation; managed by `fno config accounts`) ---
     "accounts.active": Meta("never", "Name of the account record currently active for provider rotation."),
     "accounts.auto_switch": Meta("never", "Swap to a failover account automatically when the active one is locked out."),

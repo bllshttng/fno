@@ -71,6 +71,7 @@ pub(super) async fn serve(
         claims: HashMap::new(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
+        fno_token_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: client_count_tx,
@@ -91,6 +92,8 @@ pub(super) async fn serve(
         shared_identity_notified: HashSet::new(),
         restored: false,
         restore_pending: false,
+        spawn_flight: Default::default(),
+        restore_hold: Default::default(),
         store_generations: HashMap::new(),
         pre_restore_squads: HashSet::new(),
         topology_dirty: false,
@@ -158,19 +161,23 @@ pub(super) async fn serve(
                 cached: Option<(std::time::SystemTime, u64)>,
             ) -> (Option<(std::time::SystemTime, u64)>, Option<String>) {
                 let stat_path = path.clone();
-                let stamp = tokio::task::spawn_blocking(move || {
-                    std::fs::metadata(&stat_path)
+                let (stamp, table) = tokio::task::spawn_blocking(move || {
+                    let stamp = std::fs::metadata(&stat_path)
                         .ok()
-                        .map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()))
+                        .map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
+                    (stamp, crate::registry_read::table_owns(&stat_path))
                 })
                 .await
-                .ok()
-                .flatten();
-                let raw = if stamp != cached {
-                    tokio::task::spawn_blocking(move || std::fs::read_to_string(&path).ok())
-                        .await
-                        .ok()
-                        .flatten()
+                .unwrap_or((None, false));
+                // An imported registry's rows live in graph.db, where no file
+                // stat moves, so it is read every tick.
+                let raw = if stamp != cached || table {
+                    tokio::task::spawn_blocking(move || {
+                        crate::registry_read::registry_text(&path).ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten()
                 } else {
                     None
                 };
@@ -194,13 +201,15 @@ pub(super) async fn serve(
                 if *count_rx.borrow() == 0 {
                     continue; // no viewer -> skip both file reads entirely
                 }
-                // (v48) Reachability evidence, one `fno agents list --json`
-                // process for the whole fleet on a slow sub-interval. Each
-                // probe runs as its own task so a slow CLI start never stalls
-                // the 1s registry tick; a failed probe sends nothing and the
-                // last good map stands. The latch skips a tick whose
+                // (v48) Reachability evidence, one `agent.list` RPC for the
+                // whole fleet on a slow sub-interval (the
+                // `fno agents list` interpreter it replaced was the mux
+                // server's largest child, 5-32s of Python every 60s). Each
+                // probe runs as its own task so a slow daemon answer never
+                // stalls the 1s registry tick; a failed probe sends nothing
+                // and the last good map stands. The latch skips a tick whose
                 // predecessor still runs, so a probe slower than the interval
-                // stacks no second interpreter. Ages are measured at probe
+                // stacks no second request. Ages are measured at probe
                 // time, so between probes a row's displayed age lags by at
                 // most this interval - invisible next to the 600s threshold
                 // it feeds.
@@ -212,10 +221,7 @@ pub(super) async fn serve(
                             let seq = truth_probe_seq;
                             let tx = core_tx.clone();
                             tokio::spawn(async move {
-                                let probe = tokio::task::spawn_blocking(probe_truth_map)
-                                    .await
-                                    .ok()
-                                    .flatten();
+                                let probe = probe_truth_map().await;
                                 drop(latch);
                                 if let Some(map) = probe {
                                     let _ = tx.send(CoreMsg::AgentTruth { map, seq }).await;

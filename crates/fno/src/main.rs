@@ -68,6 +68,13 @@ enum Role {
     /// fno plugin into each. Native, because it must answer before the wheel
     /// exists on a mid-install machine and forwards would 127 there.
     SetupAutowire,
+    /// `fno config get --defaults [--json]`: the defaults inventory
+    /// `config setup run` composes on. Native, so the inventory answers
+    /// beside the setup verb that reads it.
+    ConfigDefaults(Vec<OsString>),
+    /// `fno config setup run`: the one run-once setup over the one step
+    /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
+    SetupRun(Vec<OsString>),
     /// `mux ls [--json]`: list sessions (no TTY needed). The bool is `--json`.
     MuxLs(bool),
     /// `mux kill-server [<name>] [--json]`: shut a session down (no TTY needed).
@@ -153,6 +160,7 @@ enum Role {
     /// Args from the subcommand name onward; Python keeps the rich
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
+    DoctorCost(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` verb. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -163,13 +171,33 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno agents transcript ...`: the native session-bundle transfer.
+    AgentsTranscript(Vec<OsString>),
+    /// `fno agents claim backlog|export ...`: the shared-store verbs, run
+    /// by `fno-agents claim`.
+    ClaimStore(Vec<OsString>),
+    /// `fno agents top ...`: the native worker table (`fno-agents census
+    /// --workers`), claimed here because the Python front alone cost seconds.
+    AgentsTop(Vec<OsString>),
+    /// `fno doctor builds [--json]`: every cargo job at the admission doors
+    /// (`fno-agents test-run builds`). Native, because the doors are.
+    DoctorBuilds(Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
     MailShow(Vec<OsString>),
+    /// `fno agents mail send <name>@<host> ...` and `agents peek
+    /// <handle>@<host> ...`: the cross-host relay. The carried
+    /// tail runs `fno-agents mail-remote`; every other argv forwards
+    /// byte-verbatim.
+    RemoteMail(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
+    /// A reader-shaped guess (`read`, `open`, `fetch`, `cat`) at the mail
+    /// tree: refused by name, pointing at the reader, before the Python
+    /// fallback answers with typer's near-miss guess.
+    MailWrongVerb(String),
     /// `fno config paths <native-verb>`: the native paths verb. Args from the
     /// verb name onward; the worker's --paths-exec lane answers, the other
     /// paths verbs still forward to Python (one verb per PR,
@@ -179,6 +207,10 @@ enum Role {
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
+    /// `fno backlog list [<query>]`: the native node-query door (the grammar
+    /// and the read model both live in this crate, d-069a9fa1). Args after
+    /// `list`.
+    BacklogList(Vec<String>),
     /// `fno inbox law set|stage|match`: the native law-door verbs, classified
     /// lexically the way `fno doctor event` is, because the Python CLI owns
     /// the rest of the `inbox` tree.
@@ -207,17 +239,17 @@ fn exit_mux(code: i32) -> ! {
     std::process::exit(code)
 }
 
-/// The carried tail runs through the store's one owner: stdio inherited, the
+/// The carried tail runs through the native owner: stdio inherited, the
 /// child's exit code returned. A missing binary is a refusal, never a silent
 /// empty read.
-fn mail_show_exec(rest: &[OsString]) -> i32 {
+fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
     let mut cmd = std::process::Command::new(fno::digest_overlay::fno_agents_bin());
-    cmd.args(["chats", "show"]);
+    cmd.args(action);
     cmd.args(rest);
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mail show: could not run fno-agents: {e}");
+            eprintln!("{label}: could not run fno-agents: {e}");
             1
         }
     }
@@ -255,6 +287,38 @@ fn parse_web_args(rest: &[OsString]) -> Option<fno::web::WebArgs> {
 /// and `view` is refused by name, because the rename ships no compat shell.
 /// The verb mounts at two paths -- `fno agents mail <verb>` and the hidden
 /// `fno mail <verb>` group -- and both spellings claim and refuse alike.
+/// `fno agents transcript send|receive ...`: the native bundle transfer,
+/// lexically claimed beside agents_history. The Python group registers the
+/// same spelling as a shim that execs here, so both fronts answer once.
+fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
+    classify_agents_verb(args, "transcript")
+}
+
+fn classify_agents_verb(args: &[OsString], verb: &str) -> Option<Vec<OsString>> {
+    classify_group_verb(args, "agents", verb)
+}
+
+fn classify_group_verb(args: &[OsString], group: &str, verb: &str) -> Option<Vec<OsString>> {
+    if args.len() < 2 || args[0].to_str()? != group || args[1].to_str()? != verb {
+        return None;
+    }
+    Some(args[2..].to_vec())
+}
+
+/// `fno agents claim backlog|export ...`: the shared-store verbs live only
+/// in `fno-agents claim`, and the Python claim group names its actions one
+/// by one, so the front claims these two and execs the native binary.
+fn classify_claim_store(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "agents"
+        || args[1].to_str()? != "claim"
+        || !matches!(args[2].to_str()?, "backlog" | "export")
+    {
+        return None;
+    }
+    Some(args[2..].to_vec())
+}
+
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     let (verb, tail): (&str, &[OsString]) = if args.len() >= 3
         && args[0].to_str() == Some("agents")
@@ -269,15 +333,21 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
         "view" => Some(Role::MailViewRenamed),
+        "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
     }
 }
 
 fn decide_role(args: &[OsString], is_tty: bool) -> Role {
+    #[cfg(not(test))]
+    fno::doctor_cost::default_report(args);
     use cli_args::FrontDoor;
     // The native `doctor event` storage verbs are classified lexically,
     // before clap: the Python CLI still owns the `doctor` tree for every
     // other name, so `fno doctor event emit` must keep forwarding.
+    if let Some(rest) = fno::doctor_cost::classify(args) {
+        return Role::DoctorCost(rest);
+    }
     if let Some(rest) = fno::event_cli::classify_doctor_event(args) {
         return Role::DoctorEvent(rest);
     }
@@ -290,8 +360,20 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
     }
+    if let Some(rest) = classify_group_verb(args, "doctor", "builds") {
+        return Role::DoctorBuilds(rest);
+    }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
+    }
+    if let Some(rest) = classify_agents_transcript(args) {
+        return Role::AgentsTranscript(rest);
+    }
+    if let Some(rest) = classify_claim_store(args) {
+        return Role::ClaimStore(rest);
+    }
+    if let Some(rest) = classify_agents_verb(args, "top") {
+        return Role::AgentsTop(rest);
     }
     if let Some(role) = classify_mail_show(args) {
         return role;
@@ -303,10 +385,21 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(out) = fno::agents_alias::classify(args) {
         return Role::AgentsAlias(out);
     }
+    // The cross-host intercept claims an `@host` target before the agents
+    // tree forwards: `mail send`/`peek` with a remote target is a different
+    // transport, not a local verb with a funny name.
+    if let Some(rest) = fno::remote_target::classify(args) {
+        return Role::RemoteMail(rest);
+    }
     // The backlog namespace claims itself lexically, like doctor-event: the
     // sibling dispatcher owns the whole namespace's spelling (grouped and
     // legacy), and anything it does not own yet it forwards to Python
-    // itself, so the front door hands over the argv byte-verbatim.
+    // itself, so the front door hands over the argv byte-verbatim. The one
+    // lexical exception before the handover: the node-query door claims the
+    // bare `list` spelling the saved-set actions leave free.
+    if let Some(rest) = fno::backlog_list::classify(args) {
+        return Role::BacklogList(rest);
+    }
     if args.first().and_then(|a| a.to_str()) == Some("backlog") {
         return Role::Backlog;
     }
@@ -322,8 +415,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::law_cli::classify_inbox_decide(args) {
         return Role::InboxDecide(rest);
     }
+    if let Some(rest) = fno::setup_run::classify(args) {
+        return Role::SetupRun(rest);
+    }
     if fno::setup_autowire::classify(args).is_some() {
         return Role::SetupAutowire;
+    }
+    if let Some(rest) = fno::config_defaults::classify(args) {
+        return Role::ConfigDefaults(rest);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -458,6 +557,7 @@ fn main() {
     match decide_role(&args, is_tty) {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
+        Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
             // this is a gate, not a failure.
@@ -480,6 +580,8 @@ fn main() {
         Role::MuxVersion(json) => fno::version::print_version(json),
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
+        Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
             if kill_req.stale_idle || kill_req.all {
@@ -505,6 +607,7 @@ fn main() {
         Role::MuxCommand(args) => exit_mux(mux_cli::command(args, env_session.as_deref())),
         Role::MuxDoctor(json) => std::process::exit(mux_cli::doctor(json)),
         Role::DoctorEvent(rest) => std::process::exit(fno::event_cli::run(&rest)),
+        Role::DoctorCost(rest) => std::process::exit(fno::doctor_cost::run(&rest)),
         Role::DoctorLintStyle(rest) => {
             // The argv the sibling answers is the verb name plus the tail
             // the classifier sliced: `style-check --stdin ...`.
@@ -516,9 +619,39 @@ fn main() {
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
-        Role::MailShow(rest) => std::process::exit(mail_show_exec(&rest)),
+        Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
+        Role::MailShow(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail show",
+            &["chats", "show"],
+            &rest,
+        )),
+        Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail send|peek <name>@<host>",
+            &["mail-remote"],
+            &rest,
+        )),
+        Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
+            "fno agents top",
+            &["census", "--workers"],
+            &rest,
+        )),
+        Role::DoctorBuilds(rest) => std::process::exit(fno_agents_exec(
+            "fno doctor builds",
+            &["test-run", "builds"],
+            &rest,
+        )),
+        Role::ClaimStore(rest) => {
+            std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
+        }
         Role::MailViewRenamed => {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
+            std::process::exit(2);
+        }
+        Role::MailWrongVerb(verb) => {
+            eprintln!(
+                "no mail verb {verb:?}. An `fmail-<id>` header in a delivered turn is read \
+                 with `fno agents mail show <id>`"
+            );
             std::process::exit(2);
         }
         Role::AgentsAlias(fno::agents_alias::Org::Forward(argv)) => bootstrap::forward(&argv),
@@ -612,6 +745,10 @@ fn run_client(session: &str) {
 }
 
 fn run_server(socket: PathBuf) {
+    if let Err(error) = fno::role_migration::run() {
+        eprintln!("role migration: {error}");
+        std::process::exit(2);
+    }
     // The one mux role that never returns through `exit_mux`: the daemon
     // blocks until killed, so the config warning it recorded while resolving
     // the socket dir would otherwise never surface. Server stderr is a log
@@ -672,6 +809,16 @@ mod tests {
             decide_role(&os(&["agents", "mail", "view", "--all"]), false),
             Role::MailViewRenamed
         ));
+        // A reader-shaped guess refuses by name instead of reaching the
+        // Python fallback's near-miss suggestion.
+        assert!(matches!(
+            decide_role(&os(&["agents", "mail", "read", "fmail-x"]), false),
+            Role::MailWrongVerb(ref v) if v == "read"
+        ));
+        assert!(matches!(
+            decide_role(&os(&["mail", "cat", "fmail-x"]), false),
+            Role::MailWrongVerb(_)
+        ));
         // The hidden `fno mail <verb>` mount claims and refuses alike.
         assert_eq!(
             decide_role(&os(&["mail", "show", "fmail-x"]), false),
@@ -696,7 +843,7 @@ mod tests {
         use fno::agents_alias::Org;
         assert_eq!(
             decide_role(&os(&["agents", "org", "-J"]), false),
-            Role::AgentsAlias(Org::Forward(os(&["agents", "court", "-J"])))
+            Role::AgentsAlias(Org::Forward(os(&["agents", "team", "-J"])))
         );
         assert_eq!(
             decide_role(
@@ -704,7 +851,7 @@ mod tests {
                 false
             ),
             Role::AgentsAlias(Org::Forward(os(&[
-                "agents", "crown", "folio", "--scope", "fno"
+                "agents", "role", "folio", "--scope", "fno"
             ])))
         );
         assert!(matches!(
@@ -718,6 +865,11 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "whoami"]), false),
             Role::Forward
+        );
+        // `top` skips the Python front: the lead check-in reads it every beat.
+        assert_eq!(
+            decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
+            Role::AgentsTop(os(&["--json", "--subagents"]))
         );
     }
 
@@ -932,7 +1084,21 @@ mod tests {
     fn proto_role_subcommands_forward_to_python_cli() {
         // `backlog` claims itself natively now; every other unclaimed root
         // still forwards.
-        assert_eq!(decide_role(&os(&["backlog", "list"]), true), Role::Backlog);
+        assert_eq!(decide_role(&os(&["backlog", "get"]), true), Role::Backlog);
+        // The bare `list` spelling is the native node-query door; the
+        // saved-set spellings stay on the sibling dispatcher.
+        assert!(matches!(
+            decide_role(&os(&["backlog", "list"]), true),
+            Role::BacklogList(_)
+        ));
+        assert!(matches!(
+            decide_role(&os(&["backlog", "list", "s:ready"]), true),
+            Role::BacklogList(_)
+        ));
+        assert_eq!(
+            decide_role(&os(&["backlog", "list", "ready"]), true),
+            Role::Backlog
+        );
         assert_eq!(decide_role(&os(&["--help"]), false), Role::Forward);
         // `fno --version` is a Python-forwarded callback, NOT the mux self-report.
         assert_eq!(decide_role(&os(&["--version"]), false), Role::Forward);

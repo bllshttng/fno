@@ -77,7 +77,7 @@ def _load_schema() -> dict[str, Any]:
         raise SchemaUnavailableError(f"failed to parse {path}: {exc}") from exc
 
 
-_RETENTION_CLASSES = frozenset({"ephemeral", "gate", "durable"})
+_RETENTION_CLASSES = frozenset({"ephemeral", "gate", "telemetry", "durable"})
 
 
 def validate_retention_schema(schema: dict[str, Any]) -> None:
@@ -275,14 +275,15 @@ def _utc_timestamp(value: Any) -> _dt.datetime | None:
     """Parse an RFC3339 UTC timestamp; status_fanout reads it beside the judge."""
     if not isinstance(value, str) or not value:
         return None
-    if (
-        _re.fullmatch(
-            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)",
-            value,
-        )
-        is None
-    ):
+    m = _re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.([0-9]{1,9}))?(?:Z|\+00:00)",
+        value,
+    )
+    if m is None:
         return None
+    frac = m.group(1)
+    if frac is not None and len(frac) > 6:  # nanoseconds -> microseconds
+        value = f"{value[: value.index('.')]}.{frac[:6]}Z"
     try:
         parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:

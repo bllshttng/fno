@@ -105,7 +105,7 @@ def _parse_codex_record(rec: dict) -> Optional[Record]:
         timestamp=timestamp if isinstance(timestamp, str) else None,
     )
 
-_TAIL_BYTES = 4 << 20  # 4 MiB holds the last 40 records of every live king transcript
+_TAIL_BYTES = 4 << 20  # 4 MiB holds the last 40 records of every live lead transcript
 
 
 def _records_from_jsonl(
@@ -457,38 +457,6 @@ def recent_records(
     else:
         raise ObserveUnsupported(agent)
     return _resolve_peer_roles(records)
-
-
-def newest_assistant_text(path: Path) -> Optional[str]:
-    """Newest assistant turn's text from one claude- or codex-shaped JSONL.
-
-    The one transcript read for callers that hold a PATH but no agent
-    (loopcheck's distress leg routes here, : its former in-process
-    parser read claude shape only, so every codex rollout read as
-    assistant-free and no codex distress reached a parent). The two record
-    parsers are shape-disjoint per line, so trying both loses nothing. The
-    scan runs newest-first and stops at the first assistant hit, so a
-    multi-megabyte rollout pays for its tail, not a full parse. None when
-    the file yields no assistant turn.
-    """
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return None
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except (ValueError, UnicodeDecodeError):
-            continue
-        if not isinstance(rec, dict):
-            continue
-        parsed = _parse_claude_record(rec) or _parse_codex_record(rec)
-        if parsed is not None and parsed.role == "assistant":
-            return parsed.text
-    return None
 
 
 # --------------------------------------------------------------------------
@@ -1148,7 +1116,7 @@ def peek(
         # Name the instrument. Both reads above (the live-session resolver and
         # the mux-pane fallback) are registry-shaped, and the registry is not
         # the transcript: a reaped row leaves 4.9M of conversation on disk
-        # while this line used to answer a bare "peer not found". A king read
+        # while this line used to answer a bare "peer not found". A lead read
         # that as destroyed and nearly spawned fresh over a green PR.
         err.write(f"peer not found in the registry: {handle}\n")
         adoptable = _adoptable_sessions(

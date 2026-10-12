@@ -123,10 +123,42 @@ pub fn run(args: &[String]) -> i32 {
         goal_payload,
     );
 
+    // The distress scan fires on EVERY Stop with a transcript, before the
+    // ownership evaluation: lead-owned stops, event-rule returns and trees
+    // holding another session's manifest all get their help read and routed
+    // (F1). The node id comes from the resident manifest when this
+    // session owns it, else None - the help still routes by lineage. The
+    // turn-keyed dedup makes the later loopcheck read on a target-owned
+    // stop write nothing. An in-session route blocks HERE, before the
+    // ownership evaluation, with the route text: separate from the fno
+    // backstop counters, so it never burns the loop's own streak (F5).
+    let distress_hit = if !fire.transcript_path.as_os_str().is_empty() {
+        let node_id = resident_node_id(&cwd, &fire);
+        let project_events = events_path(&cwd);
+        let global_events = crate::loopcheck::default_global_events_path();
+        distress::scan_and_emit(
+            &project_events,
+            &global_events,
+            &cwd,
+            &fire.resolve_harness_id,
+            node_id.as_deref(),
+            fire.harness.as_deref(),
+            &fire.transcript_path,
+            fire.last_assistant_message.as_deref(),
+        )
+    } else {
+        None
+    };
+    if let Some((class, rung)) = distress_hit {
+        if let crate::help_router::Route::InSession(text) = crate::help_router::route(class, rung) {
+            return emit_block_for_harness(&text);
+        }
+    }
+
     // Event rules run before the ownership evaluation: a session with no
-    // target or king manifest still owes its chat asks to the board
+    // target or lead manifest still owes its chat asks to the board
     // (docs/architecture/event-rules.md). A notify leaves through the
-    // operator chokepoint; the first block or nudge speaks the same
+    // operator chokepoint; the first block or nudge serves the same
     // harness-shaped block the stop gate prints, and the stop returns.
     let rule_fires = crate::event_rules::eval_stop(&cwd, &payload);
     for notify in rule_fires.iter().filter_map(|f| f.notify.as_ref()) {
@@ -250,7 +282,7 @@ fn run_owned(
     // claude_transcript_id, then harness_session_id) must name THIS
     // transcript. Codex rollout suffixes count. The guard's allow now
     // journals a correlated stop_decision first: lead admission reads one
-    // after the newest snapshot for EVERY session, and a fresh heir resolves
+    // after the newest snapshot for EVERY session, and a fresh successor resolves
     // HERE - to its predecessor's manifest - until init, the very thing the
     // silent allow starved, writes its own.
     if !state_is_pending
@@ -891,7 +923,6 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
         worktree_repo_root(cwd).join(".fno").join("target-state.md")
     };
 
-    let mut pre_manifest_no_file = false;
     let step = if live_state.exists() {
         // Presence is not ownership: a resident manifest naming a FOREIGN
         // session sends the resolver out (the shell's non-resident branch).
@@ -906,7 +937,6 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
         // whatever else is on disk.
         resolve_across_worktrees(cwd, &fire.resolve_ids).map_err(|_| true)
     } else {
-        pre_manifest_no_file = true;
         // A stranger stop with no other worktree present cannot be a
         // worktree-ownership question, so an unreadable listing falls
         // through to the lead and visitor arms instead of blocking.
@@ -953,8 +983,7 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
     }
 
     // Visitor allow. The diagnostic names every id tried (a contract the
-    // docs reference), and the distress scan reads the payload's own
-    // message first so no reader subprocess runs for an ordinary stop.
+    // docs reference).
     if clean_miss && !fire.resolve_harness_id.is_empty() {
         eprintln!(
             "loop-check: no manifest names session {}; visitor allowed (tried: {})",
@@ -962,21 +991,27 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
             fire.resolve_ids.join(" ")
         );
     }
-    if clean_miss && pre_manifest_no_file && !fire.transcript_path.as_os_str().is_empty() {
-        let project_events = events_path(cwd);
-        let global_events = crate::loopcheck::default_global_events_path();
-        distress::scan_and_emit(
-            &project_events,
-            &global_events,
-            cwd,
-            &fire.resolve_harness_id,
-            None,
-            fire.harness.as_deref(),
-            &fire.transcript_path,
-            fire.last_assistant_message.as_deref(),
-        );
-    }
     Verdict::NoOwner
+}
+
+/// The node id from the resident manifest, when THIS stop's session is the
+/// one it names; else None (a stranger or lead stop routes by lineage, so
+/// it carries no node).
+fn resident_node_id(cwd: &Path, fire: &Fire) -> Option<String> {
+    let wt_state = worktree_space_dir(cwd).join("target-state.md");
+    let live_state = if wt_state.exists() {
+        wt_state
+    } else {
+        worktree_repo_root(cwd).join(".fno").join("target-state.md")
+    };
+    if !resident_matches(&live_state, &fire.hook_harness_id) {
+        return None;
+    }
+    let content = std::fs::read_to_string(&live_state).ok()?;
+    crate::loopcheck::scan_manifest_field(&content, "graph_node_id").or_else(|| {
+        crate::loopcheck::scan_manifest_field(&content, "target_claim_key")
+            .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
+    })
 }
 
 /// The shim's resident check: does the manifest at `state` name THIS stop's
@@ -1098,7 +1133,7 @@ fn lead_manifest_in(
         return None;
     }
     let scope = row
-        .crown_scope
+        .role_scope
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())?;
@@ -1350,8 +1385,8 @@ mod tests {
     }
 
     /// The foreign-session guard's allow journals a correlated
-    /// stop_decision, so a fresh heir's stops stay observable before init
-    /// writes the heir's own manifest.
+    /// stop_decision, so a fresh successor's stops stay observable before init
+    /// writes the successor's own manifest.
     #[test]
     fn a_foreign_manifest_stop_still_journals_a_correlated_stop_decision() {
         let _env = crate::claims::test_env_lock()
@@ -1787,7 +1822,7 @@ mod tests {
             "positive control: the row cwd and the payload cwd must key different spaces"
         );
         let scope = "x-test-epic";
-        let leads = crate::hook::events_space(&repo).join("kings");
+        let leads = crate::hook::events_space(&repo).join("leads");
         std::fs::create_dir_all(&leads).unwrap();
         let manifest = leads.join(format!("{scope}.md"));
         std::fs::write(&manifest, "---\nscope: x-test-epic\nshape: org\n---\n").unwrap();
@@ -1795,7 +1830,7 @@ mod tests {
         let teamed = RegistryEntry {
             cwd: repo.to_string_lossy().into_owned(),
             harness_session_id: Some(sid.into()),
-            crown_scope: Some(scope.into()),
+            role_scope: Some(scope.into()),
             ..Default::default()
         };
         let rows = vec![teamed];
@@ -1808,26 +1843,26 @@ mod tests {
             status: crate::AgentStatus::Exited,
             cwd: repo.to_string_lossy().into_owned(),
             harness_session_id: Some("gone-session".into()),
-            crown_scope: Some(scope.into()),
+            role_scope: Some(scope.into()),
             ..Default::default()
         };
         assert_eq!(
             super::lead_manifest_in(&[terminal], "gone-session", None, &elsewhere),
             None
         );
-        let uncrowned = RegistryEntry {
+        let unpromoted = RegistryEntry {
             cwd: repo.to_string_lossy().into_owned(),
             harness_session_id: Some("plain-session".into()),
             ..Default::default()
         };
         assert_eq!(
-            super::lead_manifest_in(&[uncrowned], "plain-session", None, &elsewhere),
+            super::lead_manifest_in(&[unpromoted], "plain-session", None, &elsewhere),
             None
         );
         let unsafe_scope = RegistryEntry {
             cwd: repo.to_string_lossy().into_owned(),
             harness_session_id: Some("sneaky-session".into()),
-            crown_scope: Some("../escape".into()),
+            role_scope: Some("../escape".into()),
             ..Default::default()
         };
         assert_eq!(
@@ -1837,7 +1872,7 @@ mod tests {
         let no_file = RegistryEntry {
             cwd: repo.to_string_lossy().into_owned(),
             harness_session_id: Some("bare-session".into()),
-            crown_scope: Some("x-no-file".into()),
+            role_scope: Some("x-no-file".into()),
             ..Default::default()
         };
         assert_eq!(
@@ -1852,7 +1887,7 @@ mod tests {
         // A row whose cwd names a removed directory (a deleted linked
         // worktree keys its own dead slug) falls back to the payload cwd's
         // space before answering None.
-        let payload_leads = crate::hook::events_space(&elsewhere).join("kings");
+        let payload_leads = crate::hook::events_space(&elsewhere).join("leads");
         std::fs::create_dir_all(&payload_leads).unwrap();
         std::fs::write(payload_leads.join(format!("{scope}.md")), "fallback").unwrap();
         let dead_cwd = RegistryEntry {
@@ -1863,7 +1898,7 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
             harness_session_id: Some("ghost-session".into()),
-            crown_scope: Some(scope.into()),
+            role_scope: Some(scope.into()),
             ..Default::default()
         };
         assert_eq!(

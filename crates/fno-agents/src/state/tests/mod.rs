@@ -93,9 +93,9 @@ fn sample_entry(name: &str) -> RegistryEntry {
         exited_at: None,
         mux: None,
         screen_state: None,
-        crown_level: None,
-        crown_scope: None,
-        crown_grantor: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
         route_settings_path: None,
         fno_id: None,
         delivery_policy: None,
@@ -138,7 +138,7 @@ fn state_substrate_roundtrips_and_absence_reads_none() {
     assert_eq!(old_row.substrate, None);
 
     // skip-when-None keeps an unstamped row's key off disk entirely.
-    let raw = std::fs::read_to_string(&path).unwrap();
+    let raw = crate::registry_store::read_raw(&path);
     let old_obj = raw.split("old-row").nth(1).unwrap();
     assert!(!old_obj.contains("substrate"));
 
@@ -499,9 +499,9 @@ fn succession_preserves_thread_id_and_branch_keeps_two_rows() {
     predecessor.session_id = Some("session-a".into());
     predecessor.codex_session_id = Some("session-a".into());
     predecessor.log_path = Some("/tmp/session-a.log".into());
-    predecessor.crown_level = Some(2);
-    predecessor.crown_scope = Some("scope-a".into());
-    predecessor.crown_grantor = Some("human".into());
+    predecessor.role_level = Some(2);
+    predecessor.role_scope = Some("scope-a".into());
+    predecessor.role_grantor = Some("human".into());
     predecessor.mux = Some(MuxRef {
         session: "main".into(),
         pane_id: 4,
@@ -519,9 +519,9 @@ fn succession_preserves_thread_id_and_branch_keeps_two_rows() {
     assert_eq!(branch.forked_from_session_id.as_deref(), Some("session-b"));
     // The branch carries no id of its own; the registry write mints it one.
     assert_eq!(branch.fno_id, None);
-    assert!(branch.crown_level.is_none());
-    assert!(branch.crown_scope.is_none());
-    assert!(branch.crown_grantor.is_none());
+    assert!(branch.role_level.is_none());
+    assert!(branch.role_scope.is_none());
+    assert!(branch.role_grantor.is_none());
     assert!(branch.short_id.is_empty());
     assert!(branch.session_id.is_none());
     assert!(branch.codex_session_id.is_none());
@@ -667,6 +667,60 @@ fn rename_agent_refuses_duplicate_and_unknown_and_grammar() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A terminal row (Exited, PermanentDead) never answers to its label again,
+/// so plain rename takes the label instead of refusing; an orphaned or failed
+/// row may still come back and keeps blocking.
+#[test]
+fn rename_vacates_a_terminal_rows_label_instead_of_refusing() {
+    let dir = tmpdir("rename-terminal-label");
+    let path = dir.join("registry.json");
+    update_registry(&path, |registry| {
+        let mut a = sample_entry("worker-a");
+        a.harness_session_id = Some("aaaaaaaa-0000-0000-0000-111111111111".into());
+        registry.entries.push(a);
+        let mut dead = sample_entry("quill");
+        dead.harness_session_id = Some("bbbbbbbb-0000-0000-0000-222222222222".into());
+        dead.status = AgentStatus::Exited;
+        registry.entries.push(dead);
+        let mut flaky = sample_entry("phoenix");
+        flaky.harness_session_id = Some("cccccccc-0000-0000-0000-333333333333".into());
+        flaky.status = AgentStatus::Failed;
+        registry.entries.push(flaky);
+    })
+    .unwrap();
+
+    rename_agent(&path, "worker-a", "quill", None).unwrap();
+    let reg = load_registry(&path).unwrap();
+    let taker = reg
+        .entries
+        .iter()
+        .find(|e| e.harness_session_id.as_deref() == Some("aaaaaaaa-0000-0000-0000-111111111111"))
+        .unwrap();
+    assert_eq!(taker.name, "quill");
+    assert!(taker.aliases.iter().any(|a| a == "worker-a"));
+    let dead = reg
+        .entries
+        .iter()
+        .find(|e| e.harness_session_id.as_deref() == Some("bbbbbbbb-0000-0000-0000-222222222222"))
+        .unwrap();
+    assert_ne!(dead.name, "quill");
+    assert!(!dead.aliases.iter().any(|a| a == "quill"));
+    assert!(is_valid_registry_label(&dead.name));
+
+    let refused = rename_agent(
+        &path,
+        "aaaaaaaa-0000-0000-0000-111111111111",
+        "phoenix",
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("already names another worker"),
+        "{refused}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn rename_agent_by_old_label_after_rename_still_lands_on_the_row() {
     // The "changed before rename" guard needs identity present but the
@@ -809,7 +863,7 @@ fn python_written_registry_loads_via_typed_path() {
   ]
 }"#;
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(&path, python_json).unwrap();
+    crate::registry_store::seed_raw(&path, python_json);
 
     let reg = load_registry(&path).unwrap();
     assert_eq!(reg.entries.len(), 1, "Python-written row must be read");
@@ -1520,11 +1574,14 @@ fn empty_registry_file_loads_default_but_corrupt_file_errors() {
     assert!(missing.entries.is_empty());
 
     // Empty file -> empty registry, no error.
-    std::fs::write(&path, "   \n").unwrap();
+    crate::registry_store::seed_raw(&path, "   \n");
     assert!(load_registry(&path).unwrap().entries.is_empty());
 
-    // Corrupt (non-empty, unparseable) file -> error, not silent default.
-    std::fs::write(&path, "{ this is not json").unwrap();
+    // Corrupt (non-empty, unparseable) legacy file -> the import errors, not
+    // a silent default. Only a store not yet imported can hold such bytes.
+    let path = dir.join("fresh").join("registry.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    crate::registry_store::seed_raw(&path, "{ this is not json");
     assert!(
         load_registry(&path).is_err(),
         "corrupt registry must surface an error"
@@ -1542,12 +1599,12 @@ fn update_registry_refuses_to_wipe_a_corrupt_registry() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("registry.json");
     let corrupt = "{\"schema_version\": 3, \"agents\": [ BROKEN";
-    std::fs::write(&path, corrupt).unwrap();
+    crate::registry_store::seed_raw(&path, corrupt);
 
     let result = update_registry(&path, |r| r.entries.push(sample_entry("new-A")));
     assert!(result.is_err(), "update over corrupt registry must error");
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
+        crate::registry_store::read_raw(&path),
         corrupt,
         "corrupt registry must be left untouched, not overwritten"
     );
@@ -1569,7 +1626,7 @@ fn update_registry_upgrades_schema_version_on_write() {
         .unwrap();
     update_registry(&path, |r| r.entries.push(sample_entry("w2"))).unwrap();
     let on_disk: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        serde_json::from_str(&crate::registry_store::read_raw(&path)).unwrap();
     assert_eq!(
         on_disk["schema_version"], REGISTRY_SCHEMA_VERSION,
         "Rust write must upgrade the on-disk schema_version"
@@ -1908,7 +1965,7 @@ fn load_registry_reads_a_newer_schema_forward() {
         load_registry(&path).is_ok(),
         "a newer writer must not brick this reader"
     );
-    std::fs::write(&path, r#"{"schema_version":1,"agents":[]}"#).unwrap();
+    crate::registry_store::seed_raw(&path, r#"{"schema_version":1,"agents":[]}"#);
     assert!(
         load_registry(&path).is_ok(),
         "v1 must still read (back-compat)"
@@ -2011,14 +2068,14 @@ fn update_registry_respects_writer_floor_and_preserves_unknown_fields() {
         r#"{{"schema_version":{newer_version},"min_writer_version":{},"writer_rev":"writer-ahead","future_top":"kept","agents":[{{"name":"worker","cwd":"/x","log_path":"/l","harness":"claude","status":"live","created_at":"2026-01-01T00:00:00Z","future_row":"kept"}}]}}"#,
         REGISTRY_SCHEMA_VERSION
     );
-    std::fs::write(&path, additive).unwrap();
+    crate::registry_store::seed_raw(&path, additive);
 
     assert!(
         update_registry(&path, |reg| reg.entries[0].status = AgentStatus::Idle).is_ok(),
         "an additive schema ahead of this writer's floor must remain writable"
     );
     let written: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        serde_json::from_slice(&crate::registry_store::read_raw(&path).into_bytes()).unwrap();
     assert_eq!(written["schema_version"], newer_version);
     assert_eq!(written["min_writer_version"], REGISTRY_SCHEMA_VERSION);
     assert_eq!(written["writer_rev"], env!("FNO_AGENTS_GIT_REV"));
@@ -2031,7 +2088,7 @@ fn update_registry_respects_writer_floor_and_preserves_unknown_fields() {
         newer_version + 1,
         REGISTRY_SCHEMA_VERSION + 1
     );
-    std::fs::write(&path, &breaking).unwrap();
+    crate::registry_store::seed_raw(&path, &breaking);
     let error = update_registry(&path, |_| ()).unwrap_err();
     match &error {
         StateError::WriterTooOld {
@@ -2049,18 +2106,24 @@ fn update_registry_respects_writer_floor_and_preserves_unknown_fields() {
         other => panic!("expected WriterTooOld, got {other:?}"),
     }
     assert!(error.to_string().contains("fno doctor update"));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), breaking);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&crate::registry_store::read_raw(&path)).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&breaking).unwrap()
+    );
 
     let incomplete = format!(
         r#"{{"schema_version":{newer_version},"min_writer_version":{},"writer_rev":"writer-ahead","agents":[{{"name":"future","cwd":"/x","log_path":"/l","harness":"claude","status":"hibernating","created_at":"2026-01-01T00:00:00Z"}},{{"name":"readable","cwd":"/x","log_path":"/l","harness":"claude","status":"live","created_at":"2026-01-01T00:00:00Z"}}]}}"#,
         REGISTRY_SCHEMA_VERSION
     );
-    std::fs::write(&path, &incomplete).unwrap();
+    crate::registry_store::seed_raw(&path, &incomplete);
+    // The table mints an fno_id per row on seed; the refusal must leave the
+    // stored document exactly as seeded.
+    let seeded = crate::registry_store::read_raw(&path);
     assert!(matches!(
         update_registry(&path, |_| ()),
         Err(StateError::WriterTooOld { .. })
     ));
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), incomplete);
+    assert_eq!(crate::registry_store::read_raw(&path), seeded);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -2146,6 +2209,9 @@ fn source_root_for_exe_returns_none_for_a_deployed_binary() {
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
 
     assert_eq!(source_root_for_exe(&exe, None), None);
+    // An install built in the shared build base keeps a detached OUT_DIR and
+    // a live manifest dir; outside a build tree it is still deployed.
+    assert_eq!(source_root_for_detached_build(&exe), None);
     std::fs::remove_dir_all(&root).ok();
 }
 
@@ -2277,7 +2343,7 @@ fn update_registry_refuses_a_source_ahead_bump_of_the_shared_registry() {
     let path = crate::paths::AgentsHome::from_env().registry_json();
     let older = REGISTRY_SCHEMA_VERSION - 1;
     let body = format!(r#"{{"schema_version":{older},"agents":[]}}"#);
-    std::fs::write(&path, &body).unwrap();
+    crate::registry_store::seed_raw(&path, &body);
 
     let result = update_registry(&path, |reg| reg.entries.clear());
 
@@ -2293,9 +2359,9 @@ fn update_registry_refuses_a_source_ahead_bump_of_the_shared_registry() {
         other => panic!("expected SourceAheadSchemaBump, got {other:?}"),
     }
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        body,
-        "the refused write must leave the file byte-identical"
+        serde_json::from_str::<serde_json::Value>(&crate::registry_store::read_raw(&path)).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        "the refused write must leave the document unchanged"
     );
     std::fs::remove_dir_all(&home).ok();
 }
@@ -2318,7 +2384,7 @@ fn update_registry_bumps_a_named_store_that_is_not_the_shared_one() {
     update_registry(&path, |r| r.entries.push(sample_entry("w"))).unwrap();
 
     let on_disk: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        serde_json::from_str(&crate::registry_store::read_raw(&path)).unwrap();
     assert_eq!(on_disk["schema_version"], REGISTRY_SCHEMA_VERSION);
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -2357,7 +2423,7 @@ fn update_registry_refuses_a_new_handleless_row() {
     // Seed with one legitimate row so the "unchanged on refusal" assertion
     // has real content to check.
     update_registry(&path, |r| r.entries.push(sample_entry("seed"))).unwrap();
-    let before = std::fs::read_to_string(&path).unwrap();
+    let before = crate::registry_store::read_raw(&path);
 
     let result = update_registry(&path, |r| r.entries.push(handleless_entry("ghost")));
     match result {
@@ -2368,7 +2434,7 @@ fn update_registry_refuses_a_new_handleless_row() {
         other => panic!("expected InvariantViolation, got {other:?}"),
     }
     assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
+        crate::registry_store::read_raw(&path),
         before,
         "a refused write must leave the registry unchanged"
     );
@@ -2466,7 +2532,7 @@ fn empty_state_file_treated_as_absent() {
     // but empty file must read as None (-> inconsistent), never an error.
     let dir = tmpdir("empty-state");
     let path = dir.join("state.json");
-    std::fs::write(&path, b"").unwrap();
+    crate::registry_store::seed_raw(&path, b"");
     assert!(load_state(&path).unwrap().is_none());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -2553,6 +2619,12 @@ fn pty_state_collapses_inconsistent_legacy_shape() {
 // shrink-only line, and test motion is the sanctioned shrink.
 #[path = "x4c87_row_counts.rs"]
 mod row_count_tests;
+
+#[path = "x43ce_provenance_repair.rs"]
+mod provenance_repair_tests;
+
+#[path = "registry_lock_queue.rs"]
+mod registry_lock_queue_tests;
 
 #[test]
 fn update_registry_mints_a_row_its_own_fno_id() {
@@ -2751,6 +2823,8 @@ fn registry_schema_fields() {
         context_used_pct: Some(1),
         context_used_tokens: Some(1),
         context_window_tokens: Some(1),
+        tool_calls: Some(1),
+        tool_errors: Some(1),
         context_measured_at: Some("value".into()),
         mail_unread: Some(1),
         harness_title: Some("value".into()),
@@ -2811,9 +2885,9 @@ fn registry_schema_fields() {
             ttl_ms: None,
             answerable: None,
         }),
-        crown_level: Some(1),
-        crown_scope: Some("value".into()),
-        crown_grantor: Some("value".into()),
+        role_level: Some(1),
+        role_scope: Some("value".into()),
+        role_grantor: Some("value".into()),
         route_settings_path: Some("value".into()),
         fno_id: Some("value".into()),
         delivery_policy: Some("value".into()),
@@ -2885,8 +2959,8 @@ fn heal_rewrites_only_a_full_uuid_copy_and_keeps_the_row_identity() {
     warden.harness_session_id = Some(uuid.into());
     warden.short_id = uuid.into();
     warden.aliases = vec!["footnote-49a80492".into()];
-    warden.crown_level = Some(1);
-    warden.crown_scope = Some("fleet".into());
+    warden.role_level = Some(1);
+    warden.role_scope = Some("fleet".into());
     let mut spawned = sample_entry("spawned");
     spawned.harness = Some("claude".into());
     spawned.harness_session_id = Some("abcd1234-1111-2222-3333-444444444444".into());
@@ -2932,8 +3006,8 @@ fn heal_rewrites_only_a_full_uuid_copy_and_keeps_the_row_identity() {
     );
     assert_eq!(warden.name, "warden", "the name survives");
     assert_eq!(warden.aliases, vec!["footnote-49a80492"]);
-    assert_eq!(warden.crown_level, Some(1), "the team fields survive");
-    assert_eq!(warden.crown_scope.as_deref(), Some("fleet"));
+    assert_eq!(warden.role_level, Some(1), "the team fields survive");
+    assert_eq!(warden.role_scope.as_deref(), Some("fleet"));
     assert_eq!(by_name("spawned").short_id, "abcd1234");
     assert_eq!(
         by_name("independent").short_id,
@@ -2982,7 +3056,7 @@ fn registry_update_snapshots_once_per_interval() {
         registry.entries.push(sample_entry("seed"));
     })
     .unwrap();
-    let before_second_write = std::fs::read(&path).unwrap();
+    let before_second_write = crate::registry_store::read_raw(&path).into_bytes();
 
     update_registry(&path, |_| {}).unwrap();
     update_registry(&path, |registry| {
@@ -3009,8 +3083,8 @@ fn registry_update_snapshots_once_per_interval() {
         "two writes within the interval: one snapshot"
     );
     assert_eq!(
-        std::fs::read(&snaps[0]).unwrap(),
-        before_second_write,
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&snaps[0]).unwrap()).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(&before_second_write).unwrap(),
         "the snapshot holds the pre-write bytes"
     );
     std::fs::remove_dir_all(&dir).ok();

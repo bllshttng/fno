@@ -37,7 +37,7 @@ So the verb mails what it wrote. The worker chain runs for the node and again fo
 - the node's graph bindings: ``locked_by_harness_session``, ``session_id``, ``locked_by``, each resolved to an ownership-live registry row. A worker can be live and bound to the node in the graph while holding no claim row at all; the claim is the weakest of the bindings, not the only one.
 - every ownership-live registry row whose ``node`` field names the node, sorted by name.
 
-The crown walk goes outward and stops at the first scope with a live crown: the node's own id when its ``type`` is ``epic``, then the epic (the owner's ``parent`` for a contained node, else the node's own), then the node's ``project``. Every scope resolves at send time by ``resolve_to_king``.
+The role walk goes outward and stops at the first scope with a live role: the node's own id when its ``type`` is ``epic``, then the epic (the owner's ``parent`` for a contained node, else the node's own), then the node's ``project``. Every scope resolves at send time by ``resolve_to_lead``.
 
 The author is matched by identity, never by name shape: an address that names a registry row is the author when the row's ``harness_session_id`` matches the sender's under ``session_identity_key``; the bare ``endswith`` match stands only for role-prefixed holders that name no row. The author is named in the receipt but never mailed its own note.
 
@@ -73,7 +73,7 @@ Sorted by divergence, not by volume. A p0 with many encounters tells you nothing
 
 Operator votes count in ``enc`` and remain visible in the split: ``enc 5 (4a/1o)``. Provenance is displayed rather than excluded, so the reader can distinguish agent demand from the operator's own vote.
 
-`dispatched` is how many of the encountering sessions were also sent to this node. Read it beside the count: `enc 12, dispatched 12` is one king that fanned out, while `enc 3, dispatched 0` is three sessions that hit the node while doing something else.
+`dispatched` is how many of the encountering sessions were also sent to this node. Read it beside the count: `enc 12, dispatched 12` is one lead that fanned out, while `enc 3, dispatched 0` is three sessions that hit the node while doing something else.
 
 A read, and only a read. It never writes rank and never moves a column; the board stays the work order and this is a column you rank FROM.
 
@@ -177,7 +177,9 @@ Close every node that shipped inside ``node_id``'s PR (task 1.5).
 
 Called inside the close mutator right after a delivery unit's completion fields are set. A node carrying ``contained_in`` was folded into that unit by ``decompose ... adopt:``; its work rides the unit's PR, so it has no PR of its own and ``scan_merge_drift`` - which only ever returns nodes carrying a PR - can never see it. Before this, dispatch and cost had each learned to read containment and completion had no inference at all, so a contained node stayed open forever behind a merged PR.
 
-Deliberately NOT the inverse of ``_cascade_close_parents``. That one closes a parent when its last child lands (bottom-up, conditional on the siblings); this closes children off their owner's merge (top-down, unconditional). One level only: containment is a direct relation to the node that owns the PR, not a chain, so a node contained in a contained node is a shape decompose cannot produce.
+Deliberately NOT the inverse of ``_cascade_close_parents``. That one closes a parent after its last child lands (bottom-up, conditional on the siblings). This one closes children off their owner's merge (top-down, evidence-gated). One level only. Containment is a direct relation to the node that owns the PR, not a chain. A node contained in a contained node is a shape decompose cannot produce.
+
+The evidence gate. A child that declared ``containment_surfaces`` closes only with evidence that its work shipped in the owner's PR. Two kinds of evidence close it. The first: the owner's merged PR changes a file that matches a declared surface. The second: the PR body bound the child through a closure-line claim, which leaves the child's own ``pr_number`` set to this PR. With neither, the cascade releases the containment instead of closing. The row drops ``contained_in``, drops the owner's PR refs, and stamps ``released_from``. The node stays open, keeps its parent, and dispatches again. A child with no declaration closes as before, so existing containments behave identically. The stranded sweep follows the same rule. A declared child of an out-of-band-done owner is released, never closed, because no merged-PR file set exists to prove its work shipped. The reconcile report and JSON name every release under ``contained_released``.
 
 Three deliberate omissions, each load-bearing:
 
@@ -431,7 +433,7 @@ Decide whether a node's plan promised work that has not all shipped.
          whose verdict is FAIL and which no ruling names. A FAIL is claimed
          work whose outcome did not hold, so it holds the close of a node that
          is still open; a done node is never reopened - the auditor is not a
-         doneness gate, a king rules. Two legal exits: a newer PASS record in
+         doneness gate, a lead rules. Two legal exits: a newer PASS record in
          the same artifacts tree, or a decision that names the report
          (``fno inbox decide <node>``); or close with --force --reason. The
          verdict reader is injectable (the ``carveout_reader`` seam shape) and
@@ -915,7 +917,7 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_verb``) worker.
 
 Every node-bearing spawn passes the verb seam. The seam projects the
     lifecycle table's ANSWER - never a copy of the table - plus the seed slot,
-    the crown/resume flags and the row facts to the ``spawn-axes`` action's
+    the role/resume flags and the row facts to the ``spawn-axes`` action's
     ``node_seed`` field, and applies its answer verbatim before any lane is
     chosen. A seed that leads with ``/target`` or ``/blueprint`` must agree
     with the node's derived verb; on disagreement the spawn refuses (exit 2,
@@ -927,7 +929,7 @@ Every node-bearing spawn passes the verb seam. The seam projects the
     ``render_node_seed`` also carries the brief env and the worktree ensure. A
     prose seed gains the node's command in front at its own slot. Everything
     else passes unchanged: other verbs (``/think``, ``/pr``), ``--reconcile``,
-    crown and resume spawns. Only an explicit ``--node`` triggers the check -
+    role and resume spawns. Only an explicit ``--node`` triggers the check -
     ``FNO_NODE`` is provenance a child inherits, never a decision to route. An
     unreadable node row, a derivation failure, or a node with no verb refuses
     the same way (unknown is not evidence of ``/target``; the message names

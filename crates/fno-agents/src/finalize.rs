@@ -697,6 +697,38 @@ pub fn run_finalize(args: &[String]) -> i32 {
         }
     }
 
+    // ── non-delivery terminal: route on the help router ──
+    // The terminal becomes a help event with a node-scoped rung, the claim
+    // moves with the route, and a second terminal on one node asks the lead
+    // with both postmortems. Interrupted is respected and routes nothing.
+    // Wall-clock age of this run at the terminal, from the manifest's
+    // created_at (the implementation window's start): the elapsed the
+    // budget evidence quotes.
+    let elapsed_min = m
+        .created_at
+        .as_deref()
+        .and_then(parse_utc_epoch)
+        .map(|start| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            u64::try_from(now.saturating_sub(start)).unwrap_or(0) / 60
+        });
+
+    crate::terminal_route::route_terminal(&crate::terminal_route::TerminalRouteFacts {
+        cwd: &cwd,
+        session_id: &session_id,
+        node: m.graph_node_id.as_deref(),
+        reason: &reason,
+        postmortem: postmortem_path.as_deref(),
+        elapsed_min,
+        claim_key: m.target_claim_key.as_deref(),
+        claim_holder: m.target_claim_holder.as_deref(),
+        project_events: &project_events,
+        global_events: &global_events,
+    });
+
     // ── STUCK ONLY: file an unanswered operator question (HALF TWO) ──
     // A worker that idles on an unanswered question and then dies (measured:
     // 7h idle, "awaiting operator's terminal/mux info", `fno inbox outstanding`
@@ -2009,21 +2041,16 @@ fn merge_gating_optout_block_reason_for(key: &str, claim: &crate::claims::ClaimR
 }
 
 fn merge_gating_optout_block_reason() -> Option<String> {
-    let directory = crate::claims::claims_dir_for(None)?;
-    if directory.is_dir() {
-        // A claims directory that exists but cannot be read is not evidence of
-        // no opt-out. Refuse ambient auto-merge until the instrument is readable.
-        if std::fs::read_dir(&directory).is_err() {
-            return Some(format!(
-                "merge-gating opt-out instrument unreadable at {}; sanctioned path: restore claims access before unattended merge",
-                directory.display()
-            ));
-        }
-    }
     for key in crate::claims::MERGE_GATING_OPTOUT_KEYS {
         let claim_key = format!("config-optout:{key}");
         let (state, claim) = crate::claims::status(&claim_key, None);
-        if state == crate::claims::ClaimState::Live {
+        if state == crate::claims::ClaimState::Corrupted {
+            return Some(format!("merge-gating opt-out instrument unreadable for {claim_key}; restore claim store access before unattended merge"));
+        }
+        if matches!(
+            state,
+            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+        ) {
             if let Some(claim) = claim {
                 return Some(merge_gating_optout_block_reason_for(key, &claim));
             }

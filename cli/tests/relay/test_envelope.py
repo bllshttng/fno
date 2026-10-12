@@ -11,7 +11,12 @@ from fno.relay import envelope as env
 
 def test_frame_produces_the_single_line_header_form():
     # The one delivered shape on one physical line: header, glyph, body.
+    # User law d-b720d23c: the header carries sender and id only - a bodied
+    # frame has no subject field.
+    import re
+
     line = env.frame("sid-abc", "hello there")
+    assert re.match(r"^`@sid-abc · fmail-[0-9a-f]{12}` ⏎ hello there$", line)
     assert line.startswith("`@sid-abc · ")
     assert line.endswith(" ⏎ hello there")
     assert "<fno_mail" not in line

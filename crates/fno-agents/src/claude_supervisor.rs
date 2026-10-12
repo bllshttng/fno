@@ -35,13 +35,14 @@ use crate::model_env_scrub::MODEL_ENV_KEYS;
 /// A new per-session stamp then defaults to the safe side, and a new
 /// machine-wide key that belongs here announces itself as a setting that did
 /// not take effect, which is the failure an operator can see and fix.
-const SUPERVISOR_WIDE_FNO_KEYS: [&str; 45] = [
+const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_AGENTS_BIN",
     "FNO_AGENTS_DAEMON_BIN",
     "FNO_AGENTS_FRONT",
     "FNO_AGENTS_HOME",
     "FNO_BIN",
     "FNO_BUS_DIR",
+    "FNO_CARGO_MAX_HOLD_SECS",
     "FNO_CARGO_TARGETS_BASE",
     "FNO_CC_DAEMON_RV_ROOT",
     "FNO_CHROME",
@@ -50,14 +51,17 @@ const SUPERVISOR_WIDE_FNO_KEYS: [&str; 45] = [
     "FNO_CLAUDE_PROJECTS_DIR",
     "FNO_CODEX_BIN",
     "FNO_CODEX_SESSIONS_DIR",
+    "FNO_CODEX_VERSION",
     "FNO_CONFIG",
     "FNO_EVENTS_PATH",
+    "FNO_FOOTNOTE_BIN",
     "FNO_GH_FACTS_DIR",
     "FNO_GLOBAL_SETTINGS_PATH",
     "FNO_HOME",
     "FNO_KILLCHECK_GIT_BIN",
     "FNO_LOOPCHECK_FNO_BIN",
     "FNO_OPENCODE_BIN",
+    "FNO_OPENCODE_STORAGE_DIR",
     "FNO_LOOPCHECK_GH_BIN",
     "FNO_LOOPCHECK_GIT_BIN",
     "FNO_LOOPS_MAIL_BIN",
@@ -69,12 +73,17 @@ const SUPERVISOR_WIDE_FNO_KEYS: [&str; 45] = [
     "FNO_PR_BASE_LINEAGE_OK",
     "FNO_PR_STATUS_CACHE_DIR",
     "FNO_PY",
+    "FNO_RECLAIM_BACKUPS_AUDIT",
+    "FNO_RECLAIM_BACKUPS_DAYS",
     "FNO_RECLAIM_STATE_ROOT",
     "FNO_REGISTRY_ALLOW_ROW_LOSS",
+    "FNO_RELEASE_REPO",
     "FNO_ROUTE_SETTINGS_DIR",
     "FNO_RUNTIME_STATE_PATH",
     "FNO_SPACES_DIR",
     "FNO_SPAWN_GATE",
+    "FNO_SCCACHE",
+    "FNO_SCCACHE_WATCH",
     "FNO_STATE_DIR",
     "FNO_STATE_ROOT_INVENTORY_DOC",
     "FNO_SUBAGENT_LIVE_SECONDS",
@@ -185,10 +194,10 @@ fn supervisor_birth_command(config_dir: Option<&Path>) -> std::process::Command 
     cmd
 }
 
-/// The OTEL_* env a supervisor birth carries when fno's localhost receiver is
-/// up (`<agents home>/otel/port` parses) and the ambient env has no telemetry
-/// of its own. Empty means "leave this supervisor's telemetry alone": an
-/// operator endpoint wins, and an already-running supervisor keeps its env
+/// The OTEL_* env a supervisor birth carries when fno's localhost receiver
+/// has published its endpoint (it bound the port once), and the ambient env
+/// has no telemetry of its own. An empty result leaves telemetry alone:
+/// an operator endpoint wins, and a running supervisor keeps its env
 /// until restart.
 pub(crate) fn otel_env(
     port_file: &Path,
@@ -206,11 +215,17 @@ pub(crate) fn otel_env(
     {
         return Vec::new();
     }
-    let Some(port) = std::fs::read_to_string(port_file)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-    else {
+    // Only a bound receiver writes the record. With no record, 4318 may
+    // belong to another collector, which would get unredacted tool detail.
+    if !port_file.is_file() {
         return Vec::new();
+    }
+    let port = match crate::otel_ingest::receiver_port(port_file) {
+        Ok(port) => port,
+        Err(error) => {
+            eprintln!("fno OTEL supervisor: {error}");
+            return Vec::new();
+        }
     };
     vec![
         ("CLAUDE_CODE_ENABLE_TELEMETRY".into(), "1".into()),
@@ -369,7 +384,7 @@ pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) {
 
 /// The seed provenance group, by name. The Rust side never imports the Python
 /// tuple; the names are the wire contract (cli/src/fno/mail/seed_provenance.py).
-const SEED_PROVENANCE_KEYS: [&str; 6] = [
+pub(crate) const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_SEED_B64",
     "FNO_SEED_PROV_FROM",
     "FNO_SEED_PROV_FROM_SESSION",
@@ -549,16 +564,18 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_birth_command_changes_nothing_that_is_not_poison() {
-        // AC2-EDGE, pure half: whatever the ambient env holds, the only
-        // explicit entries the birth command carries are poison removals -
-        // nothing else is set, stripped or rewritten. With a poison-free
-        // ambient env that is the empty set, and the notice (driven by the
-        // same held list in guard_birth) prints nothing.
+    fn birth_command_changes_only_poison_and_telemetry() {
+        // The machine endpoint is the only non-poison overlay.
         let cmd = supervisor_birth_command(None);
         for (n, v) in env_of(&cmd) {
             assert!(
-                v.is_none() && is_poison(&n),
+                (v.is_none() && is_poison(&n))
+                    || otel_env(
+                        &crate::paths::AgentsHome::from_env().otel_dir().join("port"),
+                        |key| std::env::var(key).ok()
+                    )
+                    .iter()
+                    .any(|(key, value)| key == &n && v.as_ref() == Some(value)),
                 "non-poison key {n} was changed: {v:?}"
             );
         }

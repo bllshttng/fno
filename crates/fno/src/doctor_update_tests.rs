@@ -233,3 +233,101 @@ fn run_refuses_during_an_in_progress_target() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert_eq!(code, 1);
 }
+
+fn git_ok(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn source_sync_fast_forwards_or_refuses_naming_the_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let remote = tmp.path().join("r.git");
+    let (canonical, peer) = (tmp.path().join("c"), tmp.path().join("p"));
+    let path = |p: &PathBuf| p.to_string_lossy().into_owned();
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "--bare", "-b", "trunk", &path(&remote)],
+    );
+    git_ok(tmp.path(), &["clone", "-q", &path(&remote), &path(&peer)]);
+    git_ok(&peer, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+    git_ok(
+        tmp.path(),
+        &["clone", "-q", &path(&remote), &path(&canonical)],
+    );
+    for n in 0..3 {
+        git_ok(
+            &peer,
+            &["commit", "-q", "--allow-empty", "-m", &format!("ahead {n}")],
+        );
+    }
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+
+    sync_source_checkout(&canonical, false).expect("a clean behind checkout fast-forwards");
+    assert_eq!(
+        git_ok(&canonical, &["rev-parse", "HEAD"]),
+        git_ok(&peer, &["rev-parse", "HEAD"])
+    );
+
+    git_ok(
+        &canonical,
+        &["commit", "-q", "--allow-empty", "-m", "local"],
+    );
+    git_ok(
+        &peer,
+        &["commit", "-q", "--allow-empty", "-m", "ahead again"],
+    );
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+    let refusal =
+        sync_source_checkout(&canonical, false).expect_err("diverged cannot fast-forward");
+    assert!(
+        refusal.contains("is 1 commit(s) behind origin/trunk"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_second_update_joins_only_an_update_holder() {
+    assert_eq!(update_holder_pid("fno-update-pid4242"), Some(4242));
+    assert_eq!(update_holder_pid("target-session:abc"), None);
+    assert_eq!(update_holder_pid("fno-update-pidX"), None);
+}
+
+#[test]
+fn rev_on_origin_main_reads_merged_local_and_unanswered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    let path = repo.to_string_lossy().into_owned();
+    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let base = git_ok(&repo, &["rev-parse", "HEAD"]);
+    git_ok(&repo, &["update-ref", "refs/remotes/origin/main", &base]);
+    // A merged rev (origin/main points at it) is CI-buildable; a local rev
+    // ahead of origin is not; an origin-less repo is unanswerable.
+    assert_eq!(rev_on_origin_main(&repo, &base), Some(true));
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "local"]);
+    let local = git_ok(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(rev_on_origin_main(&repo, &local), Some(false));
+    let bare = tempfile::tempdir().unwrap();
+    git_ok(bare.path(), &["init", "-q", "-b", "main"]);
+    assert_eq!(rev_on_origin_main(bare.path(), &base), None);
+}

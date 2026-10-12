@@ -130,6 +130,11 @@ fn entry(
             None,
             Some(OPERATOR),
         ),
+        "output_contract" => (
+            "the subprocess answered but not in the line the arm greps; a rename ghost - align the producer's echo with the arm's expected prefix",
+            None,
+            Some(OPERATOR),
+        ),
         _ => (
             "no class matches; read the skip reason and detail",
             None,
@@ -353,6 +358,10 @@ fn classify(row: &mut ArmStatus, facts: &RepairFacts) {
         ("timeout".to_string(), None)
     } else if skip == "grant_queue_timeout" {
         ("grant_queue_timeout".to_string(), None)
+    } else if detail.contains("TimeoutExpired") {
+        ("timeout".to_string(), None)
+    } else if detail.contains("printed no path") {
+        ("output_contract".to_string(), None)
     } else if detail.contains("not a git repository") {
         (
             "cwd_not_checkout".to_string(),
@@ -577,19 +586,14 @@ fn release_dead(key: &str, holder: &str, root: &Path) -> bool {
     dead && crate::claims::release(key, holder, Some(root), None).is_ok()
 }
 
-/// The production runner for `heal`: the launchd refresh under a 120 s bound,
-/// and the install spawned detached from the canonical checkout.
+/// The production runner for `heal`: the launchd refresh in process (each
+/// launchctl step inside the verb is timeout-guarded), and the install
+/// spawned detached from the canonical checkout.
 pub fn run_repair(action: &str, cwd: &Path) -> bool {
     match action {
         "refresh" => {
-            let mut cmd = vec![crate::scrape::fno_py().to_string_lossy().into_owned()];
-            cmd.extend(["do", "pr", "watch", "refresh"].map(str::to_string));
-            crate::org_board::budget::run_with_timeout(
-                &cmd,
-                cwd,
-                std::time::Duration::from_secs(120),
-            )
-            .is_ok()
+            let (_, rc) = crate::pr_watch::refresh::leaf_output(&[]);
+            rc == 0
         }
         "install" => {
             let Some(root) = crate::paths::canonical_repo_root(cwd) else {
@@ -756,13 +760,10 @@ mod tests {
             machine_id: Some(machine_id()),
             metadata: Default::default(),
         };
-        let dir = root.join(".fno/claims");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(format!("{}.lock", encode_key(key))),
-            serde_json::to_string(&rec).unwrap(),
-        )
-        .unwrap();
+        let path = root
+            .join(".fno/claims")
+            .join(format!("{}.lock", encode_key(key)));
+        crate::claim_store::seed_at_path(&path, &rec);
     }
 
     fn holder_finding(root: &Path, key: &str, holder: &str) -> Finding {
@@ -868,6 +869,30 @@ mod tests {
         assert!(mc.line.ends_with("heal=operator"), "{}", mc.line);
         assert!(!mc.line.contains("repair:"), "{}", mc.line);
         assert!(mc.repair.is_none());
+
+        // A rename ghost: the subprocess answered but its stdout carries no
+        // line the arm greps, so the row names the contract, not
+        // "unclassified". A Python-leg TimeoutExpired folds into `timeout`.
+        let mut ledger = row("team_ledger", SCHED_DAEMON);
+        ledger.failing = true;
+        ledger.skip_reason = Some("error".into());
+        ledger.detail = Some("ledger printed no path".into());
+        let mut rows = vec![ledger];
+        annotate(&mut rows, &facts(false));
+        let ledger = &rows[0];
+        assert_eq!(ledger.cause.as_deref(), Some("output_contract"));
+        assert!(ledger.line.contains("rename ghost"), "{}", ledger.line);
+        assert!(ledger.repair.is_none());
+        assert!(ledger.line.ends_with("heal=operator"), "{}", ledger.line);
+
+        let mut expired = row("team_ledger", SCHED_DAEMON);
+        expired.failing = true;
+        expired.skip_reason = Some("error".into());
+        expired.detail =
+            Some("subprocess.TimeoutExpired: ['fno-agents', 'lead-rundown', '--team-json']".into());
+        let mut rows = vec![expired];
+        annotate(&mut rows, &facts(false));
+        assert_eq!(rows[0].cause.as_deref(), Some("timeout"));
 
         let mut row = row("pr_watch_merge", SCHED_LAUNCHD);
         row.failing = true;

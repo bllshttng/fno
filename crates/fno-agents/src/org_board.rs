@@ -107,8 +107,8 @@ pub(crate) const MAX_DRIVER_ROWS: usize = 24;
 /// with headroom; `--max-pr-reads` still overrides it.
 pub(crate) const DEFAULT_MAX_PR_READS: usize = 50;
 pub(crate) const SRC_PRS: &str =
-    "gh pr list --state open --json number,title,mergeable,statusCheckRollup,headRefName,url";
-pub(crate) const SRC_PR_NODES: &str = "gh pr list --state open --json number,title,mergeable,statusCheckRollup,headRefName,url + fno backlog get <id>";
+    "gh pr list --state open --json number,title,mergeable,statusCheckRollup,headRefName,isCrossRepository,url";
+pub(crate) const SRC_PR_NODES: &str = "gh pr list --state open --json number,title,mergeable,statusCheckRollup,headRefName,isCrossRepository,url + fno backlog get <id>";
 /// the mergeable_pr queue asks the gate, not just the listing.
 pub(crate) const SRC_PR_GATE: &str =
     "fno do pr status <n> (ready + ready_blockers per mergeable candidate)";
@@ -211,6 +211,56 @@ fn partition_held(
     (SourceRead::ok(Value::Array(kept)), held_rows)
 }
 
+/// Split dispatch-held nodes out of the undispatched feed: an active
+/// `dispatch_hold` (plan frontmatter or the node row's own field, walked
+/// through parents and contained owners) parks the node the same way an open
+/// question does, so it never renders as the next undispatched actionable
+/// row; it is named under `held` with its hold reason. The verdict is the
+/// same one `undriven_pr` reads, so one hold answers every queue alike. A
+/// feed that never answered passes through untouched, like `partition_held`.
+fn partition_dispatch_held(
+    undispatched: SourceRead,
+    entries: Option<&[Value]>,
+) -> (SourceRead, Vec<Value>) {
+    if !undispatched.is_ok() {
+        return (undispatched, Vec::new());
+    }
+    let by_id: std::collections::BTreeMap<String, Value> = entries
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|e| {
+            e.get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), e.clone()))
+        })
+        .collect();
+    let (mut kept, mut held_rows) = (Vec::new(), Vec::new());
+    for mut row in undispatched.rows() {
+        let hold_entry = row
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| by_id.get(id))
+            .unwrap_or(&row);
+        let receipt = crate::backlog_ready::hold_verdict_receipt(hold_entry, &by_id);
+        if receipt.as_ref().is_some_and(|v| v.held) {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert(
+                    "hold_reason".to_string(),
+                    json!(receipt
+                        .as_ref()
+                        .map(|v| v.reason.as_str())
+                        .unwrap_or_default()),
+                );
+                obj.insert("held_by".to_string(), json!("dispatch_hold"));
+            }
+            held_rows.push(row);
+        } else {
+            kept.push(row);
+        }
+    }
+    (SourceRead::ok(Value::Array(kept)), held_rows)
+}
+
 // ---------------------------------------------------------------------------
 // SourceRead: one source's answer, or the reason there is no answer
 // ---------------------------------------------------------------------------
@@ -283,29 +333,6 @@ impl SourceRead {
 
 pub(crate) fn s_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
-}
-
-/// The probe feed a board slice can afford, as `(tokens, cap_warning)`.
-///
-/// The per-handle arithmetic the batch prices with (`0.75s` a handle after a
-/// `20s` cold start, ceiling `60s`) bounds the feed to a measured prefix:
-/// claim-derived holders ride first, so a cap withholds the roster tail,
-/// which the unmeasured-holders warning then names. `affordable == 0` keeps
-/// the whole feed: the page bound declines to spawn and the run reads
-/// timed-out, the receipt the board-budget pins expect, never a silent
-/// trim. `affordable >= len` feeds everything.
-pub(crate) fn bound_truth_feed(
-    tokens: Vec<String>,
-    affordable: usize,
-) -> (Vec<String>, Option<String>) {
-    if affordable == 0 || affordable >= tokens.len() {
-        return (tokens, None);
-    }
-    let note = format!(
-        "truth probe: measuring the first {affordable} of {} holders within the board slice; the tail reads unmeasured",
-        tokens.len()
-    );
-    (tokens[..affordable].to_vec(), Some(note))
 }
 
 pub(crate) fn s_i64(v: &Value, key: &str) -> Option<i64> {
@@ -841,12 +868,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                             .unwrap_or_else(|| h.clone())
                     })
                     .collect();
-                let affordable =
-                    crate::truth_probe::family1_truth_affordable_handles(Budget::spawn_bound(dl));
-                let (tokens, cap_note) = bound_truth_feed(tokens, affordable);
-                if let Some(note) = cap_note {
-                    warnings.push(note);
-                }
                 Some(s.spawn(move || {
                     crate::truth_probe::family1_truth_probe_many_measured_within(&tokens, Some(dl))
                 }))
@@ -921,21 +942,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 .join()
                 .unwrap_or(SourceRead::err("ready: reader panicked")),
         };
-        // An open question whose blocks names the node holds it out of ready
-        //; the held rows land under a `held` source beside `ready`.
-        let (ready, held_rows) = partition_held(ready, &held_map);
-        if !held_rows.is_empty() {
-            sources.insert(
-                "held".to_string(),
-                json!({
-                    "ok": true,
-                    "truncated": false,
-                    "error": "",
-                    "count": held_rows.len(),
-                    "rows": held_rows,
-                }),
-            );
-        }
         let outstanding = match t_outstanding {
             None => budget.spent_read(),
             Some(h) => h
@@ -1002,6 +1008,28 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             Some(rows) => SourceRead::ok(Value::Array(rows)),
             None => undispatched,
         };
+        // An open question whose blocks names the node holds it out of ready
+        //; the held rows land under a `held` source beside `ready`.
+        let (ready, mut held_rows) = partition_held(ready, &held_map);
+        // A ruling dispatch_hold parks a node the same way: it leaves the
+        // undispatched queue (never again the next actionable row) and is
+        // named under held with its hold reason. The split runs after the
+        // shape re-wrap above, on the canonical array payload rows() reads.
+        let (undispatched, dispatch_held_rows) =
+            partition_dispatch_held(undispatched, entries.as_deref());
+        held_rows.extend(dispatch_held_rows);
+        if !held_rows.is_empty() {
+            sources.insert(
+                "held".to_string(),
+                json!({
+                    "ok": true,
+                    "truncated": false,
+                    "error": "",
+                    "count": held_rows.len(),
+                    "rows": held_rows,
+                }),
+            );
+        }
         (
             undispatched,
             prs,
@@ -1055,7 +1083,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
 
     // Scope.
     let mut scope_ids: Option<HashSet<String>> = None;
-    let mut crown_scope: Option<String> = None;
+    let mut role_scope: Option<String> = None;
     if let Some(state_path) = &opts.state_path {
         let manifest = parse_manifest(state_path);
         let scope = manifest.get("scope").cloned().unwrap_or_default();
@@ -1079,7 +1107,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 "sources": Value::Object(sources),
             });
         }
-        crown_scope = Some(scope.clone());
+        role_scope = Some(scope.clone());
         let projects = project_map(&cwd);
         let Some(entries) = entries.as_deref() else {
             return json!({
@@ -1362,7 +1390,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         warnings,
         autonomous_merge: autonomous_merge_enabled(&cwd),
         scope_ids,
-        crown_scope,
+        role_scope,
     };
     let mut payload = build_board(&inputs);
     if let Some(obj) = payload.as_object_mut() {
@@ -1652,6 +1680,47 @@ mod tests {
         assert!(held_rows.is_empty());
     }
 
+    #[test]
+    fn dispatch_hold_partition_moves_the_row_and_names_the_reason() {
+        // An active dispatch_hold parks the node: it leaves the undispatched
+        // feed and is named under held with its hold reason.
+        let dir = tempfile::tempdir().unwrap();
+        let plan_path = write_hold_plan(
+            dir.path(),
+            "dispatch_hold:\n  reason: waiting on legal\n  release_when: legal clears\n  review_on: 2099-01-01\n  set_by: operator\n",
+        );
+        let entries = vec![json!({
+            "id": "x-hold1",
+            "priority": "p1",
+            "status": "ready",
+            "plan_path": plan_path,
+        })];
+        let feed = ok_read(json!([
+            {"id": "x-free", "priority": "p1", "title": "free"},
+            {"id": "x-hold1", "priority": "p1", "title": "held dispatch"}
+        ]));
+        let (kept, held_rows) = partition_dispatch_held(feed, Some(&entries));
+        let ids: Vec<String> = kept
+            .rows()
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(ids, vec!["x-free".to_string()]);
+        assert_eq!(held_rows.len(), 1);
+        assert_eq!(held_rows[0]["id"], json!("x-hold1"));
+        assert_eq!(held_rows[0]["held_by"], json!("dispatch_hold"));
+        assert_eq!(held_rows[0]["hold_reason"], json!("waiting on legal"));
+    }
+
+    #[test]
+    fn dispatch_hold_partition_never_reads_an_unreadable_feed_as_held_free() {
+        let feed = SourceRead::err("undispatched: reader panicked");
+        let (kept, held_rows) = partition_dispatch_held(feed, None);
+        assert!(!kept.is_ok());
+        assert!(held_rows.is_empty());
+    }
+
     fn inputs_with(ready: Value, claims: Value, claimed_nodes: Value) -> BoardInputs {
         BoardInputs {
             tasks: SourceRead::ok(json!([])),
@@ -1678,7 +1747,7 @@ mod tests {
             warnings: Vec::new(),
             autonomous_merge: false,
             scope_ids: None,
-            crown_scope: None,
+            role_scope: None,
         }
     }
 
@@ -2269,7 +2338,7 @@ mod tests {
                 .map(str::to_string)
                 .collect(),
         );
-        inputs.crown_scope = Some("x-epic".to_string());
+        inputs.role_scope = Some("x-epic".to_string());
         let board = build_board(&inputs);
         let queues = board.get("queues").and_then(Value::as_array).unwrap();
         let unheld = queues
@@ -2610,30 +2679,6 @@ mod tests {
     }
 
     #[test]
-    fn the_probe_feed_is_capped_to_the_affordable_prefix_and_names_the_tail() {
-        // The per-handle bound converts a killed empty page into a measured
-        // prefix: a slice funding part of the feed keeps the prefix
-        // (claim-derived holders ride first) and names the withheld tail.
-        let tokens: Vec<String> = (0..5).map(|i| format!("t-{i}")).collect();
-        let (feed, note) = bound_truth_feed(tokens.clone(), 3);
-        assert_eq!(feed, tokens[..3].to_vec());
-        let note = note.expect("a mid-feed cap names the tail");
-        assert!(
-            note.contains("measuring the first 3 of 5 holders"),
-            "{note:?}"
-        );
-        // A slice funding everything, and one funding nothing (the page
-        // bound declines to spawn, the run reads timed out - the receipt
-        // the budget pins expect), keep the whole feed and stay quiet.
-        let (feed, note) = bound_truth_feed(tokens.clone(), 5);
-        assert_eq!(feed, tokens);
-        assert!(note.is_none());
-        let (feed, note) = bound_truth_feed(tokens, 0);
-        assert_eq!(feed.len(), 5);
-        assert!(note.is_none());
-    }
-
-    #[test]
     fn a_working_handover_holder_keeps_its_node_out_of_unplanned_and_stale() {
         // AC7-HP: the ready feed cannot see a stale launch-window lease
         // (include_stale=false excludes it, worked ids too), so the old
@@ -2682,15 +2727,30 @@ mod tests {
         // row pre-classification, so an in_progress node in its launch window
         // read driver-none and landed in unheld_progress - the exact silence
         // the classify tests cannot see past.
-        let dir = std::env::temp_dir().join(format!("kb-board-handover-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        let root = std::env::temp_dir().join(format!("kb-board-handover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let dir = root.join("claims");
         let now = crate::claims::now_ms();
-        let yaml = format!(
-            "schema_version: 1\nkey: \"node:x-lease\"\nholder: \"spawn-handover:t-w\"\nacquired_at: {now}\npid: 1\nhost: test-host\nexpires_at: {}\nreason: \"spawn handover window for node:x-lease\"\n",
-            now + 900_000
+        crate::claim_store::seed_at_path(
+            &dir.join("node%3Ax-lease.lock"),
+            &crate::claims::ClaimRecord {
+                schema_version: 1,
+                key: "node:x-lease".into(),
+                holder: "spawn-handover:t-w".into(),
+                acquired_at: now,
+                pid: Some(1),
+                host: "test-host".into(),
+                pid_unavailable: false,
+                expires_at: Some(now + 900_000),
+                reason: Some("spawn handover window for node:x-lease".into()),
+                harness: None,
+                session_id: None,
+                pid_provenance: None,
+                machine_id: None,
+                metadata: Default::default(),
+            },
         );
-        std::fs::write(dir.join("node%3Ax-lease.lock"), yaml).expect("write lock");
         let rows = claims::read_claims_in(std::slice::from_ref(&dir)).rows();
         assert_eq!(rows.len(), 1, "the live lock is one row: {rows:?}");
         let node = json!({"id": "x-lease", "priority": "p0", "status": "in_progress"});
@@ -2763,7 +2823,7 @@ mod tests {
             {"id": "x-out", "priority": "p1", "pr_number": 1494},
         ]));
         inputs.scope_ids = Some(["x-in"].into_iter().map(str::to_string).collect());
-        inputs.crown_scope = Some("x-team".to_string());
+        inputs.role_scope = Some("x-team".to_string());
         let board = build_board(&inputs);
         let queues = board.get("queues").and_then(Value::as_array).unwrap();
         let mergeable = queues.iter().find(|q| q["name"] == "mergeable_pr").unwrap();
@@ -2889,7 +2949,7 @@ mod tests {
             "age_minutes": 60,
         }]));
         inputs.scope_ids = Some(["x-in-scope"].into_iter().map(str::to_string).collect());
-        inputs.crown_scope = Some("x-team".to_string());
+        inputs.role_scope = Some("x-team".to_string());
         let board = build_board(&inputs);
         let queues = board.get("queues").and_then(Value::as_array).unwrap();
         let blocked = queues
@@ -3311,11 +3371,14 @@ mod tests {
     #[test]
     fn a_slow_source_is_killed_inside_the_whole_board_budget() {
         // A scripted `fno` that sleeps 5 seconds under a
-        // 2,000ms board budget must be killed at its deadline-derived spawn
-        // bound, so the collector returns inside ~2.75s and the over-budget
+        // 4,000ms board budget must be killed at its deadline-derived spawn
+        // bound, so the collector returns inside ~4.75s and the over-budget
         // source reads as unreadable - never the measured 40,776ms-against-
         // 30,000ms overrun, and never the 4.9s the captured-slice shape
-        // accepted.
+        // accepted. The budget leaves room for the pre-spawn in-process
+        // reads on a loaded runner (measured: the sibling 2,000ms shape
+        // expired before its slow source spawned), and the cap stays under
+        // the 5s sleep so an unbounded read still trips it.
         let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Pins die with the body: a later test must never read a dropped
         // TempDir through a leaked env value.
@@ -3350,7 +3413,7 @@ mod tests {
         // The cwd too: from the crate dir the needs fold reads the canonical
         // checkout's live journal, which measured 20s in a debug build.
         let payload = read_board(&BoardOpts {
-            budget_ms: 2_000,
+            budget_ms: 4_000,
             cwd: Some(dir.path().to_path_buf()),
             ..Default::default()
         });
@@ -3368,8 +3431,8 @@ mod tests {
         // budget; the deadline-derived bound must keep the whole board under
         // budget plus the serialization reserve.
         assert!(
-            elapsed < std::time::Duration::from_millis(2_750),
-            "board took {elapsed:?} against a 2,000ms budget with a 5s sleep source"
+            elapsed < std::time::Duration::from_millis(4_750),
+            "board took {elapsed:?} against a 4,000ms budget with a 5s sleep source"
         );
         let parsed = crate::lead_termination::parse_org_board_value(&payload).expect("parses");
         // A budget kill is the board's own choice, not evidence about the
@@ -3399,123 +3462,6 @@ mod tests {
         assert!(
             !parsed.blind_queues.is_empty(),
             "the killed source must still be named"
-        );
-    }
-
-    #[test]
-    fn a_timed_out_truth_batch_on_a_quiet_board_reads_not_read_never_unreadable() {
-        // At load 335 on 12 cores the truth batch timed out on budget and the
-        // claim-dependent queues read unreadable, so a quiet board blocked
-        // completion on about ten consecutive stops with nothing to act on.
-        // A timeout against the board's own deadline is the board stopping,
-        // not the source failing: the queues must read not-read, the flag
-        // must stay off, and the receipt must name the read. The board also
-        // returns inside budget plus the serialization reserve, and the
-        // holder reads unmeasured by the "timed out" receipt word - never
-        // no-evidence.
-        let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _restore = EnvRestore::take(&[
-            "FNO_AGENTS_HOME",
-            "FNO_SPACES_DIR",
-            "HOME",
-            "FNO_CLAIMS_ROOT",
-        ]);
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents"));
-        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
-        std::env::set_var("HOME", dir.path());
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.path());
-        // ONE stale claim: the dead-stated holder is exactly the token the
-        // board probes, so the truth batch runs and (stubbed below) times
-        // out against the budget-derived page bound.
-        let now_ms = crate::claims::now_ms();
-        let lock = crate::claims::claim_path("node:lead-truth-holder", Some(dir.path())).unwrap();
-        std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
-        std::fs::write(
-            &lock,
-            serde_json::json!({
-                "schema_version": crate::claims::PID_UNAVAILABLE_SCHEMA_VERSION,
-                "key": "node:lead-truth-holder",
-                "holder": "claude:t-2440-truth",
-                "acquired_at": now_ms - 3_600_000,
-                "host": "board-test-off-host",
-                "pid_unavailable": true,
-                "expires_at": now_ms - 1_800_000,
-            })
-            .to_string(),
-        )
-        .unwrap();
-        // The truth batch execs bare `fno`; stub it to sleep 30s. `gh` gets
-        // an empty-open-PR listing so the prs reads never reach the network.
-        // Everything else answers at once.
-        let stub_dir = dir.path().join("stub-bin");
-        std::fs::create_dir_all(&stub_dir).unwrap();
-        let stub = crate::write_exec_stub(
-            &stub_dir,
-            "fno",
-            "#!/bin/sh\nif [ \"$1\" = agents ] && [ \"$2\" = truth ]; then exec sleep 30; fi\necho '{}'\n",
-        );
-        crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\necho '[]'\n");
-        let prev_py = std::env::var_os("FNO_PY");
-        let prev_path = std::env::var_os("PATH");
-        let prev_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_PY", &stub);
-        std::env::set_var("FNO_BIN", &stub);
-        std::env::set_var(
-            "PATH",
-            format!(
-                "{}:{}",
-                stub_dir.display(),
-                prev_path.as_deref().and_then(|p| p.to_str()).unwrap_or("")
-            ),
-        );
-
-        let start = std::time::Instant::now();
-        let payload = read_board(&BoardOpts {
-            budget_ms: 2_000,
-            cwd: Some(dir.path().to_path_buf()),
-            ..Default::default()
-        });
-        let elapsed = start.elapsed();
-
-        match prev_py {
-            Some(v) => std::env::set_var("FNO_PY", v),
-            None => std::env::remove_var("FNO_PY"),
-        }
-        match prev_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        let parsed = crate::lead_termination::parse_org_board_value(&payload).expect("parses");
-        assert!(
-            !parsed.unreadable_sources,
-            "a timed-out batch is a budget kill, never an unreadable source: {payload}"
-        );
-        assert!(
-            parsed
-                .blind_queues
-                .iter()
-                .any(|q| q.contains("stale_claim not read: truth probe: batch of")),
-            "the receipt must name the timed-out read: {:?}",
-            parsed.blind_queues
-        );
-        // The board must return inside budget plus the serialization
-        // reserve, and the holder must read unmeasured by the receipt word,
-        // never no-evidence.
-        assert!(
-            elapsed < std::time::Duration::from_millis(2_750),
-            "board took {elapsed:?} against a 2,000ms budget with a 30s truth stub"
-        );
-        let err = payload["sources"]["holder_activity"]["error"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            err.contains("timed out"),
-            "the holder must read unmeasured, got holder_activity error: {err:?}"
         );
     }
 

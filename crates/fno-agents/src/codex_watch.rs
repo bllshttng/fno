@@ -34,6 +34,7 @@ use serde_json::Value;
 
 use crate::paths::AgentsHome;
 use crate::watch_expiry::{self, Evidence, Watch};
+mod quiet;
 
 /// Poll cadence. One coalesced status read per ci watch per tick: the cache
 /// serves one live gh read per TTL across the whole fleet, so N watchers on
@@ -361,11 +362,11 @@ fn deliver_settle(watch: &SettleWatch, text: &str) -> Delivered {
 /// Production closures: the loaded-roster read, the coalesced status poll,
 /// and the per-harness settle delivery.
 pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
-    run_pass_with(
+    let settled = run_pass_with(
         home,
         &crate::codex_inject::loaded_thread_ids,
         &|cwd, pr| {
-            let (_code, out, _, _) = crate::pr_status::cache::cached_status(cwd, pr, false);
+            let (_code, out, _, _) = crate::pr_status::cache::cached_status(cwd, pr, false, None);
             Ok(PollAnswer {
                 settled: out.get("settled").and_then(Value::as_bool) == Some(true),
                 verdict: out
@@ -377,7 +378,11 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
         },
         &deliver_settle,
         &crate::events::EventEmitter::new(crate::daemon::global_events_path(home), "daemon"),
-    )
+    );
+    if let Err(error) = quiet::run(home) {
+        eprintln!("quiet recovery: {error}");
+    }
+    settled
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -423,18 +428,30 @@ mod tests {
         std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
         let home = AgentsHome::at(td.path().join("agents"));
         let _ = home.ensure_root();
+        // A codex or opencode pid outlives its session, so a node claim reads
+        // live only through the session witness: the env registry's fresh
+        // served liveness.
+        std::env::set_var(crate::paths::HOME_ENV, home.root());
+        let served_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut codex_entry = crate::state::RegistryEntry::default();
         codex_entry.name = "codex-worker".into();
         codex_entry.harness_session_id = Some("thread-a".into());
         codex_entry.status = crate::AgentStatus::Live;
+        codex_entry.liveness = Some("alive".into());
+        codex_entry.liveness_measured_at = Some(served_at.clone());
         let mut oc_entry = crate::state::RegistryEntry::default();
         oc_entry.name = "oc-worker".into();
         oc_entry.harness_session_id = Some("oc-sess-a".into());
         oc_entry.status = crate::AgentStatus::Live;
+        oc_entry.liveness = Some("alive".into());
+        oc_entry.liveness_measured_at = Some(served_at.clone());
         let mut registry = crate::state::Registry::default();
         registry.entries.push(codex_entry);
         registry.entries.push(oc_entry);
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let acquired = crate::claims::acquire(
             "node:x-codexwt",
             "target-session:thread-a",

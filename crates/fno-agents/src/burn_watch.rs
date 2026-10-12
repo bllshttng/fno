@@ -38,11 +38,37 @@ const ESCALATE_DEFAULT_CONFLICT_MERGES: u32 = 2;
 const ESCALATE_DEFAULT_DIFF_LINES: u64 = 2500;
 const ESCALATE_DEFAULT_HOURS: i64 = 24;
 const ESCALATE_DEFAULT_SLOT_WAIT_MIN: i64 = 60;
+const FIRST_EDIT_DEFAULT_MIN: i64 = 20;
 const SENDER: &str = "fno/burn-watch";
 const SENDER_LINE: &str = "Automatic notice from the fno daemon burn-watch arm, not a person. Your operator's hold outranks it.";
 
+/// The bounded subprocess budget for a status read or an ask.
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The resume argv's own bound. The parked revive waits inside the verb
+/// (roster polls plus content confirms) before the respawn returns, so the
+/// 30 s budget would cut it short by construction; 180 s is the bound
+/// `fno agents watchdog` gives the same verb.
 const RESUME_RUN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// A mail send's bound. A send can try two live rungs (the socket inject,
+/// then the pane), each waiting up to [`crate::mail_inject::LIVE_RUNG_WORST_S`].
+/// A kill inside a confirm skips the withdraw and can leave the typed line
+/// in the recipient's composer.
+const MAIL_SEND_RUN_TIMEOUT: Duration =
+    Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S + 30);
+
+/// The bound for one daemon subprocess, by verb.
+pub(crate) fn run_timeout(argv: &[String]) -> Duration {
+    match (
+        argv.get(2).map(String::as_str),
+        argv.get(3).map(String::as_str),
+    ) {
+        (Some("resume"), _) => RESUME_RUN_TIMEOUT,
+        (Some("mail"), Some("send")) => MAIL_SEND_RUN_TIMEOUT,
+        _ => RUN_TIMEOUT,
+    }
+}
 
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
@@ -101,6 +127,9 @@ pub struct BurnState {
     /// this worker; every later pass skips the counter reads.
     #[serde(default)]
     pub escalation_noted: bool,
+    /// The first-edit note went to the lead for this worker; sent once.
+    #[serde(default)]
+    pub first_edit_noted: bool,
 }
 
 /// What the five capability counters read this pass. None is unread, and an
@@ -123,6 +152,7 @@ struct Thresholds {
     diff_lines: u64,
     hours: i64,
     slot_wait_minutes: i64,
+    first_edit_minutes: i64,
 }
 
 impl Default for Thresholds {
@@ -133,6 +163,7 @@ impl Default for Thresholds {
             diff_lines: ESCALATE_DEFAULT_DIFF_LINES,
             hours: ESCALATE_DEFAULT_HOURS,
             slot_wait_minutes: ESCALATE_DEFAULT_SLOT_WAIT_MIN,
+            first_edit_minutes: FIRST_EDIT_DEFAULT_MIN,
         }
     }
 }
@@ -198,6 +229,7 @@ pub fn decide(
             task_key: prev.task_key.clone(),
             task_cwd: prev.task_cwd.clone(),
             escalation_noted: prev.escalation_noted,
+            first_edit_noted: prev.first_edit_noted,
         };
         return (Decision::Hold, next);
     }
@@ -268,11 +300,13 @@ pub fn decide(
     }
 }
 
-/// One in-scope worker: its node and the model the graph observed.
+/// One in-scope worker: its node, the model the graph observed, and when its
+/// own execute row opened.
 #[derive(Debug, Clone, PartialEq)]
 struct ScopedSession {
     node: String,
     observed_model: Option<String>,
+    started_at: Option<i64>,
 }
 
 /// What the pass knows about one node.
@@ -328,6 +362,10 @@ fn scope_sessions(rows: &[Value]) -> BTreeMap<String, ScopedSession> {
                     ScopedSession {
                         node: node.to_string(),
                         observed_model: session_model(session),
+                        started_at: session
+                            .get("started_at")
+                            .and_then(Value::as_str)
+                            .and_then(parse_epoch),
                     },
                 );
             }
@@ -396,12 +434,7 @@ pub(crate) fn run_command(argv: &[String], cwd: &str) -> (i32, String, String) {
     } else {
         std::path::PathBuf::from(cwd)
     };
-    let timeout = if argv.len() > 2 && argv[2] == "resume" {
-        RESUME_RUN_TIMEOUT
-    } else {
-        RUN_TIMEOUT
-    };
-    match crate::loopcheck::bounded_read(bin.as_ref(), &refs, &dir, SENDER, timeout) {
+    match crate::loopcheck::bounded_read(bin.as_ref(), &refs, &dir, SENDER, run_timeout(argv)) {
         Ok(out) => (
             if out.status.success() {
                 0
@@ -636,6 +669,126 @@ fn sample_counters(cwd: &str, facts: &NodeFacts, runner: Runner, now_epoch: i64)
     }
 }
 
+/// Whether the checkout holds no work yet: zero commits past the base and a
+/// clean tree. Both reads must answer, and a zero count must print as a zero:
+/// an empty or failed listing reads None and never fires the deadline.
+fn no_edits_yet(cwd: &str, base: &str, runner: Runner) -> Option<bool> {
+    let (code, out, _) = runner(
+        &[
+            "git".into(),
+            "rev-list".into(),
+            "--count".into(),
+            format!("{base}..HEAD"),
+        ],
+        cwd,
+    );
+    let ahead: u64 = (code == 0)
+        .then(|| first_line(&out))
+        .flatten()?
+        .parse()
+        .ok()?;
+    if ahead > 0 {
+        return Some(false);
+    }
+    let (code, out, _) = runner(&["git".into(), "status".into(), "--porcelain".into()], cwd);
+    (code == 0).then(|| out.trim().is_empty())
+}
+
+/// The first-edit deadline: a worker whose own execute row opened at least
+/// `minutes` ago and whose checkout still holds no work. The node's earliest
+/// execute start would fire at once for a fresh worker on a resumed node.
+/// Returns the note naming the gate the arm can read without a transcript.
+fn first_edit_overdue(
+    node: &str,
+    sid: &str,
+    harness: &str,
+    cwd: &str,
+    started_at: Option<i64>,
+    minutes: i64,
+    runner: Runner,
+    now_epoch: i64,
+) -> Option<String> {
+    if minutes <= 0 {
+        return None;
+    }
+    let age_min = (now_epoch - started_at?) / 60;
+    if age_min < minutes {
+        return None;
+    }
+    let base = first_line(
+        &runner(
+            &[
+                "git".into(),
+                "rev-parse".into(),
+                "--abbrev-ref".into(),
+                "origin/HEAD".into(),
+            ],
+            cwd,
+        )
+        .1,
+    )?;
+    if !no_edits_yet(cwd, &base, runner)? {
+        return None;
+    }
+    let gate = match crate::test_run::build_wait_since_ms(Path::new(cwd)) {
+        Some(since) => format!(
+            "{}m waiting at the cargo build door",
+            (now_epoch.saturating_mul(1000) - since) / 60_000
+        ),
+        None => "none measurable without the transcript".to_string(),
+    };
+    Some(format!(
+        "{SENDER_LINE} Stuck: node {node}, session {sid} on {harness} has made no edit \
+         {age_min}m after its execute phase opened (no commit past {base}, clean tree in \
+         {cwd}). Gate it is on: {gate}. Read it with `fno agents logs {sid}`. The deadline \
+         is {minutes}m; this note is sent once per worker."
+    ))
+}
+
+/// One note to the node's owning lead. A refused send, or a node with no
+/// owner, files one fleet task instead so the note is never lost.
+fn note_owner(
+    home: &AgentsHome,
+    runner: Runner,
+    owner: Option<String>,
+    text: &str,
+    cwd: &str,
+    node: &str,
+    task_key: &str,
+    run_line: &str,
+) {
+    let delivered = owner.is_some_and(|lead_scope| {
+        let argv = vec![
+            "fno".to_string(),
+            "agents".to_string(),
+            "mail".to_string(),
+            "send".to_string(),
+            "--from-name".to_string(),
+            SENDER.to_string(),
+            "--origin".to_string(),
+            "scheduler".to_string(),
+            "--to-lead".to_string(),
+            lead_scope,
+            text.to_string(),
+        ];
+        let (code, stdout, _) = runner(&argv, "");
+        crate::mail_inject::mail_send_accepted(code, &stdout)
+    });
+    if !delivered {
+        if let Err(e) = crate::fleet_task::file_once(
+            &crate::provider_cap::questions_path(home),
+            SENDER,
+            task_key,
+            cwd,
+            text,
+            Some(run_line),
+            Some(node),
+        ) {
+            eprintln!("burn-watch: task refused: {e}");
+        }
+    }
+}
+
 fn state_path(home: &AgentsHome, sid: &str) -> Option<std::path::PathBuf> {
     if sid.is_empty() || sid.len() > 64 || !sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
     {
@@ -809,7 +962,7 @@ fn escalation_note_text(
 
 /// The node's owning team scope, resolved once per pass and cached.
 /// An unreadable registry reads as no owner.
-fn node_owner(
+pub(crate) fn node_owner(
     config_cwd: &Path,
     registry_path: &Path,
     rows: &[Value],
@@ -1069,40 +1222,46 @@ fn run_pass(
                     .unwrap_or("unknown");
                 let text = escalation_note_text(node, sid, harness, model, &counters, &tripped);
                 let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
-                let delivered = match &owner {
-                    Some(lead_scope) => {
-                        let argv = vec![
-                            "fno".to_string(),
-                            "agents".to_string(),
-                            "mail".to_string(),
-                            "send".to_string(),
-                            "--from-name".to_string(),
-                            SENDER.to_string(),
-                            "--origin".to_string(),
-                            "scheduler".to_string(),
-                            "--to-lead".to_string(),
-                            lead_scope.clone(),
-                            text.clone(),
-                        ];
-                        let (code, stdout, _) = runner(&argv, "");
-                        crate::mail_inject::mail_send_accepted(code, &stdout)
-                    }
-                    None => false,
-                };
-                if !delivered {
-                    if let Err(e) = crate::fleet_task::file_once(
-                        &crate::provider_cap::questions_path(home),
-                        SENDER,
-                        &format!("capability escalation for {node}"),
-                        cwd,
-                        &text,
-                        Some("skills/target/scripts/handoff.sh"),
-                        Some(node),
-                    ) {
-                        eprintln!("burn-watch: escalation task refused: {e}");
-                    }
-                }
+                note_owner(
+                    home,
+                    runner,
+                    owner,
+                    &text,
+                    cwd,
+                    node,
+                    &format!("capability escalation for {node}"),
+                    "skills/target/scripts/handoff.sh",
+                );
                 next.escalation_noted = true;
+                notes += 1;
+            }
+        }
+        // The first-edit note rides its own flag for the same reason.
+        next.first_edit_noted = prev.as_ref().map(|p| p.first_edit_noted).unwrap_or(false);
+        if !next.first_edit_noted {
+            let harness = entry.harness.as_deref().unwrap_or("unknown");
+            if let Some(text) = first_edit_overdue(
+                node,
+                sid,
+                harness,
+                cwd,
+                scoped.started_at,
+                thresholds.first_edit_minutes,
+                runner,
+                now_epoch,
+            ) {
+                let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
+                note_owner(
+                    home,
+                    runner,
+                    owner,
+                    &text,
+                    cwd,
+                    node,
+                    &format!("no first edit on {node}"),
+                    &format!("fno agents logs {sid}"),
+                );
+                next.first_edit_noted = true;
                 notes += 1;
             }
         }
@@ -1249,12 +1408,25 @@ fn read_thresholds(cwd: &Path) -> Thresholds {
         diff_lines: unsigned("escalate_diff_lines", ESCALATE_DEFAULT_DIFF_LINES),
         hours: signed("escalate_hours", ESCALATE_DEFAULT_HOURS),
         slot_wait_minutes: signed("escalate_slot_wait_minutes", ESCALATE_DEFAULT_SLOT_WAIT_MIN),
+        first_edit_minutes: signed("first_edit_minutes", FIRST_EDIT_DEFAULT_MIN),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mail_send_outlives_two_live_rungs() {
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let send = run_timeout(&argv(&["fno", "agents", "mail", "send", "sid", "hi"]));
+        assert!(send > Duration::from_secs(2 * crate::mail_inject::LIVE_RUNG_WORST_S));
+        assert_eq!(
+            run_timeout(&argv(&["fno", "agents", "resume", "sid"])),
+            RESUME_RUN_TIMEOUT
+        );
+        assert_eq!(run_timeout(&argv(&["git", "log", "-1"])), RUN_TIMEOUT);
+    }
     use serde_json::json;
 
     fn sample(cost: Option<f64>, head: Option<&str>, touched: Option<i64>) -> Sample {
@@ -1304,7 +1476,7 @@ mod tests {
             0.01,
         );
         assert!(matches!(d, Decision::Wake(r) if r.contains("node untouched 2h")));
-        // Regression shape: the crown was woken twice over a node whose PR
+        // Regression shape: the role was woken twice over a node whose PR
         // branch took a commit 30 minutes earlier. The node row's touched_at
         // is not the branch: it moves on backlog commands, never on a push.
         // A flat sample whose newest commit is younger than the idle ceiling
@@ -1599,6 +1771,38 @@ mod tests {
         ));
         assert!(!crate::watch_expiry::should_wake(&watch, 103, &[receipt]));
 
+        // A build park wakes before its deadline once its parked cargo is
+        // gone, and never while that cargo still runs.
+        let mut park = watch.clone();
+        park.event_id = "park-1".into();
+        park.blocker = "build".into();
+        let park_row = |cargo_pid: u32| crate::watch_expiry::Evidence {
+            event_id: "park-1".into(),
+            seq: 1,
+            ts_ms: 50,
+            kind: "loop_check_watch_idle".into(),
+            session_id: Some("s-1".into()),
+            data: serde_json::json!({
+                "blocker": "build",
+                "build_cargo_pid": cargo_pid,
+                "build_since_ms": crate::claims::now_ms(),
+            }),
+        };
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        let gone_pid = gone.id();
+        gone.wait().unwrap();
+        assert!(crate::watch_expiry::should_wake(
+            &park,
+            10,
+            &[park_row(gone_pid)]
+        ));
+        assert!(!crate::watch_expiry::should_wake(
+            &park,
+            10,
+            &[park_row(std::process::id())]
+        ));
+        assert!(crate::watch_expiry::message(&park).contains("cargo build this session parked on"));
+
         let mut review_watch = watch.clone();
         review_watch.reason = Some("review".into());
         let review_message = crate::watch_expiry::message(&review_watch);
@@ -1632,13 +1836,18 @@ mod tests {
         legacy_entry.status = crate::AgentStatus::Live;
         let mut registry = crate::state::Registry::default();
         registry.entries.push(legacy_entry.clone());
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let acquired = crate::claims::acquire(
             "node:x-legacy",
             "target-session:s-legacy",
             crate::claims::AcquireOpts {
                 pid: Some(std::process::id()),
-                identity: Some(("s-legacy".into(), "codex".into())),
+                // A claude pid dies with its session, so the live pid
+                // vouches for the claim with no session witness.
+                identity: Some(("s-legacy".into(), "claude".into())),
                 root: None,
                 events_dir: Some(temp.path().join("claim-events")),
                 ..Default::default()
@@ -1682,7 +1891,10 @@ mod tests {
         genuine_entry.harness_session_id = Some("s-genuine".into());
         genuine_entry.status = crate::AgentStatus::Live;
         registry.entries.push(genuine_entry);
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let acquired_genuine = crate::claims::acquire(
             "node:x-genuine",
             "target-session:s-genuine",
@@ -1754,7 +1966,10 @@ mod tests {
         fresh_entry.harness_session_id = Some("s-fresh".into());
         fresh_entry.status = crate::AgentStatus::Live;
         registry.entries.push(fresh_entry);
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let acquired_fresh = crate::claims::acquire(
             "node:x-fresh",
             "target-session:s-fresh",
@@ -1840,14 +2055,37 @@ mod tests {
             )
             .unwrap();
 
-        std::fs::remove_file(home.registry_json()).unwrap();
-        std::fs::create_dir(home.registry_json()).unwrap();
+        let store = rusqlite::Connection::open(
+            crate::registry_store::database_path(&home.registry_json()).unwrap(),
+        )
+        .unwrap();
+        let document: String = store
+            .query_row(
+                "SELECT value FROM registry_meta WHERE key='document'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        store
+            .execute(
+                "UPDATE registry_meta SET value='[' WHERE key='document'",
+                [],
+            )
+            .unwrap();
         let registry_error = crate::watch_expiry::run_pass(&home);
-        std::fs::remove_dir(home.registry_json()).unwrap();
+        store
+            .execute(
+                "UPDATE registry_meta SET value=?1 WHERE key='document'",
+                [document],
+            )
+            .unwrap();
 
         legacy_entry.harness_session_id = Some("s-legacy".into());
         registry.entries = vec![legacy_entry];
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let broken_claims_root = temp.path().join("claims-root-file");
         std::fs::write(&broken_claims_root, "unreadable claims root").unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", &broken_claims_root);
@@ -1940,7 +2178,7 @@ mod tests {
         std::fs::create_dir_all(state_dir.join("locks")).unwrap();
         std::env::set_var("FNO_STATE_DIR", &state_dir);
         let claims_root = td.path().join("claims");
-        let waiters = claims_root.join(".fno/claims/build-waiters");
+        let waiters = claims_root.join(".fno/claim-aux/build-waiters");
         std::fs::create_dir_all(&waiters).unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
         let workdir = td.path().join("workdir");
@@ -2025,14 +2263,17 @@ mod tests {
         team.status = crate::AgentStatus::Live;
         team.pid = Some(std::process::id());
         team.harness = Some("claude".into());
-        team.crown_scope = Some("proj-a".into());
-        team.crown_level = Some(1);
+        team.role_scope = Some("proj-a".into());
+        team.role_level = Some(1);
         team.harness_session_id = Some("5e5c-aaaa-bbbb-cccc-000000000001".into());
         team.cwd = workdir.to_string_lossy().into_owned();
         team.model = Some("glm-5.3-flash".into());
         let mut registry = crate::state::Registry::default();
         registry.entries.push(team);
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner_inner = |argv: &[String], _cwd: &str| -> (i32, String, String) {
             calls.push(argv.to_vec());
@@ -2074,6 +2315,13 @@ mod tests {
                     (0, String::new(), String::new())
                 };
             }
+            if joined.contains("rev-list --count origin/main..HEAD") {
+                return if trip == "first_edit" {
+                    (0, "0\n".into(), String::new())
+                } else {
+                    (0, String::new(), String::new())
+                };
+            }
             if joined.contains("show --remerge-diff") {
                 return (0, "src/lib.rs\n".into(), String::new());
             }
@@ -2110,6 +2358,46 @@ mod tests {
         let tasks = crate::fleet_task::open_tasks(&crate::provider_cap::questions_path(&home))
             .unwrap_or_default();
         (calls, home, td, tasks)
+    }
+
+    #[test]
+    fn a_worker_with_no_edit_past_the_deadline_gets_one_note_to_its_lead() {
+        let (calls, home, _td, tasks) =
+            escalation_scenario("first_edit", Thresholds::default(), true, 2);
+        let notes: Vec<_> = calls
+            .iter()
+            .filter(|a| a.join(" ").contains("--to-lead"))
+            .collect();
+        assert_eq!(notes.len(), 1, "one note across two passes");
+        let text = notes[0].last().unwrap();
+        assert!(
+            text.contains(
+                "Stuck: node x-esc, session 5e5c-aaaa-bbbb-cccc-000000000001 on claude has made no edit 60m"
+            ),
+            "{text}"
+        );
+        assert!(tasks.is_empty(), "{tasks:?}");
+        let state = load_state(&home, "5e5c-aaaa-bbbb-cccc-000000000001").expect("state written");
+        assert!(state.first_edit_noted);
+        assert!(!state.escalation_noted);
+        // A zero deadline turns the arm off, and a listing that cannot prove
+        // the tree empty (the other scenarios print nothing) never fires it.
+        for (trip, thresholds) in [
+            (
+                "first_edit",
+                Thresholds {
+                    first_edit_minutes: 0,
+                    ..Thresholds::default()
+                },
+            ),
+            ("nothing", Thresholds::default()),
+        ] {
+            let (calls, _home, _td, _tasks) = escalation_scenario(trip, thresholds, true, 1);
+            assert!(
+                !calls.iter().any(|a| a.join(" ").contains("--to-lead")),
+                "{trip}"
+            );
+        }
     }
 
     #[test]

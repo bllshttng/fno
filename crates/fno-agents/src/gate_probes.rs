@@ -4,6 +4,7 @@
 //! read the same either way, and the verbs stay for the operator CLI.
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
+use crate::gh_cache;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -218,6 +219,47 @@ fn merged_pr_for_head(cwd: &Path, slug: &str, base: &str, run: RunProbe) -> (i64
     (PROBE_FAILED, String::new(), true)
 }
 
+/// How long the cached default-branch answer stays fresh: the branch moves
+/// only when an operator renames it, so an hour of staleness is cheap.
+const REPO_META_TTL_S: u64 = 3600;
+
+/// The repository's default branch, gh-cache first: the Python leg's
+/// `_default_branch` contract on the native merge path. A missing, stale or
+/// corrupt row (or an unreadable state dir) falls through to the live REST
+/// read, which stays the truth; a successful live read backfills the row.
+fn default_branch_cached(cwd: &Path, slug: &str, run: RunProbe) -> Option<String> {
+    if let Some(root) = gh_cache::rows_root(cwd) {
+        let fresh = gh_cache::read_row(
+            &root,
+            "repo-meta",
+            slug,
+            None,
+            Some(REPO_META_TTL_S),
+            gh_cache::now_secs(),
+        );
+        if let Some(hit) = fresh
+            .get("row")
+            .and_then(|row| row.get("default_branch"))
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+        {
+            return Some(hit.to_string());
+        }
+    }
+    let value =
+        gh_json(run, cwd, &format!("repos/{slug}")).and_then(|v| s_of(&v, "default_branch"))?;
+    if let Some(root) = gh_cache::rows_root(cwd) {
+        gh_cache::write_row(
+            &root,
+            "repo-meta",
+            slug,
+            None,
+            &serde_json::json!({ "default_branch": value }),
+        );
+    }
+    Some(value)
+}
+
 fn lineage(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
     let base_ref = facts.base_ref.as_str();
     let slug = run(&["git", "remote", "get-url", "origin"], cwd)
@@ -229,8 +271,7 @@ fn lineage(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
             "could not resolve owner/repo from the origin remote".into(),
         );
     };
-    let default =
-        gh_json(run, cwd, &format!("repos/{slug}")).and_then(|v| s_of(&v, "default_branch"));
+    let default = default_branch_cached(cwd, &slug, run);
     let Some(default) = default else {
         return (
             "unknown".into(),

@@ -214,6 +214,7 @@ def test_ac4_err_done_rejects_invalid_id(tmp_graph):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_triage_sub_app_registered():
     """`fno backlog triage --help` lists the five triage verbs."""
     r = _invoke("backlog", "triage", "--help")
@@ -229,6 +230,7 @@ def test_ac2_edge_triage_in_backlog_help():
     assert "triage" in r.output
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_triage_context_emits_candidates(tmp_graph):
     """`fno backlog triage context` emits JSON with a `candidates` key."""
     r = _invoke("backlog", "triage", "context", "--all")
@@ -237,6 +239,7 @@ def test_ac1_hp_triage_context_emits_candidates(tmp_graph):
     assert "candidates" in data, f"expected 'candidates' key, got {list(data.keys())}"
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
     """`fno backlog triage projects` on an empty graph returns an empty projects list.
 
@@ -256,9 +259,10 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 # ---------------------------------------------------------------------------
 
 _ADVERTISED_BACKLOG_VERBS = {
-    # `update` moved with the update port, and `add`/`idea` with the create
-    # port: the native binary advertises them, the python menu does not.
-    "get", "view", "next", "done", "defer",
+    # `update` moved with the update port, `add`/`idea` with the create
+    # port, and `view` with the projections port: the native binary
+    # advertises them, the python menu does not.
+    "get", "next", "done", "defer",
     "triage", "note",
 }
 
@@ -285,7 +289,7 @@ def test_backlog_help_advertises_only_the_menu():
 
 @pytest.mark.parametrize(
     "verb",
-    ["decompose", "intake", "undefer", "maintain", "roadmap", "supersede"],
+    ["decompose", "intake", "undefer", "supersede"],
 )
 def test_hidden_backlog_verbs_stay_invocable(verb):
     """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0)."""
@@ -301,6 +305,7 @@ def test_advertised_verbs_point_at_hidden_siblings():
     assert dn.exit_code == 0 and "reconcile" in dn.output, dn.output
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_ac2_hp_triage_propose_dry_run_emits_template(tmp_graph):
     """`fno backlog triage propose --dry-run` emits a stub proposal."""
     r = _invoke("backlog", "triage", "propose", "--dry-run", "--all")
@@ -310,6 +315,7 @@ def test_ac2_hp_triage_propose_dry_run_emits_template(tmp_graph):
         assert key in data, f"proposal template missing {key!r}"
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_triage_validate_passes_clean_proposal(tmp_graph, tmp_path):
     """A proposal with no edges / cycles passes through validate unchanged."""
     prop = tmp_path / "prop.json"
@@ -382,7 +388,7 @@ def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Phase 04 - cmd_update --project / --cwd, validator warn, list_misscoped
+# Phase 04 - cmd_update --project / --cwd, validator warn
 # ---------------------------------------------------------------------------
 
 

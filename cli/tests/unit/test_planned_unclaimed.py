@@ -76,7 +76,7 @@ def test_contained_node_with_free_claim_stays_out():
     """Containment, not the claim list, decides offerability: a contained
     subtask carries no claim of its own (the owner holds node:<owner>), so
     the claim leg read it free and the queue offered it beside genuinely
-    undispatched work - with a note telling a king to dispatch it. It ships
+    undispatched work - with a note telling a lead to dispatch it. It ships
     inside its owner's PR and never dispatches alone."""
     receipt = classify_planned_unclaimed(
         [_node("x-open"), _node("x-subtask", contained_in="x-owner", parent="x-owner")],
@@ -110,22 +110,13 @@ def test_ac3_observer_miss_is_prepended_to_normal_selection():
     assert [row["id"] for row in merged] == ["x-p0-missed", "x-p2-normal"]
 
 
-def test_ac1_hp_claim_snapshot_walks_keys_without_subprocess(tmp_path, monkeypatch):
+def test_ac1_hp_claim_snapshot_lists_node_keys_only(tmp_path, monkeypatch):
     from fno.backlog.undispatched import read_claim_snapshot
-    from fno.claims import verdict as claims_verdict
+    from tests._table_seed import seed_claim
 
-    claims = tmp_path / ".fno" / "claims"
-    claims.mkdir(parents=True)
-    (claims / "node%3Ax-held.lock").write_text("holder: a\n")
-    (claims / "node%3Ax-other.lock").write_text("holder: b\n")
-    (claims / "other%3Akey.lock").write_text("holder: c\n")
-    (claims / ".expired").mkdir()
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
-
-    def _boom(*_a, **_k):
-        raise AssertionError("read_claim_snapshot spawned the verdict sweep")
-
-    monkeypatch.setattr(claims_verdict, "run_subprocess", _boom)
+    for key, holder in (("node:x-held", "a"), ("node:x-other", "b"), ("other:key", "c")):
+        seed_claim(key, holder, root=tmp_path)
 
     rows = read_claim_snapshot()
 
@@ -137,11 +128,10 @@ def test_ac1_hp_keys_only_rows_classify_identically_to_verdict_rows(
     tmp_path, monkeypatch
 ):
     from fno.backlog.undispatched import classify_planned_unclaimed, read_claim_snapshot
+    from tests._table_seed import seed_claim
 
-    claims = tmp_path / ".fno" / "claims"
-    claims.mkdir(parents=True)
-    (claims / "node%3Ax-held.lock").write_text("holder: a\n")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
+    seed_claim("node:x-held", "a", root=tmp_path)
     entries = [_node("x-open"), _node("x-held")]
 
     from_keys = classify_planned_unclaimed(entries, read_claim_snapshot())

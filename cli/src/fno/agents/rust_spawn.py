@@ -34,7 +34,7 @@ def _opencode_serve_spawn(
     node: Optional[str] = None,
     effort: Optional[str] = None,
 ) -> str:
-    """Delegate an opencode bg spawn to the Rust serve lane; return short_id.
+    """Delegate an opencode thread spawn to the Rust serve lane; return short_id.
 
     The lane (shared serve, session mint, writable-dirs grant, registry row,
     detached writer) is implemented once, in the fno-agents runtime; forking it
@@ -49,7 +49,7 @@ def _opencode_serve_spawn(
     binary = rust_binary.resolve_binary()
     if binary is None:
         raise DispatchAskError(
-            "opencode bg spawn needs the fno-agents runtime; install it "
+            "opencode thread spawn needs the fno-agents runtime; install it "
             "(cargo build --release -p fno-agents) or use --substrate pane",
             exit_code=13,
         )
@@ -62,8 +62,9 @@ def _opencode_serve_spawn(
         name,
         "--harness",
         "opencode",
+        # thread: the binary refuses the retired bg spelling.
         "--substrate",
-        "bg",
+        "thread",
         "--cwd",
         str(cwd),
     ]
@@ -146,6 +147,8 @@ def _codex_thread_spawn(
     passthrough: Optional[list[str]] = None,
     account_env: Optional[Mapping[str, str]] = None,
     route_env: Optional[Mapping[str, str]] = None,
+    role_level: Optional[int] = None,
+    role_scope: Optional[str] = None,
 ) -> str:
     """Delegate a Codex thread spawn to the Rust daemon lane.
 
@@ -185,6 +188,8 @@ def _codex_thread_spawn(
         "--cwd",
         str(cwd),
     ]
+    if role_level is not None:
+        argv += [f"--role-level={role_level}", f"--role-scope={role_scope}"]
     if from_name:
         argv += [f"--from-name={from_name}"]
     if model:

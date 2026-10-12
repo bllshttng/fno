@@ -97,7 +97,10 @@ pub fn sccache_bin() -> Option<PathBuf> {
 }
 
 /// Set SCCACHE_DIR when the process has none and sccache is installed. A
-/// preset wins. Env mutation: call only while the process is single-threaded.
+/// preset wins. SCCACHE_IDLE_TIMEOUT gets the same never-stop default the
+/// rustc wrapper exports: a server that exits on idle mid-build falls compiles
+/// back to local rustc under fleet load. Env mutation: call only while the
+/// process is single-threaded.
 pub fn fill_sccache_env(root: &Path) {
     if sccache_bin().is_none() {
         return;
@@ -105,6 +108,180 @@ pub fn fill_sccache_env(root: &Path) {
     if std::env::var_os("SCCACHE_DIR").is_none() {
         std::env::set_var("SCCACHE_DIR", sccache_dir(root));
     }
+    if std::env::var_os("SCCACHE_IDLE_TIMEOUT").is_none() {
+        std::env::set_var("SCCACHE_IDLE_TIMEOUT", "0");
+    }
+}
+
+/// sccache is opt-in: the rustc wrapper compiles bare rustc unless the
+/// global `~/.fno/config.toml` sets `build.sccache = true` or FNO_SCCACHE=1,
+/// and SCCACHE_DISABLE=1 wins over either. The machine-wide server keep-alive
+/// reads the same signal (the machine scope is why only the global config
+/// counts here), so a machine nobody opted in runs no server.
+pub fn sccache_opted_in() -> bool {
+    sccache_opted_in_values(
+        std::env::var("SCCACHE_DISABLE").ok().as_deref(),
+        std::env::var("FNO_SCCACHE").ok().as_deref(),
+        crate::agents_config::config_lookup_global(&["build", "sccache"]).and_then(|v| v.as_bool()),
+    )
+}
+
+/// The env-and-config-free form, so the precedence the wrapper applies is
+/// unit-testable without mutating process env.
+fn sccache_opted_in_values(
+    disable: Option<&str>,
+    opt_in: Option<&str>,
+    config: Option<bool>,
+) -> bool {
+    if disable == Some("1") {
+        return false;
+    }
+    if opt_in == Some("1") {
+        return true;
+    }
+    config == Some(true)
+}
+
+/// Best-effort: one long-lived sccache server per machine. Probes for a live
+/// server and, when none answers, the machine opted into sccache, and sccache
+/// is installed, starts one detached with the never-stop idle timeout. Never
+/// blocks or fails the caller: a machine without sccache, one where the start
+/// fails, or one that never opted in, keeps every current behavior.
+pub fn ensure_sccache_server() {
+    ensure_sccache_server_unless(sccache_server_pid().is_some());
+}
+
+/// The rows-taking form: a caller holding a process table (the census verb,
+/// the machine-watch tick) answers the probe without a second table walk.
+pub fn ensure_sccache_server_unless(live_server: bool) {
+    if live_server || sccache_bin().is_none() || !sccache_opted_in() {
+        return;
+    }
+    let Some(bin) = sccache_bin() else {
+        return;
+    };
+    // The child inherits this process's env, where fill_sccache_env already
+    // resolved the idle timeout with the operator's override preserved.
+    let _ = std::process::Command::new(bin)
+        .arg("--start-server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// The live sccache server's pid, by the forms the server itself takes: the
+/// renamed title `(sccache)` or `sccache --start-server`. The client form
+/// (`sccache <rustc-path> ...`) never matches.
+pub fn sccache_server_pid() -> Option<u32> {
+    let (rows, _) = crate::census::process_table();
+    sccache_row_pid(&rows)
+}
+
+/// The rows-taking probe: same match, no process walk of its own. The
+/// daemonized server runs argument-free, so its census row is a bare
+/// executable path (or the `pbi_comm` fallback `sccache`); a client row
+/// always names its compiler, so whitespace never matches.
+pub fn sccache_row_pid(rows: &[crate::census::ProcRow]) -> Option<u32> {
+    rows.iter()
+        .find(|row| {
+            let command = row.command.trim();
+            command == "(sccache)"
+                || command.ends_with("sccache --start-server")
+                || (command.rsplit('/').next() == Some("sccache")
+                    && !command.contains(char::is_whitespace))
+        })
+        .map(|row| row.pid)
+}
+
+/// A client this old, still waiting on a server that has no compile running,
+/// is stuck: a live compile always shows as a child of the server, so a server
+/// answering `--show-stats` with clients parked and no child ran nothing for
+/// them. Measured 2026-10-08: clients sat at 0 percent CPU for 5h30m.
+pub const SCCACHE_WEDGE_CLIENT_SECS: u64 = 600;
+
+/// What the watchdog found: the wedged server and how many clients wait on it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SccacheWedge {
+    pub server_pid: u32,
+    pub stuck_clients: usize,
+    pub oldest_client_secs: u64,
+}
+
+fn is_sccache_client(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    first.rsplit('/').next() == Some("sccache")
+        && words.next().is_some_and(|arg| !arg.starts_with("--"))
+}
+
+/// A live server with clients parked past `min_client_secs` and no child of
+/// its own. Process-table only, so the tick spends no extra process walk and
+/// never asks a wedged server a question it cannot answer.
+pub fn sccache_wedge(
+    rows: &[crate::census::ProcRow],
+    min_client_secs: u64,
+) -> Option<SccacheWedge> {
+    let server_pid = sccache_row_pid(rows)?;
+    if rows.iter().any(|row| row.ppid == server_pid) {
+        return None;
+    }
+    // A client older than the server asked an earlier server: after a restart
+    // the stragglers must not read as stuck on the new one.
+    let server_age = rows.iter().find(|row| row.pid == server_pid)?.elapsed_s;
+    let stuck: Vec<u64> = rows
+        .iter()
+        .filter(|row| {
+            is_sccache_client(&row.command)
+                && row.elapsed_s >= min_client_secs
+                && row.elapsed_s < server_age
+        })
+        .map(|row| row.elapsed_s)
+        .collect();
+    let oldest_client_secs = stuck.iter().copied().max()?;
+    Some(SccacheWedge {
+        server_pid,
+        stuck_clients: stuck.len(),
+        oldest_client_secs,
+    })
+}
+
+/// Stop the wedged server and start a fresh one. `--stop-server` answers
+/// through the server, so it gets ten seconds and then the pid gets SIGKILL.
+/// Runs off the tick on its own thread: the wait must not hold the arm.
+pub fn restart_wedged_sccache(server_pid: u32) {
+    let Some(bin) = sccache_bin() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let stopped = std::process::Command::new(&bin)
+            .arg("--stop-server")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()
+            .and_then(|mut child| {
+                for _ in 0..100 {
+                    match child.try_wait() {
+                        Ok(Some(status)) => return Some(status.success()),
+                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                        Err(_) => break,
+                    }
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                None
+            });
+        if stopped != Some(true) {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &server_pid.to_string()])
+                .status();
+        }
+        ensure_sccache_server_unless(false);
+    });
 }
 
 fn expand_home(path: &Path) -> PathBuf {
@@ -1737,6 +1914,80 @@ mod tests {
         assert!(empty.is_empty());
         std::env::remove_var("FNO_CARGO_TARGETS_BASE");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // The daemonized server's census row is a bare argument-free path; a
+    // client row always names its compiler. Measured live 2026-10-07:
+    // "/opt/homebrew/bin/sccache" with no rename and no args.
+    #[test]
+    fn sccache_row_pid_matches_the_bare_daemon_and_skips_clients() {
+        let row = |pid: u32, command: &str| crate::census::ProcRow {
+            pid,
+            ppid: 1,
+            state: 'S',
+            elapsed_s: 60,
+            cpu_pct: 0.0,
+            rss_kb: 100,
+            command: command.into(),
+        };
+        let rows = vec![
+            row(10, "sccache /usr/bin/rustc --crate-name a"),
+            row(20, "/opt/homebrew/bin/sccache"),
+            row(30, "sccache"),
+            row(40, "(sccache)"),
+            row(50, "/opt/homebrew/bin/sccache --start-server"),
+        ];
+        assert_eq!(sccache_row_pid(&rows), Some(20));
+        let clients = vec![row(10, "sccache /usr/bin/rustc --crate-name a")];
+        assert_eq!(sccache_row_pid(&clients), None);
+    }
+
+    // The keep-alive reads the same opt-in signal the rustc wrapper reads, so
+    // a machine nobody opted in runs no server. Pure form: no process-env
+    // mutation.
+    #[test]
+    fn sccache_opt_in_precedence_matches_the_wrapper() {
+        assert!(!sccache_opted_in_values(Some("1"), None, Some(true)));
+        assert!(sccache_opted_in_values(None, Some("1"), Some(false)));
+        assert!(sccache_opted_in_values(None, None, Some(true)));
+        assert!(!sccache_opted_in_values(None, None, None));
+        // FNO_SCCACHE=0 is not an opt-in; the config key still decides.
+        assert!(sccache_opted_in_values(None, Some("0"), Some(true)));
+    }
+
+    #[test]
+    fn sccache_wedge_needs_old_clients_and_a_server_with_no_compile() {
+        let row = |pid: u32, ppid: u32, age: u64, command: &str| crate::census::ProcRow {
+            pid,
+            ppid,
+            state: 'S',
+            elapsed_s: age,
+            cpu_pct: 0.0,
+            rss_kb: 100,
+            command: command.into(),
+        };
+        let server = row(20, 1, 9000, "/opt/homebrew/bin/sccache");
+        let old = row(10, 5, 7000, "sccache /usr/bin/rustc --crate-name a");
+        let fresh = row(11, 5, 30, "sccache /usr/bin/rustc --crate-name b");
+        let wedged = vec![server.clone(), old.clone(), fresh.clone()];
+        assert_eq!(
+            sccache_wedge(&wedged, SCCACHE_WEDGE_CLIENT_SECS),
+            Some(SccacheWedge {
+                server_pid: 20,
+                stuck_clients: 1,
+                oldest_client_secs: 7000,
+            })
+        );
+        let compiling = vec![
+            server.clone(),
+            old.clone(),
+            row(30, 20, 7000, "rustc --crate-name a"),
+        ];
+        assert_eq!(sccache_wedge(&compiling, SCCACHE_WEDGE_CLIENT_SECS), None);
+        let restarted = vec![row(21, 1, 60, "/opt/homebrew/bin/sccache"), old.clone()];
+        assert_eq!(sccache_wedge(&restarted, SCCACHE_WEDGE_CLIENT_SECS), None);
+        let young = vec![server, fresh];
+        assert_eq!(sccache_wedge(&young, SCCACHE_WEDGE_CLIENT_SECS), None);
     }
     fn seven_h() -> u64 {
         7 * 3600

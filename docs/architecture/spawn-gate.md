@@ -9,15 +9,15 @@ There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane ax
 Two modes:
 
 - `gate` runs the full admission gate. Its payload is `{mode, name, substrate, force, no_wait, route_provider, account, caller_session, succession_scope, holder_pid, seed, session_phase}`. An admitted answer is `{status: "admitted", gate_key, gate_holder, worker_key, worker_holder}`. When a claim is not held, its key is null. A refusal is `{status: "refused", exit_code, receipt, event}`. When the seed first verb or explicit `session_phase` label names review, the gate refuses. Seed verbs use `spawn_phase.toml`.
-- `probe` is the read-only capacity reading. `fno agents gate-status`, the lane readouts, `explain` and the advance width all consume it. The payload is `{mode: "probe", caller_session, only}`. Set `only: ["lanes"]` to skip the CPU and RAM reads. This is for callers already on the spawn path. The answer keeps the probe's verdict shape. It adds three blocks every reader consumes. `lanes` covers every capped provider and every provider a live row names, each `{cap, live, counted}`. `share` is `{kings, share, held, held_rows, unattributed}`. `rows` holds the explain Gate dicts in `{name, measured, threshold, verdict, key, note}` shape.
+- `probe` is the read-only capacity reading. `fno agents gate-status`, the lane readouts, `explain` and the advance width all consume it. The payload is `{mode: "probe", caller_session, only}`. Set `only: ["lanes"]` to skip the CPU and RAM reads. This is for callers already on the spawn path. The answer keeps the probe's verdict shape. It adds three blocks every reader consumes. `lanes` covers every capped provider and every provider a live row names, each `{cap, live, counted}`. `share` is `{leads, share, held, held_rows, unattributed}`. `rows` holds the explain Gate dicts in `{name, measured, threshold, verdict, key, note}` shape.
 
 ## Claims cross the boundary owned by the caller
 
 Every claim the verb takes in gate mode is stamped with the PYTHON caller's pid. The holder reads `spawn-gate:<holder_pid>:<name>`. The native claim verdict therefore judges the real holder. It never judges the verb process, which has already exited by the time dispatch returns. The verb hands the held keys back in the admitted answer. The Python `GateGuard` releases them with the ordinary release path.
 
-## Crown succession reuses one verified slot
+## Role succession reuses one verified slot
 
-When crown settlement confirms the caller will vacate its sole live row for `succession_scope`, the gate subtracts one from the slot count. The exception ends on predecessor exit or failed live-row registration by the successor. While succession is pending, the fleet can sit at most one row above `max_live`.
+When role settlement confirms the caller will vacate its sole live row for `succession_scope`, the gate subtracts one from the slot count. The exception ends on predecessor exit or failed live-row registration by the successor. While succession is pending, the fleet can sit at most one row above `max_live`.
 
 ## The exit-code allocation table
 
@@ -28,7 +28,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 77 RAM floor
 - 78 provider cap. The quota lock and the lane faults keep this number, so exit-code consumers are unaffected. The receipt's `reason` discriminates `provider_cap`, `provider_quota_lock`, `gate_mutex_unavailable`, and `lane_reservation_unavailable`.
 - 79 load
-- 80 king share
+- 80 lead share
 - 81 registry schema
 - 82 and 83, the fleet incident pair, byte-parity
 - 82 also carries the machine admission door (`process_admission_gate`). It holds an agent-origin spawn on an unexpired runaway brake. A caller with no `FNO_AGENT_SELF` admits. The default is admit. The census and the process ceiling live in the fno crate's own agent-spawn door, which the `fno` front runs before any forwarding.

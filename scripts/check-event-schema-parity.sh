@@ -368,6 +368,16 @@ dual_owner_kinds = {
     "worktree_removed",
     "control_plane_tick",
     "state_reap",
+    # role_manifest_arm_failed: the manifest rebind at a promoted row's
+    # first identification is fail-soft in both runtimes - the Rust
+    # session-report arm and the Python identification arm emit the same
+    # failure row into one journal.
+    "role_manifest_arm_failed",
+    # triage_applied: one row per committed triage apply, emitted by the
+    # native triage engine (Rust) and the Python twin it ports, both with
+    # the backlog source, until the Python leg deletes with the closing
+    # ship.
+    "triage_applied",
     # Evals demand: the pr-watch tick's evals leg (Python) is the only
     # emitter; the rows ride the daemon's journal, so the Rust known-kind
     # table carries them for acceptance without emitting.
@@ -379,7 +389,7 @@ dual_owner_kinds = {
     "scratch_shape_observed",
     "scratch_shape_filed",
     # Succession transaction: the Rust side is the one writer (team-settle
-    # announce/transfer, the heir beat's verify/release/retro, the reap
+    # announce/transfer, the successor beat's verify/release/retro, the reap
     # rollback, all through succession_txn.rs); the Python side carries them
     # in schema.yaml for the validator and `doctor event find`, the way the
     # scratch pair above does.
@@ -414,12 +424,16 @@ dual_owner_kinds = {
     # carries it in schema.yaml for the validator and `doctor event find`,
     # the way pr_watch_unparked above does.
     "pr_watch_draft_flip",
+    # graph_archive_swept: the native archive sweep is the one emitter; the
+    # Python side carries it in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "graph_archive_swept",
     # operator_question: the ask leg is the Rust question-intake transport;
     # the lead-wake, session-register, and stale-escalate Python arms still
     # emit their own asks until they port.
     "operator_question",
     # decision_span: the Rust decision_trace emitters are the only writers
-    # (the mail-record leaf, the question intake, the decide door, the king
+    # (the mail-record leaf, the question intake, the decide door, the lead
     # stop check); the Python side carries it in schema.yaml for the
     # validator and `doctor event find`, the way pr_watch_unparked above does.
     "decision_span",
@@ -444,11 +458,15 @@ dual_owner_kinds = {
     "agent_stopped",
     "agent_stop_error",
     "agent_stop_refused",
-    "agent_crown_vacated",
+    "agent_role_vacated",
     "agent_ask_done",
     "agent_inconsistent",
     "reconcile_done",
     "startup_reconcile_done",
+    # agent_mail_drained: the prompt-submit drain boundary moved from the
+    # Python mail-notify verb to the Rust mail-notify-self verb; both
+    # emitters run until the Python leg retires.
+    "agent_mail_drained",
 }
 collisions -= dual_owner_kinds
 if collisions:

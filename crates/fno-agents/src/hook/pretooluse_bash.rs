@@ -31,10 +31,15 @@ pub fn run(_args: &[String]) -> i32 {
     // One config resolution for the whole chain: guard_enabled re-walks the
     // config candidates per call, and this hook runs on every Bash turn.
     let preset = crate::agents_config::guard_preset(&cwd);
+    // Resolved once for the chain; the Python guards receive it as
+    // FNO_EVENTS_PATH so guard_mark skips its own resolver subprocess.
+    let events_pin = crate::state_path::resolve("events", &cwd);
 
     if crate::agents_config::preset_runs(preset, "bg-process") {
         if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) = run_python_guard(&root, "bg-process-guard.py", &raw) {
+            if let Some(reason) =
+                run_python_guard(&root, "bg-process-guard.py", &raw, events_pin.as_deref())
+            {
                 refusals.push(reason);
             }
         } else {
@@ -50,7 +55,9 @@ pub fn run(_args: &[String]) -> i32 {
 
     if crate::agents_config::preset_runs(preset, "git-protection") {
         if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) = run_python_guard(&root, "git-protection.py", &raw) {
+            if let Some(reason) =
+                run_python_guard(&root, "git-protection.py", &raw, events_pin.as_deref())
+            {
                 refusals.push(reason);
             }
         } else {
@@ -66,7 +73,12 @@ pub fn run(_args: &[String]) -> i32 {
 
     if crate::agents_config::preset_runs(preset, "recursive-grep") {
         if let Some(root) = plugin_root.as_deref() {
-            if let Some(reason) = run_python_guard(&root, "recursive-grep-guard.py", &raw) {
+            if let Some(reason) = run_python_guard(
+                &root,
+                "recursive-grep-guard.py",
+                &raw,
+                events_pin.as_deref(),
+            ) {
                 refusals.push(reason);
             }
         } else {
@@ -106,16 +118,62 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if refusals.is_empty() {
+        record_launch(&payload, &cwd);
         super::emit_allow()
     } else {
         super::emit_block(&refusals.join("\n\n"))
     }
 }
 
-fn run_python_guard(root: &Path, script: &str, input: &str) -> Option<String> {
+/// Not a guard. An allowed command that starts a harness session leaves a
+/// launch record, which the child claims at SessionStart: a `claude --bg`
+/// child cannot see its launcher any other way (see launch_record.rs).
+fn record_launch(payload: &Value, cwd: &Path) {
+    let Some(cmd) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    if !crate::launch_record::may_launch(cmd) {
+        return;
+    }
+    let (ambient_session, harness, _) = crate::claims::ambient_parent_edge();
+    let session = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(ambient_session);
+    let home = crate::paths::AgentsHome::from_env();
+    if let Err(error) = crate::launch_record::record_command(
+        home.root(),
+        cmd,
+        &cwd.to_string_lossy(),
+        session.as_deref(),
+        harness.as_deref(),
+        crate::claims::now_ms(),
+    ) {
+        eprintln!("pretooluse-bash: launch record not written: {error}");
+    }
+}
+
+fn run_python_guard(
+    root: &Path,
+    script: &str,
+    input: &str,
+    events_pin: Option<&Path>,
+) -> Option<String> {
     let path = root.join("hooks").join(script);
-    let mut child = match Command::new("python3")
-        .arg(&path)
+    let mut command = Command::new("python3");
+    command.arg(&path);
+    // The shared guard_mark resolves the events journal with a
+    // `fno-agents state path events` subprocess per guard; handing the pin
+    // we already resolved saves one process spin per Python guard on every
+    // Bash turn.
+    if let Some(pin) = events_pin {
+        command.env("FNO_EVENTS_PATH", pin);
+    }
+    let mut child = match command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

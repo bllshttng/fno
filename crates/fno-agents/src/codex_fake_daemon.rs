@@ -83,6 +83,9 @@ pub struct Behavior {
     pub thread_sandbox: Option<Value>,
     /// Answer `thread/resume` with an error frame: the refused probe.
     pub fail_thread_resume: bool,
+    /// Cold threads reject turns until resumed; history exceeds the frame cap.
+    pub cold_thread: bool,
+    pub resume_history_bytes: usize,
     /// The version `initialize` reports in `serverInfo` and
     /// `thread/loaded/list` implies exists. Models the LIVE daemon's version;
     /// a fake `codex` CLI on PATH reporting a NEWER `--version` makes the
@@ -104,6 +107,7 @@ pub struct Behavior {
     /// Close the connection on `turn/start` without answering: the ack-loss
     /// shape the seed lane must read as in-flight, never as a failed delivery.
     pub unacked_turn_start: bool,
+    pub failed_turns: u32,
     /// Every request frame this fake received, in arrival order.
     ///
     /// The fake models no sandbox and deliberately never will: whether the
@@ -129,11 +133,14 @@ impl Default for Behavior {
             thread_cwd: "/tmp/fake-daemon-cwd".to_string(),
             thread_sandbox: None,
             fail_thread_resume: false,
+            cold_thread: false,
+            resume_history_bytes: 0,
             server_version: "0.149.1-fake".to_string(),
             loaded_ids: vec!["thread-t".to_string()],
             thread_status: "idle".to_string(),
             upgrade_marker: None,
             unacked_turn_start: false,
+            failed_turns: 0,
             received: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -363,6 +370,7 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
     let mut pending: Option<(String, tokio::time::Instant)> = None;
     let mut stray: Option<tokio::time::Instant> = None;
     let mut steered = false;
+    let mut loaded = !behavior.cold_thread;
     loop {
         let due = match (pending.as_ref(), stray) {
             (Some((_, turn_at)), Some(stray_at)) => Some(stray_at.min(*turn_at)),
@@ -390,7 +398,12 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
                 }
                 let Some((turn_id, _)) = pending.take() else { continue };
                 let text = format!("REPLY-{turn_n}");
-                if send(&mut sink, completed(&turn_id, "completed", &text)).await.is_err() {
+                let mut frame = completed(&turn_id, "completed", &text);
+                if turn_n <= behavior.failed_turns {
+                    frame["params"]["turn"]["status"] = json!("failed");
+                    frame["params"]["turn"]["error"] = json!({"message": "workspace routing discovery timed out"});
+                }
+                if send(&mut sink, frame).await.is_err() {
                     return;
                 }
                 continue;
@@ -438,9 +451,16 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
                 {
                     json!({"id": id, "error": {"message": "thread/resume refused"}})
                 } else {
+                    loaded = true;
                     let mut result = json!({
                         "thread": {"id": behavior.thread_id, "path": "/tmp/fake-daemon-rollout.jsonl"}
                     });
+                    if behavior.resume_history_bytes > 0
+                        && msg.pointer("/params/excludeTurns") != Some(&json!(true))
+                    {
+                        result["thread"]["turns"] =
+                            json!([{"text": "x".repeat(behavior.resume_history_bytes)}]);
+                    }
                     if let Some(sandbox) = &behavior.thread_sandbox {
                         result["sandbox"] = sandbox.clone();
                     }
@@ -448,6 +468,18 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
                 }
             }
             Some("turn/start") => {
+                if !loaded {
+                    if send(
+                        &mut sink,
+                        json!({"id": id, "error": {"message": "thread not found"}}),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
                 if behavior.unacked_turn_start {
                     return;
                 }

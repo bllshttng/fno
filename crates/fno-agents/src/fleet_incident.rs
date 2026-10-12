@@ -1010,7 +1010,7 @@ fn print_receipt(record: &IncidentRecord) {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 
@@ -1778,7 +1778,10 @@ mod tests {
             entries,
             ..crate::state::Registry::default()
         };
-        std::fs::write(home.registry_json(), serde_json::to_vec(&registry).unwrap()).unwrap();
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
 
         let result = super::session_target_value("0a1b2c3d", &home);
         assert!(result.is_err(), "a short session prefix must be refused");

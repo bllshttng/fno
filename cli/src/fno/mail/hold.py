@@ -24,11 +24,7 @@ Three sidecar states, and only one of them ever expires:
 from __future__ import annotations
 
 import json
-import math
-import os
 import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -71,6 +67,46 @@ def hold_path(handle: str) -> Path:
     return hold_dir() / f"{handle}.json"
 
 
+def _hold_transport(argv: list[str]) -> str:
+    """One mail-hold write through the native door (the receipts pattern:
+    Python keeps transports, the clock assembly lives in Rust). A door
+    failure raises VerbUnavailable - the verb is the single writer, so there
+    is no Python fallback to drift from it."""
+    from fno.rust_binary import VerbUnavailable, resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+    proc = subprocess.run(
+        [str(binary), "mail-hold", *argv],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise VerbUnavailable(
+            (proc.stderr or "fno-agents mail-hold failed").strip()[:200]
+        )
+    return proc.stdout.rstrip("\n")
+
+
+def _hold_query(argv: list[str]) -> Optional[dict]:
+    """The verb's one-line JSON state, or None when it printed nothing
+    (no clock, a permanent policy, or a lapsed one)."""
+    stdout = _hold_transport(argv)
+    return json.loads(stdout) if stdout else None
+
+
+def _describe(target) -> Optional[dict]:
+    """One describe read over the candidate sweep (first clock wins), or None
+    when the door is down - the read posture: a clock read never raises into
+    a caller."""
+    try:
+        return _hold_query(["--describe", *candidate_keys(target)])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
+        return None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -83,150 +119,88 @@ def _parse(stamp: str) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def read(handle: str) -> Optional[Hold]:
-    """This handle's clock, or None when there is no readable one.
+def _hold_from_state(handle: str, state: dict) -> Hold:
+    """The Hold a ``--read``/``--read-first`` state dict describes.
 
-    A corrupt or unparseable file reads as None, the same as an absent one.
-    Both mean "no clock", and neither is evidence that a hold is running.
-
-    Never raises. The catch is deliberately broad because resolving the
-    directory runs the whole path resolver, which loads settings and can fail
-    in ways a file read cannot - a narrow ``(OSError, ValueError)`` here let an
-    ``AttributeError`` from the resolver escape into ``fno agents mail notify-self``,
-    which runs on every ``UserPromptSubmit``. Busy mode must never be able to
-    break the turn-boundary render: an unreadable clock means the mail flows.
+    ``handle`` is the candidate the caller asked about: the verb's JSON does
+    not echo which key carried the clock, and no reader consumes the field.
     """
-    try:
-        raw = json.loads(hold_path(handle).read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 - see above; a clock read never breaks a caller
-        return None
-    if not isinstance(raw, dict):
-        return None
-    until_raw = raw.get("until")
-    until = _parse(until_raw) if isinstance(until_raw, str) else None
-    if isinstance(until_raw, str) and until is None:
-        return None
-    window = raw.get("window_s")
-    clock_kind = raw.get("clock_kind", CLOCK_IDLE)
-    if clock_kind not in (CLOCK_IDLE, CLOCK_WALL):
-        return None
-    ceiling_raw = raw.get("ceiling")
-    ceiling = _parse(ceiling_raw) if isinstance(ceiling_raw, str) else None
-    if isinstance(ceiling_raw, str) and ceiling is None:
-        return None
+    until = state.get("until")
+    ceiling = state.get("ceiling")
+    source = state.get("source")
+    window = state.get("window_s")
     return Hold(
         handle=handle,
-        until=until,
+        until=_parse(until) if isinstance(until, str) else None,
         window_s=window if isinstance(window, int) else None,
-        clock_kind=clock_kind,
-        ceiling=ceiling,
-        source=raw.get("source") if isinstance(raw.get("source"), str) else None,
+        clock_kind=state.get("clock_kind", CLOCK_IDLE),
+        ceiling=_parse(ceiling) if isinstance(ceiling, str) else None,
+        source=source if isinstance(source, str) else None,
     )
 
 
-def _write(hold: Hold) -> Hold:
-    """Atomic replace, so a reader never catches a half-written clock."""
-    directory = hold_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    fields = {
-        "until": hold.until.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.until else None,
-        "window_s": hold.window_s,
-        "clock_kind": hold.clock_kind,
-        "ceiling": hold.ceiling.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.ceiling else None,
-    }
-    # Only when set: Python-written clocks keep their legacy bytes.
-    if hold.source:
-        fields["source"] = hold.source
-    payload = json.dumps(fields)
-    fd, tmp = tempfile.mkstemp(dir=str(directory), suffix=".tmp")
+def read(handle: str) -> Optional[Hold]:
+    """This handle's clock, or None when there is no readable one.
+
+    A corrupt or unparseable file reads as None, the same as an absent one:
+    the verb answers an empty stdout for both. Both mean "no clock", and
+    neither is evidence that a hold is running.
+
+    Never raises. The catch is deliberately broad because this read runs on
+    the status path, where a missing binary or a failed transport must
+    degrade to "no clock", never break the verb answering.
+    """
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle_file:
-            handle_file.write(payload + "\n")
-        os.replace(tmp, hold_path(hold.handle))
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return hold
+        state = _hold_query(["--read", handle])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
+        return None
+    return _hold_from_state(handle, state) if state else None
 
 
 def arm(handle: str, minutes: int = DEFAULT_MINUTES) -> Hold:
     """Start (or restart) a timed hold of ``minutes`` for ``handle``."""
     window_s = max(1, int(minutes * 60))
+    _hold_transport(["--arm", handle, "--kind", CLOCK_IDLE, "--minutes", str(minutes)])
     now = _now()
-    return _write(
-        Hold(
-            handle=handle,
-            until=now + timedelta(seconds=window_s),
-            window_s=window_s,
-            clock_kind=CLOCK_IDLE,
-            ceiling=now + timedelta(seconds=window_s * 2),
-        )
+    return Hold(
+        handle=handle,
+        until=now + timedelta(seconds=window_s),
+        window_s=window_s,
+        clock_kind=CLOCK_IDLE,
+        ceiling=now + timedelta(seconds=window_s * 2),
     )
 
 
 def arm_wall(handle: str, minutes: int) -> Hold:
     """Start a fixed wall-clock hold that never re-arms on activity."""
     window_s = max(1, int(minutes * 60))
-    return _write(
-        Hold(
-            handle=handle,
-            until=_now() + timedelta(seconds=window_s),
-            window_s=window_s,
-            clock_kind=CLOCK_WALL,
-            ceiling=None,
-        )
+    _hold_transport(["--arm", handle, "--kind", CLOCK_WALL, "--minutes", str(minutes)])
+    return Hold(
+        handle=handle,
+        until=_now() + timedelta(seconds=window_s),
+        window_s=window_s,
+        clock_kind=CLOCK_WALL,
+        ceiling=None,
     )
 
 
 def arm_permanent(handle: str) -> Hold:
     """Record a policy that never expires (the hand-stamped ``bus-only``).
 
-    Not needed for enforcement - an absent clock already never lapses. This is
-    for the RENDER: it lets the DND column distinguish a deliberate permanent
-    policy from a row nobody has looked at, on rows written from here on.
+    The verb has no permanent arm, so the marker is the ABSENCE of a clock
+    file plus the registry ``bus-only`` flag: an absent clock never lapses,
+    and the gate refuses a stamped row with no clock outright. The returned
+    Hold is the in-memory representation only - ``read`` of the cleared file
+    answers None - so the DND column's "held" comes from the flag plus that
+    absence, not from a clock file.
     """
-    return _write(Hold(handle=handle, until=None, window_s=None))
+    _hold_transport(["--clear", handle])
+    return Hold(handle=handle, until=None, window_s=None)
 
 
 def clear(handle: str) -> None:
     """Remove the clock. Absent is success, not an error."""
-    try:
-        hold_path(handle).unlink()
-    except OSError:
-        pass
-
-
-def extend(handle: str) -> Optional[Hold]:
-    """Re-arm an idle hold, or return a live wall hold unchanged.
-
-    Returns None when there is no live timed hold to extend (no clock, a
-    permanent policy, or one already lapsed). The caller is ``fno agents mail
-    notify-self``, which fires on every ``UserPromptSubmit``. Wall-clock holds
-    return their existing deadline so the policy stays live without moving it.
-    """
-    hold = read(handle)
-    if hold is None or hold.until is None or hold.window_s is None:
-        return None
-    now = _now()
-    if hold.until <= now:
-        return None
-    if hold.clock_kind == CLOCK_WALL:
-        return hold
-    ceiling = hold.ceiling or (hold.until + timedelta(seconds=hold.window_s))
-    if ceiling <= now:
-        return None
-    return _write(
-        Hold(
-            handle=handle,
-            until=min(now + timedelta(seconds=hold.window_s), ceiling),
-            window_s=hold.window_s,
-            clock_kind=CLOCK_IDLE,
-            ceiling=ceiling,
-        )
-    )
+    _hold_transport(["--clear", handle])
 
 
 def lapsed(handle) -> bool:
@@ -240,36 +214,15 @@ def lapsed(handle) -> bool:
     forever, does not describe this design: held mail is durable on the bus
     and surfaces at the next SessionStart or turn boundary, so a lost clock
     costs a stall bounded by the operator's next prompt, never a lost message.
-    Auto-expire stays real through two carriers that do not depend on this
-    file surviving: the detached release timer, and that turn-boundary tidy.
+    Auto-expire stays real through carriers that do not depend on this file
+    surviving: the detached release timer, and the Rust verb's
+    turn-boundary tidy of lapsed clocks.
 
     Pure read. It never mutates the registry, so it cannot deadlock a caller
     that already holds the registry lock and cannot raise into the gate.
     """
-    hold = read_any(handle)
-    if hold is None or hold.until is None:
-        return False
-    return hold.until <= _now()
-
-
-def tidy_lapsed(handle: str) -> bool:
-    """Clear a timed hold that has run out, flag and clock together.
-
-    The delivery gate stays a pure read, so this is where a stale ``bus-only``
-    flag gets cleared: a turn boundary, where the registry lock is free. Only a
-    TIMED hold is tidied. A ``until: null`` clock is a deliberate permanent
-    policy, and an absent clock cannot be told apart from a row that never had
-    one, so neither is touched here.
-    """
-    clock = read(handle)
-    if clock is None or clock.until is None or clock.until > _now():
-        return False
-    clear(handle)
-    # Report what the WRITE did, not that the attempt was made. `set_policy`
-    # returns False for a registry it could not read or a row it never found,
-    # and returning True over that is an instrument reporting success on its
-    # own no-op path. The caller learns nothing, and the flag is still set.
-    return set_policy(handle, None)
+    state = _describe(handle)
+    return bool(state and state.get("lapsed"))
 
 
 def candidate_keys(target) -> tuple:
@@ -296,12 +249,17 @@ def candidate_keys(target) -> tuple:
 
 
 def read_any(target) -> Optional[Hold]:
-    """The clock for ``target`` under whichever of its keys carries one."""
-    for key in candidate_keys(target):
-        clock = read(key)
-        if clock is not None:
-            return clock
-    return None
+    """The clock for ``target`` under whichever of its keys carries one.
+
+    One door read over the whole candidate sweep: the sweep itself stays in
+    Python because it needs the registry entry, the FIND moves to the verb.
+    """
+    keys = candidate_keys(target)
+    try:
+        state = _hold_query(["--read-first", *keys])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
+        return None
+    return _hold_from_state(keys[0], state) if state else None
 
 
 def dnd_label(handle) -> Optional[str]:
@@ -318,11 +276,15 @@ def dnd_label(handle) -> Optional[str]:
     has no end to show. A duration whenever there is one, because a hold with
     no visible end is what the operator asked to avoid.
     """
-    if lapsed(handle):
+    state = _describe(handle)
+    if state is None:
+        # Door down: the same degrade the in-process read had - the column
+        # claims "held" rather than claiming mail flows while the flag stands.
+        return "held"
+    if state.get("lapsed"):
         return None
-    clock = read_any(handle)
-    auto = clock is not None and clock.source == CONVERSATION_SOURCE
-    return (remaining_label(handle) or "held") + (" (auto)" if auto else "")
+    auto = state.get("source") == CONVERSATION_SOURCE
+    return (state.get("remaining") or "held") + (" (auto)" if auto else "")
 
 
 def remaining_label(handle) -> Optional[str]:
@@ -332,17 +294,8 @@ def remaining_label(handle) -> Optional[str]:
     answers the question the column asks. This one answers only "how long is
     left", and returns None for a row that is held with no end recorded.
     """
-    hold = read_any(handle)
-    if hold is None:
-        return None
-    if hold.until is None:
-        return "held"
-    seconds = (hold.until - _now()).total_seconds()
-    if seconds <= 0:
-        return None
-    if seconds < 60:
-        return f"~{int(seconds)}s"
-    return f"~{math.ceil(seconds / 60)}m"
+    state = _describe(handle)
+    return state.get("remaining") if state else None
 
 
 def gate_answer_in_process(token: str) -> Optional[str]:
@@ -547,8 +500,7 @@ def release(handle: str, *, held_for_s: int = 0) -> dict:
     # The old order discarded set_policy's result and cleared the clock either
     # way, which turned a partial failure into a worse state than the failure:
     # a bus-only row with no clock never lapses, so a hold that failed to lift
-    # became PERMANENT, and no automatic path clears it - `tidy_lapsed` needs a
-    # clock it no longer has.
+    # became PERMANENT, with no automatic path left that could clear it.
     #
     # Keeping the clock on a failed write also lets this delivery through. The
     # gate reads a bus-only row with a LAPSED clock as not-holding, so the
@@ -687,104 +639,3 @@ def _emit_drain_marker(
         )
     except (OSError, ValueError, TypeError):
         pass
-
-
-def cmd_notify_self() -> None:
-    """Body of ``fno agents mail notify-self`` (hidden): one atomic
-    ``UserPromptSubmit`` mail payload, then acknowledge it.
-    """
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
-    from fno.bus.cursor import advance_cursor, scan_unread
-    from fno.config import load_settings
-    from fno.harness_identity import canonical_handle, session_identity_key
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        print(f"error: notify-self: {exc}", file=sys.stderr)
-        return
-    if not ident.harness or not ident.session_id:
-        return
-
-    handle = canonical_handle(ident.session_id)
-    clock_key = session_identity_key(ident.session_id)
-
-    # Busy mode: the hook fires on every UserPromptSubmit - an idle
-    # hold re-arms, a wall hold keeps its policy live. Both calls WRITE, so a
-    # hold failure must degrade to rendering the mail, never swallowing this turn.
-    try:
-        if extend(clock_key) is not None:
-            return
-        # The first-eight key is the pre-migration clock: extend it so an old
-        # hold keeps its idle re-arm, and tidy whichever form has lapsed.
-        if extend(handle) is not None:
-            return
-        tidy_lapsed(clock_key)
-        tidy_lapsed(handle)
-    except Exception:  # noqa: BLE001 - a hold failure never costs a delivery
-        pass
-
-    lines: list[str] = []
-
-    unread = scan_unread(handle)
-    from fno.mail.reply_resolve import present_mail_ids
-
-    present = present_mail_ids()
-
-    def _dup(m: object) -> bool:
-        return present is not None and getattr(m, "id", "") in present
-
-    to_render = [m for m in unread if not _dup(m)]
-    if to_render:
-        lines.append(f"[fno agents mail] {len(to_render)} message(s) for {handle}:")
-        for message in to_render:
-            lines.extend(
-                (
-                    f"\n--- from {message.from_} ({message.ts})  id:{message.id} ---",
-                    message.body.rstrip("\n"),
-                )
-            )
-        lines.append(
-            '\n[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."'
-        )
-
-    from fno.mail.landed import _defang_reminder, _sent_unclaimed, nag_line
-
-    ttl = load_settings().inbox.unclaimed_ttl
-    unclaimed = _sent_unclaimed(handle, ttl)
-    line = nag_line(unclaimed)
-    if line:
-        lines.append(line)
-
-    if not lines:
-        if unread:
-            advance_cursor(handle, unread[-1].id)
-            for m in unread:
-                _emit_drain_marker(m.id, handle, handle, m.from_, "skipped-duplicate")
-        return
-
-    try:
-        context = (
-            f"<system-reminder>\n"
-            f"{_defang_reminder(chr(10).join(lines))}\n"
-            f"</system-reminder>"
-        )
-        payload = json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": context,
-                }
-            },
-            ensure_ascii=False,
-        )
-        sys.stdout.write(payload + "\n")
-        sys.stdout.flush()
-    except (OSError, TypeError, ValueError):
-        return
-
-    if unread:
-        advance_cursor(handle, unread[-1].id)
-        for m in unread:
-            reason = "skipped-duplicate" if _dup(m) else "printed"
-            _emit_drain_marker(m.id, handle, handle, m.from_, reason)

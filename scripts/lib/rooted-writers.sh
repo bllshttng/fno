@@ -84,9 +84,14 @@ foreign_rooted_writers() {
     # registered, so every rooted process is an operator shell or editor and
     # nothing can be claimed as a foreign agent writer. A registry that exists
     # but cannot be parsed is an unmeasurable join -> exit 2.
-    local reg
+    # The rows live in graph.db once imported, and a plain registry.json
+    # beside the table is a stale copy, so every read goes through the door.
+    local reg doc
     reg="${STATE_DIR:-${HOME:-}/.fno}/agents/registry.json"
-    [[ -f "$reg" ]] || return 0
+    [[ -e "$reg" ]] || return 0
+    doc="$(jq -n --arg p "$reg" '{op: "read", path: $p}' \
+        | "${FNO_AGENTS_BIN:-fno-agents}" registry-commit 2>/dev/null)" || return 2
+    doc="$(jq -e '.document' <<<"$doc" 2>/dev/null)" || return 2
     jq -r --arg sid "$my_sid" --arg pids "$survivors" '
         .agents[]?
         | select((.status // "live") != "exited" and (.status // "live") != "orphaned"
@@ -96,6 +101,6 @@ foreign_rooted_writers() {
         | (.pid | tostring) as $p
         | select(($pids | split("\n") | index($p)) != null)
         | [(.pid | tostring), (.name // "?"), (.harness_session_id // "?")] | @tsv
-    ' "$reg" 2>/dev/null || return 2
+    ' <<<"$doc" 2>/dev/null || return 2
     return 0
 }

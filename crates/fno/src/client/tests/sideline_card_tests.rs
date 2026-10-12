@@ -14,8 +14,8 @@ fn card_view(agents: Vec<AgentRow>) -> View {
 fn lead_and_worker() -> Vec<AgentRow> {
     let mut lead = agent_row("lead-a", 4, Some(AgentBadge::Working), false);
     lead.harness = Some("claude".into());
-    lead.crown_level = Some(2);
-    lead.crown_scope = Some("fno".into());
+    lead.role_level = Some(2);
+    lead.role_scope = Some("fno".into());
     lead.harness_session_id = Some("sess-lead".into());
     let mut w1 = agent_row("w1", 5, Some(AgentBadge::Working), false);
     w1.harness = Some("claude".into());
@@ -120,8 +120,8 @@ fn card_age_sort_orders_workers_inside_a_lead_group() {
     let ages = [("w-old", 720u64), ("w-new", 60), ("w-mid", 600)];
     let mut agents = Vec::new();
     let mut lead = agent_row("lead-a", 4, Some(AgentBadge::Working), false);
-    lead.crown_level = Some(2);
-    lead.crown_scope = Some("fno".into());
+    lead.role_level = Some(2);
+    lead.role_scope = Some("fno".into());
     lead.harness_session_id = Some("sess-lead".into());
     lead.last_activity_age_s = Some(10);
     agents.push(lead);
@@ -183,8 +183,11 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     agents[1].last_activity_age_s = Some(36);
     agents[1].node = Some("x-4310".into());
     agents[1].model = Some("gpt-6.1-sol".into());
+    // The activity fixture: four intervals, the last idle, so the ramp
+    // scales to the card's own max (8) and grades one warn, one error.
+    agents[1].activity = Some(vec![(2, 0), (4, 1), (8, 4), (0, 0)]);
     agents[0].model = Some("claude-opus-5-5".into());
-    agents[0].crown_title = Some("Lead of mux".into());
+    agents[0].role_title = Some("Lead of mux".into());
     let mut v = card_view(agents);
     v.term = (30, 140);
     v.sideline_width = 80;
@@ -217,8 +220,62 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     v.layout.agents[1].context_used_pct = Some(129);
     let over_frame = v.compose();
     let over_window = frame_text(&over_frame);
-    assert!(over_window.contains("▄▅▆▇ 129%"), "{over_window:?}");
+    assert!(over_window.contains("▁▁▁▁▃▅█▁ · 129%"), "{over_window:?}");
+    // The ramp math: heights scale to the card's own max over the served
+    // intervals, the max reads the full block, and each cell's failed share
+    // grades its color kind (0 ok, 1 warn, 2 error).
+    let cell = card_line::activity_cell(&v.layout.agents[1], card_line::CardGraph::Activity)
+        .expect("served intervals draw");
+    assert_eq!(
+        cell.text,
+        "\u{2581}\u{2581}\u{2581}\u{2581}\u{2583}\u{2585}\u{2588}\u{2581}"
+    );
+    assert_eq!(cell.kinds, vec![0, 0, 0, 0, 0, 1, 2, 0]);
+    // The slot stays blank before two intervals, whatever they hold.
+    v.layout.agents[1].activity = Some(vec![(3, 0)]);
+    assert!(
+        card_line::activity_cell(&v.layout.agents[1], card_line::CardGraph::Activity).is_none()
+    );
+    v.layout.agents[1].activity = Some(vec![(0, 0)]);
+    assert!(
+        card_line::activity_cell(&v.layout.agents[1], card_line::CardGraph::Activity).is_none()
+    );
+    v.layout.agents[1].activity = Some(vec![]);
+    assert!(
+        card_line::activity_cell(&v.layout.agents[1], card_line::CardGraph::Activity).is_none()
+    );
+    // Context mode: the steady fill bar of the context percent, bare of
+    // the number (the number sits beside it), for the whole session.
+    v.layout.agents[1].activity = Some(vec![(3, 0)]);
+    v.layout.agents[1].context_used_pct = Some(26);
+    let bar = card_line::activity_cell(&v.layout.agents[1], card_line::CardGraph::Context)
+        .expect("the context bar draws from the first reading");
+    assert_eq!(
+        bar.text, "\u{2588}\u{258d}   ",
+        "26% fills 11 of 40 eighths"
+    );
+    assert_eq!(
+        bar.kinds,
+        vec![0, 0, 0, 0, 0],
+        "the context bar never grades"
+    );
+    // The painter wears each ramp cell in its kind's theme color: the
+    // fixture's majority-failed max cell paints error, the clean pads ok.
+    let theme = v.theme;
+    let mut saw_ok = false;
+    let mut saw_error = false;
+    for c in &frame.cells {
+        if c.c == '\u{2588}' && c.fg == theme.error {
+            saw_error = true;
+        }
+        if c.c == '\u{2581}' && c.fg == theme.ok {
+            saw_ok = true;
+        }
+    }
+    assert!(saw_error, "the majority-failed cell wears the error color");
+    assert!(saw_ok, "the clean cell wears the ok color");
     v.layout.agents[1].context_used_pct = None;
+    v.layout.agents[1].activity = None;
     v.layout.agents[1].compaction_count = None;
     v.layout.agents[1].session_cost_cents = None;
     v.layout.agents[1].session_tokens = None;
@@ -227,7 +284,7 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     v.layout.agents[1].started_at = Some(crate::digest_overlay::now_secs());
     let unmeasured = frame_text(&v.compose());
     assert!(
-        unmeasured.contains("░░░░░░░░░░░░░ · ░░░ · ░░░░░░░░"),
+        unmeasured.contains("░░░░ · ░░░ · ░░░░░░░░"),
         "a claude card whose fold has not landed pulses every field: {unmeasured:?}"
     );
     // Past 10s the fold-less row gives up the pulse: static dashes at the
@@ -235,59 +292,70 @@ fn card_frame_paints_identity_then_model_and_metrics_on_distinct_lines() {
     v.layout.agents[1].started_at = Some(crate::digest_overlay::now_secs() - 11);
     let gave_up = frame_text(&v.compose());
     assert!(
-        gave_up.contains("-             · -   · -"),
+        gave_up.contains("-    · -   · -"),
         "a row past 10s holds static dashes: {gave_up:?}"
     );
     assert!(text.contains("w1"), "{text:?}");
     assert!(text.contains("#42"), "{text:?}");
-    assert!(text.contains("opus · Lead of mux"), "{text:?}");
+    // The role moved to row 1 next to the slug; a teamed lead never
+    // prices, so its line 2 is the model alone.
+    assert!(text.contains("lead-a \u{b7} Lead of mux"), "{text:?}");
+    assert!(text.contains("opus"), "{text:?}");
+    assert!(!text.contains("opus ·"), "{text:?}");
     assert!(text.contains("lead-a"), "{text:?}");
     assert!(text.contains("one message"), "{text:?}");
     assert!(text.contains("26%"), "{text:?}");
     assert!(
-        text.contains("▂▃▄▅ 26% · 3c · 12.3k tok · one message"),
-        "the compact sparkline line matches its display contract: {text:?}"
+        text.contains("▁▁▁▁▃▅█▁ · 26% · 3c · 12.3k tok · one message"),
+        "the compact metrics line matches its display contract: {text:?}"
     );
     assert!(text.contains("3c") && text.contains("~$0.42"), "{text:?}");
     // A worker names its lead, and a teamed row names its role.
-    assert!(text.contains("gpt-6.1-sol · lead-a"), "{text:?}");
+    // The worker's lead moved to row 1 after the slug; line 2 keeps model
+    // and cost.
+    assert!(text.contains("w1 \u{b7} lead-a"), "{text:?}");
+    assert!(text.contains("gpt-6.1-sol · ~$0.42"), "{text:?}");
     // Classification contract, beyond the w1 paint above: a bare pane (no
     // harness) has nothing that could ever land, so every field hides; a
     // teamed lead never prices; a claude row's unserved fields are loading
     // skeletons, never `?`.
     let hidden = |c: &card_line::MetricCell| matches!(c, card_line::MetricCell::Hidden);
     let mut bare = agent_row("w9", 6, Some(AgentBadge::Working), false);
-    assert!(card_line::metric_cells(&bare, 0).iter().all(hidden));
+    assert!(
+        card_line::metric_cells(&bare, card_line::CardGraph::Activity)
+            .iter()
+            .all(hidden)
+    );
     bare.harness = Some("claude".into());
     bare.harness_session_id = Some("sess-w9".into());
-    bare.crown_level = Some(2);
+    bare.role_level = Some(2);
     bare.context_used_pct = Some(26);
     bare.session_tokens = Some(999);
     bare.session_cost_cents = Some(77);
-    let cells = card_line::metric_cells(&bare, 0);
-    assert!(matches!(cells[0], card_line::MetricCell::Value(_)));
-    assert!(matches!(&cells[2], card_line::MetricCell::Value(v) if v == "999 tok"));
-    // Cost left the metrics line (it rides line 2, served-only): a crowned
+    let cells = card_line::metric_cells(&bare, card_line::CardGraph::Activity);
+    assert!(
+        matches!(cells[0], card_line::MetricCell::Hidden),
+        "activity stays blank until two intervals land, it never fakes a line"
+    );
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "999 tok"));
+    // Cost left the metrics line (it rides line 2, served-only): a promoted
     // lead's session_cost_cents never reach this line at all.
     // A codex row keeps the populated-paint contract off its unreportable
     // fields: context and compactions hide even when the wire carries them,
-    // while its tokens still arrive.
+    // while its tokens land and its activity stays blank until two
+    // intervals exist.
     let mut cx = agent_row("w10", 7, Some(AgentBadge::Working), false);
     cx.harness = Some("codex".into());
     cx.harness_session_id = Some("sess-w10".into());
     cx.context_used_pct = Some(40);
     cx.session_tokens = Some(500);
-    let cells = card_line::metric_cells(&cx, 0);
+    let cells = card_line::metric_cells(&cx, card_line::CardGraph::Activity);
     assert!(
-        hidden(&cells[0]) && hidden(&cells[1]),
+        hidden(&cells[1]) && hidden(&cells[2]),
         "codex never reports context or compactions"
     );
-    assert!(matches!(&cells[2], card_line::MetricCell::Value(v) if v == "500 tok"));
-    // The history ramp's bar math (pct -> bar height); the full ramp itself
-    // only paints under the spin clock, so the static cell stands in tests.
-    assert_eq!(card_line::ramp_char(0), '▁');
-    assert_eq!(card_line::ramp_char(50), '▄');
-    assert_eq!(card_line::ramp_char(100), '▇');
+    assert!(hidden(&cells[0]));
+    assert!(matches!(&cells[3], card_line::MetricCell::Value(v) if v == "500 tok"));
 }
 
 #[test]
@@ -420,29 +488,6 @@ fn card_detail_click_routes_to_the_agent_above() {
 }
 
 #[test]
-fn hovering_line_two_or_selecting_line_one_bands_both_card_lines() {
-    for select in [false, true] {
-        let mut v = card_view(lead_and_worker());
-        v.term = (30, 140);
-        v.sideline_width = 80;
-        let (agent_i, detail_i) = card_rows_for(&v, "w1");
-        if select {
-            v.selector = Some(agent_i);
-        } else {
-            v.hover_row = Some(detail_i);
-        }
-        let frame = v.compose();
-        let width = v.sideline_paint_w().saturating_sub(1);
-        let line = "#".repeat(width);
-        assert_eq!(
-            card_highlight_snapshot(&v, &frame, agent_i, detail_i),
-            format!("{line}\n{line}\n{line}"),
-            "select={select}: the snapshot covers every cell and column boundary on both lines"
-        );
-    }
-}
-
-#[test]
 fn hover_and_selection_share_the_same_card_cell_snapshot() {
     let mut hover = card_view(lead_and_worker());
     hover.term = (30, 140);
@@ -468,6 +513,91 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
     assert_eq!(
         hover_cells, selected_cells,
         "hover and click use one paint path"
+    );
+    // The pairing bands all three lines for both gestures, every cell and
+    // column boundary included; the metrics line's hover is covered by its
+    // own test below.
+    assert!(
+        hover_cells.iter().all(|cell| cell.bg != Color::Default),
+        "hover bands every cell of all three lines"
+    );
+    assert!(
+        selected_cells.iter().all(|cell| cell.bg != Color::Default),
+        "selection bands every cell of all three lines"
+    );
+}
+
+#[test]
+fn hovering_line_three_bands_the_whole_card() {
+    // A card shades as one unit from any of its lines. Hovering the
+    // metrics line must reach back up to the detail line, not skip it.
+    let mut v = card_view(lead_and_worker());
+    v.term = (30, 140);
+    v.sideline_width = 80;
+    let (agent_i, detail_i) = card_rows_for(&v, "w1");
+    v.hover_row = Some(detail_i + 1);
+    let frame = v.compose();
+    let width = v.sideline_paint_w().saturating_sub(1);
+    let line = "#".repeat(width);
+    assert_eq!(
+        card_highlight_snapshot(&v, &frame, agent_i, detail_i),
+        format!("{line}\n{line}\n{line}"),
+        "hover on the metrics line bands all three card lines"
+    );
+}
+
+#[test]
+fn hovering_the_card_rule_between_cards_bands_no_card() {
+    // The dashed rule between adjacent cards names no card: a hover there
+    // must band neither card. It used to read as the card below's Agent
+    // line two rows up and band that card's detail line.
+    let mut plain = card_view(lead_and_worker());
+    plain.term = (30, 140);
+    plain.sideline_width = 80;
+    let plain_frame = plain.compose();
+
+    let mut v = card_view(lead_and_worker());
+    v.term = (30, 140);
+    v.sideline_width = 80;
+    let (rule_i, card_lines) = {
+        let rows = v.painted_rows();
+        let rule_i = rows
+            .iter()
+            .position(|r| matches!(r, DisplayRow::CardRule))
+            .expect("a card rule exists between adjacent cards");
+        let card_lines: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                matches!(
+                    r,
+                    DisplayRow::Agent(_) | DisplayRow::CardDetail(..) | DisplayRow::CardMetrics(..)
+                )
+            })
+            .map(|(i, _)| i)
+            .collect();
+        (rule_i, card_lines)
+    };
+    v.hover_row = Some(rule_i);
+    let frame = v.compose();
+
+    let cols = frame.cols as usize;
+    let text_w = v.sideline_paint_w().saturating_sub(1);
+    let offset = v.sideline_offset();
+    let banded = |display_i: usize| {
+        let row = display_i - offset + 1; // the strip row owns row 0
+        frame.cells[row * cols..row * cols + text_w]
+            .iter()
+            .zip(&plain_frame.cells[row * cols..row * cols + text_w])
+            .any(|(a, b)| a.bg != b.bg)
+    };
+    assert!(
+        !card_lines.is_empty(),
+        "two adjacent cards paint six card lines"
+    );
+    assert!(
+        card_lines.iter().all(|i| !banded(*i)),
+        "no card line bands from a hover on the rule"
     );
 }
 
@@ -534,8 +664,8 @@ fn a_foreign_cwd_shows_inline_in_parens_and_never_adds_a_row() {
     v.sideline_width = 80;
     let frame_text = crate::vt::frame_text(&v.compose());
     assert!(
-        frame_text.contains("w1 (elsewhere)"),
-        "the cwd rides inline after the slug: {frame_text}"
+        frame_text.contains("w1 \u{b7} lead-a (elsewhere)"),
+        "the cwd rides inline after the slug and lead: {frame_text}"
     );
     // A squad-less row whose cwd base repeats its own node id prints no
     // parenthetical (the user's noise case); one from an arbitrary directory
@@ -580,6 +710,34 @@ fn a_foreign_cwd_shows_inline_in_parens_and_never_adds_a_row() {
             );
         }
     }
+}
+
+#[test]
+fn a_teamed_rows_node_worktree_cwd_never_tags_the_name_with_its_node() {
+    // A node-backed codex thread inherits its spawner's workspace, so its
+    // own node worktree reads as a FOREIGN cwd and the card rendered
+    // `t-<node> (x-<node>)` - the node twice on one line. The parenthetical
+    // drops whenever the cwd base repeats the row's node, teamed or not; a
+    // genuinely foreign directory still tags.
+    let mut leak = agent_row("t-x64d4", 11, Some(AgentBadge::Working), false);
+    leak.harness = Some("codex".into());
+    leak.node = Some("x-64d4".into());
+    leak.cwd_base = Some("x-64d4".into());
+    let mut foreign = agent_row("t-else", 12, Some(AgentBadge::Working), false);
+    foreign.harness = Some("codex".into());
+    foreign.cwd_base = Some("elsewhere".into());
+    let mut v = card_view(vec![leak, foreign]);
+    v.term = (30, 140);
+    v.sideline_width = 80;
+    let text = crate::vt::frame_text(&v.compose());
+    assert!(
+        !text.contains("(x-64d4)"),
+        "a cwd base that repeats the node id tags no teamed name: {text}"
+    );
+    assert!(
+        text.contains("t-else (elsewhere)"),
+        "a real foreign directory keeps its context: {text}"
+    );
 }
 
 #[test]
@@ -1017,4 +1175,156 @@ fn unhighlighted_rows_read_on_a_light_terminal() {
         assert_eq!(cell.fg, Color::Indexed(8), "line 2 fg follows the palette");
         assert_eq!(cell.flags & cell_flags::DIM, 0, "no DIM on line 2");
     }
+}
+
+// ---- a card's whole span answers the menu gestures ----------------------
+
+#[tokio::test]
+async fn a_long_press_on_each_card_line_opens_the_agents_menu() {
+    // The card's detail and metrics lines carry their agent's identity, so
+    // a press there arms the hold and a 600ms hold opens the agent's menu
+    // from any line of the card - the same span the tap path resolves.
+    let (agent_i, detail_i) = card_rows_for(&card_view(lead_and_worker()), "lead-a");
+    for display_i in [agent_i, detail_i, detail_i + 1] {
+        let mut v = card_view(lead_and_worker());
+        let id = v
+            .row_identity(display_i)
+            .expect("every card line has an identity");
+        assert_eq!(id, "agent:lead-a", "card lines identify as their agent");
+        v.press_hold = Some((display_i, id, Instant::now() - Duration::from_millis(600)));
+        let term_row = (display_i - v.sideline_offset() + 1) as u16;
+        let mut buf: Vec<u8> = Vec::new();
+        let mut carry = Vec::<u8>::new();
+        crate::client::handle_stdin(
+            &mut v,
+            &mut Scanner::default(),
+            &mut carry,
+            format!("\x1b[<0;7;{}m", term_row + 1).as_bytes(),
+            &mut buf,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                v.row_menu.as_ref().map(|m| &m.target),
+                Some(super::MenuTarget::Agent(ident)) if ident.name == "lead-a"
+            ),
+            "line {display_i}: the card's menu opened: {:?}",
+            v.row_menu.as_ref().map(|m| &m.target)
+        );
+        assert!(
+            buf.is_empty(),
+            "line {display_i}: no click action rode the long press"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_right_press_on_each_card_line_opens_the_agents_menu() {
+    // Same span for right-click, the no-config path for terminals that
+    // swallow the hold. The inter-card rule stays inert: no menu opens.
+    let (agent_i, detail_i) = card_rows_for(&card_view(lead_and_worker()), "lead-a");
+    for display_i in [agent_i, detail_i, detail_i + 1] {
+        let mut v = card_view(lead_and_worker());
+        let term_row = (display_i - v.sideline_offset() + 1) as u16;
+        let mut scanner = Scanner::default();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut carry = Vec::<u8>::new();
+        crate::client::handle_stdin(
+            &mut v,
+            &mut scanner,
+            &mut carry,
+            format!("\x1b[<2;7;{}M", term_row + 1).as_bytes(),
+            &mut buf,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                v.row_menu.as_ref().map(|m| &m.target),
+                Some(super::MenuTarget::Agent(ident)) if ident.name == "lead-a"
+            ),
+            "line {display_i}: the card's menu opened: {:?}",
+            v.row_menu.as_ref().map(|m| &m.target)
+        );
+    }
+    let rule_i = card_view(lead_and_worker())
+        .painted_rows()
+        .iter()
+        .position(|row| matches!(row, DisplayRow::CardRule))
+        .expect("adjacent cards paint a rule");
+    let mut v = card_view(lead_and_worker());
+    let term_row = (rule_i - v.sideline_offset() + 1) as u16;
+    let mut scanner = Scanner::default();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut carry = Vec::<u8>::new();
+    crate::client::handle_stdin(
+        &mut v,
+        &mut scanner,
+        &mut carry,
+        format!("\x1b[<2;7;{}M", term_row + 1).as_bytes(),
+        &mut buf,
+    )
+    .await
+    .unwrap();
+    assert!(v.row_menu.is_none(), "the rule row stays inert");
+}
+
+#[test]
+fn card_row_1_carries_the_role_and_the_lead_rollup() {
+    // a lead's row 1 reads `lead · people title` and its right edge
+    // shows the team roll-up; a worker's reads `t-slug · lead`; row 2 no
+    // longer carries the lead name.
+    let mut lead = agent_row("lead-a", 4, Some(AgentBadge::Working), false);
+    lead.role_level = Some(2);
+    lead.role_title = Some("lead of fno".into());
+    lead.harness_session_id = Some("sess-lead".into());
+    let mut w1 = agent_row("w1", 5, Some(AgentBadge::Working), false);
+    w1.pr = Some(42);
+    w1.node = Some("x-abc1".into());
+    w1.lineage_kind = Some("child".into());
+    w1.spawned_by_session = Some("sess-lead".into());
+    w1.harness_session_id = Some("sess-w1".into());
+    let v = card_view(vec![lead, w1]);
+    let frame = v.compose();
+    let cols = frame.cols as usize;
+    let text_w = v.sideline_paint_w().saturating_sub(1);
+    // Rows: 0 strip, 1 head, 2 band, 3 lead card line 1, 4 line 2, 5 line 3.
+    let row_text = |row: usize| -> String {
+        frame.cells[row * cols..row * cols + text_w]
+            .iter()
+            .map(|c| c.c)
+            .collect()
+    };
+    let lead_line = row_text(3);
+    assert!(
+        lead_line.contains("lead-a \u{b7} lead of fno"),
+        "lead row 1 names its role: {lead_line:?}"
+    );
+    assert!(
+        lead_line.contains('\u{25cf}'),
+        "lead row 1 right edge shows the team roll-up glyph: {lead_line:?}"
+    );
+    let w_line = row_text(7); // display 6 -> screen row 7 (strip owns 0)
+    assert!(
+        w_line.contains("w1 \u{b7} lead-a"),
+        "worker row 1 names its lead: {w_line:?}"
+    );
+    assert!(
+        w_line.contains("#42"),
+        "worker row 1 right edge keeps node · PR: {w_line:?}"
+    );
+    let rows = v.painted_rows();
+    let detail = rows
+        .iter()
+        .find_map(|r| match r {
+            DisplayRow::CardDetail(a) if a.name == "w1" => Some(a),
+            _ => None,
+        })
+        .expect("worker card detail row");
+    let line2 = v.card_detail_text(detail, 0, 80);
+    assert!(
+        !line2.contains("lead-a") && !line2.contains("lead of fno"),
+        "row 2 dropped the lead name: {line2:?}"
+    );
 }

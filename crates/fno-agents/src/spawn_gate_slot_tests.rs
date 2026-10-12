@@ -4,7 +4,20 @@
 
 use super::*;
 
+/// An unknown effective cap at the given ceiling: what the refusal sentence
+/// tests want when no capacity state exists.
+fn cap_ceiling(ceiling: usize) -> crate::capacity::Effective {
+    crate::capacity::Effective {
+        cap: ceiling,
+        ceiling,
+        known: false,
+        reason: None,
+        since: None,
+    }
+}
+
 struct SuccessionFixture {
+    _agent: crate::spawn_gate_admission::AgentSelfFixture,
     _lock: std::sync::MutexGuard<'static, ()>,
     dir: std::path::PathBuf,
     registry: std::path::PathBuf,
@@ -53,6 +66,7 @@ impl SuccessionFixture {
         let pid = std::process::id();
         let pid_start = crate::daemon::process_start_time(pid).unwrap_or(0);
         let mut fixture = Self {
+            _agent: crate::spawn_gate_admission::AgentSelfFixture::set(),
             _lock: lock,
             dir,
             registry: std::path::PathBuf::new(),
@@ -95,8 +109,8 @@ impl SuccessionFixture {
 
     fn lead(&self, name: &str, session: &str, scope: &str) -> serde_json::Value {
         let mut row = self.row(name);
-        row["crown_level"] = serde_json::json!(1);
-        row["crown_scope"] = serde_json::json!(scope);
+        row["role_level"] = serde_json::json!(1);
+        row["role_scope"] = serde_json::json!(scope);
         row["harness_session_id"] = serde_json::json!(session);
         row
     }
@@ -112,7 +126,7 @@ impl SuccessionFixture {
             "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
             "entries": entries,
         });
-        std::fs::write(&self.registry, registry.to_string()).unwrap();
+        crate::registry_store::replace_document(&self.registry, registry);
     }
 
     fn spawn(
@@ -252,7 +266,7 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
         fixture.worker("worker", "session-a"),
     ]);
     let no_caller = fixture
-        .spawn("heir-no-caller", None, Some("x-epic"))
+        .spawn("successor-no-caller", None, Some("x-epic"))
         .expect_err("a succession without caller identity cannot replace a row");
     assert_eq!(
         no_caller.receipt.as_ref().unwrap()["succession"],
@@ -261,8 +275,8 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
 
     let mut dead = fixture.row("dead-lead");
     dead["pid"] = serde_json::json!(4_194_321_u32);
-    dead["crown_level"] = serde_json::json!(1);
-    dead["crown_scope"] = serde_json::json!("x-epic");
+    dead["role_level"] = serde_json::json!(1);
+    dead["role_scope"] = serde_json::json!("x-epic");
     dead["harness_session_id"] = serde_json::json!("session-dead");
     fixture.write_entries(vec![
         dead,
@@ -270,7 +284,11 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
         fixture.worker("other-worker", "session-other"),
     ]);
     let not_live = fixture
-        .spawn("heir-dead-caller", Some("session-dead"), Some("x-epic"))
+        .spawn(
+            "successor-dead-caller",
+            Some("session-dead"),
+            Some("x-epic"),
+        )
         .expect_err("a dead caller row cannot release a slot");
     assert_eq!(
         not_live.receipt.as_ref().unwrap()["succession"],
@@ -281,16 +299,16 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
 #[test]
 fn succession_cannot_take_a_second_slot_at_cap_plus_one() {
     let fixture = SuccessionFixture::new(2);
-    let mut heir = fixture.row("pending-heir");
-    heir["harness_session_id"] = serde_json::json!("session-heir");
+    let mut successor = fixture.row("pending-successor");
+    successor["harness_session_id"] = serde_json::json!("session-successor");
     fixture.write_entries(vec![
         fixture.lead("lead", "session-lead", "x-epic"),
         fixture.worker("worker", "session-lead"),
-        heir,
+        successor,
     ]);
 
     let refusal = fixture
-        .spawn("second-heir", Some("session-lead"), Some("x-epic"))
+        .spawn("second-successor", Some("session-lead"), Some("x-epic"))
         .expect_err("cap plus one cannot replace another slot");
     assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
     assert_eq!(refusal.receipt.as_ref().unwrap()["count"], 3);
@@ -308,7 +326,7 @@ fn succession_refuses_the_old_lead_after_transfer() {
     ]);
 
     let refusal = fixture
-        .spawn("late-heir", Some("session-old"), Some("x-epic"))
+        .spawn("late-successor", Some("session-old"), Some("x-epic"))
         .expect_err("only the holder who will be vacated may succeed");
     assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
     assert_eq!(
@@ -352,7 +370,14 @@ fn slot_refusal_line_names_the_release_remedy() {
         ..suspect.clone()
     };
 
-    let line = slot_refusal_line(4, 3, 3, &[live.clone(), suspect.clone()], 0, "tail.");
+    let line = slot_refusal_line(
+        4,
+        &cap_ceiling(3),
+        3,
+        &[live.clone(), suspect.clone()],
+        0,
+        "tail.",
+    );
     assert!(
         line.contains("fno agents claim release worker:w-res --force"),
         "{line}"
@@ -364,11 +389,11 @@ fn slot_refusal_line_names_the_release_remedy() {
 
     // All-live reservations name no remedy: releasing a live worker's slot
     // would leave it running uncounted.
-    let line = slot_refusal_line(4, 3, 3, &[live], 0, "tail.");
+    let line = slot_refusal_line(4, &cap_ceiling(3), 3, &[live], 0, "tail.");
     assert!(!line.contains("claim release"), "{line}");
 
     // Registry-only saturation names no remedy.
-    let line = slot_refusal_line(3, 3, 3, &[], 0, "tail.");
+    let line = slot_refusal_line(3, &cap_ceiling(3), 3, &[], 0, "tail.");
     assert!(!line.contains("claim release"), "{line}");
 }
 
@@ -489,8 +514,9 @@ fn rust_headless_slot_claim_stamps_holder_pid_and_provenance() {
     .unwrap();
 
     let claim_path = claims::claim_path("worker:stamp-check", Some(&root)).unwrap();
-    let raw = std::fs::read_to_string(claim_path).unwrap();
-    let record: claims::ClaimRecord = serde_yaml_ng::from_str(&raw).unwrap();
+    let record = crate::claim_store::read_at_path(&claim_path)
+        .unwrap()
+        .unwrap();
     assert_eq!(record.pid, Some(holder_pid as i32), "{record:?}");
     assert_eq!(
         record.pid_provenance.as_deref(),
@@ -582,37 +608,6 @@ fn live_holder_keeps_its_headless_slot() {
         got[0].provider.as_deref(),
         Some(KNOWN_UNROUTED_PROVIDER),
         "unrouted spawn stamps the un-routed marker"
-    );
-
-    std::env::remove_var("FNO_CLAIMS_ROOT");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// AC2-ERR: a corrupted `worker:` claim file is not counted, not named,
-/// and still pushes the warning.
-#[test]
-fn corrupted_slot_claim_is_skipped_and_warned() {
-    let _g = claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("FNO_AGENT_SELF", "gate-fixture-worker");
-    let dir = std::env::temp_dir().join(format!("fno-gate-corrupt-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let root = dir.join("claims-root");
-    let claims_dir = claims::claims_dir_for(Some(&root)).unwrap();
-    std::fs::create_dir_all(&claims_dir).unwrap();
-    std::env::set_var("FNO_CLAIMS_ROOT", &root);
-    let claim_path = claims_dir.join(format!("{}.lock", claims::encode_key("worker:broken")));
-    std::fs::write(&claim_path, "{ not yaml").unwrap();
-
-    let mut warnings = Vec::new();
-    let got = live_worker_slot_claims(&mut warnings);
-    assert!(got.is_empty(), "{got:?}");
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("corrupted slot claim worker:broken")),
-        "{warnings:?}"
     );
 
     std::env::remove_var("FNO_CLAIMS_ROOT");

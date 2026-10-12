@@ -325,7 +325,7 @@ pub struct Stats {
 pub struct Facets {
     pub projects: Vec<String>,
     pub epics: Vec<EpicRef>,
-    #[serde(rename = "kings")]
+    #[serde(rename = "leads")]
     pub leads: Vec<String>,
     pub priorities: Vec<String>,
     pub sizes: Vec<String>,
@@ -1297,17 +1297,13 @@ pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
             };
             let command = match &act {
                 SessionAction::Attach => joined.map(|a| format!("fno agents attach {}", a.name)),
-                SessionAction::Resume => sid.map(|sid| {
-                    let mut cmd = format!("fno agents resume {sid} --cross-project");
-                    if let Some(cwd) = node_cwd.as_deref().filter(|c| !c.is_empty()) {
-                        cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
-                    }
-                    cmd
-                }),
+                SessionAction::Resume => {
+                    sid.map(|sid| session_command("resume", sid, node_cwd.as_deref()))
+                }
                 // A session the registry lacks: adopt is the reach that
                 // heals the row from the harness stores.
                 SessionAction::Dim(_) if joined.is_none() => {
-                    sid.map(|sid| format!("fno agents adopt {sid} --cross-project"))
+                    sid.map(|sid| session_command("adopt", sid, None))
                 }
                 SessionAction::Dim(_) => None,
             };
@@ -1684,6 +1680,76 @@ pub(crate) fn session_action(a: Option<&AgentRow>) -> SessionAction {
     SessionAction::Dim("not resumable".into())
 }
 
+/// What opening one session does, the ONE answer every surface shares (the
+/// provenance popup today; the backlog board, the questions overlay and
+/// the sideline are the surfaces wired to the same step next). Derived from
+/// [`session_action`], the node view's own action cell, so no surface grows
+/// a second opinion about what a session link can do.
+pub(crate) enum OpenSession {
+    /// Send these wire commands: focus a live pane, portal a live paneless
+    /// row, or the row-menu resume door.
+    Cmds(Vec<crate::proto::Command>),
+    /// No wire door: this shell line reaches the session (an adopt for a
+    /// session the registry lacks). Copyable; Enter repeats it.
+    Shell(String),
+    /// Nothing can open; the reason renders where the link would.
+    Dim(String),
+}
+
+/// The shell line that reaches a session by id: `fno agents <verb> <sid>
+/// --cross-project`, pinned to `cwd` when the caller knows one. The ONE
+/// spelling both [`SessionView`] and [`open_session`] print.
+fn session_command(verb: &str, sid: &str, cwd: Option<&str>) -> String {
+    let mut cmd = format!("fno agents {verb} {sid} --cross-project");
+    if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
+        cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
+    }
+    cmd
+}
+
+/// Resolve the open-session gesture for `sid` against the roster. The
+/// shell lines carry no cwd pin: a resume relaunches in the row's recorded
+/// directory and an adopt heals the row in place.
+pub(crate) fn open_session(agents: &[AgentRow], sid: &str) -> OpenSession {
+    let joined = agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(sid));
+    match session_action(joined) {
+        SessionAction::Attach => match joined.and_then(|a| a.pane_id) {
+            Some(pid) => OpenSession::Cmds(vec![crate::proto::Command::FocusPane(pid)]),
+            // A live row with no seat reaches a portal, the agent_hit door:
+            // the attach id when the harness gave one, the session id
+            // otherwise (Follow/Locate rows carry no attach id).
+            None => OpenSession::Cmds(vec![crate::proto::Command::AttachAgent {
+                // The portal resolver answers an attach id or the registry
+                // NAME, never a session id: the same fallback agent_hit
+                // makes for Follow/Locate rows.
+                id: joined
+                    .and_then(|a| a.attach_id.clone())
+                    .or_else(|| joined.map(|a| a.name.clone()))
+                    .unwrap_or_else(|| sid.to_string()),
+                placement: crate::proto::PanePlacement {
+                    portal: Some(0),
+                    ..crate::proto::PanePlacement::default()
+                },
+            }]),
+        },
+        // The row-menu resume path: the shared per-harness door whose claude
+        // plan runs adopt, then resume, then respawn; every other harness
+        // plain resumes.
+        SessionAction::Resume => OpenSession::Cmds(vec![crate::proto::Command::RespawnAgent {
+            name: joined.map(|a| a.name.clone()).unwrap_or_else(|| sid.into()),
+        }]),
+        // A session the registry lacks: adopt is the reach that heals the
+        // row from the harness stores - the SessionView command's own rule.
+        // No cwd pin: adopt heals the row in place (the resume relaunches).
+        SessionAction::Dim(_) if joined.is_none() => {
+            OpenSession::Shell(session_command("adopt", sid, None))
+        }
+        SessionAction::Dim(why) => OpenSession::Dim(why),
+    }
+}
+
 /// POSIX single-quote a path for the resume line, so a cwd with spaces or
 /// quotes survives the shell. Mirrors the one-liner in mux_cli.rs, which
 /// stays unwidened (over the 5,000-line budget).
@@ -1704,7 +1770,7 @@ pub(crate) fn lead_of(
 ) -> Option<(String, u32)> {
     let mut best: Option<(usize, &AgentRow)> = None;
     for a in agents {
-        let (Some(scope), Some(_)) = (&a.crown_scope, a.crown_level) else {
+        let (Some(scope), Some(_)) = (&a.role_scope, a.role_level) else {
             continue;
         };
         let mut rank: Option<usize> = None;
@@ -1730,7 +1796,7 @@ pub(crate) fn lead_of(
             }
         }
     }
-    best.map(|(_, a)| (a.name.clone(), a.crown_level.unwrap_or(0)))
+    best.map(|(_, a)| (a.name.clone(), a.role_level.unwrap_or(0)))
 }
 
 // ---------------------------------------------------------------------------
@@ -2029,7 +2095,7 @@ fn any_session_live(inp: &Inputs, ids: &[String]) -> bool {
 /// leaves the slot empty and names itself on `errors`, never an empty board.
 pub fn read_search_sources(inp: &mut Inputs, want_questions: bool) {
     if inp.sessions.is_empty() {
-        let read = std::fs::read_to_string(crate::agents_view::registry_path())
+        let read = crate::registry_read::registry_text(&crate::agents_view::registry_path())
             .map_err(|e| e.to_string())
             .and_then(|raw| {
                 crate::agents_view::derive_rows(&raw, inp.read_at.max(0) as u64)

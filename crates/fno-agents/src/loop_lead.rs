@@ -14,7 +14,7 @@
 //! hardcoded to `/target --resume` and `Unit.extra_env` was read by nothing,
 //! so the spawned session was a target resume that did not know it was a lead.
 //! The lifecycle those defects sat on is now real: manifests are per-scope at
-//! `<space>/leads/<scope>.md`, coronation arms them, `fno agents org done`
+//! `<space>/leads/<scope>.md`, promotion arms them, `fno agents org done`
 //! expires them, and a leftover file is inert without a live registry team.
 //!
 //! The rebuild fixes the identity split at the source: the walk keys its unit
@@ -162,7 +162,7 @@ impl LeadQueue {
             )));
         }
         let manifest_path = crate::paths::space_dir(repo_root)
-            .join("kings")
+            .join("leads")
             .join(format!("{scope}.md"));
         let content = fs::read_to_string(&manifest_path).map_err(|_| {
             LoopError::Queue(format!(
@@ -668,11 +668,11 @@ fn live_team_holder_in_with_projects(
         .iter()
         .filter(|row| !is_terminal(row))
         .find(|row| {
-            row.crown_scope.as_deref().is_some_and(|held| {
+            row.role_scope.as_deref().is_some_and(|held| {
                 if config_unreadable {
                     scopes_overlap(held, scope, &projects)
                 } else {
-                    team_rivals(held, row.crown_level, scope, scope_level, &projects)
+                    team_rivals(held, row.role_level, scope, scope_level, &projects)
                 }
             })
         })
@@ -1051,7 +1051,7 @@ mod tests {
         // process-global and shared by every test thread. Take the env lock
         // and pin the spaces root here, so the resolution is race-free and
         // never touches the real $HOME.
-        let leads = crate::paths::space_dir(&dir).join("kings");
+        let leads = crate::paths::space_dir(&dir).join("leads");
         fs::create_dir_all(&leads).unwrap();
         let path = leads.join("k.md");
         fs::write(
@@ -1092,7 +1092,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         // Same env-lock and pin as the ceiling test: space_dir reads global
         // state, and an unlocked read raced another test's env mutation.
-        let leads = crate::paths::space_dir(&dir).join("kings");
+        let leads = crate::paths::space_dir(&dir).join("leads");
         fs::create_dir_all(&leads).unwrap();
         fs::write(
             leads.join("k.md"),
@@ -1184,16 +1184,15 @@ mod tests {
             "cwd": "/tmp",
             "status": status,
             "created_at": "2026-08-23T00:00:00Z",
-            "crown_level": scope.map(|_| 2),
-            "crown_scope": scope,
-            "crown_grantor": scope.map(|_| "human"),
+            "role_level": scope.map(|_| 2),
+            "role_scope": scope,
+            "role_grantor": scope.map(|_| "human"),
         });
         let path = dir.join("registry.json");
-        fs::write(
+        crate::registry_store::seed_raw(
             &path,
             serde_json::json!({"schema_version": 11, "agents": [row]}).to_string(),
-        )
-        .unwrap();
+        );
         path
     }
 
@@ -1203,7 +1202,7 @@ mod tests {
         let dir = _root.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
         // Env lock + pin: space_dir reads process-global state.
-        let leads = crate::paths::space_dir(&dir).join("kings");
+        let leads = crate::paths::space_dir(&dir).join("leads");
         fs::create_dir_all(&leads).unwrap();
         fs::write(leads.join("k.md"), "---\nfno_id: k-1\nscope: epic-x\n---\n").unwrap();
         let registry = write_registry(&dir, "busy", Some("epic-x"));
@@ -1310,8 +1309,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let exited = write_registry(&dir, "exited", Some("epic-x"));
         assert_eq!(live_team_holder_in(&exited, "epic-x", &dir), None);
-        let uncrowned = write_registry(&dir, "busy", None);
-        assert_eq!(live_team_holder_in(&uncrowned, "epic-x", &dir), None);
+        let unpromoted = write_registry(&dir, "busy", None);
+        assert_eq!(live_team_holder_in(&unpromoted, "epic-x", &dir), None);
         assert_eq!(
             live_team_holder_in(&dir.join("no-such-registry.json"), "epic-x", &dir),
             None,
@@ -1331,9 +1330,9 @@ mod tests {
             "cwd": "/tmp",
             "status": status,
             "created_at": "2026-08-23T00:00:00Z",
-            "crown_level": scope.map(|_| level),
-            "crown_scope": scope,
-            "crown_grantor": scope.map(|_| "human"),
+            "role_level": scope.map(|_| level),
+            "role_scope": scope,
+            "role_grantor": scope.map(|_| "human"),
         });
         let path = dir.join("registry.json");
         fs::write(
@@ -1480,9 +1479,9 @@ mod tests {
                     "cwd": "/tmp",
                     "status": "busy",
                     "created_at": "2026-08-23T00:00:00Z",
-                    "crown_level": 1,
-                    "crown_scope": "a",
-                    "crown_grantor": "human",
+                    "role_level": 1,
+                    "role_scope": "a",
+                    "role_grantor": "human",
                 }));
             let path = dir.join("registry2.json");
             fs::write(&path, rows.to_string()).unwrap();
@@ -1504,7 +1503,7 @@ mod tests {
         let _root = crate::paths::DeclaredRoot::declare("leadsucc");
         let dir = _root.path().to_path_buf();
         // Env lock + pin: space_dir reads process-global state.
-        let leads = crate::paths::space_dir(&dir).join("kings");
+        let leads = crate::paths::space_dir(&dir).join("leads");
         fs::create_dir_all(&leads).unwrap();
         fs::write(
             &leads.join("k.md"),
@@ -1534,7 +1533,7 @@ mod tests {
         let _root = crate::paths::DeclaredRoot::declare("leadrace");
         let dir = _root.path().to_path_buf();
         // Env lock + pin: space_dir reads process-global state.
-        let leads = crate::paths::space_dir(&dir).join("kings");
+        let leads = crate::paths::space_dir(&dir).join("leads");
         fs::create_dir_all(&leads).unwrap();
         let path = leads.join("k.md");
         fs::write(
@@ -1626,7 +1625,13 @@ pub(crate) struct LeadFireHistory {
 ///    outlive the only action a lead has for them, and a reset-on-repeat
 ///    counter would never converge.
 pub(crate) fn lead_fire_history(events_path: &Path, session_id: &str) -> LeadFireHistory {
-    let content = crate::event_store::journal_text(events_path, &[]);
+    // Every lead Stop runs this. Reading all rows of every type and parsing
+    // each one cost most of a multi-second Stop on a busy journal, so the
+    // store filters by type and a line without the session id is never parsed.
+    let content = crate::event_store::journal_text(
+        events_path,
+        &["lead_action", "termination", "lead_loop_check"],
+    );
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut total: u64 = 0;
     let mut dry: u64 = 0;
@@ -1634,6 +1639,9 @@ pub(crate) fn lead_fire_history(events_path: &Path, session_id: &str) -> LeadFir
     let mut last_undelivered: Option<i64> = None;
     let mut last_terminal: Option<(String, String)> = None;
     for line in content.lines() {
+        if !line.contains(session_id) {
+            continue;
+        }
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };

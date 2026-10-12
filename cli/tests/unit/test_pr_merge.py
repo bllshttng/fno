@@ -289,11 +289,17 @@ class FakeRun:
 
 @pytest.fixture
 def enabled(monkeypatch, tmp_path):
+    from functools import partial
+    from fno.claims import core as claims
+
+    monkeypatch.setattr(claims, "acquire_claim", partial(claims.acquire_claim, root=tmp_path))
+    monkeypatch.setattr(claims, "release_claim", partial(claims.release_claim, root=tmp_path))
     monkeypatch.setattr(
         "fno.pr._review_hold.resolve_pr_worktree", lambda _pr, repo: repo
     )
     monkeypatch.setattr(_merge, "_load_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
-    monkeypatch.setattr(_merge.shutil, "which", lambda _x: "/usr/bin/gh")
+    real_which = _merge.shutil.which
+    monkeypatch.setattr(_merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool))
     # The posture floor (merge step 1b) reads live settings; hermetic tests
     # resolve to the shipped default rung (self_review), never the operator's
     # real config, and never through the real loader (some tests break the
@@ -427,11 +433,11 @@ def test_plan_dispatch_hold_refuses_sanctioned_merge(
     """The dispatch hold is the owner's read now (`fno do pr hold-check`), so
     this pins that its refusal still reaches the operator through this verb."""
     monkeypatch.setattr(_merge, "run", FakeRun(toplevel=str(tmp_path)))
-    _held_owner(monkeypatch, "dispatch-hold:x-5a5c: blocking finding; set_by=king")
+    _held_owner(monkeypatch, "dispatch-hold:x-5a5c: blocking finding; set_by=lead")
     assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 2
     obj = _last_json(capsys)
     assert obj["outcome"] == "held"
-    assert "set_by=king" in obj["reason"]
+    assert "set_by=lead" in obj["reason"]
 
 
 # ---- config + gh gates ----
@@ -2025,7 +2031,8 @@ def test_covered_head_pins_the_merge_cmd(monkeypatch, tmp_path):
     covered head outranks the checks-verdict head on the one merge call)."""
     (tmp_path / ".fno").mkdir()
     _checks_enabled(monkeypatch)
-    monkeypatch.setattr(_merge.shutil, "which", lambda _x: "/usr/bin/gh")
+    real_which = _merge.shutil.which
+    monkeypatch.setattr(_merge.shutil, "which", lambda tool: "/usr/bin/gh" if tool == "gh" else real_which(tool))
     # Same hermeticity as the `enabled` fixture: the closure fetch a populated
     # per-worker sandbox graph triggers answers non-JSON and holds the merge
     # before any merge command is recorded.
@@ -3210,8 +3217,7 @@ def test_early_release_frees_the_lock_for_a_successor(enabled, monkeypatch, tmp_
     with-block's finally release (the same holder-checked call) leaves the
     successor's claim on disk untouched - the double-release is release_claim's
     own documented silent-success contract."""
-    from fno.claims.core import acquire_claim
-    from fno.claims.io import claim_path
+    from fno.claims.core import acquire_claim, claim_status, release_claim
 
     with _merge._merge_lock(42) as (state, release_now, held_detail):
         assert state == "acquired" and release_now is not None
@@ -3219,12 +3225,11 @@ def test_early_release_frees_the_lock_for_a_successor(enabled, monkeypatch, tmp_
         release_now()
         # the freed lock is takeable right now, before the merge verb returns
         acquire_claim(_lock_key(), "pr-merge:successor", reason="next merger")
-    successor_file = claim_path(_lock_key(), root=None)
-    assert successor_file.exists(), "the finally release must not free the successor's claim"
-    from fno.claims.core import release_claim
-
+    assert claim_status(_lock_key()).get("holder") == "pr-merge:successor", (
+        "the finally release must not free the successor's claim"
+    )
     release_claim(_lock_key(), "pr-merge:successor")
-    assert not successor_file.exists()
+    assert claim_status(_lock_key())["state"] == "free"
 
 
 def test_merge_lock_released_when_outcome_is_not_merged(enabled, monkeypatch, tmp_path):

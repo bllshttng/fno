@@ -65,91 +65,6 @@ def _quiet_gh_budget(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_board_render(monkeypatch):
-    """Keep every test off the real board render.
-
-    The post-publish render shells the installed front binary (`fno
-    board-render`), so an unstubbed graph write would fork a subprocess per
-    write and a lagging install would print its stderr into CliRunner's
-    mixed output, breaking --json parses far from any test about rendering.
-    Tests about the render itself request `native_board_render`, which swaps
-    this no-op for an in-process fake of the native writer.
-    """
-    import fno.graph.roadmap_public as rp
-
-    monkeypatch.setattr(rp, "render_local_targets", lambda: 0)
-
-
-@pytest.fixture
-def native_board_render(monkeypatch):
-    """An in-process fake of the native board render, for the render's own
-    tests.
-
-    Mirrors the native writer's observable contract at the Python seam: every
-    configured local target is written with the CURRENT (archive-overlaid)
-    rows; a named project matching no rows warns and counts as a failure (the
-    typo'd-project guard); a retired projection warns and skips; a failed
-    write warns with its error class and counts. The page internals remain
-    the Rust renderer's to prove.
-    """
-    import os
-    import sys
-    from pathlib import Path
-
-    import fno.graph.roadmap_public as rp
-
-    def render() -> int:
-        rows = rp.load_render_entries(None)
-        failures = 0
-        for target in rp._configured_targets():
-            scope, all_projects = rp._target_scope(target)
-            if target.projection != "local":
-                print(
-                    f"Warning: render target {target.path}: projection "
-                    f"{target.projection!r} is retired; the web backlog page "
-                    "replaces the rendered boards",
-                    file=sys.stderr,
-                )
-                continue
-            out = Path(os.path.expanduser(target.path))
-            scoped = rows if all_projects else [
-                r for r in rows if (r.get("project") or "") == scope
-            ]
-            if not all_projects and not scoped:
-                print(
-                    f"Warning: render target {out} matches no graph entry "
-                    f"with project {scope!r}; target left unchanged "
-                    "(check the project name)",
-                    file=sys.stderr,
-                )
-                failures += 1
-                continue
-            try:
-                out.parent.mkdir(parents=True, exist_ok=True)
-                body = "".join(
-                    f"<div>{r.get('id', '')} {r.get('title', '')} "
-                    f"{r.get('plan_path') or ''}</div>"
-                    for r in scoped
-                )
-                out.write_text(
-                    f'<html><body id="stats">{body}</body></html>',
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                print(
-                    f"Warning: render target {out} failed: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                failures += 1
-        return failures
-
-    monkeypatch.setattr(rp, "render_local_targets", render)
-    return render
-
-
-
-@pytest.fixture(autouse=True)
 def _operator_shell_identity(monkeypatch):
     """Run every test as a bare operator shell, never as a spawned agent.
 
@@ -190,7 +105,7 @@ def _sandbox_project_spaces(tmp_path, monkeypatch):
     """Keep project space state out of the developer's real ~/.fno/spaces.
 
     Since the spaces move, every project-relative accessor (events, plans,
-    inbox, kings, claims, status sinks, the target manifest) resolves under
+    inbox, leads, claims, status sinks, the target manifest) resolves under
     ``spaces_root()``. The pin rides the ``FNO_SPACES_DIR`` env var rather
     than patching the function so multiprocessing pool children (which re
     import fno fresh) resolve the SAME sandboxed root as the test process.
@@ -537,6 +452,29 @@ def _reap_session_processes(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _stub_codex_cli_version(monkeypatch):
+    """Never let a test's codex-argv build reach the real ``codex --version``.
+
+    ``_codex_cli_version`` shells out with a bare ``subprocess.run`` (not the
+    guarded ``_codex._subprocess_popen`` seam ``_block_live_provider_exec``
+    covers), and it is ``functools.lru_cache``-memoized per process - so an
+    unstubbed first call would both exec whatever real ``codex`` happens to be
+    on the developer's PATH and then pin that version's answer for the rest
+    of the pytest run, making --dangerously-bypass-hook-trust presence
+    host-dependent. Pin to a known-supporting version; a test that needs a
+    different answer overrides this per-test (monkeypatch order: test wins).
+    The env pin carries the same answer to any fno-agents child, whose Rust
+    probe reads ``FNO_CODEX_VERSION`` first, so parity argvs agree. It lives
+    here, not in agents/, because every codex argv build probes the version,
+    and tests outside agents/ build codex argvs too.
+    """
+    from fno.agents import mux_spawn
+
+    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
+    monkeypatch.setenv("FNO_CODEX_VERSION", "0.148.0")
+
+
+@pytest.fixture(autouse=True)
 def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     """Guard every provider subprocess seam so no cli test execs a *real*
     provider binary (e.g. an immortal ``claude --bg``).
@@ -685,6 +623,33 @@ def _stable_fno_py_cmd(monkeypatch):
     from fno import _subprocess_util
 
     monkeypatch.setattr(_subprocess_util, "fno_py_cmd", lambda: ["fno-py"])
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _pinned_native_fno():
+    """Resolve the native fno binary once, before any test narrows PATH.
+
+    Tests that set PATH to a fake bin dir, or stub shutil.which, leave the
+    event store client with no binary when the checkout has no crates/fno
+    build. FNO_BIN still wins per test. No process env is set, so children
+    resolve as before.
+    """
+    from fno.events import store_client
+    import fno.events as events_pkg
+
+    try:
+        pinned = store_client.resolve_native_bin()
+    except store_client.EventStoreUnavailable:
+        yield
+        return
+    with pytest.MonkeyPatch.context() as mp:
+        def _pinned():
+            return os.environ.get("FNO_BIN") or pinned
+        mp.setattr(store_client, "resolve_native_bin", _pinned)
+        # events/__init__ re-exports the name at import; emit paths call that
+        # copy, so patching store_client alone leaves them on the real resolver.
+        mp.setattr(events_pkg, "resolve_native_bin", _pinned)
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -978,7 +943,7 @@ def _hermetic_worker_add_dirs(monkeypatch):
 
 # Modules whose journal writes the dispatch-observability plan pins per test.
 # The tree-wide neutralise() above already aims every journal at one shared
-# sandbox; these five get a per-test tmp journal so they cannot even read each
+# sandbox; these modules get a per-test tmp journal so they cannot even read each
 # other's rows. scripts/ci/check-tests-hermetic-events.sh guards the marker
 # on the test-file side; keep the two lists in step.
 _PLAN_JOURNAL_PINNED_MODULES = frozenset(
@@ -986,17 +951,14 @@ _PLAN_JOURNAL_PINNED_MODULES = frozenset(
         "test_spawn_gate_refusal_events",
         "test_spawn_defaults",
         "test_rust_runtime",
-        "test_advance_explain",
-        "test_agents_top",
         "test_epic_status",
-        "test_join_events",
     }
 )
 
 
 @pytest.fixture(autouse=True)
 def _plan_hermetic_events_journal(request, tmp_path, monkeypatch):
-    """Pin FNO_EVENTS_PATH to this test's tmp journal for the five modules.
+    """Pin FNO_EVENTS_PATH to this test's tmp journal for the pinned modules.
 
     The audit measured 224 fixture rows and 212 rows naming a nonexistent node
     in the developer's live global journal - test fixtures a green run had
@@ -1574,6 +1536,12 @@ def _no_status_ci_door(monkeypatch):
             return []
         if verb == "authorized-merge" and op == "status-rerun":
             raise unavailable(f"fno-agents {verb} {op} unavailable in tests")
+        if verb == "authorized-merge" and op == "pr-head":
+            from fno.pr import _merge
+            from fno.pr._rest import fetch_pr_info_rest
+
+            info, _ = fetch_pr_info_rest(str(payload["pr"]), cwd=payload["cwd"], runner=_merge.run)
+            return {"head": info.get("head_sha") if info else None}
         return real_verb_call(verb, payload, unavailable=unavailable, **kwargs)
 
     monkeypatch.setattr(rust_binary, "verb_call", _fake_verb_call)

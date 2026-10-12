@@ -70,6 +70,36 @@ def _cursor(ss, name):
     return _json.loads((ss / f"{name}.cursor").read_text())
 
 
+def _utcnow():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
+def _ms(dt) -> int:
+    return int(dt.timestamp() * 1000)
+
+
+def _ts_ms(ts: str) -> int:
+    from fno.status_fanout import _timestamp_key
+
+    return _ms(_timestamp_key(ts))
+
+
+def _capture_read(monkeypatch, rows=None, high=None):
+    """Replace the native read fold with a capture; returns the queries list."""
+    import fno.events.store_client as sc
+
+    queries: list[dict] = []
+
+    def fake(active, mode, query):
+        queries.append(dict(query))
+        return (rows if rows is not None else []), 0, high
+
+    monkeypatch.setattr(sc, "read_projection", fake)
+    return queries
+
+
 # ── US1: config model ───────────────────────────────────────────────────────
 
 
@@ -206,6 +236,133 @@ def test_tick_empty_sinks_is_clean_noop(tmp_path):
     assert not _sinks_dir(tmp_path).exists()
 
 
+def test_tick_unresolved_url_skips_all_reads(tmp_path, monkeypatch):
+    from fno import status_fanout as sf
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
+    monkeypatch.delenv("OPS_MISSING", raising=False)
+
+    def _boom(*a, **k):
+        raise AssertionError("journal read attempted with no deliverable sink")
+
+    monkeypatch.setattr(sf, "_stream_since", _boom)
+    sink = StatusSinkConfig(
+        name="s", type="text-webhook", events=["blocked"], url_env="OPS_MISSING"
+    )
+    res = sf.run_tick(tmp_path, [sink])
+    assert res.sinks == [] and res.undeliverable_sinks == ("s",)
+    assert _cursor(ss, "s")["ts"] == "2026-07-12T00:00:00Z"  # untouched
+
+
+def test_tick_mixed_sinks_still_read_when_one_delivers(tmp_path, monkeypatch):
+    from fno import status_fanout as sf
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    _seed_cursor(ss, "a", "2026-07-12T00:00:00Z")
+    _seed_cursor(ss, "b", "2026-07-12T00:00:00Z")
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
+    monkeypatch.delenv("OPS_MISSING", raising=False)
+    monkeypatch.setattr(
+        sf, "_post_json", lambda u, b, t: sf._HttpResult(ok=True, status=200))
+    good = StatusSinkConfig(
+        name="a", type="json-webhook", events=["blocked"], url="https://x"
+    )
+    bad = StatusSinkConfig(
+        name="b", type="text-webhook", events=["blocked"], url_env="OPS_MISSING"
+    )
+    res = sf.run_tick(tmp_path, [good, bad])
+    assert res.rows_read == 1  # the gate did not fire: one sink delivers
+    assert res.sinks[0].dispatched == 1
+    assert res.sinks[1].short_circuited is True  # held for retry, as before
+
+
+def test_tick_store_backed_bootstrap_starts_at_wall_clock_floor(tmp_path, monkeypatch):
+    # A store answers a read with every retained generation, so a cursor-less
+    # bootstrap tick with the file-EOF floor ("", 0) rescanned the whole store.
+    # The floor must be now, and the window bounded at SQL level.
+    from fno import status_fanout as sf
+
+    from fno.paths import project_log
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    journal = project_log("events.jsonl", project_root=tmp_path)
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    (journal.parent / "events.db").write_bytes(b"")  # store-backed discriminator
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
+    before = _utcnow()
+    queries = _capture_read(monkeypatch, high=42)
+
+    sink = StatusSinkConfig(name="s", type="json-webhook", events=["blocked"],
+                            url="https://x")
+    res = sf.run_tick(tmp_path, [sink])
+
+    assert res.rows_read == 0
+    q = queries[0]
+    assert q["after_seq"] is None  # no scan cursor yet
+    assert q["since_ts"] != ""  # a real floor, not "from the epoch"
+    assert _ms(before) - 60_000 <= q["since_ms"] <= _ms(_utcnow()) + 1_000
+    assert _cursor(ss, "s")["n"] == 0
+    assert _cursor(ss, ".scan") == {"ts": "", "n": 42}  # high-water seq seeded
+
+
+def test_tick_passes_since_ms_beside_since_ts(tmp_path, monkeypatch):
+    # The ts bound must ride the query at SQL level whatever the seq bound is.
+    from fno import status_fanout as sf
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    ts = "2026-07-12T00:00:00Z"
+    _seed_cursor(ss, "s", ts)
+    _write_events(tmp_path, [_ev("2026-07-12T00:00:05Z", "blocked")])
+    queries = _capture_read(monkeypatch, high=9)
+
+    sink = StatusSinkConfig(name="s", type="json-webhook", events=["blocked"],
+                            url="https://x")
+    sf.run_tick(tmp_path, [sink])
+
+    q = queries[0]
+    assert q["since_ts"] == ts
+    assert q["after_seq"] is None
+    assert q["since_ms"] == _ts_ms(ts)
+
+    _seed_cursor(ss, ".scan", "", n=5)
+    sf.run_tick(tmp_path, [sink])
+    q = queries[1]
+    assert q["after_seq"] == 5
+    assert q["since_ts"] == ts
+    assert q["since_ms"] == _ts_ms(ts)
+
+
+def test_tick_nanosecond_fractions_key_monotonically(tmp_path, monkeypatch):
+    # Rust emitters stamp nanosecond fractions, and one row the shared parser
+    # could not key crashed the tick before any cursor persisted. The pass
+    # must complete over such rows.
+    from fno import status_fanout as sf
+
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    queries = _capture_read(
+        monkeypatch,
+        rows=[
+            _ev("2026-10-10T03:39:48.693592000Z", "blocked", node="a"),
+            _ev("2026-10-10T03:39:48.693592500Z", "blocked", node="b"),
+        ],
+        high=7,
+    )
+    _seed_cursor(ss, "s", "2026-10-10T03:39:00Z")
+    rec = _Recorder()
+    res = sf.run_tick(tmp_path, [_text_sink()], dispatch_fn=rec)
+    assert res.rows_read == 2
+    assert [ts for _, ts in rec.calls] == [
+        "2026-10-10T03:39:48.693592000Z", "2026-10-10T03:39:48.693592500Z"]
+    assert _cursor(ss, "s")["n"] == 0  # advanced past the window, count zeroed
+
+
 def test_tick_fresh_cursor_starts_at_eof_no_backfill(tmp_path):
     from fno import status_fanout as sf
 
@@ -314,6 +471,41 @@ def test_tick_rotation_drains_dot1_before_active(tmp_path):
     assert [ts for _, ts in rec.calls] == [
         "2026-07-12T00:00:01Z", "2026-07-12T00:00:09Z"]
     assert res.sinks[0].dispatched == 2
+
+
+def test_tick_store_backed_reads_only_rows_past_scan_seq(tmp_path):
+    # The daemon ticks every few seconds over a store of a million rows: an
+    # unchanged store must cost a tick zero rows, a new row must still land
+    # even when it shares the last delivered row's ts, and a fresh sink must
+    # not replay store history the journal never held.
+    from fno import status_fanout as sf
+    from fno.events.store_client import emit_envelope
+    from fno.paths import project_log
+
+    journal = project_log("events.jsonl", project_root=tmp_path)
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    ss = _sinks_dir(tmp_path)
+    ss.mkdir(parents=True)
+    _seed_cursor(ss, "s", "2026-07-12T00:00:00Z")
+    sinks = [_text_sink(), _text_sink(name="f")]
+    emit_envelope(_ev("2026-07-12T00:00:05Z", "blocked", run="r"), journal)
+    rec = _Recorder()
+
+    first = sf.run_tick(tmp_path, sinks, dispatch_fn=rec)
+    assert first.rows_read == 1
+    assert rec.calls == [("s", "2026-07-12T00:00:05Z")]
+
+    idle = sf.run_tick(tmp_path, sinks, dispatch_fn=rec)
+    assert idle.rows_read == 0
+    assert len(rec.calls) == 1
+
+    emit_envelope(_ev("2026-07-12T00:00:05Z", "blocked", run="r", node="b"), journal)
+    later = sf.run_tick(tmp_path, sinks, dispatch_fn=rec)
+    assert later.rows_read == 1
+    # s delivered the first row, so its zeroed cursor admits the same-ts peer.
+    # f fresh-initialized at wall-clock EOF (the store-backed bootstrap floor),
+    # and this peer's ts predates that floor: history to f, not delivery.
+    assert rec.calls[1:] == [("s", "2026-07-12T00:00:05Z")]
 
 
 def test_tick_short_circuit_holds_cursor_for_retry(tmp_path):
@@ -864,7 +1056,6 @@ def test_backlog_note_appends_timestamped_and_returns_plan_path(tmp_graph):
     assert found is True and plan_path == "/tmp/plan.md"
     # Second note accumulates (append-only, never replaces).
     append_progress_note(tmp_graph, "x-9", {"ts": "T2", "text": "again"})
-    import json as _json
     entry = read_graph_strict(tmp_graph)[0]
     assert [n["text"] for n in entry["progress_notes"]] == ["hi", "again"]
 
@@ -929,7 +1120,6 @@ def test_backlog_note_is_visible_and_preserves_details_and_prior_notes(tmp_graph
         catch_exceptions=False,
     )
     assert appended.exit_code == 0, appended.output
-    import json as _json
 
     node = read_graph_strict(tmp_graph)[0]
     assert node["details"] == "original rationale"
@@ -1313,8 +1503,8 @@ def test_stream_since_rotation_between_stats_triggers_one_retry(tmp_path, monkey
     real_pass = sf._stream_pass
     passes = {"n": 0}
     monkeypatch.setattr(sf, "_stream_pass",
-                        lambda a, s: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s)))
-    events, _ = sf._stream_since(active, None)
+                        lambda a, s, q=None: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s, q)))
+    events, _, _ = sf._stream_since(active, None)
     assert passes["n"] == 2  # exactly one retry
     assert [e["ts"] for e in events] == ["2026-07-12T00:00:05Z"]
 
@@ -1328,7 +1518,7 @@ def test_stream_since_persistent_rotation_bounded_at_two_passes(tmp_path, monkey
     real_pass = sf._stream_pass
     passes = {"n": 0}
     monkeypatch.setattr(sf, "_stream_pass",
-                        lambda a, s: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s)))
+                        lambda a, s, q=None: (passes.__setitem__("n", passes["n"] + 1) or real_pass(a, s, q)))
     sf._stream_since(active, None)
     assert passes["n"] == 2  # never more than 2 passes; second pass returned anyway
 
@@ -1342,13 +1532,13 @@ def test_stream_since_discards_inflated_pass_no_same_ts_overcount(tmp_path, monk
     active = tmp_path / "events.jsonl"
     active.write_text("")
     T = "2026-07-12T00:00:05Z"
-    inflated = ([_ev(T, "blocked"), _ev(T, "blocked"), _ev(T, "blocked")], 0)
-    clean = ([_ev(T, "blocked")], 0)
+    inflated = ([_ev(T, "blocked"), _ev(T, "blocked"), _ev(T, "blocked")], 0, None)
+    clean = ([_ev(T, "blocked")], 0, None)
     results = iter([inflated, clean])
-    monkeypatch.setattr(sf, "_stream_pass", lambda a, s: next(results))
+    monkeypatch.setattr(sf, "_stream_pass", lambda a, s, q=None: next(results))
     seq = iter([1, 2, 3, 3])  # pass1 rotated, pass2 stable
     monkeypatch.setattr(sf, "_active_inode", lambda p: next(seq))
-    events, _ = sf._stream_since(active, None)
+    events, _, _ = sf._stream_since(active, None)
     assert len(events) == 1  # the clean pass won; n not inflated
 
 

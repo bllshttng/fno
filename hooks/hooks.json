@@ -1,5 +1,5 @@
 {
-  "description": "Abilities plugin hooks for target loops, context monitoring, and project context injection. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh; their timeout entries here are backstops just above that internal budget. Gates that decide (target-stop-hook.sh, the PreToolUse guards, edit-integrity.sh, code-review-attest.sh, target-subagent-guard.sh, inject-control-drain-tool-boundary.sh) keep their own budgets; docs/hooks-fail-open.md owns the list.",
+  "description": "Abilities plugin hooks for target loops, context monitoring, and project context injection. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide (target-stop-hook.sh, the PreToolUse guards, edit-integrity.sh, code-review-attest.sh, target-subagent-guard.sh, inject-control-drain-tool-boundary.sh) keep their own budgets; docs/hooks-fail-open.md owns the list.",
   "modules": [
     "./register.mjs"
   ],
@@ -10,11 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/graph-write-protect.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/claude-config-write-guard.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh"
           }
         ]
       },
@@ -24,15 +20,6 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-write-protect.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/generated-write-guard.sh"
           }
         ]
       },
@@ -60,6 +47,15 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/lead-delegation-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/send-message-guard.sh"
           }
         ]
       },
@@ -281,6 +277,11 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/merge-capture.sh",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/diff-budget-commit.sh",
             "timeout": 4
           },
           {

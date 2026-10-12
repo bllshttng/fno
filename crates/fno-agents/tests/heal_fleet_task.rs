@@ -45,10 +45,10 @@ D="$(dirname "$0")"
 echo "gh $*" >> "$D/gh.log"
 for a in "$@"; do case "$a" in
   *'pulls?state=open'*)
-     echo '[{"number":1,"head":{"sha":"aaa1","ref":"feature/x-1111"},"base":{"ref":"main"},"mergeable":MERGEABLE,"body":"b"},{"number":2,"head":{"sha":"bbb2","ref":"feature/x-2222"},"base":{"ref":"main"},"mergeable":null,"body":"b"}]'
+     echo '[{"number":1,"head":{"sha":"aaa1","ref":"feature/x-1111","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","mergeable":MERGEABLE,"body":"b"},{"number":2,"head":{"sha":"bbb2","ref":"feature/x-2222","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","mergeable":null,"body":"b"}]'
      exit 0 ;;
-  *pulls/1*) echo '{"head":{"sha":"aaa1","ref":"feature/x-1111"},"base":{"ref":"main"},"mergeable":MERGEABLE,"body":"b"}'; exit 0 ;;
-  *pulls/2*) echo '{"head":{"sha":"bbb2","ref":"feature/x-2222"},"base":{"ref":"main"},"mergeable":null,"body":"b"}'; exit 0 ;;
+  *pulls/1*) echo '{"head":{"sha":"aaa1","ref":"feature/x-1111","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","mergeable":MERGEABLE,"body":"b"}'; exit 0 ;;
+  *pulls/2*) echo '{"head":{"sha":"bbb2","ref":"feature/x-2222","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","mergeable":null,"body":"b"}'; exit 0 ;;
   *check-runs) echo '{"check_runs":[{"name":"cargo fmt --check (pinned)","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/1/job/9"}]}'; exit 0 ;;
   */logs) echo "Diff in /w/w/crates/fno-agents/src/x.rs:1:"; exit 0 ;;
   */status) echo '{"statuses":[]}'; exit 0 ;;
@@ -203,4 +203,39 @@ fn two_roots_with_the_same_conflict_file_two_tasks_distinguished_by_cwd() {
                 .any(|t| t.contains(&format!(r#""cwd":"{}""#, root1.display()))),
         "same key, different cwd: {store}"
     );
+}
+
+/// The merge leg's conflict stderr (a branch holding merge commits): the
+/// verb merged instead of rebasing and aborted, so the door is merge-then-push.
+const MERGE_LEG_PUSH_STDERR: &str = "pr-push: the branch is not safely rebasable onto origin/main (status merge_conflict; files: crates/fno-agents/src/a.rs). The branch already merges origin/main, so the verb merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.";
+
+#[test]
+fn a_merge_commit_branch_conflict_tells_the_owner_to_merge_not_rebase() {
+    // A rebase flattens a branch that holds merge commits, so the merge
+    // leg's question quotes the verb's merge door and its run is a push.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(d, "", 3, MERGE_LEG_PUSH_STDERR);
+    fno_agents::heal::run_heal(&args_for(d, &["--all", "--apply"]));
+    let store = store_text(d);
+    assert_eq!(
+        store.matches(r#""type":"fleet_task""#).count(),
+        1,
+        "one open task: {store}"
+    );
+    assert!(
+        store.contains("Merge origin/main by hand")
+            && store.contains("instead of rebasing")
+            && store.contains("crates/fno-agents/src/a.rs"),
+        "{store}"
+    );
+    assert!(
+        store.contains(r#""run":"fno do pr push --pr 1""#),
+        "{store}"
+    );
+    assert!(!store.contains("fno do pr rebase"), "{store}");
 }

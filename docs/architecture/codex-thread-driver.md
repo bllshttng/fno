@@ -55,7 +55,7 @@ Before reading the protocol below, rule it out. Codex has three re-entry lanes a
 
 Two flags on that lane close the modals recorded as blocking unattended restore. `--cd <DIR>` sets the working root. Codex then never renders its "use session directory or current directory" prompt. That prompt defaults to the canonical checkout, and the correct answer is the worktree. `--dangerously-bypass-hook-trust` runs enabled hooks without persisted trust, which clears the hooks-trust gate. Neither needs a protocol and both were answered by hand three times on 2026-08-25.
 
-**What fno's own resume lane applies is `--cd` alone.** Read the paragraph above as codex's capability, not as footnote's behavior. The gap was deliberate. A registry row recorded no sandbox posture. The lane had no way to tell a bounded worker from a yolo one, and a forced bypass resumed every bounded worker with approvals off. That much is fixed (registry v19): the codex thread lane stamps `sandbox_posture` at spawn and the daemon's `thread/resume` applies it. A `--yolo` worker keeps `danger-full-access` across a daemon restart. A pre-v19 row resumes with the safe `workspace-write` default. Hook trust still needs that same operator choice, plus the installed-version gate the spawn lane already applies. So an unattended `fno agents resume` of a codex row with untrusted hooks still stalls on that prompt. Clearing it waits on an opt-in verb.
+**What fno's own resume lane applies is `--cd` and hook trust, never the approvals bypass.** Hook trust is posture-free. It skips only hook review, so it rides every resume as a global right after the binary, gated on an installed codex that ships the flag (0.148.0 or newer, pinned by `FNO_CODEX_VERSION`). The approvals bypass is the deliberate gap. A registry row recorded no sandbox posture. The lane had no way to tell a bounded worker from a yolo one, and a forced bypass resumed every bounded worker with approvals off. That much is fixed (registry v19): the codex thread lane stamps `sandbox_posture` at spawn and the daemon's `thread/resume` applies it. A `--yolo` worker keeps `danger-full-access` across a daemon restart. A pre-v19 row resumes with the safe `workspace-write` default.
 
 **What rules `codex resume` out is not capability, it is the terminal.** With stdin redirected it exits 1 in under a tenth of a second:
 
@@ -79,6 +79,16 @@ Codex's features row claims `spawn = native`: fno's own launch arm for the threa
 The claim was measured wrong in both directions before the shared-daemon move. The seat was granted to make a codex thread survive mux death, and a private app-server did survive that. It was a child of `fno-agents-daemon`, so it did not obviously survive THAT daemon's death, and the durability was narrower than advertised. Against the shared daemon the thread survives both, because neither process owns it.
 
 That is now a promise the implementation keeps rather than one it overstates.
+
+## Failed turns and quiet workers
+
+A failed `turn/completed` retains its error, keeps the worker Working, and emits `codex_turn_error`. The actor preserves waiters and starts a continuation after exponential backoff, from five seconds to five minutes. Interrupt and shutdown cancel recovery. A start without confirmed acceptance never triggers another blind start.
+
+Worker spawn and resume set OpenAI stream retries to 20 and the stream idle timeout to 600,000 ms. Explicit per-thread overrides take precedence. These settings travel through thread config and do not change the shared app-server configuration.
+
+The settle arm also checks unfinished workers once a minute. A live claim and no new transcript item for 15 minutes trigger a nudge. An error-bearing turn triggers the first nudge immediately. The 30-minute nudge includes the recorded harness resume command. At 45 minutes, the daemon sends stuck help to the lead. Recipient transcript markers confirm nudge reads. An unread nudge triggers recovery on the next sweep. An unread recovery escalates instead of repeating. Active watch leases and foreign claims hold recovery.
+
+Dead unfinished pane workers use `fno mux workspace restore --member-session <full-session-id>` in their recorded worktree. Thread workers use the native thread resume lane. Refused recovery preserves changes on a recovery branch using an isolated index, then sends branch evidence to the lead. The original branch, index, and worktree stay intact. Finished nodes and merged work are excluded from nudging.
 
 ## The two durable halves already exist
 

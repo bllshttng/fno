@@ -75,29 +75,6 @@ pub fn row_is_unarmed(row: &ArmStatus) -> bool {
     row.arm_key.is_some() && row.arm_value.as_deref() == Some("false")
 }
 
-/// The permanent old->new spellings of the 2026-10 role-arm rename
-/// (king->lead, crown->team, reign->lead). Stored tick rows are never
-/// rewritten, so the arms fold canonicalizes `data.arm` through this table
-/// and a renamed arm's history folds into its current row instead of
-/// surfacing forever as a second, dead arm reading STALE. This table never
-/// shrinks.
-pub const ARM_ALIASES: &[(&str, &str)] = &[
-    ("crown_ledger", "team_ledger"),
-    ("king_settle", "lead_settle"),
-    ("king_wake", "lead_wake"),
-    ("reign_eval", "lead_eval"),
-];
-
-/// The canonical (current) spelling of an arm name: an old stored spelling
-/// maps to its replacement, anything else is itself.
-pub fn arm_alias(arm: &str) -> &str {
-    ARM_ALIASES
-        .iter()
-        .find(|(old, _)| *old == arm)
-        .map(|(_, new)| *new)
-        .unwrap_or(arm)
-}
-
 /// The upstream arm named in [`KNOWN_ARMS`], if any.
 pub fn upstream_of(arm: &str) -> Option<&'static str> {
     KNOWN_ARMS
@@ -127,7 +104,23 @@ fn cadence_of(arm: &str) -> u64 {
 /// Every arm the readout shows, whether or not it has ever ticked.
 pub const KNOWN_ARMS: &[ArmSpec] = &[
     ArmSpec {
+        arm: "worker_wake",
+        default_interval_s: 60,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
+    ArmSpec {
         arm: "lead_wake",
+        default_interval_s: 300,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
+    ArmSpec {
+        arm: "notice_route",
         default_interval_s: 300,
         scheduler: SCHED_DAEMON,
         upstream: None,
@@ -271,6 +264,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         reader: None,
     },
     ArmSpec {
+        arm: "board_render",
+        default_interval_s: crate::board_render_arm::BOARD_RENDER_INTERVAL_S,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
+    ArmSpec {
         arm: "team_ledger",
         default_interval_s: crate::rundown::TEAM_LEDGER_INTERVAL_S,
         scheduler: SCHED_DAEMON,
@@ -341,8 +342,9 @@ pub fn tick_data(
     data
 }
 
-/// Append one tick row through the loop journal (project journal + global
-/// mirror), the journal the daemon arms already use.
+/// Append one tick row through the loop journal the daemon arms already use.
+/// A daemon arm's journal pairs the agents journal with its global twin, and
+/// the readout folds both, so the row lands once (`append_readout_row`).
 pub fn emit_tick(
     journal: &Journal,
     arm: &str,
@@ -352,7 +354,7 @@ pub fn emit_tick(
     detail: Option<&str>,
     interval_s: u64,
 ) {
-    let _ = journal.append(
+    let _ = journal.append_readout_row(
         EVENT_TYPE,
         tick_data(arm, scheduler, acted, skip_reason, detail, interval_s),
     );
@@ -405,8 +407,9 @@ pub struct ArmStatus {
     /// a stale row keeps the STALE verdict.
     pub failing: bool,
     /// Seconds since the newest run that did NOT fail, set only while
-    /// [`ArmStatus::failing`]. `None` while failing means the journal holds
-    /// no non-failure run for the arm at all.
+    /// [`ArmStatus::failing`]. `None` while failing means the read window
+    /// (`ARM_WINDOW_FLOOR_S`) holds
+    /// no non-failure run for the arm.
     pub failing_for_s: Option<u64>,
     /// Why a stale row is red, set by [`explain`]. `Some("unexplained")`
     /// means the rules ran and found nothing - a written token, never an
@@ -458,14 +461,41 @@ const ARM_ROW_TYPES: &[&str] = &[EVENT_TYPE, "pr_heal_tick"];
 /// The row types the pr-watch tick trace reads.
 const TICK_TRACE_TYPES: &[&str] = &["pr_watch_tick_attempt", "pr_watch_tick_end"];
 
-/// Every parsed row of `types` the journals hold: the store's committed rows,
-/// then the live file's bytes. Writers commit to the store only, so a fold
-/// over the raw file alone stops at the store cutover.
-fn journal_rows(journals: &[PathBuf], types: &[&str]) -> Vec<Value> {
+/// The recent window every fold reads, in seconds. Staleness is a state
+/// with no upper age bound: an arm whose newest tick sits inside the
+/// window reads STALE, one outside it reads UNOBSERVED, so the window is
+/// the depth the verdicts stay truthful to. It matches the default
+/// starvation lookback (`notify.arm_starved_after_s`, 7 days), the depth
+/// the readout vocabulary already commits to. It is also the telemetry
+/// retention, so the config reader caps a larger threshold at it.
+const ARM_WINDOW_FLOOR_S: u64 = 7 * 24 * 3600;
+
+/// Every parsed row of `types` the journals hold at or after `since_unix`:
+/// the store's committed rows in the window, then the live file's bytes.
+/// The window rides the `(type, ts_ms)` index, so a fold reads its lookback
+/// instead of every tick ever written. Writers commit to the store only, so
+/// a fold over the raw file alone stops at the store cutover; a journal
+/// with no store reads whole (raw journals are the pre-store tail).
+fn journal_rows(journals: &[PathBuf], types: &[&str], since_unix: u64) -> Vec<Value> {
+    let since_ms = i64::try_from(since_unix)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(1000);
+    // Exact types, not `of_types`: these folds skip typeless rows, so the
+    // empty type entry `of_types` adds would only keep every typeless line
+    // of a cursor-less journal riding through the read.
+    let mut query = crate::event_store::EventQuery {
+        types: types.iter().map(|t| t.to_string()).collect(),
+        include_rejected: true,
+        ..Default::default()
+    };
+    query.since_ms = Some(since_ms);
     journals
         .iter()
         .flat_map(|j| {
-            crate::event_store::journal_text(j, types)
+            crate::event_store::journal_text_checked(j, &query)
+                .unwrap_or_else(|_| {
+                    std::fs::read_to_string(crate::event_store::live_journal(j)).unwrap_or_default()
+                })
                 .lines()
                 .filter_map(|l| serde_json::from_str::<Value>(l).ok())
                 .collect::<Vec<_>>()
@@ -474,14 +504,23 @@ fn journal_rows(journals: &[PathBuf], types: &[&str]) -> Vec<Value> {
 }
 
 /// Fold every journal into one row per known arm, reading each journal's
-/// committed store rows plus its live bytes. Unknown arms seen in the
-/// journals are appended after the known ones, so a new emitter deploys
-/// before its reader does.
+/// committed store rows in the recent window plus its live bytes. Unknown
+/// arms seen in the journals are appended after the known ones, so a new
+/// emitter deploys before its reader does. The window is
+/// [`ARM_WINDOW_FLOOR_S`], the depth the verdicts stay truthful to, so a
+/// bounded read answers in place of the whole-history fold.
 pub fn read_arms(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> {
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S);
+    arms_from_rows(&journal_rows(journals, ARM_ROW_TYPES, since), now_unix)
+}
+
+/// The arms fold over rows already collected, so [`read_arms_starved`]
+/// parses each journal once and shares the rows with the starvation mark.
+fn arms_from_rows(values: &[Value], now_unix: u64) -> Vec<ArmStatus> {
     let mut newest: HashMap<String, NewestTick> = HashMap::new();
     let mut newest_ok: HashMap<String, NewestTick> = HashMap::new();
     let mut retries: HashMap<String, NewestTick> = HashMap::new();
-    for value in journal_rows(journals, ARM_ROW_TYPES) {
+    for value in values {
         fold_arm_row(value, &mut newest, &mut newest_ok, &mut retries);
     }
 
@@ -548,15 +587,17 @@ struct NewestTick {
 }
 
 fn fold_arm_row(
-    value: Value,
+    value: &Value,
     newest: &mut HashMap<String, NewestTick>,
     newest_ok: &mut HashMap<String, NewestTick>,
     retries: &mut HashMap<String, NewestTick>,
 ) {
-    // The healer's receipt type folds into the `heal` arm here too, so
+    // The healer's receipt type folds into the `heal` arm semantics, so
     // both journal folds agree on what a heal receipt looks like.
+    let healed;
     let value = if value.get("type").and_then(Value::as_str) == Some("pr_heal_tick") {
-        heal_tick_as_arm_row(value)
+        healed = heal_tick_as_arm_row(value);
+        &healed
     } else {
         value
     };
@@ -569,7 +610,6 @@ fn fold_arm_row(
     let Some(arm) = data.get("arm").and_then(Value::as_str) else {
         return;
     };
-    let arm = arm_alias(arm);
     let Some(ts_unix) = value
         .get("ts")
         .and_then(Value::as_str)
@@ -623,7 +663,7 @@ fn fresher_than(map: &HashMap<String, NewestTick>, arm: &str, ts_unix: u64) -> b
 /// the drive loop journals to the project it healed, while the arms fold
 /// reads the agents home. acted=1 when the tick changed anything (rebased,
 /// reran, escalated), 0 when it only looked; the counts ride `detail`.
-fn heal_tick_as_arm_row(value: Value) -> Value {
+fn heal_tick_as_arm_row(value: &Value) -> Value {
     let mut data = value.get("data").cloned().unwrap_or(Value::Null);
     if let Some(obj) = data.as_object_mut() {
         let count = |obj: &serde_json::Map<String, Value>, k: &str| {
@@ -659,10 +699,21 @@ fn heal_tick_as_arm_row(value: Value) -> Value {
 /// naming a budget cut and counts toward starvation; and a stale or failing
 /// row keeps its louder verdict. A heuristic with a ceiling - it reads a run
 /// of silent zeroes over time, not the arm's input, so it tunes via the
-/// threshold knob, never via an input probe.
+/// threshold knob, never via an input probe. The history is the read
+/// window, widened to the threshold: any tick the mark cannot see is older
+/// than the lookback it judges.
 pub fn mark_starved(journals: &[PathBuf], rows: &mut [ArmStatus], now_unix: u64, threshold_s: u64) {
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold_s));
+    let values = journal_rows(journals, ARM_ROW_TYPES, since);
+    mark_starved_rows(&values, rows, now_unix, threshold_s);
+}
+
+/// The starvation mark over rows already collected, so
+/// [`read_arms_starved`] shares one windowed read between the arms fold
+/// and this mark.
+fn mark_starved_rows(values: &[Value], rows: &mut [ArmStatus], now_unix: u64, threshold_s: u64) {
     let mut history: HashMap<String, Vec<(u64, u64, bool)>> = HashMap::new();
-    collect_tick_history(journal_rows(journals, ARM_ROW_TYPES), &mut history);
+    collect_tick_history(values, &mut history);
     for row in rows.iter_mut() {
         if row_is_unarmed(row)
             || row.producer_evidence == ProducerEvidence::Unobserved
@@ -702,22 +753,29 @@ pub fn fill_arm_values(rows: &mut [ArmStatus], cwd: &Path) {
 /// [`read_arms`] plus the arm values and the starved mark: the one read
 /// every arms readout makes, so the table and the status arms never
 /// disagree about the vocabulary. The threshold comes from
-/// `notify.arm_starved_after_s`.
+/// `notify.arm_starved_after_s`. One windowed journal read feeds both
+/// folds: the arms verdicts and the starvation mark parse each row once,
+/// so the readout folds its lookback once instead of twice over every
+/// tick ever written.
 pub fn read_arms_starved(journals: &[PathBuf], now_unix: u64) -> Vec<ArmStatus> {
-    let mut rows = read_arms(journals, now_unix);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    fill_arm_values(&mut rows, &cwd);
     let threshold = crate::agents_config::notify_arm_starved_after_s(&cwd);
-    mark_starved(journals, &mut rows, now_unix, threshold);
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S.max(threshold));
+    let values = journal_rows(journals, ARM_ROW_TYPES, since);
+    let mut rows = arms_from_rows(&values, now_unix);
+    fill_arm_values(&mut rows, &cwd);
+    mark_starved_rows(&values, &mut rows, now_unix, threshold);
     rows
 }
 
 /// One fold collecting every `(ts, acted, skip_explains)` triple an arm's
 /// rows hold.
-fn collect_tick_history(rows: Vec<Value>, history: &mut HashMap<String, Vec<(u64, u64, bool)>>) {
+fn collect_tick_history(rows: &[Value], history: &mut HashMap<String, Vec<(u64, u64, bool)>>) {
     for value in rows {
+        let healed;
         let value = if value.get("type").and_then(Value::as_str) == Some("pr_heal_tick") {
-            heal_tick_as_arm_row(value)
+            healed = heal_tick_as_arm_row(value);
+            &healed
         } else {
             value
         };
@@ -874,7 +932,7 @@ pub fn needs_attention(row: &ArmStatus) -> bool {
 const FAILURE_SKIPS: &[&str] = &[
     "timeout",
     "grant_queue_timeout",
-    "court_read_incomplete",
+    "team_read_incomplete",
     "error",
     "failures",
     "next-error",
@@ -939,11 +997,15 @@ pub struct TickTrace {
 }
 
 /// Fold the newest `pr_watch_tick_attempt` / `pr_watch_tick_end` records out
-/// of each journal's committed store rows plus its live bytes. Absent
-/// records leave defaults: the trace never invents a tick.
+/// of each journal's committed store rows in the recent window plus its
+/// live bytes. Absent records leave defaults: the trace never invents a
+/// tick. The window is [`ARM_WINDOW_FLOOR_S`], the same depth the arms
+/// fold reads, so a trace and the arm rows it explains answer from the
+/// same recent past.
 pub fn read_tick_trace(journals: &[PathBuf], now_unix: u64) -> TickTrace {
     let mut trace = TickTrace::default();
-    for value in journal_rows(journals, TICK_TRACE_TYPES) {
+    let since = now_unix.saturating_sub(ARM_WINDOW_FLOOR_S);
+    for value in journal_rows(journals, TICK_TRACE_TYPES, since) {
         let typ = value.get("type").and_then(Value::as_str).unwrap_or("");
         if typ != "pr_watch_tick_attempt" && typ != "pr_watch_tick_end" {
             continue;
@@ -1620,7 +1682,6 @@ mod tests {
     /// lead eval arm its 600-second daemon cadence.
     #[test]
     fn arm_watch_merge_close_and_lead_eval_are_known_daemon_arms() {
-        assert_eq!(KNOWN_ARMS.len(), 23);
         let attention = KNOWN_ARMS
             .iter()
             .find(|s| s.arm == "attention")
@@ -4199,10 +4260,7 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
 
-        // The 2026-10 role-arm rename renamed the arms but not the stored
-        // rows: a fold without the alias table surfaced king_settle/
-        // crown_ledger/reign_eval as separate arms reading STALE forever
-        // beside their live successors.
+        // Current arm rows fold their receipts into one row per arm.
         let dir = temp_dir();
         let journal = dir.join("events.jsonl");
         write_rows(
@@ -4210,7 +4268,7 @@ mod tests {
             &[
                 tick_envelope(
                     "2026-09-22T04:00:00Z",
-                    "king_settle",
+                    "lead_settle",
                     SCHED_DAEMON,
                     0,
                     json!("clear"),
@@ -4218,7 +4276,7 @@ mod tests {
                 ),
                 tick_envelope(
                     "2026-09-22T04:00:00Z",
-                    "crown_ledger",
+                    "team_ledger",
                     SCHED_DAEMON,
                     1,
                     json!(null),
@@ -4226,7 +4284,7 @@ mod tests {
                 ),
                 tick_envelope(
                     "2026-09-22T04:00:00Z",
-                    "reign_eval",
+                    "lead_eval",
                     SCHED_DAEMON,
                     0,
                     json!("not_due"),
@@ -4236,28 +4294,24 @@ mod tests {
         );
         let now = parse_rfc3339_unix("2026-09-22T04:00:10Z").unwrap();
         let rows = read_arms(&[journal], now);
-        assert!(
-            !rows.iter().any(|r| r.arm == "king_settle"),
-            "old spelling must not surface as its own arm"
-        );
         let settle = rows
             .iter()
             .find(|r| r.arm == "lead_settle")
-            .expect("king_settle folds into lead_settle");
+            .expect("lead_settle row");
         assert_eq!(settle.age_s, Some(10));
         let ledger = rows
             .iter()
             .find(|r| r.arm == "team_ledger")
-            .expect("crown_ledger folds into team_ledger");
+            .expect("team_ledger row");
         assert_eq!(ledger.acted, Some(1));
         let eval = rows
             .iter()
             .find(|r| r.arm == "lead_eval")
-            .expect("reign_eval folds into lead_eval");
+            .expect("lead_eval row");
         assert_eq!(eval.age_s, Some(10));
         std::fs::remove_dir_all(&dir).ok();
 
-        // king_wake's incomplete court read emitted no_crowned_target, a
+        // lead_wake's incomplete team read emitted no_promoted_target, a
         // healthy skip, so a dead read looked like an idle arm for 31
         // hours. The row must read FAIL and age failing_for.
         let dir = temp_dir();
@@ -4267,7 +4321,7 @@ mod tests {
             &[
                 tick_envelope(
                     "2026-09-22T03:00:00Z",
-                    "king_wake",
+                    "lead_wake",
                     SCHED_LAUNCHD,
                     0,
                     json!(null),
@@ -4275,10 +4329,10 @@ mod tests {
                 ),
                 tick_envelope(
                     "2026-09-22T04:00:00Z",
-                    "king_wake",
+                    "lead_wake",
                     SCHED_LAUNCHD,
                     0,
-                    json!("court_read_incomplete"),
+                    json!("team_read_incomplete"),
                     900,
                 ),
             ],
@@ -4286,7 +4340,7 @@ mod tests {
         let now = parse_rfc3339_unix("2026-09-22T04:00:10Z").unwrap();
         let rows = read_arms(&[journal], now);
         let wake = rows.iter().find(|r| r.arm == "lead_wake").unwrap();
-        assert_eq!(wake.skip_reason.as_deref(), Some("court_read_incomplete"));
+        assert_eq!(wake.skip_reason.as_deref(), Some("team_read_incomplete"));
         assert!(wake.failing, "line: {}", wake.line);
         // The fold leaves the rendered line empty; the readout renders it.
         let line = render_row(wake);

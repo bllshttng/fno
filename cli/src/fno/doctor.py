@@ -576,15 +576,6 @@ def _probe_installed_verb() -> ProbeResult:
     return "unknown"
 
 
-def _read_rust_marker() -> Optional[str]:
-    """Return the installed-rust-rev marker content, or None if missing/empty.
-
-    Reads the native readiness payload so this collector stays
-    monkeypatchable at the doctor module level (mirrors _read_marker's style).
-    """
-    return _probes(None).get("rust_marker")
-
-
 def _rust_source_rev(source: Optional[Path]) -> Optional[str]:
     """Return the last crates/ subtree commit SHA for the given source, or None.
 
@@ -674,9 +665,9 @@ def _binary_crates_rev(binary: Optional[str]) -> Optional[str]:
 def _human_age(seconds: int) -> str:
     """Compact process-age label. Reuses the fleet's formatter (the same
     cross-module import `mail/receipts.py` makes) rather than a 4th copy."""
-    from fno.agents.top import _fmt_age
+    from fno.agents.session_truth import fmt_age
 
-    return _fmt_age(seconds)
+    return fmt_age(seconds)
 
 
 def _daemon_drift_warning() -> Optional[str]:
@@ -1236,18 +1227,40 @@ def _groom_health() -> dict[str, Any]:
     nothing reported the silence. This is the report.
     """
     try:
-        from fno.backlog.groom import GROOM_LABEL, GROOM_STALE_HOURS, groom_staleness
-
-        state, hours = groom_staleness()
-        plist = Path.home() / "Library" / "LaunchAgents" / f"{GROOM_LABEL}.plist"
+        # The native probe exits 0 exactly when a pass is due (never ran, or
+        # past its stale threshold), so the exit code IS the stale verdict.
+        proc, probe = _groom_verb("--check")
+        plist = Path.home() / "Library" / "LaunchAgents" / "sh.fno.groom.plist"
         return {
-            "state": state,
-            "hours": hours,
-            "stale": state == "never" or (state == "ran" and hours is not None and hours > GROOM_STALE_HOURS),
+            "state": probe["state"],
+            "hours": probe["hours"],
+            "stale": proc.returncode == 0,
             "agent_installed": plist.exists(),
         }
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         return {"state": "unknown", "hours": None, "stale": False, "agent_installed": False}
+
+
+def _groom_verb(flag: str) -> tuple[subprocess.CompletedProcess, dict[str, Any]]:
+    """One native `backlog groom <flag>` call and its parsed JSON receipt."""
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise RuntimeError("fno-agents binary not found")
+    proc = subprocess.run(
+        [str(binary), "backlog", "groom", flag],
+        capture_output=True, text=True, timeout=120,
+    )
+    return proc, json.loads(proc.stdout)
+
+
+def _groom_install_agent() -> dict[str, Any]:
+    """Install the daily groom LaunchAgent through the native verb."""
+    try:
+        return _groom_verb("--install-agent")[1]
+    except Exception as exc:  # noqa: BLE001 - --fix is advisory
+        return {"status": "failed", "detail": str(exc)[:200]}
 
 
 def _archive_id_collisions() -> dict[str, Any]:
@@ -1907,10 +1920,10 @@ def _verdict(
     assembled in exactly one place.
 
     Rust staleness is proven only with full evidence: a cargo binary exists,
-    the installed-rust-rev marker is known, the crates/ subtree rev is known,
-    and they differ. Any missing evidence piece degrades to "not stale" (never
-    cry wolf). Rust evidence gaps never upgrade unknown to fresh and never
-    block fresh.
+    the binary's self-reported crates/ rev is known, the crates/ subtree rev is
+    known, and they differ. Any missing evidence piece degrades to "not stale"
+    (never cry wolf). Rust evidence gaps never upgrade unknown to fresh and
+    never block fresh.
 
     Config-schema drift follows the same full-evidence rule: only when BOTH
     keysets are known and the source defines keys the deployed CLI lacks is the
@@ -2010,6 +2023,23 @@ def _verdict(
     }
 
 
+DISK_FREE_FLOOR_GB = 20
+
+
+def _disk_free_report() -> dict[str, Any]:
+    """Advisory free-disk reading for the volume holding ~/.fno; a reading under the floor is a blocker (see _blockers)."""
+    try:
+        usage = shutil.disk_usage(Path.home() / ".fno")
+    except OSError:
+        return {"verdict": "unreadable"}
+    free_gb = usage.free / 1e9
+    return {
+        "free_gb": round(free_gb, 1),
+        "floor_gb": DISK_FREE_FLOOR_GB,
+        "verdict": "low" if free_gb < DISK_FREE_FLOOR_GB else "ok",
+    }
+
+
 def _blockers(result: dict[str, Any]) -> list[str]:
     """The findings that mean the fleet will misbehave, in the order a new
     user should act on them. Pure: reads only the assembled result dict.
@@ -2052,6 +2082,13 @@ def _blockers(result: dict[str, Any]) -> list[str]:
         blockers.append(
             f"open-file limit is low (launchd soft {fd_limit.get('launchd_soft')}); "
             "reaches spawned workers only, not this shell."
+        )
+
+    disk_free = result.get("disk_free") or {}
+    if disk_free.get("verdict") == "low":
+        blockers.append(
+            f"free disk is {disk_free.get('free_gb')} GB, under the {disk_free.get('floor_gb')} GB floor; "
+            "builds, stores and downloads fail near zero. Fix: fno doctor reclaim --apply"
         )
 
     plugin_hooks = result.get("plugin_hooks") or {}
@@ -4309,6 +4346,9 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     result["source_checkout_sync"] = _source_checkout_sync(src)
     result["launch_agents"] = _launch_agent_failures()
 
+    # Advisory free-disk reading; under the floor is a blocker. Never changes status/exit.
+    result["disk_free"] = _disk_free_report()
+
     # Advisory silent-switch legibility (Wave 6): default-off switches
     # silently producing inaction + default-on/armed switches silently merging.
     # Never changes status/exit. The plugin-cache report is computed ONCE and
@@ -4573,20 +4613,23 @@ def doctor_command(
         # current binary first.
         pw = result.get("pr_watch") or {}
         if pw.get("verdict") in ("dead", "wedged") and not json_out:
-            from fno.pr_watch._install import _LAUNCH_AGENTS_DIR, heal_watcher, refresh_watcher
+            from fno.pr_watch._install import _LAUNCH_AGENTS_DIR, heal_watcher
 
             if pw.get("verdict") == "wedged":
-                from fno.pr_watch.cli import _resolve_fno_binary
+                # The refresh verb is the native cure; it self-gates on pr_watch.enabled.
+                import subprocess
+                from fno.rust_binary import resolve_binary
 
-                rmsg, _ = refresh_watcher(
-                    launch_agents_dir=_LAUNCH_AGENTS_DIR,
-                    fno_binary=_resolve_fno_binary(),
-                    interval=int(pw.get("interval_seconds") or 600),
-                    defer_when_ticking=True,
-                    caller="doctor-fix",
-                    force_bounce=True,
-                )
-                typer.echo(f"fno doctor: --fix pr-watch refresh: {rmsg}", err=True)
+                binary = resolve_binary()
+                if binary is None:
+                    said = "skipped; fno-agents binary not found"
+                else:
+                    proc = subprocess.run(
+                        [str(binary), "pr-watch", "refresh", "--force-bounce", "--caller", "doctor-fix"],
+                        capture_output=True, text=True, check=False, timeout=120,
+                    )
+                    said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
+                typer.echo(f"fno doctor: --fix pr-watch refresh: {said}", err=True)
             else:
                 hmsg, _ = heal_watcher(
                     launch_agents_dir=_LAUNCH_AGENTS_DIR,
@@ -4622,9 +4665,7 @@ def doctor_command(
             and not gr.get("agent_installed")
             and not json_out
         ):
-            from fno.backlog.groom import install_groom_agent
-
-            receipt = install_groom_agent()
+            receipt = _groom_install_agent()
             typer.echo(
                 f"fno doctor: --fix groom agent: {receipt.get('status')}"
                 f" ({receipt.get('detail') or receipt.get('plist')})",

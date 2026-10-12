@@ -5,17 +5,41 @@ fn target_stream_emit_lands_beside_legacy_lock_dirs() {
     // The store commit owns serialization now; a legacy lock or
     // maintenance marker beside the journal neither blocks nor drops a
     // hook emission.
-    let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("events.jsonl");
-    let global = dir.path().join("global-events.jsonl");
-    std::fs::create_dir(dir.path().join("events.jsonl.lock.d")).unwrap();
-    std::fs::create_dir(dir.path().join("events.jsonl.gc.d")).unwrap();
+    for checked in [false, true] {
+        for shared in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("events.jsonl");
+            let global = if shared {
+                project.clone()
+            } else {
+                dir.path().join("global-events.jsonl")
+            };
+            std::fs::create_dir(dir.path().join("events.jsonl.lock.d")).unwrap();
+            std::fs::create_dir(dir.path().join("events.jsonl.gc.d")).unwrap();
 
-    emit_to_both(&project, &global, "mutex_probe", serde_json::json!({}));
+            if checked {
+                crate::loopcheck::fire_history::emit_to_both_checked(
+                    &project,
+                    &global,
+                    "mutex_probe",
+                    serde_json::json!({}),
+                )
+                .unwrap();
+            } else {
+                emit_to_both(&project, &global, "mutex_probe", serde_json::json!({}));
+            }
 
-    for path in [&project, &global] {
-        let text = crate::events::committed_journal_text(path);
-        assert!(text.contains("mutex_probe"), "missing in {path:?}");
+            for path in [&project, &global] {
+                let text = crate::events::committed_journal_text(path);
+                assert_eq!(
+                    text.lines()
+                        .filter(|line| line.contains("mutex_probe"))
+                        .count(),
+                    1,
+                    "checked={checked}, shared={shared}, journal={path:?}: {text}"
+                );
+            }
+        }
     }
 }
 
@@ -189,7 +213,8 @@ fn streak_ago(secs_before_now: &[i64], gap: i64) -> (u64, i64) {
     let dir = tempfile::TempDir::new().unwrap();
     let p = dir.path().join("events.jsonl");
     write_fire_log(&p, &fires);
-    let (_, streak, _, window) = read_prior_fires(&p, "sess", Some(FP), now, gap);
+    let (_, streak, _, window) =
+        read_prior_fires(loop_check_rows(&p).as_deref(), "sess", Some(FP), now, gap);
     (streak, window)
 }
 
@@ -241,7 +266,8 @@ fn debounce_changed_fingerprint_breaks_streak_at_any_speed() {
             ("2026-06-05T11:59:58Z".to_string(), "DIFFERENT"),
         ],
     );
-    let (_, streak, _, _) = read_prior_fires(&p, "sess", Some(FP), now, 300);
+    let (_, streak, _, _) =
+        read_prior_fires(loop_check_rows(&p).as_deref(), "sess", Some(FP), now, 300);
     assert_eq!(streak, 0, "a 2-second-old change still resets the streak");
 }
 
@@ -259,7 +285,13 @@ fn debounce_untimestamped_fire_is_transparent() {
     ];
     std::fs::write(&p, lines.join("\n") + "\n").unwrap();
 
-    let (_, streak, last_fp, _) = read_prior_fires(&p, "sess", Some(FP), at(NOW), 300);
+    let (_, streak, last_fp, _) = read_prior_fires(
+        loop_check_rows(&p).as_deref(),
+        "sess",
+        Some(FP),
+        at(NOW),
+        300,
+    );
     assert_eq!(
         streak, 1,
         "unplaceable fires skip; the good one still counts"

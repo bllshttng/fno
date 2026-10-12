@@ -955,6 +955,11 @@ mod tests {
         assert_eq!(classify("   "), Err("no_user_text"));
         // Header-framed and held-release turns read injected too.
         assert_eq!(classify("`@folio · msg-1 · hi`\nthe body"), Err("fno_mail"));
+        // The law's two-field header reads injected as well.
+        assert_eq!(
+            classify("`@folio · fmail-abc123def456`\nthe body"),
+            Err("fno_mail")
+        );
         // The transcript's one-line delivered form (header, " ⏎ ", body)
         // reads injected too.
         assert_eq!(
@@ -1022,7 +1027,7 @@ mod tests {
             // A native peer row (origin.kind == "peer" on the transcript row
             // itself) is its own relay kind, never an operator turn.
             json!({
-                "type": "user", "origin": {"kind": "peer", "name": "king-a1"},
+                "type": "user", "origin": {"kind": "peer", "name": "lead-a1"},
                 "message": {"role": "user", "content": "hi from a peer"}
             }),
         ];

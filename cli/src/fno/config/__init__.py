@@ -2,32 +2,13 @@
 
 Settings are DEEP-MERGED across every candidate file that exists, higher
 priority overriding lower key-by-key (nested dicts merge recursively,
-scalars and lists replace wholesale). Candidate priority, highest first:
-  1. $FNO_CONFIG env var (explicit path; when set, the ONLY candidate)
-  2. <worktree_root>/.fno/settings.yaml  (project-local to this checkout)
-  3. <canonical_root>/.fno/settings.yaml  (the main checkout's config,
-     reached via the main worktree from `git worktree list`; lets a linked
-     worktree read shared project config with zero per-worktree setup;
-     deduped when 2 == 3)
-  4. ~/.fno/settings.yaml  (per-user global; shared defaults)
-
-A key absent from a higher-priority file falls through to the next file down,
-so the per-user global holds shared defaults while each project sets only its
-deltas. With no file, built-in defaults apply. This mirrors the shell reader
-(scripts/lib/config.sh, per-key local->global fallback) and the provider loader.
+scalars and lists replace wholesale). The candidate priority list, the per-key fallthrough, and the design decisions are locked in docs/path-config.md.
 
 Cache: load_settings() is an uncached wrapper over _load_settings_at(),
 keyed on the declaration (_settings_key: env overrides + HOME + resolved
 repo root) PLUS a stat fingerprint of every candidate file. A same-key
 settings rewrite changes the fingerprint, so the cache reparses on its
 own; no cache_clear is needed to see an edit in-process.
-
-Design decisions (locked in 2026-05-14-path-config.md):
-  - extra='ignore' for forward compatibility (do NOT change to 'forbid')
-  - Emit a startup WARNING for unknown keys (not an error)
-  - Reject glob chars (*?[) at validation time, not at resolve time
-  - Reject {vault} when obsidian.enabled is False
-  - PATH_MAX = 4096 bytes enforced on state_dir / plans_dir
 """
 from __future__ import annotations
 
@@ -53,6 +34,7 @@ from pydantic import (
 )
 
 from fno.user import UserBlock
+from fno.config.split_block import SplitBlock as SplitBlock
 
 # Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
 # here; the redundant `X as X` aliases are the explicit-reexport idiom mypy's
@@ -63,8 +45,8 @@ from fno.config._auto_heal import AutoHealBlock
 from fno.config._dispatch_verbs import DEFAULT_DISPATCH_VERBS as _DEFAULT_DISPATCH_VERBS
 from fno.config._dispatch_verbs import DispatchVerbDescriptor as DispatchVerbDescriptor
 from fno.config._dispatch_verbs import resolvable_verbs as resolvable_verbs
-from fno.config._king import KING_CHECKIN_TEXT as KING_CHECKIN_TEXT
-from fno.config._king import KingBlock
+from fno.config._lead import LEAD_CHECKIN_TEXT as LEAD_CHECKIN_TEXT
+from fno.config._lead import LeadBlock
 from fno.config._evals import EvalsBlock
 from fno.config.status_sinks import StatusFanoutConfig as StatusFanoutConfig
 from fno.config.status_sinks import StatusSinkConfig as StatusSinkConfig
@@ -75,6 +57,7 @@ from fno.config.source_attribution import resolve_source as resolve_source
 from fno.config._loader import _settings_key as _settings_key
 from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
 from fno.config._guards import GuardsBlock
+from fno.config._store import StoreBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
@@ -280,6 +263,14 @@ class MaintainBlock(BaseModel):
         return v
 
 
+class PlanBlock(BaseModel):
+    """Plan budgets (config.plan): default_diff_budget is the commit-time diff-budget ceiling (hooks/diff-budget-commit.sh), 0 is off; a plan's frontmatter diff_budget overrides."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    default_diff_budget: int = Field(default=300, ge=0)
+
+
 _RENDER_PROJECTIONS = ("backlog", "roadmap", "local")
 
 # Shared with the graph-layer auto-render so the array-of-tables typo warns
@@ -318,7 +309,7 @@ class RenderTargetConfig(BaseModel):
                     # load_settings(), so raising here turns one typo in one
                     # render-target row into a ValidationError out of every
                     # settings-loading fno command. The row is REFUSED instead
-                    # at the point of use, in roadmap_public._configured_targets,
+                    # at the point of use, by the native render-target read,
                     # where skipping it costs one board and nothing else.
                     _LOG.warning(
                         "config.backlog.render_targets: unknown key %r in row "
@@ -419,7 +410,7 @@ class BacklogBlock(BaseModel):
     # Enforced by the Rust idea cap (idea_cap.rs); 0 turns the cap off.
     max_open_ideas: int = Field(default=25, ge=0)
     render_targets: list[RenderTargetConfig] = Field(default_factory=list)
-    # Seconds an open local board or reign.html tab waits, visible and
+    # Seconds an open local board or lead.html tab waits, visible and
     # untouched, before it reloads itself (0 is off).
     page_reload_s: int = 60
 
@@ -1733,7 +1724,7 @@ class HandoffBlock(BaseModel):
 
     enabled: bool = True
     used_pct_trigger: int = 50
-    king_used_pct_trigger: int = 40
+    lead_used_pct_trigger: int = 40
 
     @field_validator("used_pct_trigger")
     @classmethod
@@ -1746,43 +1737,43 @@ class HandoffBlock(BaseModel):
             )
         return v
 
-    @field_validator("king_used_pct_trigger")
+    @field_validator("lead_used_pct_trigger")
     @classmethod
-    def king_used_pct_trigger_range(cls, v: int) -> int:
+    def lead_used_pct_trigger_range(cls, v: int) -> int:
         """Percentage must be 1-100; the cross-field upper bound is below."""
         if not (1 <= v <= 100):
             raise ValueError(
-                "config.target.handoff.king_used_pct_trigger must be in range 1-100; "
+                "config.target.handoff.lead_used_pct_trigger must be in range 1-100; "
                 f"got {v}"
             )
         return v
 
     @model_validator(mode="after")
-    def king_trigger_below_teammate_trigger(self) -> "HandoffBlock":
-        """A king compacts EARLIER than a teammate, so an EXPLICITLY-set
-        king_used_pct_trigger must stay strictly below used_pct_trigger. The
+    def lead_trigger_below_teammate_trigger(self) -> "HandoffBlock":
+        """A lead compacts EARLIER than a teammate, so an EXPLICITLY-set
+        lead_used_pct_trigger must stay strictly below used_pct_trigger. The
         refusal MESSAGE is the deliverable: the failure mode this prevents is a
         future reader "tidying" 40 up to 50, and the rationale lands in front of
         the exact person trying to delete it.
 
-        The rule fires only when king_used_pct_trigger was EXPLICITLY set. A
+        The rule fires only when lead_used_pct_trigger was EXPLICITLY set. A
         DEFAULT silently invalidating an otherwise-valid explicit setting is a
-        trap: a user who sets used_pct_trigger low and never touches the king
-        knob would be refused for a value they never wrote. So a defaulted king
+        trap: a user who sets used_pct_trigger low and never touches the lead
+        knob would be refused for a value they never wrote. So a defaulted lead
         (40) leaves the config valid even when the teammate trigger dips below
-        it; the user who wants king < teammate sets king explicitly.
+        it; the user who wants lead < teammate sets lead explicitly.
         """
         if (
-            "king_used_pct_trigger" in self.model_fields_set
-            and self.king_used_pct_trigger >= self.used_pct_trigger
+            "lead_used_pct_trigger" in self.model_fields_set
+            and self.lead_used_pct_trigger >= self.used_pct_trigger
         ):
             raise ValueError(
-                "config.target.handoff.king_used_pct_trigger must be BELOW "
+                "config.target.handoff.lead_used_pct_trigger must be BELOW "
                 "used_pct_trigger "
-                f"(got {self.king_used_pct_trigger}, teammate trigger "
-                f"{self.used_pct_trigger}). A king compacts earlier than a "
+                f"(got {self.lead_used_pct_trigger}, teammate trigger "
+                f"{self.used_pct_trigger}). A lead compacts earlier than a "
                 "teammate on purpose: a worker's degradation costs one node, "
-                "a king's propagates into every ruling it issues and every "
+                "a lead's propagates into every ruling it issues and every "
                 "worker it routes, and the handoff itself costs context."
             )
         return self
@@ -1978,13 +1969,22 @@ class AgentProviderBlock(BaseModel):
     dropping the sandbox - strictly safer than the full bypass. A malformed
     block fails safe to bounded. Only the autonomous exec lane consults it; an
     interactive `host`/`drive` launch and claude (yolo is a no-op) are never
-    affected. (The old "sandboxed-but-prompting" meaning of `false` is removed;
-    it was strictly worse than bounded - sandboxed AND hangs.)
+    affected.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     headless_yolo: bool = False
+
+
+class AgentBeatBlock(BaseModel):
+    """`config.agents.<harness>.beat`; `auto` reads the harness capability row."""
+
+    beat: str = "auto"
+
+
+class CodexAgentBlock(AgentProviderBlock, AgentBeatBlock):
+    """The codex block: the provider settings plus its lead beat."""
 
 
 # The routing schema block lives in routing_blocks (the hub is shrink-only).
@@ -2099,7 +2099,7 @@ class DispatchBlock(BaseModel):
     # table (blueprint for medium and up). "low" blueprints every plan-less
     # node; "never" targets everything. Read by the lifecycle verb table
     # (fno-agents effective_verb) through the dispatch doors, and by the
-    # reign check-in's blueprint reading.
+    # lead check-in's blueprint reading.
     blueprint_floor: str = "high"
 
     @field_validator("auto_merge", mode="before")
@@ -2277,16 +2277,15 @@ class AgentsBlock(SweepKeys):
     auto_register_sessions: bool = False
     # Only routed Claude panes use this machine-local integration.
     happy_routed_panes: bool = False
-    # Row-retirement grace in SECONDS. Full contract: FIELD_META.
+    first_check_minutes: int = Field(default=10, ge=1, le=60)
     retire_grace_s: int = Field(default=900, ge=0)
-    # Sweep cadence in SECONDS; clamped under a third of the grace. Full contract: FIELD_META.
     retire_interval_s: int = Field(default=300, ge=0)
-    # Reaper-hold escalation in SECONDS. Full contract: FIELD_META.
     hold_escalate_after_s: int = Field(default=5400, ge=0)
     reap_receipts: ReapReceiptsBlock = Field(default_factory=ReapReceiptsBlock)
     reap: ReapBlock = Field(default_factory=ReapBlock)
     state_reap: StateReapBlock = Field(default_factory=StateReapBlock)
-    codex: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
+    claude: AgentBeatBlock = Field(default_factory=AgentBeatBlock)
+    codex: CodexAgentBlock = Field(default_factory=CodexAgentBlock)
     gemini: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
     # Spawn-gate scalars degrade to safe defaults: max_live caps the roster
     # union as the BACKSTOP behind the RAM floor (min_free_gb) and the CPU
@@ -2507,7 +2506,7 @@ class AgentsBlock(SweepKeys):
             return v.strip().lower()
         return "utility"
 
-    @field_validator("codex", "gemini", mode="before")
+    @field_validator("claude", "codex", "gemini", mode="before")
     @classmethod
     def _coerce_provider_block(cls, v: object) -> object:
         """Fail-safe: a non-mapping provider block degrades to defaults.
@@ -2518,7 +2517,7 @@ class AgentsBlock(SweepKeys):
         passes through so an explicit ``headless_yolo: false`` opt-out still
         takes effect. Mirrors ``ConfigBlock._coerce_auto_continue``.
         """
-        if isinstance(v, (dict, AgentProviderBlock)):
+        if isinstance(v, (dict, BaseModel)):
             return v
         return {}
 
@@ -2978,7 +2977,6 @@ class AutoMergeBlock(BaseModel):
         return "attempt"
 
 
-
 class PrWatchBlock(BaseModel):
     """PR-state watcher settings (nested under 'config.pr_watch').
 
@@ -3012,8 +3010,8 @@ class PrWatchBlock(BaseModel):
 class GroomBlock(BaseModel):
     """Daily backlog-grooming pass settings (nested under 'config.groom').
 
- wave 2: `fno backlog groom` (`_spawn_groom_worker`,
-    backlog/groom.py:204) previously spawned with no enable key at all, so it
+ wave 2: `fno backlog groom` (`spawn_worker` in
+    crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it
     could not be turned off. Default ``True`` matches the spawner's CURRENT
     effective behavior (it always ran) - shipping this gate changes nothing
     for an existing user until they explicitly disable it.
@@ -3708,10 +3706,9 @@ class MuxBlock(BaseModel):
     # attach (and the Rust reader parses it as u64, silently rejecting negatives
     # to the default), so pin the floor at 1 minute here.
     attach_digest_threshold_min: int = Field(default=10, ge=1)
-    # Focus-follows-mouse over coding panes: hovering a pane makes it the
-    # keyboard focus after a short settle. Read straight from settings.yaml by the
-    # interactive Rust client (same split-brain as attach_digest); modeled here so
-    # the off-switch is discoverable via `fno config get/set`.
+    # Focus-follows-mouse over coding panes: a hover makes the pane the keyboard
+    # focus after a short settle; read by the Rust client like `hover_focus`'s
+    # off-switch door, `fno config get/set`.
     hover_focus: bool = True
     # Show the mux status row; the Rust client reads it from config.toml, like `hover_focus`.
     status_row: bool = True
@@ -3728,6 +3725,8 @@ class MuxBlock(BaseModel):
     theme: Optional[str] = None
     # While a theme is active, paint the terminal's own palette from it (OSC 11/10/4); restore on exit.
     paint_background: bool = True
+    # The card's graph slot: activity ramp (default) or the context fill bar.
+    card_graph: Literal["activity", "context"] = "activity"
 
     @field_validator("shell_integration", mode="before")
     @classmethod
@@ -3778,8 +3777,8 @@ class WorktreeBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     policy: Optional[str] = None
-    # The worktree.* leaves below are read ad-hoc by
-    # skills/speculate/scripts/worktree-setup.sh (wt_config) and by the
+    # The worktree.* leaves below are read through `fno config get` by
+    # scripts/lib/worktree-config.sh (wt_config) and by the
     # done-node gate (prune_done, in Rust), so the model carries them but
     # never enforces their values.
     auto_install: bool = True
@@ -3918,6 +3917,7 @@ class ConfigBlock(BaseModel):
     user: UserBlock = Field(default_factory=UserBlock)
     sandbox: SandboxBlock = Field(default_factory=SandboxBlock)
     blueprint: BlueprintBlock = Field(default_factory=BlueprintBlock)
+    plan: PlanBlock = Field(default_factory=PlanBlock)
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
@@ -3927,18 +3927,19 @@ class ConfigBlock(BaseModel):
     preflight: PreflightBlock = Field(default_factory=PreflightBlock)
     approvals: ApprovalsBlock = Field(default_factory=ApprovalsBlock)
     context: ContextBlock = Field(default_factory=ContextBlock)
-    # Repo-wide ship-gate probes join plan `done_probes`; both must pass. A
-    # probe is an OBSERVATION running `sh -c` in the session cwd, so the list
-    # stays gitignored and superuser-authored: a tracked one runs code on clone.
+    # Repo-wide ship-gate probes join plan `done_probes`; both must pass. Each runs `sh -c`
+    # in the session cwd, so the list stays gitignored: a tracked one runs code on clone.
     done_probes: list[str] = Field(default_factory=list)
     target: TargetConfig = Field(default_factory=TargetConfig)
     test: TestBlock = Field(default_factory=TestBlock)
     guards: GuardsBlock = Field(default_factory=GuardsBlock)
+    store: StoreBlock = Field(default_factory=StoreBlock)
     agents: AgentsBlock = Field(default_factory=AgentsBlock)
     process_admission: ProcessAdmissionBlock = Field(default_factory=ProcessAdmissionBlock)
     dispatch: DispatchBlock = Field(default_factory=DispatchBlock)
     routing: RoutingBlock = Field(default_factory=RoutingBlock)
     sideline: SidelineBlock = Field(default_factory=SidelineBlock)
+    split: SplitBlock = Field(default_factory=SplitBlock)
     autonomy: AutonomyBlock = Field(default_factory=AutonomyBlock)
     auto_continue: AutoContinueBlock = Field(default_factory=AutoContinueBlock)
     keep_going: KeepGoingBlock = Field(default_factory=KeepGoingBlock)
@@ -3963,7 +3964,7 @@ class ConfigBlock(BaseModel):
     loops: dict[str, LoopEntry] = Field(default_factory=dict)
     status_sinks: list[StatusSinkConfig] = Field(default_factory=list)
     status_fanout: StatusFanoutConfig = Field(default_factory=StatusFanoutConfig)
-    king: KingBlock = Field(default_factory=KingBlock)
+    lead: LeadBlock = Field(default_factory=LeadBlock)
     accounts: AccountsBlock = Field(default_factory=AccountsBlock)
 
     @model_validator(mode="before")

@@ -141,7 +141,6 @@ def _reclaim_if_provably_dead(
     side effect is a blast radius nobody asked for.
     """
     from fno.claims.core import (
-        RECOVERY_LOCK_SUFFIX,
         force_release_claim,
         sweep_verdict,
     )
@@ -149,89 +148,75 @@ def _reclaim_if_provably_dead(
     from fno.claims.core import native_claims_root
     from fno.claims.io import claim_path, read_claim_file
     from fno.claims.verdict import claim_verdicts
-    from fno.mutex import acquire_dir_mutex, release_dir_mutex
 
     try:
         path = claim_path(key, root=native_claims_root(key))
     except Exception:  # noqa: BLE001 - an unmeasurable store clears nothing
         return None, "unreadable"
-    # Take the SAME per-key recovery mutex the reaper holds while it re-verifies
-    # and archives, and re-read INSIDE it. Reading, deciding, and releasing
-    # outside the lock is a TOCTOU window: force_release_claim drops a claim
-    # whatever its holder, so a worker that respawns and re-acquires between the
-    # read and the release loses a claim it legitimately owns. timeout_s=0
-    # because a dispatch must not block on a peer mid-recovery; losing the race
-    # just leaves the refusal standing, which is the safe direction.
-    lock = path.with_name(path.name + RECOVERY_LOCK_SUFFIX)
-    token = acquire_dir_mutex(lock, 0)
-    if token is None:
-        return None, "contended"
     try:
-        try:
-            claim = read_claim_file(path)
-        except Exception:  # noqa: BLE001 - unreadable is unproven
-            return None, "unreadable"
-        native = claim_verdicts([key]).get(key)
-        if native is None:
-            return None, "unreadable"
-        if key.startswith("dispatch:"):
-            # The reservation's own predicate, deliberately NOT in the shared
-            # sweep classifier. `spawn-cli:<pid>` launches a worker and exits, so
-            # a dead pid means no launch is in flight from that process (the TTL
-            # is the boot window; see the native classify_for_sweep decision),
-            # but THIS caller is the next dispatcher, standing at the moment of
-            # launch: the node claim it takes covers the window the reservation
-            # protected. ONLY this dispatcher's own holder shape. `fno backlog
-            # advance` reserves the same key as `advance:<pid>` and spawns
-            # WITHOUT --node, so that reservation is the only barrier its
-            # booting worker has; its pid is dead by design too, so a predicate
-            # reading dead-pid-and-same-host alone cleared it and launched a
-            # second worker onto the node advance had just staffed. LIVENESS
-            # FIRST. A live holder is benign dedup whoever wrote it: answering
-            # `foreign-reservation` there would print force-release advice
-            # against a reservation somebody is actively launching under.
-            if native.get("state") == "live":
-                if (
-                    native.get("session_basis") != "registry-served-live"
-                    or _pid_is_alive(claim.pid)
-                ):
-                    return None, _HOLDER_ALIVE
-                # A registry-served live verdict names the DISPATCHER's session
-                # (the subprocess stamps its caller's session id), which
-                # outlives the holder by design. Only the spawn-cli shape may
-                # clear on the holder pid: an advance:<pid> reservation stays
-                # the only barrier its booting worker has, and its pid is dead
-                # by design too.
-                if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
-                    return None, "foreign-reservation"
-            elif native.get("bucket") == "offhost":
-                return None, "offhost"
+        claim = read_claim_file(path)
+    except Exception:  # noqa: BLE001 - unreadable is unproven
+        return None, "unreadable"
+    native = claim_verdicts([key]).get(key)
+    if native is None:
+        return None, "unreadable"
+    if key.startswith("dispatch:"):
+        # The reservation's own predicate, deliberately NOT in the shared
+        # sweep classifier. `spawn-cli:<pid>` launches a worker and exits, so
+        # a dead pid means no launch is in flight from that process (the TTL
+        # is the boot window; see the native classify_for_sweep decision),
+        # but THIS caller is the next dispatcher, standing at the moment of
+        # launch: the node claim it takes covers the window the reservation
+        # protected. ONLY this dispatcher's own holder shape. `fno backlog
+        # advance` reserves the same key as `advance:<pid>` and spawns
+        # WITHOUT --node, so that reservation is the only barrier its
+        # booting worker has; its pid is dead by design too, so a predicate
+        # reading dead-pid-and-same-host alone cleared it and launched a
+        # second worker onto the node advance had just staffed. LIVENESS
+        # FIRST. A live holder is benign dedup whoever wrote it: answering
+        # `foreign-reservation` there would print force-release advice
+        # against a reservation somebody is actively launching under.
+        if native.get("state") == "live":
+            if (
+                native.get("session_basis") != "registry-served-live"
+                or _pid_is_alive(claim.pid)
+            ):
+                return None, _HOLDER_ALIVE
+            # A registry-served live verdict names the DISPATCHER's session
+            # (the subprocess stamps its caller's session id), which
+            # outlives the holder by design. Only the spawn-cli shape may
+            # clear on the holder pid: an advance:<pid> reservation stays
+            # the only barrier its booting worker has, and its pid is dead
+            # by design too.
             if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
                 return None, "foreign-reservation"
-            provably_dead, bucket = True, ""
-        else:
-            try:
-                provably_dead, bucket = sweep_verdict(
-                    claim,
-                    abandonment_probe=probe,
-                    node_settlement=settlement,
-                    native_verdict=native,
-                )
-            except Exception:  # noqa: BLE001 - a probe blowing up clears nothing
-                return None, "unprobed"
-        if not provably_dead:
-            return None, bucket
+        elif native.get("bucket") == "offhost":
+            return None, "offhost"
+        if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
+            return None, "foreign-reservation"
+        provably_dead, bucket = True, ""
+    else:
         try:
-            force_release_claim(
-                key=key,
-                reason=f"holder {claim.holder} (pid {claim.pid}) proven dead at dispatch",
-                holding_recovery_lock=True,
+            provably_dead, bucket = sweep_verdict(
+                claim,
+                abandonment_probe=probe,
+                node_settlement=settlement,
+                native_verdict=native,
             )
-        except Exception:  # noqa: BLE001 - a failed release just leaves the refusal
-            return None, "release-failed"
-        return claim.holder, ""
-    finally:
-        release_dir_mutex(lock, token)
+        except Exception:  # noqa: BLE001 - a probe blowing up clears nothing
+            return None, "unprobed"
+    if not provably_dead:
+        return None, bucket
+    try:
+        outcome = force_release_claim(
+            key=key,
+            reason=f"holder {claim.holder} (pid {claim.pid}) proven dead at dispatch",
+            expected_claim=claim,
+        )
+    except Exception:  # noqa: BLE001 - a failed release just leaves the refusal
+        return None, "release-failed"
+    return (claim.holder, "") if outcome.archived else (None, "contended")
+
 
 
 def _init_reached(node_id: str, holder: str | None, cwd: str | None) -> bool:
@@ -241,7 +226,7 @@ def _init_reached(node_id: str, holder: str | None, cwd: str | None) -> bool:
     exists: a `spawn-handover:` claim covers a launch window whose worker can
     die before it boots, and a hand `fno agents claim acquire` from a live process
     takes the key with nothing launched at all. Reporting either as a live
-    worker tells a king the opposite of the truth at the moment the king
+    worker tells a lead the opposite of the truth at the moment the lead
     decides whether to staff the node.
 
     Two markers, both POSITIVE. This never reads an absence as a yes:
@@ -343,14 +328,15 @@ def _spawn_guard_decision(
             ),
         }, 0
 
-    from fno.backlog.advance import _observe_node_claim
+    from fno.rust_binary import verb_call
+    from types import SimpleNamespace
 
-    observation = _observe_node_claim(
-        node_id,
-        cwd,
-        enforce_failure_limit=not no_reserve,
-        emit=not no_reserve,
-    )
+    observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+        "op": "claim", "node_id": node_id, "cwd": cwd,
+        "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
+    }))
+    if getattr(observation, "warning", None):
+        print(f"advance: WARNING: {observation.warning}", file=sys.stderr)
     common = {
         "holder": observation.holder,
         "truth_status": observation.truth_status,
@@ -412,12 +398,10 @@ def _spawn_guard_decision(
             )
             if prior is not None:
                 _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = _observe_node_claim(
-                    node_id,
-                    cwd,
-                    enforce_failure_limit=not no_reserve,
-                    emit=False,
-                )
+                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+                    "op": "claim", "node_id": node_id, "cwd": cwd,
+                    "enforce_failure_limit": not no_reserve, "emit_events": False,
+                }))
                 common = {
                     "holder": observation.holder,
                     "truth_status": observation.truth_status,
@@ -511,9 +495,18 @@ def _spawn_guard_decision(
                         )
                     ),
                 }, 0
+            # An authority outage is NOT occupancy: rendering it
+            # already-running sent free nodes' leads to a costlier lane.
+            if block_wins:
+                return {
+                    "verdict": "unknown",
+                    "reason": block,
+                    "detail": f"could not check node:{node_id} is running: "
+                              f"{observation.worked_error or block}; retry",
+                    **common,
+                }, 0
             reason = (
-                block if block_wins
-                else "suspect-claim" if wedged
+                "suspect-claim" if wedged
                 else "live-claim" if common["init_reached"]
                 else "unproven-claim"
             )
@@ -627,7 +620,7 @@ def _spawn_guard_decision(
         # THE node claim, not another reservation. dispatch:<id> is a launch-
         # window mutex on a key nobody reads: five workers were spawned with an
         # explicit --node tonight and not one of them was visible to `fno agents claim
-        # status node:<id>`, so four kings read those nodes as free.
+        # status node:<id>`, so four leads read those nodes as free.
         #
         # --node is the only dispatch path holding the node id as a TYPED
         # argument rather than as prose to be re-derived, which is why the claim
@@ -752,10 +745,9 @@ def _emit_reaped_abandoned(node_id: str, prior_holder: str, truth_status: str) -
     """
     try:
         from fno.agents import events as agent_events
-        from fno.backlog.advance import EVENT_CLAIM_OBSERVED
 
         agent_events.emit(
-            EVENT_CLAIM_OBSERVED,
+            "dispatch_claim_observed",
             node_id=node_id,
             claim_verdict="dead_predecessor",
             claim_state="suspect",
@@ -941,13 +933,13 @@ def cmd_watch(
     raise typer.Exit(rc)
 
 
-@agents_app.command("crown", hidden=True)
-def cmd_crown(
+@agents_app.command("role", hidden=True)
+def cmd_role(
     handle: str = typer.Argument(
         "",
         help=(
-            "Existing registered session handle to crown in place, or the "
-            "current heir when --reclaim is run from an attended shell."
+            "Existing registered session handle to role in place, or the "
+            "current successor when --reclaim is run from an attended shell."
         ),
     ),
     scopes: list[str] = typer.Option(
@@ -955,43 +947,43 @@ def cmd_crown(
         "--scope",
         help=(
             "Territory to grant. Repeat for a multi-project portfolio or a "
-            "set of epics; the crown level is derived and cannot be supplied."
+            "set of epics; the role level is derived and cannot be supplied."
         ),
     ),
     reclaim: bool = typer.Option(
         False,
         "--reclaim",
         help=(
-            "Return the current holder's crown to its recorded grantor without "
+            "Return the current holder's role to its recorded grantor without "
             "creating a session."
         ),
     ),
 ) -> None:
-    """Crown an existing session from an attended shell, from an agent whose
-    own crown strictly contains the requested scope, or add to your own
-    epic-set crown an epic your session created.
+    """Role an existing session from an attended shell, from an agent whose
+    own role strictly contains the requested scope, or add to your own
+    epic-set role an epic your session created.
 
     Run `fno agents register` inside the target session, then run this command
     with its printed handle. Same-scope succession stays on the spawn-time
-    transfer path. A row already holding a crown is re-scoped rather
+    transfer path. A row already holding a role is re-scoped rather
     than refused: the new territory replaces the old in one atomic write, the
     level is derived from the new scope, the registry records the actual
     grantor, and the receipt reports what was vacated. `--reclaim` returns a
-    transferred crown to its recorded grantor and never creates a session.
+    transferred role to its recorded grantor and never creates a session.
     """
     from fno.agents import events
-    from fno.agents.crown import CrownPromotionError, promote_existing_session
+    from fno.agents.role import RolePromotionError, promote_existing_session
 
     if reclaim:
-        from fno.agents.crown import reclaim_crown
+        from fno.agents.role import reclaim_role
 
         try:
-            receipt = reclaim_crown(handle or None)
-        except CrownPromotionError as exc:
-            print(f"crown reclaim: {exc}", file=sys.stderr)
+            receipt = reclaim_role(handle or None)
+        except RolePromotionError as exc:
+            print(f"role reclaim: {exc}", file=sys.stderr)
             raise typer.Exit(code=2) from exc
         events.emit(
-            "agent_crown_reclaimed",
+            "agent_role_reclaimed",
             reclaimed=receipt["reclaimed"],
             from_holder=receipt["from_holder"],
             scope=receipt["scope"],
@@ -1001,18 +993,18 @@ def cmd_crown(
         return
 
     if not handle or not scopes:
-        print("crown: HANDLE and at least one --scope are required", file=sys.stderr)
+        print("role: HANDLE and at least one --scope are required", file=sys.stderr)
         raise typer.Exit(code=2)
 
     try:
         receipt = promote_existing_session(handle, scopes)
-    except CrownPromotionError as exc:
-        print(f"crown: {exc}", file=sys.stderr)
+    except RolePromotionError as exc:
+        print(f"role: {exc}", file=sys.stderr)
         raise typer.Exit(code=2) from exc
 
     events.emit(
-        "agent_crowned",
-        name=receipt["crowned"],
+        "agent_promoted",
+        name=receipt["promoted"],
         level=receipt["level"],
         scope=receipt["scope"],
         grantor=receipt["grantor"],
@@ -1023,11 +1015,11 @@ def cmd_crown(
     print(json.dumps(receipt))
 
 
-# The court command moved to fno.agents.court (file budget); the
+# The team command moved to fno.agents.team (file budget); the
 # composition stays on the agents app here.
-from fno.agents.court import register_court_command  # noqa: E402
+from fno.agents.team import register_team_command  # noqa: E402
 
-register_court_command(agents_app)
+register_team_command(agents_app)
 
 
 # Moved to fno.agents.spawn_lineage; re-exported here.
@@ -1322,23 +1314,23 @@ def cmd_spawn(
             "panes per tab."
         ),
     ),
-    crown: list[str] = typer.Option(
+    promote: list[str] = typer.Option(
         [],
-        "--crown",
-        "-k",
+        "--promote",
         help=(
-            "Grant an orchestrator crown: epic id(s), one project, or "
-            "several. Refused on headless. Contract: "
+            "Promote the spawned worker to a titled role over a territory: "
+            "epic id(s), one project, or several. Contract: "
             "docs/guides/agents-spawn-flags.md."
         ),
     ),
-    succeed: bool = typer.Option(
+    hand_off: bool = typer.Option(
         False,
+        "--hand-off",
         "--succeed",
         help=(
-            "Explicitly transfer a caller-held --crown territory to the spawned "
-            "heir. Without this flag, a same-scope crown is refused and the "
-            "caller keeps its crown."
+            "Hand the caller-held role to the spawned worker. Without it, a "
+            "same-scope promote is refused and the caller keeps its role. "
+            "--succeed is the retired spelling."
         ),
     ),
     node: str | None = typer.Option(
@@ -1593,9 +1585,23 @@ def cmd_spawn(
 
     from fno.agents.spawn_defaults import resolve_spawn_gates, seedless_thread_refusal
 
+    # Retired spellings bind the same options; name the replacement when the
+    # argv used one. The process argv is exact for the real door; a test
+    # runner's argv is its own, so the notice test pins the argv it asserts.
+    _args = sys.argv[1:]
+
+    def _used(flag: str) -> bool:
+        return any(t == flag or t.startswith(flag + "=") for t in _args)
+
+    if _used("--succeed"):
+        print(
+            "--succeed is now --hand-off; the old spelling answers for one release.",
+            file=sys.stderr,
+        )
+
     substrate = resolve_spawn_gates(substrate, monitor, once=once, harness=harness)
     seedless = seedless_thread_refusal(
-        harness, substrate, message, resume=resume, crown=bool(crown), name=name, node=node
+        harness, substrate, message, resume=resume, role=bool(promote), name=name, node=node
     )
     if seedless:
         print(f"fno agents spawn: {seedless}", file=sys.stderr)
@@ -1728,43 +1734,29 @@ def cmd_spawn(
         print(refusal, file=sys.stderr)
         raise typer.Exit(code=2)
 
-    # --crown/-k <scope>... : the operator names the TERRITORY and the ladder
-    # altitude is derived from it (crown.derive_crown_level). The grantor is
-    # stamped ambiently at spawn from this session, so the child's row records who
-    # actually bestowed the crown, never a value it could forge.
-    #
-    # The substrate axis the crown actually cares about is REIGN LENGTH, not pane
-    # geometry. A crown is three registry fields; nothing in it needs a PTY. What
-    # it needs is a session that outlives the grant, because a king that exits
-    # mid-wave orphans its scope. `pane` and `bg` both qualify - a bg worker is a
-    # full persistent conversation in claude's agent view, attachable, replyable,
-    # and resumable, differing from a pane only in who draws it. `headless` is the
-    # one-shot: it answers once and exits, so a crown on it names a dead ruler
-    # before the grantor's next turn. That one stays refused.
-    #
-    # A bg king does lose the pane-layer PLACEMENT primitive (`--at current`
-    # resolves the calling pane from FNO_PANE, which a bg session has none of), so
-    # it seats minions in fresh tabs rather than beside itself. That degrades the
-    # court's ergonomics, not its authority: mail, peek, top, and wait are all
-    # substrate-blind. Court-mode briefs that need adjacency should ask for a pane
-    # king; the crown itself does not.
-    crown_level: int | None = None
-    crown_scope: str | None = None
-    if crown:
+    # --promote <scope>... : the operator names the TERRITORY, the ladder altitude
+    # derives from it (role.derive_role_level), and the grantor is stamped
+    # ambiently from this session - never a value the child could forge. The role
+    # needs a session that outlives the grant, so `headless` (one answer, then
+    # exit) is refused; `pane` and `bg` both qualify. A bg holder loses only the
+    # pane PLACEMENT primitives; mail, peek, top, and wait are substrate-blind.
+    role_level: int | None = None
+    role_scope: str | None = None
+    if promote:
         if once or substrate == "headless":
             print(
-                "--crown needs a session that outlives the grant; headless is a "
-                "one-shot that exits after one answer, so its crown would be "
+                "--promote needs a session that outlives the grant; headless is a "
+                "one-shot that exits after one answer, so its role would be "
                 "orphaned at birth. Use --substrate pane or --substrate thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
-        from fno.agents.crown import CrownScopeError, resolve_crown
+        from fno.agents.role import RoleScopeError, resolve_role
 
         try:
-            crown_level, crown_scope = resolve_crown(list(crown))
-        except CrownScopeError as exc:
-            print(f"--crown: {exc}", file=sys.stderr)
+            role_level, role_scope = resolve_role(list(promote))
+        except RoleScopeError as exc:
+            print(f"--promote: {exc}", file=sys.stderr)
             raise typer.Exit(code=2) from exc
 
     # --account names a claude account PROFILE (config_dir/settings/plugins); a
@@ -2328,7 +2320,7 @@ def cmd_spawn(
                 account=account or dispatch_account,
                 seed=message,
                 session_phase=session_phase,
-                succession_scope=crown_scope if succeed else None,
+                succession_scope=role_scope if hand_off else None,
             )
             break
         except GateRefused as exc:
@@ -2402,9 +2394,9 @@ def cmd_spawn(
                     tab=tab,
                     pane=pane,
                     bounded_placement=bounded_placement,
-                    crown_level=crown_level,
-                    crown_scope=crown_scope,
-                    succession=succeed,
+                    role_level=role_level,
+                    role_scope=role_scope,
+                    succession=hand_off,
                     provenance=prov_env,
                     account_env=account_env,
                     route_env=route_env,
@@ -2666,9 +2658,9 @@ def cmd_spawn(
                 route_provider_id=route_provider or recorded_provider,
                 model_name=model or route_model,
                 account_record_id=dispatch_account or account,
-                crown_level=crown_level,
-                crown_scope=crown_scope,
-                succession=succeed,
+                role_level=role_level,
+                role_scope=role_scope,
+                succession=hand_off,
                 route_provider=route_provider,
                 provider_gate=gate,
                 sandbox_settings=sandbox_settings,
@@ -2895,7 +2887,7 @@ def cmd_retask(
         typer.echo(json.dumps(receipt))
     else:
         # Same JSON either way (sorted keys are the only difference): the
-        # receipt is machine-parsed by the king loop, so there is no human
+        # receipt is machine-parsed by the lead loop, so there is no human
         # rendering to switch to.
         typer.echo(json.dumps(receipt, sort_keys=True))
     if receipt.get("status") != "retasked":
@@ -2945,7 +2937,7 @@ def cmd_spawn_guard(
     dispatchable.
 
     Emits ONE verdict on stdout (a ``verdict=<v> key=value`` line, or a ``--json``
-    object) in ``{dispatchable, already-running, refused, corrupted, error}``:
+    object) in ``{dispatchable, already-running, unknown, refused, corrupted, error}``:
 
     \b
     - dispatchable    node free/stale. On a reserving call ``dispatch:<id>`` is
@@ -2966,16 +2958,21 @@ def cmd_spawn_guard(
                       frees nothing), OR a racing dispatcher already holds
                       ``dispatch:<id>`` (reason=reservation-held). No reservation
                       acquired.
+    - unknown         the worked authority could not answer (the roster read
+                      failed), so the guard cannot say whether the node is
+                      running (reason=worked-authority-unavailable; detail
+                      names the reader that failed). This is NOT occupancy:
+                      retry. No reservation acquired.
     - refused        the durable dead-dispatch limit blocked another birth
                       (reason=auto-deferred|defer-failed). No reservation acquired.
     - corrupted       the ``node:<id>`` claim is corrupted; launch nothing.
     - error           the claim probe failed or the reservation could not be
                       acquired (fail-closed); launch nothing.
 
-    Exit 0 for every clean verdict (incl. already-running and corrupted). Exit
-    non-zero ONLY for a usage error or a fail-closed guard error (verdict=error),
-    so a stale ``fno`` without this verb (Typer "No such command") also fails
-    closed in the caller.
+    Exit 0 for every answered verdict (incl. already-running, unknown and
+    corrupted). Exit non-zero ONLY for a usage error or a fail-closed guard
+    error (verdict=error), so a stale ``fno`` without this verb (Typer "No such
+    command") also fails closed in the caller.
     """
     obj, exit_code = _spawn_guard_decision(
         node_id,
@@ -3198,7 +3195,7 @@ def cmd_discovered_json(
 def cmd_registry_json() -> None:
     """Internal: emit registry rows DAEMON-FREE, with the served liveness pair.
 
-    Hooks need stored crown, spawn-edge, and origin fields plus the served
+    Hooks need stored role, spawn-edge, and origin fields plus the served
     liveness verdict, derived by the freshness rule. Output is
     ``{"agents": [...]}`` via a client-side registry read. There is no Python
     registry-json left: a missing binary is refused here.
@@ -3646,27 +3643,27 @@ def cmd_top(
         False,
         "--pane-stats",
         help="Append per-pane mux server counters, differenced over the last "
-        "two 30s snapshots in the global events journal (bytes_in, "
-        "grid_updates, frames_composited, frames_emitted, cpu_ns).",
+        "two 30s snapshots in the global events journal.",
     ),
 ) -> None:
     """Show every live worker process - fno-spawned and foreign claude bg
-    alike - with pid, RSS (MB), and status.
+    alike - with pid, tree RSS (MB), served status and node.
 
-    The same union the spawn gate counts, so this is the audit surface every
-    gate message points at. Python-only (RSS via psutil; not routed to the
-    Rust client). ``--subagents`` appends a read-only sidechain
-    section; each row also carries its node and whether it shipped.
+    Answered by the Rust census (`fno-agents census --workers`); the `fno`
+    front execs it directly, so this shim only serves a Python-front call.
     """
-    from fno.agents.top import render_top
+    from fno.agents.rust_runtime import route_to_rust
 
-    print(
-        render_top(
-            as_json=as_json,
-            include_subagents=show_subagents,
-            include_pane_stats=show_pane_stats,
+    flags = [
+        flag
+        for flag, on in (
+            ("--json", as_json),
+            ("--subagents", show_subagents),
+            ("--pane-stats", show_pane_stats),
         )
-    )
+        if on
+    ]
+    route_to_rust(["census", "--workers", *flags])
 
 
 @agents_app.command("orphans", hidden=True)
@@ -4767,12 +4764,14 @@ def cmd_attach(
 from fno.agents.trace_cli import cmd_trace as _cmd_trace  # noqa: E402
 from fno.agents.resume_cli import cmd_resume as _cmd_resume  # noqa: E402
 from fno.agents.history import history_command  # noqa: E402
+from fno.agents.transcript import transcript_command  # noqa: E402
 
 agents_app.command("trace", hidden=True)(_cmd_trace)
 agents_app.command("resume")(_cmd_resume)
 # Advertised: the one verb over live rows, reap receipts and the
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
+agents_app.command("transcript", hidden=True)(transcript_command)
 
 
 # Gate verb (Task 2.3): per-provider injection verification gate management
@@ -4805,7 +4804,7 @@ def cmd_gate(
     "yard",
     hidden=True,
     help=(
-        "The yard identity fold: species, rarity tier, crown, and first-sighting "
+        "The yard identity fold: species, rarity tier, role, and first-sighting "
         "per registry citizen.\n\n"
         "Read-only over the agent registry and the graph archive. Consumed by "
         "the mux yard overlay (fail-open shell-out); `--json` is the machine "
@@ -4845,9 +4844,9 @@ def yard(
         return
     for c in citizens:
         mark = " NEW" if c["first_sighting"] else ""
-        crown = f" crown {c['crown_level']}" if c["crown_level"] else ""
+        role = f" role {c['role_level']}" if c["role_level"] else ""
         typer.echo(
-            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{crown}{mark}"
+            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{role}{mark}"
         )
     n_new = sum(1 for c in citizens if c["first_sighting"])
     typer.echo(f"{len(citizens)} citizens, {n_new} first sighting(s); tiers: {'/'.join(RARITY_TIERS)}")
@@ -4884,7 +4883,6 @@ from fno.agents import (  # noqa: E402,F401
     distress_reads,
     gate_reads,
     peek_cli,
-    transcript_reads,
 )
 
 
@@ -4895,7 +4893,7 @@ from fno.agents import (  # noqa: E402,F401
 def incident(ctx: typer.Context) -> None:
     """Durable fleet incident breaker.
 
-    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S].
+    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S] | cutover save|restore.
     """
     import subprocess
 

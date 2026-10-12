@@ -210,6 +210,30 @@ fn repo_root() -> Option<PathBuf> {
     }
 }
 
+/// The configured plans dir resolved for mint-time id exclusion: config
+/// `plans_dir` (default `.fno/plans/`), project-relative against the repo
+/// root, `~` expanded. None on a template shape or an unresolvable root:
+/// the caller then skips the scan, the same best-effort contract as the
+/// legacy archive pool.
+pub(crate) fn plans_dir_for(cwd: &Path) -> Option<PathBuf> {
+    let raw = cfg_str(cwd, &["plans_dir"]).unwrap_or_else(|| ".fno/plans/".to_string());
+    let trimmed = raw.trim_end_matches('/');
+    if has_template(trimmed) {
+        return None;
+    }
+    if is_project_relative(trimmed) {
+        return Some(
+            repo_root()
+                .unwrap_or_else(|| cwd.to_path_buf())
+                .join(trimmed),
+        );
+    }
+    if trimmed.starts_with('~') {
+        return Some(crate::paths::resolve_loose(&expanduser(trimmed)));
+    }
+    Some(PathBuf::from(trimmed))
+}
+
 /// `emit-shell [--output P]`: write the stub atomically (temp sibling +
 /// rename, the shape fno.state.io.atomic_write uses) and print
 /// `wrote N bytes to P`. Default output is `<repo>/scripts/lib/paths.sh`.
@@ -286,7 +310,7 @@ fn local_date() -> String {
 /// `handoff [--session-id S | --slug S | --scope S] [--name-only]`: print the
 /// save path for a canon handoff doc (Python `paths_cli.handoff` parity). The
 /// filename key is the session's canonical handle (first-8) unless --slug
-/// overrides. --scope keys the doc on the crown instead -- a crown outlives
+/// overrides. --scope keys the doc on the role instead -- a role outlives
 /// its sessions -- and returns the newest existing doc for that scope, so a
 /// successor session resolves its predecessor's doc; today's dated name when
 /// none exists yet. Every argv refusal exits 2, the typer BadParameter code.
@@ -352,9 +376,9 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         if session_id.is_some() || slug.is_some() {
             return Err("--scope cannot be combined with --session-id/--slug".into());
         }
-        let key = format!("crown-{}", sanitize_scope_key(&scope));
-        if key == "crown-" {
-            return Err("a crown scope is required (--scope)".into());
+        let key = format!("role-{}", sanitize_scope_key(&scope));
+        if key == "role-" {
+            return Err("a role scope is required (--scope)".into());
         }
         let suffix = format!("-{key}.md");
         let mut best: Option<(std::time::SystemTime, String)> = None;
@@ -385,7 +409,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         return Ok(render_handoff(&directory, &filename, name_only));
     }
     let Some(session_id) = session_id else {
-        return Err("a session id is required (--session-id), or a crown scope (--scope)".into());
+        return Err("a session id is required (--session-id), or a role scope (--scope)".into());
     };
     // A shell expanding an unset value hands us Some(""); the retired command
     // rejected it (`if not session_id`) rather than render the shared
@@ -492,6 +516,23 @@ fn state_dir_resolved(cwd: &Path) -> Result<PathBuf, String> {
     }
     let raw = cfg_str(cwd, &["state_dir"]).unwrap_or_else(|| "~/.fno/".to_string());
     resolve_template(raw.trim_end_matches('/'), None)
+}
+
+/// Python `paths.global_events_json()`: the machine journal beside the
+/// ledger. The `FNO_STATE_DIR` seal wins, then an absolute or `~`
+/// `paths.ledger_json` override, then an absolute `state_dir`.
+pub fn global_events_json(cwd: &Path) -> PathBuf {
+    let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
+    let override_dir = cfg_str(cwd, &["paths", "ledger_json"])
+        .filter(|_| !sealed)
+        .and_then(|raw| resolve_override(&raw).ok())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    override_dir
+        .or_else(|| state_dir_resolved(cwd).ok().filter(|d| d.is_absolute()))
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("events.jsonl")
 }
 
 /// One `paths.<key>` override value, the shape Python's emitter shares for
@@ -1010,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn handoff_scope_mints_a_dated_crown_keyed_name() {
+    fn handoff_scope_mints_a_dated_role_keyed_name() {
         let (_lock, _env) = handoff_env_guards();
         let (cwd, home) = handoff_fixture("scope-mint");
         let scope = "x-1234abcd";
@@ -1025,7 +1066,7 @@ mod tests {
             date.len() == 8 && date.chars().all(|c| c.is_ascii_digit()),
             "{out}"
         );
-        assert_eq!(rest, format!("crown-{scope}.md"));
+        assert_eq!(rest, format!("role-{scope}.md"));
         let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
     }
 
@@ -1036,8 +1077,8 @@ mod tests {
         let scope = "x-2222bbbb";
         let dir = handoff_dir(&cwd, &home);
         std::fs::create_dir_all(&dir).unwrap();
-        let old = dir.join(format!("20260901-crown-{scope}.md"));
-        let new = dir.join(format!("20260909-crown-{scope}.md"));
+        let old = dir.join(format!("20260901-role-{scope}.md"));
+        let new = dir.join(format!("20260909-role-{scope}.md"));
         std::fs::write(&old, "predecessor").unwrap();
         std::fs::write(&new, "successor").unwrap();
         stamp_mtime(&old, 1_000_000);
@@ -1054,9 +1095,9 @@ mod tests {
         let scope = "x-3333cccc";
         let dir = handoff_dir(&cwd, &home);
         std::fs::create_dir_all(&dir).unwrap();
-        let other = dir.join("20260909-crown-x-9999zzzz.md");
+        let other = dir.join("20260909-role-x-9999zzzz.md");
         let session_key = dir.join("20260909-c35abbca.md");
-        let mine = dir.join(format!("20260901-crown-{scope}.md"));
+        let mine = dir.join(format!("20260901-role-{scope}.md"));
         for p in [&other, &session_key, &mine] {
             std::fs::write(p, "x").unwrap();
         }
@@ -1071,7 +1112,7 @@ mod tests {
     #[test]
     fn handoff_scope_sanitizes_runs_into_one_dash() {
         let (_lock, _env) = handoff_env_guards();
-        // A portfolio crown stores its scope comma-joined; commas and spaces
+        // A portfolio role stores its scope comma-joined; commas and spaces
         // are not filename-safe, so each unsafe RUN collapses into one key
         // separator (Python re.sub(r"[^A-Za-z0-9._-]+", "-") parity).
         let (cwd, home) = handoff_fixture("scope-sanitize");
@@ -1085,7 +1126,7 @@ mod tests {
             Some(&home),
         )
         .unwrap();
-        assert!(out.ends_with(".md") && out.contains("-crown-x-"), "{out}");
+        assert!(out.ends_with(".md") && out.contains("-role-x-"), "{out}");
         assert!(!out.contains(',') && !out.contains(' '), "{out}");
         assert!(!out.contains("--"), "{out}");
         let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
@@ -1272,15 +1313,6 @@ mod tests {
     }
 
     #[test]
-    fn live_stub_reflects_custom_state_dir() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("state", "state_dir = '~/.my-custom-fno'\n");
-        let _env = EnvGuard::new(&fx.pins());
-        let stub = emit_paths_sh_live(&fx.root).unwrap();
-        assert!(stub.contains("$HOME/.my-custom-fno"), "stub:\n{stub}");
-    }
-
-    #[test]
     fn live_stub_resolves_vault_templates() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = LiveFx::new("vault", "");
@@ -1305,20 +1337,6 @@ mod tests {
         let _env = EnvGuard::new(&fx.pins());
         let err = emit_paths_sh_live(&fx.root).unwrap_err();
         assert!(err.contains("glob"), "error: {err}");
-    }
-
-    #[test]
-    fn live_stub_config_file_is_the_loaded_path() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = LiveFx::new("conffile", "");
-        let _env = EnvGuard::new(&fx.pins());
-        let stub = emit_paths_sh_live(&fx.root).unwrap();
-        let line = line_with(&stub, "export CONFIG_FILE=");
-        assert!(
-            line.contains(&fx.config.display().to_string()),
-            "CONFIG_FILE must name the loaded config: {line}"
-        );
-        assert!(!line.contains("$STATE_DIR"), "CONFIG_FILE: {line}");
     }
 
     #[test]

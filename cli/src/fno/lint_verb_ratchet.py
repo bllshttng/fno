@@ -52,8 +52,24 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
+    "backlog advance",
+    "backlog album",
+    "backlog archive",
+    "backlog bases",
+    "backlog board",
+    "backlog dispatch-lanes",
+    "backlog groom",
+    "backlog join",
+    "backlog maintain",
+    "backlog migrate-difficulty",
+    "backlog migrate-priorities",
+    "backlog migrate-updated-at",
     "backlog rank",
+    "backlog render-views",
     "backlog reopen",
+    "backlog roadmap",
+    "backlog unarchive",
+    "backlog view",
     "backlog session add",
     "backlog session backfill",
     "backlog session close",
@@ -76,8 +92,7 @@ COLLAPSE_MAP_ROW_HELP = (
     "  refs                  how many times the corpus outside cli/src names this "
     "leaf, swept by `python3 scripts/diagnostics/verb-callers.py`\n"
     "  reason-if-not-T1      required on every non-T1 row, left empty on T1\n"
-    "Then bump the row count pinned in cli/tests/unit/test_verb_collapse_map.py, "
-    "and regenerate scripts/ci/verb-baseline.txt last."
+    "Then regenerate scripts/ci/verb-baseline.txt last."
 )
 COLLAPSE_FLAGS_ROW_HELP = (
     "One line per hidden option on an argument-dispatched action, e.g.\n"
@@ -332,6 +347,9 @@ def iter_python_leaves():
                         f"{path} {flag}" for flag in _hidden_option_tokens(sub)
                     )
                 cmd = collapse_click_group(cmd, keep=set(collapse_keep))
+                for native in sorted(NATIVE_SERVED_LEAVES):
+                    if native.startswith(name + " ") and native.removeprefix(name + " ") in collapse_keep:
+                        yield native, None
             if hasattr(cmd, "list_commands"):
                 ctx = click.Context(cmd, info_name=name)
                 yielded = False

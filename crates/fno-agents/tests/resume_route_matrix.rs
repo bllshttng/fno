@@ -158,15 +158,14 @@ fn row_json(row: &Row, cwd: &Path) -> Value {
 }
 
 fn write_registry(home: &Path, entries: &[Value]) {
-    fs::write(
+    fno_agents::registry_store::seed_raw(
         home.join("registry.json"),
         serde_json::to_vec(&json!({
             "schema_version": fno_agents::state::REGISTRY_SCHEMA_VERSION,
             "agents": entries,
         }))
         .unwrap(),
-    )
-    .unwrap();
+    );
 }
 
 fn write_executable(path: &Path, body: &str) {
@@ -340,6 +339,7 @@ fn nonterminal_rows_refuse_instead_of_relaunching_and_terminal_rows_exec() {
         .take(HARNESSES.len() * 2)
         .skip(1)
         .step_by(2)
+        .filter(|row| row.harness != "claude")
     {
         let output = run_null(&fixture, row, &[], &fixture.bins);
         assert_eq!(

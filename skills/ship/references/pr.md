@@ -36,7 +36,7 @@ Parse the first argument token:
     /fno:ship pr merged    run the post-merge ritual on an already-merged PR
   ```
 
-  If the caller meant `fno do pr merge` and the verb REFUSES, read the refusal text. It names the sanctioned override. Those levers are the superuser's. A worker escalates to the king or superuser instead of pulling one. Never route around a gate refusal. Do not synthesize a config file. Do not flip a shared config key for the call's duration. Do not export a merge-time env var. Do not export TARGET_AUTO_MERGE before any run. Agent-origin and unattended runs scrub it anyway. Two workers improvised the first three moves within sixty seconds of each other on 2026-08-19. One left a global merge switch ON machine-wide mid-merge. That exposure is not reversible the way a merge is.
+  If the caller meant `fno do pr merge` and the verb REFUSES, read the refusal text. It names the sanctioned override. Those levers are the superuser's. A worker escalates to the lead or superuser instead of pulling one. Never route around a gate refusal. Do not synthesize a config file. Do not flip a shared config key for the call's duration. Do not export a merge-time env var. Do not export TARGET_AUTO_MERGE before any run. Agent-origin and unattended runs scrub it anyway. Two workers improvised the first three moves within sixty seconds of each other on 2026-08-19. One left a global merge switch ON machine-wide mid-merge. That exposure is not reversible the way a merge is.
 
 - **any other non-empty token** -> this is an unknown mode (likely a typo). Do NOT default, do NOT guess. Print:
 
@@ -67,7 +67,7 @@ If `origin/main` is not the right base, set `BASE` to the correct branch. If it 
 
 ### 2a-bis. Stale-base guard (before any action)
 
-A branch cut from a stale local HEAD ships a PR full of phantom deletions. It can make changes appear as reverts. Refuse before creating the PR. The check fails open on a fetch flake and points at `fno do pr rebase`:
+A branch cut from a stale local HEAD ships a PR full of phantom deletions. It can make changes appear as reverts. Refuse before creating the PR. The check fails open on a fetch flake and the stale refusal names the fix: merge origin/main, then push:
 
 ```bash
 BASE="${BASE:-origin/main}"   # re-default: this block may run standalone

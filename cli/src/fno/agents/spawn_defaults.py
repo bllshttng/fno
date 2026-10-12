@@ -94,11 +94,10 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
         "--deny-tools", "--workspace", "--squad", "-s", "--split", "-x", "--tab",
         "--pane",
         "--node", "--node-reason", "--slug", "--plan", "--name", "--recorded-provider",
-        # --route/--account/--crown were absent, so their VALUES read as
-        # positionals: a nameless `spawn --route zai,glm-5.2` registered an agent
-        # named "zai,glm-5.2". Kept in lockstep with cmd_spawn's value options
-        # (test_spawn_value_flags_cover_every_value_option pins the two together).
-        "--route", "--account", "--crown", "-k", "--dispatch-account",
+        # --route/--account/--promote were absent, so their VALUES read as positionals:
+        # a nameless `spawn --route zai,glm-5.2` registered an agent named "zai,glm-5.2".
+        # Kept in lockstep with cmd_spawn (test_spawn_value_flags_cover_every_value_option).
+        "--route", "--account", "--promote", "--promote", "-k", "--dispatch-account",
         # --at's value (current|<pane>) must not read as a positional.
         "--at",
         # --portal's index is a value, never a prompt word.
@@ -163,18 +162,18 @@ def seedless_thread_refusal(
     message: Optional[str],
     *,
     resume: Optional[str] = None,
-    crown: bool = False,
+    role: bool = False,
     name: Optional[str] = None,
     node: Optional[str] = None,
 ) -> Optional[str]:
     """The refusal text for a fresh claude thread spawn with no message, else None.
 
-    A resume continues a transcript and a crown spawn gets the reign verb typed
+    A resume continues a transcript and a role spawn gets the term verb typed
     later in dispatch, so neither needs a message here.
     """
     if harness != "claude" or substrate not in ("thread", "bg"):
         return None
-    if (message or "").strip() or resume or crown:
+    if (message or "").strip() or resume or role:
         return None
     return SEEDLESS_THREAD_REFUSAL.format(name=name or "<name>", node=node or "<node>")
 
@@ -573,7 +572,11 @@ def normalize_spawn_args(
     # pre-fence head: a passthrough `--name` is the PROVIDER's flag (claude's
     # session display name) and must not suppress fno's own name mint.
     head = toks if fence is None else toks[:fence]
-    if not any(t == "--name" or t.startswith("--name=") for t in head):
+    # A succession hand-off names nobody: the settle draws the successor's
+    # name from the machine pool, and a minted slug would arrive as an
+    # explicit proposal and decline the documented no-name draw.
+    hand_off = any(t == "--hand-off" or t.startswith("--hand-off=") for t in head)
+    if not hand_off and not any(t == "--name" or t.startswith("--name=") for t in head):
         names = (
             existing_names
             if existing_names is not None
@@ -636,8 +639,8 @@ def _default_resolver(short_id: str) -> Optional[str]:
 
 # Keep the old spelling on the canonical profile key for one release.
 _VERB_ALIASES = {"do": "execute"}
-# King work walks the crown slot whichever verb opens its seed.
-_CROWN_VERBS = frozenset({"lead", "reign", "fno-me"})
+# Lead work walks the role slot whichever verb opens its seed.
+_ROLE_VERBS = frozenset({"lead", "term", "fno-me"})
 
 # The one built-in answer to "what permission mode does an unattended worker
 # get". Formerly config.agents.spawn_permission_mode's default; a constant now,

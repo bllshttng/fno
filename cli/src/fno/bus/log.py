@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from fno.rust_binary import VerbUnavailable, chats_verb
 from fno.time_budget import validate_timeout_budget
@@ -37,6 +37,9 @@ HOSTED_DELIVERY = "hosted"
 #: and be discarded while the return selects a prompt's default. The row says
 #: what happened and no more, and names the pane a reader can go read.
 TYPED_DELIVERY = "typed"
+
+#: Audit-only: outage-era traffic backfilled with full provenance, never re-delivered.
+CROSS_SESSION_DELIVERY = "cross-session"
 
 # Size-triggered rotation now lives in the Rust bus-append door
 # (fno-agents announce::append_line), which reads the same
@@ -99,6 +102,10 @@ class Envelope:
     # Additive: a row written before this field existed reads back through the
     # legacy meta fallback.
     origin: Optional[str] = None
+    # The sender's --subject. Additive: a row written before this
+    # field existed reads back as None and the envelope header derives its
+    # third field from the body as before.
+    subject: Optional[str] = None
 
     @classmethod
     def new(
@@ -122,6 +129,7 @@ class Envelope:
         to_kind: Optional[str] = None,
         word_count: Optional[int] = None,
         origin: Optional[str] = None,
+        subject: Optional[str] = None,
     ) -> "Envelope":
         mid = id or new_msg_id()
         return cls(
@@ -143,6 +151,7 @@ class Envelope:
             to_kind=to_kind,
             word_count=word_count,
             origin=origin,
+            subject=subject,
         )
 
 
@@ -192,6 +201,8 @@ def to_json_line(env: Envelope) -> str:
         obj["to_kind"] = env.to_kind
     if env.origin:
         obj["origin"] = env.origin
+    if env.subject:
+        obj["subject"] = env.subject
     # `is not None`, not truthiness: a genuine zero-word body (a pasted log
     # masks to nothing) must serialize as 0, not vanish and read back as legacy.
     if env.word_count is not None:
@@ -236,6 +247,7 @@ def from_json_line(line: str) -> Envelope:
         # back to meta so pre-existing lines still render their provenance.
         origin=obj.get("origin")
         or (_meta.get("origin") if isinstance(_meta, dict) else None),
+        subject=obj.get("subject"),
     )
 
 
@@ -401,7 +413,24 @@ def is_deliverable(env: Envelope) -> bool:
     """
     if getattr(env, "kind", None) in CONTROL_KINDS:
         return False
-    return getattr(env, "delivery", None) not in (HOSTED_DELIVERY, TYPED_DELIVERY)
+    delivery = getattr(env, "delivery", None)
+    return delivery not in (HOSTED_DELIVERY, TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
+
+
+def stage_before_live(**fields: Any) -> None:
+    """Stage the message-only body row (no delivery mark) BEFORE the live inject.
+
+    The bus row is the body's only home, so a confirmed inject can never
+    outlive it, and a miss leaves the row deliverable exactly as a durable
+    copy. The envelope contract lives in the door: the Rust ``chats stage``
+    verb (crates/fno-agents/src/chats.rs) validates the fields, mints the row,
+    and records chats fail-closed before the bus write. ``id`` is required;
+    the receipt row (:func:`record_hosted_delivery`) shares it on confirmation
+    and supersedes the staged twin at the drain."""
+    chats_verb(
+        ["stage", str(bus_log_path())],
+        {k: v for k, v in fields.items() if v is not None},
+    )
 
 
 def record_hosted_delivery(
@@ -420,10 +449,15 @@ def record_hosted_delivery(
     to_kind: Optional[str] = None,
     word_count: Optional[int] = None,
     to_session: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> Envelope:
     """Append one audit-only record after confirmed hosted delivery. ``to_session``/
     ``to_harness`` name the session actually injected into, for the landed check
-    (which reads the ``to_harness`` meta copy)."""
+    (which reads the ``to_harness`` meta copy).
+
+    The receipt row shares its id with the body row :func:`stage_before_live`
+    wrote ahead of the inject; this row is the one that proves the delivery and
+    supersedes the staged twin for every reader."""
     meta = {k: v for k, v in (("to_session", to_session), ("to_harness", to_harness)) if v}
     env = Envelope.new(
         id=msg_id,
@@ -442,6 +476,7 @@ def record_hosted_delivery(
         to_kind=to_kind,
         word_count=word_count,
         meta=meta or None,
+        subject=subject,
     )
     append(env)
     return env
@@ -463,6 +498,7 @@ def record_typed_delivery(
     from_model: Optional[str] = None,
     to_kind: Optional[str] = None,
     word_count: Optional[int] = None,
+    subject: Optional[str] = None,
 ) -> Envelope:
     """Append one audit-only record after a ``--force`` pane send typed the body.
 
@@ -492,6 +528,7 @@ def record_typed_delivery(
         from_model=from_model,
         to_kind=to_kind,
         word_count=word_count,
+        subject=subject,
         meta={
             "transport": "pane",
             "pane_id": str(pane_id),
@@ -565,6 +602,20 @@ def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
             continue
         out.add(target.id)
     return out
+
+
+def dedupe_by_id(msgs: Iterable[Envelope], *, last: bool = False) -> list[Envelope]:
+    """One row per id. A staged body row and its receipt or durable-fallback
+    twin share an id. First wins unless ``last``: a typed receipt must not
+    swallow its staged recovery row, while the outbox and unclaimed scans read
+    the receipt row's final state."""
+    seen: dict[str, Envelope] = {}
+    for m in msgs:
+        if last:
+            seen[m.id] = m
+        else:
+            seen.setdefault(m.id, m)
+    return list(seen.values())
 
 
 def record_landed(*, msg_id: str, sender: str, recipient: str) -> Envelope:

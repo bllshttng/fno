@@ -834,7 +834,7 @@ pub fn run_org_fold(args: &[String]) -> i32 {
                 claims_dir = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
-            "--teams-json" | "--crowns-json" if i + 1 < args.len() => {
+            "--teams-json" | "--promotes-json" if i + 1 < args.len() => {
                 match serde_json::from_str::<Value>(&args[i + 1]) {
                     Ok(Value::Array(list)) => teams = list,
                     Ok(_) => {
@@ -1594,7 +1594,7 @@ mod tests {
         let registry = dir.path().join("registry.json");
         let mut v = json!({ "agents": registry_rows });
         v["schema_version"] = json!(crate::state::REGISTRY_SCHEMA_VERSION);
-        std::fs::write(&registry, v.to_string()).unwrap();
+        crate::registry_store::seed_raw(&registry, v.to_string());
         let cwd = dir.path().to_path_buf();
         let fold = org_fold(&dir.path().join("graph.json"), &cwd, None, &registry, teams).unwrap();
         (dir, registry, fold)
@@ -1602,7 +1602,7 @@ mod tests {
 
     fn team_row(name: &str, scope: &str, level: i64, status: &str) -> Value {
         json!({
-            "name": name, "status": status, "crown_scope": scope, "crown_level": level,
+            "name": name, "status": status, "role_scope": scope, "role_level": level,
             "cwd": "/repo/p", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"
         })
     }
@@ -1731,6 +1731,8 @@ mod tests {
             ]}))
             .unwrap(),
         );
+        // A legacy registry the import cannot parse: the table never opens.
+        std::fs::write(dir.path().join("registry.json"), "{ not json").unwrap();
         let cwd = dir.path().to_path_buf();
         let teams = vec![
             json!({"scope": "p", "level": 1}),
@@ -1740,7 +1742,7 @@ mod tests {
             &dir.path().join("graph.json"),
             &cwd,
             None,
-            dir.path(),
+            &dir.path().join("registry.json"),
             &teams,
         )
         .unwrap();

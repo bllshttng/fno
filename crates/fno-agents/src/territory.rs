@@ -454,7 +454,7 @@ pub fn live_teams(registry_path: &Path) -> Result<Vec<Team>, TerritoryUnknown> {
     let mut out: Vec<Team> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for row in rows {
-        let raw = row.crown_scope.as_deref().unwrap_or("").trim();
+        let raw = row.role_scope.as_deref().unwrap_or("").trim();
         if raw.is_empty() || !crate::spawn_gate::status_is_liveish(&row.status) {
             continue;
         }
@@ -462,7 +462,7 @@ pub fn live_teams(registry_path: &Path) -> Result<Vec<Team>, TerritoryUnknown> {
         if canon.is_empty() || !seen.insert(canon.clone()) {
             continue;
         }
-        let level = row.crown_level.unwrap_or(0).clamp(0, 255) as u8;
+        let level = row.role_level.unwrap_or(0).clamp(0, 255) as u8;
         out.push(Team {
             scope: canon,
             level,
@@ -502,8 +502,8 @@ pub(crate) fn node_owners(
 }
 
 /// The workspace project map: canonical project name -> normalized absolute
-/// path (mirrors `fno.graph.maintain.load_workspaces`). Best-effort like the
-/// Python read: a missing map contributes nothing, and the drain assembly
+/// path, the one map `backlog maintain` re-scopes against. Best-effort: a
+/// missing map contributes nothing, and the drain assembly
 /// treats an unmapped territory as unrootable.
 pub fn workspace_paths(cwd: &Path) -> HashMap<String, String> {
     let mut out = HashMap::new();
@@ -1057,7 +1057,7 @@ mod resolve_tests {
         )
         .unwrap();
         let registry_path = dir.join("registry.json");
-        std::fs::write(&registry_path, registry_rows.to_string()).unwrap();
+        crate::registry_store::seed_raw(&registry_path, registry_rows.to_string());
         (dir.to_path_buf(), registry_path)
     }
 
@@ -1083,7 +1083,7 @@ path = \"/repo/alpha\"
 
     fn registry_fixture() -> Value {
         let mut v = json!({"agents": [
-            {"name": "lead-a", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+            {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
              "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
             {"name": "w-1", "status": "live", "node": "e-1a", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
              "pid": std::process::id()},
@@ -1130,12 +1130,17 @@ path = \"/repo/alpha\"
         let tmp = tempfile::TempDir::new().unwrap();
         std::env::set_var("FNO_CONFIG", tmp.path().join("config.toml"));
         std::env::set_var("FNO_HOME", tmp.path());
-        let (_cwd, registry) = write_fixture(
+        let (_cwd, _) = write_fixture(
             tmp.path(),
             BASE_CONFIG,
             json!({"entries": []}),
-            registry_fixture(),
+            json!({"schema_version": 1, "agents": []}),
         );
+        // The registry shares graph.db with its own root, so it lives under
+        // a second root here: only the graph reads corrupt.
+        let registry = tmp.path().join("registry-root").join("registry.json");
+        std::fs::create_dir_all(registry.parent().unwrap()).unwrap();
+        crate::registry_store::seed_raw(&registry, registry_fixture().to_string());
         // The store is graph.db beside the anchor name; absent reads as an
         // empty store (open creates it), so unreadable = corrupt db file.
         let db = crate::backlog::database_path(&tmp.path().join("graph.json"));
@@ -1169,7 +1174,7 @@ path = \"/repo/alpha\"
         );
         // A MISSING registry reads as an empty one (fail-open, the Python
         // loader's contract); a CORRUPT one is the unknown case.
-        std::fs::write(&tmp.path().join("registry.json"), "{not json").unwrap();
+        crate::registry_store::seed_raw(&tmp.path().join("registry.json"), "{not json");
         let registry = tmp.path().join("registry.json");
         let err = resolve_territories(&tmp.path().to_path_buf(), &registry).unwrap_err();
         assert!(err.0.contains("registry unreadable"), "{err}");
@@ -1182,7 +1187,7 @@ path = \"/repo/alpha\"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "k", "status": "live", "crown_scope": "alpha", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
+                {"name": "k", "status": "live", "role_scope": "alpha", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
             ]})
             .to_string(),
         )
@@ -1315,9 +1320,9 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "crown_scope": "alpha", "crown_level": 1,
+                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
             ]})
             .to_string(),
@@ -1338,9 +1343,9 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-01", "status": "live", "crown_scope": "e-0,e-1", "crown_level": 2,
+                {"name": "lead-01", "status": "live", "role_scope": "e-0,e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-1", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-1", "status": "live", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
             ]})
             .to_string(),
@@ -1369,9 +1374,9 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "crown_scope": "alpha", "crown_level": 1,
+                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "exited", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-a", "status": "exited", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"}
             ]})
             .to_string(),
@@ -1394,9 +1399,9 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-p", "status": "live", "crown_scope": "alpha", "crown_level": 1,
+                {"name": "lead-p", "status": "live", "role_scope": "alpha", "role_level": 1,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-a", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
                 {"name": "w-1", "status": "live", "node": "e-1a", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
                  "pid": std::process::id()},
@@ -1460,7 +1465,7 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-a", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
                 {"name": "w-1", "status": "live", "node": null, "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
                  "pid": std::process::id()},
@@ -1529,9 +1534,9 @@ path = "/repo/alpha"
         std::fs::write(
             &registry,
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
-                {"name": "lead-a", "status": "live", "crown_scope": "e-1", "crown_level": 2,
+                {"name": "lead-a", "status": "live", "role_scope": "e-1", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
-                {"name": "lead-bad", "status": "live", "crown_scope": "e-loose", "crown_level": 2,
+                {"name": "lead-bad", "status": "live", "role_scope": "e-loose", "role_level": 2,
                  "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z"},
                 {"name": "w-1", "status": "live", "node": "e-1a", "cwd": "/repo/alpha", "harness": "claude", "created_at": "2026-09-07T00:00:00Z",
                  "pid": std::process::id()}

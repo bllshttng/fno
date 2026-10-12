@@ -3396,14 +3396,6 @@ def test_sliced_task_drops_a_blocker_outside_the_slice():
     assert "blocked_by: ['3.1']" in body  # 3.2 -> 3.1 is in slice, so it survives
 
 
-def test_sliced_child_measures_a_width():
-    """The emitted block is real input to the width probe, not decoration."""
-    from fno.backlog.advance import _plan_parallel_width
-
-    with tempfile.TemporaryDirectory() as d:
-        plan = Path(d) / "child.md"
-        plan.write_text(_slice_text("3-4"), encoding="utf-8")
-        assert _plan_parallel_width(plan) >= 1
 
 
 def test_scaffold_without_an_epic_strategy_names_why():

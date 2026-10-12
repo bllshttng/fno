@@ -102,6 +102,10 @@ max_prs_per_epic = 4
 # Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh.
 python_repair_added_lines = 30
 
+[plan]
+# Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off).
+default_diff_budget = 300
+
 [backlog]
 # Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).
 # id_prefix = <unset>   # optional; no default
@@ -115,7 +119,7 @@ staleness_days = 21
 max_open_ideas = 25
 # Auto-rendered boards (GLOBAL config file only): every graph mutation re-renders each {path, scope, projection=local|backlog|roadmap} target; local (the default) writes the unified board page, backlog and roadmap are retired and warn-skip.
 render_targets = []
-# Seconds an open local board, fleet.html or reign.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
+# Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
 page_reload_s = 60
 
 [backlog.maintain]
@@ -245,8 +249,8 @@ dedupe_dead_duplicates = false
 enabled = true
 # Context-used %% that triggers a general-session compact nudge.
 used_pct_trigger = 50
-# Context-used %% that triggers an earlier king compact nudge.
-king_used_pct_trigger = 40
+# Context-used %% that triggers an earlier lead compact nudge.
+lead_used_pct_trigger = 40
 
 [target.blast]
 # Enable blast-radius routing.
@@ -276,6 +280,14 @@ timeout_seconds = 1800
 # Guardrail preset: strict (every gatable guard), standard (default: the two destructive-write guards stay on), or off. Read in Rust by guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.
 preset = "standard"
 
+[store]
+# The sqld primary every machine dials out to (an http:// URL on a private network). Set, the claim keys that decide dispatch run on the primary. Read from the global config only. Unset = local store, no socket. Default unset.
+# remote_url = <unset>   # optional; no default
+# Bearer token for store.remote_url, when the primary asks for one. Default unset.
+# remote_token = <unset>   # optional; no default
+# true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false.
+share_backlog = false
+
 [agents]
 # Seconds a single-flight answer counts as fresh (default 60, one liveness cadence). Callers arriving inside the window read one child's stdout instead of each spawning their own; the latch is keyed on the normalized argv, so two `do pr wait` calls for different PRs stay two flights.
 single_flight_ttl_seconds = 60
@@ -295,6 +307,8 @@ confirm = "auto"
 auto_register_sessions = false
 # Launch routed claude panes through happy for remote monitoring; default false and pane-only.
 happy_routed_panes = false
+# Minutes after spawn before the daemon checks worker progress (default 10, range 1 to 60). With no progress it mails the spawning lead and checks once more after the same interval.
+first_check_minutes = 10
 # Seconds a worker's transcript must be quiet past, once every node its session is named on is done, before the daemon's retirement sweep drops its registry row (default 900). The receipt and the node's sessions[] row keep the resume handle. A legacy recovery.retire_grace_s still parses and lifts onto this key with a warning.
 retire_grace_s = 900
 # Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agents status` carries the value the loop enforces.
@@ -303,7 +317,7 @@ retire_interval_s = 300
 hold_escalate_after_s = 5400
 # Backstop cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3). Sized from RAM, because every live row holds RAM whether or not it works: floor((RAM_GB - 4 GB OS reserve - your desktop apps) / 1 GB per worker). The 1 GB planning figure is generous on purpose (a build or a test suite bursts past the measured 430 MB a quiet worker holds); the CPU axis (max_fleet_cpu_share) binds first on any machine with real headroom, so raise this instead of tuning it.
 max_live = 3
-# Per-territory team cap: the max live workers whose node is contained in one crown scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (kings, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).
+# Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).
 max_live_per_territory = 4
 # Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.
 provider_limits = { zai = { lanes = 5, subagents = 1 } }
@@ -364,7 +378,13 @@ expired_claims_retain_days = 30
 # Days to retain expendable PR-status cache files (default 14).
 pr_status_cache_retain_days = 14
 
+[agents.claude]
+# What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat.
+beat = "auto"
+
 [agents.codex]
+# What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat.
+beat = "auto"
 # Use full-yolo (drop sandbox) for headless codex workers.
 headless_yolo = false
 
@@ -393,7 +413,7 @@ auto_merge = false
 on_exhaustion = "defer"
 # Minutes after which a LOW (not yet exhausted) quota window whose reset is FARTHER out than this arms a cross-harness cutover instead of a wait. Default 0 = off (a fresh install is unchanged). The predicate is inverted from the defer horizon on purpose: for deferring a distant reset means wait, for cutover it means leave now. Needs dispatch.on_exhaustion='failover' and a healthy candidate in the active combo; any non-integer or negative value degrades to 0.
 cutover_low_after_minutes = 0
-# The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The reign check-in routes each unplanned row through the same table: blueprint candidates against the one-per-king ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.
+# The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The lead check-in routes each unplanned row through the same table: blueprint candidates against the one-per-lead ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.
 blueprint_floor = "high"
 
 [routing]
@@ -409,7 +429,7 @@ enforce_inventory = false
 operator_access = "unknown"
 
 [sideline]
-# The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, king, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach.
+# The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach.
 layout = "card"
 
 [sideline.colors]
@@ -421,6 +441,10 @@ route = {}
 model = {}
 # Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row.
 row = {}
+
+[split]
+# Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.
+opens = "pane"
 
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.
@@ -649,13 +673,13 @@ sandbox = false
 [worktree]
 # Global worktree-isolation policy (never|harness-native|external); default harness-native. `never` launches code payloads in place (e.g. an Obsidian vault checkout). A per-project work.workspaces.<slug>.projects[].worktree key overrides it.
 # policy = <unset>   # optional; no default
-# Run dependency install when a new worktree is set up (read by skills/speculate/scripts/worktree-setup.sh); set false to skip it. Default true.
+# Run dependency install when a new worktree is set up (read by hooks/worktree-setup.sh and worktree-manager.sh); set false to skip it. Default true.
 auto_install = true
-# Explicit setup command run after a new worktree is created, whatever auto_install says (read by skills/speculate/scripts/worktree-setup.sh). Default empty.
+# Explicit setup command run after a new worktree is created, whatever auto_install says (read by hooks/worktree-setup.sh and worktree-manager.sh). Default empty.
 setup_command = ""
-# Skip the post-setup verification step in a new worktree (read by skills/speculate/scripts/worktree-setup.sh). Default false.
+# Skip the post-setup verification step in a new worktree (read by hooks/worktree-setup.sh). Default false.
 skip_verification = false
-# Verification command for a new worktree (read by skills/speculate/scripts/worktree-setup.sh); falls back to the script's own detection when empty. Default empty.
+# Verification command for a new worktree (read by hooks/worktree-setup.sh); falls back to the script's own detection when empty. Default empty.
 test_command = ""
 # How far the merged sweep's done-node arm goes on a done tree with uncommitted tracked changes: balanced (default) keeps the tree and reports the diff; aggressive salvages the tracked diff to refs/fno/salvage/<node>, then prunes once the 30m grace passes and no live session holds the tree. Both keep the branch, salvage untracked files, and still block on conflicts, unborn trees, unreadable probes, live claims, and live sessions.
 prune_done = "balanced"
@@ -697,6 +721,8 @@ load_readout = "simple"
 # theme = <unset>   # optional; no default
 # While a footnote theme is active, paint the terminal's own background, foreground and 16-color palette from the theme (OSC 11/10/4) and restore them on exit (default on).
 paint_background = true
+# What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start.
+card_graph = "activity"
 
 [mux.restore]
 # Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).
@@ -716,29 +742,29 @@ http_timeout_secs = 5
 # Retry budget per webhook dispatch before drop/short-circuit.
 retries = 2
 
-[king]
-# Arm the king loop: hold a king session open while its board names work it can shrink. Defaults false.
+[lead]
+# Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false.
 enabled = false
-# Let the king merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the king's own work.
+# Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work.
 autonomous_merge = false
-# Arm the pr-watch tick's wake phase: respawn a king whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
+# Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
 wake_enabled = false
-# Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived reign.
+# Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead.
 wake_ceiling = 32
-# Minimum gap between billed wakes (default 900): a king woken inside the window is still working under its own in-session arm.
+# Minimum gap between billed wakes (default 900): a lead woken inside the window is still working under its own in-session arm.
 wake_debounce_seconds = 900
 # Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement.
 wake_backstop_seconds = 1800
 # Minutes a blocked distress row may sit unanswered before the blocked_child board queue surfaces it (default 30). An answer is mail to that session, a claim release on the node, or the node closing.
 blocked_child_grace_minutes = 30
-# What a crowned court session may write through the king-delegation-guard hook. refuse (default) denies a write whose target resolves inside the repo, outside its .fno state tree, build output and any king.write_roots entry, and names the rejected path. warn prints the refusal on stderr and allows, so a reign adopts the guard without a surprise. off silences the guard. An unknown value degrades to refuse.
+# What a titled org session may write through the lead-delegation-guard hook. refuse (default) denies a write whose target resolves inside the repo, outside its .fno state tree, build output and any lead.write_roots entry, and names the rejected path. warn prints the refusal on stderr and allows, so a lead adopts the guard without a surprise. off silences the guard. An unknown value degrades to refuse.
 implementation_guard = "refuse"
-# In-repo paths a crowned court session may still write through the king-delegation-guard hook. A relative entry resolves against the repo root, and a leading ~/ against $HOME. The match is by realpath, so a symlinked entry covers its target. Default empty: every in-repo path outside .fno and build output is source and refused. A blank entry is dropped. '.' allows the whole repo, the same as implementation_guard = off. Paths outside the repo always allow and need no entry.
+# In-repo paths a titled org session may still write through the lead-delegation-guard hook. A relative entry resolves against the repo root, and a leading ~/ against $HOME. The match is by realpath, so a symlinked entry covers its target. Default empty: every in-repo path outside .fno and build output is source and refused. A blank entry is dropped. '.' allows the whole repo, the same as implementation_guard = off. Paths outside the repo always allow and need no entry.
 write_roots = []
-# The /loop interval a reign self-injects on Claude (default 55m, under the one-hour prompt cache). Fail-safe: a value that is not <digits>[smhd] degrades to 55m at load, never raises.
+# The /loop interval a lead self-injects on Claude (default 55m, under the one-hour prompt cache). Fail-safe: a value that is not <digits>[smhd] degrades to 55m at load, never raises.
 checkin_interval = "55m"
-# The /loop prompt text a reign self-injects at each check-in (default: run fno agents king checkin, which gathers the readings, diffs the last beat, and journals reign_checkin; print 'no change' when idle).
-checkin_text = "reign check-in. Run fno agents king checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals reign_checkin. Then act on the printout per the reign skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
+# The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle).
+checkin_text = "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
 
 [accounts]
 # Name of the account record currently active for provider rotation.

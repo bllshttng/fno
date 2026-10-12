@@ -37,7 +37,7 @@ struct Resolved<'a> {
 /// Native auxiliary vocabulary: commands the dispatcher routes by engine
 /// contract that the Python catalog never carried (the note corpus/history
 /// reader rode the folded `backlog-notes` action, not a catalog command).
-const NATIVE_AUX: &[&str] = &["notes", "target-binding", "birth-hook"];
+const NATIVE_AUX: &[&str] = &["freshness", "notes", "target-binding", "birth-hook"];
 
 /// Resolve the head of `args` to a legacy command. Grouped spelling first
 /// (`<group> <action>`, only when the second token IS one of that group's
@@ -126,6 +126,14 @@ pub fn run(args: &[String]) -> i32 {
     // the whole argv rides the compat forward verbatim, exactly the shape
     // the Python app has always parsed.
     if is_app_option_head(args) {
+        if let Some(pos) = args
+            .iter()
+            .position(|a| matches!(a.as_str(), "advance" | "join" | "dispatch-lanes"))
+        {
+            let mut native = args[pos..].to_vec();
+            native.extend_from_slice(&args[..pos]);
+            return run(&native);
+        }
         return forward_verbatim(args);
     }
     let resolved = match resolve_head(args) {
@@ -135,10 +143,31 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // The ported tracker-owned verbs own graph state: under an external
+    // backend they refuse before any read or write. Help still answers.
+    if matches!(
+        resolved.legacy,
+        "archive"
+            | "unarchive"
+            | "maintain"
+            | "migrate-priorities"
+            | "migrate-difficulty"
+            | "migrate-updated-at"
+    ) && !carries(resolved.tail, &["--help", "-h"])
+    {
+        if let Some(code) = super::workflows::refuse_non_graph_backend(resolved.legacy) {
+            return code;
+        }
+    }
     match resolved.legacy {
         // The folded corpus/history reader: fully native, engine owns the
         // whole surface (inventory, migrate, history, stale, findings).
         "notes" => super::note_migrate::run_notes(resolved.tail),
+        // Internal: target init and blueprint step 2a ask whether a node's
+        // premise, or its plan, still holds against current main. Advisory:
+        // every verdict exits 0 and the one write is the verdict event.
+        // Not a catalog command, so it adds nothing to the menu.
+        "freshness" => super::freshness::run(resolved.tail),
         // Internal: target init/start and the init hook ask which node a run
         // may bind. Not a catalog command, so it adds nothing to the menu.
         "target-binding" => super::target_binding::run(resolved.tail),
@@ -231,11 +260,47 @@ pub fn run(args: &[String]) -> i32 {
         // locked close, the self-heals, and the shelled legs (auto-continue
         // rides the wheel until the advance port).
         "reconcile" => super::reconcile_cli::run(resolved.tail),
+        "advance" => super::advance_cli::run(resolved.tail),
+        "join" => super::advance_join::run(resolved.tail),
+        "dispatch-lanes" => super::advance_lanes::run_lanes(resolved.tail),
         // The parallel fill: native selection over the lane world (peer
         // slots, domain annotation, the file-collision gate).
         "lane-fill" => super::advance_fill::run_lane_fill(resolved.tail),
         "schedule-shadow" => super::advance_fill::run_schedule_shadow(resolved.tail),
         "worked" => super::worked::run(resolved.tail),
+        // The launch-edge writers are native (the first-launch stamp the
+        // spawn front forwards to, and the receipted backfill); the read
+        // shapes of `provenance` stay with the Python surface.
+        "provenance" if super::provenance_cli::owns(resolved.tail) => {
+            super::provenance_cli::run(resolved.tail)
+        }
+        // The triage diagnostics group is native end to end: the nine
+        // actions over the engine, health, and the locked apply. The door
+        // owns every triage tail: the wheel's triage route forwards here,
+        // so a forward back would loop.
+        "triage" => super::triage_cli::run(resolved.tail),
+        // The projections: the shared kanban classifier, the post-publish
+        // view pass, and the read verbs over it.
+        "render-views" => super::projections::run_render_views(resolved.tail),
+        "view" => super::projections::run_view(resolved.tail),
+        "board" => super::projections::run_board(resolved.tail),
+        "bases" => super::projections::run_bases(resolved.tail),
+        "roadmap" => super::projections::run_roadmap(resolved.tail),
+        "album" => super::projections::run_album(resolved.tail),
+        // Archive residency, the hygiene pass, the daily groom, and the
+        // one-shot row migrations.
+        "archive" => super::maintenance_archive::run_archive(resolved.tail),
+        "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
+        "maintain" => super::maintenance::run_maintain(resolved.tail),
+        "groom" => super::groom::run_groom(resolved.tail),
+        "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
+        "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
+        "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
+        // The publish verb is native end to end: the public projection
+        // renders through `fno board-render`, and the three targets (static
+        // dir, uploader command, GitHub Pages) are the verb's own. The
+        // catalog row sits in the board group.
+        "publish" => super::publish::run(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

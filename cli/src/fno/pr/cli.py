@@ -192,8 +192,8 @@ def status(
         "wakes when a new review posts on the PR. N waiters on "
         "one PR cost one network read per cache TTL, a rate-limit backoff is "
         "ridden out rather than hammered, and the gh-call count prints at "
-        "exit. --timeout (30m default) exits with the last observed code and "
-        "a still-unsettled note. A CONFLICTING PR refuses with exit 5 and a "
+        "exit. --timeout (15m default) exits with the last observed code and "
+        "a still-unsettled note. Red cancels the head's runs, exits 1; CONFLICTING exits 5 with a "
         "rebase receipt. Use this instead of a hand-rolled "
         "`while/sleep/grep` loop - every such loop is an uncoordinated poll "
         "against a quota the whole machine shares."
@@ -203,9 +203,9 @@ def wait(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
     until: str = typer.Option(
         "settled", "--until",
-        help="Exit when: settled (any terminal verdict), green, or a new review posts.",
+        help="settled (terminal, or red at once), red (fail fast), green (every check), review.",
     ),
-    timeout: str = typer.Option("30m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
+    timeout: str = typer.Option("15m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
     interval: str = typer.Option("60", "--interval", help="Poll interval in seconds (minimum 5)."),
 ) -> None:
     _forward_to_binary(
@@ -417,7 +417,7 @@ def heal(
     help=(
         "Refuse a PR whose branch base is > 24h of main history behind "
         "origin/main (phantom-deletion guard). Exit 0 fresh|bypass|fail-open, "
-        "3 stale (points at `fno do pr rebase`), 4 unrelated histories. Bypass "
+        "3 stale (points at the git merge origin/main fix), 4 unrelated histories. Bypass "
         "with FNO_PR_BASE_OK=stale-acknowledged (emits gate_escape)."
     ),
 )
@@ -877,13 +877,13 @@ def rebase(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "The one guarded push: fetch, rebase onto origin/main, optionally preflight, "
-        "push exactly once, print one receipt. Refuses while a CI run on the "
-        "remote head is still in flight (--force-ci-cancel overrides and "
-        "records the bypass; --preflight opts into the local runner; "
-        "--no-preflight remains an accepted no-op. "
-        "Exit 0 pushed, 1 preflight red, 2 a run in flight, 3 a refusal the "
-        "caller must fix (protected branch, dirty tree, conflict), 4 a read "
-        "error, 127 binary missing."
+        "push exactly once, print one receipt. Refuses while a CI run on the remote "
+        "head is still in flight, unless the head's checks already carry a failure: "
+        "then it cancels that stale run, records the bypass row, and pushes with no "
+        "flag. A head with no red row is never cancelled. --no-preflight is an "
+        "accepted no-op; --force-ci-cancel still overrides. Exit 0 pushed "
+        "(ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, "
+        "3 a refusal the caller must fix (protected branch, dirty tree, conflict), 4 a read error, 127 binary missing."
     ),
 )
 def push(ctx: typer.Context) -> None:

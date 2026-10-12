@@ -16,7 +16,7 @@ _SEND_TIMEOUT_SECONDS = 30.0
 _UNDELIVERED = ("notify FAILED", "notify UNCONFIRMED")
 _GRAPH_FIELDS = ("locked_by_harness_session", "session_id", "locked_by")
 _QUIET_HINT = (
-    "Write it anyway with --quiet, or find a reader with fno agents court and mail them by name."
+    "Write it anyway with --quiet, or find a reader with fno agents team and mail them by name."
 )
 
 
@@ -46,10 +46,10 @@ def claim_holder(node_id: str) -> Optional[str]:
     return holder or None
 
 
-def crowned_over(scope: str) -> list[str]:
-    from fno.agents.crown import resolve_to_king
+def promoted_over(scope: str) -> list[str]:
+    from fno.agents.role import resolve_to_lead
 
-    return resolve_to_king(scope)
+    return resolve_to_lead(scope)
 
 
 def own_session() -> Optional[str]:
@@ -99,7 +99,7 @@ def note_readers(
     index: dict[str, dict],
     rows: Optional[Iterable[Any]] = None,
     holder_of: Callable[[str], Optional[str]] = claim_holder,
-    kings_of: Callable[[str], Iterable[str]] = crowned_over,
+    leads_of: Callable[[str], Iterable[str]] = promoted_over,
     self_session: Optional[str] = None,
 ) -> NoteReaders:
     """Every bound reader for one note; the author is named, never mailed."""
@@ -184,27 +184,27 @@ def note_readers(
     if isinstance(owner_id, str) and owner_id:
         worker_readers(owner_id, f"owner {owner_id}", index.get(owner_id))
 
-    # Crown walk, nearest first; the walk stops at the first scope with a live crown.
+    # Role walk, nearest first; the walk stops at the first scope with a live role.
     epic = (owner.get("parent") if owner else None) or entry.get("parent")
     scopes: list[tuple[str, str, str]] = []
     if entry.get("type") == "epic":
-        scopes.append((node_id, f"king of {node_id}", f"crown {node_id}"))
+        scopes.append((node_id, f"lead of {node_id}", f"role {node_id}"))
     if isinstance(epic, str) and epic:
-        scopes.append((epic, f"king of {epic}", f"crown {epic}"))
+        scopes.append((epic, f"lead of {epic}", f"role {epic}"))
     if isinstance(project := entry.get("project"), str) and project:
-        scopes.append((project, f"king of {project} (project)", f"crown {project} (project)"))
+        scopes.append((project, f"lead of {project} (project)", f"role {project} (project)"))
     for scope, why, label in scopes:
         try:
-            kings = list(kings_of(scope))
+            leads = list(leads_of(scope))
         except Exception as exc:  # noqa: BLE001 - one unreadable scope costs it
             readings.append(f"{label}: unreadable ({exc})")
             continue
-        if not kings:
+        if not leads:
             readings.append(f"{label}: vacant")
             continue
-        readings.append(label + ": " + ", ".join(kings))
-        for king in kings:
-            add(king, why)
+        readings.append(label + ": " + ", ".join(leads))
+        for lead in leads:
+            add(lead, why)
         break
     return NoteReaders(node_id, recipients, author_bound, readings)
 
@@ -214,34 +214,83 @@ def _refused(head: str, readings: Iterable[str] = ()) -> Refused:
     return Refused(f"{head}so nothing was written.{trail}\n{_QUIET_HINT}", 3)
 
 
+def archived_entry(node_id: str) -> Optional[dict[str, Any]]:
+    """The node's archived row from the store, or None. Never raises.
+
+    Tells "archived" apart from "absent": both would otherwise refuse with
+    the not-found text a typo gets. The archive is default-backend storage,
+    so an external tracker selection never consults it.
+    """
+    from fno.graph._intake import _find_node
+    from fno.graph.store import read_archive_entries
+
+    try:
+        from fno.tracker import active_backend_name
+
+        if active_backend_name() != "graph":
+            return None
+        return _find_node(read_archive_entries(), node_id)
+    except Exception:  # noqa: BLE001 - a bad archive read must not mask the real refusal
+        return None
+
+
+def archived_refusal(node_id: str) -> Optional[str]:
+    """The update refusal for an archived node, or None when it is not archived."""
+    entry = archived_entry(node_id)
+    if entry is None:
+        return None
+    aid = entry.get("id") or node_id
+    return (
+        f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
+        " to restore it before updating."
+    )
+
+
 def readers_before_append(task_id: str, graph_path: Path) -> NoteReaders | Refused:
     """Resolve the readers BEFORE the append; surface any Refused verbatim."""
     from fno.agents.registry import load_registry
     from fno.graph._intake import _find_node
     from fno.graph.api import wire_rows
+    from fno.graph.store import read_nodes_by_ids
 
     try:
-        rows = wire_rows(path=graph_path)
-        entry = _find_node(rows, task_id) or next(  # the write path takes slugs too
-            (e for e in rows if str(e.get("slug") or "").lower() == task_id.strip().lower()),
-            None,
-        )
+        # The by-id seam answers the exact id/slug tiers without the whole
+        # read; the full read stays for a keeper that cannot answer.
+        fast = read_nodes_by_ids(Path(graph_path), [task_id])
+        rows: list[dict] | None = None
+        entry: dict | None = None
+        if fast and (fast.get("entries") or []) and not (fast.get("missing") or []):
+            entry = fast["entries"][0]
+            # The by-id read includes archived rows the full read excludes.
+            if entry.get("archived_at"):
+                entry = None  # fall through to the archived refusal
         if entry is None:
-            from fno.graph._archive_lookup import archived_entry
-
-            archived = archived_entry(task_id)
-            if archived is not None:
-                aid = archived.get("id") or task_id
-                return Refused(
-                    f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
-                    " to restore it before updating.",
-                    1,
-                )
+            rows = wire_rows(path=graph_path)
+            entry = _find_node(rows, task_id) or next(  # the write path takes slugs too
+                (e for e in rows if str(e.get("slug") or "").lower() == task_id.strip().lower()),
+                None,
+            )
+        if entry is None:
+            refusal = archived_refusal(task_id)
+            if refusal is not None:
+                return Refused(refusal, 1)
             return Refused(f"Error: no node resolves to '{task_id}'", 1)
-        index = {str(e.get("id")): e for e in rows if isinstance(e.get("id"), str)}
+        if rows is not None:
+            index = {str(e.get("id")): e for e in rows if isinstance(e.get("id"), str)}
+        else:
+            # The walk needs one more node: the contained_in owner chain
+            # (note_readers reads only index.get(contained_in) and
+            # index.get(owner_id)). By-id reads cover it.
+            index = {}
+            contained_in = entry.get("contained_in")
+            if isinstance(contained_in, str) and contained_in:
+                owner = read_nodes_by_ids(Path(graph_path), [contained_in])
+                for e in (owner or {}).get("entries") or []:
+                    if isinstance(e.get("id"), str):
+                        index[e["id"]] = e
         readers = note_readers(
             entry, index=index, rows=load_registry(), holder_of=claim_holder,
-            kings_of=crowned_over, self_session=own_session(),
+            leads_of=promoted_over, self_session=own_session(),
         )
     except Exception as exc:  # noqa: BLE001 - cannot prove a reader, so refuse
         return _refused(f"note refused: could not read who is bound to {task_id} ({exc}), ")

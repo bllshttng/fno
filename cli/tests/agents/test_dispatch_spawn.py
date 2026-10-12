@@ -39,6 +39,17 @@ from fno.agents.registry import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _graphless_seed_resolver(monkeypatch):
+    """The seed-word gate fails open on an unreadable graph; pin that here so
+    the plumbing tests' fake node words never depend on the ambient store."""
+
+    def _unreadable(path=None, **_):
+        raise ValueError("graph store unreadable")
+
+    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -614,30 +625,6 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
 
 
-def test_thread_refusal_is_one_message_across_both_seams(monkeypatch) -> None:
-    """The spawn seam and the dispatch-lanes seam raise the SAME text.
-
-    Two files used to render the accept set from the tuple and then hardcode
-    the same pane-only sentence beside it, so one could name a harness the
-    other had since admitted - and did.
-    """
-    from typer.testing import CliRunner
-
-    from fno.agents import dispatch
-    from fno.backlog import advance
-    from fno.graph import cli as graph_cli
-
-    with pytest.raises(dispatch.DispatchAskError) as caught:
-        dispatch._check_spawn_harness("gemini")
-
-    monkeypatch.setattr(advance, "dispatch_lanes", lambda *a, **k: [])
-    lanes = CliRunner().invoke(
-        graph_cli.cli, ["dispatch-lanes", "--harness", "gemini", "--max", "1"]
-    )
-
-    assert lanes.exit_code == 2
-    for line in str(caught.value).splitlines():
-        assert line in lanes.output
 
 
 def test_spawn_pi_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:
@@ -1174,7 +1161,11 @@ def test_keeper_lane_child_env_never_inherits_the_spawn_trigger(
     class _Boom(Exception):
         pass
 
+    real_popen = dispatch.subprocess.Popen
+
     def _fake_popen(*args, **kwargs):
+        if "env" not in kwargs:  # the registry door, not the keeper launch
+            return real_popen(*args, **kwargs)
         captured["env"] = kwargs["env"]
         raise _Boom("stop before the keeper starts")
 

@@ -420,16 +420,50 @@ def resolve_front_binary() -> Optional[Path]:
             return root / profile / "fno"
     return Path(found) if (found := shutil.which("fno")) else None
 
-def call_front_json(payload: dict, *, timeout: float = 60) -> dict:
+class FrontTimeout(VerbUnavailable):
+    """The law door gave no answer in time. A retry meets the same wait."""
+
+
+#: The law door's default bound. The read is machine-relative: measured 18s
+#: wall for 2.7s user at load 176 (2026-10-06) and 61s at load 80
+#: (2026-10-09), so the old fixed 60s wedged blueprint validation on a loaded
+#: machine. Raise the knob there; an explicit ``timeout=`` argument outranks
+#: it, and junk falls back to 60.
+LAW_DOOR_TIMEOUT_ENV = "FNO_LAW_DOOR_TIMEOUT_SECONDS"
+
+
+def _law_door_timeout() -> float:
+    raw = os.environ.get(LAW_DOOR_TIMEOUT_ENV, "").strip()
+    try:
+        return float(raw) if raw else 60.0
+    except ValueError:
+        return 60.0
+
+
+def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
     """One round-trip with the front's law door, fail-closed like verb_call."""
     import json
     import subprocess
 
+    if timeout is None:
+        timeout = _law_door_timeout()
+
     binary = resolve_front_binary()
     if binary is None:
         raise VerbUnavailable("the native fno binary was not found")
-    done = subprocess.run([str(binary), "inbox", "law", "match"],
-        input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    try:
+        done = subprocess.run([str(binary), "inbox", "law", "match"],
+            input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # The read needs about 3s of CPU. Measured 2026-10-06 at load 176: 18s
+        # wall for 2.7s user, so a timeout means the machine had no CPU to give.
+        try:
+            load = f"{os.getloadavg()[0]:.0f} on {os.cpu_count()} cores"
+        except OSError:
+            load = "unreadable"
+        raise FrontTimeout(
+            f"`fno inbox law match` gave no answer in {timeout:g}s (machine load {load})"
+        ) from None
     if done.returncode != 0:
         raise VerbUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
     return json.loads(done.stdout)

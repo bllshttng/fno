@@ -296,13 +296,10 @@ def test_cargo_target_over_free_ceiling_with_everything_protected_names_free(rep
     assert target.exists(), "protection holds even under a tightened ceiling"
 
 
-def test_setup_worktree_runs_the_same_cargo_target_apply_path():
-    text = SETUP_SRC.read_text()
-    # Canonical spelling leads; the retired root one stays for one release as
-    # the deploy-window fallback (repo script newer than the installed fno).
-    assert "fno agents workspace worktree cleanup --cargo-targets --apply" in text
-    assert "fno workspace worktree cleanup --cargo-targets --apply" in text
-    assert "cargo target cleanup failed" in text
+def test_setup_worktree_does_not_run_the_fleet_wide_cargo_sweep():
+    # The sweep walks every registered worktree; per-worktree setup must not
+    # pay for it. The daily reclaim lane `cargo_build_dirs` owns it.
+    assert "--cargo-targets" not in SETUP_SRC.read_text()
 
 
 def test_cargo_target_cli_forwards_explicit_bounds(monkeypatch: pytest.MonkeyPatch):
@@ -874,7 +871,7 @@ def test_age_sweep_removes_old_clean_detached_tree(repo: Path):
 
 def test_age_sweep_is_dry_run_by_default(repo: Path):
     """Both removal modes share one default: a bare sweep reports, --apply
-    executes. The age mode used to remove on a bare call - a king ran it
+    executes. The age mode used to remove on a bare call - a lead ran it
     expecting a preview and 13 trees went."""
     wt = _add_detached(repo, repo / "wt-age-default")
 

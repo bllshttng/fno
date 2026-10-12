@@ -47,11 +47,6 @@ import typer
 MACMON_TIMEOUT_S = 5.0
 MEMORY_PRESSURE_TIMEOUT_S = 5.0
 
-#: The lane answer's sanity cap. Per-lane costs are small; without a cap a
-#: quiet machine advertises thousands of lanes, which is a number nobody can
-#: act on and nobody should read as a promise.
-LANE_ANSWER_CAP = 64
-
 #: Per-lane seed costs (cores, GB) used when no live roster row exists to
 #: measure from. Derived from the observed resident sizes on the specifying
 #: node: a keeper about 6.5 MB, fno-agents-daemon about 105 MB, the mux
@@ -343,9 +338,9 @@ def _fleet_cost(reading: Any, rows: Optional[list]) -> tuple[float, float, int, 
 def _census(
     reading: Any, rows: Optional[list], rows_error: Optional[str], read_ms: int
 ) -> dict:
-    """The court census: kings, workers, tests.
+    """The team census: leads, workers, tests.
 
-    Kings and workers are ROW counts, tests is a PROCESS count, never folded
+    Leads and workers are ROW counts, tests is a PROCESS count, never folded
     together. The gap rides as its own field for the same reason.
     Full rule: docs/architecture/resource-meter.md.
     """
@@ -357,7 +352,7 @@ def _census(
         probe = {}
     share = probe.get("share")
     census: dict[str, Any] = {
-        "kings": None, "king_conflicts": None, "workers": None,
+        "leads": None, "lead_conflicts": None, "workers": None,
         "tests": None if reading is None else reading.test_process_count,
         "roster_rows": None if rows is None else len(rows),
         "gate_notes": list(probe.get("warnings") or []),
@@ -378,20 +373,20 @@ def _census(
 
         census["top_consumers"] = top_consumers(reading.top)
     try:
-        from fno.agents.court import gather_court
+        from fno.agents.team import gather_team
 
-        court = gather_court(rows) if rows is not None else {}
+        team = gather_team(rows) if rows is not None else {}
     except Exception:
         return census
-    kings = (court.get("summary") or {}).get("total")
-    if not isinstance(kings, int):
-        # An unreadable court nulls the crown counts rather than reporting a
+    leads = (team.get("summary") or {}).get("total")
+    if not isinstance(leads, int):
+        # An unreadable team nulls the role counts rather than reporting a
         # kingless fleet from a read that saw nothing.
         return census
-    conflicts = court.get("conflicts")
-    census["kings"] = kings
-    census["king_conflicts"] = len(conflicts) if isinstance(conflicts, list) else None
-    census["workers"] = len(rows or ()) - kings
+    conflicts = team.get("conflicts")
+    census["leads"] = leads
+    census["lead_conflicts"] = len(conflicts) if isinstance(conflicts, list) else None
+    census["workers"] = len(rows or ()) - leads
     return census
 
 
@@ -431,26 +426,29 @@ def read_lanes(
 
     assert cpu_arm.value is not None and mem_arm.value is not None  # measured arms
     per_cpu, per_gb, row_count, cost_source = _fleet_cost(footprint, rows)
-    busy = cpu_arm.value["busy_fraction"]
-    capacity = cpu_arm.value["capacity_cores"]
-    free_cores = capacity * (1.0 - busy)
-    mem_value = mem_arm.value
-    available_gb = mem_value.get("available_gb")
-    if available_gb is None and mem_value.get("free_fraction") is not None:
-        # memory_pressure without a macmon total: the seed cost needs a GB
-        # figure, and a fraction alone cannot give one. Refusing here would
-        # contradict the arm's own "measured" state, so the seed GB total
-        # (16 GB) bounds the estimate and the output says so.
-        available_gb = round(mem_value["free_fraction"] * 16.0, 1)
-        cost_source = "seed 16 GB total x memory_pressure free fraction"
-    cpu_fits = free_cores / per_cpu
-    mem_fits = available_gb / per_gb
-    answer = int(max(0.0, min(cpu_fits, mem_fits, float(LANE_ANSWER_CAP))))
 
-    if load_arm.state == DARK or (
-        isinstance(load_arm.value, dict)
-        and load_arm.value.get("verdict") in ("hold", "undecidable", "refuse")
-    ):
+    # The lane answer IS the gate's own cap read (one decider, no second
+    # arithmetic): the probe carries the live slot count and the learned
+    # effective cap, and the CPU-share arithmetic it replaces (an answer of
+    # 15 more fit at 90% CPU) is deleted. Delegating to the Rust probe is
+    # the law (d-b6cc1a2a): Python deletes, the gate decides. When the probe
+    # cannot answer, a holding CPU axis still caps at 0 (a spawn-load breach
+    # runs the suite serial); only a silent probe AND an admitting axis
+    # refuses, because then nothing measured is holding anything back.
+    from fno.agents.spawn_gate import probe_capacity
+
+    probe = probe_capacity(only=["lanes"])
+    slots = probe.get("slots")
+    effective = probe.get("effective")
+    answer: Optional[int] = None
+    if isinstance(slots, int) and isinstance(effective, int):
+        answer = max(0, effective - int(slots))
+        cost_source += f"; probe {slots} live, effective cap {effective}"
+
+    hold_verdict = isinstance(load_arm.value, dict) and load_arm.value.get(
+        "verdict"
+    ) in ("hold", "undecidable", "refuse")
+    if load_arm.state == DARK or hold_verdict:
         # The CPU axis is not admitting, or never answered: a dark sensor is
         # never headroom, and neither is a hold, an undecidable band, or a
         # refusal (AC12).
@@ -461,6 +459,13 @@ def read_lanes(
             else str(load_arm.value.get("verdict"))
         )
         cost_source += f"; cpu admission {cap_why}, answer capped at 0"
+
+    if answer is None:
+        reading.refusal_reason = (
+            "the gate cannot answer the lane question: the spawn-gate probe "
+            f"carries no effective cap ({probe.get('reason') or 'gate unavailable'})"
+        )
+        return reading
 
     reading.lane_count = answer
     reading.per_lane_cpu_cores = round(per_cpu, 3)
@@ -478,14 +483,14 @@ def _census_lines(census: dict) -> list[str]:
         return []
     n = {k: ("unknown" if v is None else v) for k, v in census.items()}
     lines = [
-        f"  court: {n['kings']} king(s), {n['workers']} worker(s), "
+        f"  team: {n['leads']} lead(s), {n['workers']} worker(s), "
         f"{n['tests']} running test(s) "
         f"({n['roster_rows']} live roster row(s), {n['read_ms']} ms)"
     ]
-    if census.get("king_conflicts"):
+    if census.get("lead_conflicts"):
         lines.append(
-            f"  court conflicts: {n['king_conflicts']} scope(s) held by more than "
-            "one live crown - a bare king count hides this"
+            f"  team conflicts: {n['lead_conflicts']} scope(s) held by more than "
+            "one live role - a bare lead count hides this"
         )
     if census.get("roster_error"):
         lines.append(f"  roster: {n['roster_error']} - the counts above are unread")

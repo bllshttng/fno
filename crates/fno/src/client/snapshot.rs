@@ -13,20 +13,70 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{LayoutView, View};
+use super::{theme_import_ui, LayoutView, View};
 use crate::frame_html::{self, Theme};
+use crate::popup::Anchor;
 use crate::proto::{self, ClientMsg, Frame, ServerMsg, BUILD_VERSION, PROTO_VERSION};
+use serde_json::Value;
 
 const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
-[--font <family>] [--message <fmail-id>]";
+[--font <family>] [--message <fmail-id>] \
+[--view bell|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
     Html,
     Svg,
     Png,
+}
+
+/// A client-local surface a snapshot opens before composing. These live in
+/// the client's own state, so the server frame never carries them; the seam
+/// flips the same state the live keys flip, then paints.
+#[derive(Debug, PartialEq)]
+pub enum ViewKind {
+    /// The notifications bell panel, with one synchronous gather like the
+    /// live panel's `maybe_kick`.
+    Bell,
+    /// The activity feed panel, with one synchronous page fold like the
+    /// live panel's run-loop kick.
+    Feed,
+    /// The sideline row context menu on the first agent row.
+    RowMenu,
+    /// The tab-strip context menu on the first tab.
+    TabMenu,
+    /// The sideline menu popup.
+    SidelineMenu,
+    /// The new-agent composer sheet, with a seeded draft so the editor text
+    /// and the real terminal cursor's cell are in the picture.
+    Composer,
+    /// The row context menu on the first PANELESS bg row: the Split
+    /// Direction group with its pane|portal toggle, the branch the first
+    /// agent row (pane-hosted) never renders.
+    SplitMenu,
+    /// The settings modal at its top level: the tab strip the tab cycle
+    /// walks.
+    Settings,
+    /// The which-key table, opened FROM settings: the printed key labels
+    /// (`ctrl+b`) live here.
+    Keys,
+}
+
+fn parse_view(v: &str) -> Option<ViewKind> {
+    match v {
+        "bell" => Some(ViewKind::Bell),
+        "feed" => Some(ViewKind::Feed),
+        "row-menu" => Some(ViewKind::RowMenu),
+        "tab-menu" => Some(ViewKind::TabMenu),
+        "sideline-menu" => Some(ViewKind::SidelineMenu),
+        "composer" => Some(ViewKind::Composer),
+        "split-menu" => Some(ViewKind::SplitMenu),
+        "settings" => Some(ViewKind::Settings),
+        "keys" => Some(ViewKind::Keys),
+        _ => None,
+    }
 }
 
 #[derive(Debug)]
@@ -49,6 +99,9 @@ pub struct SnapshotArgs {
     /// subprocess, so the snapshot runs one gather synchronously; the id
     /// resolves to its thread and positions the cursor there.
     pub message: Option<String>,
+    /// The client-local surface to open before composing, for shots of a
+    /// bell panel or a menu no server frame ever carries.
+    pub view: Option<ViewKind>,
 }
 
 /// True when a `serve` tail asks for a snapshot rather than the web bridge.
@@ -67,6 +120,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut fit = false;
     let mut font = None;
     let mut message = None;
+    let mut view = None;
     let mut it = tail.iter();
     while let Some(a) = it.next() {
         let a = a.to_str().ok_or_else(|| USAGE.to_string())?;
@@ -90,6 +144,12 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             }
             "--out" => out = Some(PathBuf::from(value()?)),
             "--message" => message = Some(value()?),
+            "--view" => {
+                let v = value()?;
+                view = Some(parse_view(&v).ok_or_else(|| {
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings or keys")
+                })?)
+            }
             tok @ ("--server" | "--session") => {
                 crate::mux_cli::note_server_flag(tok);
                 server = Some(value()?)
@@ -156,6 +216,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         fit,
         font,
         message,
+        view,
     })
 }
 
@@ -180,6 +241,7 @@ pub fn run(args: SnapshotArgs) -> i32 {
         args.fit,
         chrome,
         args.message.as_deref(),
+        args.view.as_ref(),
     );
     match frame.and_then(|f| write(&f, &args)) {
         Ok(()) => {
@@ -219,11 +281,7 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("fno-snapshot-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
     let page = dir.join("shot.html");
-    std::fs::write(
-        &page,
-        format!("<!doctype html><style>html,body{{margin:0}}svg{{display:block}}</style>{svg}"),
-    )
-    .map_err(|e| format!("temp page: {e}"))?;
+    std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
@@ -231,8 +289,11 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     if let Some(home) = crate::live_store_fence::passwd_home() {
         cmd.env("HOME", home);
     }
-    let status = cmd
+    let mut child = cmd
         .arg("--headless=new")
+        // Without its own profile dir a headless shot exits 2 whenever the
+        // user's own Chrome is running, which is most of the time.
+        .arg(format!("--user-data-dir={}", dir.join("profile").display()))
         .arg("--disable-gpu")
         .arg("--hide-scrollbars")
         .arg("--force-device-scale-factor=2")
@@ -241,13 +302,61 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
         .arg(format!("file://{}", page.display()))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|e| format!("cannot run {}: {e}", chrome.display()));
+        .spawn()
+        .map_err(|e| format!("cannot run {}: {e}", chrome.display()))?;
+    // Headless chrome can write the screenshot and then hang forever under
+    // load, wedging the whole shot run. The png on disk is the success
+    // signal: a short grace after it lands, then kill. A render with no png
+    // gets a hard two-minute bound.
+    let hard = Instant::now() + Duration::from_secs(120);
+    let mut grace: Option<Instant> = None;
+    let status;
+    loop {
+        if out_abs.exists() && grace.is_none() {
+            grace = Some(Instant::now() + Duration::from_secs(5));
+        }
+        let bound = grace.map_or(hard, |g| g.min(hard));
+        match child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
+            }
+            Ok(None) if Instant::now() >= bound => {
+                let png_landed = out_abs.exists();
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&dir);
+                if png_landed {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "{} hung past 120s and wrote no png",
+                    chrome.display()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(format!("cannot wait for {}: {e}", chrome.display()));
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
-    match status? {
+    match status.expect("loop breaks on exit, bound, or a wait error") {
         s if s.success() && out_abs.exists() => Ok(()),
         s => Err(format!("{} exited {s} and wrote no png", chrome.display())),
     }
+}
+
+/// The zero-margin page png() rasterizes. overflow:hidden: the last row's
+/// glyph descenders poke a fraction of a px past the svg height, and an
+/// exact-fit window then screenshots a composite whose bottom tile repeats
+/// the page's first rows (the doubled chrome the iMac reported). Clamping
+/// the page kills the repeat.
+fn page_html(svg: &str) -> String {
+    format!(
+        "<!doctype html><style>html,body{{margin:0;overflow:hidden}}svg{{display:block}}</style>{svg}"
+    )
 }
 
 fn find_chrome() -> Option<PathBuf> {
@@ -278,6 +387,7 @@ fn live_frame(
     fit: bool,
     chrome: crate::theme::Theme,
     message: Option<&str>,
+    kind: Option<&ViewKind>,
 ) -> Result<Frame, String> {
     let socket = proto::socket_path(server)?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
@@ -285,19 +395,10 @@ fn live_frame(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     // A sizing client reports the content area, as a real client does.
-    let dims = size.filter(|_| fit).map(|t| {
-        let empty = LayoutView {
-            squads: Vec::new(),
-            active_squad: 0,
-            panes: Vec::new(),
-            focus: 0,
-            area: (0, 0),
-            agents: Vec::new(),
-            focus_node: None,
-        };
-        View::new(t, server.into(), empty).content_dims()
-    });
-    let mut seen = runtime.block_on(observe(&socket, cwd, dims))?;
+    let dims = size
+        .filter(|_| fit)
+        .map(|t| View::new(t, server.into(), LayoutView::default()).content_dims());
+    let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
     if let Some(name) = squad {
         let target = seen
             .layout
@@ -320,6 +421,9 @@ fn live_frame(
     let area = seen.layout.area;
     let mut view = View::new(area, server.into(), seen.layout);
     view.theme = chrome;
+    // The snapshot paints what a live client in this cwd would, so the
+    // card-graph config latches here the way attach_and_run does.
+    view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
     view.frames = seen.frames;
     view.term = match size {
         Some(t) => t,
@@ -350,7 +454,122 @@ fn live_frame(
             .map(|b| b.gen)
             .unwrap_or_default();
         let mail = runtime.block_on(crate::messages_model::gather());
+        // A board with no threads paints a pane of chrome around nothing -
+        // exactly the shot law d-9f18c4d5 exists to stop. Read the gather
+        // before apply moves it, and refuse.
+        let board_empty = mail
+            .as_ref()
+            .ok()
+            .and_then(|p| p.get("threads"))
+            .and_then(Value::as_array)
+            .is_none_or(|t| t.is_empty());
         crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
+        if board_empty {
+            return Err(
+                "messages board rendered empty: mail-threads returned no threads; \
+shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                    .into(),
+            );
+        }
+    }
+    // The messages seam above is the shape: flip the client state the live
+    // keys flip, run one synchronous gather where the live panel would kick
+    // one, then compose. Menus build from the layout the server sent, so
+    // they need no gather.
+    match kind {
+        Some(ViewKind::Bell) => {
+            let gen = crate::client::bell::open(&mut view);
+            let projection = runtime.block_on(crate::messages_model::gather());
+            // Same refusal as the messages board: an announcements-less
+            // gather paints the bell as "nothing here", a shot with nothing
+            // to judge (law d-9f18c4d5).
+            let bell_empty = projection
+                .as_ref()
+                .ok()
+                .and_then(|p| p.get("announcements"))
+                .and_then(Value::as_array)
+                .is_none_or(|a| a.is_empty());
+            crate::client::bell::apply(&mut view, gen, projection);
+            if bell_empty {
+                return Err(
+                    "bell view rendered empty: the messages projection has no announcements; \
+shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                        .into(),
+                );
+            }
+        }
+        Some(ViewKind::Feed) => {
+            // The `e` key's state flip plus the fold the live panel's run
+            // loop kicks, run inline: one Head page lands, newest first.
+            view.feed = Some(super::feed_view::open_overlay(None, 0));
+            if let Some(f) = view.feed.as_mut() {
+                f.want = true;
+            }
+            let outcome = runtime.block_on(crate::feed_overlay::fetch_page(
+                crate::feed_overlay::PageReq::Head,
+                None,
+            ));
+            super::feed_view::apply_fold(&mut view, 0, outcome);
+            // A fresh root has no feed rows, so the changed view rendered
+            // with nothing to judge. Refuse the shot.
+            if view.feed.as_ref().is_none_or(|f| f.win.items.is_empty()) {
+                return Err("feed view rendered empty: this root has no feed rows; \
+shoot a root seeded with questions, mail or backlog activity \
+(scripts/ops/mux-demo-snapshot.sh seeds one)"
+                    .into());
+            }
+        }
+        Some(ViewKind::RowMenu) => {
+            let i = view
+                .display_rows()
+                .iter()
+                .position(|r| matches!(r, super::DisplayRow::Agent(_)))
+                .ok_or("no agent rows to open a row menu on")?;
+            view.open_row_menu(i, Anchor::Center);
+        }
+        Some(ViewKind::SplitMenu) => {
+            let i = view
+                .display_rows()
+                .iter()
+                .position(|r| {
+                    matches!(r, super::DisplayRow::Agent(a)
+                        if a.pane_id.is_none() && a.attach_id.is_some() && !a.exited)
+                })
+                .ok_or("no paneless bg rows to open a split menu on")?;
+            view.open_row_menu(i, Anchor::Center);
+        }
+        Some(ViewKind::Settings) => {
+            view.lane.reset();
+            theme_import_ui::reset(&mut view);
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::Keys) => {
+            // Opened FROM settings, so the dismiss marker rides: the shot
+            // shows the table exactly as the tab handoff paints it.
+            view.keys_modal_return = true;
+            view.open_keys_modal();
+        }
+        Some(ViewKind::TabMenu) => {
+            let tid = view
+                .layout
+                .squads
+                .iter()
+                .flat_map(|s| s.tabs.iter())
+                .next()
+                .map(|t| t.id)
+                .ok_or("no tabs to open a tab menu on")?;
+            view.open_tab_menu_by_id(tid, Anchor::Center);
+        }
+        Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
+        Some(ViewKind::Composer) => {
+            super::agent_launcher::open(&mut view);
+            if let Some(l) = view.launcher.as_mut() {
+                l.draft.message = "fix the mux composer cursor and paste".to_string();
+                l.draft.cursor_chars = "fix the mux composer ".chars().count();
+            }
+        }
+        None => {}
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
@@ -445,4 +664,52 @@ async fn observe(socket: &Path, cwd: String, dims: Option<(u16, u16)>) -> Result
     let layout = layout.expect("loop exits with a layout");
     frames.retain(|id, _| layout.panes.iter().any(|(p, _)| p == id));
     Ok(Observed { layout, frames })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_extra(extra: &[&str]) -> Result<SnapshotArgs, String> {
+        let mut tail: Vec<OsString> = ["--snapshot", "--server", "demo", "--out", "/tmp/s.png"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        tail.extend(extra.iter().map(OsString::from));
+        parse(&tail)
+    }
+
+    #[test]
+    fn view_flag_names_every_kind_and_refuses_the_rest() {
+        for (name, kind) in [
+            ("bell", ViewKind::Bell),
+            ("feed", ViewKind::Feed),
+            ("row-menu", ViewKind::RowMenu),
+            ("tab-menu", ViewKind::TabMenu),
+            ("sideline-menu", ViewKind::SidelineMenu),
+            ("composer", ViewKind::Composer),
+            ("split-menu", ViewKind::SplitMenu),
+            ("settings", ViewKind::Settings),
+            ("keys", ViewKind::Keys),
+        ] {
+            let args = parse_extra(&["--view", name]).expect(name);
+            assert_eq!(args.view, Some(kind), "{name}");
+        }
+        let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
+        assert!(
+            e.contains(
+                "bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings or keys"
+            ),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn raster_page_clamps_overflow() {
+        // The unclamped page screenshots a composite whose bottom tile repeats
+        // the first rows at an exact-fit window (the doubled chrome report).
+        let page = page_html("<svg>x</svg>");
+        assert!(page.contains("overflow:hidden"), "{page}");
+        assert!(page.contains("<svg>x</svg>"), "{page}");
+    }
 }

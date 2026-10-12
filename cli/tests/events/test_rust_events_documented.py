@@ -48,7 +48,14 @@ EXISTING_EVENT_TYPES = [
     "mission_complete",
 ]
 
-RUST_CLIENT_EVENT_SOURCES = {"version_skew": "rust"}
+RUST_CLIENT_EVENT_SOURCES = {
+    "version_skew": "rust",
+    # The native triage engine emits the apply telemetry from the backlog
+    # client verb, the same producer source its Python twin declares.
+    "triage_applied": "backlog",
+    # The native archive sweep emits from the backlog archive verb.
+    "graph_archive_swept": "backlog",
+}
 
 
 @pytest.fixture(scope="module")

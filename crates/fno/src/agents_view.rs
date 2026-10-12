@@ -138,16 +138,16 @@ pub struct RegistryAgent {
     /// The spawn-stamped team altitude (0 VP / 1 Director / 2 IC), mesh-owned;
     /// `None` = an un-teamed leaf. Read-only here - the sideline orders and
     /// indents by it, the mux never writes it.
-    pub crown_level: Option<u32>,
+    pub role_level: Option<u32>,
     /// The project/epic/node id the team rules over, for the inline team badge.
-    pub crown_scope: Option<String>,
+    pub role_scope: Option<String>,
     /// (v94) The role's people title read from team_names.json; None when
     /// the store has none.
-    pub crown_title: Option<String>,
+    pub role_title: Option<String>,
     /// The session id this row was spawned by - the lineage join key,
     /// matched against other rows' `harness_session_id`. `None` = no recorded
     /// parent (a root, as far as the renderer can know). Distinct from
-    /// `crown_level`, a fixed authority rank: lineage is who spawned whom.
+    /// `role_level`, a fixed authority rank: lineage is who spawned whom.
     pub spawned_by_session: Option<String>,
     /// The served CHILD/PEER word for this row's spawn edge, read from the
     /// registry row. `None` (a pre-v32 row) renders flat like a peer.
@@ -184,6 +184,10 @@ pub struct RegistryAgent {
     pub context_used_pct: Option<u8>,
     pub context_tokens: Option<(u64, u64)>,
     pub context_measured_at: Option<u64>,
+    /// The registry row's cumulative `(tool_calls, tool_errors)` pair the
+    /// daemon's tail scan writes; `None` before the first scan (or for a
+    /// harness with no readable transcript).
+    pub tool_counts: Option<(u64, u64)>,
     pub started_at: Option<u64>,
     pub mail_unread: Option<u32>,
     pub node: Option<String>,
@@ -1179,6 +1183,12 @@ pub fn registry_path() -> PathBuf {
     base.join(".fno").join("agents").join("registry.json")
 }
 
+/// The registry document text at [`registry_path`], read through the table
+/// once the registry has been imported.
+pub fn registry_text() -> std::io::Result<String> {
+    crate::registry_read::registry_text(&registry_path())
+}
+
 /// Parse the fixed `YYYY-MM-DDThh:mm:ssZ` UTC stamp the registry writes back
 /// to epoch seconds (a focused copy of fno-agents' `rfc3339_like_to_secs` -
 /// Hinnant days-from-civil; the mux reads the FILE contract, not the crate).
@@ -1405,7 +1415,7 @@ fn encode_claim_key(key: &str) -> String {
 /// an unreadable hostname fails toward "not live".
 ///
 /// NOT an identity: see `is_same_machine` below. This is only the legacy arm.
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     let mut buf = [0u8; 256];
     let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
     if rc != 0 {
@@ -1466,7 +1476,7 @@ fn platform_machine_id() -> String {
 /// `claims.rs::machine_id`). `gethostname(2)` moves under a roaming laptop,
 /// which read as cross-host and dropped a live claim to stale, and stale is
 /// stealable. Never substitutes the hostname: a present value is authoritative.
-fn machine_id() -> String {
+pub(crate) fn machine_id() -> String {
     static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CACHE.get_or_init(platform_machine_id).clone()
 }
@@ -1659,125 +1669,6 @@ pub fn overlay_truth_badges(rows: &mut [RegistryAgent], truth: &TruthBadges) {
             }
         }
     }
-}
-
-/// Process start time in the REGISTRY'S own units: macOS folds
-/// `proc_bsdinfo` to microseconds, Linux keeps the raw `/proc/<pid>/stat`
-/// starttime ticks. Deliberately NOT `probe_pid`: the registry's
-/// `pid_start_time` is a per-host, per-boot quantity compared only for
-/// equality against a value captured for the SAME pid, so it must be read
-/// with the same units `fno-agents`' registry writer used (daemon.rs
-/// `process_start_time`), not converted to epoch ms.
-#[cfg(target_os = "macos")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    use std::mem;
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(target_os = "linux")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse().ok()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn registry_start_time(_pid: u32) -> Option<u64> {
-    None
-}
-
-/// POSITIVE falsification of one non-terminal row's liveness by its own
-/// recorded pid. A machine restart writes nothing to the registry,
-/// so every row keeps the status it last had on disk - including "working"
-/// for workers that died with the reboot. `restore_squads` reads that set to
-/// decide which members to respawn, so an unverified status read respawns
-/// `claude attach` into sessions that no longer exist. Falsified ONLY on
-/// positive evidence, never on an inability to check:
-///
-/// - a recorded pid that is provably invalid (0, 1, or out of `pid_t` range -
-///   no real worker ever holds one), or
-/// - a recorded pid whose process is gone (`kill(pid, 0)` -> ESRCH), or
-/// - a recorded `(pid, pid_start_time)` pair whose live process now starts at
-///   a different time (the pid was reused after the worker died).
-///
-/// A row with no recorded pid, an unparsable document, an EPERM (alive but
-/// not ours to signal), or an unreadable start time keeps its status-field
-/// verdict - the fail-safe posture everywhere else in this file.
-fn row_falsified(row: &serde_json::Value, status: &str) -> bool {
-    if matches!(status, "exited" | "permanent-dead" | "permanent_dead") {
-        return false; // already terminal; nothing to falsify
-    }
-    let Some(pid) = row.get("pid").and_then(|v| v.as_u64()) else {
-        return false; // no recorded pid: the status field stays the verdict
-    };
-    if pid <= 1 || pid > i32::MAX as u64 {
-        return true; // a recorded pid no worker can hold is corruption, not liveness
-    }
-    // SAFETY: signal 0 performs no delivery, only an existence/permission probe.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc != 0 {
-        return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-    }
-    // Alive: only a start-time mismatch (a reused pid) may still falsify.
-    match (
-        row.get("pid_start_time").and_then(|v| v.as_u64()),
-        registry_start_time(pid as u32),
-    ) {
-        (Some(recorded), Some(now)) => recorded != now,
-        _ => false, // no basis to prove reuse -> trust existence
-    }
-}
-
-/// The attach-ids (`short_id`s) of claude rows whose claimed-live status
-/// their own recorded pid falsifies (see [`row_falsified`]). The restore-time
-/// liveness read subtracts this set so a reboot's stale "working" rows read
-/// dead instead of respawning. Tolerant of a malformed document: it
-/// contributes nothing, exactly like `derive_rows`.
-pub fn stale_live_attach_ids(reg_raw: &str) -> std::collections::HashSet<String> {
-    let mut stale = std::collections::HashSet::new();
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(reg_raw) else {
-        return stale;
-    };
-    let Some(rows) = doc
-        .get("agents")
-        .or_else(|| doc.get("entries"))
-        .and_then(|v| v.as_array())
-    else {
-        return stale;
-    };
-    for row in rows {
-        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        let is_claude = row
-            .get("harness")
-            .or_else(|| row.get("provider"))
-            .and_then(|v| v.as_str())
-            == Some("claude");
-        let attach_id = row
-            .get("short_id")
-            .or_else(|| row.get("claude_short_id"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        if is_claude && row_falsified(row, status) {
-            if let Some(id) = attach_id {
-                stale.insert(id.to_string());
-            }
-        }
-    }
-    stale
 }
 
 /// Derive the sideline row set from raw registry JSON at `now_secs`. Pure so
@@ -2025,12 +1916,12 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         .max();
         // (US9 team) Mesh-owned role metadata, additive: absent -> un-teamed.
         // Parsed tolerantly like every other field; the FILE is the contract.
-        let crown_level = row
-            .get("crown_level")
+        let role_level = row
+            .get("role_level")
             .and_then(|v| v.as_u64())
             .map(|n| n as u32);
-        let crown_scope = row
-            .get("crown_scope")
+        let role_scope = row
+            .get("role_scope")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
@@ -2039,7 +1930,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // the sideline falls back to the scope.
         let team_titles =
             crate::org_titles::titles(&registry_path().with_file_name("team_names.json"));
-        let crown_title = crown_scope
+        let role_title = role_scope
             .as_ref()
             .and_then(|scope| team_titles.get(scope.trim()).cloned());
         // Succession re-homes the org: the CURRENT owner edge (the row's
@@ -2238,9 +2129,9 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             claude_session_uuid,
             log_path,
             updated_at,
-            crown_level,
-            crown_scope,
-            crown_title,
+            role_level,
+            role_scope,
+            role_title,
             spawned_by_session,
             lineage_kind,
             spawned_by_name: None,
@@ -2259,6 +2150,10 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .get("context_measured_at")
                 .and_then(|v| v.as_str())
                 .and_then(rfc3339_like_to_secs),
+            tool_counts: row
+                .get("tool_calls")
+                .and_then(|v| v.as_u64())
+                .zip(row.get("tool_errors").and_then(|v| v.as_u64())),
             started_at: row
                 .get("created_at")
                 .and_then(|v| v.as_str())
@@ -2315,6 +2210,58 @@ pub fn supervisor_sock_path() -> PathBuf {
     base.join(".fno").join("agents").join("supervisor.sock")
 }
 
+/// One daemon RPC round trip: connect, write one length-prefixed request
+/// frame, read one length-prefixed answer frame, decode the envelope. The
+/// framing (a 4-byte little-endian body length, then the body, no newline
+/// anywhere) is the daemon's wire contract
+/// (crates/fno-agents/src/protocol.rs), so it lives in exactly one place;
+/// [`watch_registry`] and [`agent_list_rpc`] bound their own round trips
+/// and read their own result shapes. The 16 MiB cap mirrors the daemon's
+/// MAX_FRAME_BYTES, so an oversize answer is refused, not read.
+async fn daemon_rpc(
+    sock: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "id": 1u64,
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|e| format!("encode: {e}"))?;
+    let mut conn = tokio::net::UnixStream::connect(sock)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+    let mut frame = Vec::with_capacity(4 + body.len());
+    frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&body);
+    conn.write_all(&frame)
+        .await
+        .map_err(|e| format!("write: {e}"))?;
+    let mut len_buf = [0u8; 4];
+    conn.read_exact(&mut len_buf)
+        .await
+        .map_err(|e| format!("read: {e}"))?;
+    let len = u32::from_le_bytes(len_buf);
+    if len > MAX_FRAME_BYTES {
+        return Err(format!("{method}: answer frame too large: {len}"));
+    }
+    let mut answer = vec![0u8; len as usize];
+    conn.read_exact(&mut answer)
+        .await
+        .map_err(|e| format!("read: {e}"))?;
+    let resp: serde_json::Value =
+        serde_json::from_slice(&answer).map_err(|e| format!("decode: {e}"))?;
+    if let Some(err) = resp.get("error") {
+        return Err(format!("{method} error: {err}"));
+    }
+    resp.get("result")
+        .cloned()
+        .ok_or_else(|| format!("{method}: answer carried neither result nor error"))
+}
+
 /// One `agent.watch` round trip against the daemon, if one
 /// answers. The registry's (mtime, len) stamp is the subscription version: it
 /// travels out as `since` and back beside the document, so the caller's
@@ -2332,8 +2279,6 @@ pub async fn watch_registry(
     since: Option<(std::time::SystemTime, u64)>,
     sock: &std::path::Path,
 ) -> Result<(Option<(std::time::SystemTime, u64)>, Option<String>), String> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
     async fn round(
         since: Option<(std::time::SystemTime, u64)>,
         sock: &std::path::Path,
@@ -2348,33 +2293,8 @@ pub async fn watch_registry(
             }
             None => serde_json::Value::Null,
         };
-        let req = serde_json::json!({
-            "id": 1u64,
-            "method": "agent.watch",
-            "params": {"since": since_v},
-        });
-        let mut frame = req.to_string();
-        frame.push('\n');
-        let mut conn = tokio::net::UnixStream::connect(sock)
-            .await
-            .map_err(|e| format!("connect: {e}"))?;
-        conn.write_all(frame.as_bytes())
-            .await
-            .map_err(|e| format!("write: {e}"))?;
-        let mut reader = BufReader::new(conn);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| format!("read: {e}"))?;
-        let resp: serde_json::Value =
-            serde_json::from_str(line.trim()).map_err(|e| format!("decode: {e}"))?;
-        if let Some(err) = resp.get("error") {
-            return Err(format!("agent.watch error: {err}"));
-        }
-        let result = resp
-            .get("result")
-            .ok_or_else(|| "agent.watch: answer carried neither result nor error".to_string())?;
+        let result =
+            daemon_rpc(sock, "agent.watch", serde_json::json!({ "since": since_v })).await?;
         // Version -> stamp: the same (mtime, len) domain the file scan gates
         // with, so a served answer and a scanned answer are interchangeable
         // downstream without the reader knowing which one produced it.
@@ -2399,6 +2319,28 @@ pub async fn watch_registry(
     tokio::time::timeout(std::time::Duration::from_secs(2), round(since, sock))
         .await
         .map_err(|_| "agent.watch: round trip exceeded 2s".to_string())?
+}
+
+/// One `agent.list` round trip against the daemon, if one answers: the
+/// whole live fleet's rows, the same answer `fno agents list --json`
+/// prints after its Python cold start (the mux truth probe
+/// rides this instead of spawning the CLI, so no interpreter is ever a
+/// mux child). Params are empty exactly as the CLI's no-arg list sends
+/// them: no filter, every live row, the shape
+/// schemas/agents-list-row.json pins.
+///
+/// `Err(_)` - no daemon (refused/absent socket), transport fault, or the
+/// round-trip bound exceeded. The caller keeps the last good map.
+pub async fn agent_list_rpc(sock: &std::path::Path) -> Result<serde_json::Value, String> {
+    // Bound the WHOLE round trip: the daemon runs its per-list truth batch
+    // server-side, which can take tens of seconds on a big fleet, but a
+    // wedged daemon must release the probe latch, not hold it forever.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        daemon_rpc(sock, "agent.list", serde_json::json!({})),
+    )
+    .await
+    .map_err(|_| "agent.list: round trip exceeded 120s".to_string())?
 }
 
 /// Union the fno registry rows with claude's roster. Pure so the
@@ -2503,9 +2445,9 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             log_path: None,
             updated_at: None,
             // A roster worker carries no team (team is an fno-registry fact).
-            crown_level: None,
-            crown_scope: None,
-            crown_title: None,
+            role_level: None,
+            role_scope: None,
+            role_title: None,
             spawned_by_session: None,
             lineage_kind: None,
             spawned_by_name: None,
@@ -2573,9 +2515,9 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
             claude_session_uuid: Some(id.to_string()),
             log_path: None,
             updated_at: None,
-            crown_level: None,
-            crown_scope: None,
-            crown_title: None,
+            role_level: None,
+            role_scope: None,
+            role_title: None,
             spawned_by_session: r.harness_session_id.clone(),
             // A parked fork belongs to its own worker: a CHILD of it.
             lineage_kind: Some("child".into()),
@@ -2776,77 +2718,6 @@ mod tests {
     // --: restore liveness must not trust a status string the row's
     //    own pid falsifies -----------------------------------------------
 
-    /// A claude row with a recorded pid that ESRCHs must land in the stale
-    /// set - the reboot case, the exact respawn the fix removes.
-    #[test]
-    fn stale_live_attach_ids_rows() {
-        let mut child = crate::pty::ChildGuard::spawn(&mut std::process::Command::new("true"));
-        let pid = child.id();
-        child.wait_now();
-        let raw = reg(&format!(
-            r#"{{"name":"ghost","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"deadbeef","pid":{pid},"pid_start_time":99887766}}"#
-        ));
-        let stale = stale_live_attach_ids(&raw);
-        assert!(
-            stale.contains("deadbeef"),
-            "a reaped pid ({pid}) with a working status must read stale"
-        );
-
-        let pid = std::process::id();
-        let Some(start) = registry_start_time(pid) else {
-            return; // platform without start-time support; existence arm only
-        };
-        let matching = reg(&format!(
-            r#"{{"name":"me","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"aaaaaaaa","pid":{pid},"pid_start_time":{start}}}"#
-        ));
-        assert!(
-            !stale_live_attach_ids(&matching).contains("aaaaaaaa"),
-            "a live pid with a matching start time is not stale"
-        );
-        let reused = reg(&format!(
-            r#"{{"name":"me","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"aaaaaaaa","pid":{pid},"pid_start_time":{}}}"#,
-            start + 1
-        ));
-        assert!(
-            stale_live_attach_ids(&reused).contains("aaaaaaaa"),
-            "a live pid with a mismatched start time is a reused pid, not the worker"
-        );
-
-        let no_pid = reg(
-            r#"{"name":"a","cwd":"/w","status":"working","harness":"claude","short_id":"aaaaaaaa"}"#,
-        );
-        assert!(
-            stale_live_attach_ids(&no_pid).is_empty(),
-            "no pid -> not stale"
-        );
-        let mut child = crate::pty::ChildGuard::spawn(&mut std::process::Command::new("true"));
-        let pid = child.id();
-        child.wait_now();
-        let codex = reg(&format!(
-            r#"{{"name":"b","cwd":"/w","status":"working","harness":"codex",
-                 "short_id":"bbbbbbbb","pid":{pid}}}"#
-        ));
-        assert!(
-            stale_live_attach_ids(&codex).is_empty(),
-            "a non-claude short_id is not an attach target"
-        );
-        let terminal = reg(&format!(
-            r#"{{"name":"c","cwd":"/w","status":"exited","harness":"claude",
-                 "short_id":"cccccccc","pid":{pid}}}"#
-        ));
-        assert!(
-            stale_live_attach_ids(&terminal).is_empty(),
-            "a terminal row is dead by status; nothing to falsify"
-        );
-        assert!(
-            stale_live_attach_ids("{not json").is_empty(),
-            "a malformed document contributes nothing"
-        );
-    }
-
     /// A LIVE pid whose recorded start time matches stays live; the same pid
     /// with a mismatched recorded start (a reuse) reads stale.
 
@@ -2896,19 +2767,22 @@ mod tests {
     #[test]
     fn derive_rows_reads_the_owner_edge_over_the_birth_edge() {
         // Succession re-homes the org. The FILE keeps the birth
-        // edge (the abdicated lead) as history; the sideline joins the
-        // CURRENT owner, so the lead label names the heir.
-        let raw = reg(r#"{"name":"kestrel-heir","cwd":"/w","status":"live",
-                 "harness_session_id":"01a0ee3f-heir"},
+        // edge (the stepped_down lead) as history; the sideline joins the
+        // CURRENT owner, so the lead label names the successor.
+        let raw = reg(r#"{"name":"kestrel-successor","cwd":"/w","status":"live",
+                 "harness_session_id":"01a0ee3f-successor"},
                {"name":"xfcb4-w5","cwd":"/w","status":"live",
                  "spawned_by_session":"bf388b2e-lead",
                  "spawn_provenance":{"origin":{"kind":"session"},
                    "owner":{"kind":"session","harness":"codex",
-                            "session_id":"01a0ee3f-heir","cwd":"/w"}}}"#);
+                            "session_id":"01a0ee3f-successor","cwd":"/w"}}}"#);
         let rows = merge_rows(derive_rows(&raw, NOW).unwrap(), &[]);
         let kid = rows.iter().find(|r| r.name == "xfcb4-w5").unwrap();
-        assert_eq!(kid.spawned_by_session.as_deref(), Some("01a0ee3f-heir"));
-        assert_eq!(kid.spawned_by_name.as_deref(), Some("kestrel-heir"));
+        assert_eq!(
+            kid.spawned_by_session.as_deref(),
+            Some("01a0ee3f-successor")
+        );
+        assert_eq!(kid.spawned_by_name.as_deref(), Some("kestrel-successor"));
     }
 
     #[test]
@@ -3689,20 +3563,20 @@ unheard_of_field = true
         // RegistryAgent; an un-teamed row carries None (additive, absence-safe).
         let raw = reg(
             r#"{"name":"dir","cwd":"/w","status":"live","provider":"claude",
-                "crown_level":1,"crown_scope":"epic-x"},
+                "role_level":1,"role_scope":"epic-x"},
                {"name":"leaf","cwd":"/w","status":"live","provider":"claude"},
                {"name":"partial","cwd":"/w","status":"live","provider":"claude",
-                "crown_level":0,"crown_scope":""}"#,
+                "role_level":0,"role_scope":""}"#,
         );
         let rows = derive_rows(&raw, NOW).unwrap();
         let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        assert_eq!(get("dir").crown_level, Some(1));
-        assert_eq!(get("dir").crown_scope.as_deref(), Some("epic-x"));
-        assert_eq!(get("leaf").crown_level, None, "un-teamed => None");
-        assert_eq!(get("leaf").crown_scope, None);
+        assert_eq!(get("dir").role_level, Some(1));
+        assert_eq!(get("dir").role_scope.as_deref(), Some("epic-x"));
+        assert_eq!(get("leaf").role_level, None, "un-teamed => None");
+        assert_eq!(get("leaf").role_scope, None);
         // An empty scope string degrades to None (the badge then shows `?`).
-        assert_eq!(get("partial").crown_level, Some(0));
-        assert_eq!(get("partial").crown_scope, None, "empty scope => None");
+        assert_eq!(get("partial").role_level, Some(0));
+        assert_eq!(get("partial").role_scope, None, "empty scope => None");
     }
 
     #[test]
@@ -4364,9 +4238,9 @@ config_dir = "~/.claude-alt"
             claude_session_uuid: None,
             log_path: None,
             updated_at: None,
-            crown_level: None,
-            crown_scope: None,
-            crown_title: None,
+            role_level: None,
+            role_scope: None,
+            role_title: None,
             liveness: if exited {
                 Liveness::Dead
             } else {

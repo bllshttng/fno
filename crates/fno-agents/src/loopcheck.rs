@@ -85,7 +85,7 @@ pub enum TerminationReason {
     Budget,
     NoProgress,
     /// A node held on an open operator question: the first fire blocked once
-    /// naming the question and the decide verb; this fire is the second on
+    /// naming the question and the user-side clear; this fire is the second on
     /// the same still-open question, so the loop terminates instead of
     /// re-asking. The journal (not the fingerprint) carries the held state.
     /// Terminal, NOT a ship reason: the operator answers, a later run ships.
@@ -151,7 +151,7 @@ pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
 mod gh_read;
-mod intent;
+pub(crate) mod intent;
 mod local_attestation;
 mod plan_fidelity;
 mod posture;
@@ -212,7 +212,8 @@ use coverage_status::{
 };
 use findings::{blocking_severity, compute_unaddressed_findings, max_ts, ts_after, Finding};
 use fire_history::{
-    append_loop_event, make_fingerprint, min_fire_gap_secs, read_last_row_fields, read_prior_fires,
+    append_loop_event, loop_check_rows, make_fingerprint, min_fire_gap_secs, read_last_row_fields,
+    read_prior_fires,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
@@ -224,10 +225,11 @@ use gh_read::{
     GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, is_graphql_read};
+pub(crate) use intent::read_tail_lines;
+pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
 #[cfg(test)]
 use intent::{detect_intent_from_text, INTENT_LOOKBACK_ENTRIES};
-pub(crate) use intent::{extract_assistant_text, parse_xml_attr};
 use local_attestation::{
     author_is_bot, author_is_known_bot, in_scope_chain, line_carries_keyed_findings,
     local_attestation_verdict, local_latest_attestations, local_refused_verdicts,
@@ -247,13 +249,13 @@ use posture::{
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
-pub(crate) use review_findings::event_lines;
 #[cfg(test)]
 use review_findings::OpenFinding;
 use review_findings::{
     build_findings_block_reason, demote_unmeasured_coverage, open_findings_from_store,
     review_journal_text,
 };
+pub(crate) use review_findings::{event_lines, event_lines_of};
 pub use review_findings::{unattested_reviewers_scan, UnattestedReviewer};
 pub(crate) use review_inputs::{resolve_review_inputs, ReviewInputs};
 pub(crate) use self_review_floor::is_documentation_path;
@@ -399,6 +401,10 @@ pub(crate) fn decide_with_payload(
     );
     let subject = pause_subject(parsed);
     if let Some(message) = crate::loops_pause::pause_message(&subject) {
+        // A cargo parked at an admission door: the session stops here and
+        // spends no turns; the park row lets the daemon wake it when that
+        // cargo exits.
+        watch_lease::record_build_park(parsed);
         return (0, paused_output(&parsed.driver, &message));
     }
     // The lead uses a separate manifest and decision path.
@@ -484,8 +490,32 @@ pub(crate) fn decide_with_payload(
         let ttl_ms = scan_manifest_field(&manifest_content, "target_claim_ttl")
             .and_then(|s| crate::claims::parse_ttl_ms(&s))
             .unwrap_or(7_200_000);
+        // Two answers from a shared primary end the run here. A primary the
+        // worker cannot reach means the turn ends and the worker holds: it
+        // can claim nothing new. A claim another machine took after this
+        // lease ran out means the work belongs to that machine now.
         match crate::claims::renew(&key, &holder, ttl_ms, None) {
-            Ok(_) => {}
+            Ok(true) => {}
+            Ok(false) => {
+                if let Some(reason) = crate::claim_store::lost_to_peer(&key, &holder) {
+                    let message =
+                        format!("claim lost: {reason}. Stop work on this node and do not push.");
+                    return (
+                        0,
+                        allow_output(
+                            "allow",
+                            Some(TerminationReason::Interrupted),
+                            &message,
+                            0,
+                            None,
+                        ),
+                    );
+                }
+            }
+            Err(e) if crate::store_remote::is_unreachable(&e) => {
+                let message = format!("holding: {e}");
+                return (0, allow_output("allow", None, &message, 0, None));
+            }
             Err(e) => eprintln!("loop-check: lease renewal for {key} failed (non-fatal): {e}"),
         }
     }
@@ -549,7 +579,7 @@ pub(crate) fn decide_with_payload(
             .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
     });
     let harness = scan_manifest_field(&manifest_content, "harness");
-    crate::distress::scan_and_emit(
+    let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,
         &cwd,
@@ -560,12 +590,53 @@ pub(crate) fn decide_with_payload(
         last_assistant_message.as_deref(),
     );
 
-    // ── Step 1: cancel sentinel ───────────────────────────────────────────────
+    //     // ── Step 1: cancel sentinel ────────────────────────────
+    // F6: a self-cancel the SESSION wrote through its own assistant is a
+    // stuck signal, not a stop. The transcript is the truth: the newest
+    // user entry carrying the cancel verb proves a user typed it. The
+    // sentinel's own `via:` is advisory (the command writes it best-effort);
+    // the loop re-derives from the transcript at honor time.
     if let Some(hit) = check_cancel_sentinel(&cwd, &state_path, &manifest.created_at, "target") {
+        let user_typed = crate::distress::newest_user_entry_carries_cancel(&transcript_path);
+        // The transcript is the truth; a sentinel that recorded `via: user`
+        // at write time corroborates it, so a user-typed cancel never reads
+        // as a self-cancel even when the newest entry drifted.
+        let user_typed = user_typed || hit.via.as_deref() == Some("user");
+        let self_cancel = hit.author.as_deref() == Some(session_id.as_str()) && !user_typed;
+        if self_cancel {
+            // One-shot: consume the sentinel and write the stuck row instead.
+            // The router takes the follow-through from the row.
+            let _ = std::fs::remove_file(&hit.path);
+            let distress = crate::distress::help_distress_stuck(
+                "self-cancel requested by the session itself; the run routes stuck instead of stopping"
+                    .to_string(),
+                hit.reason.clone(),
+            );
+            let _ = crate::distress::emit_help_distress_blocked(
+                &project_events,
+                &global_events,
+                &cwd,
+                &session_id,
+                node_id.as_deref(),
+                harness.as_deref(),
+                &distress,
+                &format!("sentinel-{}", hit.path.display()),
+            );
+            return (
+                0,
+                allow_output(
+                    "allow",
+                    None,
+                    &format!(
+                        "self-cancel consumed as a stuck signal; the run routes stuck instead of stopping ({})",
+                        hit.reason.clone().unwrap_or_default()
+                    ),
+                    0,
+                    None,
+                ),
+            );
+        }
         emit("termination", hit.termination_data(&session_id));
-        // One-shot: once a sentinel has terminated this run it has done its
-        // job. Consuming it is what stops a cancel from re-terminating every
-        // later stop of a session that recovers and keeps working.
         if hit.kind == crate::cancel_sentinel::CancelKind::TargetSentinel {
             let _ = std::fs::remove_file(&hit.path);
         }
@@ -580,8 +651,7 @@ pub(crate) fn decide_with_payload(
             ),
         );
     }
-
-    // ── Step 2: legacy terminal status ───────────────────────────────────────
+    // ── Step 2: legacy terminal status ────────────────────────────────────────
     if let Some(ref status) = manifest.legacy_status {
         emit(
             "loop_check_legacy_manifest",
@@ -604,19 +674,34 @@ pub(crate) fn decide_with_payload(
 
     // ── Step 3: budget check ──────────────────────────────────────────────────
     if let Some(trip) = check_budget(&manifest, &settings, &now, &ledger_path) {
-        let axis = match &trip {
-            BudgetTrip::WallClock => "wall_clock",
-            BudgetTrip::Cost => "cost",
+        // The event names the cap axis with its numbers: the
+        // finalize terminal route quotes them back to the lead it asks.
+        let (axis, cap, value) = match &trip {
+            BudgetTrip::WallClock {
+                cap_min,
+                elapsed_min,
+            } => (
+                "wall_clock",
+                cap_min.map(|c| serde_json::json!(c)),
+                serde_json::json!(elapsed_min),
+            ),
+            BudgetTrip::Cost { cap_usd, spent_usd } => (
+                "cost",
+                cap_usd.map(|c| serde_json::json!(c)),
+                serde_json::json!(spent_usd),
+            ),
         };
-        emit(
-            "termination",
-            serde_json::json!({
-                "session_id": session_id,
-                "reason": "Budget",
-                "axis": axis,
-                "message": format!("budget exceeded (axis={axis})")
-            }),
-        );
+        let mut data = serde_json::json!({
+            "session_id": session_id,
+            "reason": "Budget",
+            "axis": axis,
+            "value": value,
+            "message": format!("budget exceeded (axis={axis})")
+        });
+        if let Some(cap) = cap {
+            data["cap"] = cap;
+        }
+        emit("termination", data);
         return (
             0,
             allow_output(
@@ -792,8 +877,9 @@ pub(crate) fn decide_with_payload(
     let no_pr_fp =
         || generic.delivery_fingerprint(make_fingerprint(&head_sha, "none", "none", "none"));
     let observed_fp = no_pr_fp();
+    let fire_rows = loop_check_rows(&project_events);
     let (prior_fires, journal_streak, last_recorded_fp, streak_window) = read_prior_fires(
-        &project_events,
+        fire_rows.as_deref(),
         &session_id,
         if generic_observed {
             Some(&observed_fp)
@@ -803,7 +889,7 @@ pub(crate) fn decide_with_payload(
         now,
         min_fire_gap,
     );
-    let (last_pr_state, last_ci) = read_last_row_fields(&project_events, &session_id);
+    let (last_pr_state, last_ci) = read_last_row_fields(fire_rows.as_deref(), &session_id);
     // A fire that does not run done() inherits the last recorded fingerprint,
     // so its row stays comparable with its neighbors; only done() can move it.
     let fingerprint = if generic_observed {
@@ -918,22 +1004,15 @@ pub(crate) fn decide_with_payload(
                 "cwd": &cwd,
                 "codex_thread_id": codex_thread,
             });
-            // On codex the event IS the daemon's watch registration, so the
-            // idle only stands when the registration landed (AC4-ERR); a
-            // claude watcher is agent-armed and needs no registration.
-            let emit_ok = match &codex_thread {
-                Some(_) => fire_history::emit_to_both_checked(
-                    &project_events,
-                    &global_events,
-                    "loop_check_watch_idle",
-                    idle_row,
-                )
-                .is_ok(),
-                None => {
-                    emit("loop_check_watch_idle", idle_row);
-                    true
-                }
-            };
+            // The daemon owns settle and expiry wakes on every harness;
+            // a harness task alone cannot guarantee a wake across context boundaries.
+            let emit_ok = fire_history::emit_to_both_checked(
+                &project_events,
+                &global_events,
+                "loop_check_watch_idle",
+                idle_row,
+            )
+            .is_ok();
             if emit_ok {
                 emit(
                     "loop_check",
@@ -999,6 +1078,20 @@ pub(crate) fn decide_with_payload(
             "termination",
             serde_json::json!({"session_id": session_id, "reason": reason, "message": message}),
         );
+    };
+    // Same row with structured cause fields merged in. NoProgress carries
+    // the fire's last PR state, CI conclusion and red check name, so the
+    // stall report reads them off the row instead of re-joining the
+    // previous loop_check row by hand.
+    let term_row_extra = |reason: &str, message: &str, extra: serde_json::Value| {
+        let mut row = serde_json::Map::new();
+        row.insert("session_id".into(), serde_json::json!(session_id));
+        row.insert("reason".into(), serde_json::json!(reason));
+        row.insert("message".into(), serde_json::json!(message));
+        if let serde_json::Value::Object(extra) = extra {
+            row.extend(extra);
+        }
+        emit("termination", serde_json::Value::Object(row));
     };
     let fire_row = |dec: &str, name: &str, fp_bad: bool, extra: serde_json::Value| {
         let mut row = serde_json::json!({
@@ -1881,7 +1974,15 @@ pub(crate) fn decide_with_payload(
                         );
                     }
                     // Backstop tripped + done() false -> NoProgress
-                    term_row("NoProgress", &noprogress_msg);
+                    term_row_extra(
+                        "NoProgress",
+                        &noprogress_msg,
+                        serde_json::json!({
+                            "pr_state": pr_info.state.as_str(),
+                            "ci": pr_info.ci_conclusion.render(),
+                            "red_check": pr_info.failing_checks.first(),
+                        }),
+                    );
                     fire_row(
                         "allow",
                         "backstop",
@@ -2026,6 +2127,7 @@ pub(crate) fn decide_with_payload(
                             "read": failed_read,
                             "outcome": read_err.outcome(),
                             "stderr_tail": failed_stderr,
+                            "waited_on": read_err.waited_on(),
                             "parked": true
                         }),
                     );
@@ -2113,6 +2215,7 @@ pub(crate) fn decide_with_payload(
                         "read": failed_read,
                         "outcome": read_err.outcome(),
                         "stderr_tail": failed_stderr,
+                        "waited_on": read_err.waited_on(),
                         "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
                         "graphql_remaining": quota.as_ref().map(|q| q.remaining),
                         "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),

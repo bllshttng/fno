@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from fno.registry_door import read_registry_document
 from fno.harness_identity import (
     AMBIENT_IDENTITY_ENV,
     HARNESS_SESSION_MARKERS,
@@ -516,13 +517,12 @@ def _register(tmp_path, session_id, provider="codex", status="live"):
         provider=provider, session_id=session_id, cwd="/x", registry_path=reg
     )
     if status != "live":
-        import json
 
-        data = json.loads(reg.read_text())
+        data = read_registry_document(reg)[0]
         for row in data.get("agents", []):
             if row.get("name") == entry.name:
                 row["status"] = status
-        reg.write_text(json.dumps(data))
+        _replace_registry(reg, data)
     return entry.name, reg
 
 
@@ -605,7 +605,6 @@ def test_row_owning_session_id_walk_proven_dead_pid_row_is_self(tmp_path):
     never contention. Every self-blind shape survives: a walk that is silent
     or names another family, a row whose pid leg never resolved, and a live
     foreign pid all leave the row an owner (the round-1 P1 refusal)."""
-    import json
 
     from fno.agents.registry import row_owning_session_id
 
@@ -613,11 +612,11 @@ def test_row_owning_session_id_walk_proven_dead_pid_row_is_self(tmp_path):
     name, reg = _register(tmp_path, sid, provider="claude")
 
     def _set_pid(pid):
-        data = json.loads(reg.read_text())
+        data = read_registry_document(reg)[0]
         for row in data.get("agents", []):
             if row.get("harness_session_id") == sid:
                 row["pid"] = pid
-        reg.write_text(json.dumps(data))
+        _replace_registry(reg, data)
 
     _set_pid(99999999)
     assert (
@@ -910,7 +909,7 @@ def test_ac1_hp_canonical_handle_is_first_eight():
 
 def test_legacy_suffix_handle_is_last_eight_read_only_lookup():
     """The retired last-eight address survives only as a read-only lookup so
-    pre-flip handles (e.g. a king addressed 08e8c104) still drain. It is never
+    pre-flip handles (e.g. a lead addressed 08e8c104) still drain. It is never
     generated for new mail and is NOT the canonical address."""
     assert legacy_suffix_handle("019f48e1-5b09-72a0-9bc8-6b364bcf4ae4") == "4bcf4ae4"
     assert legacy_suffix_handle("019F48E1-5B09-72A0-9BC8-6B364BCF4AE4") == "4bcf4ae4"
@@ -1546,3 +1545,10 @@ def test_owned_name_only_stamp_without_id_or_prover_still_refuses():
     owned = resolve_owned_identity(env, prove=lambda harness, _sid: harness == "codex")
     assert owned.disposition == "ambiguous"
     assert owned.session_id is None
+
+
+def _replace_registry(path, document):
+    from tests._table_seed import seed_registry
+
+    document = dict(document)
+    seed_registry(document.pop("agents"), path=path, replace=True, **document)

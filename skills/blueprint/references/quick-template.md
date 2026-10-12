@@ -87,10 +87,10 @@ consolidation:
 surface:
   question: "Which nodes need dispatch?"   # ONE line, phrased as a question
   ruling: d-XXXXXXXX                       # optional: the live law the question is quoted from
-  sweep: "rg -n 'plan_path' crates/fno-agents/src/king_board.rs"  # the exact command run; must return the control below
-  control: crates/fno-agents/src/king_board.rs build_board  # an answerer known BEFORE the sweep ran
+  sweep: "rg -n 'plan_path' crates/fno-agents/src/lead_board.rs"  # the exact command run; must return the control below
+  control: crates/fno-agents/src/lead_board.rs build_board  # an answerer known BEFORE the sweep ran
   answerers:
-    - at: crates/fno-agents/src/king_board.rs build_board (undispatched filter)
+    - at: crates/fno-agents/src/lead_board.rs build_board (undispatched filter)
       # ^ `at:` is `path[:lines] symbol (note)`: the validator greps that symbol,
       #   and each free `name(` call in `reads:`, in every language tree at the
       #   merge base; a reader in another tree that no answerer names is
@@ -100,7 +100,7 @@ surface:
       reads: "inputs.undispatched.rows()"   # the expression the site evaluates, quoted
       feed: "fno backlog undispatched --json"         # the command believed to supply the site
       emits: "31 rows, 31 with plan_path, 0 without (measured 2026-09-02)"
-    - at: crates/fno-agents/src/king_board.rs build_board (unplanned filter)
+    - at: crates/fno-agents/src/lead_board.rs build_board (unplanned filter)
       disposition: out-of-scope
       reason: "already correct; its feed is SRC_READY, measured above"
   count: 2                                 # the PR estimate, stated
@@ -168,7 +168,7 @@ no index is present, the first line says so.]
 
 [Answer each BEFORE designing. Each answer is a named thing or the word `none`; `none` is a claim and is judged like one.]
 
-1. **Persona**: who hits this, and what does it cost them today? Name the person (operator, crowned king, worker session, plugin user) and tie the cost to a source the plan cites.
+1. **Persona**: who hits this, and what does it cost them today? Name the person (operator, titled lead, worker session, plugin user) and tie the cost to a source the plan cites.
 2. **Surface fit**: which existing verb, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
 3. **Uncovered case**: which realistic input or state will this design NOT cover? Name it; "none" must survive re-reading the plan's own steps.
 4. **Deletable**: what in this plan could be deleted and the goal would still ship? Name it, or name the last thing you considered cutting.
@@ -263,6 +263,8 @@ tasks:
 ---
 
 ## Guidelines
+
+**Firm and volatile:** the goal, the acceptance contract, the invariants and the files to read are firm, and the executor trusts them. Line numbers and snippets are volatile as of `code_index.main_sha`. Say so once above the Changes section, and never trust a volatile line - `fno backlog freshness <node> --plan <plan>` names which cited paths moved.
 
 **Length:** 50-100 lines. A larger multi-wave feature still stays one `.md` - use the design-doc mutation path (`/blueprint <design-doc>` after `/think`), which builds its `## Execution Strategy` from the design. Drop `quick` for the fuller section set on an idea input.
 

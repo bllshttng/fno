@@ -192,11 +192,11 @@ pub(crate) fn fno_verb(args: &[&str]) -> Result<(i32, String, String), String> {
 /// placeholder beat. Takes the directory and scope rather than `Ctx` so the
 /// stop gate's stale-doc resolver calls the same one.
 pub(crate) fn team_handoff_doc(handoffs_dir: &Path, scope: &str) -> Result<PathBuf, String> {
-    // The FILENAME key keeps the crown- spelling: the docs on disk and both
+    // The FILENAME key keeps the role- spelling: the docs on disk and both
     // writers (the retired Python verb, the native handoff verb) mint
-    // crown-, so a reader keying team- would find nothing, ever.
-    let key = format!("crown-{}", sanitize_scope_key(scope));
-    if key == "crown-" {
+    // role-, so a reader keying team- would find nothing, ever.
+    let key = format!("role-{}", sanitize_scope_key(scope));
+    if key == "role-" {
         return Err("empty scope names no canon doc".into());
     }
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
@@ -1165,7 +1165,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
         let slots = crate::spawn_gate_lanes::share_reading(
             &crate::paths::AgentsHome::from_env().registry_json(),
-            crate::agents_config::max_live(&ctx.cwd) as usize,
+            crate::capacity::effective_from_env(crate::agents_config::max_live(&ctx.cwd) as usize)
+                .cap,
             session_id.as_deref(),
         )
         .share
@@ -1197,6 +1198,13 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("peer_blocked", peer_blocked::reading());
     take("state_root_drift", r_state_root_drift());
     take("capacity", r_capacity());
+    take(
+        "telemetry",
+        crate::otel_read::health(
+            crate::paths::AgentsHome::from_env().root(),
+            crate::agents_config::telemetry_claude_otel(&ctx.cwd),
+        ),
+    );
     take(
         "machine",
         crate::lead_checkin_machine::newest_reading(&ctx.events_paths),
@@ -1234,6 +1242,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("pushback", crate::lead_pushback::reading());
     take("subagents", crate::lead_answers::r_subagents());
     take("wake_meter", r_wake_meter(since));
+    take(
+        "correction_meter",
+        crate::correction_meter::r_correction_meter(),
+    );
     take("drain", r_drain(ctx));
     take("held", crate::lead_answers::held_reading(&ctx.scope));
     take("repeated_asks", crate::repeated_asks::reading());
@@ -1258,6 +1270,9 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
     let mut data = Map::new();
     data.insert("scope".into(), json!(scope));
     let get = |name: &str| readings.iter().find(|r| r.name == name);
+    if let Some(reading) = get("telemetry").filter(|r| r.ok) {
+        data.insert("telemetry".into(), reading.value.clone());
+    }
     if let Some(board) = get("board").filter(|r| r.ok) {
         for key in ["open_prs", "free_claim_no_driver", "blocked"] {
             data.insert(
@@ -1375,6 +1390,9 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
             "subagent_tokens_session".into(),
             wm.value["tokens_session"].clone(),
         );
+    }
+    if let Some(cm) = get("correction_meter").filter(|r| r.ok) {
+        crate::correction_meter::add_data(&cm.value, &mut data);
     }
     if let Some(drain) = get("drain").filter(|r| r.ok) {
         data.insert("undelivered".into(), drain.value.clone());
@@ -1691,11 +1709,17 @@ fn render_lines_with(
     };
     let mut lines: Vec<String> = Vec::new();
 
-    if let Some(r) = by_name("machine") {
-        if r.ok {
-            lines.push(crate::lead_checkin_machine::beat_line(&r.value));
-        } else {
-            lines.push(format!("READER FAILED machine: {}", r.error));
+    for (name, render) in [
+        (
+            "machine",
+            crate::lead_checkin_machine::beat_line as fn(&Value) -> String,
+        ),
+        ("telemetry", crate::otel_read::health_line),
+    ] {
+        if ok(name, &mut lines) {
+            if let Some(reading) = by_name(name) {
+                lines.push(render(&reading.value));
+            }
         }
     }
 
@@ -2138,6 +2162,16 @@ fn render_lines_with(
         }
     }
 
+    match failed("correction_meter") {
+        Some(r) => lines.push(format!("READER FAILED correction_meter: {}", r.error)),
+        None => {
+            let cm = by_name("correction_meter")
+                .map(|r| &r.value)
+                .unwrap_or(&Value::Null);
+            lines.push(crate::correction_meter::render_line(cm));
+        }
+    }
+
     if ok("drain", &mut lines) {
         lines.push(format!(
             "drain: undelivered {}",
@@ -2386,7 +2420,7 @@ pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> 
         );
         return false;
     }
-    let forbidden = ["team", "crown_scope", "result"]
+    let forbidden = ["team", "role_scope", "result"]
         .iter()
         .any(|k| data.contains_key(*k));
     if forbidden {
@@ -2454,14 +2488,14 @@ fn resolve_missing_team_inputs(
                     .entries
                     .iter()
                     .find(|row| {
-                        row.crown_level.is_some()
+                        row.role_level.is_some()
                             && row
-                                .crown_scope
+                                .role_scope
                                 .as_deref()
                                 .map(|s| crate::territory::canonical_scope(s.trim()) == *scope)
                                 .unwrap_or(false)
                     })
-                    .and_then(|row| row.crown_level)
+                    .and_then(|row| row.role_level)
                     .map(i64::from);
             }
             Err(e) => {
@@ -2773,7 +2807,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     );
     // The team line leads: identity first, then the beat's facts. The name
     // comes from the fold's own stamp (org_fold reads the store), so an
-    // heir's first beat already shows the carried name.
+    // successor's first beat already shows the carried name.
     let fold_name: Option<String> = beat.folded.as_ref().ok().and_then(|f| {
         f.get("fold")
             .and_then(|f| f.get("name"))
@@ -2846,7 +2880,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         lines.push(FAQ_PROMPT.into());
     }
     // The predecessor's open reforms ride every beat until filled: the
-    // heir's first beat names each unfilled part4 so it gets done.
+    // successor's first beat names each unfilled part4 so it gets done.
     for path in crate::eval_part4::unfilled_part4s(&ctx.cwd) {
         lines.push(format!("unfilled part4: {}", path.display()));
     }
@@ -2935,7 +2969,7 @@ fn rename_harness_title_for_team(scope: &str) -> Result<(), String> {
         .map_err(|error| format!("registry read failed: {error}"))?;
     let canonical = crate::territory::canonical_scope(scope);
     let mut holders = registry.entries.iter().filter(|row| {
-        row.crown_scope
+        row.role_scope
             .as_deref()
             .is_some_and(|row_scope| crate::territory::canonical_scope(row_scope) == canonical)
             && !matches!(
@@ -3011,56 +3045,17 @@ mod tests {
         include!("lead_checkin_watch_tests.rs");
     }
 
-    #[test]
-    fn cause_rows() {
-        let stderr = "fno config: a is not modeled\nfno config: b is not modeled\ngh: API rate limit exceeded for user ID 4994564. (HTTP 403)";
-        assert_eq!(
-            stderr_cause(stderr),
-            "gh: API rate limit exceeded for user ID 4994564. (HTTP 403)"
-        );
-
-        let error = "gh api repos/{owner}/{repo}/commits/<sha>/check-runs failed: fno config: x is not modeled\ngh: API rate limit exceeded (HTTP 403)";
-        assert_eq!(
-            gh_error_cause(error),
-            "gh: API rate limit exceeded (HTTP 403)"
-        );
-
-        assert_eq!(
-            stderr_cause("fno config: first\nfno config: last"),
-            "fno config: last"
-        );
-        assert_eq!(stderr_cause(" \n\t"), "no stderr");
-
-        let cause = "é".repeat(300);
-        let result = stderr_cause(&cause);
-        assert_eq!(result.chars().count(), 120);
-        assert_eq!(result, "é".repeat(120));
-    }
+    include!("lead_checkin_readings_tests.rs");
 
     #[test]
-    fn count_rows() {
-        let first = Value::Array((0..100).map(|n| json!({"number": n})).collect());
-        let second = Value::Array((100..107).map(|n| json!({"number": n})).collect());
-        assert_eq!(
-            open_pr_total(&[first, second, json!({"unexpected": true}), json!([1, 2])]),
-            109
-        );
-
-        assert_eq!(sanitize_scope_key("fno-x-aaaa epic"), "fno-x-aaaa-epic");
-        assert_eq!(sanitize_scope_key("  --x--  "), "x");
-        assert_eq!(sanitize_scope_key("///"), "");
-        assert_eq!(sanitize_scope_key("a, b"), "a-b");
-    }
-
-    #[test]
-    fn team_handoff_doc_reads_the_crown_keyed_writer() {
-        // The persisted FILENAME key is crown- (both writers mint it); the
-        // crown->team rename must never split the reader from the docs.
+    fn team_handoff_doc_reads_the_role_keyed_writer() {
+        // The persisted FILENAME key is role- (both writers mint it); the
+        // role->team rename must never split the reader from the docs.
         let base = std::env::temp_dir().join(format!("fno-checkin-dockey-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("handoffs");
         std::fs::create_dir_all(&dir).unwrap();
-        let doc = dir.join("20261001-crown-fno-x-aaaa.md");
+        let doc = dir.join("20261001-role-fno-x-aaaa.md");
         std::fs::write(&doc, "x").unwrap();
         let got = team_handoff_doc(&dir, "fno-x-aaaa").unwrap();
         assert_eq!(got, doc);
@@ -4806,7 +4801,7 @@ mod tests {
                 scope: "shared".into(),
                 holders: vec!["lead-a".into(), "lead-b".into()],
             }],
-            stale: vec![crate::team_split::StaleCrown {
+            stale: vec![crate::team_split::StaleRole {
                 row: "lead-dead".into(),
                 session: None,
                 scope: "shared".into(),
@@ -4844,7 +4839,7 @@ mod tests {
 
         let splits = crate::team_split::TeamSplits {
             double_ruled: vec![],
-            stale: vec![crate::team_split::StaleCrown {
+            stale: vec![crate::team_split::StaleRole {
                 row: "lead-fno-g6".into(),
                 session: None,
                 scope: "fno".into(),
@@ -4869,7 +4864,7 @@ mod tests {
 
         let splits = crate::team_split::TeamSplits {
             double_ruled: vec![],
-            stale: vec![crate::team_split::StaleCrown {
+            stale: vec![crate::team_split::StaleRole {
                 row: "lead-gone".into(),
                 session: None,
                 scope: "fno".into(),
@@ -4920,8 +4915,8 @@ mod tests {
                     "status": "idle",
                     "harness": "claude",
                     "harness_session_id": "ses-team",
-                    "crown_level": 2,
-                    "crown_scope": "probe fleet",
+                    "role_level": 2,
+                    "role_scope": "probe fleet",
                     "future_field": "x",
                 })],
             })
@@ -4943,7 +4938,7 @@ mod tests {
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         let scope = crate::territory::canonical_scope("probe fleet");
         let expected_board = crate::paths::space_dir(&repo)
-            .join("kings")
+            .join("leads")
             .join(format!("{scope}.md"));
         std::fs::create_dir_all(expected_board.parent().unwrap()).unwrap();
         std::fs::write(&expected_board, "# lead\n").unwrap();

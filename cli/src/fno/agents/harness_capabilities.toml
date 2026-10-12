@@ -13,6 +13,15 @@ map_version = 24
 # The value is the composer check's verdict (tests/mail-header-composer-smoke.sh),
 # read as data by the renderer - never a branch in code.
 mail_header_at = true
+# THE LEAD BEAT. What keeps a lead waking between events, read when
+# `agents.<harness>.beat` is `auto` (the default). `daemon`: the daemon's
+# lead-wake mail is the only beat. `loop`: the lead also arms the native
+# `/loop`. `goal`: the provider goal is the continuation. `schedule`: the
+# harness's own recurring schedule tool. An absent key reads `daemon`.
+# Claude keeps `loop` until the daemon wake has a delivery bound past the
+# user-typing hold and a stopped daemon is reported at SessionStart; then
+# this row flips to `daemon` and the /loop retires.
+beat = "loop"
 permission_bypass = ["--dangerously-skip-permissions"]
 # LAUNCHER CHOICE LISTS. The mux composer's picker chips read these. Three
 # states: key ABSENT = no surface at all (the chip reads "not offered");
@@ -205,6 +214,9 @@ state = "native"
 
 [harness.codex]
 mail_header_at = true
+# The provider goal keeps a Codex lead working between wakes. It stays
+# while mail to an idle thread can fail to start a turn.
+beat = "goal"
 permission_bypass = ["--dangerously-bypass-approvals-and-sandbox"]
 # efforts: the keys of model_switch_strategy.effort_labels below.
 # permission_modes: the two shortcuts plus every <sandbox>:<approval> pair
@@ -510,6 +522,8 @@ state = "capable"
 
 [harness.agy]
 mail_header_at = true
+# agy documents a recurring `schedule` tool (internal/agy/docs/Hookslink.md:135).
+beat = "schedule"
 permission_bypass = ["--dangerously-skip-permissions"]
 # efforts: agy's own `--effort (low|medium|high)`. permission_modes: exactly
 # the vocabulary permission_pane_tokens maps (codex_posture.rs).
@@ -673,6 +687,7 @@ clear_modal = ["trust (?:this )?folder|do you trust", "\r"]
 
 [harness.opencode]
 mail_header_at = true
+beat = "daemon"
 permission_bypass = ["--dangerously-skip-permissions"]
 # efforts EMPTY: the door passes provider values through, so the picker
 # offers free text rather than a list.
@@ -1664,15 +1679,17 @@ headless = "unsandboxed"
 state = "native"
 measured_by = { reader = "session-id resume journey", version = "3.14.3", date = "2026-09-29" }
 
-# footnote: footnote's own turn loop (crates/fno-agents/src/footnote_harness),
-# run in-process by the client over a borrowed model endpoint. Headless only:
+# footnote: footnote's own turn loop (the fnh binary), a child binary the
+# client launches with one launch spec on stdin. Headless only:
 # no pane, no thread, no TUI. The id is footnote's own fno_id, minted before
 # the first record, so the binding is preassigned.
 [harness.footnote]
 mail_header_at = true
 permission_bypass = []
 efforts = []
-permission_modes = []
+# permission_modes: the modes the fnh binary reads from launch spec v2,
+# Claude Code's own names. dontAsk denies what default would ask.
+permission_modes = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"]
 resume = "native-session"
 autonomous_pane = false
 route_on_pane = false
@@ -1705,7 +1722,7 @@ supported = false
 rule_ids = []
 keys = []
 
-# No TUI exists: the loop is a function in the client process.
+# No TUI exists: the loop is a one-shot child process per input.
 [harness.footnote.resume_strategy.forms.interactive_create]
 kind = "unsupported"
 tokens = []
@@ -1718,7 +1735,7 @@ tokens = []
 kind = "unsupported"
 tokens = []
 
-# In-process forms: the client runs the loop; no child argv exists.
+# The verbs a user types; the client turns each into a footnote child.
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["fno-agents", "spawn", "-H", "footnote", "--substrate", "headless"]
@@ -1831,35 +1848,35 @@ proof = "goal-active"
 
 [harness.claude.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/king-delegation-guard.sh", "crates/fno-agents/src/hook/lead_guard.rs"]
+via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/hook/lead_guard.rs"]
 
 [harness.claude.hooks.lead_reinject]
 state = "supported"
-via = ["hooks/context-hooks.json", "hooks/king-postcompact-reinject.sh"]
+via = ["hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.codex.hooks.lead_guard]
 state = "supported"
-via = ["hooks/codex-hooks.json", "hooks/king-delegation-guard.sh", "crates/fno-agents/src/hook/lead_guard.rs"]
+via = ["hooks/codex-hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/hook/lead_guard.rs"]
 
 [harness.codex.hooks.lead_reinject]
 state = "supported"
-via = ["hooks/context-hooks.json", "hooks/king-postcompact-reinject.sh"]
+via = ["hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.agy.hooks.lead_guard]
 state = "supported"
-via = ["hooks/agy-king-guard.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/lead_guard.rs"]
+via = ["hooks/agy-lead-guard.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/lead_guard.rs"]
 
 [harness.agy.hooks.lead_reinject]
 state = "impossible"
-reason = "agy exposes no compaction event (PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop); the crown line lands at invocationNum 0 in hooks/agy-team-inject.sh"
+reason = "agy exposes no compaction event (PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop); the role line lands at invocationNum 0 in hooks/agy-team-inject.sh"
 
 [harness.opencode.hooks.lead_guard]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/king-delegation-guard.sh"]
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/lead-delegation-guard.sh"]
 
 [harness.opencode.hooks.lead_reinject]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/king-postcompact-reinject.sh", "hooks/target-postcompact-reinject.sh"]
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/lead-postcompact-reinject.sh", "hooks/target-postcompact-reinject.sh"]
 
 [harness.pi.hooks.lead_guard]
 state = "supported"
@@ -1867,15 +1884,15 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/hook/le
 
 [harness.pi.hooks.lead_reinject]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/king-postcompact-reinject.sh"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.footnote.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/king-delegation-guard.sh", "crates/fno-agents/src/footnote_harness/hooks.rs"]
+via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/footnote_harness/mod.rs"]
 
 [harness.footnote.hooks.lead_reinject]
-state = "impossible"
-reason = "the footnote harness compacts in-process (footnote_harness maybe_compact) and fires no compaction hook event, so the postcompact carrier never runs; the lead brief rides SessionStart only"
+state = "supported"
+via = ["hooks/hooks.json", "hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.gemini.hooks.lead_guard]
 state = "missing"
@@ -1933,17 +1950,25 @@ blocked = "none"
 state = "supported"
 via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 
+# agy, opencode and pi push presence only: one `fno-agents report --kind
+# session` at session start, so the registry knows the session id and
+# transcript. No per-turn push reaches `fno-agents hook session-state`
+# (hook/adapter/ has claude and codex only), so these rows read their turn
+# state from the screen scrape and never observe model, effort or posture.
 [harness.agy.hooks.session_state]
 state = "supported"
 via = ["hooks/agy-session-report.sh", "crates/fno-agents/src/agy_hooks.rs"]
+reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
 
 [harness.opencode.hooks.session_state]
 state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js"]
+reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
 
 [harness.pi.hooks.session_state]
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts"]
+reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
 
 [harness.gemini.hooks.session_state]
 state = "missing"
@@ -1989,7 +2014,7 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/event_r
 
 [harness.footnote.hooks.event_rules]
 state = "supported"
-via = ["crates/fno-agents/src/footnote_harness/hooks.rs", "crates/fno-agents/src/hook/stop.rs"]
+via = ["crates/fno-agents/src/footnote_harness/mod.rs", "crates/fno-agents/src/hook/stop.rs"]
 
 [harness.gemini.hooks.event_rules]
 state = "impossible"

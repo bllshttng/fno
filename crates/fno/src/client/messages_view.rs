@@ -38,22 +38,22 @@ fn bool_of(v: &Value, key: &str) -> bool {
     v.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-/// The channel row's display word: the retired `kings` scope reads as
-/// `leads` (item 5: no king anymore), everything else as itself, never
+/// The channel row's display word: the retired `leads` scope reads as
+/// `leads` (item 5: no lead anymore), everything else as itself, never
 /// with a `#`.
 fn channel_label(scope: &str) -> String {
-    if scope == "kings" {
+    if scope == "leads" {
         "leads".to_string()
     } else {
         scope.to_string()
     }
 }
 
-/// The display label for a sender or system arm: the retired `king-settle`
+/// The display label for a sender or system arm: the retired `lead-settle`
 /// stamp reads `lead-settle` (item 5). A display rename only - the mail
-/// identity, and every stored row, still say `fno/king-settle`.
+/// identity, and every stored row, still say `fno/lead-settle`.
 fn display_label(name: &str) -> String {
-    name.replace("king-settle", "lead-settle")
+    name.replace("lead-settle", "lead-settle")
 }
 
 pub(crate) type MessagesTx =
@@ -128,6 +128,9 @@ pub(crate) struct MessagesBoard {
     pub(crate) filter: ListFilter,
     pub(crate) sort_mode: SortMode,
     pub(crate) pending_message_id: Option<String>,
+    /// A clicked `@handle` awaiting the gather: resolves to the participant
+    /// whose name (or key) matches, then selects it in column 1.
+    pub(crate) pending_handle: Option<String>,
     selected_message_id: Option<String>,
     pub(crate) detail: Option<super::messages_detail::SessionDetail>,
     pub(super) reply: Option<super::messages_reply::ReplyState>,
@@ -156,6 +159,7 @@ impl MessagesBoard {
             filter: ListFilter::All,
             sort_mode: SortMode::Last,
             pending_message_id: None,
+            pending_handle: None,
             selected_message_id: None,
             detail: None,
             reply: None,
@@ -723,17 +727,36 @@ impl MessagesBoard {
             };
             if run_key.as_deref() != Some(key) {
                 push_blank(&mut lines, &mut owners);
+                // The name line is the envelope's formal structure, so it
+                // paints in the label color, distinct from the dim meta and
+                // the bold subject under it.
                 let mut label = if mine_row {
                     let pad = w.saturating_sub(1).saturating_sub(sender.chars().count());
-                    BLine::of(&[seg(format!("{}{sender}", " ".repeat(pad)), BRole::Meta)])
+                    BLine::of(&[seg(format!("{}{sender}", " ".repeat(pad)), BRole::Label)])
                 } else {
-                    BLine::of(&[seg(sender.clone(), BRole::Meta)])
+                    BLine::of(&[seg(sender.clone(), BRole::Label)])
                 };
                 label.band = selected;
                 lines.push(label);
                 owners.push(Some(index));
             }
             run_key = Some(key.to_string());
+            // The sender's --subject rides the row; a headline line under
+            // the sender, only when one was given.
+            let subject = text_of(r, "subject");
+            if !subject.is_empty() {
+                for mut line in BLine::of(&[seg(subject, BRole::Head)]).wrap(wrap_w) {
+                    if mine_row {
+                        let pad = w
+                            .saturating_sub(1)
+                            .saturating_sub(line.text.chars().count());
+                        line.text = format!("{}{}", " ".repeat(pad), line.text);
+                    }
+                    line.band = selected;
+                    lines.push(line);
+                    owners.push(Some(index));
+                }
+            }
             let wrapped = BLine::plain(text_of(r, "body")).wrap(wrap_w);
             for mut line in wrapped {
                 if mine_row {
@@ -885,6 +908,16 @@ pub(crate) fn open_message(view: &mut View, id: String) {
     }
 }
 
+/// Open the Messages tab filtered to a clicked `@handle`. The projection
+/// gather resolves the name to its participant, then column 1 selects it;
+/// a handle that never messaged this fleet notices instead of selecting.
+pub(crate) fn open_handle(view: &mut View, name: String) {
+    open(view);
+    if let Some(board) = view.messages_board.as_mut() {
+        board.pending_handle = Some(name);
+    }
+}
+
 /// Restore after launch: a persisted Messages sideline reopens it.
 pub(crate) fn restore(view: &mut View) {
     if view.sideline_view == SidelineView::Messages {
@@ -986,6 +1019,25 @@ pub(crate) fn apply_gather(
                     b.col = Col::Thread;
                 } else {
                     notice = Some(format!("message {id}: no conversation found"));
+                }
+            }
+            if let Some(handle) = b.pending_handle.take() {
+                let want = handle.trim_start_matches('@').to_string();
+                let rows = b.tree_rows();
+                let hit = rows.iter().position(|r| {
+                    matches!(r, TreeRow::Agent { key, name, .. }
+                        if name.eq_ignore_ascii_case(&want) || key.eq_ignore_ascii_case(&want))
+                });
+                match hit {
+                    Some(i) => {
+                        if let TreeRow::Agent { key, .. } = &rows[i] {
+                            b.sel_agent = Some(key.clone());
+                            b.sel_thread = None;
+                            b.cursors[0] = i;
+                            b.col = Col::Chats;
+                        }
+                    }
+                    None => notice = Some(format!("@{want}: no messages found")),
                 }
             }
         }
@@ -1315,7 +1367,13 @@ fn open_chat_popup(view: &mut View) {
         .footer("esc close")
         .plain_body();
     if let Some(b) = view.messages_board.as_mut() {
-        b.detail = Some(super::messages_detail::SessionDetail { popup });
+        b.detail = Some(super::messages_detail::SessionDetail {
+            popup,
+            // A conversation popup carries no session key and never
+            // receives a token answer: the empty key matches nothing.
+            key: String::new(),
+            tokens_pending: false,
+        });
     }
 }
 

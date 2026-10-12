@@ -3,13 +3,28 @@
 //! record.
 //!
 //! A node HELD on an open question must stop once, name the question, and
-//! never re-ask on a later fire: the first fire emits a `loop_check` block
-//! row with `gate: held_on_question`, and the second fire (the same question
-//! still open) terminates `HeldOnQuestion` with a digest naming the decide
-//! verb. The held state is the journal itself, never the fingerprint.
+//! never re-ask on a later fire: the first fire emits a
+//! `loop_check_question_gate` row with `gate: held_on_question`, and the
+//! second fire (the same question still open) terminates `HeldOnQuestion`
+//! with a digest naming the user-side clear. Only the user closes the
+//! question, so neither text names the decide verb. The held state is the
+//! journal itself, never the fingerprint.
 
 use serde_json::Value;
 use std::path::PathBuf;
+
+/// The event types the stop gate's question family reads. `event_lines_of`
+/// narrows the journal to this list, so a family type missing here is
+/// silently skipped: the folds never see its rows and the gate cannot fire
+/// on them. One list serves both folds; each `match` handles only the kinds
+/// it folds and skips the rest. The guard test below fails when the schema
+/// gains a question, decision or hold type this list lacks.
+pub(crate) const QUESTION_FAMILY_TYPES: &[&str] = &[
+    "operator_question",
+    "operator_question_closed",
+    "operator_decision",
+    "loop_check_question_gate",
+];
 
 /// A question THIS session asked, that was closed WITH an answer, and for
 /// which no `operator_decision` event exists on any reachable journal. The
@@ -43,7 +58,9 @@ pub(crate) fn scan_unrecorded_decisions(
         std::collections::HashSet::new();
     let mut recorded: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in journals {
-        let Ok(content) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(content) =
+            crate::loopcheck::event_lines_of(path, QUESTION_FAMILY_TYPES).map(|l| l.join("\n"))
+        else {
             continue;
         }; // committed rows, commit order
         for line in content.lines() {
@@ -130,7 +147,9 @@ pub(crate) fn scan_open_holds(
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut blocked_once: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in journals {
-        let Ok(content) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(content) =
+            crate::loopcheck::event_lines_of(path, QUESTION_FAMILY_TYPES).map(|l| l.join("\n"))
+        else {
             continue;
         }; // committed rows, commit order
         for line in content.lines() {
@@ -158,7 +177,7 @@ pub(crate) fn scan_open_holds(
                 }
                 // The first fire's own block row: gate held_on_question,
                 // session-scoped, naming the questions it blocked on.
-                "loop_check" => {
+                "loop_check_question_gate" => {
                     if data.get("gate").and_then(|v| v.as_str()) == Some("held_on_question")
                         && data.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
                     {
@@ -250,8 +269,9 @@ pub(crate) enum QuestionGateStop {
 /// question blocks once and terminates on the second fire (step 3c). The
 /// journals fold as a UNION (operator verbs write to the canonical root's
 /// journal; a worktree stop gate reads its own cwd's), and the gate's own
-/// loop_check/termination rows land through `emit`, so the held state the
-/// second fire reads is the journal itself, never the fingerprint.
+/// loop_check_question_gate/termination rows land through `emit`, so the
+/// held state the second fire reads is the journal itself, never the
+/// fingerprint.
 pub(crate) fn question_gates(
     project_events: &std::path::Path,
     global_events: &std::path::Path,
@@ -279,10 +299,9 @@ pub(crate) fn question_gates(
             .collect::<Vec<_>>()
             .join(", ");
         emit(
-            "loop_check",
+            "loop_check_question_gate",
             serde_json::json!({
                 "session_id": session_id,
-                "decision": "block",
                 "gate": "unrecorded_decision",
                 "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
             }),
@@ -298,8 +317,8 @@ pub(crate) fn question_gates(
         };
     }
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
-    // id and the two remedies; the second fire on the same still-open question
-    // terminates, so a held node stops once and is never re-asked.
+    // id and the user-side remedies; the second fire on the same still-open
+    // question terminates, so a held node stops once and is never re-asked.
     let held = scan_open_holds(&journals, session_id, node_id);
     if !held.is_empty() {
         let qids = held
@@ -310,20 +329,24 @@ pub(crate) fn question_gates(
         let h = &held[0];
         if first_fire {
             emit(
-                "loop_check",
+                "loop_check_question_gate",
                 serde_json::json!({
                     "session_id": session_id,
-                    "decision": "block",
                     "gate": "held_on_question",
                     "held": qids,
                 }),
             );
             return QuestionGateStop::Block {
                 reason: format!(
-                    "held on open question {}: '{}'; answer it with \
-                     `fno backlog decide <node> \"<ruling>\" --question-id {}` \
-                     or close the question to move on",
-                    h.question_id, h.question, h.question_id
+                    "held on open question {qid}: '{}'. Only the user closes it: on the \
+                     question board, or at their own terminal with \
+                     `fno inbox outstanding clear {qid} --answer \"<answer>\"`. This \
+                     session cannot answer it, and a decide record does not close it. If \
+                     this session asked it and no longer needs it, withdraw it with \
+                     `fno inbox outstanding clear {qid}`. Otherwise end the turn. The next \
+                     stop on this question ends the loop.",
+                    h.question,
+                    qid = h.question_id
                 ),
             };
         }
@@ -333,9 +356,12 @@ pub(crate) fn question_gates(
             format!(" options: {};", h.options.join(" | "))
         };
         let digest = format!(
-            "still held on open question {}: '{}'{}. answer it with \
-             `fno backlog decide <node> \"<ruling>\" --question-id {}`",
-            h.question_id, h.question, options_line, h.question_id
+            "still held on open question {qid}: '{}'.{} The loop ends here. The user \
+             answers on the question board, or with \
+             `fno inbox outstanding clear {qid} --answer \"<answer>\"`.",
+            h.question,
+            options_line,
+            qid = h.question_id
         );
         emit(
             "termination",
@@ -375,49 +401,92 @@ mod tests {
         )
     }
 
-    fn brow(qid: &str, session: &str) -> String {
-        format!(
-            r#"{{"ts":"2026-09-17T11:30:00Z","type":"loop_check","source":"target","data":{{"session_id":"{session}","decision":"block","gate":"held_on_question","held":["{qid}"]}}}}"#
-        )
+    #[test]
+    fn open_question_blocks_once_then_terminates_through_the_real_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project-events.jsonl");
+        let global = dir.path().join("global-events.jsonl");
+        // Outside any git repo, so canonical_repo_root adds no real journal.
+        let cwd = dir.path().join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        crate::event_store::append_envelope(&project, &qrow("q-1", "sess-a", &["x-n"]), None)
+            .unwrap();
+        let emit = |t: &str, d: Value| crate::loopcheck::emit_to_both(&project, &global, t, d);
+
+        let QuestionGateStop::Block { reason } =
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &emit)
+        else {
+            panic!("first fire must block");
+        };
+        assert!(
+            reason.contains("fno inbox outstanding clear q-1"),
+            "{reason}"
+        );
+        assert!(!reason.contains("backlog decide"), "{reason}");
+
+        let QuestionGateStop::Terminate { reason, message } =
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &emit)
+        else {
+            panic!("second fire must terminate");
+        };
+        assert!(matches!(
+            reason,
+            super::super::TerminationReason::HeldOnQuestion
+        ));
+        assert!(message.contains("q-1"), "{message}");
+        assert!(
+            message.contains("fno inbox outstanding clear q-1 --answer"),
+            "{message}"
+        );
+        assert!(!message.contains("backlog decide"), "{message}");
+
+        let count = |ty: &str| {
+            crate::events::committed_journal_text(&project)
+                .lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter(|v| v.get("type").and_then(Value::as_str) == Some(ty))
+                .count()
+        };
+        assert_eq!(count("loop_check_question_gate"), 1, "one marker row lands");
+        assert_eq!(count("termination"), 1, "one termination row lands");
+
+        // A marker that never lands leaves every fire a first fire: the gate
+        // blocks again and never terminates without it.
+        let lost = dir.path().join("lost-events.jsonl");
+        crate::event_store::append_envelope(&lost, &qrow("q-2", "sess-b", &["x-n"]), None).unwrap();
+        let drop_rows = |_: &str, _: Value| {};
+        for _ in 0..2 {
+            assert!(matches!(
+                question_gates(&lost, &lost, &cwd, "sess-b", "x-n", &drop_rows),
+                QuestionGateStop::Block { .. }
+            ));
+        }
     }
 
     #[test]
-    fn open_blocking_question_holds_the_node_once() {
-        let raw = [qrow("q-1", "sess-a", &["x-n"]), brow("q-1", "sess-a")].join("\n");
-        let path = std::env::temp_dir().join(format!(
-            "fno-holds-test-1-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path.clone()];
-        let holds = scan_open_holds(&journals, "sess-a", "x-n");
-        assert_eq!(holds.len(), 1);
-        assert!(holds[0].already_blocked, "the prior block row is seen");
-        assert_eq!(holds[0].question_id, "q-1");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn second_fire_without_a_prior_block_is_a_first_fire() {
-        let raw = qrow("q-2", "sess-b", &["x-n"]);
-        let path = std::env::temp_dir().join(format!(
-            "fno-holds-test-2-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path.clone()];
-        let holds = scan_open_holds(&journals, "sess-b", "x-n");
-        assert_eq!(holds.len(), 1);
-        assert!(!holds[0].already_blocked);
-        let _ = std::fs::remove_file(&path);
+    fn gated_types_cover_every_schema_question_family_type() {
+        let schema: Value = serde_json::from_str(include_str!("../event_store/events_schema.json"))
+            .expect("events_schema.json must parse (generated by build.rs)");
+        let names = schema
+            .get("event_types")
+            .and_then(|v| v.as_object())
+            .expect("event_types must be an object")
+            .keys();
+        let missing: Vec<String> = names
+            .filter(|n| {
+                n.starts_with("operator_question")
+                    || n.starts_with("operator_decision")
+                    || n.as_str() == "loop_check_question_gate"
+            })
+            .filter(|n| !QUESTION_FAMILY_TYPES.contains(&n.as_str()))
+            .cloned()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "question/decision/hold types the schema emits but QUESTION_FAMILY_TYPES \
+             lacks: {missing:?}; event_lines_of drops their rows before the fold, so \
+             the hold gate never sees them"
+        );
     }
 
     #[test]

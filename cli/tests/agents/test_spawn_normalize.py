@@ -42,6 +42,9 @@ def test_ac1_hp_nameless_spawn_mints_slug():
     out = _norm(["spawn"])
     assert out == ["spawn", "--name", out[2]]
     assert "-" in out[2]  # adjective-noun slug
+    # A succession hand-off names nobody: the settle draws the name, and a
+    # minted slug would arrive as an explicit proposal and decline the draw.
+    assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
 
 
 def test_workspace_value_flag_not_misread_as_name_or_substrate():
@@ -244,7 +247,7 @@ def test_value_flag_values_are_never_counted_as_positionals():
     for flag, value in (
         ("--route", "zai,glm-5.2"),
         ("--account", "readyrule"),
-        ("--crown", "level=1,scope=x-1234"),
+        ("--promote", "level=1,scope=x-1234"),
     ):
         out = _norm(["spawn", flag, value, "do the thing"])
         assert out[1] == "--name", f"{flag}: no name minted"

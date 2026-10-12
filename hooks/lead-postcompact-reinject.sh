@@ -63,7 +63,7 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 [[ -n "$SID" ]] || exit 0
 
 # The brief, checked before the registry read: it is a pure file stat, and the
-# common case (an uncrowned session compacting) must not pay the fno/jq spawns.
+# common case (an untitled session compacting) must not pay the fno/jq spawns.
 # Missing or empty means no injection, never a partial one.
 [[ -r "$BRIEF" && -s "$BRIEF" ]] || exit 0
 
@@ -85,8 +85,8 @@ REG_RC=$?
 MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SID" \
     '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
 [[ -n "$MY_ROW" ]] || exit 0
-TEAM_LEVEL="$(printf '%s' "$MY_ROW" | jq -r '.crown_level // empty' 2>/dev/null)"
-TEAM_SCOPE="$(printf '%s' "$MY_ROW" | jq -r '.crown_scope // empty' 2>/dev/null)"
+TEAM_LEVEL="$(printf '%s' "$MY_ROW" | jq -r '.role_level // empty' 2>/dev/null)"
+TEAM_SCOPE="$(printf '%s' "$MY_ROW" | jq -r '.role_scope // empty' 2>/dev/null)"
 [[ -n "$TEAM_LEVEL" || -n "$TEAM_SCOPE" ]] || exit 0
 
 # Never truncate: a brief that outgrew its budget fails the byte-budget test
@@ -106,7 +106,7 @@ $(sed '/^<!--/d' "$BRIEF")"
 # no entry for this scope - never a failed hook).
 FAQ_MAX_BYTES=4000
 if [[ -n "$TEAM_SCOPE" ]]; then
-    FAQ_ENTRIES="$(fno agents king faq list --scope "$TEAM_SCOPE" 2>/dev/null || true)"
+    FAQ_ENTRIES="$(fno agents org faq list --scope "$TEAM_SCOPE" 2>/dev/null || true)"
     FAQ_BYTES="$(printf '%s' "$FAQ_ENTRIES" | wc -c | tr -d ' ')"
     if [[ "$FAQ_BYTES" -gt "$FAQ_MAX_BYTES" ]]; then
         # A raw `head -c` cut can split a multi-byte UTF-8 character mid-
@@ -117,7 +117,7 @@ import sys
 sys.stdout.write(sys.stdin.buffer.read(${FAQ_MAX_BYTES}).decode('utf-8', errors='ignore'))
 ")
 
-_(truncated at ${FAQ_MAX_BYTES}B; \`fno agents king faq list --scope \"${TEAM_SCOPE}\"\` has the rest)_"
+_(truncated at ${FAQ_MAX_BYTES}B; \`fno agents lead faq list --scope \"${TEAM_SCOPE}\"\` has the rest)_"
     fi
     if [[ -n "$(printf '%s' "$FAQ_ENTRIES" | tr -d '[:space:]')" ]]; then
         CONTEXT="$CONTEXT
@@ -291,7 +291,7 @@ fi
 # after a compact. Reads the same manifest every lead arm resolves; a missing
 # manifest or a foreign session id means the brief above is the
 # whole teaching, so nothing is appended (fail to the narrower rule).
-LEAD_MANIFEST="$(fno agents king manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
+LEAD_MANIFEST="$(fno agents lead manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
 if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
     LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
     LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
@@ -300,9 +300,25 @@ if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
 
 ## You are still leading (shape: ${LEAD_SHAPE})
 
-The /loop heartbeat and stop arm survive a compact: verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents king verdict\` are demand reads, not beats. Claude's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one verb: \`fno agents king checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> --priority\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
+The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one verb: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> --priority\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
     fi
 fi
+# The read-verb lesson rides the post-compact brief: a compaction boundary
+# newer than the taught one re-teaches it once, and the door prints nothing
+# when the session is current. Best-effort - a stale or absent binary
+# teaches nothing and never blocks the brief.
+if [[ -r "$SOURCE_ROOT/hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=../hooks/lib/agents-bin.sh
+    source "$SOURCE_ROOT/hooks/lib/agents-bin.sh"
+    TEACH_BIN="$(fno_agents_bin "$SOURCE_ROOT")"
+    if [[ -n "$TEACH_BIN" && -x "$TEACH_BIN" && -n "$SID" ]]; then
+        TEACH="$("$TEACH_BIN" mail-teach --session "$SID" --mark 2>/dev/null || true)"
+        [[ -n "$TEACH" ]] && CONTEXT="${CONTEXT}
+
+$TEACH"
+    fi
+fi
+
 postcompact_emit "$(postcompact_carrier "$SOURCE")" "$CONTEXT"
 
 exit 0

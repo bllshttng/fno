@@ -143,6 +143,35 @@ fn read_config(cwd: &Path) -> PostMergeCfg {
 // Small helpers
 // ---------------------------------------------------------------------------
 
+/// A sync_command leg that starts a binary update or compile. A post-merge
+/// sync runs seconds after the merge, before CI publishes the new tarball,
+/// so such a leg can only fall back to a local compile: dropped by name.
+fn is_compile_leg(leg: &str) -> bool {
+    let t = leg.trim();
+    t == "fno update"
+        || t.starts_with("fno update ")
+        || t == "fno doctor update"
+        || t.starts_with("fno doctor update ")
+        || t == "cargo install"
+        || t.starts_with("cargo install ")
+}
+
+/// Split an `&&` chain, drop the compile legs, rejoin the rest. Returns the
+/// runnable remainder (possibly empty) and what was dropped, so the caller
+/// names each loss.
+fn strip_compile_legs(cmd: &str) -> (String, Vec<String>) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for leg in cmd.split("&&") {
+        if is_compile_leg(leg) {
+            dropped.push(leg.trim().to_string());
+        } else {
+            kept.push(leg.trim().to_string());
+        }
+    }
+    (kept.join(" && "), dropped)
+}
+
 fn synced_marker(canonical: &Path, sha: &str) -> PathBuf {
     canonical.join(".fno").join("post-merge-synced").join(sha)
 }
@@ -331,19 +360,25 @@ fn append_receipt(
     exit: i32,
     timed_out: bool,
     re_pulled: u64,
+    failure_tail: Option<&str>,
     stderr: &mut Vec<String>,
 ) {
     use std::io::Write;
     let ts = (deps.now)().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let line = json!({
+    let mut receipt = json!({
         "ts": ts,
         "pr": pr,
         "sha": sha12(sha),
         "exit": exit,
         "timed_out": timed_out,
         "re_pulled": re_pulled,
-    })
-    .to_string();
+    });
+    // A failed chain keeps its folded stderr tail: the capture dir is deleted
+    // after the run, so the receipt is the only place the reason survives.
+    if let Some(text) = failure_tail.filter(|t| !t.trim().is_empty()) {
+        receipt["stderr_tail"] = json!(tail(&crate::client::fold_repeated_lines(text)));
+    }
+    let line = receipt.to_string();
     let path = canonical.join(".fno").join("post-merge-sync-receipt.jsonl");
     let write = || -> std::io::Result<()> {
         let mut f = std::fs::OpenOptions::new()
@@ -758,6 +793,7 @@ fn run_sync_with_shell(deps: &Deps, cwd: &Path, pr: u64, shell: &ShellRun) -> Sy
     // dies with us.
     let holder = format!("sync-canonical:{pr}:{}:{}", std::process::id(), nanos());
     let make_opts = || crate::claims::AcquireOpts {
+        host: None,
         pid: Some(std::process::id()),
         pid_unavailable: false,
         ttl_ms: Some(CLAIM_TTL_MS),
@@ -894,9 +930,34 @@ fn sync_under_lease(
             "post-merge install: test:priority held by {holder}; building without priority"
         ));
     }
-    let out = shell(&cfg.sync_command, canonical);
+    // A post-merge sync never starts a binary update or compile: the chain
+    // runs before CI publishes the new tarball, so an update leg here can
+    // only fall back to a local compile. Compile legs are dropped by name.
+    let (sync_command, dropped) = strip_compile_legs(&cfg.sync_command);
+    for leg in &dropped {
+        stdout.push(format!(
+            "post-merge sync: dropped '{leg}' from sync_command: a post-merge sync never starts a binary update or compile (the tarball for the new rev is not published yet)"
+        ));
+    }
+    if sync_command.trim().is_empty() {
+        write_marker(&marker, stderr);
+        stdout.push(format!(
+            "post-merge sync: sync_command held only update/compile legs; nothing to run; marked {}",
+            sha12(&sha)
+        ));
+        return 0;
+    }
+    let out = shell(&sync_command, canonical);
     if matches!(prio, crate::claims::AcquireOutcome::Acquired(_)) {
-        let _ = crate::claims::release(crate::test_run::PRIORITY_KEY, &prio_holder, None, None);
+        // A swallowed release failure leaves a TTL hold the next sync parks
+        // behind, invisible in every receipt.
+        if let Err(error) =
+            crate::claims::release(crate::test_run::PRIORITY_KEY, &prio_holder, None, None)
+        {
+            stderr.push(format!(
+                "post-merge install: priority lane release failed: {error}"
+            ));
+        }
     }
     if out.timed_out {
         stderr.push(format!(
@@ -908,14 +969,24 @@ fn sync_under_lease(
         write_marker(&marker, stderr);
         stdout.push(format!("post-merge sync: synced {}", sha12(sha)));
         let re_pulled = drain_pending(deps, canonical, stdout, stderr);
-        append_receipt(deps, canonical, pr, sha, 0, false, re_pulled, stderr);
+        append_receipt(deps, canonical, pr, sha, 0, false, re_pulled, None, stderr);
         return 0;
     }
 
     // Surface the command and its output, not just the exit code: a real
     // failure here was a one-word typo the receipt hid for days. The marker
     // stays withheld, so retry behaviour is unchanged.
-    append_receipt(deps, canonical, pr, sha, out.code, out.timed_out, 0, stderr);
+    append_receipt(
+        deps,
+        canonical,
+        pr,
+        sha,
+        out.code,
+        out.timed_out,
+        0,
+        Some(&out.stderr),
+        stderr,
+    );
     let mut parts = vec![
         format!(
             "post-merge sync: failed (exit {}); marker withheld, will retry",
@@ -1308,6 +1379,34 @@ mod tests {
         catchup_window_days = 3\n\
         sync_stale_hours = 24\n";
 
+    #[test]
+    fn strip_compile_legs_drops_update_and_cargo_only() {
+        // The observed machine shape: the update leg sits mid-chain.
+        let (kept, dropped) = strip_compile_legs(
+            "git checkout main && git pull origin main && fno update && fno restart",
+        );
+        assert_eq!(
+            kept,
+            "git checkout main && git pull origin main && fno restart"
+        );
+        assert_eq!(dropped, vec!["fno update".to_string()]);
+
+        // A bare cargo install leg and an update with flags drop too.
+        let (kept, dropped) = strip_compile_legs("cargo install --path crates/fno && git pull");
+        assert_eq!(kept, "git pull");
+        assert_eq!(dropped, vec!["cargo install --path crates/fno".to_string()]);
+
+        // A command of only compile legs runs nothing.
+        let (kept, dropped) = strip_compile_legs("fno update --rust");
+        assert_eq!(kept, "");
+        assert_eq!(dropped, vec!["fno update --rust".to_string()]);
+
+        // A plain command passes through untouched.
+        let (kept, dropped) = strip_compile_legs("git pull origin main");
+        assert_eq!(kept, "git pull origin main");
+        assert!(dropped.is_empty());
+    }
+
     fn write_cfg(cwd: &Path, body: &str) {
         std::fs::create_dir_all(cwd.join(".fno")).unwrap();
         std::fs::write(cwd.join(".fno/config.toml"), body).unwrap();
@@ -1514,6 +1613,7 @@ mod tests {
         );
         // A live other holder (our pid proves live).
         let opts = crate::claims::AcquireOpts {
+            host: None,
             pid: Some(std::process::id()),
             pid_unavailable: false,
             ttl_ms: Some(600_000),
@@ -1617,13 +1717,22 @@ mod tests {
         assert_eq!(row["exit"], 0);
         assert_eq!(row["re_pulled"], 1);
         assert_eq!(row["pr"], 5);
-        // The priority lane was taken and released: no live hold left.
-        let (state, _) =
+        // The priority lane this run took must be released: no live hold on
+        // this run's own checkout. Sibling tests run in parallel without the
+        // env lock and their production acquire resolves the same root, so a
+        // foreign record mid-flight is a sibling's transient state, not a
+        // leak from this run.
+        let own_holder = format!("worktree:{}", tmp.path().display());
+        let (state, rec) =
             crate::claims::status(crate::test_run::PRIORITY_KEY, Some(claims_root.path()));
-        assert!(!matches!(
+        let own_hold_left = matches!(
             state,
             crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
-        ));
+        ) && matches!(&rec, Some(record) if record.holder == own_holder);
+        assert!(
+            !own_hold_left,
+            "priority lane hold left behind: {state:?} {rec:?}"
+        );
 
         // Phase 2: a failing pull keeps the marks for the next sweep.
         pulls.borrow_mut().1 = false;
@@ -1847,7 +1956,7 @@ mod tests {
             ShellOutcome {
                 code: 124,
                 stdout: String::new(),
-                stderr: String::new(),
+                stderr: "cargo admission: holding\ncargo admission: holding\nfno update: FAILED step(s): uv install\n".into(),
                 timed_out: true,
             }
         });
@@ -1861,6 +1970,18 @@ mod tests {
         let lines = stderr.join("\n");
         assert!(lines.contains("sync_command timed out after 600s; marker withheld, will retry"));
         assert!(lines.contains("post-merge sync: failed (exit 124); marker withheld, will retry"));
+        // The capture dir is gone after the run; the receipt keeps the reason.
+        let receipt = std::fs::read_to_string(
+            tmp.path()
+                .join(".fno")
+                .join("post-merge-sync-receipt.jsonl"),
+        )
+        .unwrap();
+        let row: Value = serde_json::from_str(receipt.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            row["stderr_tail"],
+            "cargo admission: holding (x2)\nfno update: FAILED step(s): uv install"
+        );
     }
 
     #[test]
@@ -2061,6 +2182,7 @@ mod tests {
         write_cfg(tmp.path(), CFG_BODY);
         // Hold the lease so the newest sync reads declined.
         let opts = crate::claims::AcquireOpts {
+            host: None,
             pid: Some(std::process::id()),
             pid_unavailable: false,
             ttl_ms: Some(600_000),

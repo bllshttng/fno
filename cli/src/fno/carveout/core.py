@@ -92,7 +92,7 @@ class Carveout:
     need: Optional[str]
     description: str
     truncated: bool
-    # Optional crown scope this carve-out discharges (e.g. an epic id). The king
+    # Optional role scope this carve-out discharges (e.g. an epic id). The lead
     # orphan check (hooks/context-nudge.sh) reads this FIELD rather than
     # grepping `description` free text, so rewording a sentence cannot silently
     # silence it. Optional + last so existing records and retro-triage parse
@@ -182,12 +182,12 @@ def _owning_node_id(repo_root: Path) -> Optional[str]:
         wanted = {f"target-session:{c}" for c in candidates}
         try:
             from fno.claims.core import list_claims
-            from fno.claims.io import claims_dir, global_claims_root
+            from fno.claims.io import global_claims_root
 
             matches = [
                 claim.get("key", "")
                 for claim in list_claims(
-                    prefix="node:", root=claims_dir(global_claims_root())
+                    prefix="node:", root=global_claims_root()
                 )
                 if (claim.get("holder") or "") in wanted
             ]

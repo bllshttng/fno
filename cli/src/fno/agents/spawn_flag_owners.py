@@ -130,8 +130,8 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     "--tab": FlagOwner(FNO, "mux tab placement"),
     "--mux-session": FlagOwner(FNO, "dispatch-next porcelain pins its mux lane"),
     "--bounded-placement": FlagOwner(FNO, "serialized placement lane under the mux lease"),
-    "--crown": FlagOwner(FNO, "crown ladder; no harness has the concept"),
-    "--succeed": FlagOwner(FNO, "crown succession; fno validates the transfer"),
+    "--promote": FlagOwner(FNO, "role ladder; no harness has the concept (--promote/-k bind it)"),
+    "--hand-off": FlagOwner(FNO, "role succession; fno validates the transfer (--succeed binds it)"),
     "--node": FlagOwner(FNO, "backlog identity; exports the node-provenance env"),
     "--slug": FlagOwner(FNO, "provenance override"),
     "--plan": FlagOwner(FNO, "provenance override"),
@@ -144,4 +144,4 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
 
 #: Growth ratchet, measured at merge: 45 flags (44 + --mux-session, the
 #: dispatch-next lane pin).
-SPAWN_FLAG_CAP = 45
+SPAWN_FLAG_CAP = 46

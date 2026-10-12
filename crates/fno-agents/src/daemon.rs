@@ -49,7 +49,7 @@ use self::lifecycle::entry_for_lifecycle;
 use self::roster_death::claude_row_provably_absent;
 pub(crate) use self::roster_death::{claude_row_id, pid_is_gone, row_death_reason};
 pub(crate) use self::store_socket_sweep::store_socket_sweep;
-mod list_rows;
+pub(crate) mod list_rows;
 use self::list_rows::{
     activity_basis_from_truth, apply_row_contradiction, attention_sort_key, basis_word_from_truth,
     handle_list, rendered_status_from_truth,
@@ -485,53 +485,15 @@ fn recover_with_policy(
 /// units across platforms (Linux ticks vs macOS microseconds) do not matter.
 ///
 /// DO NOT read this as a wall clock. At least three writers fill the column it
-/// lands in, in at least three conventions: this function (Linux ticks / macOS
+/// lands in, in at least three conventions: the probe (Linux ticks / macOS
 /// micros), `_process_start_time` in cli/src/fno/agents/spawn_gate.py, and
 /// `claude_adopt.rs`, which passes through whatever claude's own roster wrote.
 /// Converting one of them to epoch time makes the equality comparisons in
 /// `pid_is_ours` and `_pid_alive` fail across writers, which reaps live workers.
 /// A consumer that needs a real start time needs its own field, not this token.
-#[cfg(target_os = "linux")]
-pub fn process_start_time(pid: u32) -> Option<u64> {
-    // /proc/<pid>/stat field 22 (1-based) is `starttime` in clock ticks since
-    // boot. The comm field (2) can contain spaces and parens, so split on the
-    // LAST ')' and index from there. After "comm)" the space-separated fields are
-    // [state, ppid, ...], with starttime the 20th (0-based index 19).
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse::<u64>().ok()
-}
-
-/// macOS: `proc_pidinfo(PROC_PIDTBSDINFO)` fills a `proc_bsdinfo` whose
-/// `pbi_start_tvsec`/`pbi_start_tvusec` is the process start time; fold to
-/// microseconds. (`kinfo_proc` is not exposed by the libc crate.)
-#[cfg(target_os = "macos")]
-pub fn process_start_time(pid: u32) -> Option<u64> {
-    use std::mem;
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: buffer is a zeroed proc_bsdinfo of exactly `size` bytes.
-    // proc_pidinfo returns the number of bytes written; anything other than a
-    // full struct means the process is gone / not introspectable -> None.
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_start_time(_pid: u32) -> Option<u64> {
-    None
-}
+///
+/// Re-exported from [`crate::process_probe`], which owns the probe.
+pub use crate::process_probe::process_start_time;
 
 pub(crate) use crate::gc_inventory::index_tree;
 // the pane kill and its absence vocabulary moved to pane_stop.rs
@@ -1322,6 +1284,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         }
         Err(e) => return Err(e),
     };
+    crate::truth_probe::start_daemon_warm(&home);
     let sock_path = home.supervisor_sock();
     let bound_ino = std::fs::metadata(&sock_path).ok().map(|m| m.ino());
 
@@ -1522,11 +1485,11 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     // when it is still FRESH: the request activity it ran under is unchanged
     // (a served request resets the idle clock) AND the registry it read has
     // not been written since (a pane-substrate worker spawns by writing the
-    // registry directly, with no daemon contact - the mtime is the one
+    // registry directly, with no daemon contact - its stamp is the one
     // positive marker of that). Anything stale is discarded unread.
     let idle_probe_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let idle_probe_verdict: Arc<
-        std::sync::Mutex<Option<(bool, Instant, Option<std::time::SystemTime>)>>,
+        std::sync::Mutex<Option<(bool, Instant, Option<serde_json::Value>)>>,
     > = Arc::new(std::sync::Mutex::new(None));
     let mut drift_flag = crate::quiet_retire::DriftFlag::new();
     // The periodic fleet arms, extracted to daemon/fleet_arms.rs (this file
@@ -1633,9 +1596,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                             let no_worker = crate::quiet_retire::no_live_worker(&home);
                             // mtime AFTER the reads: a registry write that
                             // raced the probe is caught by the change.
-                            let mtime = std::fs::metadata(home.registry_json())
-                                .ok()
-                                .and_then(|m| m.modified().ok());
+                            let mtime = crate::quiet_retire::registry_stamp(&home);
                             *verdict.lock().unwrap() = Some((no_worker, probe_activity, mtime));
                         });
                     }
@@ -1646,9 +1607,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                             probe_activity,
                             last_activity,
                             probe_mtime,
-                            std::fs::metadata(ctx.home.registry_json())
-                                .ok()
-                                .and_then(|m| m.modified().ok()),
+                            crate::quiet_retire::registry_stamp(&ctx.home),
                         )
                     });
                     if fresh {
@@ -1958,14 +1917,13 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // The subscription verb: version-gated full document,
         // so a subscriber pays a stat per idle tick and a read per write.
         Some("watch") => run_blocking(ctx, req, handle_watch).await,
-        // status reads the in-memory drive table for the active-drives count, so
-        // it stays on the async runtime rather than the blocking pool.
+        // status reads the in-memory drive table, so it stays on the async runtime.
         Some("status") => handle_status(ctx, req).await,
+        Some("truth") => run_blocking(ctx, req, crate::truth_probe::truth_rpc).await,
         Some("reconcile") => run_blocking(ctx, req, handle_reconcile).await,
         // Label rename: the registry transaction under the flock, off-loop.
         Some("rename") => run_blocking(ctx, req, convert::handle_rename).await,
-        // Pane-to-thread conversion: the agent lock plus a registry flip.
-        Some("convert") => convert::handle_convert(ctx, req).await,
+        Some("convert") => convert::handle_convert(ctx, req).await, // agent lock + registry flip
         // Inside-leg state push (E3.2): a per-turn hook stores the latest
         // {working|blocked|done} on the matching claude row. Pure flock + CPU.
         Some("report") => run_blocking(ctx, req, handle_report).await,
@@ -4160,12 +4118,12 @@ where
                     .unwrap_or(Value::Null);
                 // Same formatter as Python's `AgentEntry.team_label`, so the two
                 // surfaces render an identical descriptor for the same row. Python
-                // tests the scope for falsiness (`self.crown_scope or '?'`), so the
+                // tests the scope for falsiness (`self.role_scope or '?'`), so the
                 // empty string has to fall back here too, not just None.
-                let team: Value = match e.crown_level {
+                let team: Value = match e.role_level {
                     Some(level) => Value::String(format!(
                         "L{level} {}",
-                        e.crown_scope
+                        e.role_scope
                             .as_deref()
                             .filter(|s| !s.is_empty())
                             .unwrap_or("?")
@@ -4294,10 +4252,10 @@ where
                     "substrate": e.substrate,
                     // Team (US9): the compact descriptor plus the raw fields, so a
                     // minion can resolve who to escalate to.
-                    "crown": team,
-                    "crown_level": e.crown_level,
-                    "crown_scope": e.crown_scope,
-                    "crown_grantor": e.crown_grantor,
+                    "role": team,
+                    "role_level": e.role_level,
+                    "role_scope": e.role_scope,
+                    "role_grantor": e.role_grantor,
                     // The parent edge the orphan check keys on; null is a real answer.
                     "spawned_by_session": e.spawned_by_session,
                     // The served CHILD/PEER word; null before the first stamp.
@@ -5143,7 +5101,7 @@ async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
 }
 
 fn cleanup_lead_manifest(entry: &state::RegistryEntry) {
-    let Some(scope) = entry.crown_scope.as_deref() else {
+    let Some(scope) = entry.role_scope.as_deref() else {
         return;
     };
     if scope.is_empty()
@@ -5157,7 +5115,7 @@ fn cleanup_lead_manifest(entry: &state::RegistryEntry) {
     let Some(leads) = crate::paths::space_dir_opt(std::path::Path::new(&entry.cwd)) else {
         return;
     };
-    let path = leads.join("kings").join(format!("{scope}.md"));
+    let path = leads.join("leads").join(format!("{scope}.md"));
     // Owner guard, the Rust half of Python remove_lead_manifest's
     // expected_harness_session_id: a successor teamed over this scope after
     // the row went terminal can have re-armed the manifest with ITS session
@@ -6561,45 +6519,28 @@ pub(crate) fn run_reconcile_sweep(
 
 /// `agent.watch`: the subscription face of the registry.
 ///
-/// `{"since": {"mtime_nanos", "len"} | null}` in; one answer out. The first
+/// `{"since": <version> | null}` in; one answer out. The first
 /// call (`since` absent) serves the FULL document - connect, payload. Later
-/// calls serve the full document again only when the registry's (mtime, len)
-/// stamp moved - which is exactly what any write (the sweep, `agent.report`,
+/// calls serve the full document again only when the registry's version
+/// moved - which is exactly what any write (the sweep, `agent.report`,
 /// spawn, rm, a Python-side CLI verb) does to the file - and a bare version
 /// echo when it did not, so a polling reader costs one stat per tick instead
 /// of one file read. The caller keeps its read off the file entirely: the
 /// daemon is the reader now, the served rows are the served facts.
 fn handle_watch(ctx: &Ctx, req: &Request) -> Response {
-    let since = req.params.get("since").and_then(|v| {
-        let mtime = v.get("mtime_nanos")?.as_i64()?;
-        let len = v.get("len")?.as_u64()?;
-        Some((mtime, len))
-    });
     let path = ctx.home.registry_json();
-    let meta = match std::fs::metadata(&path) {
-        Ok(m) => m,
-        // A vanished registry is a legitimate empty answer, not an error: the
-        // watcher clears (the same contract the file reader's vanish arm has).
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let version = match crate::registry_store::watch_version(&path) {
+        Ok(Some(version)) => version,
+        // A vanished registry is a legitimate empty answer: the watcher clears.
+        Ok(None) => {
             return Response::ok(
                 req.id,
                 json!({"version": Value::Null, "doc": {"agents": []}}),
-            );
+            )
         }
-        Err(e) => {
-            return registry_read_failed(req.id, state::StateError::Io(e));
-        }
+        Err(e) => return registry_read_failed(req.id, e),
     };
-    let mtime_nanos = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
-    let len = meta.len();
-    let version = json!({"mtime_nanos": mtime_nanos, "len": len});
-    let unchanged = matches!(&since, Some((m, l)) if *m == mtime_nanos && *l == len);
-    if unchanged {
+    if req.params.get("since") == Some(&version) {
         return Response::ok(req.id, json!({"version": version, "doc": null}));
     }
     let registry = match load_registry_asserted(&path) {
@@ -6955,10 +6896,10 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d, hh, mm, ss)
 }
 
-/// The interval-gated maintenance sweeps (stale questions, park records),
-/// split out for the file budget; each is stamp-gated and pause-aware.
+/// The interval-gated maintenance sweeps, split out for the file budget; stamp-gated, pause-aware.
 pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
+pub(crate) mod sandbox_ingest;
 #[cfg(test)]
 pub(crate) use sweeps::{parse_stale_sweep, STALE_SWEEP_INTERVAL_SECS};
 // Test-only report imports live in this tail block beside the sweeps ones:

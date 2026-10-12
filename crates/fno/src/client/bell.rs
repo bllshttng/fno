@@ -80,7 +80,10 @@ impl Panel {
 
 pub(crate) type Tx = tokio::sync::mpsc::UnboundedSender<(u64, Result<Value, String>)>;
 
-pub(crate) fn open(view: &mut View) {
+/// Open the panel and hand back the generation a later
+/// [`apply`] must carry: the snapshot seam pairs this with one synchronous
+/// gather where the live loop would kick one.
+pub(crate) fn open(view: &mut View) -> u64 {
     let generation = view.bell.generation.wrapping_add(1);
     view.bell.open = true;
     view.bell.generation = generation;
@@ -92,6 +95,7 @@ pub(crate) fn open(view: &mut View) {
     }
     view.feed = None;
     view.region_owner = super::region_focus::RegionOwner::Pane;
+    generation
 }
 
 pub(crate) fn close(view: &mut View) {
@@ -143,13 +147,15 @@ pub(crate) fn button_label(view: &View) -> String {
     label
 }
 
-/// The bell's seat: the far right of the mux top bar (terminal row 0), so it
-/// shows whether or not the sideline is open. Full-terminal columns; a
-/// transient notice paints under it, never over.
+/// The bell's seat: the far right of the mux top bar (terminal row 0), one
+/// column in from the edge, so its last cell sits beside the pane border's
+/// top-right corner instead of on it. Shows whether or not the sideline is
+/// open. Full-terminal columns; a transient notice paints under it, never
+/// over.
 pub(crate) fn button_range(view: &View) -> std::ops::Range<usize> {
     let width = unicode_width::UnicodeWidthStr::width(button_label(view).as_str());
     let cols = view.term.1 as usize;
-    cols.saturating_sub(width)..cols
+    cols.saturating_sub(width + 1)..cols.saturating_sub(1)
 }
 
 pub(super) fn button_at(view: &View, row: u16, col: u16) -> bool {

@@ -32,6 +32,17 @@ from fno.paths_testing import use_tmpdir
 from fno.agents.mux_spawn import MuxSpawnResult
 from tests.agents._fake_claude import stub_codex_sandbox_probe  # noqa: F401  re-exported for test_spawn_pane_codex_receipt
 
+
+@pytest.fixture(autouse=True)
+def _graphless_seed_resolver(monkeypatch):
+    """The seed-word gate fails open on an unreadable graph; pin that here so
+    the plumbing tests' fake node words never depend on the ambient store."""
+
+    def _unreadable(path=None, **_):
+        raise ValueError("graph store unreadable")
+
+    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
+
 AGY_HARNESS = "agy"
 CODEX_HARNESS = "codex"
 OPENCODE_HARNESS = "opencode"
@@ -762,14 +773,15 @@ def test_terminal_raise_keeps_meaning_for_a_declared_harness_with_no_arm(
         build_pane_argv("declared-but-armless", "", tmp_path, False, None)
 
 
-def test_build_pane_argv_codex_hook_trust_bypass_on_bypass_posture_only(
+def test_build_pane_argv_codex_hook_trust_bypass_on_every_posture(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Codex 0.148 parks a fresh pane on a `Hooks need review` modal that the
     approvals bypass alone does not clear. No harness declares a modal response
     mapping - `submit_keys` submits a composed turn and says nothing about a
-    modal - so only --dangerously-bypass-hook-trust clears it, and only on a
-    bypass posture on a codex new enough to support it."""
+    modal - so only --dangerously-bypass-hook-trust clears it. fno trusts the
+    hooks of every worker it launches, on a codex new enough to parse the flag.
+    The sandboxed postures keep their sandbox and approval tokens."""
     from fno.agents import mux_spawn
     from fno.agents.mux_spawn import build_pane_argv
 
@@ -783,19 +795,25 @@ def test_build_pane_argv_codex_hook_trust_bypass_on_bypass_posture_only(
     )
     assert "--dangerously-bypass-hook-trust" in yolo_mode
 
+    bypass_permissions = build_pane_argv(
+        "codex", "", tmp_path, False, None, permission_mode="bypassPermissions"
+    )
+    assert "--dangerously-bypass-hook-trust" in bypass_permissions
+
     sandboxed_default = build_pane_argv("codex", "", tmp_path, False, None)
-    assert "--dangerously-bypass-hook-trust" not in sandboxed_default
+    assert "--dangerously-bypass-hook-trust" in sandboxed_default
+    assert "workspace-write" in sandboxed_default
 
     full_auto = build_pane_argv(
         "codex", "", tmp_path, False, None, permission_mode="full-auto"
     )
-    assert "--dangerously-bypass-hook-trust" not in full_auto
+    assert "--dangerously-bypass-hook-trust" in full_auto
 
     explicit_sandbox = build_pane_argv(
         "codex", "", tmp_path, False, None,
         permission_mode="workspace-write:on-request",
     )
-    assert "--dangerously-bypass-hook-trust" not in explicit_sandbox
+    assert "--dangerously-bypass-hook-trust" in explicit_sandbox
 
 
 def test_build_pane_argv_codex_hook_trust_omitted_on_older_or_unknown_codex(
@@ -1463,7 +1481,6 @@ def test_node_spawn_persists_projects_and_supplies_watchdog_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
     """The production pane mint proves the node beyond constructed rows."""
-    from fno import paths
     from fno.agents import watchdog
     from fno.agents.format import serialize_entry
     from fno.agents.harnesses import claude as claude_mod
@@ -1476,7 +1493,9 @@ def test_node_spawn_persists_projects_and_supplies_watchdog_identity(
         provenance={"FNO_NODE": "x-cafe", "FNO_SLUG": "node-projection"},
     )
 
-    persisted = json.loads(paths.agents_registry_path().read_text(encoding="utf-8"))
+    from fno.registry_door import read_registry_document
+
+    persisted = read_registry_document()[0]
     persisted_row = persisted["agents"][0]
     assert persisted_row["node"] == "x-cafe"
 
@@ -3200,6 +3219,29 @@ def test_happy_pane_argv_refuses_when_happy_is_absent(monkeypatch) -> None:
         mux_spawn.happy_pane_argv(["claude", "go"], _ROUTE)
 
 
+def test_inject_route_model_argv_pins_the_route_before_the_seed_fence() -> None:
+    """A routed pane pins ANTHROPIC_MODEL on argv, ahead of settings env.
+
+    The user settings env block outranks process env, so env alone let a
+    global model pin win. The token lands flags-first, before the ``--``
+    fence, so it can never become prompt text, and an argv that already names
+    a model is caller intent that wins.
+    """
+    import fno.agents.mux_spawn as mux_spawn
+
+    route = {"ANTHROPIC_MODEL": "glm-5.3-flash[1m]"}
+    pinned = mux_spawn.inject_route_model_argv(["claude", "--name", "w", "go"], route)
+    assert pinned == ["claude", "--model", "glm-5.3-flash[1m]", "--name", "w", "go"]
+    fenced = mux_spawn.inject_route_model_argv(["claude", "go", "--", "--model x"], route)
+    assert fenced == ["claude", "--model", "glm-5.3-flash[1m]", "go", "--", "--model x"]
+    # An existing model token (explicit flag or passthrough) is never doubled.
+    explicit = mux_spawn.inject_route_model_argv(["claude", "--model", "glm-5.2"], route)
+    assert explicit == ["claude", "--model", "glm-5.2"]
+    # No route model, or a non-claude head: byte-identical.
+    assert mux_spawn.inject_route_model_argv(["claude", "go"], {}) == ["claude", "go"]
+    assert mux_spawn.inject_route_model_argv(["codex", "go"], route) == ["codex", "go"]
+
+
 def test_explicit_happy_monitor_refuses_when_happy_is_absent_before_runner(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4791,6 +4833,11 @@ def test_codex_hook_review_prompt_refuses_before_seed_and_reaps(
     tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.mux_spawn import DispatchAskError
+    from fno.agents import mux_spawn
+
+    # A codex too old or unknown for the hook-trust flag still meets the
+    # modal, and the spawn must refuse it.
+    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: None)
     from fno.agents.registry import load_registry
 
     runner = FakeRunner(read_stdout="Hooks need review")
@@ -4836,6 +4883,11 @@ def test_empty_codex_spawn_still_refuses_trust_prompt(
     tmp_path: Path, monkeypatch, modal: str, expected: str
 ) -> None:
     from fno.agents.mux_spawn import DispatchAskError
+    from fno.agents import mux_spawn
+
+    # A codex too old or unknown for the hook-trust flag still meets the
+    # modal, and the spawn must refuse it.
+    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: None)
     from fno.agents.registry import load_registry
 
     runner = FakeRunner(read_stdout=modal)

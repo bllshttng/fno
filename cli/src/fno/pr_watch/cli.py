@@ -101,10 +101,9 @@ def _bounce_sender(window_s: float = 15.0) -> str:
     """
     try:
         import time
-        from fno.paths import state_dir
-        from fno.pr_watch._install import _BOUNCE_SIDECAR
+        from fno.pr_watch._install import bounce_sidecar_path
 
-        raw = json.loads((state_dir() / _BOUNCE_SIDECAR).read_text(encoding="utf-8"))
+        raw = json.loads(bounce_sidecar_path().read_text(encoding="utf-8"))
         if time.time() - float(raw["ts"]) <= window_s:
             return f"{raw['caller']} pid {raw['pid']} via {raw.get('parent', '')}".rstrip()
     except Exception:  # noqa: BLE001 - evidence, never a gate
@@ -429,12 +428,12 @@ _RECOVERY_ROOT_FLOOR_S = 3.0
 _EVERY_TICK_CAP_S: dict[str, float] = {
     "settings": 10,
     "sweep": 150,
-    # The wake pays three fixed reads before its first crown (court, the
+    # The wake pays three fixed reads before its first role (team, the
     # answered journal, the graph), each bounded at 10s, and guards every
     # truth read behind a 15s step floor. The 45s cap measured "budget
-    # spent after 0 of 5 crowns" with truth_reads=0 (2026-09-28 fleet
+    # spent after 0 of 5 roles" with truth_reads=0 (2026-09-28 fleet
     # specimen). 75s fits the fixed reads plus two truth reads.
-    "king_wake": 75,
+    "lead_wake": 75,
     # The notify phase pays the arm subprocess over every catch-up root
     # (armed pass: 23.1s measured over 12 roots 2026-09-27). 15s still cut
     # it mid-arm; 30s fits at the 0.85x deadline.
@@ -512,6 +511,21 @@ def _tick_outcome(result, tick_failed: Optional[str], timed_out: bool) -> str:
     return "ok"
 
 
+
+def _replay_views() -> None:
+    """Replay the native view pass. The provenance cache moves no store
+    version, so the keeper's render pass would never see the change."""
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is not None:
+        subprocess.run(
+            [str(binary), "backlog", "render-views"],
+            capture_output=True, check=False, timeout=600,
+        )
+
 @cli.command()
 def tick() -> None:
     """Poll open-PR backlog nodes and fire /fno:ship pr check or /fno:ship pr merged.
@@ -561,7 +575,7 @@ def tick() -> None:
     # boundary (SCAN_PROGRESS); this dict holds the rest.
     progress: dict[str, str] = {}
     ceiling_box: dict[str, Optional[int]] = {"v": None}
-    arm_interval: dict[str, int] = {"king_wake": 900, "notify_watch": 300, "watchdog": 600}
+    arm_interval: dict[str, int] = {"lead_wake": 900, "notify_watch": 300, "watchdog": 600}
     roots_box: dict[str, Optional[list]] = {"v": None}
     phase_caps = dict(_PHASE_CAP_S)
     grant_queue_timeout_s = _GRANT_QUEUE_READ_TIMEOUT_S
@@ -1205,7 +1219,7 @@ def tick() -> None:
             assert cfg is not None
             set_tick_phase("merge")
             interval = int(getattr(cfg, "interval_seconds", 600))
-            head = f"merge kw={'cut' if 'king_wake' in cut else 'ok'}"
+            head = f"merge kw={'cut' if 'lead_wake' in cut else 'ok'}"
             if not tick_enabled:
                 _emit_tick_row("pr_watch_merge", interval_s=interval, skip_reason="disabled",
                                detail=f"{head} pr_watch disabled")
@@ -1263,46 +1277,46 @@ def tick() -> None:
         # pushed and filed; only UNKNOWN rows get recorded; every other
         # class, LIVE included, is quiet and untouched.
         #
-        # The king wake phase runs BEFORE it: it is cheaper than either leg
-        # (one registry read, one transcript probe per crown, a bus scan) and
+        # The lead wake phase runs BEFORE it: it is cheaper than either leg
+        # (one registry read, one transcript probe per role, a bus scan) and
         # the wake it fires is the thing the stranded sweep would otherwise
         # have to notice too late.
-        def _phase_king_wake(_slice_s: float) -> None:
-            set_tick_phase("king_wake")
+        def _phase_lead_wake(_slice_s: float) -> None:
+            set_tick_phase("lead_wake")
             # The guard is the first statement, before the import: this module is
             # on the launchd hot path and the wake phase pulls the bus and the
             # harness layer, which an unarmed tick must not pay for. The double
-            # getattr matches the phase's own read: a settings stub with no king
+            # getattr matches the phase's own read: a settings stub with no lead
             # block at all (the tick's test harnesses) must read as unarmed.
-            # Double getattr throughout: a settings stub with no king block at all
+            # Double getattr throughout: a settings stub with no lead block at all
             # must read as unarmed (debounce default), never crash the tick.
-            kw_i = int(getattr(getattr(settings, "king", None), "wake_debounce_seconds", 900))
-            arm_interval["king_wake"] = kw_i
-            if getattr(getattr(settings, "king", None), "wake_enabled", False):
+            kw_i = int(getattr(getattr(settings, "lead", None), "wake_debounce_seconds", 900))
+            arm_interval["lead_wake"] = kw_i
+            if getattr(getattr(settings, "lead", None), "wake_enabled", False):
                 try:
-                    from fno.pr_watch._king_wake import run_king_wake
+                    from fno.pr_watch._lead_wake import run_lead_wake
 
-                    wake_summary = run_king_wake(
+                    wake_summary = run_lead_wake(
                         settings,
                         emit=_emit_event,
                         seconds_left_fn=phase_seconds_left,
-                        on_step=lambda s: set_tick_phase(f"king_wake:{s}"),
+                        on_step=lambda s: set_tick_phase(f"lead_wake:{s}"),
                     )
                     woke = ", ".join(
                         f"{w['scope']}:{w['reason']}" for w in wake_summary.get("woke", [])
                     )
                     typer.echo(
-                        f"king wake: crowns={wake_summary.get('crowns', 0)}"
+                        f"lead wake: roles={wake_summary.get('roles', 0)}"
                         + (f" woke={woke}" if woke else "")
                     )
-                    crowns = int(wake_summary.get("crowns", 0) or 0)
+                    roles = int(wake_summary.get("roles", 0) or 0)
                     woke_n = len(wake_summary.get("woke", []) or [])
                     evaluated = int(wake_summary.get("evaluated", 0) or 0)
                     truth_reads = int(wake_summary.get("truth_reads", 0) or 0)
-                    if crowns == 0 and wake_summary.get("court_incomplete"):
-                        skip = "court_read_incomplete"
-                    elif crowns == 0:
-                        skip = "no_crowned_target"
+                    if roles == 0 and wake_summary.get("team_incomplete"):
+                        skip = "team_read_incomplete"
+                    elif roles == 0:
+                        skip = "no_promoted_target"
                     elif woke_n:
                         skip = None
                     elif wake_summary.get("budget_spent"):
@@ -1314,20 +1328,20 @@ def tick() -> None:
                     rc = Counter(str(i.get("refusal") or "?") for i in wake_summary.get("refused") or [])
                     refused_s = ",".join(f"{k}:{rc[k]}" for k in sorted(rc))
                     detail = (
-                        f"crowns={crowns} evaluated={evaluated}/{crowns}"
+                        f"roles={roles} evaluated={evaluated}/{roles}"
                         f" truth_reads={truth_reads}"
                         + (f" woke={woke}" if woke else "")
                         + (f" refused={refused_s}" if refused_s else "")
                         + (f" note={note}" if note else "")
                     )
-                    _emit_tick_row("king_wake", interval_s=kw_i, acted=woke_n,
+                    _emit_tick_row("lead_wake", interval_s=kw_i, acted=woke_n,
                                    skip_reason=skip, detail=detail)
                 except Exception as exc:  # noqa: BLE001 - never let a wake break the tick
-                    log.warning("pr-watch: king wake phase failed: %s", exc)
-                    _emit_tick_row("king_wake", interval_s=kw_i, skip_reason="wake_failed",
+                    log.warning("pr-watch: lead wake phase failed: %s", exc)
+                    _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_failed",
                                    detail=str(exc)[:200])
             else:
-                _emit_tick_row("king_wake", interval_s=kw_i, skip_reason="wake_disabled")
+                _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_disabled")
 
         # The operator-notice sampler: one phase, always run; the
         # Rust arm answers notify_off itself when the [notify] signals list
@@ -1434,9 +1448,7 @@ def tick() -> None:
                     f"acted={acted_n} failed={failed_n}"
                 )
                 if changed:
-                    from fno.graph.render import render_graph_md
-                    from fno.graph.store import read_graph_strict
-                    render_graph_md(read_graph_strict())
+                    _replay_views()
             except _WatchdogBudgetSpent as exc:
                 log.info("pr-watch: stranded leg skipped: %s", exc)
             except Exception as exc:  # noqa: BLE001 - never let the stranded sweep break pr-watch
@@ -1447,12 +1459,12 @@ def tick() -> None:
         # where ticks died. Reconcile owns the outcome-keyed leg and surfaces
         # a proven-stale canonical through its SessionStart hook.
         # Value order, not cost order: behind a fleet-loaded sweep that
-        # saturates its cap, the wake evaluated no crown and the merge read
+        # saturates its cap, the wake evaluated no role and the merge read
         # 38s of grant queue and executed nothing. Both arms read durable
         # state, never the sweep's result, so they run first; the sweep
         # follows as the one arm that resumes per-PR across ticks.
         sweep_started = True
-        _run_phase("king_wake", _phase_king_wake, arm="king_wake")
+        _run_phase("lead_wake", _phase_lead_wake, arm="lead_wake")
         _run_phase("merge", _phase_merge, arm="pr_watch_merge")
         _run_phase("sweep", _phase_sweep, arm="pr_watch_sweep")
         _run_phase("notify_watch", _phase_notify, arm="notify_watch")
@@ -1551,27 +1563,34 @@ def install(
     """Render and install the global PR-state watcher LaunchAgent, then load it.
 
     Prints the full plist before writing.  Requires explicit confirmation
-    before writing to ~/Library/LaunchAgents/, then runs ``launchctl load`` so
-    enabled means running.  Pass ``--no-activate`` to write only.
+    before writing to ~/Library/LaunchAgents/, then bootout/bootstrap/kickstart
+    bounces the agent so enabled means running.  Pass ``--no-activate`` to
+    write only.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    settings = load_settings()
-    cfg = settings.pr_watch
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
 
-    _interval = interval if interval > 0 else cfg.interval_seconds
-
-    m.install(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=_interval,
-        dry_run=dry_run,
-        activate=not no_activate,
-    )
-    # A fresh install sees the healer's arm state beside the watcher's.
-    from fno.pr_watch._install import heal_status_line
-
-    typer.echo(heal_status_line())
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr watch install: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    argv = [str(binary), "pr-watch", "install", "--fno-binary", _resolve_fno_binary()]
+    if dry_run:
+        argv.append("--dry-run")
+    if interval > 0:
+        argv += ["--interval", str(interval)]
+    if no_activate:
+        argv.append("--no-activate")
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @cli.command()
@@ -1583,26 +1602,14 @@ def refresh() -> None:
     and is safe to run by hand. A no-op when ``pr_watch.enabled`` is false, so
     an install that does not use the watcher gets nothing. Never fails loud:
     the update chain calls it best-effort and a refresh failure must not fail
-    the update.
+    the update. Force and caller identity (doctor --fix) are verb-level
+    flags on ``fno-agents pr-watch refresh`` itself; a new flag is a new
+    verb and belongs in crates.
     """
-    from fno.pr_watch import _install as m
+    from fno.pr.cli import _forward_to_binary
 
-    settings = load_settings()
-    if not settings.pr_watch.enabled:
-        typer.echo("pr-watch: disabled; nothing to refresh.")
-        return
-
-    msg, _rc = m.refresh_watcher(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=settings.pr_watch.interval_seconds,
-        defer_when_ticking=True,
-        caller="refresh",
-    )
-    typer.echo(f"pr-watch refresh: {msg}")
-    from fno.pr_watch._install import heal_status_line
-
-    typer.echo(heal_status_line())
+    argv = ["refresh", "--fno-binary", _resolve_fno_binary(), "--caller", "refresh"]
+    _forward_to_binary("pr-watch", argv)
 
 
 # Single-flight window for the SessionStart self-heal: long enough to cover the
@@ -1682,15 +1689,31 @@ def ensure_watcher_activated() -> str:
 
     The config-set hook path: it must never prompt (the interactive install
     confirm would wedge a headless `fno config set`).  Returns the outcome
-    string from ``_install.ensure_activated``.
+    string from the ``fno-agents pr-watch install --ensure`` verb.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    return m.ensure_activated(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=load_settings().pr_watch.interval_seconds,
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # No binary, no activation leg. The caller's warning names the remedy
+        # and the config write stays enabled for doctor to flag.
+        return "load-failed"
+    proc = subprocess.run(
+        [
+            str(binary), "pr-watch", "install", "--ensure",
+            "--fno-binary", _resolve_fno_binary(),
+            "--interval", str(load_settings().pr_watch.interval_seconds),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
+    word = proc.stdout.strip()
+    known = {"already-running", "activated", "write-failed", "load-failed"}
+    return word if word in known else "load-failed"
 
 
 def deactivate_watcher() -> str:

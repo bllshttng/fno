@@ -29,7 +29,7 @@ class FakeRun:
         self,
         *,
         default: str = "main",
-        base: str = "feature/bg-crown",
+        base: str = "feature/bg-role",
         merged_pr: str = "",
         merged_head: str = LANDED,
         base_tip: str = LANDED,
@@ -148,29 +148,100 @@ def patch_run(monkeypatch):
     return _apply
 
 
-@pytest.mark.parametrize(
-    "kwargs,verdict,fragment",
-    [
-        ({"pr_head": ""}, "unknown", "head sha"),
-        ({"contained": True}, "ok", "contains"),
-        ({"contained": False}, "stale", "merge origin/main into the branch"),
-        ({"fetch_fails": True}, "unknown", "could not refresh"),
-    ],
-)
-def test_default_base_lineage_table(patch_run, kwargs, verdict, fragment):
-    """A base that IS the default branch: ancestry decides, probes stay humble.
+@pytest.fixture(autouse=True)
+def gh_cache_off(monkeypatch):
+    """The repo-meta glue never reaches the real binary from this suite.
 
-    The stale row asserts the remedy, not just the fault: a refusal that
-    closes the door without pointing at the key invites improvisation.
+    Every read misses and every write is dropped, so the verdict tests stay at
+    the ``_proc.run`` seam; the cache tests below re-stub ``verb_call`` per
+    test, and the last stub wins for that test only.
+    """
+    monkeypatch.setattr(
+        "fno.rust_binary.verb_call", lambda verb, payload, **kw: {"row": None}
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"contained": True}, {"contained": False}, {"fetch_fails": True}],
+)
+def test_default_base_passes_whether_or_not_the_head_has_the_tip(patch_run, kwargs):
+    """A base that IS the default branch never fails on how far behind the head is.
+
+    A catch-up demand made busy-main PRs chase the tip forever, and every
+    catch-up push cancelled their CI. A real conflict is GitHub's refusal.
     """
     patch_run(FakeRun(base="main", **kwargs))
+    got, _ = _base_lineage.lineage_verdict(805, "/repo")
+    assert got == "ok"
+
+
+def test_default_branch_served_from_the_repo_meta_row(patch_run, monkeypatch):
+    """A fresh repo-meta row answers without the ``repos/{slug}`` round trip.
+
+    The live probe fails here, so an ``ok`` verdict is only reachable through
+    the cache row: the test fails both ways the glue can regress - a read that
+    misses (probe fails, verdict unknown) and a read that never fires.
+    """
+    asks: list[dict] = []
+
+    def _cache(verb, payload, **kw):
+        asks.append(payload)
+        return {"row": {"default_branch": "main"}}
+
+    patch_run(FakeRun(default_fails=True))
+    monkeypatch.setattr("fno.rust_binary.verb_call", _cache)
     got, why = _base_lineage.lineage_verdict(805, "/repo")
-    assert got == verdict
-    assert fragment in why
+    assert got == "ok"
+    assert "main" in why
+    assert asks == [
+        {
+            "op": "read",
+            "kind": "repo-meta",
+            "slug": "owner/repo",
+            "ttl_s": _base_lineage._REPO_META_TTL_S,
+        }
+    ]
+
+
+def test_default_branch_miss_goes_live_and_writes_the_row(patch_run, monkeypatch):
+    """A miss pays the live read once and backfills the repo-meta row."""
+    fake = patch_run(FakeRun())
+    asks: list[dict] = []
+
+    def _cache(verb, payload, **kw):
+        asks.append(payload)
+        return {"row": None}
+
+    monkeypatch.setattr("fno.rust_binary.verb_call", _cache)
+    verdict, _ = _base_lineage.lineage_verdict(805, "/repo")
+    assert verdict == "ok"
+    assert ["gh", "api", "repos/owner/repo"] in fake.calls
+    assert [a for a in asks if a.get("op") == "write"] == [
+        {
+            "op": "write",
+            "kind": "repo-meta",
+            "slug": "owner/repo",
+            "row": {"default_branch": "main"},
+        }
+    ]
+
+
+def test_unavailable_binary_keeps_the_live_probe(patch_run, monkeypatch):
+    """A missing fno-agents binary is a cache miss, never a failed verdict."""
+    from fno.rust_binary import VerbUnavailable
+
+    def _boom(verb, payload, **kw):
+        raise VerbUnavailable("fno-agents gh-cache failed: binary not found")
+
+    patch_run(FakeRun())
+    monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
+    verdict, _ = _base_lineage.lineage_verdict(805, "/repo")
+    assert verdict == "ok"
 
 
 def test_merged_pr_on_unmoved_base_refuses(patch_run):
-    """The specimen: PR #789 merged feature/bg-crown, whose tip had not moved."""
+    """The specimen: PR #789 merged feature/bg-role, whose tip had not moved."""
     patch_run(FakeRun(merged_pr="789", merged_head=LANDED, base_tip=LANDED, contained=True))
     verdict, why = _base_lineage.lineage_verdict(800, "/repo")
     assert verdict == "stale"

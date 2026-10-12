@@ -3,14 +3,14 @@
 A CLI-only install of footnote (`curl fno.sh | sh`, `uv`, `brew`, `cargo`) lands
 the `fno` binary but **not** the ``/fno:*`` slash commands - those come from the
 Claude Code plugin / Gemini extension / Codex marketplace integration. This
-module installs that integration for each CLI the user checks in the setup
-wizard. It runs side-effecting installers and writes no settings.yaml config
-(that is ``run_wizard``'s job); the two concerns stay cleanly separated.
+module installs that integration for each CLI the user checks in. It runs
+side-effecting installers and writes no settings.yaml config (that is
+``fno config setup run``'s job); the two concerns stay cleanly separated.
 
-The core (``run_cli_integration``) is interactive-agnostic, mirroring
-``run_wizard``: a ``select_fn`` is injected so the same code drives a terminal
-checklist, the Claude Code multi-select UI, and tests. Adapters take an
-injectable subprocess runner so tests never shell out for real.
+The core (``run_cli_integration``) is interactive-agnostic: a ``select_fn`` is
+injected so the same code drives a terminal checklist, the Claude Code
+multi-select UI, and tests. Adapters take an injectable subprocess runner so
+tests never shell out for real.
 """
 from __future__ import annotations
 
@@ -308,30 +308,30 @@ def _agy_hooks_json() -> Path:
 
 def _agy_adapter_path() -> "Optional[Path]":
     # The adapter ships in the plugin (hooks/), which the uv/curl wheel does NOT
-    # carry. resolve_plugin_script always returns a path (last fallback may not
+    # carry. The durable resolver always returns a path (last fallback may not
     # exist), so gate on is_file(): None means "not in this install" -> manual.
-    from fno.paths import resolve_plugin_script
+    from fno.paths import resolve_plugin_script_durable
 
-    p = resolve_plugin_script("hooks/footnote-agy-target-stop-hook.sh")
+    p = resolve_plugin_script_durable("hooks/footnote-agy-target-stop-hook.sh")
     return p if p.is_file() else None
 
 
-def _agy_crown_adapter_path() -> "Optional[Path]":
-    # Same load-shape as _agy_adapter_path for the PreInvocation crown adapter.
-    # agy has no session-start event, so the crown line rides PreInvocation
+def _agy_role_adapter_path() -> "Optional[Path]":
+    # Same load-shape as _agy_adapter_path for the PreInvocation role adapter.
+    # agy has no session-start event, so the role line rides PreInvocation
     # gated on invocationNum == 0 (first model call == session start).
-    from fno.paths import resolve_plugin_script
+    from fno.paths import resolve_plugin_script_durable
 
-    p = resolve_plugin_script("hooks/agy-team-inject.sh")
+    p = resolve_plugin_script_durable("hooks/agy-team-inject.sh")
     return p if p.is_file() else None
 
 
 def _agy_guard_adapter_path() -> "Optional[Path]":
     # Same load-shape for the PreToolUse lead guard shim; it translates agy's
-    # payload to the shared king guard through `king-guard --wire agy`.
-    from fno.paths import resolve_plugin_script
+    # payload to the shared lead guard through `lead-guard --wire agy`.
+    from fno.paths import resolve_plugin_script_durable
 
-    p = resolve_plugin_script("hooks/agy-king-guard.sh")
+    p = resolve_plugin_script_durable("hooks/agy-lead-guard.sh")
     return p if p.is_file() else None
 
 
@@ -339,7 +339,7 @@ def _agy_is_installed() -> bool:
     from fno.rust_binary import call_binary_json
 
     adapter = _agy_adapter_path()
-    crown = _agy_crown_adapter_path()
+    role = _agy_role_adapter_path()
     args = [
         "agy",
         "--hooks-status",
@@ -349,8 +349,8 @@ def _agy_is_installed() -> bool:
     ]
     if adapter is not None:
         args += ["--adapter", str(adapter)]
-    if crown is not None:
-        args += ["--crown", str(crown)]
+    if role is not None:
+        args += ["--promote", str(role)]
     guard = _agy_guard_adapter_path()
     if guard is not None:
         args += ["--guard", str(guard)]
@@ -398,9 +398,9 @@ def _agy_install() -> IntegrationResult:
         str(hooks_file),
         "--json",
     ]
-    crown = _agy_crown_adapter_path()
-    if crown is not None:
-        args += ["--crown", str(crown)]
+    role = _agy_role_adapter_path()
+    if role is not None:
+        args += ["--promote", str(role)]
     guard = _agy_guard_adapter_path()
     if guard is not None:
         args += ["--guard", str(guard)]

@@ -1806,6 +1806,11 @@ PYEOF
             fi
             echo "target_claim_blocked_reason: claim_held_by_other" >> "$STATE_FILE"
           fi
+        elif grep -q 'store.remote_url) is unreachable' "$STATE_DIR/.claim-err" 2>/dev/null; then
+          # A shared primary that cannot be reached decides nothing. A peer
+          # machine may hold this node, so this session must not build it.
+          printf 'author: init\nreason: store_unreachable\n' > "$STATE_DIR/.target-cancelled"
+          echo "target_claim_blocked_reason: store_unreachable" >> "$STATE_FILE"
         else
           echo "target_claim_blocked_reason: acquire_error_rc_${_acq_rc}" >> "$STATE_FILE"
         fi
@@ -1826,15 +1831,36 @@ PYEOF
     # null arm that used to sit here could never run.
     echo "graph_node_id: $_NODE_ID" >> "$STATE_FILE"
 
-    # Stale plan: notes newer than the plan's last commit (else its mtime)
-    # mean the plan lags its node. Advisory and silent on any failure.
-    if [[ "$_NODE_OWNED" -eq 1 && -n "${INITIAL_PLAN_PATH:-}" && -f "${INITIAL_PLAN_PATH%%#*}" ]]; then
-      _stale_json="$(fno backlog notes stale "$_NODE_ID" --plan "${INITIAL_PLAN_PATH%%#*}" --json 2>/dev/null)" || _stale_json=""
-      if [[ "$_stale_json" == *'"stale":true'* ]]; then
-        _stale_n="$(printf '%s' "$_stale_json" | sed -n 's/.*"newer_notes":\([0-9]*\).*/\1/p')"
-        _stale_ts="$(printf '%s' "$_stale_json" | sed -n 's/.*"newest_note_at":"\([^"]*\)".*/\1/p')"
-        _stale_basis="$(printf '%s' "$_stale_json" | sed -n 's/.*"basis":"\([^"]*\)".*/\1/p')"
-        echo "target: plan ${INITIAL_PLAN_PATH%%#*} predates ${_stale_n} notes on $_NODE_ID (newest ${_stale_ts}, basis ${_stale_basis}); read them before trusting the plan" >&2
+    # Premise and plan freshness against current main, from the native
+    # freshness verb. One advisory read: verdict lines print, nothing
+    # blocks, and an older fno-agents without the verb stays silent. The
+    # notes `predates` line survives, printed from the plan leg's notes
+    # field when the notes are newer than the plan.
+    if [[ "$_NODE_OWNED" -eq 1 ]]; then
+      _fresh_json=""
+      if [[ -n "${INITIAL_PLAN_PATH:-}" && -f "${INITIAL_PLAN_PATH%%#*}" ]]; then
+        _fresh_json="$(fno backlog freshness "$_NODE_ID" --plan "${INITIAL_PLAN_PATH%%#*}" --json 2>/dev/null)" || _fresh_json=""
+      else
+        _fresh_json="$(fno backlog freshness "$_NODE_ID" --json 2>/dev/null)" || _fresh_json=""
+      fi
+      if [[ -n "$_fresh_json" ]]; then
+        _fresh_pv="$(printf '%s' "$_fresh_json" | sed -n 's/.*"premise":{"verdict":"\([^"]*\)".*/\1/p')"
+        _fresh_pe="$(printf '%s' "$_fresh_json" | sed -n 's/.*"premise":{"verdict":"[^"]*","evidence":"\([^"]*\)".*/\1/p')"
+        if [[ -n "$_fresh_pv" ]]; then
+          echo "target: premise: ${_fresh_pv} - ${_fresh_pe}" >&2
+        fi
+        _fresh_plv="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"\([^"]*\)".*/\1/p')"
+        if [[ -n "$_fresh_plv" ]]; then
+          _fresh_pls="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"[^"]*","since":"\([^"]*\)".*/\1/p')"
+          _fresh_ple="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"[^"]*","since":"[^"]*","evidence":"\([^"]*\)".*/\1/p')"
+          echo "target: plan: ${_fresh_plv} since ${_fresh_pls:-unknown} - ${_fresh_ple}" >&2
+        fi
+        if [[ "$_fresh_json" == *'"stale":true'* ]]; then
+          _stale_n="$(printf '%s' "$_fresh_json" | sed -n 's/.*"newer_notes":\([0-9]*\).*/\1/p')"
+          _stale_ts="$(printf '%s' "$_fresh_json" | sed -n 's/.*"newest_note_at":"\([^"]*\)".*/\1/p')"
+          _stale_basis="$(printf '%s' "$_fresh_json" | sed -n 's/.*"basis":"\([^"]*\)".*/\1/p')"
+          echo "target: plan ${INITIAL_PLAN_PATH%%#*} predates ${_stale_n} notes on $_NODE_ID (newest ${_stale_ts}, basis ${_stale_basis}); read them before trusting the plan" >&2
+        fi
       fi
     fi
 
@@ -1845,7 +1871,7 @@ PYEOF
     # opt-in - absent or `manual` waits for a person or a lead
     # session to run the verb and does nothing here, so plans written before
     # the key keep their behavior. Both facts come from the canonical probes
-    # in fno.backlog.join_trigger: bash re-implementing the auto-continue
+    # in the native join probes: bash re-implementing the auto-continue
     # precedence chain (autonomy master, env, config, default) is how the
     # two drift. Every failure mode is non-fatal and named: an unmeasured
     # width never fires join, and a parked trigger names the measured width
@@ -1882,9 +1908,9 @@ PYEOF
         fi
         _jt_width=""
         _jt_armed_line=""
-        if [[ -n "${FNO_PYTHON:-}" && -d "$_jt_root/cli/src" ]]; then
-          _jt_width="$(PYTHONPATH="$_jt_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" "$FNO_PYTHON" -m fno.backlog.join_trigger width "$_jt_plan" 2>/dev/null)" || _jt_width=""
-          _jt_armed_line="$(PYTHONPATH="$_jt_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" "$FNO_PYTHON" -m fno.backlog.join_trigger armed "$REPO_ROOT" 2>/dev/null)" || _jt_armed_line=""
+        if command -v fno >/dev/null 2>&1; then
+          _jt_width="$(fno backlog join width "$_jt_plan" 2>/dev/null)" || _jt_width=""
+          _jt_armed_line="$(fno backlog join armed "$REPO_ROOT" 2>/dev/null)" || _jt_armed_line=""
         fi
         case "$_jt_armed_line" in
           armed=true*) _jt_armed=1 ;;

@@ -1240,20 +1240,21 @@ pub(crate) fn mux_pane_kill_stop(
 //
 // `blocked` is NOT terminal: the session is waiting for input, so it holds.
 
-/// The three witnesses that say a worker finished. Any one suffices: a
-/// transcript older than the grace window, a held pid that answers ESRCH,
-/// or a terminal state on the harness roster. Liveness alone never vetoes:
-/// a terminal state outranks a fresh transcript. The merge reaper passes
-/// the roster's death evidence as `terminal`; the sweep passes `None` and
-/// keeps its own classify-to-apply gap clause on top, because only the
-/// sweep holds a classification age to compare against.
+/// The three witnesses that say a worker finished. Any one suffices: a transcript older
+/// than the grace window (never at the cargo build door, which writes none), a held pid
+/// that answers ESRCH, or a terminal state on the harness roster. Liveness alone never vetoes:
+/// a terminal state outranks a fresh transcript. The merge reaper passes the roster's death
+/// evidence as `terminal`; the sweep passes `None` and keeps its own classify-to-apply gap
+/// clause on top, because only the sweep holds a classification age to compare against.
 pub(crate) fn worker_finished(
     e: &state::RegistryEntry,
     age_s: Option<i64>,
     grace_secs: i64,
     terminal: Option<&str>,
 ) -> bool {
-    if matches!(age_s, Some(a) if a > grace_secs) {
+    let parked =
+        || e.pid.is_some() && crate::test_run::build_wait_since_ms(Path::new(&e.cwd)).is_some();
+    if matches!(age_s, Some(a) if a > grace_secs) && !parked() {
         return true;
     }
     if e.pid.is_some_and(crate::daemon::pid_is_gone) {
@@ -1396,12 +1397,12 @@ pub fn provenance_verdict(
                                     merge_note.push(format!("{node}:gh"));
                                     continue;
                                 }
+                                // A failed read is not evidence: the
+                                // transcript-only gates decide, and the
+                                // recorded backstop still guards the commit.
                                 None => {
-                                    hold = Some(KeepReason::PrStateContradicts {
-                                        node: node.clone(),
-                                        detail: format!("pr {pr} state unread"),
-                                    });
-                                    break;
+                                    merge_note.push(format!("{node}:unread"));
+                                    continue;
                                 }
                             }
                         }
@@ -1663,7 +1664,7 @@ pub(crate) fn run_with_release(
         .entries
         .iter()
         .filter(|e| {
-            e.crown_level.is_none()
+            e.role_level.is_none()
                 && graph.is_some()
                 && (e.origin.as_deref() == Some("spawn")
                     || e.pid.is_some_and(crate::daemon::pid_is_gone)
@@ -1695,7 +1696,7 @@ pub(crate) fn run_with_release(
     let mut staged: Vec<Option<(ProvenanceVerdict, Option<i64>)>> =
         Vec::with_capacity(registry.entries.len());
     for e in &registry.entries {
-        let eligible = e.crown_level.is_none()
+        let eligible = e.role_level.is_none()
             && (e.origin.as_deref() == Some("spawn")
                 || e.pid.is_some_and(crate::daemon::pid_is_gone)
                 || e.harness_name() == "claude"
@@ -1758,14 +1759,14 @@ pub(crate) fn run_with_release(
         }
     }
 
-    let mut manifest_teams = crate::lead_state::ManifestCrownCache::new();
+    let mut manifest_teams = crate::lead_state::ManifestRoleCache::new();
     for (e, staged_row) in registry.entries.iter().zip(staged.iter()) {
         let id = row_label(e);
         if e.origin.as_deref() == Some("operator") {
             summary.kept_operator.push(id);
             continue;
         }
-        if e.crown_level.is_some() || manifest_teams.holds(e) {
+        if e.role_level.is_some() || manifest_teams.holds(e) {
             summary.kept_teamed.push(id);
             continue;
         }
@@ -2022,10 +2023,10 @@ pub(crate) fn run_with_release(
         // The open-PR keep (Locked Decision 1) asks the PR, not the record:
         // the graph names the candidate, and once the row is quiet past the
         // grace GitHub settles whether the PR still needs its driver. A
-        // settled PR releases through `pr_settled`; a failed read holds
-        // under `pr state contradicts` - never a retirement on an unread
-        // answer.
-        let (open_pr, pr_settled) = match &verdict.work {
+        // settled PR releases through `pr_settled`; a failed read is an
+        // unknown, not a keep - the transcript-only gates decide, and the
+        // recorded backstop still guards the commit.
+        let (open_pr, pr_settled, pr_unread) = match &verdict.work {
             WorkState::Open { node, .. } => {
                 let quiet_past_grace = matches!(age, Some(a) if a > grace_secs);
                 match open_pr_verdict(
@@ -2036,21 +2037,13 @@ pub(crate) fn run_with_release(
                     quiet_past_grace,
                     Some(&mut pr_read_adapter),
                 ) {
-                    OpenPrVerdict::Holds { node, pr } => (Some((node, pr)), false),
-                    OpenPrVerdict::Settled { .. } => (None, true),
-                    OpenPrVerdict::Unread { node, pr } => {
-                        if confirm_hold.is_none() {
-                            confirm_hold = Some(KeepReason::PrStateContradicts {
-                                node,
-                                detail: format!("pr {pr} state unread"),
-                            });
-                        }
-                        (None, false)
-                    }
-                    OpenPrVerdict::None => (None, false),
+                    OpenPrVerdict::Holds { node, pr } => (Some((node, pr)), false, None),
+                    OpenPrVerdict::Settled { .. } => (None, true, None),
+                    OpenPrVerdict::Unread { node, pr } => (None, false, Some((node, pr))),
+                    OpenPrVerdict::None => (None, false, None),
                 }
             }
-            _ => (None, false),
+            _ => (None, false, None),
         };
         let node_merged = verdict.merged_but_open.is_some();
         // change 8: the existence-specific probe on the row's own
@@ -2099,7 +2092,7 @@ pub(crate) fn run_with_release(
         };
         let mut row = GcRow {
             origin: e.origin.clone(),
-            teamed: e.crown_level.is_some(),
+            teamed: e.role_level.is_some(),
             work,
             transcript_age_s: age,
             owns_worktree,
@@ -2791,12 +2784,16 @@ pub(crate) fn run_with_release(
             _ => "done".to_string(), // unreachable: only AllDone and the released Open arms retire
         };
         // The release rides the audit line: what was ruled, how old
-        // the hold was, and an unconfirmed stop named as such.
+        // the hold was, an unconfirmed stop named as such, and an unread
+        // PR read marked where a reader audits the retirement.
         if let Some(note) = &release_note {
             basis = format!("{note}{basis}");
         }
         if release_stop_outcome == Some(false) {
             basis.push_str("; stop issued, unconfirmed");
+        }
+        if let Some((_, pr)) = &pr_unread {
+            basis.push_str(&format!("; pr {pr} state unread"));
         }
         let worktree = if probed.owns_worktree {
             Some(e.cwd.clone())
@@ -3246,14 +3243,10 @@ pub(crate) fn commit_retirements(
     // emit + summary report only what really happened.
     let retiring: std::collections::BTreeSet<String> = to_retire.keys().cloned().collect();
     let write = state::update_registry(&home.registry_json(), |r| {
-        // Revalidate shared-cwd occupancy against the registry as it
-        // stands right now, under the lock: `run`'s snapshot is
-        // stop-confirmation, receipt-write, and probe seconds old by the
-        // time a prune is about to fire, and a newly registered agent on
-        // that cwd is invisible to a check run against the old snapshot.
-        // The same-cwd tie among rows retiring THIS pass was already
-        // settled once in `run`; only a row NOT in `to_retire` counts as
-        // a fresh occupant here.
+        // `run`'s snapshot is stop-confirmation, receipt-write, and probe
+        // seconds old by the time a prune fires, so revalidate shared-cwd
+        // occupancy under the lock; ties among rows retiring this pass were
+        // settled in `run`, so only a row NOT in `to_retire` is a fresh occupant.
         for order in to_retire.values_mut() {
             if order.tree != TreeAction::Prune {
                 continue;
@@ -3355,6 +3348,9 @@ pub(crate) fn commit_retirements(
                     report.retired_names.remove(&e.name);
                     continue;
                 }
+                // Retirement is a row drop with no stop seam; the stamp is
+                // what a later wake reads.
+                crate::wake_name::stamp_from_row(home, e);
                 let (receipt_node, node_resolution) = match node_id.as_deref() {
                     Some(node) => (Some(node.to_string()), "name"),
                     None => graph_join
@@ -4711,9 +4707,8 @@ mod tests {
         std::fs::write(&claim, b"claim").unwrap();
         age_file(&claim, 40);
         let registry =
-            br#"{"entries":[{"name":"live-worker","created_at":"2026-09-09T00:00:00Z"}]}"#;
-        std::fs::write(home.registry_json(), registry).unwrap();
-
+            br#"{"schema_version":1,"entries":[{"name":"live-worker","cwd":"/x","created_at":"2026-09-09T00:00:00Z"}]}"#;
+        crate::registry_store::seed_raw(&home.registry_json(), registry);
         let summary = reap_state_files(
             &home,
             crate::agents_config::StateReapConfig::default(),
@@ -4723,7 +4718,8 @@ mod tests {
         assert!(!claim.exists());
         assert_eq!(summary.expired_claims.deleted, 1);
         assert_eq!(summary.totals.deleted, 1);
-        assert_eq!(std::fs::read(home.registry_json()).unwrap(), registry);
+        let rows = crate::state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(rows.entries.len(), 1);
         assert!(summary.applied);
         assert!(!summary.dry_run);
         std::fs::remove_dir_all(&base).ok();
@@ -4858,17 +4854,19 @@ mod tests {
     }
 
     #[test]
-    fn all_done_unreadable_pr_answer_holds_and_never_retires() {
+    fn all_done_unreadable_pr_answer_is_not_evidence() {
         let (e, mut graph) = all_done_row_with_pr();
         graph.pr_reads.insert(("/repo/wt".to_string(), 1943), None);
         let mut read = staged_reader(&graph);
         let verdict = provenance_verdict(&e, "sess-1", &graph, None, Some(&mut read));
         assert_eq!(
-            verdict.hold,
-            Some(KeepReason::PrStateContradicts {
-                node: "N1".into(),
-                detail: "pr 1943 state unread".into(),
-            })
+            verdict.hold, None,
+            "a failed read is not evidence: the transcript-only gates decide"
+        );
+        assert_eq!(
+            verdict.merge_note,
+            vec!["N1:unread".to_string()],
+            "the unread answer rides the retire basis as the mark"
         );
     }
 

@@ -58,6 +58,9 @@ fn head_label(column: AgentSortColumn) -> &'static str {
         AgentSortColumn::LastMessage => "last msg",
         AgentSortColumn::Pr => "pr",
         AgentSortColumn::Age => "age",
+        AgentSortColumn::Created => "created",
+        AgentSortColumn::Modified => "mod",
+        AgentSortColumn::Manual => "manual",
     }
 }
 
@@ -171,16 +174,34 @@ impl View {
     /// click map, so the gestures never disagree on the footer's row: when
     /// the rows overflow, the footer pins directly above the org block, and
     /// the row there is the footer's even though its display row has
-    /// scrolled away. The pinned test reads the same raw region
-    /// `sideline_visible_rows` starts from, so a list that exactly fits
-    /// never reads as pinned here.
+    /// scrolled away. The pinned copy paints at the absolute row `list_rows`
+    /// names in both compositions: a `top +` form held only full-screen and
+    /// read one row up when docked, so hover and click landed on the list
+    /// row behind the buttons. The pinned test reads the
+    /// same raw region `sideline_visible_rows` starts from, so a list that
+    /// exactly fits never reads as pinned here.
     pub(super) fn pinned_footer_row_index(&self, row: u16, top: usize) -> Option<usize> {
-        let list_rows = (self.term.0 as usize)
-            .saturating_sub(1) // the strip row
-            .saturating_sub(self.org_block_rows());
-        let raw_rows = list_rows.saturating_sub(self.bottom_row_is_chrome() as usize);
+        // The composition's own row height: full-screen composes into the
+        // slice below the tab strip, docked into the full terminal. The
+        // block count must come from the same height the paint used, or at
+        // the boundary height where the two availability checks disagree
+        // the resolver fires on a row the footer never paints.
+        let rows = if self.sideline_full {
+            (self.term.0 as usize).saturating_sub(TAB_BAR_ROWS as usize)
+        } else {
+            self.term.0 as usize
+        };
+        let (block_rows, _) = self.org_block_layout(rows);
+        let chrome_rows = self.bottom_row_is_chrome() as usize;
+        let list_rows = rows.saturating_sub(block_rows);
+        let raw_rows = list_rows.saturating_sub(chrome_rows).saturating_sub(1); // the strip row
         let pinned = self.painted_rows().len() > raw_rows && raw_rows >= 2;
-        if !pinned || row < top as u16 || row as usize != top + list_rows.saturating_sub(2) {
+        // The pinned copy paints at buffer row `list_rows - 1`, which is
+        // the absolute row `term.0 - block_rows - 1` in both compositions.
+        let footer_row = (self.term.0 as usize)
+            .saturating_sub(block_rows)
+            .saturating_sub(1);
+        if !pinned || row < top as u16 || row as usize != footer_row {
             return None;
         }
         self.painted_rows()
@@ -583,6 +604,7 @@ impl View {
                             "",
                             card_line::metrics(
                                 a,
+                                self.card_graph,
                                 now,
                                 row_message_text(a).as_deref(),
                                 text_w.saturating_sub(pad),
@@ -736,7 +758,10 @@ impl View {
                     cells[r * cols].c = CARD_EDGE_BAR;
                     cells[r * cols].fg = crate::theme::dim_fg(&self.theme);
                 }
-                self.paint_card_identity(cells, r, cols, text_w, drow);
+                self.paint_card_identity(cells, r, cols, text_w, drow, highlit);
+                if let DisplayRow::CardMetrics(a) = drow {
+                    self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
+                }
             }
         }
         // The density button, painted LAST over the sideline's top row.
@@ -924,16 +949,11 @@ impl View {
                     Some(TabContext::Ordinal(ord)) => suffix.push_str(&format!(" \u{b7}{ord}")),
                     None => {
                         // A squad-less row's cwd base disambiguates paneless
-                        // agents launched from arbitrary directories - unless
-                        // the worktree IS the agent's own node worktree, where
-                        // the basename repeats the node id and prints noise.
+                        // agents launched from arbitrary directories, minus
+                        // the node-repeat noise (`cwd_base_repeats_node`).
                         // Squad members never read cwd here.
-                        if a.squad.is_none() {
-                            if let Some(base) = a
-                                .cwd_base
-                                .as_deref()
-                                .filter(|b| Some(*b) != a.node.as_deref())
-                            {
+                        if a.squad.is_none() && !cwd_base_repeats_node(a) {
+                            if let Some(base) = a.cwd_base.as_deref() {
                                 suffix.push_str(&format!(" ({base})"));
                             }
                         }
@@ -947,7 +967,14 @@ impl View {
                 let suffix_width = suffix.width();
                 let base_width = name_w.saturating_sub(prefix_width);
                 let label = if card {
-                    card_line::slug(a, &self.backlog)
+                    // Row 1 carries the role vocabulary: a lead's
+                    // people title after its slug (`sorrel · lead of mux`), a
+                    // worker's lead after its thread slug (`t-x0eee · sorrel`).
+                    let slug = card_line::slug(a, &self.backlog);
+                    match self.lead_label(a) {
+                        Some(role) => format!("{slug} \u{b7} {role}"),
+                        None => slug,
+                    }
                 } else {
                     a.name.clone()
                 };
@@ -1056,6 +1083,15 @@ impl View {
                         ),
                     ]
                 } else {
+                    // A sort with no column of its own (created, modified,
+                    // manual) still has to be visible: its label and arrow
+                    // ride the age cell, the rightmost sortable slot.
+                    let fallback = matches!(
+                        self.agent_sort.column,
+                        AgentSortColumn::Created
+                            | AgentSortColumn::Modified
+                            | AgentSortColumn::Manual
+                    );
                     head_sorts(false)
                         .into_iter()
                         .map(|sort| {
@@ -1064,6 +1100,13 @@ impl View {
                                 // No space before the age arrow: right-aligned or
                                 // spaced, it sits under the density button's two
                                 // overlay columns and the toggle reads dead.
+                                Some(AgentSortColumn::Age) if fallback => {
+                                    format!(
+                                        "{}{}",
+                                        head_label(self.agent_sort.column),
+                                        arrow(self.agent_sort.column)
+                                    )
+                                }
                                 Some(AgentSortColumn::Age) => {
                                     format!("age{}", arrow(AgentSortColumn::Age))
                                 }
@@ -1071,7 +1114,8 @@ impl View {
                                 Some(c) => format!("{} {}", head_label(c), arrow(c)),
                             };
                             let right = sort == Some(AgentSortColumn::Status)
-                                || sort == Some(AgentSortColumn::Pr);
+                                || sort == Some(AgentSortColumn::Pr)
+                                || sort == Some(AgentSortColumn::Age);
                             rt_cell(text, Color::Default, cell_flags::DIM, right)
                         })
                         .collect()
@@ -1140,6 +1184,13 @@ impl View {
                 }
             }
         }
+        // The card's `node · PR` caption rides at every width now,
+        // gated by the persisted toggle (prefix+Y). Extended inserts its own
+        // head before this runs, so the guard keeps one head, never two.
+        if self.show_card_head && !matches!(out_rows.first(), Some(DisplayRow::TableHead)) {
+            out_rows.insert(0, DisplayRow::TableHead);
+            out_depths.insert(0, 0);
+        }
         (out_rows, out_depths)
     }
 
@@ -1166,6 +1217,7 @@ impl View {
         paint_legacy_row(cells, r, cols, text_w, &label, cell_flags::BOLD);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_card_identity(
         &self,
         cells: &mut [Cell],
@@ -1173,6 +1225,7 @@ impl View {
         cols: usize,
         text_w: usize,
         drow: &DisplayRow<'_>,
+        highlit: bool,
     ) {
         let DisplayRow::Agent(agent) = drow else {
             return;
@@ -1189,6 +1242,8 @@ impl View {
             )
         };
         let spans = card_line::identity_spans(agent, text_w);
+        // Read before the ifs below move the span fields.
+        let identity_free = spans.node.is_none() && spans.pr.is_none();
         // On the chosen card the accent fill owns the line: the node and PR
         // spans read in the fill's base tone (brand-on-brand text would
         // vanish - the composed contrast test pins this at 3:1).
@@ -1237,18 +1292,92 @@ impl View {
                 cell.flags = 0;
             }
         }
+        // A lead's row 1 right side is the team roll-up: the
+        // section header's per-state count strip, over the workers beneath
+        // it. It yields to node · PR the way every right-edge occupant does:
+        // a lead holding a PR keeps its PR there, no roll-up this paint.
+        if agent.role_level.is_some() && identity_free {
+            // The lead's own glyph carries its state on the left; the strip
+            // counts the workers beneath it, so the lead row is out.
+            let members = self
+                .layout
+                .agents
+                .iter()
+                .filter(|x| {
+                    !std::ptr::eq(*x, *agent)
+                        && super::agent_group::team_lead_name(self, x).as_deref()
+                            == Some(agent.name.as_str())
+                })
+                .map(|x| agent_lattice_state(x));
+            let rollup = section_rollup(members);
+            if !rollup.is_empty() {
+                let pairs: String = rollup
+                    .iter()
+                    .map(|(s, n)| format!("{}{n}", lattice_glyph(*s).0))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let w = crate::chrome::str_cols(&pairs);
+                let start = text_w.saturating_sub(w);
+                // The strip yields to the surface that owns the line: the
+                // chosen fill's or the band's own fg there, dim only at
+                // rest (the composed contrast test pins 3:1 on both).
+                let rollup_fg = if on_chosen_fill {
+                    fill_fg
+                } else if highlit {
+                    crate::theme::band_style(&self.theme).0
+                } else {
+                    crate::theme::dim_fg(&self.theme)
+                };
+                for (cell, ch) in line[start..].iter_mut().zip(pairs.chars()) {
+                    cell.c = ch;
+                    cell.fg = rollup_fg;
+                    cell.flags = 0;
+                }
+            }
+        }
     }
 
-    /// Line 2 keeps model, lead and cost left, with created and activity
-    /// ages right. Cost is served-only: a crowned lead never prices, and an
+    /// The activity ramp's failure colors: each glyph cell wears ok, warn
+    /// or error by its interval's failed share (the heights and the kinds
+    /// come from [`card_line::activity_cell`]). Painted over the metrics
+    /// row after the text lands, the same pass shape as the identity spans.
+    fn paint_card_activity(
+        &self,
+        cells: &mut [Cell],
+        row: usize,
+        cols: usize,
+        text_w: usize,
+        a: &AgentRow,
+        pad: usize,
+    ) {
+        if self.card_graph != crate::client::CardGraph::Activity {
+            return;
+        }
+        let Some(cell) = card_line::activity_cell(a, self.card_graph) else {
+            return;
+        };
+        let line = &mut cells[row * cols..row * cols + text_w];
+        for (n, kind) in cell.kinds.iter().enumerate() {
+            let col = pad + n;
+            if col >= text_w {
+                break;
+            }
+            line[col].fg = match kind {
+                0 => self.theme.ok,
+                1 => self.theme.warn,
+                _ => self.theme.error,
+            };
+        }
+    }
+
+    /// Line 2 keeps model and cost left, with created and activity ages
+    /// right. The lead name that used to ride this line moved to row 1
+    ///. Cost is served-only: a promoted lead never prices, and an
     /// unserved cost renders nothing rather than a placeholder.
     pub(super) fn card_detail_text(&self, a: &AgentRow, now: u64, text_w: usize) -> String {
         let mut segments: Vec<String> = Vec::new();
         if let Some(model) = card_line::model_label(a) {
             segments.push(model);
-        }
-        if let Some(k) = self.lead_label(a) {
-            segments.push(k);
         }
         if let Some(cents) = a.session_cost_cents {
             segments.push(row_meter::cost_cell(cents));
@@ -1274,7 +1403,10 @@ impl View {
     /// The card-mode highlight pairing: a card's lower half inverts when
     /// the `Agent` row above it is selected or hovered, and an `Agent` row
     /// also inverts when its lower half is hovered. `base` is the ordinary
-    /// (non-inert) highlight for this row.
+    /// (non-inert) highlight for this row. A `CardRule` between two cards
+    /// names no card: only the metrics line reaches two rows up (its own
+    /// card's Agent line), never the detail line, whose second row up is
+    /// the rule above the card.
     pub(super) fn card_pair_highlit(
         &self,
         display: &[DisplayRow<'_>],
@@ -1282,13 +1414,21 @@ impl View {
         base: bool,
     ) -> bool {
         match display.get(i) {
-            Some(DisplayRow::CardDetail(..) | DisplayRow::CardMetrics(..)) => {
+            Some(row @ (DisplayRow::CardDetail(..) | DisplayRow::CardMetrics(..))) => {
                 base || self.list_selector() == Some(i)
                     || self.hover_row == Some(i)
                     || self.list_selector() == Some(i.saturating_sub(1))
                     || self.hover_row == Some(i.saturating_sub(1))
-                    || self.list_selector() == Some(i.saturating_sub(2))
-                    || self.hover_row == Some(i.saturating_sub(2))
+                    || matches!(row, DisplayRow::CardMetrics(..))
+                        && (self.list_selector() == Some(i.saturating_sub(2))
+                            || self.hover_row == Some(i.saturating_sub(2)))
+                    // The detail line is the metrics line's upper half too:
+                    // a hover or selection on the card's last line bands it.
+                    // The metrics line never has a card row below.
+                    || matches!(row, DisplayRow::CardDetail(..))
+                        && matches!(display.get(i + 1), Some(DisplayRow::CardMetrics(..)))
+                        && (self.list_selector() == Some(i + 1)
+                            || self.hover_row == Some(i + 1))
             }
             Some(DisplayRow::Agent(_)) => {
                 base || matches!(display.get(i + 1), Some(DisplayRow::CardDetail(..)))
@@ -1303,7 +1443,13 @@ impl View {
     /// (US3, inline) The foreign-cwd base an agent shows inline in parens:
     /// `Some` only when the agent's cwd basename differs from its squad's
     /// project basename. The dim `Sub` row's join, moved into the label.
+    /// A base that repeats the row's own node id never tags: a node-backed
+    /// thread lives in its node's worktree, and the node is already painted
+    /// on the card's right edge.
     pub(super) fn foreign_base<'a>(&self, a: &'a AgentRow) -> Option<&'a str> {
+        if cwd_base_repeats_node(a) {
+            return None;
+        }
         let squad_id = a.squad?;
         let squad = self.layout.squads.iter().find(|s| s.id == squad_id)?;
         let base = super::section_project_base(&squad.canonical_cwd);
@@ -1314,36 +1460,21 @@ impl View {
         }
     }
 
-    /// The lead label for line 2 of a card: the teamed row itself shows its
-    /// people title, else its team scope; a worker walks its lineage to the
-    /// first teamed ancestor and shows [`team_display_name`]. No teamed
-    /// ancestor, or a lineage cycle (capped at one step per agent), labels
-    /// nothing.
+    /// The lead label for row 1 of a card: the teamed row itself
+    /// shows its people title, else its team scope; a worker walks its
+    /// lineage to the first teamed ancestor and shows [`team_display_name`].
+    /// No teamed ancestor, or a lineage cycle (capped at one step per agent),
+    /// labels nothing.
     pub(super) fn lead_label(&self, a: &AgentRow) -> Option<String> {
-        if a.crown_level.is_some() {
-            if let Some(title) = a.crown_title.as_deref().filter(|t| !t.is_empty()) {
+        if a.role_level.is_some() {
+            if let Some(title) = a.role_title.as_deref().filter(|t| !t.is_empty()) {
                 return Some(title.to_string());
             }
-            return a.crown_scope.clone();
+            return a.role_scope.clone();
         }
-        let mut parent = lineage_parent(a);
-        let mut steps = 0;
-        while let Some(pid) = parent {
-            if steps >= self.layout.agents.len() {
-                return None;
-            }
-            let row = self
-                .layout
-                .agents
-                .iter()
-                .find(|r| r.harness_session_id.as_deref() == Some(pid))?;
-            if row.crown_level.is_some() {
-                return Some(team_display_name(row).to_string());
-            }
-            parent = lineage_parent(row);
-            steps += 1;
-        }
-        None
+        // A worker's lead name: the same walk the group bands run, so a
+        // row-1 label and its band can never disagree on the lead.
+        super::agent_group::team_lead_name(self, a)
     }
 }
 
@@ -1358,10 +1489,11 @@ fn row_age(a: &AgentRow, now: u64) -> String {
     }
 }
 
-/// The name a teamed row shows on its workers' cards. Today the lead's
-/// handle; the team's own name replaces it when the wire carries one.
-fn team_display_name(lead: &AgentRow) -> &str {
-    &lead.name
+/// The one cwd-base noise rule, shared by both tag sites: a worktree named
+/// for the row's own node repeats the id the card already paints, so its
+/// basename tags nothing.
+fn cwd_base_repeats_node(a: &AgentRow) -> bool {
+    a.node.is_some() && a.cwd_base == a.node
 }
 
 /// The message text an agent's row shows: the markup-stripped tail, or the

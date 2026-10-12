@@ -10,13 +10,16 @@ import re
 import subprocess
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from fno.agents.dispatch import DispatchAskError
+from fno.agents.registry import TERMINAL_STATUSES, load_registry, update_registry
 
 _CODEX_DAEMON_START_TIMEOUT_S = 15  # `daemon start` no-ops when running.
 _ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_CODEX_HOOK_REVIEW_MODAL_RE = re.compile(r"hooks need review", re.I)
 
 
 def ensure_codex_daemon(
@@ -217,6 +220,7 @@ def _make_codex_bind_probe(
     used = oracle_used if oracle_used is not None else []
     last_probe_s = [0.0]
     prev_candidate: list = [None]
+    modal_answered = [False]
 
     def _mark_oracle(name: str) -> None:
         used[:] = [name]
@@ -231,7 +235,31 @@ def _make_codex_bind_probe(
             _PROBE_TIMEOUT_S,
             _backfill_codex_session_id,
             _mux_pane_alive,
+            _read_pane_tail,
+            _run_mux,
         )
+
+        def _answer_hook_modal() -> None:
+            # Codex 0.148+ parks a fresh pane on a Hooks need review modal
+            # that can paint after the readiness gate's single read;
+            # unanswered it holds the pane for the whole window (measured on
+            # codex 0.156.1). Answer with the modal's option 3, continue
+            # WITHOUT trusting: untrusted hooks do not run, which a bounded
+            # pane already implies. Once only - a raised send may still have
+            # landed, and a second `3` into a closed modal would type a turn.
+            if not _CODEX_HOOK_REVIEW_MODAL_RE.search(_read_pane_tail(mux, runner)):
+                return
+            if modal_answered[0]:
+                _note("hooks-review modal still parked after the option-3 answer")
+                return
+            modal_answered[0] = True
+            try:
+                _run_mux(["mux", "pane", "send", "--server", str(mux["session"]),
+                          str(mux["pane_id"]), "--text", "3", "--submit", "--raw"],
+                         runner)
+                _note("hooks-review modal answered once (option 3, continue without trusting)")
+            except DispatchAskError as exc:
+                _note(f"hooks-review modal answer send failed: {exc}")
 
         sid = _backfill_codex_session_id(
             cwd,
@@ -247,6 +275,7 @@ def _make_codex_bind_probe(
         now_s = time.monotonic()
         if now_s - last_probe_s[0] < _CODEX_DAEMON_PROBE_INTERVAL_S:
             # A rate-limit skip is not an observation; the fd note stands.
+            _answer_hook_modal()
             return None
         last_probe_s[0] = now_s
         candidate = _codex_daemon_candidate(
@@ -259,6 +288,7 @@ def _make_codex_bind_probe(
             if candidate is not None:
                 _note(f"daemon: candidate {candidate} awaiting a repeat probe")
             prev_candidate[0] = candidate
+            _answer_hook_modal()
             return None
         # The candidate repeated - trust it unless the pane is gone.
         if _mux_pane_alive(mux, runner, timeout=_PROBE_TIMEOUT_S) is False:
@@ -268,6 +298,51 @@ def _make_codex_bind_probe(
         return candidate
 
     return _probe
+
+
+def codex_backfill_stamp_applies(
+    row, name, session_id, child_pid, pid_start_time, mux
+) -> bool:
+    """The compare-and-set guards reconcile's backfill and the spawn-time
+    late-bind stamp share: only this pane's codex row, id-less and
+    non-terminal. The caller owns the duplicate-id check.
+    """
+    return (
+        row.name == name
+        and row.harness == "codex"
+        and row.pid == child_pid
+        and row.pid_start_time == pid_start_time
+        and row.mux == mux
+        and not row.harness_session_id
+        and row.status not in TERMINAL_STATUSES
+    )
+
+
+def stamp_late_bind(
+    name, session_id, child_pid, pid_start_time, mux, registry_path=None
+) -> bool:
+    """Stamp a post-window codex bind onto the pane's id-less row; True on success.
+
+    Compare-and-set as reconcile's backfill (same guard helper); never an id
+    another row holds. A raced miss leaves the row `spawning` for the next
+    reconcile to heal.
+    """
+    def apply(rows):
+        dup = any(r.name != name and r.harness_session_id == session_id for r in rows)
+        return [
+            replace(r, harness_session_id=session_id, status="live")
+            if (not dup and codex_backfill_stamp_applies(
+                r, name, session_id, child_pid, pid_start_time, mux
+            ))
+            else r
+            for r in rows
+        ]
+
+    update_registry(apply, path=registry_path)
+    row = next((r for r in load_registry(path=registry_path) if r.name == name), None)
+    return bool(row and row.harness_session_id == session_id)
+
+
 def deliver_seed(thread_id: str, seed: str, cwd: Path, dirs: Sequence[str]) -> bool:
     """Send a bounded pane's seed as a fno turn/start, which carries the roots."""
     from fno.agents.writable_dirs import WORKER_ADD_DIRS_ENV

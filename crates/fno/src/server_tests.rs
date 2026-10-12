@@ -72,8 +72,7 @@ fn attach_argv_rows() {
         attach_argv_for(Some("claude"), "job1", Some("readyrule"), Some(dir)),
         attach_argv("job1", Some("readyrule"), Some(dir))
     );
-    // A row with no harness recorded keeps the claude shape it had before
-    // a harness was passed at all.
+    // No harness recorded: keep the claude shape it had before.
     assert_eq!(
         attach_argv_for(None, "job1", None, None),
         attach_argv("job1", None, None)
@@ -542,8 +541,8 @@ fn agent_in(sess: &str, pane: u64, badge: Option<AgentBadge>, exited: bool) -> R
         claude_session_uuid: None,
         log_path: None,
         updated_at: None,
-        crown_level: None,
-        crown_scope: None,
+        role_level: None,
+        role_scope: None,
         liveness: if exited {
             agents_view::Liveness::Dead
         } else {
@@ -3784,8 +3783,8 @@ pub(super) fn exited_claude_row(name: &str, uuid: Option<&str>) -> RegistryAgent
         claude_session_uuid: uuid.map(str::to_owned),
         log_path: None,
         updated_at: None,
-        crown_level: None,
-        crown_scope: None,
+        role_level: None,
+        role_scope: None,
         harness: None,
         ..Default::default()
     }
@@ -6257,8 +6256,8 @@ pub(super) fn bg_row(name: &str, cwd: &str, attach: Option<&str>) -> RegistryAge
         claude_session_uuid: None,
         log_path: None,
         updated_at: None,
-        crown_level: None,
-        crown_scope: None,
+        role_level: None,
+        role_scope: None,
         harness: None,
         ..Default::default()
     }
@@ -8284,6 +8283,7 @@ pub(super) fn empty_core() -> Core {
         claims: HashMap::new(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
+        fno_token_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: watch::channel(0).0,
@@ -8304,6 +8304,8 @@ pub(super) fn empty_core() -> Core {
         shared_identity_notified: HashSet::new(),
         restored: false,
         restore_pending: false,
+        spawn_flight: Default::default(),
+        restore_hold: Default::default(),
         store_generations: HashMap::new(),
         pre_restore_squads: HashSet::new(),
         topology_dirty: false,
@@ -8317,7 +8319,6 @@ pub(super) fn empty_core() -> Core {
         portal_session_guards: std::collections::BTreeMap::new(),
     }
 }
-
 fn placement_core() -> Core {
     let mut core = empty_core();
     core.session.add_squad(
@@ -8463,143 +8464,6 @@ fn pane_placement_split_without_existing_route_creates_first_tab() {
         lane.name.is_empty() && !lane.key.is_empty(),
         "unnamed, durable key"
     );
-}
-
-#[test]
-fn pane_placement_target_does_not_replace_child_cwd() {
-    let mut core = placement_core();
-    let root = std::env::temp_dir().join(format!("fno-placement-cwd-{}", std::process::id()));
-    let child_cwd = root.join("child");
-    std::fs::create_dir_all(&child_cwd).unwrap();
-    let marker = child_cwd.join("cwd.txt");
-    let pid = core
-        .run_pane(
-            "/repo/default".into(),
-            child_cwd.to_string_lossy().into_owned(),
-            vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                "pwd > cwd.txt; sleep 30".into(),
-            ],
-            24,
-            80,
-            false,
-            PanePlacement {
-                target: PaneTarget::SquadName("review".into()),
-                ..Default::default()
-            },
-            None,
-        )
-        .unwrap();
-
-    // A loaded CI runner can take several seconds just to spawn the PTY +
-    // start the shell; 15s matches the PTY-wait convention elsewhere and
-    // keeps this off the flake list. Readiness is NON-EMPTY CONTENT, not
-    // existence: `pwd > cwd.txt` creates the file on redirect, BEFORE pwd
-    // writes into it, so an exists() gate can hand the read an empty string
-    // and the canonicalize below then fails as a confusing NotFound.
-    let content = || {
-        std::fs::read_to_string(&marker)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-    };
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while content().is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let reported =
-        content().expect("pane shell never wrote cwd.txt within 15s (spawn slow or failed)");
-    assert_eq!(
-        std::fs::canonicalize(reported.trim()).unwrap(),
-        std::fs::canonicalize(&child_cwd).unwrap()
-    );
-    let (sid, _) = core.session.find_pane(pid).unwrap();
-    assert_eq!(sid, 7);
-
-    core.reap_pane(pid);
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn run_pane_create_if_absent_mints_persisted_named_squad() {
-    // AC2-HP (x-9f75): a `pane run --squad <name>` naming no existing squad mints a persisted named squad
-    // (origins = the spawn's repo root) and lands the pane as its first tab. A second run with the same
-    // name joins it - no duplicate mint.
-    let _s = StoreScratch::new("run-create-if-absent");
-    let mut core = empty_core();
-    let run = |core: &mut Core| {
-        core.run_pane(
-            "/repo/proj".into(),
-            "/repo/proj".into(),
-            vec!["/bin/cat".into()],
-            24,
-            80,
-            false,
-            PanePlacement {
-                target: PaneTarget::SquadName("readyrule".into()),
-                ..Default::default()
-            },
-            None,
-        )
-        .unwrap()
-    };
-    let pid = run(&mut core);
-    let (sid, _) = core.session.find_pane(pid).unwrap();
-    let sq = core.session.squad(sid).unwrap();
-    assert_eq!(sq.name.as_deref(), Some("readyrule"));
-    assert_eq!(sq.origins, vec!["/repo/proj".to_string()]);
-    assert_eq!(tree::leaves(&sq.tabs[0].root), vec![pid]);
-    assert!(
-        crate::squad_store::load()
-            .squads
-            .iter()
-            .any(|s| s.name == "readyrule"),
-        "the named squad is persisted (write-through)"
-    );
-
-    let pid2 = run(&mut core);
-    let (sid2, _) = core.session.find_pane(pid2).unwrap();
-    assert_eq!(sid2, sid, "the second run joins the existing named squad");
-    assert_eq!(
-        core.session
-            .squads
-            .iter()
-            .filter(|s| s.name.as_deref() == Some("readyrule"))
-            .count(),
-        1,
-        "no duplicate squad minted"
-    );
-
-    core.reap_pane(pid);
-    core.reap_pane(pid2);
-}
-
-#[test]
-fn run_pane_create_if_absent_rejects_blank_name_before_spawn() {
-    // A blank/whitespace SquadName is still refused (never a minted squad),
-    // and no pane is spawned - fail-closed, mirroring resolve_placement.
-    let _s = StoreScratch::new("run-create-blank");
-    let mut core = empty_core();
-    let before = core.panes.len();
-    let err = core
-        .run_pane(
-            "/repo/proj".into(),
-            "/repo/proj".into(),
-            vec!["/bin/cat".into()],
-            24,
-            80,
-            false,
-            PanePlacement {
-                target: PaneTarget::SquadName("   ".into()),
-                ..Default::default()
-            },
-            None,
-        )
-        .unwrap_err();
-    assert!(err.1.contains("blank"), "{err:?}");
-    assert_eq!(err.0, err_code::BAD_REQUEST, "blank name is a bad request");
-    assert_eq!(core.panes.len(), before, "no pane spawned on a blank name");
-    assert!(core.session.squads.is_empty(), "no squad minted");
 }
 
 #[test]

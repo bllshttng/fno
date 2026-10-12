@@ -30,10 +30,12 @@ pub(super) fn codex_thread_on_done(
         let name = name.clone();
         let turn_id = receipt.turn_id.clone();
         let status = receipt.status.clone();
+        let error = receipt.error.clone();
+        let failed = status == "failed" || error.is_some();
         let registry_path = registry_path.clone();
         tokio::spawn(async move {
             let bump_name = name.clone();
-            let _ = update_registry_offloaded(registry_path, move |registry| {
+            let session_id = update_registry_offloaded(registry_path, move |registry| {
                 if let Some(entry) = registry.find_mut(&bump_name) {
                     // The completion of an INTERRUPTED turn must not
                     // resurrect a row the stop path just settled Exited:
@@ -44,18 +46,38 @@ pub(super) fn codex_thread_on_done(
                         entry.status = crate::AgentStatus::Live;
                         entry.last_message_at = Some(now_rfc3339_like());
                     }
+                    return entry.harness_session_id.clone();
                 }
+                None
             })
-            .await;
-            let _ = emitter.emit(
-                "agent_ask_done",
-                &json!({
-                    "name": name,
-                    "backend": "codex-thread",
-                    "turn_id": turn_id,
-                    "turn_status": status,
-                }),
-            );
+            .await
+            .ok()
+            .flatten();
+            if !failed && status == "completed" {
+                if let Some(session_id) = session_id.as_deref() {
+                    crate::mail_hold::conversation_turn_end(session_id);
+                }
+            }
+            let mut payload = json!({
+                "name": name,
+                "backend": "codex-thread",
+                "turn_id": turn_id,
+                "turn_status": status,
+            });
+            if let Some(session_id) = session_id {
+                payload["session_id"] = json!(session_id);
+            }
+            if let Some(error) = error {
+                payload["error"] = error;
+            }
+            let event = if failed {
+                emitter.emit("codex_turn_error", &payload)
+            } else {
+                emitter.emit("agent_ask_done", &payload)
+            };
+            if let Err(error) = event {
+                eprintln!("codex-thread: completion event write failed: {error}");
+            }
         });
     })
 }
@@ -116,7 +138,7 @@ pub(super) fn codex_thread_on_status(
 
 /// Land one thread-driver report: off the actor task, through the
 /// shared seq gate, notifying on the done/blocked episode edge exactly as the
-/// claude hook's flush does, and emitting one event per accepted write.
+/// claude hook's flush does, and emitting one event per state change.
 async fn write_thread_inside_leg(
     registry_path: PathBuf,
     emitter: EventEmitter,
@@ -128,11 +150,11 @@ async fn write_thread_inside_leg(
 ) {
     let (seq, state_str) = (rep.seq, inside_leg_state_str(rep.state));
     let session_for_emit = session_id.clone();
-    let notify = update_registry_offloaded(registry_path, move |registry| {
-        gate_inside_leg_onto_row(registry, &session_id, rep)
+    let (notify, journal) = update_registry_offloaded(registry_path, move |registry| {
+        gate_inside_leg_onto_row_journaled(registry, &session_id, rep)
     })
     .await
-    .unwrap_or(None);
+    .unwrap_or((None, false));
     if let Some((body, is_done)) = notify {
         notify_badge(
             name.clone(),
@@ -142,15 +164,31 @@ async fn write_thread_inside_leg(
             notify_on_done,
         );
     }
-    let _ = emitter.emit(
-        "codex_thread_inside_leg",
-        &json!({
-            "name": name,
-            "session_id": session_for_emit,
-            "state": state_str,
-            "seq": seq,
-        }),
-    );
+    // A stale-seq drop or a same-state repeat journals nothing.
+    if journal {
+        let _ = emitter.emit(
+            "codex_thread_inside_leg",
+            &json!({
+                "name": name,
+                "session_id": session_for_emit,
+                "state": state_str,
+                "seq": seq,
+            }),
+        );
+    }
+}
+
+/// Whether a stored report journals: a state change, or a blocked report
+/// whose reason changed (a new question the subscribe feed must surface).
+/// A same-state repeat updates the row and stays quiet.
+pub(super) fn journals_transition(
+    prev: Option<&crate::state::InsideLegReport>,
+    next: &crate::state::InsideLegReport,
+) -> bool {
+    prev.is_none_or(|p| {
+        p.state != next.state
+            || (next.state == crate::state::InsideLegState::Blocked && p.reason != next.reason)
+    })
 }
 
 /// The ONE seq-gated inside-leg writer core: find the row holding
@@ -167,6 +205,17 @@ pub(super) fn gate_inside_leg_onto_row(
     session_uuid: &str,
     rep: crate::state::InsideLegReport,
 ) -> Option<(String, bool)> {
+    gate_inside_leg_onto_row_journaled(registry, session_uuid, rep).0
+}
+
+/// [`gate_inside_leg_onto_row`] plus whether the stored report journals
+/// ([`journals_transition`]); `false` on a stale-seq drop or no such row.
+fn gate_inside_leg_onto_row_journaled(
+    registry: &mut crate::state::Registry,
+    session_uuid: &str,
+    rep: crate::state::InsideLegReport,
+) -> (Option<(String, bool)>, bool) {
+    let mut journal = false;
     let (state_str, rep_state, rep_reason) = (
         inside_leg_state_str(rep.state),
         rep.state,
@@ -180,11 +229,12 @@ pub(super) fn gate_inside_leg_onto_row(
     {
         let newer = e.inside_leg.as_ref().is_none_or(|cur| cur.yields_to(&rep));
         if newer {
+            journal = journals_transition(e.inside_leg.as_ref(), &rep);
             let prev_state = e.inside_leg.as_ref().map(|r| r.state);
             let body = rep_reason.unwrap_or_else(|| state_str.to_string());
             if crate::state::enters(prev_state, rep_state, crate::state::InsideLegState::Blocked) {
                 notify = Some((body, false));
-            } else if e.crown_level.is_none()
+            } else if e.role_level.is_none()
                 && crate::state::enters(prev_state, rep_state, crate::state::InsideLegState::Done)
             {
                 notify = Some((body, true));
@@ -200,7 +250,7 @@ pub(super) fn gate_inside_leg_onto_row(
             e.screen_state = None;
         }
     }
-    notify
+    (notify, journal)
 }
 
 /// Which channel a badge transition may use. A done badge is a desk event:

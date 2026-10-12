@@ -14,11 +14,14 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from fno.paths_testing import use_tmpdir
+from fno.registry_door import read_registry_document
 
 
 def _events(tmp_path: Path) -> list[dict]:
@@ -537,15 +540,15 @@ def test_restamp_repoints_row_at_the_reminted_id(tmp_path: Path, monkeypatch) ->
     assert rows[0].name == "target-x-f0c2"
 
 
-def test_restamp_branches_a_crowned_live_row(tmp_path: Path, monkeypatch) -> None:
+def test_restamp_branches_a_promoted_live_row(tmp_path: Path, monkeypatch) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.registry import load_registry, restamp_harness_session_id, write_registry
 
     _spawned_row()
     row = load_registry()[0]
-    row.crown_level = 1
-    row.crown_scope = "scope-a"
-    row.crown_grantor = "human"
+    row.role_level = 1
+    row.role_scope = "scope-a"
+    row.role_grantor = "human"
     write_registry([row])
 
     entry = restamp_harness_session_id(
@@ -560,18 +563,18 @@ def test_restamp_branches_a_crowned_live_row(tmp_path: Path, monkeypatch) -> Non
     assert len(rows) == 2
     predecessor = next(row for row in rows if row.harness_session_id == BIRTH)
     branch = next(row for row in rows if row.harness_session_id == REMINT)
-    assert predecessor.crown_level == 1
-    assert predecessor.crown_scope == "scope-a"
-    assert predecessor.crown_grantor == "human"
+    assert predecessor.role_level == 1
+    assert predecessor.role_scope == "scope-a"
+    assert predecessor.role_grantor == "human"
     assert branch.name == "target-x-f0c2-branch-08054b1d"
     # The branch mints its own id at the write; it is neither session id.
     assert branch.fno_id
     assert branch.fno_id != REMINT
     assert branch.fno_id != BIRTH
     assert branch.forked_from_session_id == BIRTH
-    assert branch.crown_level is None
-    assert branch.crown_scope is None
-    assert branch.crown_grantor is None
+    assert branch.role_level is None
+    assert branch.role_scope is None
+    assert branch.role_grantor is None
     # x-a457: born bg-routable - the 8-hex jobId the rv socket farm keys on,
     # derived from the new session id, not the predecessor's handle.
     assert branch.short_id == REMINT.split("-", 1)[0]
@@ -596,7 +599,7 @@ def test_restamp_branches_a_crowned_live_row(tmp_path: Path, monkeypatch) -> Non
     assert len(load_registry()) == 2
 
 
-def test_restamp_succession_preserves_a_crowned_dead_predecessor(
+def test_restamp_succession_preserves_a_promoted_dead_predecessor(
     tmp_path: Path, monkeypatch
 ) -> None:
     use_tmpdir(monkeypatch, tmp_path)
@@ -604,9 +607,9 @@ def test_restamp_succession_preserves_a_crowned_dead_predecessor(
 
     _spawned_row()
     row = load_registry()[0]
-    row.crown_level = 1
-    row.crown_scope = "scope-a"
-    row.crown_grantor = "human"
+    row.role_level = 1
+    row.role_scope = "scope-a"
+    row.role_grantor = "human"
     write_registry([row])
 
     entry = restamp_harness_session_id(
@@ -621,10 +624,10 @@ def test_restamp_succession_preserves_a_crowned_dead_predecessor(
     assert len(rows) == 1
     assert rows[0].harness_session_id == REMINT
     assert rows[0].predecessor_session_ids == [BIRTH]
-    assert rows[0].crown_level == 1
+    assert rows[0].role_level == 1
 
 
-def test_restamp_branches_an_uncrowned_live_row(tmp_path: Path, monkeypatch) -> None:
+def test_restamp_branches_an_unpromoted_live_row(tmp_path: Path, monkeypatch) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.registry import load_registry, restamp_harness_session_id
 
@@ -817,7 +820,9 @@ def test_restamp_ignores_a_pending_marker_inherited_from_its_parent(
     def _no_sleep(_s: float) -> None:
         raise AssertionError("an inherited marker must not re-enable the wait")
 
-    monkeypatch.setattr(rs.time, "sleep", _no_sleep)
+    # Only this module's clock: subprocess.run's own wait loop sleeps on the
+    # shared time module, and an event emit must not trip the stub.
+    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
     monkeypatch.setattr(rs, "_row_exists", lambda *_a: False)
 
     assert rs._restamp("the-nested-one-shot", "claude", REMINT) == 0
@@ -837,7 +842,9 @@ def test_restamp_never_waits_for_a_row_a_headless_one_shot_will_not_get(
     def _no_sleep(_s: float) -> None:
         raise AssertionError("a rowless substrate must not wait")
 
-    monkeypatch.setattr(rs.time, "sleep", _no_sleep)
+    # Only this module's clock: subprocess.run's own wait loop sleeps on the
+    # shared time module, and an event emit must not trip the stub.
+    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
     monkeypatch.setattr(rs, "_row_exists", lambda *_a: False)
 
     assert rs._restamp("worker-headless", "claude", REMINT) == 0
@@ -856,7 +863,9 @@ def test_restamp_does_not_poll_when_the_row_is_already_current(
     def _no_sleep(_s: float) -> None:
         raise AssertionError("must not sleep when the row already exists")
 
-    monkeypatch.setattr(rs.time, "sleep", _no_sleep)
+    # Only this module's clock: subprocess.run's own wait loop sleeps on the
+    # shared time module, and an event emit must not trip the stub.
+    monkeypatch.setattr(rs, "time", SimpleNamespace(monotonic=time.monotonic, sleep=_no_sleep))
 
     assert rs._restamp("target-x-f0c2", "claude", BIRTH) == 0
 
@@ -1006,14 +1015,13 @@ def test_observation_of_a_recorded_id_is_a_no_op(tmp_path: Path, monkeypatch) ->
     """Case 2: the same id again writes nothing - every later SessionStart of
     a healthy worker lands here, so it stays silent."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
 
     _spawned_row()
-    before = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    before = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     entry, outcome = _observe("target-x-f0c2", BIRTH)
     assert outcome == "no-op"
     assert entry.harness_session_id == BIRTH
-    after = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    after = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     assert after == before, "a no-op observation must not rewrite the file"
 
 
@@ -1066,16 +1074,15 @@ def test_observation_refuses_a_third_distinct_id_and_names_both(
     """The cap: primary and related already hold two different ids, so a
     third writes NOTHING and the refusal names both recorded ids."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
 
     _spawned_row()
     _observe("target-x-f0c2", FORK)
-    before = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    before = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     entry, outcome = _observe("target-x-f0c2", THIRD)
     assert outcome == "refused-cap"
     assert entry.harness_session_id == BIRTH
     assert entry.related_session_id == FORK, "the refusal carries both ids"
-    after = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    after = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     assert after == before, "a refused observation changes nothing on disk"
 
 
@@ -1172,7 +1179,7 @@ def test_both_ids_resolve_to_the_one_row(tmp_path: Path, monkeypatch) -> None:
     """Both ids address the row: the full uuids AND their canonical handles,
     primary and related alike - 'valid forever' means addressable."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry, resolve_agent
+    from fno.agents.registry import resolve_agent
 
     _spawned_row()
     _observe("target-x-f0c2", FORK)
@@ -1285,14 +1292,16 @@ def test_heal_mux_ref_idempotent_noop_writes_nothing(tmp_path, monkeypatch):
     from fno.agents.registry import _registry_path
 
     registry_path = _registry_path(None)
-    before = registry_path.read_bytes()
+    from fno.registry_door import read_registry_document
+
+    before = read_registry_document(registry_path)
     emitted: list = []
     monkeypatch.setattr(events, "emit", lambda *a, **k: emitted.append((a, k)))
 
     moved = heal_mux_ref(name="t-worker", harness="claude", mux_session="main", pane_id=31)
 
     assert moved is None
-    assert registry_path.read_bytes() == before, "an idempotent heal rewrote the file"
+    assert read_registry_document(registry_path) == before, "an idempotent heal rewrote the table"
     assert emitted == []
 
 

@@ -291,17 +291,26 @@ def think_spawn_on_decompose_wave0(
 
 
 def _daily_counter_path() -> Path:
-    """``~/.fno/.think-spawn-daily.json`` - the global per-day spawn counter.
-
-    Per-install (not per-project): the firehose guard bounds total bg /think
-    sessions a day regardless of which repo or node triggered them. Resolved
-    under ``global_claims_root()`` (the SAME ``$FNO_CLAIMS_ROOT``-honoring base
-    as the dispatch dedup tokens) so the counter isolates with the claims in
-    tests and travels with them in production.
+    """``~/.fno/state/think-spawn-daily.json`` - the global per-day spawn
+    counter, per-install (not per-project): the firehose guard bounds total
+    bg /think sessions a day. Resolved under ``global_claims_root()`` (the
+    same ``$FNO_CLAIMS_ROOT``-honoring base as the dispatch dedup tokens) so
+    it isolates with the claims in tests. First resolve renames the legacy
+    root spelling - the ``paths.state_runtime_file`` ladder, rebuilt here
+    because this base follows the claims root, not ``state_dir()``.
     """
     from fno.claims.io import global_claims_root
 
-    return global_claims_root() / ".fno" / ".think-spawn-daily.json"
+    base = global_claims_root() / ".fno"
+    new = base / "state" / "think-spawn-daily.json"
+    legacy = base / ".think-spawn-daily.json"
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(new)
+        except OSError:
+            return legacy
+    return new
 
 
 def _today_str() -> str:
@@ -865,12 +874,13 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
-        from fno.backlog.advance import _gate_refusal_detail
+        from fno.rust_binary import VerbUnavailable, verb_call
 
-        raise SpawnError(
-            f"fno agents spawn exited {proc.returncode}: "
-            f"{_gate_refusal_detail(stderr or proc.stdout or '')}"
-        )
+        try:
+            detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
+        except VerbUnavailable as exc:
+            detail = f"{stderr or proc.stdout or ''} (gate detail unavailable: {exc})"
+        raise SpawnError(f"fno agents spawn exited {proc.returncode}: {detail}")
     short_id = _parse_short_id(proc.stdout or "")
     if short_id:
         return short_id

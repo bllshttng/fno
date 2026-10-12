@@ -38,7 +38,15 @@ The `agent_spawned` event (`cli/src/fno/events/schema.yaml`) carries the same `s
 
 Both helpers trim env values and coerce empty/whitespace to `None`. Neither raises: a missing env or absent manifest degrades every field to null and the create path proceeds unchanged.
 
-**Node launch edge** (`cli/src/fno/agents/cli.py`, `_stamp_launch_edge`, called at both spawn sites beside `_stamp_spawned_session_row`). A registry row is reaped and a node is durable, so a spawn that names a node writes the same triple onto the node. Until this stamp existed the three graph fields were declared and read, but written by nothing. 0 of 2356 nodes carried one, flat zero in every `created_at` cohort.
+**Node launch edge** (`cli/src/fno/agents/spawn_lineage.py`, `_stamp_launch_edge`, called at both spawn sites beside `_stamp_spawned_session_row`). A registry row is reaped and a node is durable, so a spawn that names a node writes the same triple onto the node. Until this stamp existed the three graph fields were declared and read, but written by nothing. 0 of 2356 nodes carried one, flat zero in every `created_at` cohort.
+
+**Launch records** (`crates/fno-agents/src/launch_record.rs`). A session started with `claude --bg`, `codex exec`, `agy`, `opencode run`, `pi` or another harness binary from a Bash tool call has no spawn birth. A `claude --bg` child cannot see its launcher either. Every bg worker is a child of one claude daemon pid. Its env carries no launcher session id. So the launcher's own PreToolUse Bash hook (`fno-agents hook pretooluse-bash`) writes a launch record after the guards allow the command. The record names the launcher session, harness and cwd, the worker's harness, name, node and cwd, and the time. It lives in `<agents home>/launches/pending/` for 10 minutes. A `fno agents spawn` typed in Bash writes the same record.
+
+The child claims it. All six harnesses send `fno-agents report --kind session` at SessionStart. That report claims the one pending record with the same harness and cwd from the last 10 minutes. A record whose worker name equals the child's name wins outright: a claude child reads its name from `$CLAUDE_JOB_DIR/state.json`, a spawned worker from `FNO_AGENT_SELF`. Otherwise exactly one candidate must remain. Two or more claim nothing. The claim renames the record to `launches/claimed/<child session id>.json` and stamps the node's first-launch edge through the same Rust stamp the spawn front uses. A claude adopt fills an empty registry edge from the claimed record.
+
+Three launches stay unseen. A lead that runs no PreToolUse Bash hook writes no record. A human shell writes none. A script (`bash run.sh`) hides the harness word. Those children stay unowned.
+
+**Backfill.** `fno backlog provenance --backfill <map.md>` reads a markdown table of launches: launched, lead session, worker name, worker sessions. It prints one line per worker: `would-write`, `kept` or `skip` with the reason. `--apply` writes. The lead prefix must name exactly one session. The worker session must have worked exactly one node. The worker name is printed and never used to find the node. Rows are written in launch order, so the earliest launch wins, and an existing edge is never overwritten. Each write appends one line to `<agents home>/launches/backfill.jsonl`.
 
 Do not fill this field from `source_session_id`. They answer different questions. Of 506 nodes carrying both a `source_session_id` and a worked session, the filer is not among the workers in 428.
 
@@ -89,18 +97,18 @@ The one spawn door lives in `crates/fno-agents/src/spawn_contract.rs` and `spawn
 |---|---|
 | `spawn_id` | coordinator-allocated attempt id (`sp-<hex>`) correlating journal accepted record, birth row, and receipt |
 | `spawn_provenance.origin` | `session` (proven parent: harness, full session id, caller cwd, plus an optional invocation reference for a script the session ran) or `non_session` (typed source: daemon arm + cause, LaunchAgent label, shell with TTY and process identity, or test script + run id) |
-| `spawn_provenance.owner` | session, project-qualified mission, project-qualified crown scope, operator/TTY, or test run. Separate from origin by design. Daemon work names its mission or crown without inventing a parent. A kingless scope is still a valid owner |
+| `spawn_provenance.owner` | session, project-qualified mission, project-qualified role scope, operator/TTY, or test run. Separate from origin by design. Daemon work names its mission or role without inventing a parent. A kingless scope is still a valid owner |
 | `spawned_by_*` | generated compatibility projection of a session origin, never independently writable on a new birth |
 
 Rules the door enforces before any launch:
 
-- a daemon or launch-agent origin requires a mission or crown owner. The daemon starter is never substituted.
+- a daemon or launch-agent origin requires a mission or role owner. The daemon starter is never substituted.
 - a cause code must speak the naming-codes vocabulary. The retired `sob` refuses.
 - a known-shape session id attributed to the wrong harness refuses (the forgery shape).
 - a session-launched test keeps its live session parent. The script is recorded as the invocation, never as a parent replacement.
-- rows predating the door read as `legacy_missing` provenance. That is a visible defect, never silently blessed, and never repaired from a name prefix, crown holder, or adopter.
+- rows predating the door read as `legacy_missing` provenance. That is a visible defect, never silently blessed, and never repaired from a name prefix, role holder, or adopter.
 
-Producers carry context through the `FNO_SPAWN_ORIGIN` / `FNO_SPAWN_OWNER` env carrier (validated, malformed refuses) or the `agent.spawn` request's `origin`/`owner` fields. Explicit dispatch context outranks ambient capture. A session spawning by hand keeps its real session parent. Adoption is a voucher, not a birth: the adopter lands in `adopted_by_session`, and a re-adopt preserves every birth field. The crown hook reads ownership. A door-stamped row is owned autonomous work, never an unlinked orphan.
+Producers carry context through the `FNO_SPAWN_ORIGIN` / `FNO_SPAWN_OWNER` env carrier (validated, malformed refuses) or the `agent.spawn` request's `origin`/`owner` fields. Explicit dispatch context outranks ambient capture. A session spawning by hand keeps its real session parent. Adoption is a voucher, not a birth: the adopter lands in `adopted_by_session`, and a re-adopt preserves every birth field. The role hook reads ownership. A door-stamped row is owned autonomous work, never an unlinked orphan.
 
 Read-only runtime verification: `scripts/diagnostics/verify-spawn-contract.py --plan <plan.md>` checks the correlated real-path proof (spawn ids, journal correlation, sha pinning, freshness) and refuses anything self-asserted.
 

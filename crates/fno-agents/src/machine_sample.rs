@@ -59,6 +59,17 @@ pub fn parse_proc_stat_cpu(text: &str) -> Option<HostTicks> {
     })
 }
 
+/// Map `HOST_CPU_LOAD_INFO` ticks, ordered USER, SYSTEM, IDLE, NICE
+/// (`mach/machine.h` `CPU_STATE_*`), onto busy, system and idle.
+pub fn mach_ticks(cpu_ticks: [u32; 4]) -> HostTicks {
+    let [user, system, idle, nice] = cpu_ticks.map(u64::from);
+    HostTicks {
+        busy: user + system + nice,
+        system,
+        idle,
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn host_ticks() -> Option<HostTicks> {
     parse_proc_stat_cpu(&std::fs::read_to_string("/proc/stat").ok()?)
@@ -86,13 +97,7 @@ pub fn host_ticks() -> Option<HostTicks> {
             &mut count,
         )
     };
-    (status == 0).then(|| HostTicks {
-        busy: u64::from(info.cpu_ticks[0])
-            + u64::from(info.cpu_ticks[1])
-            + u64::from(info.cpu_ticks[2]),
-        system: u64::from(info.cpu_ticks[2]),
-        idle: u64::from(info.cpu_ticks[3]),
-    })
+    (status == 0).then(|| mach_ticks(info.cpu_ticks))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -306,8 +311,8 @@ pub fn read(
     let mut warnings = Vec::new();
     let live = crate::spawn_gate::live_rows(&home.registry_json(), &mut warnings);
     sample.live_rows = Some(live.len() as u64);
-    sample.leads = Some(live.iter().filter(|row| row.crown_level.is_some()).count() as u64);
-    sample.workers = Some(live.iter().filter(|row| row.crown_level.is_none()).count() as u64);
+    sample.leads = Some(live.iter().filter(|row| row.role_level.is_some()).count() as u64);
+    sample.workers = Some(live.iter().filter(|row| row.role_level.is_none()).count() as u64);
     #[cfg(target_os = "macos")]
     {
         if let Ok(out) = std::process::Command::new("vm_stat").output() {
@@ -431,8 +436,23 @@ impl MachineSample {
     }
 }
 
+/// How far back the cheap tail read reaches before falling back to the full
+/// journal: machine_sample rows land once per daemon tick (300s), so the
+/// window holds the newest row unless other events outgrow 8MB between two
+/// ticks. The full-read fallback is correct but slow; the window only has
+/// to be generous, never exact.
+const NEWEST_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+
 pub fn newest(journal: &Path) -> Option<(String, Value)> {
-    let text = std::fs::read_to_string(journal).ok()?;
+    if let Some(text) = newest_tail_text(journal) {
+        if let Some(row) = newest_row(&text) {
+            return Some(row);
+        }
+    }
+    newest_row(&std::fs::read_to_string(journal).ok()?)
+}
+
+fn newest_row(text: &str) -> Option<(String, Value)> {
     text.lines().rev().find_map(|line| {
         let event: Value = serde_json::from_str(line).ok()?;
         (event.get("type")?.as_str()? == "machine_sample").then(|| {
@@ -450,6 +470,22 @@ pub fn newest(journal: &Path) -> Option<(String, Value)> {
             (id, data)
         })
     })
+}
+
+fn newest_tail_text(journal: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = std::fs::metadata(journal).ok()?.len();
+    if len <= NEWEST_TAIL_BYTES {
+        return None;
+    }
+    let mut file = std::fs::File::open(journal).ok()?;
+    file.seek(SeekFrom::Start(len - NEWEST_TAIL_BYTES)).ok()?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    match text.find('\n') {
+        Some(pos) => Some(text[pos + 1..].to_string()),
+        None => None,
+    }
 }
 
 fn display(value: Option<&Value>, digits: usize) -> String {
@@ -696,6 +732,14 @@ mod tests {
         assert_eq!(ticks.busy, 33);
         assert_eq!(ticks.system, 14);
         assert_eq!(ticks.idle, 24);
+    }
+
+    #[test]
+    fn mach_ticks_count_idle_as_idle() {
+        let ticks = mach_ticks([10, 3, 80, 2]);
+        assert_eq!(ticks.busy, 15);
+        assert_eq!(ticks.system, 3);
+        assert_eq!(ticks.idle, 80);
     }
 
     #[test]

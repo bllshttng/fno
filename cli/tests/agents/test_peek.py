@@ -20,7 +20,6 @@ from fno.agents.peek import (
     _codex_rollout_path,
     _emit_record,
     _read_complete_lines,
-    newest_assistant_text,
     peek,
     recent_records,
 )
@@ -180,22 +179,22 @@ def test_peek_gone_pane_names_the_exit_and_the_resume(tmp_path, monkeypatch):
     )
     out, err = io.StringIO(), io.StringIO()
     rc = peek(
-        "king-4d9b-delivery",
+        "lead-4d9b-delivery",
         stdout=out,
         stderr=err,
         resolve=lambda h: (None, ["someone-else"]),
         projects_root=tmp_path,
-        mux_lookup=lambda h: ("main", 2277, "king-4d9b-delivery"),
+        mux_lookup=lambda h: ("main", 2277, "lead-4d9b-delivery"),
         mux_reader=lambda sess, pane, n: (1, ""),
     )
     msg = err.getvalue()
     assert "pane 2277 is gone" in msg
-    assert "fno agents resume king-4d9b-delivery" in msg
+    assert "fno agents resume lead-4d9b-delivery" in msg
     assert "the mux did not answer" not in msg
     # The fall-through continues past the pane read, so the not-found shape
     # (no registry row in this test) is the expected exit here, not 1.
     assert rc == 13
-    assert "peer not found in the registry: king-4d9b-delivery" in msg
+    assert "peer not found in the registry: lead-4d9b-delivery" in msg
 
 
 def test_peek_mux_pane_no_row_falls_through_to_not_found(tmp_path):
@@ -477,106 +476,6 @@ def test_peek_reader_codex(tmp_path, monkeypatch):
     )
     recs = recent_records("codex", "cx-999", "/tmp/proj", 10, codex_sessions_dir=tmp_path)
     assert [(r.role, r.text) for r in recs] == [("user", "ping")]
-
-
-def test_newest_assistant_text_reads_codex_rollout_help_tag(tmp_path):
-    """x-6aca regression: a codex rollout whose final assistant message
-    carries a help tag is readable. loopcheck's former in-process parser
-    resolved the speaker via /message/role and a top-level role, and a codex
-    rollout puts both under payload, so every line read as assistant-free and
-    no codex distress ever reached a parent."""
-    rollout = tmp_path / "rollout-2026-09-06T00-00-00-cx-1.jsonl"
-    rollout.write_text(
-        "\n".join(
-            [
-                json.dumps({"type": "session_meta", "payload": {"id": "cx-1", "cwd": "/tmp/proj"}}),
-                json.dumps(
-                    {
-                        "type": "response_item",
-                        "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "run the target"}]},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "response_item",
-                        "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "branch created, continuing"}]},
-                    }
-                ),
-                # task_complete rides event_msg, which is not a message record:
-                # the reader must skip it and keep scanning for the newest
-                # assistant turn.
-                json.dumps(
-                    {
-                        "type": "event_msg",
-                        "payload": {"type": "task_complete", "last_agent_message": "done"},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "response_item",
-                        "payload": {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": '<help reason="worktree-init-blocked" evidence="Unable to create .git/refs/heads/feature/x-6aca.lock: Operation not permitted"> no source edits occurred'}],
-                        },
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    text = newest_assistant_text(rollout)
-    assert text is not None
-    assert 'reason="worktree-init-blocked"' in text
-
-
-def test_newest_assistant_text_reads_the_newest_entry_only(tmp_path):
-    """The NEWEST assistant turn wins, not the newest distress-bearing one;
-    an older entry's distress was handled at its own stop."""
-    path = tmp_path / "t.jsonl"
-    path.write_text(
-        "\n".join(
-            [
-                _assistant('<help reason="old wall">'),
-                _user("go"),
-                _assistant("still working"),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    assert newest_assistant_text(path) == "still working"
-
-
-def test_newest_assistant_text_reads_the_agy_shim_synthesis(tmp_path):
-    """The agy stop hook normalizes Gemini-family lines to exactly this shape
-    before loop-check reads them (hooks/footnote-agy-target-stop-hook.sh); the reader
-    must accept the shim's dialect, not only a real claude transcript's."""
-    synth = tmp_path / "synth.jsonl"
-    synth.write_text(
-        json.dumps(
-            {
-                "type": "assistant",
-                "message": {"role": "assistant", "content": '<help reason="agy-blocked">no source edits occurred</help>'},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    assert 'reason="agy-blocked"' in newest_assistant_text(synth)
-
-
-def test_newest_assistant_text_none_without_an_assistant_turn(tmp_path):
-    """User-only, empty, and absent files all read as no answer (None), which
-    the caller treats as fail-quiet."""
-    user_only = tmp_path / "user-only.jsonl"
-    user_only.write_text(_user("go") + "\n", encoding="utf-8")
-    assert newest_assistant_text(user_only) is None
-    empty = tmp_path / "empty.jsonl"
-    empty.write_text("", encoding="utf-8")
-    assert newest_assistant_text(empty) is None
-    assert newest_assistant_text(tmp_path / "absent.jsonl") is None
 
 
 # --------------------------------------------------------------------------
@@ -1464,7 +1363,7 @@ def _quiet_claude_fleet(tmp_path, monkeypatch, session_id):
 
     The x-f715 shape: the live listing is liveness-gated, so nothing here
     answers a live resolver, and the exact row match takes only the name
-    ("king-harness-pi") and the full session id - the 8-hex handle hits
+    ("lead-harness-pi") and the full session id - the 8-hex handle hits
     neither. The durable-store rung is the only reader left.
     """
     from fno import paths
@@ -1494,7 +1393,7 @@ def _quiet_claude_fleet(tmp_path, monkeypatch, session_id):
     write_registry(
         [
             AgentEntry(
-                name="king-harness-pi",
+                name="lead-harness-pi",
                 harness="claude",
                 harness_session_id=session_id,
                 status="orphaned",
@@ -1514,7 +1413,7 @@ def test_peek_resolves_a_quiet_session_by_short_session_id(tmp_path, monkeypatch
 
     x-f715: peek refused a short-id handle with "peer not found in the
     registry" while three other readers resolved the same session. The refusal
-    named an absence the roster contradicted, and the crown rerouted a launch
+    named an absence the roster contradicted, and the role rerouted a launch
     order on the strength of it.
     """
     session_id = "647b3a9c-6544-43fe-899e-704382f3d973"

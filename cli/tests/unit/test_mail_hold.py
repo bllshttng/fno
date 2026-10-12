@@ -20,8 +20,15 @@ HANDLE = "abcd1234"
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
-    """Point the clock directory at a tmp state root, not the real ~/.fno."""
+    """Point the clock directory at a tmp state root, not the real ~/.fno.
+
+    FNO_HOME aims the Rust writer (arm/clear shell the mail-hold verb) at
+    the same root the Python readers use; without it the arm writes
+    the machine's state while read() checks the tmp one.
+    """
     monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
+    monkeypatch.setenv("FNO_HOME", str(tmp_path))
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -40,9 +47,29 @@ def _msg(msg_id, sender, body, ts="2026-08-20T10:00:00Z"):
     return SimpleNamespace(id=msg_id, from_=sender, body=body, ts=ts)
 
 
+def _seed(hold: hold_mod.Hold) -> hold_mod.Hold:
+    """Write a clock file directly: the transport only arms and clears, and
+    several tests need states it cannot express (a lapsed clock, a
+    conversation-sourced one). Same bytes the old writer wrote."""
+    import json
+
+    fields = {
+        "until": hold.until.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.until else None,
+        "window_s": hold.window_s,
+        "clock_kind": hold.clock_kind,
+        "ceiling": hold.ceiling.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.ceiling else None,
+    }
+    if hold.source:
+        fields["source"] = hold.source
+    path = hold_mod.hold_path(hold.handle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(fields) + "\n", encoding="utf-8")
+    return hold
+
+
 def _expire(handle):
     """Age a live timed hold past its deadline without deleting its clock."""
-    return hold_mod._write(
+    return _seed(
         hold_mod.Hold(
             handle=handle,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),
@@ -95,7 +122,7 @@ def test_arm_writes_a_readable_clock_and_clear_removes_it():
         ceiling=armed.ceiling,
         source=hold_mod.CONVERSATION_SOURCE,
     )
-    hold_mod._write(auto)
+    _seed(auto)
     assert hold_mod.read(HANDLE).source == hold_mod.CONVERSATION_SOURCE
     assert hold_mod.dnd_label(HANDLE).endswith(" (auto)")
     bare = hold_mod.Hold(
@@ -105,7 +132,7 @@ def test_arm_writes_a_readable_clock_and_clear_removes_it():
         clock_kind=armed.clock_kind,
         ceiling=armed.ceiling,
     )
-    hold_mod._write(bare)
+    _seed(bare)
     assert hold_mod.dnd_label(HANDLE) == hold_mod.remaining_label(HANDLE)
     assert not hold_mod.dnd_label(HANDLE).endswith(" (auto)")
 
@@ -124,44 +151,13 @@ def test_wall_clock_arm_has_fixed_deadline_and_no_idle_ceiling(monkeypatch):
     assert armed.window_s == 480
 
 
-def test_wall_clock_activity_preserves_the_original_deadline(monkeypatch):
-    start = datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(hold_mod, "_now", lambda: start)
-    armed = hold_mod.arm_wall(HANDLE, 8)
-    later = start + timedelta(minutes=1)
-    monkeypatch.setattr(hold_mod, "_now", lambda: later)
-
-    active = hold_mod.extend(HANDLE)
-
-    assert active is not None
-    assert active.clock_kind == "wall"
-    assert active.until == armed.until
-
-
-def test_idle_activity_clamps_at_the_absolute_ceiling(monkeypatch):
-    start = datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc)
-    hold_mod._write(
-        hold_mod.Hold(
-            handle=HANDLE,
-            until=start + timedelta(minutes=1),
-            window_s=480,
-            clock_kind="idle",
-            ceiling=start + timedelta(minutes=2),
-        )
-    )
-    monkeypatch.setattr(hold_mod, "_now", lambda: start)
-
-    active = hold_mod.extend(HANDLE)
-
-    assert active is not None
-    assert active.until == start + timedelta(minutes=2)
-    assert active.ceiling == start + timedelta(minutes=2)
-
-
 def test_a_permanent_policy_renders_as_held_with_no_countdown():
     hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.read(HANDLE).until is None
-    assert hold_mod.remaining_label(HANDLE) == "held"
+    # The permanent marker is the ABSENCE of a clock file plus the registry
+    # flag; read() answers None for a cleared file, and the column's "held"
+    # comes from dnd_label's fallback, not from a clock file.
+    assert hold_mod.read(HANDLE) is None
+    assert hold_mod.dnd_label(HANDLE) == "held"
 
 
 # --- Task 2: auto-expire, on BOTH branches of the gate ----------------------
@@ -188,7 +184,7 @@ def test_a_live_hold_does_not_lapse_and_an_expired_one_does():
     hold_mod.arm(HANDLE, 5)
     assert hold_mod.lapsed(HANDLE) is False
 
-    hold_mod._write(
+    _seed(
         hold_mod.Hold(
             handle=HANDLE,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),
@@ -201,8 +197,8 @@ def test_a_live_hold_does_not_lapse_and_an_expired_one_does():
 def test_a_corrupt_clock_reads_as_no_clock_and_keeps_holding():
     """An unreadable clock is not evidence the hold ended, so the flag stands.
 
-    The hold then lifts at the recipient's next turn boundary (notify-self
-    tidies it) or on `fno agents mail hold --off`. A stall, and a bounded one.
+    The hold then lifts on `fno agents mail hold --off`. A stall, and a
+    bounded one.
     """
     hold_mod.arm(HANDLE, 5)
     hold_mod.hold_path(HANDLE).write_text("{not json", encoding="utf-8")
@@ -325,45 +321,6 @@ def test_gate_leaves_a_clockless_bus_only_row_refusing_on_both_branches(monkeypa
     assert dispatch._delivery_policy_refusal(HANDLE) == dispatch.BUS_ONLY_POLICY
 
 
-def test_extend_pushes_a_live_hold_out_and_refuses_everything_else():
-    hold_mod.arm(HANDLE, 5)
-    first = hold_mod.read(HANDLE).until
-    extended = hold_mod.extend(HANDLE)
-    assert extended is not None and extended.until >= first
-
-    hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.extend(HANDLE) is None
-
-    hold_mod.clear(HANDLE)
-    assert hold_mod.extend(HANDLE) is None
-
-
-def test_tidy_lapsed_clears_a_timed_hold_but_never_a_permanent_policy(monkeypatch):
-    cleared = []
-    monkeypatch.setattr(
-        hold_mod,
-        "set_policy",
-        # Returns True: this stub stands in for a write that SUCCEEDED, and
-        # tidy_lapsed now reports the write rather than the attempt.
-        lambda handle, policy: (cleared.append((handle, policy)), True)[1],
-    )
-
-    hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.tidy_lapsed(HANDLE) is False
-    assert hold_mod.read(HANDLE) is not None
-
-    hold_mod._write(
-        hold_mod.Hold(
-            handle=HANDLE,
-            until=datetime.now(timezone.utc) - timedelta(seconds=1),
-            window_s=60,
-        )
-    )
-    assert hold_mod.tidy_lapsed(HANDLE) is True
-    assert hold_mod.read(HANDLE) is None
-    assert cleared == [(HANDLE, None)]
-
-
 # --- Release rendering -----------------------------------------------------
 
 
@@ -454,7 +411,7 @@ def test_a_failed_policy_write_keeps_the_clock_so_the_hold_stays_recoverable(mon
 
     Clearing the clock regardless left a bus-only row with no clock, and that
     never lapses, so a hold that failed to lift became permanent with no
-    automatic path back: `tidy_lapsed` needs a clock it no longer has.
+    automatic path back.
     """
     _expire(HANDLE)
     monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: False)
@@ -465,8 +422,8 @@ def test_a_failed_policy_write_keeps_the_clock_so_the_hold_stays_recoverable(mon
 
     clock = hold_mod.read(HANDLE)
     assert clock is not None, "a failed policy write must keep the clock"
-    # Still lapsed, so the gate lets mail through and the next turn boundary
-    # retries the tidy.
+    # Still lapsed, so the gate lets mail through, and the next turn
+    # boundary's Rust tidy lifts the row.
     assert hold_mod.lapsed(HANDLE) is True
 
 
@@ -533,9 +490,9 @@ def test_the_release_delivers_through_the_lane_dispatcher(monkeypatch):
 
 
 def test_the_drain_delivers_a_multi_line_digest_on_the_live_lane(monkeypatch):
-    """C17 evidence (x-9008, crown ruling d-9187ccf6).
+    """C17 evidence (x-9008, role ruling d-9187ccf6).
 
-    The crown's held-mail drain lost three messages when the raw door
+    The role's held-mail drain lost three messages when the raw door
     refused the multi-line digest with "an unframed payload must be a
     single line". That refusal's premise died with C17: the Rust typing
     layer flattens every payload into ONE submitted line (pinned by
@@ -640,8 +597,8 @@ def test_release_delivers_held_release_frame_without_synthetic_sender(monkeypatc
         is_release = (
             text.startswith("1 held messages · sent ")
             and (
-                "`@worker · fmail-123456789abc · the held report`" in text
-                or "`worker · fmail-123456789abc · the held report`" in text
+                "`@worker · fmail-123456789abc`" in text
+                or "`worker · fmail-123456789abc`" in text
             )
             and "<fno_mail" not in text
         )
@@ -662,8 +619,8 @@ def test_release_delivers_held_release_frame_without_synthetic_sender(monkeypatc
     assert len(injected) == 1
     assert injected[0].startswith("1 held messages · sent ")
     assert (
-        "`@worker · fmail-123456789abc · the held report`" in injected[0]
-        or "`worker · fmail-123456789abc · the held report`" in injected[0]
+        "`@worker · fmail-123456789abc`" in injected[0]
+        or "`worker · fmail-123456789abc`" in injected[0]
     )
     assert "<fno_mail" not in injected[0]
     assert scan_unread(HANDLE) == []
@@ -809,7 +766,6 @@ def test_cli_for_arms_wall_clock_and_names_it_in_the_receipt(monkeypatch, capsys
         "fno.agents.registry.register_existing_session", lambda **_kwargs: None
     )
     monkeypatch.setattr(hold_mod, "arm_wall", lambda handle, minutes: armed)
-    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: None)
 
     mail_cli.cmd_hold(minutes=None, for_minutes=8, off=False, status=False)
 
@@ -819,31 +775,34 @@ def test_cli_for_arms_wall_clock_and_names_it_in_the_receipt(monkeypatch, capsys
 
     # The status leg reads the record, not the gate: the gate's own-pass
     # answers deliverable for the session's own hold, which once made
-    # --status report "no hold" while the check-in read bus-only.
-    auto = hold_mod.Hold(
-        handle=HANDLE,
-        until=armed.until,
-        window_s=480,
-        clock_kind="wall",
-        source=hold_mod.CONVERSATION_SOURCE,
-    )
+    # --status report "no hold" while the check-in read bus-only. The clock
+    # is seeded directly and the verb renders the line.
     monkeypatch.setattr(
         hold_mod, "resolve_entry", lambda _h: SimpleNamespace(delivery_policy="bus-only")
     )
-    monkeypatch.setattr(hold_mod, "read_any", lambda _h: auto)
+    _seed(
+        hold_mod.Hold(
+            handle=HANDLE,
+            until=datetime.now(timezone.utc) + timedelta(minutes=8),
+            window_s=480,
+            clock_kind="wall",
+            source=hold_mod.CONVERSATION_SOURCE,
+        )
+    )
     mail_cli.cmd_hold(minutes=None, for_minutes=None, off=False, status=True)
     output = capsys.readouterr().out
     assert "machine-armed while you talk" in output
     assert "lifts about 2 min after your answer" in output
 
     # A manual stamp keeps the old shape.
-    live_manual = hold_mod.Hold(
-        handle=HANDLE,
-        until=datetime.now(timezone.utc) + timedelta(minutes=8),
-        window_s=480,
-        clock_kind="wall",
+    _seed(
+        hold_mod.Hold(
+            handle=HANDLE,
+            until=datetime.now(timezone.utc) + timedelta(minutes=8),
+            window_s=480,
+            clock_kind="wall",
+        )
     )
-    monkeypatch.setattr(hold_mod, "read_any", lambda _h: live_manual)
     mail_cli.cmd_hold(minutes=None, for_minutes=None, off=False, status=True)
     output = capsys.readouterr().out
     assert "lifts in" in output
@@ -937,18 +896,6 @@ def test_an_unreadable_clock_renders_a_question_mark_not_an_empty_cell(monkeypat
     assert fmt._dnd_label(_full_entry()) == "?"
 
 
-def test_tidy_lapsed_reports_the_write_not_the_attempt(monkeypatch):
-    """Returning True over a policy write that no-opped is the same defect."""
-    _expire(HANDLE)
-    monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: False)
-
-    assert hold_mod.tidy_lapsed(HANDLE) is False
-
-    _expire(HANDLE)
-    monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
-    assert hold_mod.tidy_lapsed(HANDLE) is True
-
-
 def test_a_bus_only_row_with_no_clock_reads_held_not_blank():
     """The pre-busy-mode row: flag set by hand, no clock, mail genuinely held.
 
@@ -970,7 +917,15 @@ def test_the_dnd_column_and_the_delivery_gate_never_disagree(monkeypatch):
     """
     import json
 
+    real_run = hold_mod.subprocess.run
+
     def _fake_run(argv, **_kw):
+        if "--session" not in argv:
+            # A mail-hold read/write the port routed through the door: serve
+            # the real clock state (the seeds write it, the column and the
+            # gate mirror both read it back) instead of answering "no clock"
+            # for every case, which would agree vacuously.
+            return real_run(argv, capture_output=True, text=True, timeout=10)
         token = argv[argv.index("--session") + 1]
         clock = hold_mod.read_any(token)
         # Mirror the Rust gate: only a LAPSED timed clock delivers; no clock,
@@ -990,10 +945,27 @@ def test_the_dnd_column_and_the_delivery_gate_never_disagree(monkeypatch):
     # clocks here sit under that same key; the column's addresses() sweep
     # finds it either way.
     full = _entry().harness_session_id
+    # The clockful states seed directly: inside this test every subprocess
+    # ride is the stub, so a transport arm would no-op and each case would
+    # degenerate to "no clock" while its name still said otherwise.
     cases = [
         ("no clock", lambda: None),
-        ("permanent", lambda: hold_mod.arm_permanent(full)),
-        ("live timed", lambda: hold_mod.arm(full, 5)),
+        (
+            "permanent",
+            lambda: _seed(hold_mod.Hold(handle=full, until=None, window_s=None)),
+        ),
+        (
+            "live timed",
+            lambda: _seed(
+                hold_mod.Hold(
+                    handle=full,
+                    until=datetime.now(timezone.utc) + timedelta(minutes=5),
+                    window_s=300,
+                    clock_kind="idle",
+                    ceiling=datetime.now(timezone.utc) + timedelta(minutes=10),
+                )
+            ),
+        ),
         ("lapsed timed", lambda: _expire(full)),
     ]
     for name, arrange in cases:
@@ -1008,7 +980,7 @@ def test_the_dnd_column_and_the_delivery_gate_never_disagree(monkeypatch):
 
 
 def test_a_lapsed_hold_renders_no_dnd_because_mail_flows_again():
-    hold_mod._write(
+    _seed(
         hold_mod.Hold(
             handle=HANDLE,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),

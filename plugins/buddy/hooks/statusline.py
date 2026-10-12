@@ -7,7 +7,6 @@ the copy. It reads only files the mod wrote beside it, so it stays fast.
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import unicodedata
@@ -16,14 +15,30 @@ HOME = os.path.dirname(os.path.abspath(__file__))
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)")
 MIN_ROWS, MAX_ROWS = 3, 6
 # Under this many columns the original buddy showed a one-line face.
-NARROW = 100
+NARROW = 60
 # The original speech bubble held about 30 columns of text.
 BUBBLE_W = 30
 # A frame older than this belongs to a session that stopped drawing.
-STALE_S = 30
+STALE_S = 45
+# The user's own status line reruns at most this often unless its input changes,
+# or at its own refreshInterval when it has one.
+INNER_MAX_AGE_S = 30
 # Claude Code trims a row's leading spaces; a braille blank holds the column.
 LEAD = "⠀"
-COLORS = {"gray": 90, "green": 32, "cyan": 36, "magenta": 35, "yellow": 33}
+# The ANSI names Claude Code's -ansi themes use for the rarity colors.
+# The bare names are what a mod from before the theme table still writes.
+ANSI_NAMES = {"blackBright": 90, "white": 37, "green": 32, "greenBright": 92, "blue": 34, "blueBright": 94, "magenta": 35, "magentaBright": 95, "yellow": 33, "yellowBright": 93, "gray": 90, "cyan": 36}
+
+
+def sgr(color):
+    """The escape for a frame color: rgb(r,g,b) as 24-bit, ansi:<name> in the terminal's own palette, else dim gray."""
+    color = color or ""
+    if color.startswith("rgb(") and color.endswith(")"):
+        parts = [p.strip() for p in color[4:-1].split(",")]
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            return "\x1b[38;2;" + ";".join(parts) + "m"
+    name = color[5:] if color.startswith("ansi:") else color
+    return f"\x1b[{ANSI_NAMES.get(name, 90)}m"
 
 
 def width(s):
@@ -38,6 +53,32 @@ def cut(s, n):
             return out[:-1] + "…" if out else ""
         out, w = out + c, w + cw
     return out
+
+
+def bubble(text, room, widest=BUBBLE_W):
+    """A thought bubble over `room` rows, bottom-aligned, its trail of dots pointing at the buddy.
+
+    Three rows or more get the outline; fewer get the bare words.
+    """
+    # The outline needs its full width; a terminal too narrow for it gets the bare words.
+    framed = room >= 3 and widest >= BUBBLE_W + 4
+    rows = room - 2 if framed else room
+    if rows < 1 or not text.strip():
+        return [""] * room
+    # Start at the original's 30 columns and widen until the words fit the rows beside the buddy.
+    w = min(BUBBLE_W, max(widest, 8))
+    lines = wrap(text, w)
+    while len(lines) > rows and w < widest:
+        w = min(widest, w + 4)
+        lines = wrap(text, w)
+    if len(lines) > rows:
+        lines = lines[: rows - 1] + [cut(" ".join(lines[rows - 1 :]), w)]
+    bw = max(width(line) for line in lines)
+    body = [line + " " * (bw - width(line)) for line in lines]
+    if framed:
+        body = ["╭" + "─" * (bw + 2) + "╮"] + [f"│ {b} │" for b in body] + ["╰" + "─" * (bw + 2) + "╯ ◦ ·"]
+        body = [b if i == len(body) - 1 else b + "    " for i, b in enumerate(body)]
+    return [""] * (room - len(body)) + body
 
 
 def wrap(text, n):
@@ -61,15 +102,64 @@ def wrap(text, n):
     return lines
 
 
-def inner_rows(stdin, data):
+def inner_key(data):
+    """The payload minus the clocks Claude Code advances on every tick, plus the width the rows were sized for."""
+    stable = dict(data)
+    stable["cost"] = {k: v for k, v in (data.get("cost") or {}).items() if not k.endswith("duration_ms")}
+    stable["columns"] = os.environ.get("COLUMNS", "")
+    return json.dumps(stable, sort_keys=True)
+
+
+def cached_inner_rows(stdin, data, session):
+    """The user's status line reruns on a real session change or once its rows age out; other ticks reuse them.
+
+    The age bound keeps a clock or a background git change from going stale for good.
+    A failed run never replaces good rows: the last good rows show and the next tick retries.
+    """
+    if not session:
+        return inner_rows(stdin, data)
+    path = os.path.join(HOME, "frames", f"{session}.inner.json")
+    key = inner_key(data)
+    cached = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached.get("key") == key and time.time() - cached.get("at", 0) < inner_max_age():
+            return cached["rows"]
+    except (OSError, ValueError, KeyError):
+        pass
+    rows = inner_rows(stdin, data)
+    if not rows:
+        return cached.get("rows") or rows
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"key": key, "at": time.time(), "rows": rows}, f)
+    except OSError:
+        pass
+    return rows
+
+
+def inner_line():
     try:
         with open(os.path.join(HOME, "inner.json"), encoding="utf-8") as f:
-            inner = json.load(f).get("statusLine") or {}
-    except (OSError, ValueError):
-        inner = {}
+            return json.load(f).get("statusLine") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def inner_max_age():
+    every = inner_line().get("refreshInterval")
+    return every if isinstance(every, (int, float)) and every >= 1 else INNER_MAX_AGE_S
+
+
+def inner_rows(stdin, data):
+    inner = inner_line()
     command = inner.get("command") if inner.get("type") == "command" else None
     if command:
         try:
+            # Imported here: most ticks reuse cached rows and never pay for it.
+            import subprocess
+
             out = subprocess.run(command, shell=True, input=stdin, capture_output=True, text=True, timeout=5).stdout
         except Exception:
             out = ""
@@ -109,37 +199,43 @@ def layout(left, frame, cols):
         return left
     if cols + 4 < NARROW:
         return face_row(left, frame, cols)
-    color = f"\x1b[{COLORS.get(frame.get('color'), 90)}m"
+    color = sgr(frame.get("color"))
     art = [r.rstrip() for r in frame.get("sprite", [])]
     while art and not art[0].strip():
         art.pop(0)
     name = frame.get("name", "")
     fleet = frame.get("fleet") or ""
-    # Like the original: the full sprite with its name row below, at 100 columns or more.
+    # Like the original: the full sprite with its name row below, at 60 columns or more.
     aw = max([width(a) for a in art] + [len(name)])
     art.append(name.center(aw).rstrip())
     # Speech wraps beside the body like the original bubble, bottom-aligned; the fleet line sits beside the name row.
     labels = [""] * len(art)
     labels[-1] = fleet
-    room = len(art) - 1
-    lines = wrap(frame.get("speech") or "", BUBBLE_W)
-    if len(lines) > room:
-        lines = lines[: room - 1] + [cut(" ".join(lines[room - 1 :]), BUBBLE_W)] if room else []
-    bw = max([width(line) for line in lines] + [0])
-    for i, line in enumerate(lines):
-        labels[room - len(lines) + i] = line + " " * (bw - width(line))
+    # The bubble may widen into the room the user's rows leave free beside the buddy.
+    # The bubble may take the whole width beside the buddy, over the user's rows, while it shows.
+    widest = min(BUBBLE_W * 2, cols - aw - 12)
+    for i, line in enumerate(bubble(frame.get("speech") or "", len(art) - 1, widest)):
+        labels[i] = line
 
-    for rows in range(max(len(left), len(art), MIN_ROWS), MAX_ROWS + 1):
+    least = max(len(left), len(art), MIN_ROWS)
+    if least > MAX_ROWS:
+        return face_row(left, frame, cols)
+    # Prefer a row count where the user's rows fit whole; else keep the full buddy and cut the rows beside it.
+    tries = [*range(least, MAX_ROWS + 1), least]
+    for n, rows in enumerate(tries):
         lefts = left + [""] * (rows - len(left))
         top = rows - len(art)
-        if all(width(lefts[top + i]) + aw + 2 <= cols for i in range(len(art))):
+        if n == len(tries) - 1 or all(width(lefts[top + i]) + aw + 2 <= cols for i in range(len(art))):
             out = lefts[:top]
             for i, a in enumerate(art):
                 l = lefts[top + i] or LEAD
-                free = cols - width(l) - aw - 3
-                label = cut(labels[i], free) if free > 3 else ""
+                label = cut(labels[i], cols - aw - 4)
                 # Only the buddy wears its rarity color; its words use the terminal's own text color.
                 words = label + " " if label else ""
+                # While the buddy talks, its bubble covers the user's row; the row comes back when it fades.
+                room = cols - width(words) - aw - 1
+                if width(l) > room:
+                    l = cut(ANSI.sub("", l), room) if room > 1 else LEAD
                 pad = cols - width(l) - width(words) - aw
                 out.append(l + " " * pad + words + color + a.ljust(aw) + "\x1b[0m")
             return out
@@ -149,7 +245,7 @@ def layout(left, frame, cols):
 
 def face_row(left, frame, cols):
     """The one-line face on the lowest row that has room."""
-    color = f"\x1b[{COLORS.get(frame.get('color'), 90)}m"
+    color = sgr(frame.get("color"))
     face = f"{frame.get('face', '')} {frame.get('name', '')}"
     if frame.get("speech"):
         face += f": {frame['speech']}"
@@ -188,11 +284,26 @@ def main():
                 f.write(str(int(time.time() * 1000)))
         except OSError:
             pass
-    left = inner_rows(stdin, data)
+    left = cached_inner_rows(stdin, data, session)
     # Claude Code's usable status width runs a few columns under COLUMNS.
     cols = int(os.environ.get("COLUMNS") or 120) - 4
-    print("\n".join(layout(left, read_frame(session), cols)))
-
+    out = "\n".join(layout(left, read_frame(session), cols))
+    print(out)
+    # statusline.sh prints this again, with no Python, until the input or the width changes or a new frame lands.
+    key = os.environb.get(b"BUDDY_KEY")
+    if session and key is not None:
+        cache = os.path.join(HOME, "frames", f"{session}.cache")
+        tmp = f"{cache}.{os.getpid()}"
+        try:
+            # The key, a NUL, then the output, swapped in whole so a reader never sees half of it.
+            with open(tmp, "wb") as f:
+                f.write(key + b"\0" + (out + "\n").encode("utf-8"))
+            os.replace(tmp, cache)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 if __name__ == "__main__":
     main()

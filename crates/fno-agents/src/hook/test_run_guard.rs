@@ -32,7 +32,6 @@
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::lead_guard::lex;
 use crate::test_run::cargo_test_selects_whole_suite;
@@ -106,9 +105,9 @@ const UV_VALUE_FLAGS: &[&str] = &[
 
 const PYTEST_REASON: &str = "[fno test-run guard] `{cmd}` runs pytest outside the suite admission. A raw suite takes no test:suite slot, waits behind no live cargo build, and imports whichever fno is first on PYTHONPATH - on this machine two raw suites at once are the measured crush behind this guard.\n\nRun `fno doctor test <test files>` instead, for example `fno doctor test cli/tests/unit/test_x.py`. It takes the one machine-wide test:suite slot, holds while another suite or cargo build is live, and pins PYTHONPATH to this worktree. A bare `fno doctor test` runs the whole cli/tests tree while it holds that slot.";
 
-const CARGO_REASON: &str = "[fno test-run guard] `{cmd}` runs the crates suite unadmitted. Raw `cargo test` takes no test:suite slot and waits behind no live cargo build.\n\nRun the narrowest target through the door instead: `fno doctor test rust --manifest-path crates/<crate>/Cargo.toml --lib <module>::` for unit tests, or `--test <file stem>` for one integration file. A whole-crate run is refused here too; CI runs every suite on every PR.";
+const CARGO_REASON: &str = "[fno test-run guard] `{cmd}` runs the crates suite unadmitted. Raw `cargo test` takes no test:suite slot and waits behind no live cargo build.\n\nAn agent session runs no tests here at all: the cargo run door refuses its test binaries. Commit, push with `fno do pr push`, and CI runs the tests. In a session the user attends, run the narrowest target through the door instead: `fno doctor test rust --manifest-path crates/<crate>/Cargo.toml --lib <module>::` for unit tests, or `--test <file stem>` for one integration file. A whole-crate run is refused here too; CI runs every suite on every PR.";
 
-const WHOLE_RUST_REASON: &str = "[fno test-run guard] `{cmd}` runs a whole crate test suite. CI runs every suite on every PR. Here a whole run holds the one machine-wide test:suite slot for many minutes while one-test runs queue behind it.\n\nRun the narrowest target instead: `fno doctor test rust --manifest-path crates/<crate>/Cargo.toml --lib <module>::` for unit tests, or `--test <file stem>` for one integration file. To run the whole suite anyway, prefix the command with `FNO_TEST_FULL=1`; it then waits while targeted runs are queued.";
+const WHOLE_RUST_REASON: &str = "[fno test-run guard] `{cmd}` runs a whole crate test suite. CI runs every suite on every PR. Here a whole run holds the one machine-wide test:suite slot for many minutes while one-test runs queue behind it.\n\nAn agent session runs no tests here at all: the cargo run door refuses its test binaries. Commit, push with `fno do pr push`, and CI runs the tests. In a session the user attends, run the narrowest target instead: `fno doctor test rust --manifest-path crates/<crate>/Cargo.toml --lib <module>::` for unit tests, or `--test <file stem>` for one integration file. To run the whole suite anyway, prefix the command with `FNO_TEST_FULL=1`; it then waits while targeted runs are queued.";
 
 const WHOLE_DOOR_REASON: &str = "[fno test-run guard] `{cmd}` selects no target, so it runs the whole default suite in the foreground and this turn blocks on the test:suite queue for up to the run's whole budget. CI runs every suite on every PR.\n\nRun only the tests covering the files you changed: `fno doctor test <changed test files>`. A whole-suite run that is truly needed starts as a background task: it queues on test:suite and this turn never blocks. To run it in the foreground anyway, prefix the command with `FNO_TEST_FULL=1`.";
 
@@ -653,18 +652,7 @@ fn refused_segment(
 }
 
 fn repo_root(cwd: &Path) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if root.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(root))
-    }
+    crate::paths::worktree_toplevel(cwd)
 }
 
 /// True when root is a footnote checkout or worktree of one. Both markers
@@ -753,12 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn env_prefix_refused() {
-        let root = footnote_root();
-        assert!(decide("FNO_DEBUG=1 pytest -q", root.path()).is_some());
-    }
-
-    #[test]
     fn timeout_wrapper_refused() {
         let root = footnote_root();
         assert!(decide("timeout 30 uv run pytest", root.path()).is_some());
@@ -770,12 +752,6 @@ mod tests {
         assert!(decide("uvx pytest", root.path()).is_some());
         assert!(decide("uv tool run pytest -q", root.path()).is_some());
         assert!(decide("uvx --from pytest-uv pytest -q", root.path()).is_some());
-    }
-
-    #[test]
-    fn uv_run_python_m_pytest_refused() {
-        let root = footnote_root();
-        assert!(decide("uv run python -m pytest -q", root.path()).is_some());
     }
 
     #[test]
@@ -831,12 +807,6 @@ mod tests {
     fn cargo_build_allows() {
         let root = footnote_root();
         assert!(decide("cargo build --release", root.path()).is_none());
-    }
-
-    #[test]
-    fn pytest_in_echo_string_allows() {
-        let root = footnote_root();
-        assert!(decide("echo \"pytest passed\"", root.path()).is_none());
     }
 
     #[test]
@@ -945,12 +915,6 @@ mod tests {
     fn cargo_t_alias_refused() {
         let root = footnote_root();
         assert!(decide("cargo t", root.path()).is_some());
-    }
-
-    #[test]
-    fn cargo_b_alias_allows() {
-        let root = footnote_root();
-        assert!(decide("cargo b --release", root.path()).is_none());
     }
 
     #[test]

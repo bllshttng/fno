@@ -1211,7 +1211,12 @@ fn expand_tilde_with(p: &str, home: Option<PathBuf>) -> PathBuf {
 /// is impossible. Global config only (the bootstrap runs independent of cwd).
 /// Best-effort: an absent or malformed file is "no pin" (US2/AC2-ERR).
 fn read_dev_source_pin() -> Option<String> {
-    let cfg = home_dir()?.join(".fno/config.toml");
+    // FNO_CONFIG relocates the config, and the demo shot script pins the
+    // python leg through it; a pin written there must not be read from HOME.
+    let cfg = match std::env::var_os("FNO_CONFIG") {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => home_dir()?.join(".fno/config.toml"),
+    };
     parse_dev_source(&fs::read_to_string(cfg).ok()?)
 }
 
@@ -1627,6 +1632,10 @@ fn decide_identity(name: &str, author: &str) -> Result<(), String> {
 fn exec_real(real: &Path, args: &[OsString]) -> BootErr {
     let mut command = bootstrap_command(real);
     command.args(args);
+    // Set before the interpreter starts: Python caches the package's own
+    // __init__ bytecode before its body runs, and a .pyc written while
+    // `uv tool install` replaces the venv fails it (os error 66).
+    command.env("PYTHONDONTWRITEBYTECODE", "1");
     let err = crate::process_admission::bootstrap_exec(&mut command);
     BootErr::new(
         126,

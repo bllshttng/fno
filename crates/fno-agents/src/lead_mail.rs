@@ -18,7 +18,7 @@ use std::path::Path;
 pub const SETTLE_SENDER: &str = "fno/lead-settle";
 
 /// Live team holders for `scope`, by row name, sorted and deduped - the
-/// port of `resolve_to_lead` over the JSON rows: `crown_level` present, the
+/// port of `resolve_to_lead` over the JSON rows: `role_level` present, the
 /// held scope answers, status not terminal.
 fn lead_holders(
     registry: &[Value],
@@ -28,14 +28,10 @@ fn lead_holders(
     let mut names: Vec<String> = registry
         .iter()
         .filter(|row| !crate::row_verdict::finished_json(row))
-        .filter(|row| {
-            row.get("crown_level")
-                .map(|c| !c.is_null())
-                .unwrap_or(false)
-        })
+        .filter(|row| row.get("role_level").map(|c| !c.is_null()).unwrap_or(false))
         .filter(|row| {
             crate::announce::team_answers(
-                crate::announce::row_str(row, "crown_scope"),
+                crate::announce::row_str(row, "role_scope"),
                 scope,
                 projects,
             )
@@ -49,7 +45,13 @@ fn lead_holders(
 
 /// Append one durable envelope under the bus sidecar flock. Body rides raw:
 /// the bus is the delivery, and a fleet-plain row renders in every drain.
-fn append_mail(bus_live: &Path, sender: &str, holder: &str, text: &str) -> Result<(), String> {
+fn append_mail(
+    bus_live: &Path,
+    chats_dir: &Path,
+    sender: &str,
+    holder: &str,
+    text: &str,
+) -> Result<(), String> {
     let id = crate::announce::new_msg_id();
     let word_count = text.split_whitespace().count() as i64;
     let mut obj = Map::new();
@@ -63,7 +65,7 @@ fn append_mail(bus_live: &Path, sender: &str, holder: &str, text: &str) -> Resul
     obj.insert("to_kind".into(), json!("name"));
     obj.insert("word_count".into(), json!(word_count));
     obj.insert("body".into(), json!(text));
-    crate::announce::append_line(bus_live, &Value::Object(obj))
+    crate::announce::append_line(bus_live, &Value::Object(obj), chats_dir)
 }
 
 /// Send one lead mail in process: resolve the scope's live holders and
@@ -73,6 +75,7 @@ fn append_mail(bus_live: &Path, sender: &str, holder: &str, text: &str) -> Resul
 pub fn send_at(
     registry: &Path,
     bus_live: &Path,
+    chats_dir: &Path,
     sender: &str,
     scope: &str,
     text: &str,
@@ -85,7 +88,7 @@ pub fn send_at(
     match holders.len() {
         0 => Err(format!("lead mail: no live team answers {scope:?}")),
         1 => {
-            append_mail(bus_live, sender, &holders[0], text)?;
+            append_mail(bus_live, chats_dir, sender, &holders[0], text)?;
             Ok(holders)
         }
         n => Err(format!(
@@ -109,6 +112,7 @@ pub fn send(sender: &str, scope: &str, text: &str) -> Result<Vec<String>, String
     send_at(
         &home.registry_json(),
         &dot_fno.join("bus").join("messages.jsonl"),
+        &crate::chats::chats_dir(),
         sender,
         scope,
         text,
@@ -121,6 +125,31 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
+    /// The chats index resolves from the env, not from the passed dirs, so
+    /// an unpinned test opens the shared runner chats.db and races its
+    /// siblings on it. Fields drop in order: the env comes back before the
+    /// lock is released.
+    struct Pinned {
+        _home: crate::claims::EnvVarGuard,
+        _state: crate::claims::EnvVarGuard,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn pin_home(tmp: &Path) -> Pinned {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dot_fno = tmp.join(".fno");
+        let home = dot_fno.join("agents");
+        Pinned {
+            _home: crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", &home.to_string_lossy()),
+            // The index and the bus the chats import reads both resolve
+            // through the state dir, so it is pinned beside the home.
+            _state: crate::claims::EnvVarGuard::set("FNO_STATE_DIR", &dot_fno.to_string_lossy()),
+            _lock: lock,
+        }
+    }
+
     fn registry_path(tmp: &Path) -> PathBuf {
         tmp.join("registry.json")
     }
@@ -129,18 +158,22 @@ mod tests {
         tmp.join("bus").join("messages.jsonl")
     }
 
+    fn chats_dir(tmp: &Path) -> PathBuf {
+        tmp.join("chats")
+    }
+
     fn write_registry(tmp: &Path, rows: Value) {
         let doc = json!({
             "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
             "agents": rows,
         });
-        std::fs::write(registry_path(tmp), doc.to_string()).unwrap();
+        crate::registry_store::seed_raw(&registry_path(tmp), doc.to_string());
     }
 
     fn team_row(name: &str, scope: &str, level: u8, status: &str) -> Value {
         json!({
-            "name": name, "status": status, "crown_scope": scope,
-            "crown_level": level, "cwd": "/repo", "harness": "claude",
+            "name": name, "status": status, "role_scope": scope,
+            "role_level": level, "cwd": "/repo", "harness": "claude",
             "harness_session_id": format!("sess-{name}"),
             "log_path": format!("/tmp/{name}.log"),
             "created_at": "2026-09-25T12:00:00Z",
@@ -167,6 +200,7 @@ mod tests {
     #[test]
     fn one_live_holder_gets_one_durable_envelope_addressed_to_its_name() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let _pin = pin_home(tmp.path());
         write_registry(
             tmp.path(),
             json!([
@@ -177,6 +211,7 @@ mod tests {
         let mailed = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-aaaa",
             "PR #7 on x-1 settled green at abc123.",
@@ -198,15 +233,29 @@ mod tests {
         for key in ["v", "id", "ts", "thread"] {
             assert!(row.get(key).is_some(), "{key} missing");
         }
+        // The chat mirror follows the passed dir, never the env store:
+        // a fixture send records beside the fixture bus.
+        let chat_dirs = std::fs::read_dir(chats_dir(tmp.path()))
+            .expect("chats dir created beside the fixture bus")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("chat-"))
+            .count();
+        assert!(chat_dirs >= 1, "mirror landed in the passed chats dir");
+        assert!(
+            tmp.path().join(".fno/db/chats.db").exists(),
+            "the index lives in the test's own home, not the runner's"
+        );
     }
 
     #[test]
     fn a_vacant_team_refuses_and_writes_nothing() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let _pin = pin_home(tmp.path());
         write_registry(tmp.path(), json!([worker_row("worker-1")]));
         let err = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-bbbb",
             "text",
@@ -219,6 +268,7 @@ mod tests {
     #[test]
     fn a_split_team_refuses_instead_of_mailing_two_holders() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let _pin = pin_home(tmp.path());
         write_registry(
             tmp.path(),
             json!([
@@ -229,6 +279,7 @@ mod tests {
         let err = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-cccc",
             "text",
@@ -239,8 +290,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_and_uncrowned_rows_never_address() {
+    fn terminal_and_unpromoted_rows_never_address() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let _pin = pin_home(tmp.path());
         write_registry(
             tmp.path(),
             json!([
@@ -252,6 +304,7 @@ mod tests {
         let mailed = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-aaaa",
             "text",
@@ -271,6 +324,7 @@ mod tests {
         let err = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-dddd",
             "text",
@@ -280,6 +334,7 @@ mod tests {
         let mailed = send_at(
             &registry_path(tmp.path()),
             &bus_path(tmp.path()),
+            &chats_dir(tmp.path()),
             SETTLE_SENDER,
             "x-eeee",
             "text",

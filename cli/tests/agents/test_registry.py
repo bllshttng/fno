@@ -13,12 +13,14 @@ import fcntl
 import json
 import multiprocessing as mp
 import time
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from fno.paths_testing import use_tmpdir
+from fno.registry_door import read_registry_document
 
 
 def _replace_path_on_first_flock(monkeypatch, module, lock_path: Path):
@@ -234,7 +236,7 @@ def test_ac1_hp_round_trip_entry(tmp_path: Path, monkeypatch) -> None:
     assert e.context_measured_at == "2026-09-30T12:00:00Z"
     assert e.mail_unread == 1
     # AC1-HP: model provider is explicit and unset; removed session aliases die.
-    raw_row = json.loads(registry_path.read_text())["agents"][0]
+    raw_row = read_registry_document(registry_path)[0]["agents"][0]
     assert raw_row["provider"] is None
     for dead in ("codex_session_id", "gemini_session_id", "claude_session_uuid"):
         assert dead not in raw_row
@@ -266,9 +268,9 @@ def test_provider_outage_route_axes_round_trip_without_credentials(
     assert loaded[0].route_provider_id == "zai"
     assert loaded[0].model_name == "glm-5.3"
     assert loaded[0].account_record_id == "acct-a"
-    raw = registry_path.read_text()
-    assert json.loads(raw)["agents"][0]["route_provider_id"] == "zai"
-    assert "AUTH_TOKEN" not in raw
+    raw = read_registry_document(registry_path)[0]
+    assert raw["agents"][0]["route_provider_id"] == "zai"
+    assert "AUTH_TOKEN" not in json.dumps(raw)
 
 
 def test_ac1_hp_optional_session_ids(tmp_path: Path, monkeypatch) -> None:
@@ -310,7 +312,7 @@ def test_ac1_hp_schema_version_in_file(tmp_path: Path, monkeypatch) -> None:
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
     write_registry([entry], path=registry_path)
 
-    raw = json.loads(registry_path.read_text())
+    raw = read_registry_document(registry_path)[0]
     assert raw.get("schema_version") == SCHEMA_VERSION
 
 
@@ -336,15 +338,15 @@ def test_ac2_err_atomic_write_on_exception(tmp_path: Path, monkeypatch) -> None:
         log_path="/tmp/safe.log",
     )
     write_registry([initial_entry], path=registry_path)
-    original_content = registry_path.read_text()
+    original_content = read_registry_document(registry_path)[0]
 
-    # Now simulate a write that raises mid-way by patching json.dumps
-    import fno.agents.registry as reg_module
+    # Now simulate a write that dies inside the table door.
+    import fno.registry_door as door_module
 
-    def _exploding_dumps(*args, **kwargs):
+    def _exploding_commit(*args, **kwargs):
         raise RuntimeError("simulated kill -9 mid-write")
 
-    monkeypatch.setattr(reg_module, "_json_dumps", _exploding_dumps)
+    monkeypatch.setattr(door_module, "commit_registry_document", _exploding_commit)
 
     new_entry = AgentEntry(
         name="corrupt-agent",
@@ -355,10 +357,197 @@ def test_ac2_err_atomic_write_on_exception(tmp_path: Path, monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="simulated kill -9"):
         write_registry([new_entry], path=registry_path)
 
-    # Original file must be intact
-    assert registry_path.read_text() == original_content
+    # The table must be intact
+    assert read_registry_document(registry_path)[0] == original_content
     loaded = load_registry(path=registry_path)
     assert loaded[0].name == "safe-agent"
+
+
+def test_write_registry_failure_surfaces_and_keeps_the_table(tmp_path: Path, monkeypatch) -> None:
+    """An ``OSError`` inside the write door propagates and leaves no partial rows."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    import fno.registry_door as door_module
+    from fno.agents.registry import AgentEntry, write_registry
+
+    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _explode(*args, **kwargs):
+        raise OSError("simulated disk full during commit")
+
+    monkeypatch.setattr(door_module, "commit_registry_document", _explode)
+
+    entry = AgentEntry(name="t", harness="claude", cwd="/tmp", log_path="/tmp/t.log")
+    with pytest.raises(OSError, match="simulated disk full"):
+        write_registry([entry], path=registry_path)
+
+    assert read_registry_document(registry_path)[0]["agents"] == []
+
+
+# ---------------------------------------------------------------------------
+# revision_conflict retry: a non-flock writer lands in the read-to-commit
+# window, the door refuses once, update_registry reloads and re-applies.
+# ---------------------------------------------------------------------------
+
+
+_CONFLICT_JSON = (
+    '{"status":"refused","reason":"revision_conflict",'
+    '"message":"registry changed since read. Reload before applying the mutation again."}'
+)
+
+
+def _seed_registry(registry_path: Path) -> None:
+    from fno.agents.registry import AgentEntry, write_registry
+
+    write_registry(
+        [AgentEntry(name="resident", harness="claude", cwd="/tmp", log_path="/tmp/r.log")],
+        path=registry_path,
+    )
+
+
+def test_update_registry_retries_revision_conflict_and_keeps_concurrent_row(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A busy lock, then a conflict, then the retry lands with every row present."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    import fno.rust_binary as rb
+    from fno.agents.registry import AgentEntry, load_registry, update_registry
+
+    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    _seed_registry(registry_path)
+
+    real_verb_call = rb.verb_call
+    commits = {"n": 0, "applies": 0}
+
+    def _conflict_once(verb, payload, **kwargs):
+        if verb == "registry-commit" and "revision" in payload:
+            commits["n"] += 1
+            if commits["n"] == 1:
+                raise rb.VerbUnavailable(
+                    "registry-commit: lock at /x/graph.json.lock stayed busy past the 10s "
+                    "deadline; no holder recorded in the lock file"
+                )
+            if commits["n"] == 2:
+                raise rb.VerbUnavailable(_CONFLICT_JSON)
+        return real_verb_call(verb, payload, **kwargs)
+
+    monkeypatch.setattr(rb, "verb_call", _conflict_once)
+
+    def _append_spawned(entries):
+        commits["applies"] += 1
+        return entries + [
+            AgentEntry(name="spawned", harness="codex", cwd="/tmp", log_path="/tmp/s.log")
+        ]
+
+    update_registry(_append_spawned, path=registry_path)
+
+    assert [e.name for e in load_registry(path=registry_path)] == ["resident", "spawned"]
+    assert commits["n"] == 3
+    assert commits["applies"] == 3
+
+
+def test_update_registry_reapplies_when_a_writer_lands_between_load_and_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The guard covers the load, not just the commit's own read: a row a
+    non-flock writer adds after the load survives, never refused as row loss."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    import fno.rust_binary as rb
+    from fno.agents.registry import AgentEntry, load_registry, update_registry
+
+    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    _seed_registry(registry_path)
+
+    real_verb_call = rb.verb_call
+    concurrent = AgentEntry(name="concurrent", harness="claude", cwd="/tmp", log_path="/tmp/c.log")
+    landed = {"done": False}
+
+    def _writer_lands_after_first_read(verb, payload, **kwargs):
+        answer = real_verb_call(verb, payload, **kwargs)
+        if payload.get("op") == "read" and not landed["done"]:
+            landed["done"] = True
+            doc = answer["document"]
+            rows = doc["agents"] + [asdict(concurrent)]
+            real_verb_call(
+                verb,
+                {"path": payload["path"], "schema_version": doc["schema_version"],
+                 "agents": rows, "revision": answer["revision"]},
+            )
+        return answer
+
+    monkeypatch.setattr(rb, "verb_call", _writer_lands_after_first_read)
+
+    update_registry(
+        lambda entries: entries
+        + [AgentEntry(name="spawned", harness="codex", cwd="/tmp", log_path="/tmp/s.log")],
+        path=registry_path,
+    )
+
+    assert [e.name for e in load_registry(path=registry_path)] == [
+        "resident", "concurrent", "spawned"
+    ]
+
+
+def test_update_registry_conflict_exhaustion_and_non_conflict_single_shot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Conflicts retry until the deadline, past any fixed count, then keep
+    RegistryVersionError; a non-conflict refusal never retries."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    import fno.agents.registry as reg
+    import fno.rust_binary as rb
+    from fno.agents.registry import AgentEntry, RegistryVersionError, update_registry
+
+    clock = {"now": 0.0}
+    fake_time = SimpleNamespace(**{k: getattr(time, k) for k in dir(time) if k[0] != "_"})
+    fake_time.monotonic = lambda: clock["now"]
+    fake_time.sleep = lambda s: clock.__setitem__("now", clock["now"] + s)
+    monkeypatch.setattr(reg, "time", fake_time)
+    monkeypatch.setattr(reg, "_CONFLICT_RETRY_SECONDS", 1.0)
+
+    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    _seed_registry(registry_path)
+
+    real_verb_call = rb.verb_call
+    commits = {"n": 0}
+
+    def _always_conflict(verb, payload, **kwargs):
+        if verb == "registry-commit" and "revision" in payload:
+            commits["n"] += 1
+            raise rb.VerbUnavailable(_CONFLICT_JSON)
+        return real_verb_call(verb, payload, **kwargs)
+
+    monkeypatch.setattr(rb, "verb_call", _always_conflict)
+
+    def _append(entries):
+        return entries + [
+            AgentEntry(name="spawned", harness="codex", cwd="/tmp", log_path="/tmp/s.log")
+        ]
+
+    with pytest.raises(RegistryVersionError, match="revision_conflict"):
+        update_registry(_append, path=registry_path)
+    assert commits["n"] > 3
+    assert clock["now"] >= 1.0
+
+    commits["n"] = 0
+
+    def _schema_refused(verb, payload, **kwargs):
+        if verb == "registry-commit" and "revision" in payload:
+            commits["n"] += 1
+            raise rb.VerbUnavailable('{"status":"refused","reason":"schema_refused"}')
+        return real_verb_call(verb, payload, **kwargs)
+
+    monkeypatch.setattr(rb, "verb_call", _schema_refused)
+    with pytest.raises(RegistryVersionError, match="schema_refused"):
+        update_registry(_append, path=registry_path)
+    assert commits["n"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +877,7 @@ def test_load_registry_rejects_invalid_json(tmp_path: Path, monkeypatch) -> None
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text("not even {valid", encoding="utf-8")
 
-    with pytest.raises(RegistryVersionError, match="malformed JSON"):
+    with pytest.raises(RegistryVersionError):
         load_registry(path=registry_path)
 
 
@@ -701,7 +890,7 @@ def test_load_registry_rejects_non_dict_top_level(tmp_path: Path, monkeypatch) -
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text("[]", encoding="utf-8")
 
-    with pytest.raises(RegistryVersionError, match="not a JSON object"):
+    with pytest.raises(RegistryVersionError, match="not an object"):
         load_registry(path=registry_path)
 
 
@@ -716,7 +905,7 @@ def test_load_registry_rejects_non_list_agents_field(tmp_path: Path, monkeypatch
         json.dumps({"schema_version": 1, "agents": "oops"}), encoding="utf-8"
     )
 
-    with pytest.raises(RegistryVersionError, match="'agents' field is not a list"):
+    with pytest.raises(RegistryVersionError, match="not an array"):
         load_registry(path=registry_path)
 
 
@@ -732,7 +921,7 @@ def test_load_registry_rejects_non_dict_row(tmp_path: Path, monkeypatch) -> None
         encoding="utf-8",
     )
 
-    with pytest.raises(RegistryVersionError, match="row 0 is not a JSON object"):
+    with pytest.raises(RegistryVersionError, match="not an object"):
         load_registry(path=registry_path)
 
 
@@ -796,30 +985,6 @@ def test_update_registry_serializes_different_name_writes(
     assert names == {f"worker-{i}" for i in range(n_workers)}, (
         f"expected {n_workers} distinct worker entries; got {names}"
     )
-
-
-def test_write_registry_cleans_orphan_tmp_on_failure(tmp_path: Path, monkeypatch) -> None:
-    """An ``OSError`` during the temp-write/rename window does not leave a stray .tmp."""
-    use_tmpdir(monkeypatch, tmp_path)
-
-    import fno.agents.registry as reg_module
-    from fno.agents.registry import AgentEntry, write_registry
-
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _explode_replace(*args, **kwargs):
-        raise OSError("simulated disk full during rename")
-
-    monkeypatch.setattr(reg_module.os, "replace", _explode_replace)
-
-    entry = AgentEntry(name="t", harness="claude", cwd="/tmp", log_path="/tmp/t.log")
-    with pytest.raises(OSError, match="simulated disk full"):
-        write_registry([entry], path=registry_path)
-
-    # The .tmp must be cleaned up so future writes don't accumulate orphans.
-    tmp_sibling = registry_path.with_suffix(registry_path.suffix + ".tmp")
-    assert not tmp_sibling.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -906,7 +1071,10 @@ def test_us2_schema_version_is_three() -> None:
     # v34: additive `lineage_kind` - the served CHILD/PEER word the liveness
     # sweep stamps on rows with a spawn edge.
     # v38: sweep-owned context and unread facts survive compatibility writes.
-    assert SCHEMA_VERSION == 38
+    # v39 (x-fdab): additive `tool_calls`/`tool_errors` - the daemon's
+    # incremental transcript fold, the sideline card graph's input.
+    # v40 migrates the authority vocabulary and fences older writers.
+    assert SCHEMA_VERSION == 40
 
 
 def test_session_lineage_fields_round_trip(tmp_path: Path, monkeypatch) -> None:
@@ -1001,7 +1169,7 @@ def test_v15_model_provider_round_trips_without_collapsing_harness(
     loaded = load_registry(path=registry_path)
     assert loaded[0].harness == dual_axis
     assert loaded[0].provider == dual_axis
-    assert json.loads(registry_path.read_text())["agents"][0]["provider"] == dual_axis
+    assert read_registry_document(registry_path)[0]["agents"][0]["provider"] == dual_axis
 
 
 def test_v14_provider_still_backfills_harness_without_inventing_model_provider(
@@ -1095,6 +1263,8 @@ def test_load_registry_accepts_all_projected_statuses(tmp_path: Path, monkeypatc
         "exited",
         "permanent_dead",
     ):
+        registry_path = tmp_path / status / "registry.json"
+        registry_path.parent.mkdir()
         registry_path.write_text(
             json.dumps(
                 {
@@ -1170,7 +1340,10 @@ def test_ab_a171ceb2_v4_reads_host_mode_and_keeps_back_compat(
             r["host_mode"] = host_mode
         return r
 
-    # v4 round-trips an explicit interactive host_mode.
+    # v4 round-trips an explicit interactive host_mode. Each version seeds its
+    # own store: the table imports a legacy file once.
+    registry_path = tmp_path / "v4" / "registry.json"
+    registry_path.parent.mkdir()
     registry_path.write_text(
         json.dumps({"schema_version": 4, "agents": [row("interactive")]}),
         encoding="utf-8",
@@ -1182,6 +1355,8 @@ def test_ab_a171ceb2_v4_reads_host_mode_and_keeps_back_compat(
     # Every version in the widened accepted range still loads (no v1 drop),
     # and an absent host_mode coerces to exec regardless of version.
     for v in (1, 2, 3, 4):
+        registry_path = tmp_path / f"v{v}-bare" / "registry.json"
+        registry_path.parent.mkdir()
         registry_path.write_text(
             json.dumps({"schema_version": v, "agents": [row()]}), encoding="utf-8"
         )
@@ -1208,7 +1383,7 @@ def test_inside_leg_round_trips_across_registry_boundary(
         write_registry,
     )
 
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path = tmp_path / "agents-fixture" / "registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
 
     report = {
@@ -1249,6 +1424,8 @@ def test_inside_leg_round_trips_across_registry_boundary(
     assert reloaded[0].inside_leg == report
 
     # (c) A row without inside_leg defaults to None, and a fresh AgentEntry too.
+    registry_path = tmp_path / "bare" / "registry.json"
+    registry_path.parent.mkdir()
     registry_path.write_text(
         json.dumps(
             {
@@ -1288,7 +1465,7 @@ def test_screen_state_round_trips_across_registry_boundary(
         write_registry,
     )
 
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path = tmp_path / "agents-fixture" / "registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
 
     verdict = {
@@ -1349,7 +1526,7 @@ def test_stop_record_round_trips_across_registry_boundary(
         write_registry,
     )
 
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path = tmp_path / "agents-fixture" / "registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
 
     stop = {"by": "stop-verb", "at": "2026-09-15T00:00:00Z", "reason": None}
@@ -1411,9 +1588,7 @@ def test_us2_v1_entries_synthesized_at_read(tmp_path: Path, monkeypatch) -> None
             }
         ],
     }
-    on_disk_text = json.dumps(v1_payload)
-    registry_path.write_text(on_disk_text, encoding="utf-8")
-    pre_mtime = registry_path.stat().st_mtime_ns
+    registry_path.write_text(json.dumps(v1_payload), encoding="utf-8")
 
     loaded = load_registry(path=registry_path)
 
@@ -1422,8 +1597,8 @@ def test_us2_v1_entries_synthesized_at_read(tmp_path: Path, monkeypatch) -> None
     assert loaded[0].status == "live"
     assert loaded[0].last_message_at is None
     # On-disk file is untouched (no auto-mutation during load).
-    assert registry_path.read_text(encoding="utf-8") == on_disk_text
-    assert registry_path.stat().st_mtime_ns == pre_mtime
+    # The load imported the file but never wrote the table.
+    assert read_registry_document(registry_path)[1] == 0
 
 
 def test_us2_first_write_upgrades_on_disk_to_current(tmp_path: Path, monkeypatch) -> None:
@@ -1437,7 +1612,7 @@ def test_us2_first_write_upgrades_on_disk_to_current(tmp_path: Path, monkeypatch
     _as_deployed(monkeypatch)
     from fno.agents.registry import SCHEMA_VERSION, load_registry, write_registry
 
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path = tmp_path / "agents-fixture" / "registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(
         json.dumps(
@@ -1463,7 +1638,7 @@ def test_us2_first_write_upgrades_on_disk_to_current(tmp_path: Path, monkeypatch
     loaded = load_registry(path=registry_path)
     write_registry(loaded, path=registry_path)
 
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert raw["schema_version"] == SCHEMA_VERSION  # 4 today
     assert raw["agents"][0]["status"] == "live"
     assert raw["agents"][0]["last_message_at"] is None
@@ -1540,6 +1715,23 @@ def test_phase5_v3_round_trip_preserves_mcp_channel_id(tmp_path: Path, monkeypat
     assert loaded[0].mcp_channel_id == "ch-abc-123"
 
 
+def test_agent_entry_accepts_every_field_in_registry_schema() -> None:
+    """Every field the Rust writer declares in registry_schema.toml loads into AgentEntry."""
+    import dataclasses
+    import tomllib
+
+    import fno.agents
+    from fno.agents.registry import AgentEntry
+
+    schema = Path(fno.agents.__file__).parent / "registry_schema.toml"
+    declared = set(tomllib.loads(schema.read_text())["fields"])
+    # Read-time legacy keys: load_registry folds or drops these before building the entry.
+    legacy = {"claude_session_uuid", "claude_short_id", "codex_session_id",
+              "gemini_session_id", "legacy_provider", "session_id"}
+    missing = declared - legacy - {f.name for f in dataclasses.fields(AgentEntry)}
+    assert not missing, f"AgentEntry lacks registry_schema.toml fields: {sorted(missing)}"
+
+
 def test_phase5_v2_entries_synthesized_to_v3_at_read(tmp_path: Path, monkeypatch) -> None:
     """A v2 on-disk registry reads back with ``mcp_channel_id=None`` for every
     row without mutating the file on disk."""
@@ -1565,9 +1757,7 @@ def test_phase5_v2_entries_synthesized_to_v3_at_read(tmp_path: Path, monkeypatch
             }
         ],
     }
-    on_disk_text = json.dumps(v2_payload)
-    registry_path.write_text(on_disk_text, encoding="utf-8")
-    pre_mtime = registry_path.stat().st_mtime_ns
+    registry_path.write_text(json.dumps(v2_payload), encoding="utf-8")
 
     loaded = load_registry(path=registry_path)
 
@@ -1575,8 +1765,8 @@ def test_phase5_v2_entries_synthesized_to_v3_at_read(tmp_path: Path, monkeypatch
     assert loaded[0].name == "v2-row"
     assert loaded[0].mcp_channel_id is None
     # No auto-mutation; the file stays at v2 until next write.
-    assert registry_path.read_text(encoding="utf-8") == on_disk_text
-    assert registry_path.stat().st_mtime_ns == pre_mtime
+    # The load imported the file but never wrote the table.
+    assert read_registry_document(registry_path)[1] == 0
 
 
 def test_session_id_property_resolves_provider_specific_id() -> None:
@@ -1631,7 +1821,7 @@ def test_session_id_property_excluded_from_asdict_serialization(
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
     write_registry([entry], path=registry_path)
 
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert "session_id" not in raw["agents"][0]
     # Round-trips back to a real entry whose property still resolves.
     assert load_registry(path=registry_path)[0].session_id == "sess-1"
@@ -2144,7 +2334,7 @@ def test_python_write_emits_rust_readable_values(tmp_path: Path, monkeypatch) ->
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
     write_registry([entry], path=registry_path)
 
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     row = raw["agents"][0]
     # Rust `String` fields: empty string, NOT null (null would fail deserialize).
     assert row["short_id"] == ""
@@ -2179,7 +2369,7 @@ def test_mux_ref_roundtrips_and_reaches_rust_shape(tmp_path: Path, monkeypatch) 
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
     write_registry([entry], path=registry_path)
 
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert raw["agents"][0]["mux"] == {"session": "work", "pane_id": 7}
 
     loaded = load_registry(path=registry_path)
@@ -2225,7 +2415,7 @@ def test_write_registry_rejects_double_ref_rows(tmp_path: Path, monkeypatch) -> 
         write_registry([bg_double], path=registry_path)
 
     # The refused writes must not have clobbered the store.
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert [r["name"] for r in raw["agents"]] == ["ok"]
 
 
@@ -2254,7 +2444,7 @@ def test_v9_legacy_row_backfills_claude_short_id_into_short_id(
     _as_deployed(monkeypatch)
     from fno.agents.registry import load_registry, write_registry
 
-    registry_path = tmp_path / ".fno" / "agents" / "registry.json"
+    registry_path = tmp_path / "agents-fixture" / "registry.json"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(
         json.dumps(
@@ -2286,7 +2476,7 @@ def test_v9_legacy_row_backfills_claude_short_id_into_short_id(
     from fno.agents.registry import SCHEMA_VERSION
 
     write_registry(loaded, path=registry_path)
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert raw["schema_version"] == SCHEMA_VERSION
     row = raw["agents"][0]
     assert "claude_short_id" not in row
@@ -2385,8 +2575,8 @@ def test_a_refresh_fills_an_origin_the_row_never_had(tmp_path, monkeypatch):
     assert register_existing_session(**kwargs, origin="operator").origin == "operator"
 
 
-def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
-    """x-2b6f: the manifest is the durable crown record; register is the
+def test_register_re_stamps_role_from_a_live_manifest(tmp_path, monkeypatch):
+    """x-2b6f: the manifest is the durable role record; register is the
     repair door for a row a restore stripped. A manifest naming the session
     stamps an unstamped row, a stamped row is never touched, and no manifest
     registers bare."""
@@ -2409,15 +2599,15 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
             f"harness_session_id: {session}\n"
             "owner_pid: 1\n"
             "created_at: 2026-09-01T00:00:00Z\n"
-            f"crown_scope: {scope}\n"
-            "crown_level: 2\n"
-            "crown_grantor: vellum\n"
+            f"role_scope: {scope}\n"
+            "role_level: 2\n"
+            "role_grantor: vellum\n"
             "---\n"
         )
 
-    kings = space_dir(Path(tmp_path)) / "kings"
-    kings.mkdir(parents=True, exist_ok=True)
-    (kings / "x-demo.md").write_text(manifest_body(sid, "x-demo"), encoding="utf-8")
+    leads = space_dir(Path(tmp_path)) / "leads"
+    leads.mkdir(parents=True, exist_ok=True)
+    (leads / "x-demo.md").write_text(manifest_body(sid, "x-demo"), encoding="utf-8")
 
     row = register_existing_session(
         provider=CLAUDE_HARNESS,
@@ -2425,9 +2615,9 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
         cwd=str(tmp_path),
         name="quill2",
     )
-    assert row.crown_scope == "x-demo"
-    assert row.crown_level == 2
-    assert row.crown_grantor == "vellum"
+    assert row.role_scope == "x-demo"
+    assert row.role_level == 2
+    assert row.role_grantor == "vellum"
 
     # No manifest naming it: a fresh session registers bare.
     bare = register_existing_session(
@@ -2436,13 +2626,13 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
         cwd=str(tmp_path),
         name="bare",
     )
-    assert bare.crown_scope is None
+    assert bare.role_scope is None
 
-    # A malformed crown_level registers the row BARE instead of raising:
+    # A malformed role_level registers the row BARE instead of raising:
     # a junk stamp must never cost the session its row.
-    (kings / "x-junk.md").write_text(
+    (leads / "x-junk.md").write_text(
         manifest_body("88888888-0000-0000-0000-000000000000", "x-junk").replace(
-            "crown_level: 2", "crown_level: two"
+            "role_level: 2", "role_level: two"
         ),
         encoding="utf-8",
     )
@@ -2452,7 +2642,7 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
         cwd=str(tmp_path),
         name="junky",
     )
-    assert junky.crown_level is None
+    assert junky.role_level is None
 
     # A row already stamped is never touched by a manifest naming it.
     seeded = AgentEntry(
@@ -2462,9 +2652,9 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
         harness=CLAUDE_HARNESS,
         harness_session_id=sid,
     )
-    seeded.crown_scope = "x-kept"
-    seeded.crown_level = 1
-    seeded.crown_grantor = "human"
+    seeded.role_scope = "x-kept"
+    seeded.role_level = 1
+    seeded.role_grantor = "human"
     write_registry([seeded])
     kept = register_existing_session(
         provider=CLAUDE_HARNESS,
@@ -2472,9 +2662,9 @@ def test_register_re_stamps_crown_from_a_live_manifest(tmp_path, monkeypatch):
         cwd=str(tmp_path),
         name="quill2",
     )
-    assert kept.crown_scope == "x-kept"
-    assert kept.crown_level == 1
-    assert kept.crown_grantor == "human"
+    assert kept.role_scope == "x-kept"
+    assert kept.role_level == 1
+    assert kept.role_grantor == "human"
 
 
 def test_node_field_stamps_and_round_trips_v21(tmp_path, monkeypatch):
@@ -2571,7 +2761,7 @@ def test_v24_requested_axis_round_trips_verbatim(tmp_path: Path, monkeypatch) ->
     )
     write_registry([entry], path=registry_path)
 
-    raw = json.loads(registry_path.read_text())["agents"][0]
+    raw = read_registry_document(registry_path)[0]["agents"][0]
     assert raw["requested_model"] == "glm-5.3[1m]"
     assert raw["requested_provider"] == "zai"
     assert raw["requested_effort"] == "high"
@@ -2673,7 +2863,6 @@ def test_update_registry_accounts_for_a_removed_row(
     from fno.agents.registry import AgentEntry, update_registry
 
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
-    events_path = tmp_path / ".fno" / "agents" / "events.jsonl"
     _seed_rows(
         registry_path,
         [
@@ -2760,7 +2949,6 @@ def test_update_registry_journals_rows_lost_naming_the_writer(
     from fno.agents.registry import AgentEntry, update_registry
 
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
-    events_path = tmp_path / ".fno" / "agents" / "events.jsonl"
     _seed_rows(
         registry_path,
         [
@@ -2881,7 +3069,6 @@ def test_update_registry_keeps_a_receipt_the_sweep_already_staged(
     from fno.agents.registry import AgentEntry, update_registry
 
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
-    events_path = tmp_path / ".fno" / "agents" / "events.jsonl"
     _seed_rows(
         registry_path,
         [
@@ -2939,7 +3126,6 @@ def test_update_registry_reports_a_stale_binary_and_writes_nothing(
     from fno.agents.registry import AgentEntry, load_registry, update_registry
 
     registry_path = tmp_path / ".fno" / "agents" / "registry.json"
-    events_path = tmp_path / ".fno" / "agents" / "events.jsonl"
     _seed_rows(
         registry_path,
         [
@@ -3060,7 +3246,7 @@ def test_session_report_fields_round_trip(monkeypatch, tmp_path) -> None:
         ],
         path=registry_path,
     )
-    raw = json.loads(registry_path.read_text(encoding="utf-8"))
+    raw = read_registry_document(registry_path)[0]
     assert raw["agents"][0]["transcript_path"] == "/t/w1.jsonl"
     assert raw["agents"][0]["start_source"] == "resume"
     row = load_registry(path=registry_path)[0]

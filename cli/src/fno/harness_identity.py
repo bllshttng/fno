@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -1166,7 +1165,7 @@ def resolve_attester_identity(
         # preserves an argv0 rename), never the whole argv: an `env
         # CLAUDE_CODE_SESSION_ID=<forged>` wrapper or a shell assignment
         # carries the MARKER SPELLING in its argv, and the marker contains
-        # the family token - matching the full argv would crown that wrapper
+        # the family token - matching the full argv would role that wrapper
         # the deciding family carrier and stamp the forgery `process`
         # (reproduced live in review round 2). Unreadable -> not family,
         # which can only degrade the witness, never forge one.
@@ -1271,11 +1270,9 @@ def live_thread_row_for_cwd(
     if not cwd:
         return None
     try:
-        if registry_path is None:
-            from fno.paths import agents_registry_path
+        from fno.registry_door import read_registry_document
 
-            registry_path = agents_registry_path()
-        raw = json.loads(registry_path.read_text(encoding="utf-8"))
+        raw = read_registry_document(registry_path)[0]
         rows = raw.get("agents") if isinstance(raw, dict) else None
         if not isinstance(rows, list):
             return None

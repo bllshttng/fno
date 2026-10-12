@@ -49,6 +49,31 @@ const ALT_ACCOUNT: &str = "alt";
 /// Resolve the sibling fno-agents binary. The two crates share a repo but
 /// not a cargo target dir; the fno-agents test leg (preflight runs it
 /// first) builds it there.
+/// The registry document as text, read through the table door: after the
+/// import `registry.json` is a fence directory, not a file.
+fn registry_text(path: &Path) -> String {
+    use std::io::Write;
+    let mut child = std::process::Command::new(fno_agents_bin())
+        .arg("registry-commit")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("run registry-commit");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            serde_json::json!({"path": path, "op": "read"})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "registry read failed");
+    String::from_utf8(output.stdout).unwrap()
+}
+
 fn fno_agents_bin() -> PathBuf {
     if let Ok(bin) = std::env::var("FNO_AGENTS_BIN") {
         if !bin.is_empty() && Path::new(&bin).exists() {
@@ -234,16 +259,26 @@ config_dir = "{}"
     fn fresh_transcript(&self, sid: &str) {
         let proj = self.home().join(".claude").join("projects").join("proj");
         std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(proj.join(format!("{sid}.jsonl")), "{\"message\":{}}\n").unwrap();
+        std::fs::write(proj.join(format!("{sid}.jsonl")), assistant_turn(0)).unwrap();
     }
 
     fn quiet_transcript_at(&self, root: &Path, sid: &str) {
         let proj = root.join("projects").join("proj");
         std::fs::create_dir_all(&proj).unwrap();
         let path = proj.join(format!("{sid}.jsonl"));
-        std::fs::write(&path, "{\"message\":{}}\n").unwrap();
+        std::fs::write(&path, assistant_turn(100_000)).unwrap();
         old_mtime(&path);
     }
+}
+
+/// One stamped claude assistant turn `age_s` seconds old: the record the
+/// truth reader ages a session by.
+fn assistant_turn(age_s: i64) -> String {
+    let stamp =
+        (chrono::Utc::now() - chrono::Duration::seconds(age_s)).format("%Y-%m-%dT%H:%M:%S%.3fZ");
+    format!(
+        "{{\"type\":\"assistant\",\"timestamp\":\"{stamp}\",\"message\":{{\"role\":\"assistant\",\"content\":\"reading the ledger\"}}}}\n"
+    )
 }
 
 fn old_mtime(path: &Path) {
@@ -376,46 +411,18 @@ fn every_removal_door_leaves_the_row_absent_from_all_three_stores() {
     let shim_dir = fleet.dir.join("shims");
     std::fs::create_dir_all(&shim_dir).unwrap();
     write_claude_shim(&fleet.dir, &shim_dir);
-    // A `fno` shim: the prune's pane probe answers no panes, and the
-    // reaper's truth probe answers the wire the Rust reader parses (a
-    // keyed map for `--handles`, a bare payload for one handle): quiet
-    // rows report old ages, the live row a young one. It must speak only
-    // when addressed, so an unexpected call is loud.
+    // A `fno` shim: the prune's pane probe answers no panes. The reaper's
+    // truth reads the fleet's own transcripts in process. The shim must
+    // speak only when addressed, so an unexpected call is loud.
     write_executable(
         &shim_dir.join("fno"),
-        format!(
-            r#"#!/bin/sh
-if [ "$1" = "agents" ] && [ "$2" = "truth" ]; then
-  if [ "$3" = "--handles" ]; then
-    printf '{{'
-    first=1
-    for h in $(printf '%s' "$4" | /usr/bin/tr ',' ' '); do
-      if [ "$h" = "{S4}" ] || [ "$h" = "{U4}" ]; then
-        row='{{"state":"working","last_activity_age_s":2}}'
-      else
-        row='{{"state":"stalled","last_activity_age_s":100000}}'
-      fi
-      if [ "$first" -eq 1 ]; then first=0; else printf ','; fi
-      printf '"%s":%s' "$h" "$row"
-    done
-    printf '}}\n'
-  elif [ "$3" = "{S4}" ] || [ "$3" = "{U4}" ]; then
-    printf '{{"state":"working","last_activity_age_s":2}}\n'
-  else
-    printf '{{"state":"stalled","last_activity_age_s":100000}}\n'
-  fi
-  exit 0
-fi
+        r#"#!/bin/sh
 if [ "$1" = "mux" ] && [ "$2" = "pane" ] && [ "$3" = "ls" ]; then
   printf '[]\n'
   exit 0
 fi
 exit 2
 "#,
-            S4 = S4,
-            U4 = U4,
-        )
-        .as_str(),
     );
     BUILD.call_once(|| {
         let status = Command::new("cargo")
@@ -438,7 +445,7 @@ exit 2
     // it stages is what door 3's receipts (claude,U1) pair-leg reads.
     let d1 = fleet.run(&shim_dir, &bin, &["reap"]);
     println!("door 1 (reap): {d1}");
-    let registry = std::fs::read_to_string(fleet.agents_home().join("registry.json")).unwrap();
+    let registry = registry_text(&fleet.agents_home().join("registry.json"));
     assert!(
         !registry.contains(ROW1),
         "door 1: registry still holds the row"
@@ -573,7 +580,7 @@ impl Fleet {
     /// LIVE row survives every door in all three stores. A sweep that
     /// flips a live row to dead fails HERE, not on an operator's machine.
     fn assert_live_stays(&self, after: &str) {
-        let registry = std::fs::read_to_string(self.agents_home().join("registry.json")).unwrap();
+        let registry = registry_text(&self.agents_home().join("registry.json"));
         assert!(
             registry.contains(ROW4),
             "{after}: the sweep reaped the live row from the registry"
@@ -593,7 +600,7 @@ impl Fleet {
     /// The property, asserted after every door: the row is absent from all
     /// three stores.
     fn assert_property(&self, after: &str) {
-        let registry = std::fs::read_to_string(self.agents_home().join("registry.json")).unwrap();
+        let registry = registry_text(&self.agents_home().join("registry.json"));
         assert!(
             !registry.contains(ROW1),
             "{after}: registry still holds {ROW1}: {registry}"

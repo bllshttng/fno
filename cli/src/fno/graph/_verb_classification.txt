@@ -19,9 +19,6 @@ note
 # encounter appends to a node's graph record, exactly like note
 encounter
 remove
-migrate-priorities
-migrate-difficulty
-migrate-updated-at
 supersede
 unsupersede
 # board and queue state
@@ -38,29 +35,20 @@ pick
 unclaim
 requeue
 # storage + sweep machinery
-archive
-unarchive
-maintain
-groom
 # graph-row mutation (stamps deferred_kind under the lock)
 backfill-deferred-kind
 # graph-state read: under an external backend the local graph is not
 # the store, so the read must refuse with the rest
 stuck-epics
 # orchestration that stamps nodes
-advance
 reconcile-findings
 lanes
 lane-fill
-dispatch-lanes
 # join spawns workers into a held worktree; the joiners, not join,
 # write task rows ()
-join
 # footnote-owned DATA with a graph-resident write path (refused until the
 # write moves to the sidecar seam)
 cost
-# sub-app mutations
-triage apply
 capture promote
 batch join
 batch prepare
@@ -76,21 +64,15 @@ get
 status
 # reads the store's mutation counter; writes nothing
 version
-view
 next
 ready
 worked
 queued
 provenance
-roadmap
-bases
-album
 project-root
-board
 undispatched
 # replays the post-publish views after a native (mux) store write;
 # renders only, never a graph write
-render-views
 discover
 # demand reads encounters and writes nothing
 demand
@@ -109,19 +91,13 @@ capture empty-pass
 capture list
 capture scan
 capture tidy
-# triage read/propose surfaces (apply is tracker-owned)
-triage consistency
-triage context
-triage health
-triage projects
-triage propose
-triage rank
-triage trend
-triage validate
 # batch read surfaces
 batch open
 batch status
 batch metrics
+# the triage route forwards at the native door; every action reads or
+# applies through the classified engine
+triage
 # read-only operators' surface over the graph store
 # graph-store integrity check (read-only)
 collisions check

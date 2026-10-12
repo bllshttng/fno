@@ -31,7 +31,7 @@ Measured 2026-09-11: 5408 hits across 1012 files. Measured 2026-09-15 for the au
 | Wire value | the origin string in ledgers and envelopes: 80 sites in `cli/src` and `crates/*/src`, plus the env pins `FNO_OPERATOR_SESSION_ID`, `FNO_OPERATOR_HARNESS`, `FNO_OPERATOR_TRANSCRIPT`, `FNO_OPERATOR_CAPTURE_DIR`, and the `--authority operator` value | No. A data migration with no gain the human can see. |
 | Persisted graph data | `source_kind: operator_request`: 12 source files plus live rows in `graph.json` | No. Stored values; the display layer can relabel without touching them. |
 | Shipped config keys | `routing.operator_access` and `routing.operator_view`, written in `crates/fno-agents/src/route_slot.rs` | No. They are already in users' config.toml files. |
-| Shell homonym | `hooks/king-delegation-guard.sh`, where the shell uses `operator` for redirection, not a person | No. Nothing to rename. |
+| Shell homonym | `hooks/lead-delegation-guard.sh`, where the shell uses `operator` for redirection, not a person | No. Nothing to rename. |
 
 ## Judged keep-list: authority-adjacent phrasings that stay
 
@@ -39,7 +39,7 @@ Each phrasing below was weighed against the table during the authority rename an
 
 - **operator ruling** - a dated decision citation ("operator ruling 2026-08-13"). It records who ruled. It is history, not a live gate. New rulings say superuser in their prose.
 - **operator override** - config precedence the human set (`EVENTS_SCHEMA_PATH`, `FNO_AGENTS_BIN`). It names a setting, not the authority a gate checks.
-- **queue lanes** - the king board's `operator-request` lane, the `fno inbox user` queue's internal `operator lane` file name, and the origin-keyed voter lane. They hang off the wire value and the stored rows.
+- **queue lanes** - the lead board's `operator-request` lane, the `fno inbox user` queue's internal `operator lane` file name, and the origin-keyed voter lane. They hang off the wire value and the stored rows.
 - **`operator` typing** for pane provenance - keystroke provenance in `mux_cli.rs`, not the mail-probe warning. The mail-probe pitfall family says superuser typing.
 
 ## A deliberate omission
@@ -65,3 +65,7 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 The address sense in skill prose is `user`. `scripts/ci/check-operator-address.sh` prevents drift.
 
 Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `cli/src/fno/user.py` (`UserBlock`, `display_name()`), the three address strings that import it, and the `fno inbox user` verb. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
+
+## Role vocabulary
+
+A lead or Head holds a role over a scope. A team is its colleagues and workers. A term is the declared service interval. A succession promotes a successor colleague. The outgoing lead chooses a fresh real person name for each successor, gender-neutral by default, and supplies `--name` with `--hand-off`. No name bank or numbered suffix is used. `fno agents org` is the public lifecycle door, `--promote` grants a role, and `--hand-off` transfers it. Runtime authority fields are `role_level`, `role_scope`, and `role_grantor`. At daemon and mux-server startup, the upgrade migration rewrites stored keys and events and raises the registry writer floor; normal readers accept only current keys.

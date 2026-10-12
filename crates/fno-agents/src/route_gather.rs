@@ -10,7 +10,7 @@ use std::path::Path;
 
 const MODEL_TIERS_TABLE: &str = include_str!("model_tiers.toml");
 
-const SLOT_VERBS: [&str; 5] = ["think", "blueprint", "target", "review", "crown"];
+const SLOT_VERBS: [&str; 5] = ["think", "blueprint", "target", "review", "role"];
 const OBJECTIVES: [&str; 3] = ["cheapest-that-clears", "best-available", "prefer-harness"];
 /// A band's minimum coding percentile; a tier is a MINIMUM, so a model
 /// clears it at the floor or above.
@@ -226,11 +226,19 @@ fn account_record_vendors(cwd: &Path) -> Value {
     Value::Object(out)
 }
 
-/// The snapshot at `<state_dir>/benchmarks.json`, or None when absent,
-/// unreadable, or missing `fetched_at`/`source` (invalid is ignored, never
-/// a dead gather).
+/// The snapshot at `<state_dir>/cache/benchmarks.json` (the root spelling
+/// still reads while it exists: the Python writer renames it into `cache/`
+/// on its first resolve), or None when absent, unreadable, or missing
+/// `fetched_at`/`source` (invalid is ignored, never a dead gather).
 fn load_snapshot(cwd: &Path) -> Option<Value> {
-    let path = crate::agents_config::state_dir(cwd)?.join("benchmarks.json");
+    let root = crate::agents_config::state_dir(cwd)?;
+    let new = root.join("cache").join("benchmarks.json");
+    let legacy = root.join("benchmarks.json");
+    let path = if new.exists() || !legacy.exists() {
+        new
+    } else {
+        legacy
+    };
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let obj = data.as_object()?;
     if obj

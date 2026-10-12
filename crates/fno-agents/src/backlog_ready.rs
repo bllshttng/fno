@@ -221,7 +221,7 @@ pub(crate) fn priority_name(e: &Value) -> String {
 
 /// ISO-8601 reader: `Z` or numeric offset, else naive reads UTC; an
 /// unparseable stamp is no signal.
-fn parse_iso_ms(value: &Value) -> Option<i64> {
+pub(crate) fn parse_iso_ms(value: &Value) -> Option<i64> {
     let s = match value {
         Value::String(s) => s.as_str(),
         _ => return None,
@@ -229,7 +229,7 @@ fn parse_iso_ms(value: &Value) -> Option<i64> {
     parse_iso_str(s)
 }
 
-fn parse_iso_str(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso_str(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -365,7 +365,7 @@ fn touched_ms(entry: &Value) -> Option<i64> {
 }
 
 /// Whole days from `ts` to `now`, flooring like Python's `timedelta.days`.
-fn days_between(now_ms: i64, ts_ms: i64) -> i64 {
+pub(crate) fn days_between(now_ms: i64, ts_ms: i64) -> i64 {
     (now_ms - ts_ms).div_euclid(86_400_000)
 }
 
@@ -709,7 +709,7 @@ pub(crate) fn serve_effective_verb(params: &Value) -> Result<Value, String> {
 /// A plan-less idea the autonomous drain may dispatch without a plan
 /// (`ladder.is_cold_dispatchable`): `status == "idea"` AND rung `none`, so
 /// a linked decompose stub (rung `idea`) stays behind --include-ideas.
-fn is_cold_dispatchable(e: &Value) -> bool {
+pub(crate) fn is_cold_dispatchable(e: &Value) -> bool {
     get_str(e, "status") == Some("idea") && plan_rung(e) == "none"
 }
 
@@ -995,7 +995,7 @@ pub(crate) fn node_is_open(node: &Value) -> bool {
 
 /// True when a ready node shows any sign of being live or recently worked
 /// (`maintain.node_has_movement`).
-fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
+pub(crate) fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
     if truthy(entry.get("sessions")) || truthy(entry.get("pr_number")) {
         return true;
     }
@@ -1037,7 +1037,7 @@ fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
 /// Quarantine-eligible: abandoned, old, unmoved (`maintain.is_stale_ready`).
 /// The caller guarantees ready status; containment, blockers, undesigned
 /// rungs, movement and unprovable age each independently exempt.
-fn is_stale_ready(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
+pub(crate) fn is_stale_ready(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
     if truthy(entry.get("contained_in")) || truthy(entry.get("blocked_by")) {
         return false;
     }
@@ -1641,6 +1641,8 @@ pub(crate) fn dispatch_node_summary(e: &Value) -> Value {
         "difficulty",
         "plan_path",
         "model",
+        "provider",
+        "effort",
         "dispatch_verb",
         "dispatch_brief",
         "mission_id",

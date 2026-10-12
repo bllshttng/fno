@@ -3,7 +3,6 @@
 Public API (re-exported for callers):
     commit_rows_via_store  the raw store write seam
     recompute_statuses     status derivation
-    render_graph_md        kanban rendering
 """
 from __future__ import annotations
 
@@ -27,14 +26,6 @@ from fno.graph.store import (  # noqa: F401
 from fno.graph.statuses import (  # noqa: F401
     is_stale_lock,
     recompute_statuses,
-)
-from fno.graph.render import (  # noqa: F401
-    render_graph_md,
-    _kanban_column,
-    _kanban_card,
-    _graph_sort_key,
-    _project_key,
-    UNSCOPED_LABEL,
 )
 from fno.graph.depends import (  # noqa: F401
     _collect_frontmatter_depends,

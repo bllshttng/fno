@@ -91,38 +91,6 @@ def test_ac2_err_existing_source_kind_preserved():
     assert e["source_inbox_msg"] == "msg-a4f1"
 
 
-def test_ac4_edge_kanban_render_does_not_crash_with_provenance_fields(tmp_path, monkeypatch):
-    """AC4-EDGE: kanban renderer ignores provenance fields, no crash on entries with them."""
-    g = _make_graph(tmp_path, [
-        {
-            "id": "ab-kan00001",
-            "title": "Kanban entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_kind": "from_inbox",
-            "source_project": "example-pipeline",
-            "source_session_id": "sess-abc",
-            "source_inbox_msg": "msg-a4f1",
-        }
-    ])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.render import render_graph_md
-    from fno.graph.store import read_graph_strict
-
-    entries = read_graph_strict(g)
-    out_path = tmp_path / "graph.md"
-    # Must not crash
-    render_graph_md(entries, path=out_path)
-    assert out_path.exists()
-    md = out_path.read_text()
-    # Provenance fields must NOT appear in kanban output
-    assert "source_inbox_msg" not in md
-    assert "msg-a4f1" not in md
-    assert "source_kind" not in md
-
-
 def test_ac4_edge_provenance_survives_save_reload(tmp_path, monkeypatch):
     """AC4-EDGE: Idempotent triage - source_inbox_msg persists across save/reload."""
     g = _make_graph(tmp_path, [

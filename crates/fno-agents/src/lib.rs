@@ -54,9 +54,11 @@ mod agent_lock;
 pub mod agent_ref;
 pub mod agents_config;
 pub(crate) mod agents_event;
+pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
+pub mod agy_mint;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
@@ -71,11 +73,13 @@ pub mod attention_route;
 pub mod authorized_merge;
 pub mod backlog;
 pub mod backlog_ready;
+pub mod backlog_share;
 pub mod bash_census;
 #[cfg(test)]
 #[path = "birth_guard_tests.rs"]
 mod birth_guard_tests;
 pub mod blueprint_judge;
+pub mod board_render_arm;
 mod boot_revival;
 mod bounded_cmd;
 mod bounded_spawn;
@@ -83,7 +87,10 @@ pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;
 pub mod capability_leaves;
+pub mod capacity;
 pub mod cargo_build_dirs;
+pub(crate) mod cargo_builds;
+pub(crate) mod cargo_orphans;
 pub mod census;
 pub mod chats;
 pub mod check_supersession;
@@ -107,6 +114,7 @@ pub mod claude_stream_entry;
 pub mod claude_supervisor;
 pub mod claude_transcript_paths;
 pub mod claude_vault;
+pub mod claude_workspace_trust;
 pub mod cli_args;
 pub mod client;
 pub mod client_render;
@@ -134,8 +142,10 @@ pub mod component_update;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
+pub mod correction_meter;
 pub mod corrections_verify;
 pub mod cursor_agent;
+pub mod cutover;
 pub mod daemon;
 pub mod day;
 pub mod decide_door;
@@ -149,6 +159,7 @@ pub mod distress;
 pub mod drift;
 pub mod duration;
 pub mod effect_gate;
+pub mod effect_map;
 pub mod effort_surface;
 pub mod envelope;
 pub mod escalation;
@@ -167,12 +178,15 @@ pub mod fallback_chain;
 pub mod feed;
 pub mod finalize;
 pub mod finalize_run_summary;
+pub mod first_check;
 pub mod fleet_incident;
 pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_task;
 pub mod flight_gate;
 pub mod footnote_harness;
+pub mod footnote_transcript;
+pub(crate) mod footprint_cache;
 pub mod gate_probes;
 pub mod gc;
 pub mod gc_adopt;
@@ -193,6 +207,7 @@ pub mod graph_keeper;
 pub mod graph_store;
 pub mod grok_ask;
 pub mod grok_store;
+pub mod harness_beat;
 pub mod harness_capabilities;
 pub mod harness_daemon;
 pub mod harness_matrix;
@@ -201,6 +216,8 @@ pub mod harness_roster;
 pub mod harness_verbs;
 pub mod heal;
 pub mod heal_pid;
+pub mod heal_sweep;
+pub mod help_router;
 pub mod hold_label;
 pub mod honesty_sweep;
 pub mod hook;
@@ -217,6 +234,7 @@ pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
+pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
 pub mod lead_answers;
@@ -237,12 +255,14 @@ pub mod lead_term;
 pub mod lead_termination;
 pub mod lead_verdict_inputs;
 pub mod lead_wake;
+pub mod lease_heartbeat;
 pub mod ledger_axes;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
 pub mod list_row;
 pub mod live_store_fence;
 pub mod liveness_sweep;
+pub mod lock_queue;
 pub mod logs;
 pub mod logs_client;
 pub mod loop_dispatch;
@@ -256,11 +276,18 @@ pub mod machine_load;
 pub mod machine_mail;
 pub mod machine_sample;
 pub mod machine_watch;
+pub mod mail_arm;
+pub mod mail_backfill;
+pub mod mail_bus;
 pub mod mail_control_drain;
 pub mod mail_envelope;
 pub mod mail_header;
 pub mod mail_hold;
 pub mod mail_inject;
+pub mod mail_notify_self;
+pub mod mail_receipt;
+pub mod mail_remote;
+pub mod mail_teach;
 pub mod mail_threads;
 pub mod main_ci;
 pub mod main_ci_proof;
@@ -280,6 +307,7 @@ mod mint_guard_tests;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod name_draw;
 pub mod naming;
 pub mod needs;
 pub mod node_branch;
@@ -287,6 +315,7 @@ pub mod node_origin;
 pub mod node_reading;
 pub mod node_route;
 pub mod node_seed;
+pub mod notice_route;
 pub mod nudge;
 pub mod occupancy_login;
 pub mod opencode_ask;
@@ -303,6 +332,8 @@ pub mod org_rivals;
 pub mod orphan_reap;
 pub mod osc;
 pub mod otel_ingest;
+pub mod otel_read;
+pub(crate) mod owner_ladder;
 pub mod pane_keeper;
 pub mod pane_rebind;
 pub mod pane_relaunch;
@@ -317,6 +348,7 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod pr_admission;
 pub mod pr_body_check;
 pub mod pr_create;
 pub mod pr_draft_ready;
@@ -330,6 +362,7 @@ pub mod pr_status_facts;
 pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
+pub mod process_probe;
 pub mod protocol;
 pub mod prove_it_verdicts;
 pub mod provenance;
@@ -356,6 +389,8 @@ pub mod refusal_trend;
 pub mod registry_commit;
 pub mod registry_guard;
 pub mod registry_json;
+pub mod registry_read;
+pub mod registry_store;
 pub mod release_notes;
 pub mod removals;
 pub mod rename;
@@ -375,6 +410,7 @@ pub mod revival_check;
 pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
+pub mod role_migration;
 pub mod roster_progress;
 pub mod roster_reap;
 pub mod route_capacity;
@@ -402,8 +438,10 @@ pub mod session_backfill;
 pub mod session_cost;
 pub mod session_join;
 pub mod session_names_fold;
+pub(crate) mod session_origin;
 pub mod session_report;
 pub mod session_start_bytes;
+pub mod session_truth;
 pub mod single_flight;
 pub mod skill_drift;
 pub mod slot_cutover;
@@ -426,6 +464,8 @@ pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub mod stale_spaces;
+pub mod stalls;
 pub mod state;
 pub mod state_layout;
 pub mod state_layout_sqlite;
@@ -433,6 +473,8 @@ pub mod state_path;
 pub mod state_root_drift;
 pub mod store_conn;
 pub mod store_exec;
+pub mod store_export;
+pub mod store_remote;
 pub mod stream_worker;
 pub mod stuck_work;
 pub mod subagent_hold;
@@ -450,8 +492,10 @@ pub mod team_names;
 pub mod team_reap;
 pub mod team_rescope;
 pub mod team_settle;
+pub mod team_spawn;
 pub mod team_split;
 pub mod team_widen;
+pub mod terminal_route;
 pub mod terminal_stop;
 pub mod terminal_vocab;
 pub mod territory;
@@ -459,6 +503,7 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 pub mod tick_ledger;
+pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
 pub mod truth_probe;
@@ -472,6 +517,7 @@ pub mod wake_name;
 pub mod watch_expiry;
 pub mod wave;
 pub mod worked_nodes;
+pub mod worker_wake;
 pub mod worktree_reapable;
 pub mod write_queue;
 pub mod zcode;
@@ -1459,10 +1505,19 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // The sandbox-denial ingester: codex transcript refusals -> one row per
+    // (session, class, path) with a hit count, plus the pass summary row.
+    // The claude half rides another node; harness is the seam.
+    "sandbox_denial",
+    "sandbox_ingest",
     // Reconcile's post-close emits (the Python twins declared both in
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
+    // Triage apply telemetry (the native triage engine): one row per
+    // committed apply, carrying the applied counts, the priority moves and
+    // the dropped-entry count.
+    "triage_applied",
     // The pr-watch sweep flipped an open fno-bound draft PR back to ready
     // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
     "pr_watch_draft_flip",
@@ -1488,6 +1543,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The keeper's render trigger failed a pass (waves 8-9 store cutover);
     // carries the version and a stderr tail, and the backoff retries it.
     "graph_render_failed",
+    // One archive sweep ran, dry run or apply; carries the moved and
+    // held-back counts.
+    "graph_archive_swept",
     // Pane-to-thread conversion: one per phase of the agent.convert
     // transaction (classified, claims-held, pane-stopped, hand-off,
     // resumed, flipped, rolled-back), carrying the name and strategy.
@@ -1534,6 +1592,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "merge_reaper_stopped",
     "agent_inconsistent",
     "agent_ask_done",
+    "codex_turn_error",
+    "quiet_worker_nudge",
+    "quiet_worker_recovery",
+    "quiet_worker_error",
     "agent_create_no_session",
     "agent_orphan_reaped",
     "agent_orphan_state_archived",
@@ -1582,10 +1644,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // nothing, because a reaper that speaks only when it kills cannot be told
     // apart from a reaper that never ran.
     "orphan_reap_sweep",
-    // Worktree report sweep (daemon-emitted): one line per repo per 24h
-    // saying what `fno agents workspace worktree cleanup --merged` WOULD archive. Report-only by
-    // construction, because a timer tick is not proof that work landed; removal
-    // stays on the merge-triggered path. Emitted even when the counts are zero,
+    // Worktree sweep (daemon-emitted): one line per repo per 6h saying what
+    // `fno agents workspace worktree cleanup --merged` WOULD archive, or what
+    // its --apply pass archived once a merge proof stands (a minted cleanup
+    // request, or the pass's own dry-run judgment for an outside merge).
+    // Emitted even when the counts are zero,
     // so a quiet repo cannot be mistaken for a sweep that never ran.
     "worktree_sweep",
     // Stale-question reconcile (daemon-emitted): `fno agents stale-escalate`
@@ -1694,6 +1757,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The lead-wake arm's receipt: one row per daemon wake episode, the
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
+    "worker_wake",
+    // The beat's cron act receipt: the wake resumed a parked codex lead's
+    // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
+    // the wake-mode loop emits for its dispatch-side resume.
+    "lead_goal_resumed",
     // A team's term declared or extended (`fno agents org term <spec>
     // [--reason]`), before or after a Stop-hook gate observed it reached.
     // The receipt a lead's tenure bound leaves; `fno doctor event audit`
@@ -1706,7 +1774,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // same kind through the shared emitter.
     "agent_team_vacated",
     // A succession reverted: the reap sweep restored the predecessor's
-    // session after an heir died unbound past the window (team_reap.rs;
+    // session after a successor died unbound past the window (team_reap.rs;
     // the daemon retire arm and `fno agents reap`).
     "team_succession_reverted",
     // The succession transaction (succession_txn.rs): announce (plus its
@@ -1724,6 +1792,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Startup reconcile sweep (daemon-emitted, plan Architecture B)
     "startup_reconcile_done",
     "startup_reconcile_failed",
+    // Truth warm pass (daemon-emitted): every row's cursor rebuilt after a
+    // restart, so no session answers `warming` past this point.
+    "truth_warm_done",
     // Registry-side keeper sweep (daemon-emitted): the daemon-start
     // walk of the lane-B keeper thread sockets. Every dead or wedged verdict
     // carries its reason; the rebound/dead/wedged row events name the row.
@@ -1751,6 +1822,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // agent_raw_inject records a payload delivered without the <fno_mail>
     // envelope, so the provenance marker survives in the ledger, not transcript.
     "agent_raw_inject",
+    // Prompt-boundary mail delivery (mail_notify_self.rs): one receipt per
+    // drained id, so a sender can join events to a terminal drained state.
+    "agent_mail_drained",
     // Review invocation attempt/outcome join (daemon-emitted): the
     // canonical repo-local event records how a Codex review was fired and
     // whether its transport confirmed delivery.
@@ -1803,6 +1877,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (unknown session / third distinct id) without storing.
     "session_report_stored",
     "session_report_dropped",
+    // The same failure the Python identification arm emits: the manifest
+    // rebind at a promoted row's first self-identification did not land.
+    "role_manifest_arm_failed",
     // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
     // an inside-leg report is going Exited; the completion is published before
     // the registry clears the report (AC-X2-4).
@@ -1814,7 +1891,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "inside_leg_buffer_flushed",
     // Driver-sourced thread-row status: the codex thread actor's
     // turn phases land on the row's inside_leg through the shared seq gate;
-    // one event per accepted write.
+    // one event per state change.
     "codex_thread_inside_leg",
     // Screen-manifest fallback rung (daemon-emitted, scrape sweep): a scraped
     // verdict was stored/refreshed/cleared on a hook-less mux row, or a
@@ -1989,7 +2066,7 @@ pub(crate) fn tail_bytes(path: &std::path::Path, cap: u64) -> Vec<u8> {
         return Vec::new();
     }
     let mut buf = Vec::new();
-    if file.read_to_end(&mut buf).is_err() {
+    if file.take(len - start).read_to_end(&mut buf).is_err() {
         return Vec::new();
     }
     if start > 0 {

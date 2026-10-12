@@ -120,7 +120,7 @@ def _populate_state(sandbox: Path) -> Path:
         encoding="utf-8",
     )
     (state_dir / "agents" / "registry.json").write_text(
-        json.dumps({"entries": [{"name": "state-canary", "crown_label": "state-canary"}]}),
+        json.dumps({"entries": [{"name": "state-canary", "role_label": "state-canary"}]}),
         encoding="utf-8",
     )
     (state_dir / "claims" / "state-canary.lock").write_text(
@@ -441,11 +441,12 @@ _LANES_READING: Optional[tuple[Optional[int], str]] = None
 def _lanes_threads() -> tuple[Optional[int], str]:
     """Test-thread cap from the `fno doctor lanes` reading, or None at default.
 
-    `lane_count` is how many MORE lanes fit: an idle box tops out at 64
-    (LANE_ANSWER_CAP) - full parallelism, not a lowered constant - and a
-    spawn-load ceiling breach forces 0, which clamps to 1 (serial). A refused
-    reading (a dark sensor is never headroom) or a failed one returns None so
-    the runner keeps its own default where sensors are dark (CI).
+    `lane_count` is how many MORE lanes fit, answered by the spawn-gate probe
+    itself (the learned effective cap minus the live slot count), so the suite
+    reads the same decider the gate refuses with. A spawn-load ceiling breach
+    forces 0, which clamps to 1 (serial). A refused reading (a dark sensor is
+    never headroom) or a failed one returns None so the runner keeps its own
+    default where sensors are dark (CI).
     """
     global _LANES_READING
     if _LANES_READING is not None:
@@ -659,7 +660,8 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      "bash tests/lib/test_frontend_surface.sh\n"
      "bash tests/lib/test_infer_has_ui.sh\n"
      "bash tests/lib/test_resolve_plan_executor.sh"),
-    ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh"),
+    ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\n"
+     "bash tests/lib/test_config_plans_chain.sh"),
     ("cost-accuracy harness", ".",
      "uv run --project cli python cli/tests/unit/test_session_cost_dedup.py"),
     ("loop-check shim + immutable manifest harness", ".",
