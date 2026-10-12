@@ -2234,9 +2234,10 @@ fn roots_in_heal_order(a: &Args) -> Vec<std::path::PathBuf> {
                 line.get("data")
                     .and_then(|d| d.get("root"))
                     .and_then(Value::as_str)
+                    .map(String::from)
             })
         {
-            last_seen.insert(root.to_string(), i);
+            last_seen.insert(root, i);
         }
     }
     let mut order = a.roots.clone();
