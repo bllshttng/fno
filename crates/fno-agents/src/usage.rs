@@ -9,13 +9,6 @@
 /// slice order is the `--help` display order. This MUST cover every routable
 /// verb (the `build_request` match arms plus the directly-dispatched specials).
 /// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
-/// parity; `print_help_lists_every_routable_verb` guards this display
-/// list against that set, so a new verb cannot land without a `--help` entry
-///.
-/// Usage line per dispatchable verb; the leading token is the verb name and the
-/// slice order is the `--help` display order. This MUST cover every routable
-/// verb (the `build_request` match arms plus the directly-dispatched specials).
-/// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
 /// parity; `print_help_lists_every_routable_verb` (below) guards this display
 /// list against that set, so a new verb cannot land without a `--help` entry
 ///.
