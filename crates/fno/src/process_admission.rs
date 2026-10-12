@@ -453,20 +453,28 @@ fn describe_brake(until: u64, value: &serde_json::Value) -> String {
 /// True when this process carries a worker identity. Only an agent-origin
 /// caller of the agent-spawn entry can be held: the arm attributes load
 /// before it arms the brake, so a refusal there means fno's own fan-out,
-/// never the user's tap or their mux server.
+/// never the user's tap or their mux server. FNO_AGENT_SELF names a spawned
+/// worker; a claude thread worker carries none (the supervisor strips it),
+/// so CLAUDECODE=1 with CLAUDE_CODE_SESSION_ATTENDED=0, the harness's own
+/// unattended marker, counts too.
 fn agent_origin() -> bool {
-    std::env::var_os("FNO_AGENT_SELF")
-        .filter(|name| !name.is_empty())
-        .is_some()
+    std::env::var_os("FNO_AGENT_SELF").is_some_and(|name| !name.is_empty())
+        || (std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1")
+            && std::env::var_os("CLAUDE_CODE_SESSION_ATTENDED").is_some_and(|v| v == "0"))
 }
 
 /// The server's start: a server an agent spawned inherits its worker
-/// identity and a background QoS policy, so the agent-spawn gate would hold
-/// the user's taps and the server would run demoted. Stripping the identity
-/// and clearing the inherited policy keeps fno's most important process out
-/// of both traps. A no-op on Linux.
+/// identity, the claude harness markers, and a background QoS policy, so the
+/// agent-spawn gate would hold the user's taps and the server would run
+/// demoted. Stripping the identity and the markers and clearing the
+/// inherited policy keeps fno's most important process out of both traps. A
+/// real claude worker re-mints its own markers, so this spares only the
+/// server's own shells the agent classification. The priority half is a
+/// no-op on Linux.
 pub fn claim_server_priority() {
     std::env::remove_var("FNO_AGENT_SELF");
+    std::env::remove_var("CLAUDECODE");
+    std::env::remove_var("CLAUDE_CODE_SESSION_ATTENDED");
     #[cfg(target_os = "macos")]
     unsafe {
         // PRIO_DARWIN_PROCESS 0,0 clears an inherited background policy on
@@ -2009,5 +2017,36 @@ mod tests {
         std::env::remove_var("FNO_MACHINE_BRAKE");
         std::env::remove_var("FNO_AGENT_SELF");
         assert!(permit.is_ok(), "absent brake admits as before");
+    }
+
+    /// An unattended claude worker carries no FNO_AGENT_SELF (the supervisor
+    /// strips it), yet the harness's own markers name it an agent, so the
+    /// agent-spawn door holds it; an attended session stays the user's.
+    #[test]
+    fn agent_origin_reads_the_unattended_claude_marker() {
+        let _env = BRAKE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = [
+            "FNO_AGENT_SELF",
+            "CLAUDECODE",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+        ]
+        .iter()
+        .map(|k| (*k, std::env::var_os(k)))
+        .collect();
+        std::env::remove_var("FNO_AGENT_SELF");
+        std::env::set_var("CLAUDECODE", "1");
+        std::env::set_var("CLAUDE_CODE_SESSION_ATTENDED", "0");
+        assert!(agent_origin(), "an unattended claude worker is an agent");
+        std::env::set_var("CLAUDE_CODE_SESSION_ATTENDED", "1");
+        assert!(!agent_origin(), "an attended session is the user's");
+        std::env::set_var("CLAUDE_CODE_SESSION_ATTENDED", "0");
+        std::env::set_var("CLAUDECODE", "0");
+        assert!(!agent_origin(), "a zero claude marker is not claude");
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
     }
 }

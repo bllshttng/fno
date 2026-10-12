@@ -7,12 +7,15 @@
 use crate::spawn_gate::{Refusal, EXIT_FLEET_STOP};
 
 /// True when this process carries a worker identity: the agent-spawn doors'
-/// one caller key. The user's own typed verb carries none, and no gate may
-/// refuse or hold it.
+/// one caller key. FNO_AGENT_SELF names a spawned worker. A claude thread
+/// worker carries none (the supervisor strips it), so CLAUDECODE=1 with
+/// CLAUDE_CODE_SESSION_ATTENDED=0, the harness's own unattended marker,
+/// counts too. An attended session, or one without both markers, is the
+/// user's own typed verb, and no gate may refuse or hold it.
 pub(crate) fn gate_agent_origin() -> bool {
-    std::env::var_os("FNO_AGENT_SELF")
-        .filter(|name| !name.is_empty())
-        .is_some()
+    std::env::var_os("FNO_AGENT_SELF").is_some_and(|name| !name.is_empty())
+        || (std::env::var_os("CLAUDECODE").is_some_and(|v| v == "1")
+            && std::env::var_os("CLAUDE_CODE_SESSION_ATTENDED").is_some_and(|v| v == "0"))
 }
 
 /// The machine brake as a gate arm. The default is admit, and only an
