@@ -560,6 +560,10 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
             String::new()
         } else {
             match step.and_then(|s| owner.get(s).copied().flatten()) {
+                Some(i) if orphaned(&error) => format!(
+                    " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
+                    changes[i].table
+                ),
                 Some(i) => format!(
                     " The {} row {CHANGED}. This machine took the primary's rows back; retry the write.",
                     changes[i].table
@@ -573,6 +577,13 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
 
 fn unseeded(error: &str) -> bool {
     error.contains("no such table: backlog_seed")
+}
+
+/// The step named a parent row the primary lacks. No peer changed anything,
+/// so the changed-row hint would send the caller to retry a write that
+/// cannot succeed.
+fn orphaned(error: &str) -> bool {
+    error.contains("FOREIGN KEY constraint failed")
 }
 
 /// The batch id is already on the primary: an earlier flush landed it and
