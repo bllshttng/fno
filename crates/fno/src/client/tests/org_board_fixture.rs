@@ -44,7 +44,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     b.mode = OrgMode::Tree;
     b.filter = OrgSessions::Current;
     let texts = b
-        .lines(60, 24)
+        .lines_with_map(60, 24).0
         .into_iter()
         .map(|l| l.text)
         .collect::<Vec<_>>();
@@ -294,7 +294,7 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
         .all(|r| matches!(r.selected, Selected::Session(_))));
     assert_eq!(rows[0].lead, "finch", "lead order: {}", rows[0].lead);
     let lines: Vec<String> = b
-        .lines(60, 24)
+        .lines_with_map(60, 24).0
         .into_iter()
         .map(|l| l.text.clone())
         .collect();
@@ -304,7 +304,7 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
         assert!(l.split_whitespace().count() >= 6, "a blank cell: {l:?}");
     }
     let narrow: Vec<String> = b
-        .lines(27, 24)
+        .lines_with_map(27, 24).0
         .into_iter()
         .map(|l| l.text.clone())
         .collect();

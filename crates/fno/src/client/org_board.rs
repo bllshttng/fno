@@ -388,13 +388,10 @@ impl OrgBoard {
         }
         memo.as_ref().expect("graph memo filled").5.clone()
     }
-    pub(crate) fn lines(&self, width: usize, height: usize) -> Vec<BLine> {
-        self.lines_with_map(width, height).0
-    }
-
     /// The board's lines plus the row index each line belongs to, built in
     /// one pass so a frame's paint and its follow offset share the body.
-    fn lines_with_map(&self, width: usize, height: usize) -> (Vec<BLine>, Vec<usize>) {
+    /// Tests read the lines alone through `.0`.
+    pub(crate) fn lines_with_map(&self, width: usize, height: usize) -> (Vec<BLine>, Vec<usize>) {
         if let Some(detail) = &self.detail {
             return (detail.lines(width), Vec::new());
         }
