@@ -167,6 +167,10 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     let saved_full = view.board_full;
     view.term = (24, 100);
     view.board_full = true;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let tap = |row, col| crate::mouse::MouseReport {
         row,
         col,
