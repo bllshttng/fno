@@ -995,18 +995,18 @@ mod tests {
         // and the node's pr known to the board - one branch binding with
         // the pr riding through join.pr.
         let mut join = BacklogJoin::default();
-        join.pr.insert("x-cb30".into(), 3159);
-        let ids: HashSet<String> = ["x-cb30".to_string()].into();
+        join.pr.insert("x-2222".into(), 3159);
+        let ids: HashSet<String> = ["x-2222".to_string()].into();
         let a = RegistryAgent {
             name: "deploy bot".into(),
             cwd: "/tmp/repo".into(),
             ..Default::default()
         };
         let branches: HashMap<String, String> =
-            [("/tmp/repo".to_string(), "feature/x-cb30-foo".to_string())].into();
+            [("/tmp/repo".to_string(), "feature/x-2222-foo".to_string())].into();
         let got = graph_bindings_for(&join, &ids, &HashMap::new(), &branches, &a);
         assert_eq!(got.len(), 1, "one branch clue, one binding");
-        assert_eq!(got[0].node, "x-cb30");
+        assert_eq!(got[0].node, "x-2222");
         assert_eq!(got[0].pr, Some(3159), "pr rides through join.pr");
         assert_eq!(got[0].source, "branch");
         assert_eq!(got[0].state, "open");
@@ -1150,8 +1150,8 @@ mod tests {
         // today's name + claim fallbacks still resolve node and leave pr
         // unset.
         let join = BacklogJoin::default();
-        let ids: HashSet<String> = ["x-cb30".to_string()].into();
-        let holders: HashMap<String, String> = [("w1".to_string(), "x-cb30".to_string())].into();
+        let ids: HashSet<String> = ["x-2222".to_string()].into();
+        let holders: HashMap<String, String> = [("w1".to_string(), "x-2222".to_string())].into();
         let claim_agent = RegistryAgent {
             name: "w1".into(),
             ..Default::default()
@@ -1159,16 +1159,16 @@ mod tests {
         let got = graph_bindings_for(&join, &ids, &holders, &HashMap::new(), &claim_agent);
         assert_eq!(got.len(), 1, "the claim fallback survives an empty join");
         assert_eq!(got[0].source, "claim");
-        assert_eq!(got[0].node, "x-cb30");
+        assert_eq!(got[0].node, "x-2222");
         assert_eq!(got[0].pr, None);
         let name_agent = RegistryAgent {
-            name: "x-cb30-runner".into(),
+            name: "x-2222-runner".into(),
             ..Default::default()
         };
         let got2 = graph_bindings_for(&join, &ids, &HashMap::new(), &HashMap::new(), &name_agent);
         assert_eq!(got2.len(), 1, "the name fallback survives an empty join");
         assert_eq!(got2[0].source, "name");
-        assert_eq!(got2[0].node, "x-cb30");
+        assert_eq!(got2[0].node, "x-2222");
     }
 
     fn ids_empty() -> HashSet<String> {

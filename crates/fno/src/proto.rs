@@ -4075,11 +4075,11 @@ mod tests {
         );
         let bound_wire = r#"{"squad":null,"name":"z","pane_id":null,
             "badge":null,"reason":null,"exited":false,
-            "bindings":[{"node":"x-cb30","pr":3159,"source":"branch",
+            "bindings":[{"node":"x-2222","pr":3159,"source":"branch",
                          "state":"open","inferred":true}]}"#;
         let bound: AgentRow = serde_json::from_str(bound_wire).unwrap();
         assert_eq!(bound.bindings.len(), 1);
-        assert_eq!(bound.bindings[0].node, "x-cb30");
+        assert_eq!(bound.bindings[0].node, "x-2222");
         assert_eq!(bound.bindings[0].pr, Some(3159));
         assert_eq!(bound.bindings[0].source, "branch");
         assert_eq!(bound.bindings[0].state, "open");
