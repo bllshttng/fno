@@ -43,6 +43,10 @@ fn lists_by_header_cwd_and_renders_user_turns() {
             r#"{"type":"message","id":"a1","message":{"role":"assistant","content":[],"stopReason":"end_turn"}}"#,
             "\n",
             r#"{"type":"message","id":"b1","message":{"role":"bashExecution","command":"ls","output":"","timestamp":1785000002000}}"#,
+            "\n",
+            r#"{"type":"message","id":"t4","message":{"role":"user","content":"string typed","timestamp":1785000003000}}"#,
+            "\n",
+            r#"{"type":"message","id":"a2","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash"}],"timestamp":1785000004000}}"#,
         ),
     );
     write_session(
@@ -62,7 +66,9 @@ fn lists_by_header_cwd_and_renders_user_turns() {
     assert_eq!(sessions[0].session_id, id);
     let raw = source.read(&sessions[0]);
     let turns = source.turns(&raw);
-    assert_eq!(turns.len(), 2);
+    assert_eq!(turns.len(), 3);
     assert_eq!(turns[0].text, "first typed");
     assert_eq!(turns[1].text, "second typed");
+    assert_eq!(turns[2].text, "string typed");
+    assert_eq!(source.tool_uses(&raw), 1);
 }

@@ -7,12 +7,12 @@
 //! (`unknown`), never `operator`. The header row's `cwd` decides the
 //! project. The store is only ever read.
 
-use crate::opencode_transcript::push_user_row;
+use crate::opencode_transcript::{push_row, push_user_row, rfc3339_ms};
 use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, first_cwd_row, in_roots, within_window,
     SessionFile, TranscriptSource, Turn,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -143,10 +143,12 @@ impl TranscriptSource for PiSource {
     }
 }
 
-/// pi JSONL rendered as claude-shaped JSONL: each user message's text parts
-/// join into one user row; every other row shape (`session`,
-/// `model_change`, `thinking_level_change`, assistant, `bashExecution`)
-/// renders nothing.
+/// pi JSONL rendered as claude-shaped JSONL: each user message becomes one
+/// user row (the session format permits `content` as a plain string or as
+/// an array of text blocks), each assistant `toolCall` block becomes one
+/// assistant row carrying a `tool_use` block so the shared counter sees it.
+/// Every other row shape (`session`, `model_change`,
+/// `thinking_level_change`, `bashExecution`) renders nothing.
 fn render(raw: &str) -> String {
     let mut out = String::new();
     for line in raw.lines() {
@@ -159,22 +161,44 @@ fn render(raw: &str) -> String {
         let Some(msg) = row.get("message") else {
             continue;
         };
-        if msg.get("role").and_then(|v| v.as_str()) != Some("user") {
-            continue;
-        }
-        let Some(parts) = msg.get("content").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        let text: Vec<&str> = parts
-            .iter()
-            .filter(|p| p.get("type").and_then(|v| v.as_str()) == Some("text"))
-            .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
-            .collect();
-        if text.is_empty() {
-            continue;
-        }
         let ts = msg.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        push_user_row(&mut out, ts, &text.join("\n"));
+        match msg.get("role").and_then(|v| v.as_str()) {
+            Some("user") => {
+                let text = match msg.get("content") {
+                    Some(Value::String(s)) => Some(s.clone()),
+                    Some(Value::Array(parts)) => {
+                        let text: Vec<&str> = parts
+                            .iter()
+                            .filter(|p| p.get("type").and_then(|v| v.as_str()) == Some("text"))
+                            .filter_map(|p| p.get("text").and_then(|v| v.as_str()))
+                            .collect();
+                        (!text.is_empty()).then(|| text.join("\n"))
+                    }
+                    _ => None,
+                };
+                if let Some(text) = text {
+                    push_user_row(&mut out, ts, &text);
+                }
+            }
+            Some("assistant") => {
+                let Some(parts) = msg.get("content").and_then(|v| v.as_array()) else {
+                    continue;
+                };
+                for block in parts {
+                    if block.get("type").and_then(|v| v.as_str()) != Some("toolCall") {
+                        continue;
+                    }
+                    push_row(
+                        &mut out,
+                        &serde_json::json!({
+                            "type": "assistant", "timestamp": rfc3339_ms(ts),
+                            "message": {"role": "assistant", "content": [{"type": "tool_use"}]},
+                        }),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
     out
 }
