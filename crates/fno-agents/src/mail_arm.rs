@@ -240,7 +240,7 @@ fn mail_word_cap() -> Option<i64> {
 fn style_door_refuses(payload: &str) -> bool {
     let mut cmd = std::process::Command::new(crate::mail_remote::fno_binary());
     cmd.args(style_door_argv(mail_word_cap()));
-    let Ok(child) = cmd
+    let Ok(mut child) = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())

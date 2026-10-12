@@ -639,25 +639,17 @@ mod tests {
         };
         let home = std::path::Path::new("/tmp/fno-mail-arm-retry-test");
         let remote = Remote::parse("http://127.0.0.1:1", None).expect("parses");
-        let mut older_failed = false;
-        let mut inject = |row: &crate::mail_bus::BusRow| {
-            if row.msg_id == "older" && !older_failed {
-                older_failed = true;
-                false
-            } else {
-                true
-            }
-        };
+        let mut fail_older = |row: &crate::mail_bus::BusRow| row.msg_id != "older";
         let rows = vec![bus_row(1, "older"), bus_row(2, "newer")];
         assert_eq!(
-            crate::mail_arm::pull_rows_with(&remote, rows, home, &mut inject),
+            crate::mail_arm::pull_rows_with(&remote, rows, home, &mut fail_older),
             1,
             "the failed row does not count as delivered"
         );
-        assert!(older_failed);
+        let mut deliver_all = |_row: &crate::mail_bus::BusRow| true;
         let retried = vec![bus_row(1, "older")];
         assert_eq!(
-            crate::mail_arm::pull_rows_with(&remote, retried, home, &mut inject),
+            crate::mail_arm::pull_rows_with(&remote, retried, home, &mut deliver_all),
             1,
             "the next beat delivers the row the earlier beat could not"
         );
