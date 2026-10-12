@@ -600,7 +600,7 @@ pub(crate) fn budget_hold_read(
     now: i64,
 ) -> Result<Option<(i64, i64, i64)>, String> {
     match budget_hold_query(root)? {
-        Some((until, step, last)) if until > now => Some((until, step, last)),
+        Some((until, step, last)) if until > now => Ok(Some((until, step, last))),
         _ => Ok(None),
     }
 }
