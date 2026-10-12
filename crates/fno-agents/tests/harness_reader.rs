@@ -190,6 +190,17 @@ fn isolation_reads_its_nonce_back_and_reports_the_real_root_pair() {
         Some(true),
         "the paired negative read: the nonce is absent from the real state root"
     );
+    // A child runs inside the root, never in the caller's checkout, so no
+    // project `.fno/config.toml` reaches the probe.
+    let mut cmd = std::process::Command::new("true");
+    root.child_env(&mut cmd);
+    let cwd = cmd.get_current_dir().expect("child_env pins the cwd");
+    let fno_home = cmd
+        .get_envs()
+        .find(|(k, _)| *k == "FNO_HOME")
+        .and_then(|(_, v)| v)
+        .expect("child_env pins FNO_HOME");
+    assert_eq!(std::path::Path::new(fno_home), cwd.join("fno"));
 }
 
 #[test]

@@ -561,13 +561,23 @@ impl IsolatedRoot {
     }
 
     /// Every child of the journey runs with this env: the two isolation pins
-    /// set, every ambient state and config pin stripped.
+    /// set, every ambient state and config pin stripped. The cwd is the
+    /// isolated root too: a child left in the caller's checkout reads that
+    /// project's `.fno/config.toml`, so its routing policy decides the probe.
+    /// `FNO_PY` pins the caller's own Python CLI, resolved before `HOME`
+    /// moves; under the isolated home the `fno` front finds no uv tool and
+    /// provisions the released wheel instead of the build being qualified.
     pub fn child_env(&self, cmd: &mut Command) {
         for name in AMBIENT_PINS {
             cmd.env_remove(name);
         }
         cmd.env("FNO_HOME", &self.fno_home);
         cmd.env("HOME", &self.home);
+        cmd.current_dir(&self.dir);
+        let py = PathBuf::from(crate::scrape::fno_py());
+        if py.is_absolute() && py.is_file() {
+            cmd.env("FNO_PY", py);
+        }
     }
 
     fn fno(&self, argv: &[&str]) -> (Option<i32>, String) {
@@ -814,9 +824,12 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
             attempts,
             format!(
                 "registry row was not found; receipt was not used as proof ({})",
+                // The tail: spawn prints its refusal last, after any notes.
                 {
-                    let trimmed = spawn_output.trim();
-                    trimmed.chars().take(120).collect::<String>()
+                    let chars: Vec<char> = spawn_output.trim().chars().collect();
+                    chars[chars.len().saturating_sub(160)..]
+                        .iter()
+                        .collect::<String>()
                 }
             ),
         ));
@@ -1007,9 +1020,8 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut capture_cmd = Command::new("bash");
     capture_cmd
-        .arg("cli/scripts/smoke/capture-readiness-grid.sh")
-        .arg(harness)
-        .current_dir(&repo_root);
+        .arg(repo_root.join("cli/scripts/smoke/capture-readiness-grid.sh"))
+        .arg(harness);
     root.child_env(&mut capture_cmd);
     capture_cmd.env("READINESS_SMOKE", "1");
     let capture = run_command_bounded(capture_cmd, INSTRUMENT_TIMEOUT_S);
