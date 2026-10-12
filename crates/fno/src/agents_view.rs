@@ -1374,6 +1374,25 @@ pub(crate) fn node_id_candidates(name: &str) -> Vec<String> {
     candidates
 }
 
+/// Resolve the first candidate in `name` that names a real key in `known`.
+/// Bare-hex candidates match by hex suffix only when exactly one key matches;
+/// ambiguity resolves to none.
+pub(crate) fn resolve_node_id<V>(name: &str, known: &HashMap<String, V>) -> Option<String> {
+    node_id_candidates(name).into_iter().find_map(|candidate| {
+        if known.contains_key(&candidate) {
+            return Some(candidate);
+        }
+        if !is_hex_run(&candidate, 4) {
+            return None;
+        }
+        let matches: Vec<&String> = known
+            .keys()
+            .filter(|key| key.split_once('-').is_some_and(|(_, hex)| hex == candidate))
+            .collect();
+        (matches.len() == 1).then(|| matches[0].clone())
+    })
+}
+
 /// Percent-encode a claim key to its lockfile stem, matching the Python writer's
 /// `urllib.parse.quote(key, safe="")` (bytes not in `[A-Za-z0-9._~-]` -> %XX).
 fn encode_claim_key(key: &str) -> String {
@@ -4234,17 +4253,8 @@ config_dir = "~/.claude-alt"
         }
     }
 
-    /// The binding fold consumes candidates through a membership find
-    /// (row_set's branch and name sources), so the tests join through that
-    /// same shape rather than through a resolver of their own.
-    fn find_known<'a>(known: &'a HashMap<String, ()>, name: &str) -> Option<std::string::String> {
-        node_id_candidates(name)
-            .into_iter()
-            .find(|n| known.contains_key(n))
-    }
-
     #[test]
-    fn candidates_find_node_id_in_worker_name() {
+    fn resolves_node_id_from_worker_name() {
         let known = HashMap::from([
             ("x-aaaa".to_string(), ()),
             ("x-bbbb".to_string(), ()),
@@ -4263,12 +4273,14 @@ config_dir = "~/.claude-alt"
             ("t-eeee-finish", "x-eeee"),
         ] {
             assert_eq!(
-                find_known(&known, name).as_deref(),
+                resolve_node_id(name, &known).as_deref(),
                 Some(expected),
                 "{name}"
             );
         }
-        assert_eq!(find_known(&known, "phasestall"), None);
+        assert_eq!(resolve_node_id("phasestall", &known), None);
+        let empty: HashMap<String, ()> = HashMap::new();
+        assert_eq!(resolve_node_id("worker-x-dddd-foo", &empty), None);
     }
 
     /// Copied verbatim from `fno agents list` on 2026-08-20. The negative
@@ -4299,12 +4311,16 @@ config_dir = "~/.claude-alt"
             .filter_map(|(_, expected)| expected.map(|id| (id.to_string(), ())))
             .collect::<HashMap<_, _>>();
         for (name, expected) in LIVE_NAMES {
-            assert_eq!(find_known(&known, name).as_deref(), *expected, "{name}");
+            assert_eq!(
+                resolve_node_id(name, &known).as_deref(),
+                *expected,
+                "{name}"
+            );
         }
         // Two registry rows differing only in the bare-hex slot make a bare
         // hex lookup ambiguous: it resolves to none rather than guessing.
         let ambiguous = HashMap::from([("x-4444".to_string(), ()), ("y-4444".to_string(), ())]);
-        assert_eq!(find_known(&ambiguous, "t-4444-finish"), None);
+        assert_eq!(resolve_node_id("t-4444-finish", &ambiguous), None);
     }
 
     #[test]

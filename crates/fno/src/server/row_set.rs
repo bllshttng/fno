@@ -130,13 +130,14 @@ pub(super) fn same_project(a: &str, b: &str) -> bool {
 /// node, its cwd's branch clue, the claim holder, a node-shaped name, then
 /// the session's full graph history. Nodes dedupe first-wins, so the
 /// strongest source to name a node answers for it. A name binds when it
-/// parses to a served node or to a node the join carries a pr for - the pr
-/// join outlived the served-card filter and must not regress. History rows
+/// parses to a served node or to a node the join carries a pr for (a bare
+/// hex run matches by unique suffix) - the pr join outlived the
+/// served-card filter and must not regress. History rows
 /// bind unfiltered: a session's merged past is real even when no card for
 /// it is served.
 fn graph_bindings_for(
     join: &BacklogJoin,
-    backlog_ids: &HashSet<String>,
+    known: &HashMap<String, ()>,
     node_by_holder: &HashMap<String, String>,
     branch_by_cwd: &HashMap<String, String>,
     a: &RegistryAgent,
@@ -173,10 +174,7 @@ fn graph_bindings_for(
         });
     }
     if let Some(branch) = branch_by_cwd.get(&a.cwd) {
-        if let Some(node) = agents_view::node_id_candidates(branch)
-            .into_iter()
-            .find(|n| backlog_ids.contains(n))
-        {
+        if let Some(node) = agents_view::resolve_node_id(branch, known) {
             let pr = join.pr.get(&node).copied();
             admit(GraphBinding {
                 node,
@@ -196,10 +194,7 @@ fn graph_bindings_for(
             ..Default::default()
         });
     }
-    if let Some(node) = agents_view::node_id_candidates(&a.name)
-        .into_iter()
-        .find(|n| backlog_ids.contains(n) || join.pr.contains_key(n))
-    {
+    if let Some(node) = agents_view::resolve_node_id(&a.name, known) {
         let pr = join.pr.get(&node).copied();
         admit(GraphBinding {
             node,
@@ -271,7 +266,7 @@ fn wire_bindings(bindings: Vec<GraphBinding>) -> Vec<SessionBinding> {
 /// precedence contract lives in exactly one place.
 fn row_binding_view(
     join: &BacklogJoin,
-    backlog_ids: &HashSet<String>,
+    known: &HashMap<String, ()>,
     node_by_holder: &HashMap<String, String>,
     branch_by_cwd: &HashMap<String, String>,
     a: &RegistryAgent,
@@ -281,7 +276,7 @@ fn row_binding_view(
     Option<u64>,
     Option<String>,
 ) {
-    let bound = graph_bindings_for(join, backlog_ids, node_by_holder, branch_by_cwd, a);
+    let bound = graph_bindings_for(join, known, node_by_holder, branch_by_cwd, a);
     let current = pick_current(&bound);
     let node = current.map(|b| b.node.clone());
     let pr = current.and_then(|b| b.pr);
@@ -304,13 +299,19 @@ impl Core {
         // Which registry agents a pane row already claimed (so they don't
         // double-render as watch-only). Indexed like `self.agents`.
         let mut consumed = vec![false; self.agents.len()];
-        // The session-node join inputs: the served node ids and the
+        // The session-node join inputs: the known node ids (served cards
+        // plus the pr join's keys, so a bare-hex worker name still
+        // suffix-resolves after its card leaves the served set) and the
         // live-claim reverse (holder -> node). `graph_bindings_for` merges
         // the graph's explicit rows, the spawn node, the cwd branch, the
         // claim, a node-shaped name, and the session history into one
         // binding list per row; the row takes its node, pr, and attach
         // handle from the current binding.
-        let backlog_ids: HashSet<String> = self.backlog.iter().map(|c| c.id.clone()).collect();
+        let mut known: HashMap<String, ()> =
+            self.backlog.iter().map(|c| (c.id.clone(), ())).collect();
+        for id in self.backlog_join.pr.keys() {
+            known.entry(id.clone()).or_insert(());
+        }
         let node_by_holder: HashMap<String, String> = self
             .backlog_holders
             .iter()
@@ -378,7 +379,7 @@ impl Core {
                                 && a.liveness == agents_view::Liveness::Unmeasured;
                             let (bindings, node, pr, pr_session_short) = row_binding_view(
                                 &self.backlog_join,
-                                &backlog_ids,
+                                &known,
                                 &node_by_holder,
                                 &self.branch_by_cwd,
                                 a,
@@ -584,7 +585,7 @@ impl Core {
                     let squad = self.thread_workspace(a);
                     let (bindings, node, pr, pr_session_short) = row_binding_view(
                         &self.backlog_join,
-                        &backlog_ids,
+                        &known,
                         &node_by_holder,
                         &self.branch_by_cwd,
                         a,
@@ -673,7 +674,7 @@ impl Core {
                     let cwd_base = foreign_cwd_base(&a.cwd, squad_cwd_of(squad).as_deref());
                     let (bindings, node, pr, pr_session_short) = row_binding_view(
                         &self.backlog_join,
-                        &backlog_ids,
+                        &known,
                         &node_by_holder,
                         &self.branch_by_cwd,
                         a,
@@ -996,7 +997,10 @@ mod tests {
         // the pr riding through join.pr.
         let mut join = BacklogJoin::default();
         join.pr.insert("x-2222".into(), 3159);
-        let ids: HashSet<String> = ["x-2222".to_string()].into();
+        let ids: HashMap<String, ()> = ["x-2222"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
         let a = RegistryAgent {
             name: "deploy bot".into(),
             cwd: "/tmp/repo".into(),
@@ -1047,7 +1051,10 @@ mod tests {
                 ),
             ],
         );
-        let ids: HashSet<String> = ["x-cccc".to_string()].into();
+        let ids: HashMap<String, ()> = ["x-cccc"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
         let a = RegistryAgent {
             name: "worker".into(),
             harness_session_id: Some("s1".into()),
@@ -1117,7 +1124,7 @@ mod tests {
         // rows never duplicate the node.
         let mut join = BacklogJoin::default();
         join.pr.insert("x-1".into(), 100);
-        let ids: HashSet<String> = ["x-1".to_string()].into();
+        let ids: HashMap<String, ()> = ["x-1"].into_iter().map(|i| (i.to_string(), ())).collect();
         let holders: HashMap<String, String> = [("deploy".to_string(), "x-1".to_string())].into();
         let branches: HashMap<String, String> =
             [("/tmp/repo".to_string(), "feature/x-1-feat".to_string())].into();
@@ -1147,7 +1154,10 @@ mod tests {
         // today's name + claim fallbacks still resolve node and leave pr
         // unset.
         let join = BacklogJoin::default();
-        let ids: HashSet<String> = ["x-2222".to_string()].into();
+        let ids: HashMap<String, ()> = ["x-2222"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
         let holders: HashMap<String, String> = [("w1".to_string(), "x-2222".to_string())].into();
         let claim_agent = RegistryAgent {
             name: "w1".into(),
@@ -1168,7 +1178,7 @@ mod tests {
         assert_eq!(got2[0].node, "x-2222");
     }
 
-    fn ids_empty() -> HashSet<String> {
-        HashSet::new()
+    fn ids_empty() -> HashMap<String, ()> {
+        HashMap::new()
     }
 }
