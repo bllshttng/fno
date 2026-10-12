@@ -991,12 +991,6 @@ pub enum Reach {
     Locate,
 }
 
-/// One sideline agent row inside [`ServerMsg::Layout`] (v5, brief US2). The
-/// server's off-loop registry reader joins registry rows to panes via the
-/// `mux` ref and derives the 3-tier fact-badge lattice: `exited` (pane-exit
-/// fact, beats everything) > `badge` (in-TTL inside-leg report) > liveness
-/// (both `None`/`false` - a plain row). `squad` is the squad the row renders
-/// under; `None` is the catch-all for rows whose cwd matches no squad.
 /// (v110) One node binding on an [`AgentRow`]: the node the row's session
 /// drives, its pr when the board knows one, and how the binding was found.
 /// `inferred` is false only for an explicit bind and a live claim.
@@ -1010,6 +1004,12 @@ pub struct SessionBinding {
     pub inferred: bool,
 }
 
+/// One sideline agent row inside [`ServerMsg::Layout`] (v5, brief US2). The
+/// server's off-loop registry reader joins registry rows to panes via the
+/// `mux` ref and derives the 3-tier fact-badge lattice: `exited` (pane-exit
+/// fact, beats everything) > `badge` (in-TTL inside-leg report) > liveness
+/// (both `None`/`false` - a plain row). `squad` is the squad the row renders
+/// under; `None` is the catch-all for rows whose cwd matches no squad.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRow {
     pub squad: Option<u64>,

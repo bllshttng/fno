@@ -1255,7 +1255,7 @@ impl View {
         if let (Some(node), Some(span)) = (agent.node.as_deref(), spans.node) {
             let node_start = span.start;
             // An inferred current binding dims the node: the row's node is
-            // a guess (branch, claim, name, history), not a stamp.
+            // a guess (branch, spawn, name, history), not a stamp.
             let inferred = agent.bindings.iter().any(|b| b.node == node && b.inferred);
             for (cell, ch) in line[span].iter_mut().zip(node.chars()) {
                 cell.c = ch;

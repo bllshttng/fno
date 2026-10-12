@@ -1210,9 +1210,10 @@ impl ReaderState {
             || self.last_join.as_ref() != Some(&self.join)
             || self.last_sent.as_ref() != Some(&queue)
         {
+            let join = self.join.clone();
             self.last_sent = Some(queue.clone());
-            self.last_join = Some(self.join.clone());
-            Some((queue, self.join.clone()))
+            self.last_join = Some(join.clone());
+            Some((queue, join))
         } else {
             None
         }

@@ -222,9 +222,13 @@ fn graph_bindings_for(
 }
 
 /// The row's current binding: an explicit open bind wins outright (the
-/// operator aimed the session), else the open row with the newest ts;
-/// equal timestamps keep the earlier listing.
+/// operator aimed the session), else live-session evidence (spawn, branch,
+/// claim, name) outranks history, and ts orders only inside a tier;
+/// equal timestamps keep the earlier listing. History rows are the only
+/// ones carrying a ts, so a bare ts comparison would let a stale past
+/// session outrank this row's live claim.
 fn pick_current(bindings: &[GraphBinding]) -> Option<&GraphBinding> {
+    let tier = |b: &GraphBinding| if b.source == "history" { 1u8 } else { 0 };
     let mut current: Option<&GraphBinding> = None;
     for b in bindings {
         if b.state != "open" {
@@ -235,7 +239,10 @@ fn pick_current(bindings: &[GraphBinding]) -> Option<&GraphBinding> {
         }
         let newer = match current {
             None => true,
-            Some(c) => b.ts.as_deref() > c.ts.as_deref(),
+            Some(c) => {
+                let (tb, tc) = (tier(b), tier(c));
+                tb < tc || (tb == tc && b.ts.as_deref() > c.ts.as_deref())
+            }
         };
         if newer {
             current = Some(b);
@@ -257,6 +264,29 @@ fn wire_bindings(bindings: Vec<GraphBinding>) -> Vec<SessionBinding> {
             state: b.state,
         })
         .collect()
+}
+
+/// One lookup for every AgentRow constructor: the row's wire bindings plus
+/// the current binding's node, pr, and driver attach handle, so the
+/// precedence contract lives in exactly one place.
+fn row_binding_view(
+    join: &BacklogJoin,
+    backlog_ids: &HashSet<String>,
+    node_by_holder: &HashMap<String, String>,
+    branch_by_cwd: &HashMap<String, String>,
+    a: &RegistryAgent,
+) -> (
+    Vec<SessionBinding>,
+    Option<String>,
+    Option<u64>,
+    Option<String>,
+) {
+    let bound = graph_bindings_for(join, backlog_ids, node_by_holder, branch_by_cwd, a);
+    let current = pick_current(&bound);
+    let node = current.map(|b| b.node.clone());
+    let pr = current.and_then(|b| b.pr);
+    let attach = current.and_then(|b| join.driver.get(&b.node).cloned());
+    (wire_bindings(bound), node, pr, attach)
 }
 
 impl Core {
@@ -346,14 +376,13 @@ impl Core {
                             let unmeasured = exited
                                 && !pane_dead
                                 && a.liveness == agents_view::Liveness::Unmeasured;
-                            let bound = graph_bindings_for(
+                            let (bindings, node, pr, pr_session_short) = row_binding_view(
                                 &self.backlog_join,
                                 &backlog_ids,
                                 &node_by_holder,
                                 &self.branch_by_cwd,
                                 a,
                             );
-                            let current = pick_current(&bound);
                             AgentRow {
                                 harness: a.harness.clone(),
                                 model: a.model.clone(),
@@ -381,7 +410,7 @@ impl Core {
                                 context_measured_at: a.context_measured_at,
                                 started_at: a.started_at,
                                 mail_unread: a.mail_unread,
-                                node: current.map(|b| b.node.clone()),
+                                node,
                                 harness_title: a.harness_title.clone(),
                                 answerable: if exited { None } else { a.answerable.clone() },
                                 // A pane-hosted row focuses its pane; the attach
@@ -402,9 +431,8 @@ impl Core {
                                     .clone()
                                     .or_else(|| pane_entry.and_then(|e| e.account.clone())),
                                 updated_at: a.updated_at,
-                                pr: current.and_then(|b| b.pr),
-                                pr_session_short: current
-                                    .and_then(|b| self.backlog_join.driver.get(&b.node).cloned()),
+                                pr,
+                                pr_session_short,
                                 tail: self.compose_tail(a),
                                 role_level: a.role_level,
                                 role_scope: a.role_scope.clone(),
@@ -431,7 +459,7 @@ impl Core {
                                     a.harness.as_deref(),
                                     a.attach_id.as_deref(),
                                 ),
-                                bindings: wire_bindings(bound),
+                                bindings,
                             }
                         }
                         None => {
@@ -554,14 +582,13 @@ impl Core {
                     // panel shows it where ResumeAgent will actually place
                     // the pane - the two lookups must agree.
                     let squad = self.thread_workspace(a);
-                    let bound = graph_bindings_for(
+                    let (bindings, node, pr, pr_session_short) = row_binding_view(
                         &self.backlog_join,
                         &backlog_ids,
                         &node_by_holder,
                         &self.branch_by_cwd,
                         a,
                     );
-                    let current = pick_current(&bound);
                     out.push(AgentRow {
                         harness: a.harness.clone(),
                         model: a.model.clone(),
@@ -593,7 +620,7 @@ impl Core {
                         context_measured_at: a.context_measured_at,
                         started_at: a.started_at,
                         mail_unread: a.mail_unread,
-                        node: current.map(|b| b.node.clone()),
+                        node,
                         harness_title: a.harness_title.clone(),
                         answerable: None,
                         attach_id: None,
@@ -605,9 +632,8 @@ impl Core {
                         subline: subline_with_title(a, self.compose_subline(&a.cwd)),
                         account: a.account.clone(),
                         updated_at: a.updated_at,
-                        pr: current.and_then(|b| b.pr),
-                        pr_session_short: current
-                            .and_then(|b| self.backlog_join.driver.get(&b.node).cloned()),
+                        pr,
+                        pr_session_short,
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -627,7 +653,7 @@ impl Core {
                         // Dangling dead: the pane is gone, so no vt reading.
                         pane_activity: None,
                         reach: Reach::Locate,
-                        bindings: wire_bindings(bound),
+                        bindings,
                     })
                 }
                 None => {
@@ -645,14 +671,13 @@ impl Core {
                     // (AC2-UI), a squad-matched row for the foreign-cwd
                     // exception subline.
                     let cwd_base = foreign_cwd_base(&a.cwd, squad_cwd_of(squad).as_deref());
-                    let bound = graph_bindings_for(
+                    let (bindings, node, pr, pr_session_short) = row_binding_view(
                         &self.backlog_join,
                         &backlog_ids,
                         &node_by_holder,
                         &self.branch_by_cwd,
                         a,
                     );
-                    let current = pick_current(&bound);
                     out.push(AgentRow {
                         harness: a.harness.clone(),
                         model: a.model.clone(),
@@ -681,7 +706,7 @@ impl Core {
                         context_measured_at: a.context_measured_at,
                         started_at: a.started_at,
                         mail_unread: a.mail_unread,
-                        node: current.map(|b| b.node.clone()),
+                        node,
                         harness_title: a.harness_title.clone(),
                         answerable: if a.exited { None } else { a.answerable.clone() },
                         attach_id: if a.exited { None } else { a.attach_id.clone() },
@@ -697,9 +722,8 @@ impl Core {
                         // foreign row carries its source account here (piece 3).
                         account: a.account.clone(),
                         updated_at: a.updated_at,
-                        pr: current.and_then(|b| b.pr),
-                        pr_session_short: current
-                            .and_then(|b| self.backlog_join.driver.get(&b.node).cloned()),
+                        pr,
+                        pr_session_short,
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -724,7 +748,7 @@ impl Core {
                             a.harness.as_deref(),
                             a.attach_id.as_deref(),
                         ),
-                        bindings: wire_bindings(bound),
+                        bindings,
                     })
                 }
             }
@@ -1036,9 +1060,9 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_bind_beats_a_newer_inferred_binding() {
-        // AC3-EDGE: a phase:bind row on x-1 (older ts) outranks a newer
-        // inferred history row on x-2; two inferred opens pick the newest.
+    fn current_picks_explicit_then_live_then_newest_history() {
+        // AC3-EDGE: an explicit bind wins outright; a live claim beats a
+        // ts-carrying history row; two inferred opens pick the newest.
         let mut join = BacklogJoin::default();
         join.by_session.insert(
             "s1".into(),
@@ -1071,6 +1095,22 @@ mod tests {
             pick_current(&got2).map(|b| b.node.as_str()),
             Some("x-2"),
             "two inferred opens pick the last-touched node"
+        );
+        // A live claim (no ts) beats an open history row (any ts): the
+        // claim is this session's present, the history row its past.
+        let holders: HashMap<String, String> = [("worker".to_string(), "x-1".to_string())].into();
+        let got3 = graph_bindings_for(&join2, &ids_empty(), &holders, &HashMap::new(), &a);
+        assert_eq!(
+            got3.iter()
+                .find(|b| b.source == "claim")
+                .map(|b| b.node.as_str()),
+            Some("x-1"),
+            "the claim binding is admitted ts-less"
+        );
+        assert_eq!(
+            pick_current(&got3).map(|b| b.node.as_str()),
+            Some("x-1"),
+            "live claim outranks the ts-carrying history row"
         );
     }
 

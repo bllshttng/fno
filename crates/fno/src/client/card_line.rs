@@ -56,7 +56,7 @@ pub(super) fn binding_suffix(a: &AgentRow) -> String {
         let open = a
             .bindings
             .iter()
-            .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.state != "done")
+            .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.state == "open")
             .count();
         if open > 0 {
             format!(" +{open} open")
@@ -406,16 +406,16 @@ mod binding_display_tests {
         let a = row(vec![
             binding("x-cur", Some(3159), "open", false),
             binding("x-oth1", None, "open", false),
-            binding("x-oth2", None, "review", false),
+            binding("x-oth2", None, "merged", false),
         ]);
         assert_eq!(binding_suffix(&a), " +2 open");
     }
 
     #[test]
-    fn suffix_is_empty_when_others_are_done_without_prs() {
+    fn suffix_is_empty_when_others_are_closed_without_prs() {
         let a = row(vec![
             binding("x-cur", Some(3159), "open", false),
-            binding("x-oth1", None, "done", false),
+            binding("x-oth1", None, "merged", false),
         ]);
         assert_eq!(binding_suffix(&a), "");
     }
