@@ -70,6 +70,47 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
                 .any(|j| t.contains(j))),
         "rows read in words: {texts:?}"
     );
+    // (x-93ab) AC3-HP: a long node title wraps whole at a 27-col column,
+    // every line stays inside the column, and the map ties every wrapped
+    // line back to its row.
+    let node_index = b
+        .rows()
+        .iter()
+        .position(|r| r.key == "node:x-1")
+        .expect("the node row exists");
+    let saved_title = b.snapshot.tree.as_ref().unwrap().leads[0].nodes[0]
+        .view
+        .card
+        .title
+        .clone();
+    b.snapshot.tree.as_mut().unwrap().leads[0].nodes[0]
+        .view
+        .card
+        .title = "an eighty character node title about org views ".repeat(2) + "end marker";
+    let (wrapped, wmap) = b.body(27);
+    for l in &wrapped {
+        assert!(l.text.chars().count() <= 27, "{:?}", l.text);
+    }
+    let owned: Vec<_> = wmap.iter().filter(|l| **l == node_index).collect();
+    assert!(
+        owned.len() > 1,
+        "the long title wrapped onto continuation lines"
+    );
+    assert!(
+        wrapped
+            .iter()
+            .any(|l| l.text.starts_with("    ") && l.text.contains("marker")),
+        "continuations indent under the guide: {:?}",
+        wrapped.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+    );
+    assert!(wrapped.iter().any(|l| l.text.contains("end marker")));
+    b.snapshot.tree.as_mut().unwrap().leads[0].nodes[0]
+        .view
+        .card
+        .title = saved_title;
+    drop(b);
+    let b = view.org_board.as_mut().unwrap();
+    b.cursor = 0;
     assert_eq!(
         counts_line(&json!({"ready": 3, "done": 0, "in_review": 2, "in_progress": 4})),
         "4 working · 2 in review · 3 ready"

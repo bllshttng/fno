@@ -11,6 +11,7 @@ pub(crate) enum Selected {
     Node(crate::backlog_model::NodeView),
     Session(OrgSession),
 }
+#[derive(Clone)]
 struct Row {
     key: String,
     text: String,
@@ -448,22 +449,90 @@ impl OrgBoard {
         if self.mode == OrgMode::Table {
             lines.push(BLine::meta(table_header(width)));
         }
-        let rows = self.rows();
-        let guides = tree_guides(&rows);
-        for (i, row) in rows.iter().enumerate() {
-            let mut line = if self.mode == OrgMode::Table {
-                BLine::plain(table_row(row, width))
-            } else {
-                let mut segs = vec![seg(guides[i].clone(), BRole::Meta)];
-                segs.extend(row.segs.iter().cloned());
-                BLine::of(&segs)
-            };
-            line.band = i == self.cursor;
-            lines.push(line);
-        }
+        let (body, _map) = self.body(width);
+        lines.extend(body);
         lines
     }
+
+    /// The body lines under the header, plus the row index each line
+    /// belongs to. A wrapped row paints on several lines, and the cursor
+    /// band, the tap map and the follow offset all read the LINE index of
+    /// the cursor ROW from this map. A row wider than the column wraps at
+    /// word boundaries onto continuation lines indented under its tree
+    /// guide plus 2. A session row's unbounded tail text stops after 2
+    /// continuation lines with an ellipsis; `d` detail shows a tail whole.
+    /// The cursor band covers every line of the cursor row.
+    fn body(&self, width: usize) -> (Vec<BLine>, Vec<usize>) {
+        let rows = self.rows();
+        let guides = tree_guides(&rows);
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
+        for (i, r) in rows.iter().enumerate() {
+            if self.mode == OrgMode::Table {
+                map.push(i);
+                let mut line = BLine::plain(table_row(r, width));
+                line.band = i == self.cursor;
+                lines.push(line);
+                continue;
+            }
+            let mut segs = vec![seg(guides[i].clone(), BRole::Meta)];
+            segs.extend(r.segs.iter().cloned());
+            let indent = " ".repeat(guides[i].chars().count() + 2);
+            let band = i == self.cursor;
+            let is_session = matches!(r.selected, Selected::Session(_));
+            let mut pieces = BLine::of(&segs).wrap_indented(width, &indent);
+            if is_session && pieces.len() > 3 {
+                pieces.truncate(3);
+                let last = pieces.len() - 1;
+                if pieces[last].text.chars().count() + 1 <= width {
+                    pieces[last].text.push('\u{2026}');
+                    pieces[last].roles.push(pieces[last].default_role);
+                } else {
+                    pieces[last].text.pop();
+                    pieces[last].text.push('\u{2026}');
+                }
+            }
+            for p in pieces {
+                map.push(i);
+                let mut line = p;
+                line.band = band;
+                lines.push(line);
+            }
+        }
+        (lines, map)
+    }
+
+    /// The rows the current mode paints, in Tree order: Tree folds by its
+    /// own state, Table narrows to worker sessions, Graph keeps the rows
+    /// a dot stands for. Tab reads the key here so the cursor keeps its
+    /// row across a mode switch when the new mode paints it.
+    fn mode_rows(&self, width: usize, height: usize) -> Vec<Row> {
+        let rows = self.rows();
+        match self.mode {
+            OrgMode::Tree => rows,
+            OrgMode::Table => {
+                let session_rows: Vec<Row> = rows
+                    .into_iter()
+                    .filter(|r| matches!(r.selected, Selected::Session(_)))
+                    .collect();
+                session_rows
+            }
+            OrgMode::Graph => {
+                let memo = self.graph.borrow();
+                match memo.as_ref() {
+                    Some(m) if m.0 == self.body_gen && m.2 == self.filter && m.3 == self.query => {
+                        m.5.iter()
+                            .map(|(i, _)| rows.get(*i).cloned())
+                            .flatten()
+                            .collect()
+                    }
+                    _ => rows,
+                }
+            }
+        }
+    }
 }
+
 fn now() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
 }
@@ -749,7 +818,13 @@ pub(crate) fn paint(
         if b.detail.is_some() {
             None
         } else {
-            Some(b.cursor + if b.mode == OrgMode::Table { 2 } else { 1 })
+            Some(if b.mode == OrgMode::Graph {
+                b.cursor + 1
+            } else {
+                let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
+                let (_, map) = b.body(width);
+                map.get(b.cursor).map(|l| l + offset).unwrap_or(0)
+            })
         },
         &view.theme,
     );
@@ -864,7 +939,15 @@ pub(crate) async fn keys(
                 crate::view_store::save_board_full(view.board_full);
             }
             ModalKey::Byte(b'\t') => {
+                let key = b
+                    .mode_rows(graph_width, graph_height)
+                    .get(b.cursor)
+                    .map(|r| r.key.clone());
                 b.mode = b.mode.next();
+                let rows = b.mode_rows(graph_width, graph_height);
+                b.cursor = key
+                    .and_then(|k| rows.iter().position(|r| r.key == k))
+                    .unwrap_or(0);
                 crate::view_store::save_org_prefs(b.mode, b.filter);
             }
             ModalKey::Byte(b's') => {
@@ -903,7 +986,8 @@ pub(crate) async fn keys(
                     b.graph_lines(graph_width, graph_height);
                     b.move_graph_cursor(true);
                 } else {
-                    b.cursor = (b.cursor + 1).min(b.rows().len().saturating_sub(1));
+                    let rows = b.mode_rows(graph_width, graph_height);
+                    b.cursor = (b.cursor + 1).min(rows.len().saturating_sub(1));
                 }
             }
             ModalKey::Left | ModalKey::Byte(b'h') => {
@@ -973,8 +1057,9 @@ pub(crate) async fn mouse(
     }
     if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
         let rows = b.rows();
+        let (lines, map) = b.body(width);
         let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
-        let len = rows.len() + offset;
+        let len = lines.len() + offset;
         let start = if b.mode == OrgMode::Graph || len <= height {
             0
         } else {
@@ -1008,10 +1093,10 @@ pub(crate) async fn mouse(
             index
         } else {
             let clicked = rep.row as usize + start;
-            if clicked < offset || clicked - offset >= rows.len() {
+            if clicked < offset || clicked - offset >= lines.len() {
                 return Ok(());
             }
-            clicked - offset
+            map[clicked - offset]
         };
         // A tap selects; a tap on the row already selected acts like Enter.
         if index != b.cursor {
