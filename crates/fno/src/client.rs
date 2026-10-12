@@ -7782,10 +7782,8 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41+) Script-layout and one-shot control-verb replies:
-                    // control-connection only, never sent to an attached
-                    // client - ignore, don't desync. The attach handshake
-                    // carries the same list.
+                    // (v41+) control-connection-only replies: ignore, don't
+                    // desync. The attach handshake carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
