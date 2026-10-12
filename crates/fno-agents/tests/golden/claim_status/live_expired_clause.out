@@ -1,0 +1,1 @@
+{"key":"session:ref-exp","state":"suspect","basis":"ttl-expired-unresolved","holder":"pty:parity","schema_version":1,"pid":"PID","pid_unavailable":false,"host":"HOST","machine_id":"MACHINE_ID","acquired_at":"ACQUIRED_AT","expires_at":"EXPIRES_AT","expired":true,"harness":"claude","session_id":"a1b2c3d4-1111-2222-3333-444455556666","session_basis":"unresolved"}

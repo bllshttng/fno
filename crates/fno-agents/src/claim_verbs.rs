@@ -87,6 +87,12 @@ pub fn run_claim(args: &[String]) -> i32 {
         // keys, native pre-read for repo-local) route here.
         return crate::claim_cli::refresh::run(&args[1..]);
     }
+    if op == "status" {
+        // Wave 4 of the leaf port: the operator surface (payload, refusal,
+        // roster crosscheck and overlay, verdict line) lives in claim_cli;
+        // goldens are the contract.
+        return crate::claim_cli::status::run(&args[1..]);
+    }
     if op == "lane-acquire" {
         return crate::claim_lanes_cli::run_lane_acquire(&args[1..]);
     }

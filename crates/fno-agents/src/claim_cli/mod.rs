@@ -11,6 +11,7 @@
 pub mod acquire;
 pub mod refresh;
 pub mod release;
+pub mod status;
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -393,7 +394,7 @@ pub fn claim_json_string(claim: &crate::claims::ClaimRecord) -> String {
 
 /// `json.dumps` default separators over a serde value. Object keys iterate in
 /// serde_json's map order.
-fn spaced(v: &Value) -> String {
+pub(crate) fn spaced(v: &Value) -> String {
     match v {
         Value::Object(m) => {
             let parts: Vec<String> = m
