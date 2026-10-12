@@ -148,7 +148,7 @@ pub struct Lead {
 }
 
 /// One board card.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Card {
     pub id: String,
     pub slug: Option<String>,
@@ -379,7 +379,7 @@ pub struct Board {
 }
 
 /// One graph session row joined to the roster.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionView {
     pub phase: Option<String>,
     pub harness: Option<String>,
@@ -399,7 +399,7 @@ pub struct SessionView {
 }
 
 /// A PR bound to a node.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Pr {
     pub number: u64,
     pub url: Option<String>,
@@ -440,7 +440,7 @@ pub struct Note {
 }
 
 /// One node's whole answer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct NodeView {
     pub card: Card,
     pub details: Option<Value>,

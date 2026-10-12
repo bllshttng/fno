@@ -44,6 +44,20 @@ def test_registry_is_complete_and_exact() -> None:
     assert not extra, f"registry entries with no model leaf: {sorted(extra)}"
 
 
+def test_build_agent_freeze_reads_strict_bool() -> None:
+    """The freeze switch takes a TOML bool only, matching the Rust reader's
+    as_bool(): pydantic would coerce the string "yes" to True and report the
+    machine frozen while the doors read the same line unset."""
+    from pydantic import ValidationError
+
+    from fno.config import BuildBlock
+
+    assert BuildBlock().agent_freeze is False
+    assert BuildBlock.model_validate({"agent_freeze": True}).agent_freeze is True
+    with pytest.raises(ValidationError, match="TOML bool"):
+        BuildBlock.model_validate({"agent_freeze": "yes"})
+
+
 def test_provider_outage_config_defaults_and_minima_are_fail_closed() -> None:
     defaults = RecoveryBlock()
     assert defaults.watchdog.enabled is False

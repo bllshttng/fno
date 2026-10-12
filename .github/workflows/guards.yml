@@ -155,8 +155,11 @@ jobs:
         # floor the 0 cap cannot express; the suite still shrinks in net
         # across any PR that only extends existing owners. 3: the identity
         # schema (d-f9c59b68, d-2327af8e) adds two native modules and one
-        # store aggregate, each carrying its first contract test.
-        run: fno-agents test-delta --base "$TEST_BASE" --max-net 3
+        # store aggregate, each carrying its first contract test. 6: the
+        # OTLP exporter is a new native module whose four tests are its
+        # first contracts, plus two regressions in existing owners (the
+        # preview-flag refusal and the old-spelling vacate).
+        run: fno-agents test-delta --base "$TEST_BASE" --max-net 6
 
       - name: Verb matrix fresh
         if: ${{ !cancelled() }}

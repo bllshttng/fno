@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -51,10 +52,12 @@ if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
   exit "$MOCK_ABI_ACQUIRE_RC"
 fi
 # `backlog get` is how the node guard establishes that a token IS a graph node.
-# Delegating (rather than exiting 0 with no output, which reads as "not a node")
-# exercises real resolution against the fixture graph.
+# The fixture reader answers from the seeded store. Delegating to the
+# roadmap-tasks shim recursed mock -> shim -> mock once the shim became a
+# front-door forwarder: the shim's own `fno` resolves to THIS mock on the
+# sandbox PATH, and the spawn chain never terminates.
 if [[ "$1" == "backlog" && "$2" == "get" ]]; then
-  exec python3 "$MOCK_ABI_SHIM" "${@:2}"
+  exec python3 "$MOCK_ABI_GET" "${@:2}"
 fi
 # The owned-identity verb: a test that pins the refusal wording controls the
 # KEY=value answer here (empty by default, which reads as the stale-fno
@@ -81,6 +84,59 @@ fi
 exit 0
 """
 
+GRAPH_GET = """#!/usr/bin/env python3
+\"\"\"Fixture-graph reader behind the sandbox mock's `backlog get`.
+
+Reads the store the way the product does (fno.graph.store), with a raw-JSON
+fallback for bare-list seeds. An absent node exits 1; a present node prints
+the requested --field as JSON, or the whole row without one. --strict is
+accepted and ignored: the fixture has no archive leg, so store presence IS
+liveness.
+\"\"\"
+import json
+import os
+import sys
+
+
+def _rows(path):
+    try:
+        from fno.graph.store import read_graph_strict
+
+        return read_graph_strict(path)
+    except Exception:
+        pass
+    with open(path, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    if isinstance(doc, list):
+        return doc
+    return doc.get("entries") or doc.get("nodes") or []
+
+
+def main() -> int:
+    raw = sys.argv[1:]
+    node_id = next((a for a in raw if not a.startswith("--") and a != "get"), None)
+    field = sys.argv[sys.argv.index("--field") + 1] if "--field" in raw else None
+    path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "graph.json")
+    rows = _rows(path)
+    node = next(
+        (r for r in rows if isinstance(r, dict) and r.get("id") == node_id), None
+    )
+    if node is None:
+        return 1
+    value = node.get(field) if field else node
+    # The verb's text output prints scalars bare (ab-deadbeef, True, 123);
+    # only containers ride the JSON spelling.
+    if isinstance(value, (str, bool, int, float)) or value is None:
+        print(value)
+    else:
+        print(json.dumps(value))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+"""
+
 
 def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     home = tmp_path / "home"
@@ -100,6 +156,9 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     mock = bindir / "fno"
     mock.write_text(MOCK_ABI)
     mock.chmod(0o755)
+    getr = bindir / "graph-get.py"
+    getr.write_text(GRAPH_GET)
+    getr.chmod(0o755)
     log = tmp_path / "fno.log"
 
     # The stub answers `fno-agents state path` so init writes its state into the
@@ -137,7 +196,7 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
         "HOME": str(home),
         "PATH": f"{bindir}:{env['PATH']}",
         "MOCK_ABI_LOG": str(log),
-        "MOCK_ABI_SHIM": str(REPO_ROOT / "scripts" / "roadmap-tasks.py"),
+        "MOCK_ABI_GET": str(getr),
         "MOCK_ABI_NATIVE": str(native),
         "MOCK_ABI_STATE_DIR": str(home / ".fno"),
         "MOCK_ABI_FRONT": str(front),
@@ -146,18 +205,38 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     return repo, home, log, env
 
 
+class _InitResult(NamedTuple):
+    returncode: int
+    stderr: str
+
+
 def _run_init(repo: Path, env: dict):
-    return subprocess.run(
+    """Run the init script under a bounded process group. A hung delegate
+    (the mock `exec`s into the real front) survives a lone child kill and
+    holds the output pipes, so the group dies together and a stall reports
+    its own captured output instead of hanging the runner."""
+    import os
+    import signal
+
+    proc = subprocess.Popen(
         ["bash", str(INIT_SCRIPT)],
         cwd=repo,
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        # These integration paths exercise the real writer and can approach the
-        # old ceiling under the parallel full suite. Bound hangs without turning
-        # scheduler pressure into a false functional failure.
-        timeout=90,
+        start_new_session=True,
     )
+    try:
+        out, err = proc.communicate(timeout=90)
+        return _InitResult(proc.returncode, err)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        raise AssertionError(
+            f"init stalled: group-killed at 90s\nSTDOUT tail:\n{out[-2000:]}\n"
+            f"STDERR tail:\n{err[-2000:]}"
+        )
 
 
 def _state(repo: Path) -> str:
