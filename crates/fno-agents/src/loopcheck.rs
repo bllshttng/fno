@@ -579,6 +579,14 @@ pub(crate) fn decide_with_payload(
             .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
     });
     let harness = scan_manifest_field(&manifest_content, "harness");
+    // The harness session the friction row names: the payload's own id
+    // first, else the one init recorded in the manifest.
+    let harness_session = parsed
+        .harness_session
+        .as_deref()
+        .or(manifest.harness_session_id.as_deref())
+        .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("null"))
+        .map(str::to_string);
     let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,
@@ -588,6 +596,7 @@ pub(crate) fn decide_with_payload(
         harness.as_deref(),
         &transcript_path,
         last_assistant_message.as_deref(),
+        harness_session.as_deref(),
     );
 
     //     // ── Step 1: cancel sentinel ────────────────────────────
@@ -621,6 +630,7 @@ pub(crate) fn decide_with_payload(
                 harness.as_deref(),
                 &distress,
                 &format!("sentinel-{}", hit.path.display()),
+                harness_session.as_deref(),
             );
             return (
                 0,
@@ -1413,6 +1423,27 @@ pub(crate) fn decide_with_payload(
 
         match done_result {
             Ok(mut pr_info) => {
+                // This session's own PR: a spent review round or a red check
+                // is friction. Best-effort; it never moves the verdict below.
+                crate::friction::on_pr_read(
+                    &crate::friction::Sinks {
+                        project: &project_events,
+                        global: &global_events,
+                    },
+                    &crate::friction::PrRead {
+                        harness_session: harness_session.as_deref(),
+                        node: node_id.as_deref(),
+                        harness: harness.as_deref(),
+                        number: pr_info.number,
+                        head_sha: &pr_info.head_oid,
+                        ci_failure: matches!(pr_info.ci_conclusion, CiConclusion::Failure(_)),
+                        failing_checks: &pr_info.failing_checks,
+                        rounds_used: pr_info.range_tiling.rounds_used,
+                        rounds_max: pr_info.range_tiling.rounds_max,
+                        unaddressed_blocking: pr_info.unaddressed_findings.len(),
+                        hard_blocker: pr_info.range_tiling.hard_blocker,
+                    },
+                );
                 // Read 4's newest activity timestamp folds into the
                 // fingerprint's 4th component: a late inline finding advances
                 // the fingerprint (re-block, not NoProgress - the codex

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -238,7 +239,9 @@ def test_lane_and_cohort_flags_pass_through_to_run_task(tmp_path: Path, monkeypa
 
 
 def _macro_journal(path: Path, *, old: bool = False) -> None:
-    ts = "2025-01-01T10:00:00Z" if old else "2026-09-12T10:00:00Z"
+    # A fixed recent date ages out of the 30-day macro window; stay one day back.
+    recent = datetime.now(timezone.utc) - timedelta(days=1)
+    ts = "2025-01-01T10:00:00Z" if old else recent.strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [
         {"ts": ts, "type": "loop_check_watch_idle", "data": {"session_id": "s1", "node_id": "n1", "reason": "ci"}},
         {"ts": ts, "type": "termination", "data": {"session_id": "s1", "node_id": "n1", "reason": "Budget"}},

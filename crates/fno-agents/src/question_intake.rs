@@ -27,9 +27,52 @@ use std::path::{Path, PathBuf};
 /// `cli/src/fno/events/__init__.py: QUESTION_CAP`.
 pub const QUESTION_CAP: usize = 2000;
 
+/// The filled question file the template arm prints: the gate's own shape,
+/// sourced from the file that enforces it so neither can drift.
+pub const QUESTION_TEMPLATE: &str = "\
+---
+recommend: 1
+---
+
+<the question, one line>
+
+## Options
+1. <first choice>.
+    What happens next: <what starts the moment this is chosen>
+2. <second choice>.
+    What happens next: <what starts the moment this is chosen>
+
+## Blocked because
+<what stays stuck until this is answered>
+
+## Why these options
+<the reading that produced exactly these options>
+
+## Downside
+<the cost of the option you recommend>
+
+## Recommendation
+Option 1, <the reason in one line>.
+
+## Not thought through
+<the part you did not check>
+
+## Reversible
+costly
+
+## Cost if wrong
+<what breaks if the recommendation is wrong>
+
+## Meanwhile
+<what keeps moving while the question waits>
+";
+
 #[derive(Deserialize)]
 pub struct IntakeRequest {
     pub question: String,
+    /// `--template`: print the filled question file, record nothing.
+    #[serde(default)]
+    pub template: bool,
     #[serde(default)]
     pub ask: Option<String>,
     #[serde(default)]
@@ -74,6 +117,10 @@ pub struct IntakeAnswer {
     pub lines: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qid: Option<String>,
+    /// True only on a template answer; the shim reads it to refuse a binary
+    /// that predates the template arm.
+    #[serde(default)]
+    pub template: bool,
     /// `law` | `node_pointer` | `context` | `decide_yourself` | `dedup` | `write` | `index`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
@@ -92,6 +139,7 @@ impl IntakeAnswer {
             exit_code: code,
             lines: Vec::new(),
             qid: None,
+            template: false,
             refusal: None,
             open_id: None,
             truncated: false,
@@ -230,6 +278,12 @@ fn is_question_file(text: &str) -> bool {
     SECTIONS.iter().any(|s| text.contains(s))
 }
 
+/// The exact word the Reversible section must hold: one of the three,
+/// nothing else. Extra text under the heading reads as missing.
+fn is_reversible_word(word: &str) -> bool {
+    matches!(word, "yes" | "costly" | "no")
+}
+
 fn title_of(text: &str, parsed_title: &str) -> String {
     if !parsed_title.trim().is_empty() {
         return parsed_title.trim().to_string();
@@ -292,6 +346,12 @@ fn targets_operator_retraction(question: &str, laws: &[crate::law_match::LawRow]
 }
 
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
+    if req.template {
+        let mut answer = IntakeAnswer::exit(0);
+        answer.lines = vec![QUESTION_TEMPLATE.to_string()];
+        answer.template = true;
+        return answer;
+    }
     // The user's name for the refusal line, and the render cap for the
     // receipt; both absent read as the plain shapes.
     let who = req.display_name.as_deref().unwrap_or("the user");
@@ -355,8 +415,17 @@ question and ask again: only the user may record that retraction.";
     // written.
     let asked_class = parsed.class.trim();
     if !asked_class.is_empty() && !crate::decision_trace::DECISION_CLASSES.contains(&asked_class) {
+        // Quote the class: line as read; the recurring wrong value is
+        // 'decision', and a bare "unknown class" sent askers hunting
+        // for a list instead of fixing the one word.
+        let read_line = req
+            .question
+            .lines()
+            .find(|l| l.split_once(':').is_some_and(|(k, _)| k.trim() == "class"))
+            .unwrap_or("class:");
         answer.lines.push(format!(
-            "outstanding: refused: unknown class '{asked_class}'. Allowed: {}.",
+            "outstanding: refused: read '{read_line}'. class must be one of six \
+words: {}. 'decision' is not a class.",
             crate::decision_trace::DECISION_CLASSES.join(", ")
         ));
         answer.refusal = Some("class".to_string());
@@ -421,7 +490,7 @@ One line plus a node pointer (law d-59af3235)."
         if parsed.unknowns.trim().is_empty() {
             missing.push("## Not thought through");
         }
-        if !matches!(parsed.reversible.trim(), "yes" | "costly" | "no") {
+        if !is_reversible_word(parsed.reversible.trim()) {
             missing.push("## Reversible (yes, costly, or no)");
         }
         if parsed.reversible.trim() == "costly" && parsed.cost_if_wrong.trim().is_empty() {
@@ -437,6 +506,27 @@ One line plus a node pointer (law d-59af3235)."
 --question-file. One action with no choice is a pin: pass --ask \"<the action>\".",
                 missing.join(", ")
             ));
+            // The quote lines: where a value was present to read, name it
+            // and the shape wanted, so one pass fixes the file.
+            let reversible_read = parsed.reversible.trim();
+            if !reversible_read.is_empty() && !is_reversible_word(reversible_read) {
+                answer.lines.push(format!(
+                    "outstanding: the Reversible section reads '{reversible_read}'; \
+it must hold exactly one word: yes, costly, or no. Any extra text under the \
+heading reads as missing."
+                ));
+            }
+            for (i, o) in parsed.options.iter().enumerate() {
+                if o.next.trim().is_empty() {
+                    answer.lines.push(format!(
+                        "outstanding: option {} '{}' carries no 'What happens next:' \
+line; each option needs an indented 'What happens next: <the action this \
+choice starts>'.",
+                        i + 1,
+                        o.text
+                    ));
+                }
+            }
             answer.refusal = Some("context".to_string());
             answer.exit_code = 2;
             return answer;
@@ -455,9 +545,9 @@ One line plus a node pointer (law d-59af3235)."
                     None => "fno backlog decide <node> \"<ruling>\"".to_string(),
                 };
                 answer.lines.push(format!(
-                    "outstanding: refused: you can decide this one: it carries a \
-recommendation and marks itself reversible. Record the ruling yourself or \
-hand it to your lead: {decide} (--authority team or agent), then continue. \
+                    "outstanding: refused: reversible with a recommendation is yours \
+to rule. Decide door first: {decide} (--authority team or agent) - record the \
+ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
 credential, reaches outside the machine, or a product or taste call - name it \
 with why_user: in the question file."
@@ -788,6 +878,7 @@ mod tests {
     fn req(question: &str, root: &Path) -> IntakeRequest {
         IntakeRequest {
             question: question.to_string(),
+            template: false,
             ask: None,
             options: vec![],
             blocks: vec![],
@@ -991,6 +1082,14 @@ stops
             "the refusal names the decide door: {:?}",
             answer.lines
         );
+        let line = answer
+            .lines
+            .iter()
+            .find(|l| l.contains("fno backlog decide"))
+            .unwrap();
+        let door = line.find("fno backlog decide").unwrap();
+        let tail = line.find("The user answers only").unwrap();
+        assert!(door < tail, "the decide door comes first: {line}");
         assert!(journal_text(&root).is_empty());
         // An empty why_user reads the same as an absent one: not user-only.
         let question = QUESTION_FILE
