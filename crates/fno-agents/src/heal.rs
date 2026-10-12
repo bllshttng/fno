@@ -2666,6 +2666,16 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             }
         }
     }
+    let fno_bin = seam_bin(a, "fno");
+    let steward_io = crate::pr_steward::RealIo {
+        gh_bin: a.gh_bin.as_str(),
+        fno_bin: fno_bin.as_str(),
+        cwd: std::path::Path::new(&a.cwd),
+    };
+    bump(
+        &mut counts,
+        crate::pr_steward::run_pass(&steward_io, std::path::Path::new(&a.cwd), &pages, dry_run),
+    );
     emit_tick_event(
         a,
         &counts,
@@ -3738,6 +3748,7 @@ exit 0
         );
         let events = log_of(d, "events.jsonl");
         assert!(events.contains("\"healed\":1"), "{events}");
+        assert!(events.contains("\"steward_off_no_law\":1"), "{events}");
         assert!(events.contains("\"skip_claim_held\":1"), "{events}");
         assert!(events.contains("\"skip_outside\":1"), "{events}");
 
