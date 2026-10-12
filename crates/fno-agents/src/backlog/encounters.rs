@@ -8,6 +8,69 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Append one encounter to the node whose id is exactly `node_id`, refusing
+/// a second vote from the same voter. The voter is the record's own
+/// `voter_key`, else its `session_id`. Returns `{appended, error, reason}`
+/// with reason missing, duplicate or unidentified: the keeper op, the
+/// native verb and the creation vote all answer from this one body.
+pub(crate) fn append_refusing_duplicate(
+    entries: &mut [Value],
+    node_id: &str,
+    record: Value,
+) -> Value {
+    let voter = |v: &Value| -> String {
+        v.get("voter_key")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("session_id").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let key = voter(&record);
+    if key.is_empty() {
+        return serde_json::json!({"appended": false,
+            "error": "an encounter with no voter key (session_id) is not readable back to a transcript",
+            "reason": "unidentified"});
+    }
+    let Some(obj) = entries
+        .iter_mut()
+        .find(|e| crate::graph_store::entry_id(e) == Some(node_id))
+        .and_then(Value::as_object_mut)
+    else {
+        return serde_json::json!({"appended": false,
+            "error": format!("no node resolves to '{node_id}'"), "reason": "missing"});
+    };
+    if let Some(prior) = obj
+        .get("encounters")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|prior| voter(prior) == key))
+    {
+        return serde_json::json!({"appended": false,
+            "error": format!(
+                "voter {key} already recorded an encounter on {} at {}",
+                obj.get("id").and_then(Value::as_str).unwrap_or(node_id),
+                // Python's f-string printed a missing stamp as "None"; the
+                // receipt keeps that spelling.
+                prior
+                    .get("created_at")
+                    .or_else(|| prior.get("ts"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("None")
+            ),
+            "reason": "duplicate"});
+    }
+    let encounters = obj
+        .entry("encounters".to_string())
+        .or_insert_with(|| Value::Array(vec![]));
+    if !encounters.is_array() {
+        *encounters = Value::Array(vec![]);
+    }
+    encounters
+        .as_array_mut()
+        .expect("just made an array")
+        .push(record);
+    serde_json::json!({"appended": true, "error": Value::Null, "reason": Value::Null})
+}
+
 /// Schema 4. The vote time is the row's creation time, so the schema-3
 /// `ts` column is `created_at` now (user ruling 2026-09-23).
 pub fn ddl() -> String {

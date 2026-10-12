@@ -16,8 +16,6 @@ new
 intake
 decompose
 note
-# encounter appends to a node's graph record, exactly like note
-encounter
 remove
 supersede
 unsupersede
