@@ -59,6 +59,17 @@ pub fn parse_proc_stat_cpu(text: &str) -> Option<HostTicks> {
     })
 }
 
+/// Map `HOST_CPU_LOAD_INFO` ticks, ordered USER, SYSTEM, IDLE, NICE
+/// (`mach/machine.h` `CPU_STATE_*`), onto busy, system and idle.
+pub fn mach_ticks(cpu_ticks: [u32; 4]) -> HostTicks {
+    let [user, system, idle, nice] = cpu_ticks.map(u64::from);
+    HostTicks {
+        busy: user + system + nice,
+        system,
+        idle,
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn host_ticks() -> Option<HostTicks> {
     parse_proc_stat_cpu(&std::fs::read_to_string("/proc/stat").ok()?)
@@ -86,13 +97,7 @@ pub fn host_ticks() -> Option<HostTicks> {
             &mut count,
         )
     };
-    (status == 0).then(|| HostTicks {
-        busy: u64::from(info.cpu_ticks[0])
-            + u64::from(info.cpu_ticks[1])
-            + u64::from(info.cpu_ticks[2]),
-        system: u64::from(info.cpu_ticks[2]),
-        idle: u64::from(info.cpu_ticks[3]),
-    })
+    (status == 0).then(|| mach_ticks(info.cpu_ticks))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -727,6 +732,14 @@ mod tests {
         assert_eq!(ticks.busy, 33);
         assert_eq!(ticks.system, 14);
         assert_eq!(ticks.idle, 24);
+    }
+
+    #[test]
+    fn mach_ticks_count_idle_as_idle() {
+        let ticks = mach_ticks([10, 3, 80, 2]);
+        assert_eq!(ticks.busy, 15);
+        assert_eq!(ticks.system, 3);
+        assert_eq!(ticks.idle, 80);
     }
 
     #[test]
