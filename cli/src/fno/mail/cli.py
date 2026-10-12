@@ -4690,7 +4690,99 @@ def _self_handle_or_exit() -> "tuple[str, object]":
     return canonical_handle(ident.session_id), ident
 
 
-from fno.mail.hold_cli import cmd_hold, cmd_hold_release  # noqa: E402
+def _forward_mail_hold(argv: list[str]) -> None:
+    """Forward one hold-front verb to the bundled fno-agents binary.
+
+    The hold verbs' bodies live in the Rust mail front now; Python owns
+    transport only, the same split as the claims forward.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail hold: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "mail", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+def cmd_hold(
+    minutes: int = typer.Option(
+        None,
+        "--minutes",
+        "-m",
+        help="Idle minutes before the hold lifts by itself (default 5). The "
+        "quiet window restarts every prompt and ends at 2x the requested window.",
+    ),
+    for_minutes: int = typer.Option(
+        None,
+        "--for",
+        help="Wall-clock minutes before the hold lifts. The deadline never moves.",
+    ),
+    off: bool = typer.Option(
+        False, "--off", help="Lift the hold now and deliver what it held."
+    ),
+    status: bool = typer.Option(
+        False, "--status", help="Report the current hold without changing it."
+    ),
+) -> None:
+    """Busy mode: hold this session's incoming mail, and drain it on a timer.
+
+    While the hold is on, mail addressed to this session never pastes into the
+    prompt line. It queues durable and the sender gets a receipt saying so.
+    Either clock DELIVERS without a new prompt, so a hold whose only drain
+    trigger is the operator cannot stall.
+    """
+    argv = ["hold"]
+    if minutes is not None:
+        argv += ["--minutes", str(minutes)]
+    if for_minutes is not None:
+        argv += ["--for", str(for_minutes)]
+    if off:
+        argv.append("--off")
+    if status:
+        argv.append("--status")
+    _forward_mail_hold(argv)
+
+
+def cmd_hold_release(
+    handle: str = typer.Option(..., "--handle", help="The held session's handle."),
+    poll_s: int = typer.Option(
+        15, "--poll-s", hidden=True, help="Seconds between clock re-reads."
+    ),
+) -> None:
+    """Sleep until ``handle``'s hold expires, then release it.
+
+    Re-reads the clock on every wake rather than sleeping once to the original
+    deadline, so an idle re-arm (the operator typed again) extends the hold
+    instead of being overrun by a timer that already committed to a time.
+
+    Exits quietly when the clock disappears or turns permanent: both mean
+    someone else took the hold off, and a second release would be a no-op that
+    still emitted a release event.
+    """
+    _forward_mail_hold(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
+
 
 mail_app.command("hold")(cmd_hold)
 mail_app.command("hold-release", hidden=True)(cmd_hold_release)
