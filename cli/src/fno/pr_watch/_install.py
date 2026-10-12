@@ -25,8 +25,6 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-import typer
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -201,21 +199,6 @@ def render_plist(
 # launchctl helpers (stubbed in tests via monkeypatch)
 # ---------------------------------------------------------------------------
 
-
-def _run_launchctl(*args: str) -> int:
-    """Run launchctl; return exit code.  Best-effort: never raises."""
-    try:
-        result = subprocess.run(
-            ["launchctl", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return result.returncode
-    except OSError:
-        return -1
-
-
 # A wedged job's `launchctl kickstart` was observed to HANG indefinitely; every
 # launchctl call in the bounce is timeout-guarded so a hung fix command can't be
 # worse than no fix. 10s is generous for a local launchctl round-trip.
@@ -231,9 +214,8 @@ _BOOTSTRAP_RETRIES = 4
 def _run_launchctl_timed(*args: str, timeout_s: float = _LAUNCHCTL_TIMEOUT_S) -> tuple[int, bool]:
     """Run launchctl with a timeout. Returns ``(returncode, timed_out)``.
 
-    Separate from :func:`_run_launchctl` because the un-wedge bounce needs to
-    distinguish a HANG (report which step wedged, exit nonzero) from a normal
-    nonzero rc (tolerated for bootout).
+    The un-wedge bounce needs to distinguish a HANG (report which step wedged,
+    exit nonzero) from a normal nonzero rc (tolerated for bootout).
     """
     try:
         result = subprocess.run(
@@ -478,61 +460,9 @@ def refresh_watcher(
     )
 
 
-def _launchctl_is_loaded() -> bool:
-    """Return True when sh.fno.pr-watcher appears in launchctl list output."""
-    try:
-        result = subprocess.run(
-            ["launchctl", "list"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return _LABEL in (result.stdout or "")
-    except OSError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Open-PR count for status (stubbed in tests)
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# install
-
-
-def unload_only(*, launch_agents_dir: Path) -> str:
-    """Unload the agent but keep the plist (config disable path).  Idempotent.
-
-    Returns ``not-installed`` (no plist), ``already-unloaded``, ``unloaded``,
-    or ``unload-failed``.  Never raises.
-    """
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-    if not plist_path.exists():
-        return "not-installed"
-    if not _launchctl_is_loaded():
-        return "already-unloaded"
-    rc = _run_launchctl("unload", str(plist_path))
-    return "unloaded" if rc == 0 else "unload-failed"
-
-
-# ---------------------------------------------------------------------------
-# uninstall
-# ---------------------------------------------------------------------------
-
-
-def uninstall(*, launch_agents_dir: Path) -> None:
-    """Unload (best-effort) and remove the plist.  Preserves watermark store."""
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-
-    if plist_path.exists():
-        _run_launchctl("unload", str(plist_path))
-        plist_path.unlink()
-        typer.echo(f"Removed: {plist_path}")
-    else:
-        typer.echo(f"Nothing to remove: {plist_path} does not exist")
-
-    typer.echo("Watermark store preserved (reinstall picks up existing history).")
 
 
 # ---------------------------------------------------------------------------

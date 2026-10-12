@@ -397,6 +397,13 @@ def test_spawn_claude_command_receipt_names_effective_message(workdir_claude) ->
     receipt = json.loads(_receipt_line(result.output))
     assert receipt["effective_message"] == "/fno:ship pr check 7"
 
+    # v41: the row records the DELIVERED seed (post brevity enrichment),
+    # so the attended guard can exempt the machine's own slash-command turn.
+    from fno.agents.spawn_payload import enrich_spawn_payload
+
+    entry = next(e for e in load_registry() if e.name == "command-c")
+    assert entry.spawn_payload == enrich_spawn_payload("/fno:ship pr check 7")
+
 
 def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
     """zsh turns a double-quoted `$fno:target x-1` into `arget x-1`. The spawn

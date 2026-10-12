@@ -30,13 +30,25 @@ The role is granted, never inferred. Verify it before anything else:
 2. If a row carries a role-source field, use it. If it does not, call the reader directly: resolve `term_state(scope)` (`fno agents org manifest-path` resolves the same file) and print `ROLE-SOURCE: term_state (team field absent)`.
 3. This session's handle must appear titled over `<scope>` (rung 0, 1 or 2), the manifest-versus-registry answer must read `split: false`, AND `conflicts` must carry no entry whose scope is `<scope>`. The two fields answer different questions. `split` is one role that two readers describe differently. `conflicts` is two roles over one territory. `agree` answers neither: two rival rows both read `agree: true` by design, because `agree` only says the graph was read and the scope resolved.
 4. A split, a conflict, or an unknown STOPS the skill and prints both session ids. For a conflict, print the two holders the entry names. A `conflicts` of null means the reader gave no answer. That is an unknown and it stops the skill, because an absent answer is not the same as no rival. A lead cannot lead through a role two readers disagree about, it cannot lead beside a rival, and it cannot re-role itself.
-5. Otherwise print `not promoted over <scope>; from an attended shell: fno agents org promote <handle> --scope <scope>` and stop.
+5. Otherwise print that this session is not promoted over `<scope>`. Print the grant line for an attended shell: `fno agents org promote <handle> --scope <scope>`. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
 
 How a role is granted, the ladder and succession: [the role model](references/once.md#who-runs-this-the-role-is-granted).
 
+## Without a role
+
+A session with no role over the scope does not lead. It runs no check-in, spawns no worker for the scope, and records no ruling. It can still act in three ways.
+
+- Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents org --json` lists the roles on this machine only.
+- Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
+- Mail a named peer: `fno agents mail send <name> "<text>"` on this machine. Use `fno agents mail send <name>@<host> "<text>"` for a peer on another machine. Run `fno agents register` first, so the peer can answer.
+
+An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from an attended shell on this machine.
+
+If `fno backlog get <scope>` finds no node, this machine's backlog does not hold the scope. The steps to share it are in [a node on a second machine](../../docs/architecture/multiplayer.md#a-node-on-a-second-machine).
+
 ## On titling
 
-- `fno agents org init --scope <scope>`. Print level, scope, mail handle. When the output carries a settled-findings section, those titles are what this epic already established: read them before the first check-in and never re-derive them.
+- `fno agents org init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agents whoami --json` does not work. Print level, scope, mail handle. The output can carry a settled-findings section. Those titles are what this epic already established. Read them before the first check-in. Never re-derive them.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
 - Declare the shape now: `fno agents org shape pass` for a one-wave pass, and `fno agents org shape team` THE MOMENT the lead spawns its first worker. This is the field the Stop nudge reads; an undeclared org is nagged at every stop.

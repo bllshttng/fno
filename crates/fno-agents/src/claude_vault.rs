@@ -181,6 +181,9 @@ struct Receipt {
     action: String,
     verdict: String,
     record: Option<String>,
+    // Extra context that is not the outcome itself: which slot sources a sync
+    // skipped, so the receipt explains a write that ignored a credential.
+    note: Option<String>,
 }
 
 impl Receipt {
@@ -189,15 +192,20 @@ impl Receipt {
             action: action.to_string(),
             verdict: verdict.into(),
             record,
+            note: None,
         }
     }
 
     fn json(&self) -> Value {
-        json!({
+        let mut receipt = json!({
             "action": self.action,
             "verdict": self.verdict,
             "record": self.record,
-        })
+        });
+        if let Some(note) = &self.note {
+            receipt["note"] = json!(note);
+        }
+        receipt
     }
 }
 
@@ -232,6 +240,8 @@ pub fn run(args: &[String]) -> i32 {
     let (code, receipt) = run_with_options(action, options, &SystemExternal);
     if json_output {
         println!("{}", receipt.json());
+    } else if let Some(note) = &receipt.note {
+        println!("provider-cap vault {action}: {} ({note})", receipt.verdict);
     } else {
         println!("provider-cap vault {action}: {}", receipt.verdict);
     }
@@ -337,32 +347,91 @@ fn sync(options: &Options, external: &dyn External) -> (i32, Receipt) {
         Ok(blobs) => blobs,
         Err(verdict) => return (4, Receipt::new(action, verdict, None)),
     };
-    if blobs.is_empty() {
-        return (4, Receipt::new(action, "empty-slot", None));
+    // A source whose token already expired cannot be the live one (newest_blob
+    // would never pick it), and proving it would fail the whole slot: skip it
+    // before the proof and say so in the receipt instead. A stale
+    // .credentials.json from a pre-keychain install must not block the two
+    // live keychain items from syncing.
+    let mut live: Vec<SlotBlob> = Vec::new();
+    let mut expired: Vec<&'static str> = Vec::new();
+    for item in blobs {
+        if oauth(&item.blob)
+            .and_then(|oauth| oauth.expires_at)
+            .is_some_and(|expires_at| expires_at <= now_ms())
+        {
+            expired.push(item.source);
+        } else {
+            live.push(item);
+        }
     }
+    if live.is_empty() {
+        if expired.is_empty() {
+            return (4, Receipt::new(action, "empty-slot", None));
+        }
+        return (
+            4,
+            Receipt::new(
+                action,
+                format!("expired-slot: {}", expired.join(", ")),
+                None,
+            ),
+        );
+    }
+    let note = (!expired.is_empty()).then(|| format!("skipped expired: {}", expired.join(", ")));
+    let (code, mut receipt) = sync_live(action, &live, options, external);
+    receipt.note = note;
+    (code, receipt)
+}
+
+fn sync_live(
+    action: &str,
+    blobs: &[SlotBlob],
+    options: &Options,
+    external: &dyn External,
+) -> (i32, Receipt) {
     // The two required logins leave one unscoped and one scoped item whose
     // tokens differ but prove the SAME account (each item refreshes on its
     // own). All principals equal -> the latest expiry is the live token; a
-    // principal mismatch or any profile failure keeps today's refusal.
-    let (blob, proven): (&String, Option<Principal>) = if blobs.len() == 1 {
-        (&blobs[0], None)
+    // principal mismatch or a source that fails to prove refuses, naming the
+    // source so the operator knows which credential to inspect.
+    let (blob, proven): (&str, Option<Principal>) = if blobs.len() == 1 {
+        (&blobs[0].blob, None)
     } else {
         let mut principals: Vec<Principal> = Vec::with_capacity(blobs.len());
-        for item in &blobs {
-            let proof = oauth(item)
+        for item in blobs {
+            let proof = oauth(&item.blob)
                 .and_then(|oauth| oauth.access_token)
                 .ok_or(())
                 .and_then(|token| external.profile(&token).map_err(|_| ()));
             match proof {
                 Ok(principal) => principals.push(principal),
-                Err(_) => return (4, Receipt::new(action, "ambiguous-slot", None)),
+                Err(_) => {
+                    return (
+                        4,
+                        Receipt::new(
+                            action,
+                            format!("ambiguous-slot: {} failed to prove", item.source),
+                            None,
+                        ),
+                    )
+                }
             }
         }
-        if principals.iter().any(|p| p != &principals[0]) {
-            return (4, Receipt::new(action, "ambiguous-slot", None));
+        if let Some(index) = principals.iter().position(|p| p != &principals[0]) {
+            return (
+                4,
+                Receipt::new(
+                    action,
+                    format!(
+                        "ambiguous-slot: {} and {} disagree",
+                        blobs[0].source, blobs[index].source
+                    ),
+                    None,
+                ),
+            );
         }
-        let best = newest_blob(&blobs);
-        (&blobs[best], Some(principals.swap_remove(best)))
+        let best = newest_blob(blobs);
+        (&blobs[best].blob, Some(principals.swap_remove(best)))
     };
     let principal = match proven {
         Some(principal) => principal,
@@ -427,7 +496,7 @@ fn sync(options: &Options, external: &dyn External) -> (i32, Receipt) {
     {
         return (4, Receipt::new(action, "stale-slot", Some(record.clone())));
     }
-    if stored == *blob {
+    if stored == blob {
         return (0, Receipt::new(action, "unchanged", Some(record.clone())));
     }
     if atomic_write(&stored_path, blob).is_err() {
@@ -522,7 +591,7 @@ fn live_owner(
 ) -> bool {
     if let Ok(blobs) = slot_blobs(slot_dir, external) {
         if blobs.len() == 1 {
-            if let Some(access_token) = oauth(&blobs[0]).and_then(|o| o.access_token) {
+            if let Some(access_token) = oauth(&blobs[0].blob).and_then(|o| o.access_token) {
                 if external
                     .profile(&access_token)
                     .is_ok_and(|principal| principal == *record_principal)
@@ -758,8 +827,11 @@ pub(crate) fn stored_health(
     // Refreshing the record whose stored token IS the slot's live token would
     // spend that token; skip before any network call.
     if stored_refresh.is_some_and(|token| {
-        blobs.iter().any(|blob| {
-            oauth(blob).and_then(|item| item.refresh_token).as_deref() == Some(token.as_str())
+        blobs.iter().any(|item| {
+            oauth(&item.blob)
+                .and_then(|oauth| oauth.refresh_token)
+                .as_deref()
+                == Some(token.as_str())
         })
     }) {
         return Some("slot-owner".to_string());
@@ -907,24 +979,47 @@ fn matching_records(store: &Path, wanted: &Principal) -> Vec<String> {
     matches
 }
 
-fn slot_blobs(slot_dir: &Path, external: &dyn External) -> Result<Vec<String>, String> {
+/// One slot credential plus where it came from, so a refusal can name the
+/// source that failed instead of a bare "ambiguous".
+struct SlotBlob {
+    blob: String,
+    source: &'static str,
+}
+
+impl AsRef<str> for SlotBlob {
+    fn as_ref(&self) -> &str {
+        &self.blob
+    }
+}
+
+const SCOPED_SOURCE: &str = "scoped-keychain";
+const UNSCOPED_SOURCE: &str = "keychain";
+const FILE_SOURCE: &str = ".credentials.json";
+
+fn slot_blobs(slot_dir: &Path, external: &dyn External) -> Result<Vec<SlotBlob>, String> {
     let scoped = scoped_service(slot_dir)?;
-    let services = [scoped, "Claude Code-credentials".to_string()];
-    let mut blobs = Vec::new();
-    for service in services {
+    let services = [
+        (scoped, SCOPED_SOURCE),
+        ("Claude Code-credentials".to_string(), UNSCOPED_SOURCE),
+    ];
+    let mut blobs: Vec<SlotBlob> = Vec::new();
+    for (service, source) in services {
         let blob = external
             .keychain(&service)
             .map_err(|_| "keychain-unavailable".to_string())?;
         if let Some(blob) = blob.filter(|blob| has_credential(blob)) {
-            if !blobs.contains(&blob) {
-                blobs.push(blob);
+            if !blobs.iter().any(|item| item.blob == blob) {
+                blobs.push(SlotBlob { blob, source });
             }
         }
     }
     let file = slot_dir.join(".credentials.json");
     if let Ok(blob) = fs::read_to_string(file) {
-        if has_credential(&blob) && !blobs.contains(&blob) {
-            blobs.push(blob);
+        if has_credential(&blob) && !blobs.iter().any(|item| item.blob == blob) {
+            blobs.push(SlotBlob {
+                blob,
+                source: FILE_SOURCE,
+            });
         }
     }
     Ok(blobs)
@@ -1282,7 +1377,9 @@ mod tests {
             &blob("old-b", "b-refresh", now_ms() - 1),
         );
         fs::write(temp.path().join(".active-claude"), "account-a").unwrap();
-        let live_blob = blob("b", "b-new-refresh", now_ms());
+        // A minute out: the sync partition's <= now_ms() check runs after this
+        // construction, and an equal stamp would read the slot as expired.
+        let live_blob = blob("b", "b-new-refresh", now_ms() + 60_000);
         let mut external = MockExternal::default();
         external
             .keychain
@@ -1342,11 +1439,11 @@ mod tests {
         let mut external = MockExternal::default();
         external.keychain.insert(
             scoped_service(&slot).unwrap(),
-            Some(blob("b", "b-refresh", now_ms())),
+            Some(blob("b", "b-refresh", now_ms() + 60_000)),
         );
         external.keychain.insert(
             "Claude Code-credentials".to_string(),
-            Some(blob("a", "a-refresh", now_ms())),
+            Some(blob("a", "a-refresh", now_ms() + 60_000)),
         );
         external
             .profiles
@@ -1357,7 +1454,97 @@ mod tests {
 
         let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
         assert_eq!(code, 4);
-        assert_eq!(receipt.verdict, "ambiguous-slot");
+        assert_eq!(
+            receipt.verdict,
+            "ambiguous-slot: scoped-keychain and keychain disagree"
+        );
+    }
+
+    #[test]
+    fn sync_skips_an_expired_slot_file_and_names_it() {
+        let temp = TempDir::new().unwrap();
+        let slot = temp.path().join("slot");
+        let who = principal("acct-makers", "org-makers");
+        let older = blob("a-access", "a-refresh", now_ms() + 1_000);
+        let newer = blob("b-access", "b-refresh", now_ms() + 2_000);
+        record(temp.path(), "makers", &who, &older);
+        let mut external = MockExternal::default();
+        external
+            .keychain
+            .insert(scoped_service(&slot).unwrap(), Some(older.clone()));
+        external
+            .keychain
+            .insert("Claude Code-credentials".to_string(), Some(newer.clone()));
+        external
+            .profiles
+            .insert("a-access".to_string(), Ok(who.clone()));
+        external.profiles.insert("b-access".to_string(), Ok(who));
+        // The stale sidecar of a pre-keychain install: its token expired, so
+        // proving it used to fail the whole slot. Skip it, write the live
+        // keychain pair, and name the skipped file in the receipt.
+        fs::create_dir_all(&slot).unwrap();
+        fs::write(
+            slot.join(".credentials.json"),
+            blob("dead-access", "dead-refresh", now_ms() - 1),
+        )
+        .unwrap();
+
+        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
+        assert_eq!(code, 0);
+        assert_eq!(receipt.verdict, "written");
+        assert_eq!(
+            receipt.note.as_deref(),
+            Some("skipped expired: .credentials.json")
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("makers/blob")).unwrap(),
+            newer
+        );
+    }
+
+    #[test]
+    fn sync_refusal_names_the_source_that_failed_to_prove() {
+        let temp = TempDir::new().unwrap();
+        let slot = temp.path().join("slot");
+        let mut external = MockExternal::default();
+        external.keychain.insert(
+            scoped_service(&slot).unwrap(),
+            Some(blob("b", "b-refresh", now_ms() + 60_000)),
+        );
+        external.keychain.insert(
+            "Claude Code-credentials".to_string(),
+            Some(blob("a", "a-refresh", now_ms() + 60_000)),
+        );
+        // Only the scoped item proves: the unscoped blob's token still looks
+        // live but its profile call fails, so the refusal must name it. The
+        // expiry sits a minute out because the partition's <= now_ms() check
+        // runs after construction, and an equal stamp reads as expired.
+        external
+            .profiles
+            .insert("b".to_string(), Ok(principal("acct-b", "org-b")));
+
+        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
+        assert_eq!(code, 4);
+        assert_eq!(receipt.verdict, "ambiguous-slot: keychain failed to prove");
+    }
+
+    #[test]
+    fn sync_refuses_an_all_expired_slot_by_name() {
+        let temp = TempDir::new().unwrap();
+        let slot = temp.path().join("slot");
+        let mut external = MockExternal::default();
+        external.keychain.insert(
+            scoped_service(&slot).unwrap(),
+            Some(blob("b", "b-refresh", now_ms() - 1)),
+        );
+        external.keychain.insert(
+            "Claude Code-credentials".to_string(),
+            Some(blob("a", "a-refresh", now_ms() - 1)),
+        );
+
+        let (code, receipt) = execute("sync", &options(temp.path(), &slot, None), &external);
+        assert_eq!(code, 4);
+        assert_eq!(receipt.verdict, "expired-slot: scoped-keychain, keychain");
     }
 
     #[test]
@@ -1499,9 +1686,13 @@ mod tests {
                 email: Some("jason@readyrule.com".to_string()),
             };
             let mut external = MockExternal::default();
+            // A minute out: login's step-1 sync sees this blob (post_login
+            // serves the unscoped item), and an expiry stamped at now_ms()
+            // reads as expired to the partition's <= now_ms() check, which
+            // would refuse the slot before the wrong-account path runs.
             external.post_login.lock().unwrap().insert(
                 "Claude Code-credentials".to_string(),
-                blob("w1", "w1-refresh", now_ms()),
+                blob("w1", "w1-refresh", now_ms() + 60_000),
             );
             external.profiles.insert("w1".to_string(), Ok(wrong));
             *external.login_result.lock().unwrap() = Some(Ok(()));

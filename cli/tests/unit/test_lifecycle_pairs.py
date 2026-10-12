@@ -65,14 +65,6 @@ LIFECYCLE_PAIRS: tuple[Pair, ...] = (
         "correction is reopen, a verb the native binary serves after the "
         "python leg retired",
     ),
-    # An edit path would make the record deniable, which is the property the
-    # demand signal exists to prevent. A later correction is a progress note.
-    Pair(
-        "backlog",
-        "encounter",
-        None,
-        "an encounter is a thing that happened and cannot be edited or withdrawn",
-    ),
     # -- existence transitions --
     Pair("backlog", "new", "remove"),
     Pair("backlog", "intake", "remove"),
@@ -113,7 +105,7 @@ KNOWN_COMMANDS: dict[str, frozenset[str]] = {
         "backfill-deferred-kind", "batch", "capture", "carveout",
         "collisions", "contain", "cost",
         "decompose", "defer",
-        "demand", "discover", "done", "encounter", "epic", "get",
+        "demand", "discover", "done", "epic", "get",
         "intake", "lane-fill", "lanes", "new",
         "next", "note", "pick", "project-root", "provenance", "queue", "queued",
         "ready", "reconcile-findings", "requeue", "retro",

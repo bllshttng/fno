@@ -145,6 +145,7 @@ pub fn run(args: &[String]) -> i32 {
             fire.harness.as_deref(),
             &fire.transcript_path,
             fire.last_assistant_message.as_deref(),
+            Some(fire.resolve_harness_id.as_str()).filter(|s| !s.is_empty()),
         )
     } else {
         None
