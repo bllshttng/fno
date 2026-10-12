@@ -9,7 +9,6 @@ Seven operations on top of io + staleness:
     claim_status      - inspect a single key.
     list_claims       - enumerate all live (and optionally stale) claims.
     force_release_claim - administrative override, always succeeds.
-    reap_dead_claims  - archive every provably-dead claim (GC).
 
 Rust owns claim persistence and audit receipts in graph.db. Python is a transport client.
 """
@@ -137,7 +136,6 @@ __all__ = [
     "force_release_claim",
     "list_claims",
     "list_claims_with_counts",
-    "reap_dead_claims",
     "sweep_verdict",
     "refresh_claim",
     "release_claim",
@@ -376,23 +374,6 @@ def sweep_verdict(
     # False: a live worker holds this node. None: the probe could not run,
     # which is unknown, and unknown keeps.
     return False, "suspect_alive" if probe_verdict is False else "suspect_unprobed"
-
-
-def _default_reap_roots() -> list[Path]:
-    """Both claims roots swept by a bare ``fno agents claim reap`` (AC2).
-
-    Global node claims live at ``claims_dir(global_claims_root())``
-    (``~/.fno/claims`` by default); a repo's own root is
-    ``claims_dir(None)`` (canonical repo root). A cwd whose canonical repo
-    root IS the global root sweeps once, not twice - see
-    :func:`fno.claims.io.dedup_claims_roots`.
-    """
-    return _dedup_roots([global_claims_root(), None])
-
-
-def _dedup_roots(roots: list[Optional[Path]]) -> list[Path]:
-    """Resolve + dedup an explicit ``--root`` list, returning the claims dirs."""
-    return [cdir for _, cdir in dedup_claims_roots(roots)]
 
 
 def native_claims_root(key: str) -> Optional[Path]:
@@ -659,114 +640,3 @@ def force_release_claim(
         archived=bool(payload.get("archived")),
         previous_holder=payload.get("previous_holder"),
     )
-
-
-def reap_dead_claims(
-    *,
-    roots: Optional[list[Optional[Path]]] = None,
-    apply: bool = False,
-    abandonment_probe: Optional[Callable[..., Optional[bool]]] = None,
-    node_settlement: Optional[Callable[..., Optional[bool]]] = None,
-    optout_sink: Optional[list[Claim]] = None,
-) -> dict[str, Any]:
-    """Archive claims proven dead; unknown or degraded evidence stays protected.
-
-    The native verdict batch enumerates each claims table, so every scanned
-    key has a verdict. The apply pass re-reads the row and asks again before
-    retiring exactly the observed row, so a claim recreated since the scan is
-    never archived.
-    """
-    import json
-
-    from .events import emit_claim_reap_swept, emit_claim_reaped
-
-    directories = _default_reap_roots() if roots is None else _dedup_roots(roots)
-    summary: dict[str, Any] = dict.fromkeys(
-        ("scanned", "reaped", "would_reap", "kept_offhost", "kept_suspect", "kept_live",
-         "kept_suspect_alive", "kept_suspect_unprobed", "kept_unclassified", "corrupted",
-         "vanished", "contended"),
-        0,
-    )
-    summary.update(
-        roots=[str(d) for d in directories], reap_failed=[], unclassified_dirs={},
-        kept_suspect_unprobed_by={}, apply=apply,
-    )
-    probe_reasons = getattr(abandonment_probe, "reasons", {})
-    ts = now_ms()
-
-    def _judge(claim: Claim, verdict: dict[str, Any]) -> tuple[bool, str]:
-        dead, bucket = sweep_verdict(
-            claim, abandonment_probe=abandonment_probe,
-            node_settlement=node_settlement, native_verdict=verdict,
-        )
-        if not dead and bucket == "suspect_unprobed":
-            token = probe_reasons.get(claim.key) if isinstance(probe_reasons, dict) else None
-            if token:
-                counts = summary["kept_suspect_unprobed_by"]
-                counts[token] = counts.get(token, 0) + 1
-        return dead, bucket
-
-    for directory in directories:
-        verdicts = claim_verdicts(claims_dir_path=directory)
-        for key, verdict in verdicts.items():
-            if verdict.get("state") == "free":
-                continue
-            summary["scanned"] += 1
-            locator = directory / f"{encode_key(key)}.lock"
-            try:
-                claim = read_claim_file(locator)
-                dead, bucket = _judge(claim, verdict)
-                if not dead:
-                    summary["kept_" + bucket] = summary.get("kept_" + bucket, 0) + 1
-                    continue
-                if not apply:
-                    summary["would_reap"] += 1
-                    continue
-                fresh = read_claim_file(locator)
-                fresh_verdict = claim_verdicts([key], claims_dir_path=directory).get(key)
-                if fresh_verdict is None:
-                    summary["kept_unclassified"] += 1
-                    dirs = summary["unclassified_dirs"]
-                    dirs[str(directory)] = dirs.get(str(directory), 0) + 1
-                    continue
-                # The keyed re-read sees one row, so it cannot see the pid's
-                # other holders and reads a shared pid as exclusive. The
-                # sweep's shared verdict holds while the row's pid is the same.
-                if (
-                    fresh.pid is not None
-                    and fresh.pid == claim.pid
-                    and verdict.get("basis") == "pid-shared"
-                    and fresh_verdict.get("basis") == "live"
-                ):
-                    fresh_verdict = {
-                        **fresh_verdict, "state": "suspect", "basis": "pid-shared",
-                        "bucket": "suspect", "provably_dead": False,
-                    }
-                fresh_dead, fresh_bucket = _judge(fresh, fresh_verdict)
-                if not fresh_dead:
-                    summary["kept_" + fresh_bucket] = summary.get("kept_" + fresh_bucket, 0) + 1
-                    continue
-                result = _native_claim(
-                    "force-release", key,
-                    ["--claims-dir", str(directory), "--reason", "reap proven-dead claim",
-                     "--expected-claim", json.dumps(fresh.model_dump())],
-                )
-                if not result.get("archived"):
-                    summary["contended"] += 1
-                    continue
-                summary["reaped"] += 1
-                if optout_sink is not None and key.startswith("config-optout:"):
-                    optout_sink.append(fresh)
-                emit_claim_reaped(
-                    fresh, root=str(directory), age_ms=max(0, ts - fresh.acquired_at),
-                    basis=fresh_verdict.get("basis"),
-                )
-            except ClaimGoneAway:
-                summary["vanished"] += 1
-            except ClaimCorrupted:
-                summary["corrupted"] += 1
-            except Exception as exc:  # noqa: BLE001 - one bad row never aborts the sweep
-                summary["reap_failed"].append((str(locator), str(exc)))
-    if apply:
-        emit_claim_reap_swept(summary)
-    return summary

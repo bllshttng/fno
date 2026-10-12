@@ -1045,7 +1045,7 @@ fn record_finalize_done(
 /// ledger / stamp the plan. In an installed environment `cli/src` is not found
 /// relative to the binary, PYTHONPATH is left untouched, and the installed
 /// `fno` package is used.
-fn py_module(cwd: &Path) -> Command {
+pub(crate) fn py_module(cwd: &Path) -> Command {
     let mut cmd = Command::new(py_interpreter(cwd));
     cmd.current_dir(cwd);
     if let Some(src) = repo_cli_src(cwd) {

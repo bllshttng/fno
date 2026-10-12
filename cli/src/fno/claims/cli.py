@@ -1334,7 +1334,7 @@ def _handover_pane_probe_blocked(claim) -> bool:
 
 
 def _abandonment_probe(reading: Optional[RosterReading] = None):
-    """The roster-backed probe :func:`reap_dead_claims` calls on a SUSPECT node.
+    """The roster-backed SUSPECT abandonment probe (agents surface).
 
     Returns a callable answering ``True`` (proven abandoned), ``False`` (the
     holder is still working) or ``None`` (unproven, so the claim is kept). One
@@ -1491,61 +1491,46 @@ def reap_cmd(
     Expiry and liveness are measured by the claim's holder shape. Dry-run is the
     default; `--apply` archives and verifies every move before counting it.
     """
-    optout_sink: list = []
-    summary = _claims_core.reap_dead_claims(
-        roots=list(root) if root else None,
-        apply=apply,
-        abandonment_probe=_abandonment_probe(),
-        node_settlement=_node_settlement(),
-        optout_sink=optout_sink,
-    )
-    if optout_sink:
-        from fno.claims.optout_lease import restore_reaped_optouts
+    return _forward_reap(apply, list(root) if root else [], json_output)
 
-        summary.setdefault("reap_failed", []).extend(restore_reaped_optouts(optout_sink))
 
+def _forward_reap(apply, roots, json_output) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct. The claims-port
+    epic put the leaf's logic in crates/fno-agents/src/claim_cli/reap.rs
+    (Python owns transport only, per the dual-implementation protocol)."""
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = []
+    if apply:
+        argv.append("--apply")
+    for path in roots:
+        argv.extend(("--root", str(path)))
     if json_output:
-        typer.echo(json.dumps(summary))
-    else:
-        for path, reason in summary["reap_failed"]:
-            typer.echo(f"FAILED  {path}  ({reason})", err=True)
-        if apply:
-            typer.echo(f"reaped {summary['reaped']} of {summary['scanned']} scanned")
-        else:
-            typer.echo(
-                f"would reap {summary['would_reap']} of {summary['scanned']} scanned "
-                "(dry-run; pass --apply)"
-            )
-        # "roster not consulted" only ever renders beside the token that
-        # measured the degraded read, never as a blanket unprobed label.
-        suspect = f"{summary['kept_suspect']} suspect"
-        if summary["kept_suspect_alive"]:
-            suspect += f", {summary['kept_suspect_alive']} suspect (worker alive)"
-        unprobed_by = summary.get("kept_suspect_unprobed_by") or {}
-        if summary["kept_suspect_unprobed"]:
-            detail = ", ".join(
-                f"{token} {count} (roster not consulted)"
-                if token == "roster-read-degraded"
-                else f"{token} {count}"
-                for token, count in sorted(unprobed_by.items())
-            )
-            suffix = f": {detail}" if detail else ""
-            suspect += f", {summary['kept_suspect_unprobed']} suspect (probe unanswered{suffix})"
-        if summary.get("kept_unclassified"):
-            dirs = ", ".join(
-                f"{path} {count}"
-                for path, count in sorted((summary.get("unclassified_dirs") or {}).items())
-            )
-            suspect += f", {summary['kept_unclassified']} unclassified (no native verdict: {dirs})"
+        argv.append("--json")
+    binary = resolve_binary()
+    if binary is None:
         typer.echo(
-            f"kept: {summary['kept_live']} live, {suspect}, "
-            f"{summary['kept_offhost']} off-host, {summary['corrupted']} corrupted, "
-            f"{summary['vanished']} vanished, {summary['contended']} contended  |  "
-            f"roots: {', '.join(summary['roots'])}"
+            "fno agents claim reap: the fno-agents binary was not found "
+            "(reinstall fno, run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN).",
+            err=True,
         )
-
-    if summary["reap_failed"]:
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer (a CliRunner caller must see it).
+    result = subprocess.run(
+        [str(binary), "claim", "reap", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @cli.command(name="session-pid")

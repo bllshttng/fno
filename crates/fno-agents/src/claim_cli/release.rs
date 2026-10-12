@@ -373,11 +373,12 @@ fn other_roots(key: &str, taken: &Path) -> Vec<(Option<PathBuf>, PathBuf)> {
     out
 }
 
-/// The python `claims_dir(None)` for the others scan: the override, else the
-/// repo space. KEY-AGNOSTIC on purpose - `claim_path`'s prefix routing would
-/// fold a global key's "other" root into the one just read, and the scan is
-/// exactly about naming the root the resolved path did not read.
-fn default_claims_dir() -> Option<PathBuf> {
+/// The python `claims_dir(None)` resolution: the override, else the repo
+/// space. Shared by the others scan and reap's default sweep. KEY-AGNOSTIC on
+/// purpose - `claim_path`'s prefix routing would fold a global key's "other"
+/// root into the one just read, and both callers are about naming (or
+/// sweeping) the root the resolved path names, not a key's home.
+pub(crate) fn default_claims_dir() -> Option<PathBuf> {
     let override_root = std::env::var_os("FNO_CLAIMS_ROOT").filter(|v| !v.is_empty());
     if let Some(root) = override_root {
         return Some(PathBuf::from(root).join(crate::claims::CLAIMS_DIRNAME));

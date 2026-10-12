@@ -4,6 +4,8 @@ from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
+import subprocess
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -1186,3 +1188,48 @@ def test_unresolved_roster_row_naming_another_node_stays_free(cwd_tmp, fake_rost
     assert info["state"] == "free"
     assert info.get("basis") != "unresolved-roster-row"
     assert info["roster_coverage"] == "degraded"
+
+def test_reap_forwards_the_assembled_argv_to_the_native_leaf(monkeypatch):
+    """The forward seam is transport-only: argv assembly, output re-emission
+    through typer, and the leaf's return code become the verb's exit code."""
+    seen = {}
+
+    def _fake_run(argv, **_kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(
+            argv, 3, stdout="leaf stdout", stderr="leaf stderr"
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents")
+    )
+
+    result = runner.invoke(
+        cli, ["reap", "--apply", "--root", "/r1", "--root", "/r2", "--json"]
+    )
+
+    assert seen["argv"] == [
+        "/bin/fno-agents",
+        "claim",
+        "reap",
+        "--apply",
+        "--root",
+        "/r1",
+        "--root",
+        "/r2",
+        "--json",
+    ]
+    assert result.exit_code == 3
+    assert "leaf stdout" in result.output
+    assert "leaf stderr" in result.stderr
+
+
+def test_reap_names_the_remedy_when_the_binary_is_missing(monkeypatch):
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+
+    result = runner.invoke(cli, ["reap"])
+
+    assert result.exit_code == 127
+    assert "fno-agents binary was not found" in result.stderr
+    assert "FNO_AGENTS_BIN" in result.stderr
