@@ -330,6 +330,12 @@ pub(super) fn toast_argv(os: &str, title: &str, body: &str) -> Vec<String> {
 /// it; a spawn failure or a timeout is dropped, since the registry write has
 /// already landed.
 fn local_toast(title: &str, body: &str) {
+    // Refuse under cargo test even when the hermetic stamp is missing: a
+    // unit test's seeded body (the 2026-10-01 leak that toasted the user
+    // with an `aaaaaaa` fixture) must never reach the operator's screen.
+    if cfg!(test) {
+        return;
+    }
     if std::env::var_os("FNO_TEST_HERMETIC").is_some_and(|v| v == "1") {
         return;
     }
