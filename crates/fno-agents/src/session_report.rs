@@ -113,7 +113,8 @@ enum Outcome {
     },
     /// No row held the id and the handler minted one: a launch-record child
     /// (`native: true`) joins as the launcher's row; a session with no record
-    /// is the user's own (decision D3 revised, d-d0c63de7): origin operator,
+    /// is the user's own (decision D3 revised, recorded on the node): origin
+    /// operator,
     /// an occupant toward the cap, never refused, managed or reaped.
     Minted {
         native: bool,
@@ -348,6 +349,7 @@ pub(crate) fn handle_session_report(
                     "name": row_name,
                     "harness": harness,
                     "session_id": session_id,
+                    "related_filled": false,
                     "minted": if native { "native" } else { "operator" },
                     "source": source,
                 }),
