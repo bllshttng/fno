@@ -579,31 +579,56 @@ mod tests {
         }
     }
 
-    /// AC4-HP: one codex Lead holding two claude workers (one joined by
-    /// session id, one by name), one member no Lead claims, `slot_rows`
-    /// naming all four plus one reservation, and ages 10s, 900s, None. The
-    /// Lead line reads its three live, the unowned line its one, the team
-    /// line names the reservation, and no reservation sits under a Lead.
+    /// The census's primary owner test at one boundary. AC4-HP: one codex
+    /// Lead holding two claude workers, one member no Lead claims,
+    /// `slot_rows` naming all four plus one reservation. AC4-PR: the Lead's
+    /// sessions sit on nodes whose PRs are merged and open, and the unowned
+    /// drifter carries its own `pr`. AC4-PROV: lane zai caps at 16, lane
+    /// anthropic has no cap, and a counted name with no row reads unknown.
+    /// The books stay honest throughout: the reservation counts once
+    /// fleet-wide, pr and merged read the node and the row, and no line
+    /// claims a zero or a merge it cannot know.
     #[test]
-    fn lead_lines_attribute_members_and_keep_reservations_fleet_wide() {
+    fn census_attributes_members_and_keeps_the_books_honest() {
+        let mut drifter = row("drifter", Some(20));
+        drifter.pr = Some(7);
         let rows = vec![
             row("chief", Some(900)),
             row("worker-a", Some(10)),
             row("worker-b", None),
-            row("drifter", Some(20)),
+            drifter,
         ];
-        let gate = gate_with(vec![
+        let mut gate = gate_with(vec![
             slot_row("chief", None),
             slot_row("worker-a", None),
             slot_row("worker-b", None),
             slot_row("drifter", None),
             slot_row("res-1", Some("reservation")),
         ]);
+        let mut zai = serde_json::Map::new();
+        zai.insert("cap".into(), serde_json::json!(16));
+        zai.insert("live".into(), serde_json::json!(4));
+        zai.insert(
+            "counted".into(),
+            serde_json::json!(["chief", "worker-a", "worker-b", "drifter", "ghost-a"]),
+        );
+        let mut anthropic = serde_json::Map::new();
+        anthropic.insert("cap".into(), Value::Null);
+        anthropic.insert("live".into(), serde_json::json!(5));
+        anthropic.insert("counted".into(), serde_json::json!([]));
+        let mut lanes = serde_json::Map::new();
+        lanes.insert("zai".into(), Value::Object(zai));
+        lanes.insert("anthropic".into(), Value::Object(anthropic));
+        lanes.insert("quota_source".into(), serde_json::json!("snapshot"));
+        gate.lanes = Some(Value::Object(lanes));
         let org = crate::org_model::OrgTree {
             leads: vec![org_lead(
                 "chief",
                 Some("Fleet Lead"),
-                &[("worker-a", None), ("worker-b", None)],
+                &[
+                    ("worker-a", Some((1, Some("merged")))),
+                    ("worker-b", Some((2, None))),
+                ],
             )],
             unowned: Vec::new(),
             measured_at: 0,
@@ -622,104 +647,70 @@ mod tests {
         assert_eq!(team.unowned.live, 1, "the drifter is unowned");
         assert_eq!(team.observed, 0, "every live row is a named slot");
         assert!(team.tests_known, "a gate with a tests block is known");
-
-        let mut lines = lead_lines(&team.leads, 200, 10);
-        lines.extend(unowned_line(&team.unowned, 200));
-        let text = lines.join("\n");
-        assert!(
-            text.contains("Fleet Lead 3 live · 1 working · 1 unknown age"),
-            "{text}"
+        assert_eq!(team.leads[0].counts.pr, 2, "one pr per session node");
+        assert_eq!(
+            team.leads[0].counts.merged, 1,
+            "merged reads the node's merge status"
         );
-        assert!(text.contains("unowned  1 live"), "{text}");
-        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
-        assert!(fleet.contains("1 reserved"), "{fleet}");
-        assert!(!fleet.contains("0 live"), "{fleet}");
-    }
-
-    /// AC4-PR: a Lead with one session on a node whose PR is merged and one
-    /// on a node with an open PR, and an unowned row with `pr: 42`. The
-    /// Lead line shows both prs and the merge; the unowned line shows its
-    /// pr with merged unknown.
-    #[test]
-    fn pr_counts_read_the_node_and_the_row() {
-        let gate = gate_with(vec![
-            slot_row("worker-a", None),
-            slot_row("worker-b", None),
-            slot_row("solo", None),
-        ]);
-        let org = crate::org_model::OrgTree {
-            leads: vec![org_lead(
-                "chief",
-                None,
-                &[
-                    ("worker-a", Some((1, Some("merged")))),
-                    ("worker-b", Some((2, None))),
-                ],
-            )],
-            unowned: Vec::new(),
-            measured_at: 0,
-        };
-        let mut solo = row("solo", Some(10));
-        solo.pr = Some(42);
-        let rows = vec![row("worker-a", Some(10)), row("worker-b", Some(10)), solo];
-        let team = census(&rows, &gate, Some(&org));
-
-        assert_eq!(team.leads[0].counts.pr, 2);
-        assert_eq!(team.leads[0].counts.merged, 1);
-        assert_eq!(team.unowned.pr, 1);
+        assert_eq!(team.unowned.pr, 1, "the drifter's own pr counts");
         assert_eq!(
             team.unowned.merged, 0,
             "an unowned row's merged reads unknown"
         );
 
         let text = lead_lines(&team.leads, 200, 10).join("\n");
-        assert!(text.contains("2 pr · 1 merged"), "{text}");
-        let text = unowned_line(&team.unowned, 200).expect("the unowned line renders");
-        assert!(text.contains("1 live · 1 pr"), "{text}");
-        assert!(!text.contains("merged"), "{text}");
-    }
-
-    /// AC4-PROV: lane zai with cap 16, live 13 and 13 counted names of
-    /// which 7 rows are under five minutes and 2 names have no row, and
-    /// lane anthropic with cap null and live 5.
-    #[test]
-    fn provider_lines_render_occupancy_working_and_no_cap() {
-        let mut rows: Vec<AgentRow> = (0..7).map(|i| row(&format!("w{i}"), Some(10))).collect();
-        rows.extend((0..4).map(|i| row(&format!("i{i}"), Some(900))));
-        let mut lanes = serde_json::Map::new();
-        let mut zai = serde_json::Map::new();
-        zai.insert("cap".into(), serde_json::json!(16));
-        zai.insert("live".into(), serde_json::json!(13));
-        let mut counted: Vec<String> = (0..7).map(|i| format!("w{i}")).collect();
-        counted.extend((0..4).map(|i| format!("i{i}")));
-        counted.extend(["ghost-a".to_string(), "ghost-b".to_string()]);
-        zai.insert("counted".into(), serde_json::json!(counted));
-        lanes.insert("zai".into(), Value::Object(zai));
-        let mut anthropic = serde_json::Map::new();
-        anthropic.insert("cap".into(), Value::Null);
-        anthropic.insert("live".into(), serde_json::json!(5));
-        anthropic.insert("counted".into(), serde_json::json!([]));
-        lanes.insert("anthropic".into(), Value::Object(anthropic));
-        lanes.insert("quota_source".into(), serde_json::json!("snapshot"));
-        let gate = GateReading {
-            lanes: Some(Value::Object(lanes)),
-            ..GateReading::default()
-        };
-
-        let team = census(&rows, &gate, None);
-        let text = provider_lines(&team.providers, 200).join("\n");
         assert!(
-            text.contains("13/16 occupied · 7/16 working · 2 unknown"),
+            text.contains("Fleet Lead 3 live · 1 working · 1 unknown age"),
             "{text}"
         );
-        assert!(text.contains("anthropic 5 occupied (no cap)"), "{text}");
-        assert!(!text.contains("quota_source"), "{text}");
+        assert!(text.contains("2 pr · 1 merged"), "{text}");
+        let unowned_text = unowned_line(&team.unowned, 200).expect("the unowned line renders");
+        assert!(
+            unowned_text.contains("unowned  1 live · 1 pr"),
+            "{unowned_text}"
+        );
+        assert!(
+            !unowned_text.contains("merged"),
+            "the unowned line never claims a merge: {unowned_text}"
+        );
+        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
+        assert!(fleet.contains("1 reserved"), "{fleet}");
+        assert!(!fleet.contains("0 live"), "{fleet}");
+
+        let providers = provider_lines(&team.providers, 200).join("\n");
+        assert!(
+            providers.contains("4/16 occupied · 2/16 working · 2 unknown"),
+            "{providers}"
+        );
+        assert!(
+            providers.contains("anthropic 5 occupied (no cap)"),
+            "{providers}"
+        );
+        assert!(!providers.contains("quota_source"), "{providers}");
     }
 
-    /// AC5-NARROW: at a 30-column sideline the line still ends at a segment
-    /// boundary with an ellipsis, and no digit group is split.
+    /// The fleet line's render contracts at one boundary: a tests block
+    /// that errored reads `testing unknown` while the activity answers still
+    /// render; at a 30-column sideline the line trims at a segment boundary
+    /// with an ellipsis, never splitting a digit group; and with more Leads
+    /// than the budget the dimmest rest folds into one summary line whose
+    /// live total keeps the books balanced.
     #[test]
-    fn narrow_width_trims_at_segment_boundaries() {
+    fn the_fleet_line_reads_unknown_fits_narrow_and_folds_the_rest() {
+        let rows = vec![row("w0", Some(10))];
+        let gate = GateReading {
+            slot_rows: Some(vec![slot_row("w0", None)]),
+            max_live: Some(3),
+            tests: Some(serde_json::json!({"error": "process table unreadable"})),
+            ..GateReading::default()
+        };
+        let team = census(&rows, &gate, None);
+        assert!(!team.tests_known);
+        assert_eq!(team.counts.testing, 0);
+        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
+        assert!(fleet.contains("testing unknown"), "{fleet}");
+        assert!(fleet.contains("1/3 live"), "{fleet}");
+
         let line = fit(
             "team",
             &[
@@ -734,31 +725,9 @@ mod tests {
         assert!(line.ends_with('…'), "{line}");
         assert!(!line.contains("2 te"), "no digit group split: {line}");
         assert!(line.contains("21/23 live"), "{line}");
-    }
 
-    /// A tests block that errored reads `testing unknown` on the fleet
-    /// line, while the activity answers still render.
-    #[test]
-    fn an_errored_tests_block_reads_unknown_not_zero() {
-        let rows = vec![row("w0", Some(10))];
-        let gate = GateReading {
-            slot_rows: Some(vec![slot_row("w0", None)]),
-            max_live: Some(3),
-            tests: Some(serde_json::json!({"error": "process table unreadable"})),
-            ..GateReading::default()
-        };
-        let team = census(&rows, &gate, None);
-        assert!(!team.tests_known);
-        assert_eq!(team.counts.testing, 0);
-        let fleet = fit("team", &fleet_segments(&team, &gate), 200);
-        assert!(fleet.contains("testing unknown"), "{fleet}");
-        assert!(fleet.contains("1/3 live"), "{fleet}");
-    }
-
-    /// AC5-CAP: with more Leads than the budget, the dimmest rest folds
-    /// into one summary line and the live books stay balanced.
-    #[test]
-    fn lead_lines_fold_the_rest_into_one_summary() {
+        // AC5-CAP: with more Leads than the budget, the dimmest rest folds
+        // into one summary line and the live books stay balanced.
         let leads: Vec<LeadCounts> = (0..12)
             .map(|i| LeadCounts {
                 label: format!("lead-{i}"),

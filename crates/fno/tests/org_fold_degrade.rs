@@ -11,27 +11,9 @@
 use fno::org_overlay::{fold_now, gate_now};
 
 #[tokio::test]
-async fn a_binary_that_cannot_answer_degrades_rather_than_hangs() {
-    // SAFETY: this binary holds exactly one test, so no other thread can be
-    // reading the environment while it is written. See the module note.
-    unsafe { std::env::set_var("FNO_BIN", "/bin/false") };
-    let start = std::time::Instant::now();
-
-    let org = fold_now().await;
-
-    assert!(org.is_none(), "a silent binary is a failed fold");
-    assert!(
-        start.elapsed() < std::time::Duration::from_secs(3),
-        "the fold is bounded, it does not hang"
-    );
-}
-
-/// Both binaries dark: every fold half fails inside its own budget, so the
-/// panel renders its named degrades instead of hanging on either child.
-#[tokio::test]
 async fn dark_binaries_fail_every_half_inside_their_budgets() {
-    // SAFETY: same single-file rationale as above; both tests in this file
-    // pin the same two values, so a concurrent write is the same value.
+    // SAFETY: this file holds exactly one test, so no other thread can be
+    // reading the environment while it is written. See the module note.
     unsafe { std::env::set_var("FNO_BIN", "/bin/false") };
     unsafe { std::env::set_var("FNO_AGENTS_BIN", "/bin/false") };
     let start = std::time::Instant::now();
