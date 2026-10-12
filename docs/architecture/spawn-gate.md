@@ -39,6 +39,12 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 88 blueprint thread cap. More than `agents.profiles.blueprint.max_live` live `bp` threads, or more than one per territory, refuses the spawn and teaches the subagent path.
 - 89 review session. A seed or label that names review causes a permanent refusal. The refusal runs before `--force` and the `FNO_SPAWN_GATE=0` bypass. Run the inline fno review lane.
 
+## Overriding the learned cap
+
+`agents.max_live` is the ceiling. Under it, the machine watch learns a working cap per machine. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`, and every cap display reads it through `capacity::effective`.
+
+`[agents.capacity] floor` is the lowest cap the loop may learn. The default is 1. The loop never cuts below the floor, and the reader raises a lower stored cap to the floor at once, with no wait for the next tick. A floor above `agents.max_live` clamps to the ceiling. The cap line then reads `effective cap 8 of 24 (held at agents.capacity.floor 8, learned 5)`.
+
 ## Reading a refusal
 
 The last `spawn-gate: refused on <axis> (<reason>, exit <code>): <figures>` line on stderr is the verdict. It is the WHOLE refusal: one line naming the reason and what to do, the exit code carrying the class. When the receipt carries a `remedy`, the verdict ends `; remedy: <what to do>`. The figures are the receipt's scalar fields. With `--json` the caller also gets the receipt as one JSON object. Every other gate line starts `spawn-gate note:` and passed. The Python transport's pass lines carry that prefix too. If the gate verb itself is unreachable, the transport prints the same verdict shape for exit 87 before refusing. The Python reader `cli/src/fno/backlog/advance.py` (`_gate_refusal_detail`) keys on the `spawn-gate: ` prefix and reads the last such line, so it gets the verdict, never a passing reading.

@@ -10,9 +10,7 @@ fn cap_ceiling(ceiling: usize) -> crate::capacity::Effective {
     crate::capacity::Effective {
         cap: ceiling,
         ceiling,
-        known: false,
-        reason: None,
-        since: None,
+        ..Default::default()
     }
 }
 

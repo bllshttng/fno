@@ -356,7 +356,8 @@ mod probe {
             .unwrap_or(false);
 
         let ceiling = agents_config::max_live(&config_cwd) as usize;
-        let learned = crate::capacity::effective(&home, ceiling);
+        let floor = crate::capacity::thresholds(&config_cwd).floor as usize;
+        let learned = crate::capacity::effective(&home, ceiling, floor);
         let cap = learned.cap;
         let floor_gb = agents_config::min_free_gb(&config_cwd);
         let swap_cap = agents_config::max_swap_pct(&config_cwd);
