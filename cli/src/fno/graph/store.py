@@ -1420,26 +1420,6 @@ def append_progress_note(
     return landed, result.get("plan_path")
 
 
-def append_encounter(
-    path: Path, node_id: str, record: dict
-) -> "tuple[bool, str | None, str | None]":
-    """Append one encounter, refusing a second from the same voter.
-
-    Returns ``(appended, error, reason)``. ``reason`` is one of ``"missing"``,
-    ``"duplicate"``, or ``"unidentified"`` -- a caller picks an exit code from
-    a symbol, never from this function's prose.
-    """
-    resolved = _resolve_node_id(Path(path), node_id)
-    if resolved is None:
-        return False, f"no node resolves to '{node_id}'", "missing"
-    result = _run_op(Path(path), "append_encounter", {"node_id": resolved, "record": record})
-    return (
-        bool(result.get("appended")),
-        result.get("error"),
-        result.get("reason"),
-    )
-
-
 def append_wave_note(path: Path, node_id: str, note: dict) -> tuple[bool, str | None]:
     """Append a structured wave note, refusing missing or terminal targets."""
     resolved = _resolve_node_id(Path(path), node_id)

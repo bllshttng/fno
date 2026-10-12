@@ -122,6 +122,58 @@ fn query_nodes(
     Ok(ids)
 }
 
+/// One open node an any-token query matched.
+pub(crate) struct AnyHit {
+    pub id: String,
+    pub title: String,
+    pub slug: String,
+    pub description: String,
+}
+
+/// Open nodes matching ANY of `tokens`, best first: the friction match's
+/// recall query. Tokens are quoted like [`search`]'s and joined with `OR`.
+/// Done, superseded, deferred and archived rows are left out here, and the
+/// `nodes_raw` carry is not read: a raw row is not an open node.
+pub(crate) fn search_any(
+    connection: &Connection,
+    tokens: &[String],
+    limit: i64,
+) -> Result<Vec<AnyHit>, String> {
+    let phrases: Vec<String> = tokens
+        .iter()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    if phrases.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(
+            // The state filter runs before the LIMIT: closed rows that rank
+            // first must not use up the limit.
+            "SELECT n.id, n.title, n.slug, COALESCE(n.description, '')
+             FROM nodes_fts f
+             JOIN nodes n ON n.rowid = f.rowid
+             WHERE nodes_fts MATCH ?1
+               AND n.status NOT IN ('done', 'superseded', 'deferred')
+               AND n.archived_at IS NULL AND n.superseded_by IS NULL
+             ORDER BY f.rank LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let found = statement
+        .query_map(params![phrases.join(" OR "), limit], |row| {
+            Ok(AnyHit {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                slug: row.get(2)?,
+                description: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    found
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

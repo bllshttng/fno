@@ -87,6 +87,11 @@
           },
           {
             "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/friction-offer-inject.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
             "command": "${PLUGIN_ROOT}/hooks/inject-mail-notify.sh",
             "timeout": 4
           },
@@ -172,6 +177,11 @@
           {
             "type": "command",
             "command": "bash ${PLUGIN_ROOT}/hooks/claim-heartbeat.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ${PLUGIN_ROOT}/hooks/friction-offer-inject.sh",
+            "timeout": 3
           }
         ]
       }

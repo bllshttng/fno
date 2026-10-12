@@ -58,6 +58,7 @@ NATIVE_SERVED_LEAVES = {
     "backlog bases",
     "backlog board",
     "backlog dispatch-lanes",
+    "backlog encounter",
     "backlog groom",
     "backlog join",
     "backlog maintain",

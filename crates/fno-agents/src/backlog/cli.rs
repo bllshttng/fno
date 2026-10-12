@@ -209,6 +209,9 @@ pub fn run(args: &[String]) -> i32 {
         // The lane pin is native: id gate, operator fence, lane/epic scoping
         // and midpoint arithmetic over the single-row write seam.
         "rank" => super::rank_cli::run(resolved.tail),
+        // The vote is native: identity, style gate and the one same-voter
+        // refusal over the single-row write seam. No Python twin remains.
+        "encounter" => super::encounter_cli::run(resolved.tail),
         // The create verbs are native end to end as of this wave: parse,
         // gates, locked write with the rollup inside it, receipts.
         "add" => super::create_cli::run(resolved.tail),
