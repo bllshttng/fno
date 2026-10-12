@@ -39,7 +39,6 @@ import datetime
 import json
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -292,21 +291,13 @@ def _git_common_dir(cwd: Path) -> Optional[str]:
     worktree, so it would refuse canonical->worktree traffic. Returns None for a
     non-repo or any git failure (the caller then refuses to adopt).
     """
+    from fno.paths import git_common_dir
+
+    common = git_common_dir(cwd, timeout=2)
     try:
-        out = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse",
-             "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, check=False, timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
+        return str(common.resolve()) if common else None
+    except OSError:
         return None
-    common = (getattr(out, "stdout", "") or "").strip()
-    if getattr(out, "returncode", 1) == 0 and common:
-        try:
-            return str(Path(common).resolve())
-        except OSError:
-            return None
-    return None
 
 
 def _project_identity(cwd: Optional[str]) -> "tuple[Optional[str], Optional[str]]":
