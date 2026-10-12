@@ -571,6 +571,13 @@ pub(crate) enum CoreMsg {
     ServerStats {
         reply: oneshot::Sender<ServerMsg>,
     },
+    /// (v110) One `fno notify` delivery: the Core owns `clients`, so the
+    /// broadcast runs on the loop and the receipt counts what was queued.
+    Notify {
+        title: String,
+        body: String,
+        reply: oneshot::Sender<ServerMsg>,
+    },
     Attach {
         id: u64,
         rows: u16,
@@ -8722,6 +8729,48 @@ impl Core {
         }
     }
 
+    /// (v110) Re-emit one desktop notification to EVERY attached client's
+    /// tty, `title` verbatim (the pane-capture path resolves the pane name
+    /// first; see [`Self::broadcast_pane_notice`]). Returns how many clients
+    /// the notice was queued to. A wedged reliable channel is a dead client
+    /// (the [`Self::send_copy`] policy): torn down, and its notice does not
+    /// count as delivered.
+    fn broadcast_desktop_notice(&mut self, title: &str, body: &str) -> usize {
+        let mut queued = 0usize;
+        let mut wedged: Vec<u64> = Vec::new();
+        for c in &self.clients {
+            if c.reliable_tx
+                .try_send(ServerMsg::DesktopNotice {
+                    title: title.to_string(),
+                    body: body.to_string(),
+                })
+                .is_ok()
+            {
+                queued += 1;
+            } else {
+                wedged.push(c.id);
+            }
+        }
+        for id in wedged {
+            eprintln!("fno mux: client {id} reliable channel wedged on DesktopNotice; dropping it");
+            self.clients.retain(|c| c.id != id);
+            self.push_layout(true);
+        }
+        queued
+    }
+
+    /// (v110) The pane-capture leg: title the pane's own notification with
+    /// the pane name (its mux-assigned name, else `pane <id>`), so the
+    /// desktop alert names the pane it came from.
+    fn broadcast_pane_notice(&mut self, pane: u64, body: &str) {
+        let title = self
+            .panes
+            .get(&pane)
+            .and_then(|e| e.name.clone())
+            .unwrap_or_else(|| format!("pane {pane}"));
+        self.broadcast_desktop_notice(&title, body);
+    }
+
     /// (v56, hover affordance) One link-span lookup for the requesting client
     /// only: resolve the link under pane-local `(row, col)` and reply with its
     /// visible cells. The guards mirror the click path's ownership rule: the
@@ -11348,6 +11397,13 @@ impl Core {
                 ));
                 Flow::Continue
             }
+            CoreMsg::Notify { title, body, reply } => {
+                let clients = self.broadcast_desktop_notice(&title, &body);
+                let _ = reply.send(ServerMsg::NoticeSent {
+                    clients: clients as u32,
+                });
+                Flow::Continue
+            }
             CoreMsg::Kill => {
                 // Notify clients, then let the shared shutdown choke point
                 // capture before killing non-keeper children. Keeper-held
@@ -12140,6 +12196,7 @@ fn drain_pty_output(
 ) -> bool {
     let mut drained = false;
     let mut touched = HashSet::new();
+    let mut fired_notices: Vec<(u64, String)> = Vec::new();
     {
         let mut feed = |pid: u64, chunk: PaneChunk| {
             drained = true;
@@ -12154,6 +12211,14 @@ fn drain_pty_output(
                     if let Some(entry) = core.panes.get_mut(&pid) {
                         let t0 = Instant::now();
                         entry.vt.feed(&bytes);
+                        // Notifications ride out of the pane at capture
+                        // time: drained here so the queue never carries a
+                        // live pane's notice across feeds, then re-emitted
+                        // (titled with the pane name) after the borrow
+                        // drops.
+                        for notice in entry.vt.take_notices() {
+                            fired_notices.push((pid, notice.body));
+                        }
                         entry.last_output = t0;
                         entry
                             .stats
@@ -12198,6 +12263,9 @@ fn drain_pty_output(
     for pid in touched {
         core.broadcast_pane(pid);
         core.note_pane_output(pid);
+    }
+    for (pid, body) in fired_notices {
+        core.broadcast_pane_notice(pid, &body);
     }
     if drained {
         core.sync_focused_modes();
@@ -12658,6 +12726,15 @@ async fn handle_control(
         }
         ControlVerb::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
         ControlVerb::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
+        ControlVerb::Notify { title, body } => {
+            core_tx
+                .send(CoreMsg::Notify {
+                    title,
+                    body,
+                    reply: reply_tx,
+                })
+                .await
+        }
         ControlVerb::RetireSession {
             harness,
             session_id,

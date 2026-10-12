@@ -7812,6 +7812,16 @@ async fn attach_and_run(
                         let _ = tx.send((chars, outcome));
                     });
                 }
+                Ok(ServerMsg::DesktopNotice { title, body }) => {
+                    // (v110) A desktop notification re-emitted from a pane's
+                    // OSC 9/99/777 (titled with the pane name) or an `fno
+                    // notify` delivery: write the OSC 777 escape to the outer
+                    // terminal, which raises the toast. Inline and
+                    // best-effort - a bounded, allocation-light write (no
+                    // exec to hang on, unlike Copy), and a terminal that
+                    // drops OSC 777 loses the toast, never the session.
+                    crate::notify::deliver(&title, &body, raw_out);
+                }
                 Ok(ServerMsg::OpenLink { url }) => {
                     // External opens run off-loop; a cold browser must not stall
                     // rendering. The router names the opener per pseudo scheme;
