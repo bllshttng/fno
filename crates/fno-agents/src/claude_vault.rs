@@ -1686,9 +1686,13 @@ mod tests {
                 email: Some("jason@readyrule.com".to_string()),
             };
             let mut external = MockExternal::default();
+            // A minute out: login's step-1 sync sees this blob (post_login
+            // serves the unscoped item), and an expiry stamped at now_ms()
+            // reads as expired to the partition's <= now_ms() check, which
+            // would refuse the slot before the wrong-account path runs.
             external.post_login.lock().unwrap().insert(
                 "Claude Code-credentials".to_string(),
-                blob("w1", "w1-refresh", now_ms()),
+                blob("w1", "w1-refresh", now_ms() + 60_000),
             );
             external.profiles.insert("w1".to_string(), Ok(wrong));
             *external.login_result.lock().unwrap() = Some(Ok(()));
