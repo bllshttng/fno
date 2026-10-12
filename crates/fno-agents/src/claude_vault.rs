@@ -1377,7 +1377,9 @@ mod tests {
             &blob("old-b", "b-refresh", now_ms() - 1),
         );
         fs::write(temp.path().join(".active-claude"), "account-a").unwrap();
-        let live_blob = blob("b", "b-new-refresh", now_ms());
+        // A minute out: the sync partition's <= now_ms() check runs after this
+        // construction, and an equal stamp would read the slot as expired.
+        let live_blob = blob("b", "b-new-refresh", now_ms() + 60_000);
         let mut external = MockExternal::default();
         external
             .keychain
@@ -1437,11 +1439,11 @@ mod tests {
         let mut external = MockExternal::default();
         external.keychain.insert(
             scoped_service(&slot).unwrap(),
-            Some(blob("b", "b-refresh", now_ms())),
+            Some(blob("b", "b-refresh", now_ms() + 60_000)),
         );
         external.keychain.insert(
             "Claude Code-credentials".to_string(),
-            Some(blob("a", "a-refresh", now_ms())),
+            Some(blob("a", "a-refresh", now_ms() + 60_000)),
         );
         external
             .profiles
@@ -1507,14 +1509,16 @@ mod tests {
         let mut external = MockExternal::default();
         external.keychain.insert(
             scoped_service(&slot).unwrap(),
-            Some(blob("b", "b-refresh", now_ms())),
+            Some(blob("b", "b-refresh", now_ms() + 60_000)),
         );
         external.keychain.insert(
             "Claude Code-credentials".to_string(),
-            Some(blob("a", "a-refresh", now_ms())),
+            Some(blob("a", "a-refresh", now_ms() + 60_000)),
         );
         // Only the scoped item proves: the unscoped blob's token still looks
-        // live but its profile call fails, so the refusal must name it.
+        // live but its profile call fails, so the refusal must name it. The
+        // expiry sits a minute out because the partition's <= now_ms() check
+        // runs after construction, and an equal stamp reads as expired.
         external
             .profiles
             .insert("b".to_string(), Ok(principal("acct-b", "org-b")));
