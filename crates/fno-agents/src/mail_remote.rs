@@ -661,16 +661,37 @@ mod tests {
             1,
             "the next beat delivers the row the earlier beat could not"
         );
-        // The finality rule: the style door naming violations is the
-        // deterministic refusal; a clean receipt and unparseable output
-        // read transient, so the row stays pending for the next beat.
+        // The finality rule: the style door naming violations (with no
+        // exception declared) is the deterministic refusal; a clean receipt,
+        // an excepted body, and unparseable output read transient, so the
+        // row stays pending for the next beat.
         assert!(crate::mail_arm::door_confirms_refusal(
             br#"{"violations":[{"rule":3,"sentence_index":3}]}"#
         ));
         assert!(!crate::mail_arm::door_confirms_refusal(
             br#"{"violations":[]}"#
         ));
+        assert!(!crate::mail_arm::door_confirms_refusal(
+            br#"{"exception":"quoted word","violations":[{"rule":3}]}"#
+        ));
         assert!(!crate::mail_arm::door_confirms_refusal(b"{}"));
         assert!(!crate::mail_arm::door_confirms_refusal(b"not json"));
+        // The consult rides the front door's lint-style forwarding, with the
+        // configured mail word cap appended when one is set.
+        let argv = crate::mail_arm::style_door_argv(None);
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some("doctor"),
+            "the front door classifies the check name"
+        );
+        assert!(argv.contains(&"--stdin".to_string()));
+        assert!(argv.contains(&"--json".to_string()));
+        assert!(!argv.iter().any(|word| word == "--word-cap"));
+        let capped = crate::mail_arm::style_door_argv(Some(60));
+        let cap_at = capped
+            .iter()
+            .position(|word| word == "--word-cap")
+            .expect("cap flag");
+        assert_eq!(capped[cap_at + 1], "60");
     }
 }

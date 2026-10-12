@@ -176,38 +176,77 @@ fn brief(text: &[u8], cap: usize) -> String {
 }
 
 /// The style door's receipt naming violations: the deterministic refusal.
-/// A clean receipt, an exception receipt, and unparseable output all read
-/// transient, so the caller leaves the row pending for the next beat.
+/// Mirrors the mail gate's own clean rule: a non-empty `exception` makes an
+/// excepted body clean whatever the violations carry, and a clean or
+/// unparseable receipt reads transient, so the row stays pending for the
+/// next beat.
 pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
     serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout))
         .ok()
-        .and_then(|receipt| {
+        .is_some_and(|receipt| {
+            let excepted = receipt
+                .get("exception")
+                .is_some_and(|exception| !exception.is_null());
+            if excepted {
+                return false;
+            }
             receipt
                 .get("violations")
-                .and_then(|violations| violations.as_array().cloned())
+                .and_then(|violations| violations.as_array())
+                .is_some_and(|violations| !violations.is_empty())
         })
-        .is_some_and(|violations| !violations.is_empty())
+}
+
+/// The argv the front door forwards to its sibling `style-check`, with the
+/// receiver's configured mail word cap so the consult answers the same
+/// question the send's gate asked (the built-in default 80 applies when no
+/// cap is configured).
+pub(crate) fn style_door_argv(word_cap: Option<i64>) -> Vec<String> {
+    let mut argv = vec![
+        "doctor".to_string(),
+        "lint".to_string(),
+        "style".to_string(),
+        "--surface".to_string(),
+        "mail".to_string(),
+        "--stdin".to_string(),
+        "--json".to_string(),
+    ];
+    if let Some(cap) = word_cap {
+        argv.push("--word-cap".to_string());
+        argv.push(cap.to_string());
+    }
+    argv
+}
+
+/// The receiver's configured mail word cap, read the way the daemon reads
+/// every config key: project config at the working directory falling back
+/// to the global file. `None` keeps the checker's built-in default.
+fn mail_word_cap() -> Option<i64> {
+    crate::agents_config::config_lookup(
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        &["style", "word_cap", "mail"],
+    )
+    .and_then(|value| value.as_integer())
 }
 
 /// Ask the receiver's own style door about the body, the same door the
-/// local send consults, through this binary's `style-check`. Runs only on
-/// an exit-1 refusal, where the exit alone is ambiguous: the style gate
-/// refuses for good, but so does a budget window, a down door, or an
-/// internal error. The body rides a writer thread, so a payload wider than
-/// the pipe buffer cannot deadlock the read.
+/// local send consults by way of the front door's
+/// `doctor lint style` forwarding (the daemon binary itself has no
+/// `style-check` dispatch). Runs only on an exit-1 refusal, where the exit
+/// alone is ambiguous: the style gate refuses for good, but so does a
+/// budget window, a down door, or an internal error. The body rides a
+/// writer thread, so a payload wider than the pipe buffer cannot deadlock
+/// the read.
 fn style_door_refuses(payload: &str) -> bool {
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    let mut child = match std::process::Command::new(exe)
-        .args(["style-check", "--surface", "mail", "--stdin", "--json"])
+    let mut cmd = std::process::Command::new(crate::mail_remote::fno_binary());
+    cmd.args(style_door_argv(mail_word_cap()));
+    let Ok(child) = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
+    else {
+        return false;
     };
     let payload = payload.to_string();
     let mut pipe = child.stdin.take();
