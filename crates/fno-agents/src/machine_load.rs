@@ -204,6 +204,7 @@ pub fn outside_question(groups: &[StoredGroup]) -> IntakeRequest {
     options.push("leave everything alone".to_string());
     IntakeRequest {
         question,
+        template: false,
         ask: None,
         options,
         blocks: Vec::new(),
@@ -530,6 +531,7 @@ pub fn file_budget_question(
     );
     let req = IntakeRequest {
         question,
+        template: false,
         ask: None,
         options: vec![
             format!("yes, set agents.max_live to {}", b.max_live),
