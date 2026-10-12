@@ -3943,11 +3943,7 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 params.insert("model".into(), str_arg(&mut it, "-m/--model")?);
             }
             "--from-name" => {
-                // NOTE: --from-name is accepted and forwarded to the daemon, but
-                // the daemon's handle_ask currently ignores it (PTY path does not
-                // apply the envelope wrapper yet). Accepted without error for
-                // Python flag-parity; the daemon will wire it when the envelope
-                // lands (Wave 5/6 follow-up).
+                // Forwarded for Python flag-parity; every ask path validates it.
                 params.insert("from_name".into(), str_arg(&mut it, "--from-name")?);
             }
             "--yolo" | "-Y" => {

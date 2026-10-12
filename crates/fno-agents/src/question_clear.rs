@@ -681,6 +681,19 @@ mod tests {
         let decisions = graph_decisions(&req);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0]["authority_source"], "team");
+        assert!(
+            result.deliveries.is_empty(),
+            "a self-answer mails nobody: {:?}",
+            result.lines
+        );
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("answered by its own asker 01a0cbdd")),
+            "{:?}",
+            result.lines
+        );
 
         // (e) The same answer without a live team: refused.
         let tmp = tempfile::tempdir().unwrap();
@@ -733,6 +746,53 @@ mod tests {
         };
         assert!(holds_team(&[team.clone()], "01a0cbdd"));
         assert!(!holds_team(&[team], "49a80492"));
+    }
+
+    #[test]
+    fn a_full_session_id_pair_outranks_a_shared_handle() {
+        // (a) Two same-window codex sessions share the eight-character
+        // handle: the closer is a different session, so the asker still
+        // gets the mail.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-collide", Some("C: do as asked"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.caller.as_mut().unwrap().teamed = true;
+        req.closed_by = Some("20261012_closer_full".to_string());
+        let mut question = ask_from("q-collide", "01a0cbdd", "which lane?");
+        question["data"]["session_id"] = json!("20261012_asker_full");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert_eq!(result.deliveries.len(), 1, "{:?}", result.lines);
+        assert!(
+            !result
+                .lines
+                .iter()
+                .any(|l| l.contains("answered by its own asker")),
+            "{:?}",
+            result.lines
+        );
+
+        // (b) The full ids match: no mail even though the gate read handles.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-full", Some("C: do as asked"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.caller.as_mut().unwrap().teamed = true;
+        req.closed_by = Some("20261012_asker_full".to_string());
+        let mut question = ask_from("q-full", "01a0cbdd", "which lane?");
+        question["data"]["session_id"] = json!("20261012_asker_full");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(result.deliveries.is_empty(), "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("answered by its own asker 01a0cbdd")),
+            "{:?}",
+            result.lines
+        );
     }
 }
 use crate::backlog::api::{self, Store};
@@ -935,6 +995,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         .caller
         .clone()
         .unwrap_or_else(|| resolve_clear_caller(req));
+    let closer = agent_handle(req, &caller);
     let (asked, mut closed_ids) = crate::question_intake::question_rows(&req.index_path);
     let mut answer = ClearAnswer::new();
     let mut newly_closed = 0usize;
@@ -969,7 +1030,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             .and_then(|data| data.get("asker"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if let Some(agent) = agent_handle(req, &caller) {
+        if let Some(agent) = closer.as_deref() {
             let own_ask = asker == agent;
             let allowed = if req.answer.is_some() {
                 own_ask
@@ -1152,17 +1213,43 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .and_then(|data| data.get("asker"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            answer.deliveries.push(Delivery {
-                qid: qid.clone(),
-                question: question_text(question_event),
-                asker: asker.to_string(),
-                session_id: question_event
-                    .get("data")
-                    .and_then(|data| data.get("session_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                decision_id,
-            });
+            let asker_session = question_event
+                .get("data")
+                .and_then(|data| data.get("session_id"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty());
+            // A self-answer (the closer is the asker) mails nobody: the
+            // deliver door transports whatever deliveries names, so push a
+            // receipt line instead and Python has nothing to send. Full
+            // session ids outrank the eight-character handle, which two
+            // same-window codex sessions can share (identity.rs); the
+            // deliver door resolves the asker by the full id. A full-id
+            // pair decides, and with no pair the handle comparison stands
+            // with the door's ambiguity guard as the backstop.
+            let self_answer = match (
+                req.closed_by.as_deref().filter(|value| !value.is_empty()),
+                asker_session,
+            ) {
+                (Some(closer_id), Some(asker_id)) => closer_id == asker_id,
+                _ => closer.as_deref() == Some(asker),
+            };
+            if !asker.is_empty() && self_answer {
+                answer.lines.push(format!(
+                    "outstanding: {qid} answered by its own asker {asker}; no answer mail sent"
+                ));
+            } else {
+                answer.deliveries.push(Delivery {
+                    qid: qid.clone(),
+                    question: question_text(question_event),
+                    asker: asker.to_string(),
+                    session_id: question_event
+                        .get("data")
+                        .and_then(|data| data.get("session_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    decision_id,
+                });
+            }
         } else {
             let (close, close_line) = close_event(req, qid, None);
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {

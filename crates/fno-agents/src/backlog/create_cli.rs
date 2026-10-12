@@ -233,7 +233,7 @@ pub(crate) fn repo_root(cwd: &Path) -> String {
 
 /// Project name -> work-map path lives in settings; the walk also answers
 /// detection (path -> name) through the same candidates.
-fn detect_project(cwd: &Path) -> Option<String> {
+pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     for doc in super::settings::config_candidates() {
         for (name, raw) in work_pairs(&doc) {
             let expanded = expand_home(&raw).to_string_lossy().into_owned();
@@ -733,32 +733,16 @@ fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
 /// Style gate, identity, and the same-voter duplicate refusal ride the
 /// append. Filing stays primary: every failure prints one warning.
 fn append_creation_vote(graph: &Path, node_id: &str, evidence: &str) {
+    use super::encounter_cli::{append_vote, style_refusal, vote_record, VoteRefusal, Voter};
     let warn = |why: &str| eprintln!("warning: creation vote skipped for {node_id}: {why}");
     let evidence = evidence.trim();
     if evidence.is_empty() {
         warn("an encounter with no evidence is a poll");
         return;
     }
-    if std::env::var("FNO_STYLE_ENFORCE").as_deref() != Ok("0")
-        && super::style_check::has_exception(evidence).is_none()
-    {
-        let cap = super::settings::config_candidates()
-            .iter()
-            .find_map(|doc| {
-                doc.get("style")?
-                    .get("word_cap")?
-                    .get("encounter")?
-                    .as_u64()
-            })
-            .map(|n| n as usize);
-        let violations = super::style_check::check(evidence, "encounter", cap);
-        if !violations.is_empty() {
-            warn(&super::style_check::format_violations(
-                &violations,
-                "encounter",
-            ));
-            return;
-        }
+    if let Some(report) = style_refusal(evidence) {
+        warn(&report);
+        return;
     }
     let get = |name: &str| std::env::var(name).ok();
     let ident = crate::spawn_context::resolve_self_identity(
@@ -769,107 +753,21 @@ fn append_creation_vote(graph: &Path, node_id: &str, evidence: &str) {
     );
     let session_id = ident.session_id.clone().filter(|s| !s.trim().is_empty());
     let harness = ident.harness.clone().filter(|s| !s.trim().is_empty());
-    let (Some(session_id), Some(harness)) = (session_id, harness) else {
+    if session_id.is_none() || harness.is_none() {
         warn("no provable session identity");
         return;
-    };
-    let mut record = Map::new();
-    record.insert(
-        "ts".into(),
-        Value::String(crate::graph_store::now_isoformat()),
-    );
-    record.insert("session_id".into(), Value::String(session_id.clone()));
-    record.insert("voter_key".into(), Value::String(session_id.clone()));
-    record.insert("voter_kind".into(), Value::String("agent".into()));
-    record.insert("harness".into(), Value::String(harness.clone()));
-    record.insert(
-        "fno_id".into(),
-        Value::String(canonical_handle(&session_id)),
-    );
-    record.insert("evidence".into(), Value::String(evidence.to_string()));
-    // Model/effort provenance for a claude session, best-effort.
-    if harness == "claude" {
-        if let Ok(effort) = std::env::var("CLAUDE_EFFORT") {
-            let effort = effort.trim().to_string();
-            if !effort.is_empty() {
-                record.insert("effort".into(), Value::String(effort));
-            }
-        }
-        if std::env::var("ANTHROPIC_BASE_URL").is_ok_and(|v| !v.trim().is_empty()) {
-            if let Ok(model) = std::env::var("ANTHROPIC_MODEL") {
-                let model = model.trim().to_string();
-                if !model.is_empty() {
-                    record.insert("model".into(), Value::String(model));
-                }
-            }
-        }
     }
-    // The append: one locked write with the keeper's same-voter refusal.
-    let run = || -> Result<(), String> {
-        let base_version = crate::graph_store::base_version(graph).map_err(|e| e.to_string())?;
-        let mut entries = crate::graph_store::read_rows(graph).map_err(|e| e.to_string())?;
-        let Some(row) = entries
-            .iter_mut()
-            .find(|r| r.get("id").and_then(Value::as_str) == Some(node_id))
-        else {
-            return Err(format!("no node resolves to '{node_id}'"));
-        };
-        let key = session_id.clone();
-        if let Some(obj) = row.as_object_mut() {
-            let existing = obj
-                .get("encounters")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for prior in &existing {
-                let prior_key = prior
-                    .get("voter_key")
-                    .and_then(Value::as_str)
-                    .or_else(|| prior.get("session_id").and_then(Value::as_str))
-                    .unwrap_or_default();
-                if prior_key == key {
-                    return Err(format!(
-                        "voter {key} already recorded an encounter on {node_id} at {}",
-                        prior
-                            .get("created_at")
-                            .or_else(|| prior.get("ts"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("None")
-                    ));
-                }
-                let _ = prior;
-            }
-            let encounters = obj
-                .entry("encounters".to_string())
-                .or_insert_with(|| Value::Array(vec![]));
-            if !encounters.is_array() {
-                *encounters = Value::Array(vec![]);
-            }
-            encounters
-                .as_array_mut()
-                .expect("just made an array")
-                .push(Value::Object(record.clone()));
-        }
-        crate::graph_store::locked_mutate(
-            graph,
-            crate::graph_store::MutateInput {
-                entries,
-                canonical_path: None,
-                base_version,
-                plan_rungs: None,
-            },
-            crate::graph_store::DEFAULT_LOCK_TIMEOUT,
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
+    let voter = Voter {
+        session_id,
+        harness,
+        operator: false,
     };
-    if let Err(e) = run() {
+    // The creation vote keeps its `ts` stamp key; the reader accepts both.
+    if let Err(VoteRefusal::Missing(e) | VoteRefusal::Duplicate(e) | VoteRefusal::Store(e)) =
+        append_vote(graph, node_id, vote_record("ts", evidence, &voter))
+    {
         warn(&e);
     }
-}
-
-fn canonical_handle(session_id: &str) -> String {
-    session_id.chars().take(8).collect()
 }
 
 /// The add flow end to end: parse, gate order, locked write with the rollup

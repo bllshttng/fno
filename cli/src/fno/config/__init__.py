@@ -34,6 +34,7 @@ from pydantic import (
 )
 
 from fno.user import UserBlock
+from fno.config.build_block import BuildBlock as BuildBlock
 from fno.config.split_block import SplitBlock as SplitBlock
 
 # Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
@@ -50,8 +51,7 @@ from fno.config._lead import LeadBlock
 from fno.config._evals import EvalsBlock
 from fno.config.status_sinks import StatusFanoutConfig as StatusFanoutConfig
 from fno.config.status_sinks import StatusSinkConfig as StatusSinkConfig
-# The keyed settings loader lives in fno.config._loader (this file is
-# shrink-only); re-exported under the names every caller and test imports.
+# The keyed settings loader lives in shrink-only fno.config._loader; re-exported for callers.
 from fno.config._loader import _load_settings_at as _load_settings_at
 from fno.config.source_attribution import resolve_source as resolve_source
 from fno.config._loader import _settings_key as _settings_key
@@ -309,7 +309,7 @@ class RenderTargetConfig(BaseModel):
                     # load_settings(), so raising here turns one typo in one
                     # render-target row into a ValidationError out of every
                     # settings-loading fno command. The row is REFUSED instead
-                    # at the point of use, in roadmap_public._configured_targets,
+                    # at the point of use, by the native render-target read,
                     # where skipping it costs one board and nothing else.
                     _LOG.warning(
                         "config.backlog.render_targets: unknown key %r in row "
@@ -3010,8 +3010,8 @@ class PrWatchBlock(BaseModel):
 class GroomBlock(BaseModel):
     """Daily backlog-grooming pass settings (nested under 'config.groom').
 
- wave 2: `fno backlog groom` (`_spawn_groom_worker`,
-    backlog/groom.py:204) previously spawned with no enable key at all, so it
+ wave 2: `fno backlog groom` (`spawn_worker` in
+    crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it
     could not be turned off. Default ``True`` matches the spawner's CURRENT
     effective behavior (it always ran) - shipping this gate changes nothing
     for an existing user until they explicitly disable it.
@@ -3910,6 +3910,7 @@ class ConfigBlock(BaseModel):
     plans_dir: str = ".fno/plans/"
     plans_filename: str = "%Y%m%d-{slug}-{node}.md"
     branch: BranchBlock = Field(default_factory=BranchBlock)
+    build: BuildBlock = Field(default_factory=BuildBlock)
     paths: PathsBlock = Field(default_factory=PathsBlock)
     obsidian: ObsidianBlock = Field(default_factory=ObsidianBlock)
     project: ProjectBlock = Field(default_factory=ProjectBlock)

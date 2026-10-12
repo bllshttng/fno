@@ -16,12 +16,7 @@ new
 intake
 decompose
 note
-# encounter appends to a node's graph record, exactly like note
-encounter
 remove
-migrate-priorities
-migrate-difficulty
-migrate-updated-at
 supersede
 unsupersede
 # board and queue state
@@ -38,10 +33,6 @@ pick
 unclaim
 requeue
 # storage + sweep machinery
-archive
-unarchive
-maintain
-groom
 # graph-row mutation (stamps deferred_kind under the lock)
 backfill-deferred-kind
 # graph-state read: under an external backend the local graph is not
@@ -71,21 +62,15 @@ get
 status
 # reads the store's mutation counter; writes nothing
 version
-view
 next
 ready
 worked
 queued
 provenance
-roadmap
-bases
-album
 project-root
-board
 undispatched
 # replays the post-publish views after a native (mux) store write;
 # renders only, never a graph write
-render-views
 discover
 # demand reads encounters and writes nothing
 demand

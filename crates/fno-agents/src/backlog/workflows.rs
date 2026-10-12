@@ -20,6 +20,7 @@ use super::settings;
 use super::supersession::normalize_surface;
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
+use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
 
 // ---------------------------------------------------------------------------
 // argv parsing
@@ -287,23 +288,16 @@ pub(crate) fn children_all_closed(parent: &Value, kids: &[&Value]) -> bool {
 }
 
 /// True when a deliberate reopen postdates every child's close (the
-/// _reopen_outranks_child_closes twin). Ambiguity favours the human.
+/// _reopen_outranks_child_closes twin). Ambiguity favours the human: an
+/// unreadable reopen protects, an unreadable child stamp protects.
 pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> bool {
-    let reopened = match parse_iso(parent.get("reopened_at")) {
-        Some(t) => t,
-        None => {
-            let raw = text_at(parent, "reopened_at").unwrap_or("");
-            return !raw.trim().is_empty();
-        }
-    };
-    for kid in kids {
-        if let Some(closed) = parse_iso(kid.get("completed_at")) {
-            if closed >= reopened {
-                return false;
-            }
-        }
-    }
-    true
+    reopen_outranks_stamps(
+        text_at(parent, "reopened_at"),
+        &kids
+            .iter()
+            .map(|k| text_at(k, "completed_at"))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// True when a deliberate reopen postdates the merge being closed on (the
@@ -340,16 +334,11 @@ fn clear_reopen_warning_if_child_matches(parent: &mut Value, child_id: Option<&s
     }
 }
 
-pub(crate) fn auto_closed_note(entry: &Value) -> String {
-    let has_plan = truthy_field(entry, "plan_path")
-        || entry
-            .get("plan_path")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
-    let has_pr = entry.get("pr_number").and_then(Value::as_u64).is_some();
-    if has_plan && !has_pr {
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)".into();
-    }
+/// completion_note for a container closed by all-children-complete. A
+/// plan-having, PR-less container is never closed any more (the
+/// has_own_plan_work hold), so the old UNVERIFIED flag branch is retired
+/// with the false close it flagged.
+pub(crate) fn auto_closed_note(_entry: &Value) -> String {
     "auto-closed: all children complete".into()
 }
 
@@ -431,7 +420,11 @@ pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec
         let parent_is_done = truthy_field(&entries[idx], "completed_at");
         let outranks = reopen_outranks_child_closes(&entries[idx], &kid_refs);
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
-        if parent_is_done || outranks || !all_closed {
+        // Own plan work holds the close: the parent's own deliverables are
+        // unverified, and the UNVERIFIED note that used to flag this close
+        // is retired with it.
+        let holds_plan = has_own_plan_work(&entries[idx]);
+        if parent_is_done || outranks || holds_plan || !all_closed {
             clear_reopen_warning_if_child_matches(&mut entries[idx], Some(node_id));
             break;
         }
@@ -663,7 +656,7 @@ pub fn run_done(tail: &[String]) -> i32 {
 fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     // External backend: the shared gates then exactly one tracker.close are
     // the seam's job (still Python-owned).
-    if external_backend_selected() {
+    if crate::graph_get::external_backend_selected() {
         return forward_to_python("done", tail);
     }
     if !has_node_id_prefix(task_id) {
@@ -754,6 +747,18 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                     "backlog_done_refused",
                     json!({"node_id": task_id, "pr_number": refs[0].0, "reason": msg}),
                 );
+                if let Some(space) = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| crate::paths::space_dir_opt(&cwd))
+                {
+                    crate::friction::record_gate_refusal(
+                        &space.join("events.jsonl"),
+                        "done",
+                        Some(task_id),
+                        &msg,
+                        &msg,
+                    );
+                }
                 return evidence.exit_code();
             }
         }
@@ -948,6 +953,27 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 
 /// `fno backlog reopen` — clears a node's completion. Fully native: the
 /// Python twin and its registry row are gone.
+/// The reopen verb's done fact: a completion stamp, or a children-rollup
+/// derived done (status done with every child closed and the row's own
+/// completion cleared). A bare status-done row nothing derives is stale
+/// data, and the golden contract keeps it out of reopen's reach: the
+/// completion stamp is the evidence of done, not the status field.
+fn reopenable_done(rows: &[Value], node: &Value, task_id: &str) -> bool {
+    if truthy_field(node, "completed_at") {
+        return true;
+    }
+    if text_at(node, "status") != Some("done") {
+        return false;
+    }
+    let kids: Vec<&Value> = rows
+        .iter()
+        .filter(|e| {
+            text_at(e, "contained_in") != Some(task_id) && text_at(e, "parent") == Some(task_id)
+        })
+        .collect();
+    children_all_closed(node, &kids)
+}
+
 pub fn run_reopen(tail: &[String]) -> i32 {
     let (id, reason, force, help, unknown) = parse_reopen_args(tail);
     if help {
@@ -1024,7 +1050,12 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     // The CANONICAL id, not the argument: a partial-id spelling resolves
     // here, and the cascade walks full ids.
     let task_id: String = text_at(node, "id").map(String::from).unwrap_or(task_id);
-    if !truthy_field(&node, "completed_at") {
+    // The done fact, not the derived column (is_done_door_fact's twin at
+    // the patch door): `status: done` is also written by the children
+    // rollup, and a derived-done row reopens with its reopened_at stamping
+    // the hold the derivation respects. A bare status-done row that nothing
+    // derives is stale data, not done.
+    if !reopenable_done(&rows, node, &task_id) {
         eprintln!("warning: {task_id} is not done; nothing to reopen");
         return 0;
     }
@@ -1103,13 +1134,13 @@ pub fn run_reopen(tail: &[String]) -> i32 {
             not_found.replace(true);
             return Ok(false);
         };
-        if !truthy_field(&rows[idx], "completed_at") {
-            raced.replace(true);
-            return Ok(false);
-        }
         let canonical_id = text_at(&rows[idx], "id")
             .map(String::from)
             .unwrap_or_else(|| task_id.clone());
+        if !reopenable_done(rows, &rows[idx], &canonical_id) {
+            raced.replace(true);
+            return Ok(false);
+        }
         {
             let status = rungs
                 .get(&canonical_id)
@@ -1388,10 +1419,6 @@ fn find_node<'a>(rows: &'a [Value], task_id: &str) -> Option<&'a Value> {
     None
 }
 
-fn external_backend_selected() -> bool {
-    active_backend_name() != "graph"
-}
-
 pub(crate) fn active_backend_name() -> String {
     std::env::var("FNO_TRACKER_BACKEND")
         .ok()
@@ -1585,7 +1612,7 @@ fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
 
 /// The shared non-graph backend guard (the update door's guard, per verb):
 /// these verbs own graph state; under an external backend they refuse.
-fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
+pub(crate) fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
     let backend = active_backend_name();
     if backend == "graph" {
         return None;

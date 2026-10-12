@@ -31,6 +31,7 @@ pub mod done_evidence;
 pub(crate) mod drift_emit;
 pub(crate) mod drift_scan;
 pub mod edges;
+pub mod encounter_cli;
 pub mod encounters;
 pub mod entities;
 pub mod epic_cap;
@@ -39,9 +40,13 @@ pub mod find_cli;
 pub mod findings;
 pub mod freshness;
 pub mod get_cli;
+pub mod groom;
 pub mod idea_cap;
+pub mod maintenance;
+pub mod maintenance_archive;
 pub(crate) mod merge_evidence;
 pub(crate) mod merge_state;
+pub mod migrations;
 pub mod model;
 pub mod next;
 pub mod node_ref;
@@ -54,8 +59,10 @@ pub mod note_stale;
 pub mod orphan_plans;
 pub mod patch;
 pub mod pr_link;
+pub mod projections;
 pub(crate) mod promise;
 pub mod provenance_cli;
+pub mod publish;
 pub mod pull_requests;
 pub mod quota_route;
 pub mod rank_cli;
@@ -445,7 +452,7 @@ fn store_owes_a_fold(connection: &Connection) -> Result<bool, String> {
     Ok(materialized_rows(connection)? == 0)
 }
 
-fn read_connection(graph: &Path) -> Result<Connection, String> {
+pub(crate) fn read_connection(graph: &Path) -> Result<Connection, String> {
     crate::state_layout_sqlite::wait_for_fence(state_root_of(graph));
     let path = database_path(graph);
     if path.exists() {

@@ -412,9 +412,10 @@ fn flush_gate_metrics(state: &StoreState) {
 /// incumbent instead of failing the spawn.
 pub const EXIT_SEAT_OWNED: i32 = 3;
 
-/// How long the store must stay quiet after the last write before the view
-/// pass runs: a burst of writes renders once, not once per write.
-const RENDER_SETTLE: Duration = Duration::from_secs(2);
+// How long the store must stay quiet after a write burst before the view
+// pass runs: a burst of writes renders once, not once per write. The const
+// moved to board_render_arm with the pass; the backoff doubles from here.
+use crate::board_render_arm::RENDER_SETTLE;
 
 /// Whether the canonical view pass is owed right now: the store's version
 /// moved since the last render AND the write burst has settled. `None`
@@ -441,19 +442,10 @@ fn render_due(state: &StoreState, current: &str, rendered: Option<&str>, settle:
 /// `graph_render_failed` on failure. Never touches the write gate: a slow or
 /// failing render delays nothing, and the next settled tick retries.
 fn trigger_render(state: &StoreState) {
-    trigger_render_with(state, run_render_pass);
+    trigger_render_with(state, crate::board_render_arm::run_render_pass);
 }
 
-/// Backoff between render attempts after consecutive failures: double from
-/// the settle floor each time, capped at ten minutes. A permanently failing
-/// pass then costs one spawn per cap window, not one per second.
-fn render_backoff(failures: u32) -> Duration {
-    let shift = failures.min(10);
-    RENDER_SETTLE
-        .checked_mul(1u32 << shift)
-        .unwrap_or(Duration::from_secs(600))
-        .min(Duration::from_secs(600))
-}
+use crate::board_render_arm::render_backoff;
 
 /// The injectable body of [`trigger_render`]: tests pass their own pass
 /// runner instead of the subprocess.
@@ -535,53 +527,6 @@ fn trigger_render_with(state: &StoreState, run: impl FnOnce() -> Result<(), (i32
         }
     }
     state.render_in_flight.store(false, Ordering::SeqCst);
-}
-
-/// Run the canonical view pass as a subprocess. The keeper is a Rust worker:
-/// the pass is Python-owned (config.toml targets, vault rendering), so it
-/// shells to the `fno` CLI the same way the mux's retired replay did.
-/// `Err` carries the exit code and the stderr tail for the failure event.
-fn run_render_pass() -> Result<(), (i32, String)> {
-    let bin = match std::env::var_os("FNO_BIN") {
-        Some(v) => PathBuf::from(v),
-        None => {
-            // A lib unit test declared no fno: refuse before the PATH walk,
-            // the same declared-only rule scrape::fno_bin applies.
-            if cfg!(test) {
-                return Err((-1, "no fno declared under a unit test".into()));
-            }
-            let path = match std::env::var_os("PATH") {
-                Some(p) => p,
-                None => return Err((-1, "PATH is unset; the view pass cannot run".into())),
-            };
-            match std::env::split_paths(&path)
-                .map(|dir| dir.join("fno"))
-                .find(|candidate| candidate.is_file())
-            {
-                Some(p) => p,
-                None => {
-                    return Err((-1, "no fno CLI on PATH; the view pass cannot run".into()));
-                }
-            }
-        }
-    };
-    let out = std::process::Command::new(bin)
-        .args(["backlog", "render-views"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| (-1, format!("spawn failed: {e}")))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    // Tail only, char-safe: the emitter caps payloads at 500 B, so the tail
-    // must leave room for the envelope fields.
-    let tail: String = {
-        let skip = stderr.chars().count().saturating_sub(300);
-        stderr.chars().skip(skip).collect()
-    };
-    Err((code, tail))
 }
 
 /// How often an idle keeper re-checks that the socket path still names the
@@ -2165,59 +2110,9 @@ fn apply_op_impl(entries: &mut Vec<Value>, name: &str, p: &Value) -> Result<Valu
                 .get("record")
                 .cloned()
                 .ok_or_else(|| StoreError::Invalid("append_encounter needs a record".into()))?;
-            // demand.voter_key: the record's own voter_key, else its
-            // session_id - never a params-level field.
-            let key = record
-                .get("voter_key")
-                .and_then(Value::as_str)
-                .or_else(|| record.get("session_id").and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_string();
-            if key.is_empty() {
-                return Ok(json!({"appended": false,
-                    "error": "an encounter with no voter key (session_id) is not readable back to a transcript",
-                    "reason": "unidentified"}));
-            }
-            let Some(idx) = find_exact(entries, node_id) else {
-                return Ok(json!({"appended": false,
-                    "error": format!("no node resolves to '{node_id}'"), "reason": "missing"}));
-            };
-            let obj = entries[idx].as_object_mut().unwrap();
-            let existing = obj
-                .get("encounters")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for prior in &existing {
-                let prior_key = prior
-                    .get("voter_key")
-                    .and_then(Value::as_str)
-                    .or_else(|| prior.get("session_id").and_then(Value::as_str))
-                    .unwrap_or_default();
-                if prior_key == key {
-                    return Ok(json!({"appended": false,
-                        "error": format!(
-                            "voter {key} already recorded an encounter on {} at {}",
-                            obj.get("id").and_then(Value::as_str).unwrap_or(node_id),
-                            // Python's f-string prints the None of a missing
-                            // stamp as "None"; byte parity keeps that spelling.
-                            prior
-                                .get("created_at")
-                                .or_else(|| prior.get("ts"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("None")
-                        ),
-                        "reason": "duplicate"}));
-                }
-            }
-            let encounters = obj
-                .entry("encounters".to_string())
-                .or_insert_with(|| Value::Array(vec![]));
-            if !encounters.is_array() {
-                *encounters = Value::Array(vec![]);
-            }
-            encounters.as_array_mut().unwrap().push(record);
-            Ok(json!({"appended": true, "error": Value::Null, "reason": Value::Null}))
+            Ok(crate::backlog::encounters::append_refusing_duplicate(
+                entries, node_id, record,
+            ))
         }
         "append_wave_note" => {
             let node_id = param_str(p, "node_id")?;
@@ -4719,35 +4614,6 @@ mod tests {
         // A state with NO stamp at all reads as settled: boot catch-up.
         let fresh = render_trigger_state(graph.clone(), None);
         assert!(render_due(&fresh, &current, None, RENDER_SETTLE));
-    }
-
-    /// The happy path: the pass runs, the marker stamps, and the next tick
-    /// is a no-op (positive marker: the stamp exists and the runner ran).
-    #[test]
-    fn render_trigger_runs_the_pass_and_stamps_the_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let current = seed_render_store(&graph);
-        let state = render_trigger_state(graph.clone(), None);
-        let runs = std::cell::Cell::new(0u32);
-        trigger_render_with(&state, || {
-            runs.set(runs.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs.get(), 1);
-        assert_eq!(
-            crate::backlog::rendered_version(&graph).unwrap(),
-            Some(current),
-            "the marker names the version the pass rendered"
-        );
-
-        // The stamped marker retires the debt: the next tick does not run.
-        let runs2 = std::cell::Cell::new(0u32);
-        trigger_render_with(&state, || {
-            runs2.set(runs2.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs2.get(), 0);
     }
 
     /// A failed pass journals `graph_render_failed` with the exit code and

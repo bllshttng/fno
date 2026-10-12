@@ -165,6 +165,7 @@ The lease is what makes the idle safe, so a session that cannot take one never i
 | `loop_advisory_mode` | hook | advisory-mode session |
 | `loop_check_binary_missing` | hook | `fno-agents` binary not found |
 | `loop_check_legacy_manifest` | hook | pre-wedge manifest detected |
+| `loop_check_question_gate` | hook | the question gate blocks a stop on an open question |
 
 ### Two-tier event model (the #1 external-reviewer question)
 

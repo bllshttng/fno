@@ -8,7 +8,6 @@ from __future__ import annotations
 import pytest
 
 from fno.graph._intake import make_selection_sort_key
-from fno.graph.render import _kanban_card, _orphan_ids
 from fno.graph.rollup import orphan_ids
 
 
@@ -81,30 +80,6 @@ def test_default_orphan_set_reproduces_pre_rollup_ordering():
 
 
 # -- board flag --
-
-
-def test_orphan_card_carries_the_tag():
-    entry = node("x-1")
-    card = _kanban_card(entry, {}, frozenset({"x-1"}))
-    assert "[orphan]" in card
-
-
-def test_linked_card_has_no_tag():
-    assert "[orphan]" not in _kanban_card(node("x-1"), {}, frozenset())
-
-
-# -- fail-open --
-
-
-def test_orphan_ids_fails_open_when_rollup_raises(monkeypatch):
-    """Board rendering runs inside the graph lock; it must never raise."""
-    import fno.graph.rollup as rollup
-
-    def boom(entries):
-        raise RuntimeError("simulated rollup failure")
-
-    monkeypatch.setattr(rollup, "orphan_ids", boom)
-    assert _orphan_ids([node("x-1")]) == frozenset()
 
 
 # -- health metric shape --

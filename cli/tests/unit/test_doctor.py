@@ -1591,8 +1591,9 @@ def test_fix_installs_the_groom_agent_when_nothing_schedules_it(
     monkeypatch.setattr(doctor.sys, "platform", "darwin")  # the install is launchd-only
     calls: list = []
     monkeypatch.setattr(
-        "fno.backlog.groom.install_groom_agent",
-        lambda **kw: calls.append(kw) or {"status": "installed", "detail": "ok"},
+        doctor,
+        "_groom_install_agent",
+        lambda: calls.append(1) or {"status": "installed", "detail": "ok"},
     )
     result = runner.invoke(app, ["doctor", "--fix"])
     assert len(calls) == 1
@@ -1613,10 +1614,10 @@ def test_fix_skips_the_install_when_the_agent_is_already_there(
     # platform guard - off launchd it would pass without exercising anything.
     monkeypatch.setattr(doctor.sys, "platform", "darwin")
 
-    def _boom(**kw):
+    def _boom():
         raise AssertionError("must not reinstall an agent that is already installed")
 
-    monkeypatch.setattr("fno.backlog.groom.install_groom_agent", _boom)
+    monkeypatch.setattr(doctor, "_groom_install_agent", _boom)
     runner.invoke(app, ["doctor", "--fix"])
 
 
@@ -1670,10 +1671,10 @@ def test_fix_does_not_attempt_a_launchd_install_off_darwin(
     )
     monkeypatch.setattr(doctor.sys, "platform", "linux")
 
-    def _boom(**kw):
+    def _boom():
         raise AssertionError("must not attempt a launchd install off darwin")
 
-    monkeypatch.setattr("fno.backlog.groom.install_groom_agent", _boom)
+    monkeypatch.setattr(doctor, "_groom_install_agent", _boom)
     result = runner.invoke(app, ["doctor", "--fix"])
     assert "groom agent" not in result.stderr
 

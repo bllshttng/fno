@@ -65,13 +65,20 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
         // The plan/preview path reads no store and no home env (existing
         // unit tests run it with no declared agents home).
         let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
-        return resolve_with_projects(payload, &projects);
+        let mut answer = resolve_with_projects(payload, &projects)?;
+        if let Some(store) = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json()) {
+            crate::name_draw::settle_draw(payload, &mut answer, &store);
+        }
+        return Ok(answer);
     }
     let store = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json());
     let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
-    let answer = resolve_with_projects(payload, &projects)?;
+    let mut answer = resolve_with_projects(payload, &projects)?;
     // No declared home (a test) reads as no store, so the plan answer is
     // unchanged; production always declares one.
+    if let Some(store) = store.as_ref() {
+        crate::name_draw::settle_draw(payload, &mut answer, store);
+    }
     if let Some(store) = store.as_ref() {
         apply_name_effect(payload, &answer, store);
     }
@@ -82,7 +89,8 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
 /// instead of setting the agents home env.
 pub fn resolve_at(payload: &Value, store: &std::path::Path) -> Result<Value, String> {
     let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
-    let answer = resolve_with_projects(payload, &projects)?;
+    let mut answer = resolve_with_projects(payload, &projects)?;
+    crate::name_draw::settle_draw(payload, &mut answer, store);
     apply_name_effect(payload, &answer, store);
     Ok(answer)
 }
@@ -325,6 +333,7 @@ fn plan_with_projects(
         .unwrap_or("");
 
     if succession
+        && !proposed_name.is_empty()
         && (!crate::team_names::valid_person_name(proposed_name)
             || rows.iter().any(|row| {
                 !crate::row_verdict::finished_json(row)
@@ -336,7 +345,7 @@ fn plan_with_projects(
             }))
     {
         return Ok(plan_answer("declined", occupancy, Vec::new(),
-            json!("--hand-off requires --name <Name>: the outgoing lead chooses a fresh person name, distinct from every live lead"), caller_value));
+            json!("--hand-off requires --name <Name>: the outgoing lead chooses a fresh person name, distinct from every live lead; or drop --name and take the machine's draw"), caller_value));
     }
 
     if let Some((first, _)) = occupancy.rivals.first() {
@@ -612,35 +621,58 @@ mod tests {
     fn handoff_requires_an_explicit_new_person_name_before_any_transfer() {
         let tmp = tempfile::tempdir().unwrap();
         let _home = crate::AgentsHomeEnvGuard::set(tmp.path());
+        let claims = tmp.path().join("claims");
         let mut payload = json!({"scope":"scope", "succession":true,
+            "claims_root": claims.to_string_lossy(),
             "caller":{"kind":"agent", "name":"Jordan"},
             "rows":[{"name":"Jordan", "status":"live", "role_scope":"scope",
                 "harness_session_id":"old-session"}]});
-        for candidate in [None, Some("warm-viper"), Some("Jordan")] {
+        for candidate in [Some("warm-viper"), Some("Jordan")] {
             payload["proposed_name"] = candidate.map(Value::from).unwrap_or(Value::Null);
             let refused = resolve_at(&payload, &team_store(tmp.path())).unwrap();
             assert_eq!(refused["outcome"], "declined");
             assert!(refused["refusal"].as_str().unwrap().contains("--name"));
             assert!(!team_store(tmp.path()).exists());
         }
-        payload["proposed_name"] = json!("Avery");
+        // No name: the machine draws, and the answer names the draw.
+        payload["proposed_name"] = Value::Null;
         let plan = resolve_at(&payload, &team_store(tmp.path())).unwrap();
         assert_eq!(plan["outcome"], "succeeded");
+        let drawn = plan["draw"]["name"].as_str().unwrap().to_string();
+        // A hand-typed name refuses: the machine draws, accept or redraw.
+        payload["proposed_name"] = json!("HandTyped");
+        let refused = resolve_at(&payload, &team_store(tmp.path())).unwrap();
+        assert_eq!(refused["outcome"], "declined");
+        assert!(refused["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("the machine draws successor names"));
+        // Accept: the drawn name re-answers the same draw.
+        payload["proposed_name"] = json!(drawn);
+        let plan = resolve_at(&payload, &team_store(tmp.path())).unwrap();
+        assert_eq!(plan["outcome"], "succeeded");
+        assert_eq!(plan["draw"]["name"], json!(drawn));
+        // The apply pass binds the drawn name and burns it into the history.
         payload["plan"] = plan;
-        payload["successor"] = json!("Avery");
+        payload["successor"] = json!(drawn);
         payload["successor_identity"] = json!({"session_id":"new-session"});
         let applied = resolve_at(&payload, &team_store(tmp.path())).unwrap();
         assert_eq!(applied["outcome"], "succeeded");
         let store = crate::team_names::snapshot(&team_store(tmp.path())).unwrap();
-        assert_eq!(store["teams"]["scope"]["name"], "Avery");
+        assert_eq!(store["teams"]["scope"]["name"], json!(drawn));
         assert_eq!(
             store["teams"]["scope"]["pending_succession"]["successor_name"],
-            "Avery"
+            json!(drawn)
         );
         assert_eq!(
             store["teams"]["scope"]["pending_succession"]["successor_session"],
             "new-session"
         );
+        let history =
+            std::fs::read_to_string(crate::team_names::history_path(&team_store(tmp.path())))
+                .unwrap();
+        assert!(history.contains(&format!("\"kind\": \"bound\"")));
+        assert!(history.contains(&drawn.to_ascii_lowercase()));
     }
 
     fn row(name: &str, scope: &str, status: &str) -> Value {
@@ -691,6 +723,13 @@ mod tests {
 
     #[test]
     fn grant_rows() {
+        // The succession arms answer home-free BY CONTRACT ("no declared home
+        // reads as no store"), so they hold the env lock while they run: a
+        // parallel home-guarded test must not leak FNO_AGENTS_HOME in and
+        // turn the draw on mid-test.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": false,
             "caller": {"kind": "human"}, "rows": [],
@@ -700,8 +739,12 @@ mod tests {
         assert_eq!(out["vacate"], json!([]));
         assert!(out["refusal"].is_null());
 
+        // slot_probe: these answer occupancy only. A parallel test may set
+        // FNO_AGENTS_HOME without holding the env lock, and a draw fired on
+        // a leaked home would decline this answer and burn a name.
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": true, "proposed_name": "Taylor",
+            "slot_probe": true,
             "caller": {"kind": "agent", "name": "lead-a"},
             "rows": [row("lead-a", "fno", "busy")],
         }))
@@ -711,6 +754,7 @@ mod tests {
 
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": true, "proposed_name": "Taylor",
+            "slot_probe": true,
             "caller": {"kind": "human"},
             "rows": [row("lead-a", "fno", "busy")],
         }))

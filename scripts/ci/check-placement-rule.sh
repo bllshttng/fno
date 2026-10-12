@@ -163,6 +163,9 @@
 #      crates/fno-agents/src/backlog/birth.rs joins ~/.claude/projects to
 #      birth a session row from the harness's own transcript tree: read-only,
 #      the same category as transcript_tail.rs. Footnote stores nothing there.
+#      crates/fno-agents/src/backlog/maintenance.rs parses a node's
+#      cwd for the `/.claude/worktrees/` segment to name its repo. String
+#      parsing of a path the harness made; it writes nothing there.
 #      crates/fno-agents/src/plans_path.rs reads the project's
 #      .claude/settings.local.json / .claude/settings.json - the
 #      plansDirectory tier of the plans-dir chain, i.e. Claude Code's own
@@ -300,6 +303,8 @@ crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs
 crates/fno-agents/src/backlog/autobrief.rs
 crates/fno-agents/src/backlog/advance_join.rs
+crates/fno-agents/src/backlog/maintenance.rs
+crates/fno-agents/src/backlog/maintenance_tests.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py
@@ -307,7 +312,6 @@ cli/src/fno/cost/_session_cost.py
 cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
-cli/src/fno/graph/maintain.py
 cli/src/fno/inbox/drain.py
 cli/src/fno/observer/isolation.py
 cli/src/fno/paths.py

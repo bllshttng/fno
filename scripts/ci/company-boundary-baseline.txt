@@ -64,5 +64,4 @@ cli/src/fno/graph/statuses.py: L1 core -> L5 runtime / from fno.agents.reachabil
 # the same shape as the roster.py entries above. The detector takes the
 # prover as an injected parameter, so tests drive it hermetically; the
 # edge lives only where the sweep composes its instrument.
-cli/src/fno/graph/maintain.py: L1 core -> L5 runtime / from fno.agents.watchdog import finished_with_the_tree, tail_facts
 layer cycle: L0 platform -> L5 runtime -> L0 platform

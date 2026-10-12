@@ -85,7 +85,7 @@ const PLIST_TEMPLATE: &str = "\
 </plist>
 ";
 
-fn xml_escape(value: &str) -> String {
+pub(crate) fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -97,7 +97,7 @@ fn xml_escape(value: &str) -> String {
 /// launchd PATH capture: the binary's dir, then the cargo bin dir, then the
 // fixed install dirs; launchd PATH without cargo bin fails every tick at
 // binary lookup.
-fn default_agent_path(fno_binary: &str) -> String {
+pub(crate) fn default_agent_path(fno_binary: &str) -> String {
     let mut entries: Vec<String> = Vec::new();
     if fno_binary.contains('/') {
         if let Some(parent) = Path::new(fno_binary).parent() {
@@ -128,7 +128,7 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-fn augment_path(install_path: &str) -> String {
+pub(crate) fn augment_path(install_path: &str) -> String {
     let mut entries: Vec<String> = install_path
         .split(':')
         .filter(|p| !p.is_empty())
@@ -174,7 +174,7 @@ pub(crate) fn render_plist(
         .replace("{log_err}", &xml_escape(&log_err.display().to_string()))
 }
 
-fn write_if_changed(plist_path: &Path, plist_text: &str) -> std::io::Result<bool> {
+pub(crate) fn write_if_changed(plist_path: &Path, plist_text: &str) -> std::io::Result<bool> {
     if let Ok(current) = std::fs::read_to_string(plist_path) {
         if current == plist_text {
             return Ok(false);
@@ -407,7 +407,7 @@ static LAUNCHCTL_CALL: AtomicUsize = AtomicUsize::new(0);
 /// `defer_when_ticking`: a bounce fired mid-tick SIGTERMs that very tick, so
 /// heal, refresh and doctor all pass the flag; a deferred refresh leaves its
 /// rewritten plist for the next bounce.
-fn bounce(
+pub(crate) fn bounce(
     plist_path: &Path,
     label: &str,
     kickstart: bool,

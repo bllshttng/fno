@@ -1,8 +1,6 @@
 """Design-stage probe: the `design` rung of the derived lifecycle ladder."""
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from fno.graph.ladder import is_design_stage
@@ -132,30 +130,6 @@ def test_missing_file_stays_armed(tmp_path):
 )
 def test_malformed_entries_stay_armed(entry):
     assert not is_design_stage(entry)
-
-
-def test_design_node_is_never_stale_ready(tmp_path):
-    """Quarantine must not reach a node that is unarmed on purpose.
-
-    Pinned on `is_stale_ready` itself rather than `detect_stale_ready`, because
-    `maintain --apply` re-runs the predicate directly under the lock.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from fno.graph.maintain import detect_stale_ready, is_stale_ready
-
-    now = datetime.now(timezone.utc)
-    plan = tmp_path / "d.md"
-    plan.write_text(DESIGN_FM)
-    os.utime(plan, (0, 0))  # ancient mtime: no movement signal
-    node = {
-        "id": "x-old",
-        "status": "ready",
-        "plan_path": str(plan),
-        "created_at": (now - timedelta(days=400)).isoformat(),
-    }
-    assert not is_stale_ready(node, now, 21)
-    assert detect_stale_ready([node], 21, now) == []
 
 
 def test_recompute_persists_the_design_rung(tmp_path):
@@ -411,8 +385,6 @@ def test_receipt_reports_a_node_already_on_the_design_rung(tmp_path, monkeypatch
     assert out == [("x-d", "design")]
 
 
-
-
 def test_starvation_receipt_names_design_not_quarantined(tmp_path, monkeypatch):
     """A design-stage node is a lifecycle rung, not starvation.
 
@@ -543,11 +515,22 @@ def test_uncertain_documents_park(tmp_path, body):
 
 
 def test_missing_file_is_unreadable_and_not_dispatchable(tmp_path):
+    """A missing plan file reads UNREADABLE, except on an in_review node:
+    the plan did its job once the PR opened, so a vanished file reads as the
+    node's own rung and stays dispatchable. Any other status keeps failing
+    closed."""
     from fno.graph.ladder import Rung, is_dispatchable, plan_rung
 
     entry = {"id": "x-test", "plan_path": str(tmp_path / "gone.md")}
     assert plan_rung(entry) is Rung.UNREADABLE
     assert is_dispatchable(entry) is False
+
+    gone = {"id": "x-gone", "plan_path": str(tmp_path / "gone.md"), "status": "in_review"}
+    building = {"id": "x-bld", "plan_path": str(tmp_path / "gone.md"), "status": "in_progress"}
+    assert plan_rung(gone) is Rung.IN_REVIEW
+    assert is_dispatchable(gone) is True
+    assert plan_rung(building) is Rung.UNREADABLE
+    assert is_dispatchable(building) is False
 
 
 @pytest.mark.parametrize("status", ["idea", "stub", "design"])
@@ -653,36 +636,7 @@ def _ready_row(plan_path: str) -> dict:
     }
 
 
-
-
-
-
 # every readiness path re-probes the rung, not just `design` (sigma panel) -----
-
-
-def test_maintain_never_quarantines_an_undesigned_node(tmp_path):
-    """`maintain --apply` must not defer a scaffold off the board.
-
-    `is_stale_ready` exempted DESIGN only, so an `idea`-rung row aged into
-    stale-quarantine and got `deferred_at` stamped. Two of its three callers
-    never pass through `selection_guards`, so the rung probe has to live here.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from fno.graph.maintain import is_stale_ready
-
-    now = datetime.now(timezone.utc)
-    old = (now - timedelta(days=572)).isoformat()
-    for status in ("idea", "stub", "design"):
-        plan = tmp_path / f"{status}.md"
-        plan.write_text(f"---\nstatus: {status}\n---\n")
-        node = {
-            "id": f"x-{status[:4]}",
-            "status": "ready",
-            "plan_path": str(plan),
-            "created_at": old,
-        }
-        assert is_stale_ready(node, now, 21) is False, status
 
 
 def test_entry_status_uses_the_same_rung_table_as_recompute(tmp_path):

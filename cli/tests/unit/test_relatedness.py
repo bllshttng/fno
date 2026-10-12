@@ -3,7 +3,6 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 
@@ -160,29 +159,6 @@ def test_write_map_round_trip(tmp_path):
     mapping = {"a": [{"id": "b", "score": 0.42, "reason": "shared domain 'code'"}]}
     R.write_map(p, mapping)
     assert json.loads(p.read_text()) == mapping
-
-
-# --- AC8-EDGE: archive (consumed as-is by the nightly wrapper) never touches a
-# referenced or too-recent terminal node. Guards the contract the composition
-# relies on. ---
-
-def test_archive_holds_back_referenced_and_recent():
-    from fno.graph.archive import partition_for_archive
-
-    now = datetime.now(timezone.utc)
-    old = "2020-01-01T00:00:00+00:00"
-    entries = [
-        {"id": "done-old-ref", "completed_at": old},          # old but referenced
-        {"id": "done-old-free", "completed_at": old},          # old, unreferenced -> archives
-        {"id": "done-young", "completed_at": now.isoformat()}, # too recent
-        {"id": "open", "blocked_by": ["done-old-ref"]},        # open node referencing the first
-    ]
-    to_archive, _, skipped = partition_for_archive(entries, older_than_days=30, now=now)
-    ids = {e["id"] for e in to_archive}
-    assert ids == {"done-old-free"}
-    skip_reasons = {e["id"]: e["_skip"] for e in skipped}
-    assert skip_reasons["done-old-ref"] == "referenced-by-open-node"
-    assert skip_reasons["done-young"] == "too-recent"
 
 
 # --- CLI boundary: build then get round-trip + exit-code contract (AC2/AC3) ---

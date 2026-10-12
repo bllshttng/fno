@@ -12,7 +12,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from fno.graph import fts, relatedness
+from fno.graph import relatedness
+
+
+class SearchUnavailableError(RuntimeError):
+    """The keeper, and with it the store's FTS index, is unreachable."""
+
+
+def _fts_search(query: str, graph_path: Path, limit: int | None = 20) -> list[str]:
+    """Node ids matching ``query``, ranked by the keeper's FTS5 index."""
+    from fno.graph.store import _client_for
+
+    try:
+        result = _client_for(Path(graph_path)).request(
+            "api", {"op": "search", "q": query, "limit": limit}
+        )
+    except FileNotFoundError:
+        raise
+    except RuntimeError as exc:
+        raise SearchUnavailableError(str(exc)) from exc
+    return [str(row) for row in result.get("rows", [])]
 
 
 @dataclass(frozen=True)
@@ -131,10 +150,10 @@ def candidates(
         )
     else:
         try:
-            fts_ids = [node_id for node_id in fts.search(
+            fts_ids = [node_id for node_id in _fts_search(
                 " ".join(part for part in (title, details) if part), path, limit=None
             ) if node_id in by_id]
-        except (fts.SearchUnavailableError, FileNotFoundError) as exc:
+        except (SearchUnavailableError, FileNotFoundError) as exc:
             degraded = True
             warning = str(exc)
 
@@ -178,9 +197,9 @@ def positive_control(
     path = graph_path or _graph_path()
     pool = entries if entries is not None else _entries_for(path)
     try:
-        matches = [node_id for node_id in fts.search(query, path, limit=None)]
+        matches = [node_id for node_id in _fts_search(query, path, limit=None)]
         return {"query": query, "matches": matches, "lane": "fts", "degraded": False}
-    except fts.SearchUnavailableError as exc:
+    except SearchUnavailableError as exc:
         lowered = query.casefold()
         matches = [
             entry["id"]
@@ -200,6 +219,8 @@ def positive_control(
 
 
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
+# The reason `fno backlog maintain` stale drains stamp, at any staleness_days.
+_STALE_DRAIN_REASON_RE = re.compile(r"^stale >\d+d, drained by maintain")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _QUOTED_SPAN_RE = re.compile(r"(?<![A-Za-z0-9])(['\"])[^'\"\n]*\1(?![A-Za-z0-9])")
 
@@ -231,13 +252,11 @@ def _file_evidence(node: dict[str, Any]) -> list[str]:
 
 
 def _stale_reason_still_true(node: dict[str, Any]) -> bool:
-    from fno.graph.maintain import _STALE_IDEAS_DEFERRED_REASON_RE
-
     reason = node.get("deferred_reason")
     deferred_at = node.get("deferred_at")
     if (
         not isinstance(reason, str)
-        or not _STALE_IDEAS_DEFERRED_REASON_RE.match(reason)
+        or not _STALE_DRAIN_REASON_RE.match(reason)
         or not isinstance(deferred_at, str)
     ):
         return False

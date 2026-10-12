@@ -720,6 +720,11 @@ def settle_spawn_role(
     return [updates.get(i, row) for i, row in enumerate(rows)], outcome, vacated
 
 
+def adopt_drawn_name(succession: bool, plan: Optional[dict], name: str) -> str:
+    """Adopt a succession settle's draw: the machine names the successor."""
+    return (plan or {}).get("draw", {}).get("name") or name if succession else name
+
+
 def plan_spawn_role(
     scope: str,
     caller_row,
@@ -739,6 +744,11 @@ def plan_spawn_role(
     from fno.agents.registry import load_registry
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
+    # The machine draws successor names; "redraw" is the reserved ask for a
+    # fresh draw, never a name (the pool excludes it and the refusals teach it).
+    redraw = proposed_name is not None and proposed_name.strip().lower() == "redraw"
+    if redraw:
+        proposed_name = None
     caller_name = getattr(caller_row, "name", None)
     caller = {"kind": "agent", "name": caller_name} if caller_name else {"kind": "human"}
     try:
@@ -750,6 +760,7 @@ def plan_spawn_role(
         "scope": scope,
         "succession": succession,
         "proposed_name": proposed_name,
+        "redraw": redraw,
         "caller": caller,
         "exclude_name": exclude_name,
         "rows": [asdict(row) for row in rows],

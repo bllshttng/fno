@@ -59,6 +59,10 @@ pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
 pub mod agy_mint;
+pub mod agy_transcript;
+#[cfg(test)]
+#[path = "agy_transcript_tests.rs"]
+mod agy_transcript_tests;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
@@ -79,6 +83,7 @@ pub mod bash_census;
 #[path = "birth_guard_tests.rs"]
 mod birth_guard_tests;
 pub mod blueprint_judge;
+pub mod board_render_arm;
 mod boot_revival;
 mod bounded_cmd;
 mod bounded_spawn;
@@ -186,6 +191,7 @@ pub mod flight_gate;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
+pub mod friction;
 pub mod gate_probes;
 pub mod gc;
 pub mod gc_adopt;
@@ -306,6 +312,7 @@ mod mint_guard_tests;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod name_draw;
 pub mod naming;
 pub mod needs;
 pub mod node_branch;
@@ -331,6 +338,7 @@ pub mod orphan_reap;
 pub mod osc;
 pub mod otel_ingest;
 pub mod otel_read;
+pub mod otlp_export;
 pub(crate) mod owner_ladder;
 pub mod pane_keeper;
 pub mod pane_rebind;
@@ -341,6 +349,10 @@ pub mod paths_cli;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
+pub mod pi_transcript;
+#[cfg(test)]
+#[path = "pi_transcript_tests.rs"]
+mod pi_transcript_tests;
 pub mod plan_doc;
 pub mod planning_lane;
 pub mod plans_dirs;
@@ -357,6 +369,7 @@ pub mod pr_push;
 pub mod pr_rebase;
 pub mod pr_status;
 pub mod pr_status_facts;
+pub mod pr_steward;
 pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
@@ -1541,6 +1554,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The keeper's render trigger failed a pass (waves 8-9 store cutover);
     // carries the version and a stderr tail, and the backoff retries it.
     "graph_render_failed",
+    // One archive sweep ran, dry run or apply; carries the moved and
+    // held-back counts.
+    "graph_archive_swept",
     // Pane-to-thread conversion: one per phase of the agent.convert
     // transaction (classified, claims-held, pane-stopped, hand-off,
     // resumed, flipped, rolled-back), carrying the name and strategy.

@@ -371,15 +371,6 @@ def test_stranded_next_receipts_caps_and_names_the_total():
     assert _stranded_next_receipts([("x-1", "plan-less")]) == []
 
 
-def test_groom_parses_the_reconcile_leg_count():
-    from fno.backlog.groom import _reconcile_leg_outcome
-
-    stdout = (
-        "Auto-closed 1 container epic(s) (all children complete): x-e\n"
-        "re-parented 38 stranded child(ren) under terminal parents: x-a -> (none)\n"
-    )
-    assert _reconcile_leg_outcome(stdout) == "ok (re-parented 38)"
-    assert _reconcile_leg_outcome("No merged-PR drift found.\n") == "ok (re-parented 0)"
 
 
 # ---------------------------------------------------------------------------

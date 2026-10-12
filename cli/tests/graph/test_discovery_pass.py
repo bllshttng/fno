@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.graph import discovery, fts
+from fno.graph import discovery
 from fno.graph.cli import cli
 
 runner = CliRunner()
@@ -59,7 +59,7 @@ def _seed(graph: Path, entries: list[dict]) -> None:
 
 def test_candidates_union_recall_lanes(tmp_graph: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_graph, [_node("x-fts"), _node("x-related"), _node("x-both")])
-    monkeypatch.setattr(fts, "search", lambda *args, **kwargs: ["x-fts", "x-both"])
+    monkeypatch.setattr(discovery, "_fts_search", lambda *args, **kwargs: ["x-fts", "x-both"])
     monkeypatch.setattr(
         "fno.graph.relatedness.similar_nodes",
         lambda *args, **kwargs: [
@@ -83,9 +83,9 @@ def test_candidates_degrade_when_fts_is_unavailable(
     _seed(tmp_graph, [_node("x-related")])
 
     def unavailable(*args, **kwargs):
-        raise fts.SearchUnavailableError("no fts5")
+        raise discovery.SearchUnavailableError("no fts5")
 
-    monkeypatch.setattr(fts, "search", unavailable)
+    monkeypatch.setattr(discovery, "_fts_search", unavailable)
     monkeypatch.setattr(
         "fno.graph.relatedness.similar_nodes",
         lambda *args, **kwargs: [("x-related", 0.4, "shared terms")],
@@ -199,7 +199,7 @@ def test_candidates_floor_passthrough_keeps_caller_floors(
             )
         ],
     )
-    monkeypatch.setattr(fts, "search", lambda *args, **kwargs: [])
+    monkeypatch.setattr(discovery, "_fts_search", lambda *args, **kwargs: [])
 
     default_floor = discovery.candidates(
         "alfa bravo charlie delta echo foxtrot golf hotel", "", graph_path=tmp_graph, domain=""

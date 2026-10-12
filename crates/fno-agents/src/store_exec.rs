@@ -148,13 +148,13 @@ pub(crate) fn handle_keeper_scan(
 }
 
 /// The serving half of the lane, split from stdin/stdout so it stays
-/// testable without a process.
-/// No render pass here, deliberately: the Python client already renders the
-/// canonical views after a landed publish (`_finish_mutation`), so an exec
+/// testable without a process. No render pass here, deliberately: the write
+/// path renders nothing after a landed publish - the keeper's settled
+/// trigger and the daemon's board_render arm own the views, so an exec
 /// render would run the pass twice for every CLI write - and a synchronous
 /// `fno backlog render-views` inside the child re-enters the store client,
 /// which wedges under the test sandbox. The resident trigger's remaining
-/// job (native mux writes rendering graph.md) rides with the resident
+/// job (native mux writes rendering the views) rides with the resident
 /// keeper itself.
 fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
     if payload.len() > MAX_FRAME_BYTES {

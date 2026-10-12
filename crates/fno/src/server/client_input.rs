@@ -34,10 +34,15 @@ impl Core {
             if scrolled {
                 self.broadcast_pane(focus);
             }
-            if let Some(entry) = self.panes.get(&focus) {
-                if let Err(crate::pty::PtyError::Write(error)) = entry.pty.write_input(&bytes) {
-                    if error.kind() == std::io::ErrorKind::WouldBlock {
-                        self.notice(id, "pane not accepting input; keys dropped");
+            // A focus whose spawn is still in flight (a fresh-squad attach's
+            // placeholder leaf) buffers the bytes for replay at registration
+            // instead of dropping them on the missing pane entry.
+            if !self.buffer_in_flight_input(focus, &bytes) {
+                if let Some(entry) = self.panes.get(&focus) {
+                    if let Err(crate::pty::PtyError::Write(error)) = entry.pty.write_input(&bytes) {
+                        if error.kind() == std::io::ErrorKind::WouldBlock {
+                            self.notice(id, "pane not accepting input; keys dropped");
+                        }
                     }
                 }
             }

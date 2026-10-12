@@ -279,9 +279,6 @@ def census_reads(verbose: bool = False) -> tuple[int, list[str]]:
     rust_allow = {str(REPO_ROOT / p) for p in READ_ALLOWLIST if p.endswith(".rs")}
     machinery = {
         str(REPO_ROOT / "cli/src/fno/backlog/advance.py"),
-        # run_pass is the maintain verb's engine (moved out of the cli shell);
-        # its reads are the verb's own orchestration, not a new consumer.
-        str(REPO_ROOT / "cli/src/fno/graph/maintain.py"),
         # The lifecycle verbs (defer/undefer/unsupersede/retract) live here,
         # nested in their registrar (file-budget ratchet); their pre-check
         # reads are the verbs' own orchestration, and every entry path is a

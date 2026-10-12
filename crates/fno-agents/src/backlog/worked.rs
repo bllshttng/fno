@@ -825,6 +825,28 @@ fn worker_reachability(row: &FleetRow, listing: &[Hit]) -> Reach {
     classify_reachability(Some(&truth), Some(age), falsifier)
 }
 
+/// Node id -> names of its REACHABLE roster workers. An unread roster is an
+/// Err naming why, so a reaper holds instead of reading "no worker".
+pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>>, String> {
+    let reading = read_roster();
+    if !reading.consulted {
+        return Err(reading.reason);
+    }
+    let listing = store_listing(&claude_projects_root());
+    let mut out = BTreeMap::new();
+    for (node, rows) in &reading.workers_by_node {
+        let names: Vec<String> = rows
+            .iter()
+            .filter(|r| worker_reachability(r, &listing).verdict == REACHABLE)
+            .map(|r| r.name.clone())
+            .collect();
+        if !names.is_empty() {
+            out.insert(node.clone(), names);
+        }
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // The worked overlay (`live_worked_node_ids`, strict)
 // ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@
 #   2. If gate-flipping, add the gate name to `gates`.
 #   3. Add a fixture record to cli/tests/events/parity_corpus.jsonl so
 #      both validators agree on the shape.
-#   4. CI parity test (test_validator_parity.py) runs both validators
+#   4. CI parity test (crates/fno-agents/tests/event_validate_parity.rs) runs both validators
 #      against the corpus; both must give the same verdict on every record.
 #
 # Data keys are OPEN: data.required must be present, data.forbidden is
@@ -4239,7 +4239,7 @@ event_types:
           description: "Target session identifier."
         reason:
           type: string
-          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DonePlanned, NoWork, Budget, NoProgress, Interrupted, Aborted]
+          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DonePlanned, NoWork, Budget, NoProgress, HeldOnQuestion, Interrupted, Aborted]
           description: "TerminationReason enum value."
         axis:
           type: string
@@ -5218,6 +5218,27 @@ event_types:
           type: string
           enum: [COMPLETE, BLOCKED, ABORTED]
           description: "Legacy status value found in the manifest."
+    consumers: [operator]
+
+  - name: loop_check_question_gate
+    description: "One row per stop the question gate blocks. gate names the fold. held lists the open questions a held_on_question block named, and unrecorded lists the decided questions an unrecorded_decision block named. The next fire reads the held list to end the loop instead of blocking again. Not a fire observation, so it never counts toward the no-progress streak."
+    sources: [hook]
+    data:
+      required: [session_id, gate]
+      properties:
+        session_id:
+          type: string
+          description: "Target session identifier from the manifest."
+        gate:
+          type: string
+          enum: [held_on_question, unrecorded_decision]
+          description: "Which question fold blocked."
+        held:
+          type: array
+          description: "Question ids a held_on_question block named."
+        unrecorded:
+          type: array
+          description: "Question ids an unrecorded_decision block named."
     consumers: [operator]
 
   - name: loop_unit_dispatched
@@ -6367,12 +6388,6 @@ event_types:
         skip_deadline:
           type: integer
           description: "PRs past the root's slice of the 480s drive budget; they wait for the next tick."
-        skip_unchanged:
-          type: integer
-          description: "PRs whose head sha and checks digest both match the last sweep's record; skipped after the one checks read, before the pulls read and the job logs."
-        pr_states:
-          type: object
-          description: "Per-PR (head sha, checks digest) this sweep recorded for the root; the next sweep's unchanged-skip baseline."
         still_red:
           type: integer
           description: "PRs acted on that remain red (escalations or read errors after apply)."
@@ -7559,6 +7574,54 @@ event_types:
           type: string
           description: "Pointer to evidence (path/url), truncated to the reason cap."
     consumers: [parent handle via mail bus, peek]
+
+  - name: friction
+    description: "An agent session hit friction: its own <help> or RESULT: BLOCKED, a gate refusing its own spawn, join or done, a review round spent without a pass on its own PR, or a red CI check on its own PR. One row per session per fingerprint. Written even when the backlog match is off; match names what the guarded match did. Emitted natively in Rust (crates/fno-agents/src/friction.rs)."
+    sources: [target, hook, test]
+    data:
+      required: [evidence, origin, fingerprint, match]
+      properties:
+        session_id:
+          type: string
+          description: "Harness session id of the agent that hit the friction."
+        node_id:
+          type: string
+          description: "The node the agent was working on, when known."
+        stage:
+          type: string
+          description: "Pipeline stage when known: review, ci, or the working node's open session phase."
+        harness:
+          type: string
+        model:
+          type: string
+        evidence:
+          type: string
+          description: "What happened, capped at 500 chars."
+        reason:
+          type: string
+        origin:
+          type: string
+          enum: [help, result_blocked, gate_refusal, review_round, ci_failure]
+        gate:
+          type: string
+          enum: [spawn, join, done]
+          description: "The refusing gate; only on origin gate_refusal."
+        pr:
+          type: integer
+        head_sha:
+          type: string
+        fingerprint:
+          type: string
+          description: "12 hex: sha256 over origin and its key. The debounce and the --friction vote key."
+        match:
+          type: string
+          enum: [off, cap, debounce, budget, error, empty, offered]
+        candidates:
+          type: array
+          description: "Open node ids the match offered."
+        elapsed_ms:
+          type: integer
+    consumers: [friction offer hook, fno backlog encounter --friction, per-node friction readers]
 
   - name: run_summary
     description: "The loop reached terminal (finalize path). Carries per-run task counts + termination reason. Emitted natively in Rust. PUSHED to the parent handle when spawn lineage exists."

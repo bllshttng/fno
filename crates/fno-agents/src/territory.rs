@@ -69,7 +69,25 @@ pub(crate) fn compile_territory(
     if members.is_empty() {
         return Err("a team needs a scope: name an epic or a project".to_string());
     }
-    let projects = projects.clone()?;
+    // An unreadable project map means no alias is known, which is the Python
+    // resolver's answer too. A member the graph names as an epic needs no map.
+    let (projects, map_error) = match projects {
+        Ok(map) => (map.clone(), None),
+        Err(e) => (HashMap::new(), Some(e.clone())),
+    };
+    let not_found = |m: &str| {
+        let mut text = format!(
+            "{m:?} is neither a configured project nor a backlog node; \
+             nothing to lead over (check for a typo)"
+        );
+        if let Some(e) = &map_error {
+            text.push_str(&format!(
+                ". The project map could not be read ({e}), so a project name \
+                 cannot resolve on this machine"
+            ));
+        }
+        text
+    };
 
     let entry_by_id = |id: &str| {
         entries
@@ -116,16 +134,7 @@ pub(crate) fn compile_territory(
         if !epic_members.is_empty() {
             for m in &epic_members {
                 match entry_by_id(m) {
-                    None => {
-                        return Err(member_not_found(
-                            m,
-                            entries,
-                            format!(
-                                "{m:?} is neither a configured project nor a backlog node; \
-                                 nothing to lead over (check for a typo)"
-                            ),
-                        ))
-                    }
+                    None => return Err(member_not_found(m, entries, not_found(m))),
                     Some(entry) => {
                         if s_str(entry, "type") != Some("epic") {
                             return Err(format!(
@@ -148,16 +157,7 @@ pub(crate) fn compile_territory(
             (false, canon.clone())
         } else {
             match entry_by_id(raw) {
-                None => {
-                    return Err(member_not_found(
-                        raw,
-                        entries,
-                        format!(
-                            "{raw:?} is neither a configured project nor a backlog node; \
-                             nothing to lead over (check for a typo)"
-                        ),
-                    ))
-                }
+                None => return Err(member_not_found(raw, entries, not_found(raw))),
                 Some(entry) => {
                     if s_str(entry, "type") != Some("epic") {
                         return Err(format!("team scope {raw:?} is not an epic in the graph"));
@@ -502,8 +502,8 @@ pub(crate) fn node_owners(
 }
 
 /// The workspace project map: canonical project name -> normalized absolute
-/// path (mirrors `fno.graph.maintain.load_workspaces`). Best-effort like the
-/// Python read: a missing map contributes nothing, and the drain assembly
+/// path, the one map `backlog maintain` re-scopes against. Best-effort: a
+/// missing map contributes nothing, and the drain assembly
 /// treats an unmapped territory as unrootable.
 pub fn workspace_paths(cwd: &Path) -> HashMap<String, String> {
     let mut out = HashMap::new();
@@ -984,6 +984,38 @@ mod moved_scope_tests {
         let (key, ids) = compile_territory("x-epic", &entries, &projects).unwrap();
         assert_eq!(key, "x-epic");
         assert!(ids.contains("x-epic") && ids.contains("x-ch1d"));
+    }
+
+    #[test]
+    fn an_epic_scope_compiles_when_the_project_map_is_unreadable() {
+        let entries = vec![
+            json!({"id": "x-epic", "type": "epic", "status": "ready", "priority": "p1"}),
+            json!({"id": "x-ch1d", "parent": "x-epic", "status": "ready", "priority": "p1"}),
+        ];
+        let projects = Err("no work.workspaces in any candidate config.toml".to_string());
+        let ids = compile_scope_ids("x-epic", &entries, &projects).unwrap();
+        assert!(ids.contains("x-epic") && ids.contains("x-ch1d"));
+    }
+
+    #[test]
+    fn an_unreadable_project_map_is_named_in_a_refusal_not_hidden() {
+        let entries = vec![json!({"id": "x-epic", "type": "epic", "status": "ready"})];
+        let map_error = crate::org_board::scope::map_from_work(None).unwrap_err();
+        for teaches in ["work.workspaces", "~/.fno/config.toml", "projects", "path"] {
+            assert!(map_error.contains(teaches), "{teaches}: {map_error}");
+        }
+        let projects = Err(map_error.clone());
+        let missing = compile_scope_ids("fno", &entries, &projects).unwrap_err();
+        assert!(
+            missing.contains("neither a configured project nor a backlog node")
+                && missing.contains(&map_error),
+            "{missing}"
+        );
+        let empty = compile_scope_ids("fno", &[], &projects).unwrap_err();
+        assert!(
+            empty.contains("returned 0 nodes") && empty.contains("unknown, not absent"),
+            "{empty}"
+        );
     }
 
     #[test]

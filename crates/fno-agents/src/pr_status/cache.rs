@@ -405,7 +405,7 @@ pub(crate) fn git_slug(cwd: &Path) -> Option<String> {
     crate::merge_gates::repo_slug_from_origin(&url)
 }
 
-fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
+pub(crate) fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
     let path = rows_newest_first(dir, slug_key, pr).into_iter().next()?;
     let row = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&row).ok()

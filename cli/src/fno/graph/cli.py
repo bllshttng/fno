@@ -113,19 +113,7 @@ cli.add_typer(_retro_app, name="retro", hidden=True)
 # never pick up the same node. The implementation is homed in graph/statuses.py
 # (so the board renderers can share it without a cli<->render cycle); re-exported
 # under the original module-global name that existing tests monkeypatch.
-from fno.graph.statuses import derived_status, live_claimed_node_ids as _live_claimed_node_ids  # noqa: E402
-
-
-def _require_live_claimed_node_ids(operation: str) -> set[str]:
-    """Read live claims for a dispatch or mutation path, failing closed."""
-    try:
-        return _live_claimed_node_ids(strict=True)
-    except Exception as exc:
-        typer.echo(
-            f"Error: live claim state is unavailable; {operation} refused.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from exc
+from fno.graph.statuses import live_claimed_node_ids as _live_claimed_node_ids  # noqa: E402
 
 
 def _has_unmerged_open_pr(e: dict) -> bool:
@@ -814,8 +802,6 @@ def _resolve_asserted_id(
     return resolved
 
 
-
-
 def _refuse_create_on_external_backend() -> None:
     """Refuse node-creation verbs on a non-default backend.
 
@@ -852,24 +838,6 @@ def _prompt_difficulty_value(value: str) -> str:
         return normalize_difficulty(value) or ""
     except ValueError as exc:
         raise click.UsageError(f"{exc}. {DIFFICULTY_HELP}") from exc
-
-
-def _encounter_provenance(harness: str | None) -> dict[str, str]:
-    """Model/effort provenance for an encounter record, or nothing.
-
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    provenance: dict[str, str] = {}
-    if harness != "claude":
-        return provenance
-    effort = (os.environ.get("CLAUDE_EFFORT") or "").strip()
-    if effort:
-        provenance["effort"] = effort
-    if (os.environ.get("ANTHROPIC_BASE_URL") or "").strip():
-        model = (os.environ.get("ANTHROPIC_MODEL") or "").strip()
-        if model:
-            provenance["model"] = model
-    return provenance
 
 
 def _validate_priority_or_exit(priority: str, *, blocks_everything: bool = False) -> None:
@@ -2033,140 +2001,6 @@ def cmd_intake(
 # -- update --
 
 
-@cli.command("encounter", hidden=True)
-def cmd_encounter(
-    task_id: str = typer.Argument(..., help="Node id this session hit while doing something else."),
-    evidence: str = typer.Option(
-        ...,
-        "--evidence",
-        "-e",
-        help="What it cost, in a sentence or two. Required, and capped by config.style.word_cap.encounter.",
-    ),
-    as_operator: bool = typer.Option(
-        False,
-        "--operator",
-        help="Record this as the operator's vote under the stable 'operator' voter key. A declaration, not proof; one per node, and the casting session's id is kept on the record when provable.",
-    ),
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit the appended record as JSON."),
-) -> None:
-    """Record ONE encounter with this node, from this session, with evidence.
-
-    An encounter is a thing that happened and cannot be edited or withdrawn:
-    there is no correction verb, and a later correction is a `fno backlog note`.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno import rust_binary
-    from fno.claims.self_identity import resolve_self_identity
-    from fno.config import load_settings
-    from fno.graph.store import append_encounter
-    from fno.harness_identity import canonical_handle
-
-    evidence = evidence.strip()
-    if not evidence:
-        typer.echo(
-            "Error: an encounter with no evidence is a poll. Name what it cost.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    try:
-        identity = resolve_self_identity()
-    except Exception:  # noqa: BLE001 - an unresolvable identity is a refusal, not a crash
-        identity = None
-    session_id = getattr(identity, "session_id", None)
-    session_id = session_id if isinstance(session_id, str) else None
-    harness = getattr(identity, "harness", None)
-    harness = harness if isinstance(harness, str) else None
-    # `--operator` is a declaration, not proof; see the contract doc.
-    if not as_operator and (not session_id or not harness):
-        typer.echo(
-            "Error: no provable session identity, so this encounter would not be "
-            "readable back to a transcript. Run `fno whoami` to see what this "
-            "session can prove.",
-            err=True,
-        )
-        raise typer.Exit(code=5)
-
-    # Rule 7's escapes, inherited per docs/style-rules.md. Evidence and identity
-    # stay required above: the cap is length policy, not the falsifiability one.
-    if os.environ.get("FNO_STYLE_ENFORCE") != "0":
-        cap = load_settings().style.word_cap.encounter
-        err, receipt = rust_binary.style_receipt(evidence, "encounter", cap)
-        # A door error, a violation, or a silent binary (no dict) refuses: the gate never vanishes.
-        clean = isinstance(receipt, dict) and (receipt.get("exception") or not receipt.get("violations"))
-        if not clean:
-            typer.echo(err or (receipt or {}).get("report") or "style gate unreadable", err=True)
-            raise typer.Exit(code=4)
-
-    record: dict[str, object] = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "evidence": evidence,
-    }
-    if as_operator:
-        record.update({"voter_key": "operator", "voter_kind": "operator"})
-        # The canonical provenance keys every encounter carries, so a reader
-        # keyed on `session_id` (the falsifiability contract, and every
-        # pre-operator record) sees who cast the vote. `voter_key` stays
-        # `operator` for the dedupe and the demand split, and takes precedence
-        # over `session_id` in voter_key resolution, so provenance cannot
-        # fork the operator lane into per-session voters.
-        if session_id:
-            record["session_id"] = session_id
-            record["fno_id"] = canonical_handle(session_id)
-        if harness:
-            record["harness"] = harness
-        record.update(_encounter_provenance(harness))
-    else:
-        assert session_id is not None and harness is not None
-        record.update(
-            {
-                "session_id": session_id,
-                "voter_key": session_id,
-                "voter_kind": "agent",
-                "harness": harness,
-                "fno_id": canonical_handle(session_id),
-            }
-        )
-        record.update(_encounter_provenance(harness))
-    appended, error, reason = append_encounter(_graph_path(), task_id, record)
-    if not appended:
-        typer.echo(f"Error: {error}", err=True)
-        if reason == "duplicate":
-            typer.echo(
-                "Add a `fno backlog note` instead if there is more to say.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
-        raise typer.Exit(code=1)
-
-    # Counted inside this verb rather than in a helper. The helper was its own
-    # enclosing function, so its graph read had no verb boundary for the
-    # external-backend guard to sit on; here the read rides the guard this
-    # tracker-owned verb already carries.
-    from fno.graph._intake import _find_node
-
-    try:
-        stored = _find_node(wire_rows(path=_graph_path()), task_id)
-        total = len(stored.get("encounters") or []) if stored else 0
-    except Exception:  # noqa: BLE001 - a receipt count must not fail a landed write
-        total = 0
-    if json_output:
-        typer.echo(
-            json.dumps(
-                {"id": task_id, "encounter": record, "total": total}, separators=(",", ":")
-            )
-        )
-    else:
-        if as_operator:
-            typer.echo(f"encounter recorded on {task_id} (operator, {total} total)")
-        else:
-            assert session_id is not None
-            typer.echo(
-                f"encounter recorded on {task_id} "
-                f"(session {canonical_handle(session_id)}, {total} total)"
-            )
-
-
 @cli.command("demand", hidden=True)
 def cmd_demand(
     json_output: bool = typer.Option(False, "--json", "-J", help="Emit the rows as JSON."),
@@ -2195,7 +2029,6 @@ def cmd_demand(
         typer.echo(json.dumps(rows, separators=(",", ":")))
     else:
         typer.echo(format_rows(rows))
-
 
 
 # -- unclaim / release / requeue: the queue-return subject lives in
@@ -2746,96 +2579,7 @@ def cmd_lane_fill(
     raise typer.Exit(code=2)
 
 
-
-
 # -- join --
-
-
-
-
-# -- groom --
-
-
-@cli.command("groom", hidden=True)
-def cmd_groom(
-    model: Optional[str] = typer.Option(
-        None, "--model", "-m", help="Model for the groom worker (default: sonnet)."
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", "-N", help="Print the brief and day key without dispatching."
-    ),
-    age: Optional[int] = typer.Option(
-        None, "--age", help="Archive-leg age gate in days (default: 14)."
-    ),
-    install_agent: bool = typer.Option(
-        False, "--install-agent", help="Install the daily LaunchAgent and exit (macOS)."
-    ),
-    refresh_agent: bool = typer.Option(
-        False,
-        "--refresh-agent",
-        help="Re-render an installed LaunchAgent onto the current binary and exit.",
-    ),
-    hour: Optional[int] = typer.Option(
-        None, "--hour", help="Local hour for --install-agent (default: 2)."
-    ),
-    check: bool = typer.Option(
-        False,
-        "--check",
-        help="Report grooming freshness and exit 0 only if a pass is due. Runs nothing.",
-    ),
-) -> None:
-    """Run today's grooming pass over the backlog (at most once a day).
-
-    One pipeline: the mechanical legs (archive, reconcile, maintain, relatedness)
-    run first under the daily claim, then ONE Sonnet worker makes the judgment
-    calls. Judgment is levers-only: the worker may supersede, defer/undefer,
-    re-prioritize, rank, promote, and file ideas - never anything else - and mails
-    a one-screen report of every mutation with its receipt. A second run on the
-    same UTC day exits 0 with an ``already-ran`` receipt, running nothing at all.
-    """
-    from fno.backlog.groom import (
-        GROOM_AGE_DEFAULT,
-        GROOM_HOUR_DEFAULT,
-        GROOM_MODEL_DEFAULT,
-        groom_is_due,
-        groom_staleness,
-        install_groom_agent,
-        refresh_groom_agent,
-        run_groom,
-    )
-
-    if check:
-        # The shell bridge to the freshness predicate, so the SessionStart
-        # fallback can gate on it without re-implementing the marker scan.
-        # Exit code is the answer; stdout is for a human reading the receipt.
-        state, hours = groom_staleness()
-        typer.echo(json.dumps({"state": state, "hours": hours}))
-        raise typer.Exit(code=0 if groom_is_due((state, hours)) else 1)
-
-    if refresh_agent:
-        # The tail of `fno doctor update`, so it must never fail the update: a skipped
-        # or failed refresh reports and exits 0.
-        typer.echo(json.dumps(refresh_groom_agent(), indent=2))
-        return
-
-    if install_agent:
-        receipt = install_groom_agent(hour=hour if hour is not None else GROOM_HOUR_DEFAULT)
-        typer.echo(json.dumps(receipt, indent=2))
-        if receipt.get("status") == "failed":
-            raise typer.Exit(code=1)
-        return
-
-    receipt = run_groom(
-        cwd=os.getcwd(),
-        model=model or GROOM_MODEL_DEFAULT,
-        dry_run=dry_run,
-        age=age if age is not None else GROOM_AGE_DEFAULT,
-    )
-    typer.echo(json.dumps(receipt, indent=2))
-    # `degraded` exits non-zero too: the pass ran, but a mechanical leg is broken
-    # and a scheduler log nobody reads is not a signal.
-    if receipt.get("status") in ("failed", "degraded"):
-        raise typer.Exit(code=1)
 
 
 # -- lanes --
@@ -2900,98 +2644,6 @@ def cmd_lanes(
             f"{ln['slot']}  {ln['lane_id']}{slug}  "
             f"domain={ln.get('domain') or '-'}  {ln.get('status') or '-'}{pr}"
         )
-
-
-# -- board --
-
-
-@cli.command("board", hidden=True)
-def cmd_board(
-    project: Optional[str] = typer.Option(
-        None, "--project", help="Filter to one project; default the current repo's."
-    ),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Same three sections, JSON, unknown markers included."
-    ),
-) -> None:
-    """Just finished / In progress / On deck - the board in one glance.
-
-    Reads only the graph and the on-disk pr-status cache, never GitHub: a
-    verb whose job is showing the board must never be the thing that
-    exhausts the quota. An unreadable source renders as an explicit
-    unknown, never as an empty section.
-    """
-    from fno.graph.board import (
-        board_unreadable_payload,
-        compute_board,
-        print_board,
-    )
-    from fno.graph.store import GraphUnreadableError, StoreUnavailable, read_graph_strict
-    from fno.tracker import active_backend_name
-
-    # The board spans done + in-progress + ready sections, which needs
-    # lookback past list_open()'s open-only contract (the same done-at-
-    # PR-green grace window pr_watch's discovery needs and cannot get from
-    # the tracker seam without storage-engine work, out of scope here). An
-    # external backend degrades the same way an unreadable graph already
-    # does, rather than reading the wrong store.
-    if active_backend_name() != "graph":
-        payload = board_unreadable_payload(
-            f"board is unavailable under the {active_backend_name()} tracker backend"
-        )
-        if json_output:
-            typer.echo(json.dumps(payload))
-        else:
-            print_board(payload, typer.echo)
-        raise typer.Exit(code=1)
-
-    try:
-        entries = read_graph_strict(_graph_path())
-    except GraphUnreadableError as exc:
-        payload = board_unreadable_payload(f"graph unreadable ({exc})")
-        if json_output:
-            typer.echo(json.dumps(payload))
-        else:
-            print_board(payload, typer.echo)
-        raise typer.Exit(code=1)
-    except StoreUnavailable as exc:
-        # Same degradation as an unreadable graph: the store's keeper being
-        # unreachable (a pip-only box with no fno-agents-worker, a packet
-        # that has not built the binary yet) is an unreadable SOURCE, and
-        # this command's contract is an explicit unknown, never a traceback.
-        payload = board_unreadable_payload(f"graph store unavailable ({exc})")
-        if json_output:
-            typer.echo(json.dumps(payload))
-        else:
-            print_board(payload, typer.echo)
-        raise typer.Exit(code=1)
-
-    proj = project
-    if proj is None:
-        from fno.graph._intake import detect_project
-
-        proj = detect_project(entries)
-
-    board = compute_board(entries, project=proj)
-    if json_output:
-        typer.echo(json.dumps(board))
-        return
-    print_board(board, typer.echo)
-
-
-@cli.command("render-views", hidden=True)
-def cmd_render_views() -> None:
-    """Replay the canonical post-publish views after a native store write:
-    a fresh read renders the same graph.md and configured board targets a
-    CLI write would. A failed view exits nonzero, so the keeper withholds
-    the rendered_version stamp and its backoff retries the pass.
-    """
-    from fno.graph.store import render_canonical_views
-
-    failed = render_canonical_views()
-    if failed:
-        typer.echo(f"render-views: {failed} view(s) failed", err=True)
-        raise typer.Exit(code=1)
 
 
 # -- get --
@@ -3963,166 +3615,6 @@ cli.add_typer(task_app, name="task", hidden=True)
 
 # -- backfill-slugs --
 
-# -- view --
-
-
-@cli.command("view")
-def cmd_view() -> None:
-    """Render the backlog as HTML and open it with the system's default handler.
-
-    Always rerenders before opening so the file reflects current graph.json
-    state even if the auto-render hook hasn't fired since the last edit. The
-    file lives at ``~/.fno/pages/graph.html`` and is opened via ``open`` on
-    macOS, ``xdg-open`` on Linux, ``os.startfile`` on Windows - whichever
-    handler the OS has registered for ``.html`` takes over from there
-    (browser, yazi, anything else).
-
-    Set ``FNO_NO_OPEN=1`` to skip the launch step and just print the path -
-    useful for scripts, CI, and tests.
-    """
-    import platform
-    import shutil
-    import subprocess
-
-    from fno.graph._constants import GRAPH_HTML
-
-    # The board is the native front binary's snapshot render: it re-gathers
-    # the store itself and writes every configured local target, the
-    # canonical board among them.
-    from fno.graph.roadmap_public import render_local_targets
-
-    failures = render_local_targets()
-    if failures:
-        typer.echo(
-            f"Error: local board render failed ({failures} target(s)); "
-            "see the warnings above",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    typer.echo(str(GRAPH_HTML))
-
-    if os.environ.get("FNO_NO_OPEN") == "1":
-        return
-
-    system = platform.system()
-    try:
-        if system == "Darwin":
-            subprocess.run(["open", str(GRAPH_HTML)], check=False)
-        elif system == "Windows":
-            os.startfile(str(GRAPH_HTML))  # type: ignore[attr-defined]
-        else:
-            opener = shutil.which("xdg-open") or shutil.which("wslview")
-            if opener:
-                subprocess.run([opener, str(GRAPH_HTML)], check=False)
-            else:
-                typer.echo(
-                    "No xdg-open / wslview found; file rendered but not opened.",
-                    err=True,
-                )
-    except OSError as e:
-        typer.echo(f"Could not launch opener: {e}", err=True)
-
-
-# -- bases (canonical epic/mission progress Bases) --
-
-
-@cli.command("bases", hidden=True)
-def cmd_bases(
-    out: Optional[str] = typer.Option(
-        None,
-        "--out",
-        help="Directory to emit the .base files into (default: the capture-inbox dir).",
-    ),
-) -> None:
-    """Emit the canonical epic/mission progress Base files ().
-
-    Regenerable: refreshes a file carrying the generated marker, refuses to
-    clobber a hand-authored base (one prints `refused:`). Prints one line per
-    file: written | unchanged | refused.
-    """
-    from fno.graph._bases import BASES, write_base
-    from fno.paths import inbox_path
-
-    out_dir = Path(out) if out else inbox_path().parent
-    for name, content in BASES.items():
-        target = out_dir / name
-        action = write_base(target, content)
-        typer.echo(f"{action}: {target}")
-
-
-# -- roadmap (public, curated) --
-
-
-@cli.command("roadmap", hidden=True)
-def cmd_roadmap(
-    project: Optional[str] = typer.Option(
-        None,
-        "--project",
-        help="Project to render (defaults to the project mapped to the cwd).",
-    ),
-    out: Optional[str] = typer.Option(
-        None, "--out", help="Write markdown to this path instead of stdout."
-    ),
-    backlog_html: Optional[str] = typer.Option(
-        None,
-        "--backlog-html",
-        help=(
-            "Also write the public open-work HTML board (leak-gated, native "
-            "renderer) to this path."
-        ),
-    ),
-) -> None:
-    """Render public roadmap and backlog projections through one leak gate.
-
-    Qualifying nodes are public unless explicitly marked ``public: false``.
-    Titles must clear the shared leak gate before any public output is written.
-    """
-    from pathlib import Path
-
-    from fno.graph._intake import detect_project_from_settings, repo_root
-    from fno.graph.roadmap_public import (
-        atomic_write_documents,
-        load_render_entries,
-        omit_leaky_rows,
-        render_public_backlog_html,
-        render_public_roadmap_md,
-    )
-
-    resolved_project = project or detect_project_from_settings(repo_root())
-    if not resolved_project:
-        typer.echo(
-            "Error: no project given and none mapped to the cwd; pass --project.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    try:
-        entries = load_render_entries(_display_entries("roadmap", strict=True))
-    except typer.Exit:
-        raise
-    except Exception as exc:
-        typer.echo(f"Error: canonical graph read failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    entries, _ = omit_leaky_rows(entries, resolved_project)
-
-    if backlog_html:
-        if not render_public_backlog_html(resolved_project, backlog_html):
-            typer.echo("Error: public backlog HTML render failed; see the warning above", err=True)
-            raise typer.Exit(code=1)
-
-    md = render_public_roadmap_md(entries, resolved_project)
-
-    documents: dict[Path, str] = {}
-    out_path = Path(os.path.expanduser(out)) if out else None
-    if out_path:
-        documents[out_path] = md
-    atomic_write_documents(documents)
-
-    if out_path:
-        typer.echo(str(out_path))
-    else:
-        typer.echo(md, nl=False)
-
 
 # -- tree --
 
@@ -4534,6 +4026,40 @@ NR == FNR {
 """
 
 
+def _load_obsidian_vault() -> Optional[str]:
+    """The vault name from the GLOBAL config, when Obsidian is enabled."""
+    try:
+        from fno.config_io import read_global_block
+
+        obs = read_global_block("obsidian") or {}
+        vault = obs.get("vault") if obs.get("enabled") else None
+        return str(vault) if vault else None
+    except Exception:
+        return None
+
+
+def _obsidian_url(vault: str, plan_path: str) -> Optional[str]:
+    """An ``obsidian://open`` deep link for a vault-relative ``internal/`` plan."""
+    import urllib.parse
+
+    p = plan_path.strip()
+    if not p.startswith("internal/"):
+        idx = p.rfind(f"/{vault}/")
+        if idx != -1 and p[idx + len(vault) + 2:].startswith("internal/"):
+            p = p[idx + len(vault) + 2:]
+        elif (idx := p.rfind("/internal/")) != -1:
+            p = p[idx + 1:]
+        else:
+            return None
+    p = p.rstrip("/")
+    if not p.endswith(".md"):
+        return None
+    return (
+        f"obsidian://open?vault={urllib.parse.quote(vault, safe='')}"
+        f"&file={urllib.parse.quote(p[:-3], safe='/')}"
+    )
+
+
 @cli.command("pick", hidden=True)
 def cmd_pick(
     project: Optional[str] = typer.Option(None, help="Filter by project name"),
@@ -4571,7 +4097,6 @@ def cmd_pick(
     from fno.graph.store import commit_rows_via_store
     from fno.graph._intake import filter_by_project, _find_node, _graph_sort_key_fn
     from fno.graph._constants import has_node_id_prefix
-    from fno.graph.roadmap_public import _load_obsidian_vault, obsidian_url as _obsidian_url
 
     fzf = shutil.which("fzf")
     if not fzf:
@@ -5069,20 +4594,15 @@ def _apply_completion_fields(node: dict, *, merge_status: Optional[str] = None) 
         node["merge_status"] = merge_status
 
 
-def _auto_closed_note(entry: dict) -> str:
+def _auto_closed_note(_entry: dict) -> str:
     """completion_note for a container closed by all-children-complete ().
 
     Both close paths (_cascade_close_parents, _sweep_close_done_epics) reach
-    here holding the parent dict. A container with its own plan_path but no
-    PR may carry deliverables the children never built; the cascade closes it
-    anyway, so an untracked false-done needs a flag. When plan_path is set and
-    pr_number is not, the note marks the deliverables UNVERIFIED - not that
-    they are missing (a filesystem stat measured 75% false positives from
-    renames and path conventions), only that no PR proves them. A flag, not a
-    gate: the close still happens, it just becomes findable.
+    here holding the parent dict. A plan-having, PR-less container is no
+    longer closed at all: the own-plan-work hold stops both close paths, so
+    the old UNVERIFIED flag branch is retired with the false close it
+    flagged.
     """
-    if entry.get("plan_path") and not entry.get("pr_number"):
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)"
     return "auto-closed: all children complete"
 
 
@@ -5735,8 +5255,6 @@ def _canonical_post_close(
 # native now, owned by the door's lifecycle module.
 
 
-
-
 @cli.command("reconcile-findings", hidden=True)
 def cmd_reconcile_findings(
     apply: bool = typer.Option(
@@ -5794,73 +5312,6 @@ def cmd_reconcile_findings(
     typer.echo(f"reconcile-findings: closed {closed}/{len(findings)} node(s)")
 
 
-
-# -- maintain (recurring backlog + kanban hygiene sweep) --
-
-
-@cli.command("maintain", hidden=True)
-def cmd_maintain(
-    apply: bool = typer.Option(
-        False,
-        "--apply",
-        help=(
-            "Apply the deterministic legs; the judgment legs stay "
-            "proposal-only regardless of this flag."
-        ),
-    ),
-    json_out: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="Emit structured JSON instead of a human summary.",
-    ),
-    recheck: bool = typer.Option(
-        False,
-        "--recheck",
-        help="Validity sweep: re-review watermarked ideas (ignore prior decks).",
-    ),
-    no_validity: bool = typer.Option(
-        False,
-        "--no-validity",
-        help="Skip the validity sweep (the leg that calls the analyzer).",
-    ),
-    suspect_reverts: bool = typer.Option(
-        False,
-        "--suspect-reverts",
-        help=(
-            "Read-only retro sweep: print drained nodes carrying evidence of "
-            "a human curation decision, then exit; mutates nothing."
-        ),
-    ),
-) -> None:
-    """Keep graph.json + the kanban board clean by composing existing verbs.
-
-    Deterministic legs apply under ``--apply``; the judgment legs (dedup,
-    drain-stale, cap-Now) only ever propose. Full leg list + loop form:
-    docs/backlog-usage.md "Health and hygiene". Best-effort: a single failed
-    apply does not abort the rest; an empty graph is a clean no-op.
-
-    The pass runs under a wall-clock budget, ``backlog.maintain.budget_seconds``
-    (default 300s), checked between legs; the validity analyzer additionally
-    inherits whatever time is left. A pass that runs out exits 4 and prints a
-    partial receipt naming the leg it stopped in, plus a health-history row
-    with ``complete: false`` - exit 4 means "partial results", never a clean
-    board.
-    """
-    from fno.graph import maintain as _maintain
-
-    _maintain.run_pass(
-        apply=apply,
-        json_out=json_out,
-        recheck=recheck,
-        no_validity=no_validity,
-        suspect_reverts=suspect_reverts,
-        graph_path=_graph_path,
-        live_claimed=_live_claimed_node_ids,
-        require_live_claimed=_require_live_claimed_node_ids,
-    )
-
-
 # -- reprioritize --
 
 
@@ -5894,399 +5345,6 @@ def cmd_reprioritize(
 
     commit_rows_via_store(_graph_path(), mutator)
     typer.echo(f"Reprioritized {task_id}: {old_holder[0]} -> {priority}")
-
-
-@cli.command("migrate-priorities", hidden=True)
-def cmd_migrate_priorities(
-    apply: bool = typer.Option(False, "--apply", help="Apply the idempotent p0 to p1 migration."),
-    rollback: bool = typer.Option(
-        False, "--rollback", help="Restore rows changed by the migration."
-    ),
-) -> None:
-    """Dry-run or apply the explicit legacy p0 re-band migration."""
-    from fno.graph.migrations import migrate_legacy_p0, rollback_legacy_p0
-    from fno.graph.store import commit_rows_via_store
-
-    if apply and rollback:
-        typer.echo("Error: --apply and --rollback are mutually exclusive", err=True)
-        raise typer.Exit(code=2)
-    holder: list[dict] = []
-    if rollback:
-
-        def rollback_mutator(entries: list[dict]) -> list[dict]:
-            holder.append(rollback_legacy_p0(entries))
-            return entries
-
-        commit_rows_via_store(_graph_path(), rollback_mutator)
-        receipt = holder[0]
-    elif not apply:
-        receipt = migrate_legacy_p0(wire_rows(path=_graph_path()), apply=False)
-    else:
-
-        def mutator(entries: list[dict]) -> list[dict]:
-            holder.append(migrate_legacy_p0(entries, apply=True))
-            return entries
-
-        commit_rows_via_store(_graph_path(), mutator)
-        receipt = holder[0]
-    typer.echo(json.dumps(receipt, sort_keys=True))
-
-
-@cli.command("migrate-difficulty", hidden=True)
-def cmd_migrate_difficulty(
-    apply: bool = typer.Option(
-        False, "--apply", help="Move each model_tier band onto difficulty and drop the retired key."
-    ),
-    backfill: bool = typer.Option(
-        False, "--backfill", help="Backfill missing bands from size, priority, or type."
-    ),
-) -> None:
-    """Dry-run or apply the difficulty migrations."""
-    from fno.graph.migrations import backfill_difficulty, migrate_model_tier
-    from fno.graph.store import commit_rows_via_store
-
-    def _run(entries: list[dict]) -> dict:
-        try:
-            if backfill:
-                return backfill_difficulty(entries, apply=apply)
-            return migrate_model_tier(entries, apply=apply)
-        except ValueError as exc:
-            typer.echo(f"fno backlog migrate-difficulty: {exc}", err=True)
-            raise typer.Exit(code=2)
-
-    if apply:
-        holder: list[dict] = []
-
-        def mutator(entries: list[dict]) -> list[dict]:
-            holder.append(_run(entries))
-            return entries
-
-        commit_rows_via_store(_graph_path(), mutator)
-        receipt = holder[0]
-    else:
-        receipt = _run(wire_rows(path=_graph_path()))
-    typer.echo(json.dumps(receipt, sort_keys=True))
-
-
-@cli.command("migrate-updated-at", hidden=True)
-def cmd_migrate_updated_at(
-    apply: bool = typer.Option(
-        False,
-        "--apply",
-        help="Remove the proven-unread __updated_at field from candidate rows.",
-    ),
-) -> None:
-    """Dry-run or apply the one-shot __updated_at residue migration."""
-    from fno.graph.migrations import migrate_updated_at
-    from fno.graph.store import commit_rows_via_store
-
-    if apply:
-        holder: list[dict] = []
-
-        def mutator(entries: list[dict]) -> list[dict]:
-            holder.append(migrate_updated_at(entries, apply=True))
-            return entries
-
-        commit_rows_via_store(_graph_path(), mutator)
-        receipt = holder[0]
-    else:
-        receipt = migrate_updated_at(wire_rows(path=_graph_path()), apply=False)
-    typer.echo(json.dumps(receipt, sort_keys=True))
-
-
-
-
-# -- archive --
-
-@cli.command(
-    "archive",
-    hidden=True,
-    epilog="Paired verb: `fno backlog unarchive <id>` moves one node back into "
-    "the working graph. Unlike `remove`, archiving keeps the node readable.",
-)
-def cmd_archive(
-    apply: bool = typer.Option(
-        False, "--apply", help="Move the entries (default: dry-run, report only)."
-    ),
-    older_than_days: int = typer.Option(
-        30, "--older-than-days", help="Only archive terminal nodes older than N days."
-    ),
-    roadmap_id: Optional[str] = typer.Option(
-        None, "--roadmap-id", help="Restrict the sweep to this roadmap group."
-    ),
-) -> None:
-    """Sweep old terminal (done/superseded) nodes into archive residency:
-    same store, but they stop answering default reads.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from datetime import datetime, timezone
-
-    from fno.graph.store import commit_rows_via_store
-    from fno.graph.archive import (
-        _archive_bucket_counts,
-        _last_sweep_line,
-        _receipt_reason_order,
-        partition_for_archive,
-        release_soft_edges,
-        retire_stale_postmortems,
-    )
-
-    now = datetime.now(timezone.utc)
-
-    def _split(entries):
-        # Guard against the FULL graph so an open node in another roadmap that
-        # references one of these terminal nodes (blocker/parent/supersede) is
-        # still protected; only the archive SET is roadmap-restricted.
-        to_archive, _remaining_pool, skipped = partition_for_archive(entries, older_than_days, now)
-        if roadmap_id:
-            to_archive = [e for e in to_archive if e.get("roadmap_id") == roadmap_id]
-            # `skipped` is restricted with the same predicate so the receipt's
-            # held counts describe what THIS run considered; the full-graph
-            # guard above already protects to_archive from cross-roadmap
-            # references, and counting other roadmaps' holds here would pin
-            # them on this run's gate in the receipt and the swept event.
-            skipped = [e for e in skipped if e.get("roadmap_id") == roadmap_id]
-        arch_ids = {e["id"] for e in to_archive if isinstance(e, dict) and e.get("id")}
-        remaining = [e for e in entries if e.get("id") not in arch_ids]
-        return to_archive, remaining, skipped
-
-    def _echo_receipt(moved: int, held: dict[str, int], stripped: int = 0) -> None:
-        for reason in _receipt_reason_order(held):
-            typer.echo(f"  held back ({reason}): {held[reason]}")
-        typer.echo(f"  soft edges stripped from open nodes: {stripped}")
-        typer.echo(f"  last sweep: {_last_sweep_line(now)}")
-
-    def _emit_swept_event(
-        moved: int, held: dict[str, int], stripped: int = 0, mode: str = "apply"
-    ) -> None:
-        try:
-            from fno.events import _build, append_event
-            from fno.paths import state_dir
-
-            event = _build(
-                "graph_archive_swept",
-                "backlog",
-                {
-                    "moved": moved,
-                    "held_referenced": held["referenced-by-open-node"],
-                    "held_related": held["related-peer-not-archived"],
-                    "held_too_recent": held["too-recent"],
-                    "held_no_timestamp": held["no-parseable-timestamp"],
-                    "soft_edges_stripped": stripped,
-                    "mode": mode,
-                    "older_than_days": older_than_days,
-                },
-            )
-            append_event(event, state_dir() / "events.jsonl")
-        except Exception:  # noqa: BLE001 - the sweep itself must not fail on a bad event write
-            pass
-
-    if not apply:
-        entries, retired = retire_stale_postmortems(wire_rows(path=_graph_path()), now)
-        to_archive, _rem, skipped = _split(entries)
-        typer.echo(
-            f"[dry-run] would archive {len(to_archive)} terminal node(s) "
-            f"older than {older_than_days}d into archive residency"
-        )
-        typer.echo(f"  would retire {len(retired)} stale postmortem receipt(s)")
-        _echo_receipt(len(to_archive), _archive_bucket_counts(skipped))
-        typer.echo("Re-run with --apply to move them.")
-        # Every run emits, dry-run included: a leg that went silent must stay
-        # distinguishable from one that never ran, and the dry-run leg (the
-        # daily groom rehearsal) is the one most likely to break quietly.
-        _emit_swept_event(len(to_archive), _archive_bucket_counts(skipped), mode="dry-run")
-        return
-
-    receipt: dict = {"moved": 0, "held": _archive_bucket_counts([]), "stripped": 0, "retired": 0}
-
-    def mutator(entries):
-        entries, retired = retire_stale_postmortems(entries, now)
-        receipt["retired"] = len(retired)
-        to_archive, _remaining, skipped = _split(entries)
-        receipt["held"] = _archive_bucket_counts(skipped)
-        if not to_archive:
-            return entries
-        receipt["moved"] = len(to_archive)
-
-        # Soft-edge release BEFORE the stamp: no live row keeps a pointer
-        # at an archived id.
-        arch_ids = {e["id"] for e in to_archive if isinstance(e, dict) and e.get("id")}
-        patched, stripped = release_soft_edges(
-            [e for e in entries if e.get("id") not in arch_ids], arch_ids
-        )
-        receipt["stripped"] = stripped
-
-        # One atomic write: ALL rows come back or the sweep would drop them.
-        stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        patched_by_id = {e.get("id"): e for e in patched if isinstance(e, dict)}
-        return [
-            {**e, "archived_at": stamp} if isinstance(e, dict) and e.get("id") in arch_ids
-            else patched_by_id.get(e.get("id"), e)
-            for e in entries
-        ]
-
-    commit_rows_via_store(_graph_path(), mutator)
-    if receipt["moved"]:
-        typer.echo(f"Archived {receipt['moved']} terminal node(s)")
-    else:
-        typer.echo("No terminal nodes eligible to archive.")
-    if receipt["retired"]:
-        typer.echo(
-            f"Retired {receipt['retired']} stale postmortem receipt(s) (closed by age rule)"
-        )
-    _echo_receipt(receipt["moved"], receipt["held"], receipt["stripped"])
-    _emit_swept_event(receipt["moved"], receipt["held"], receipt["stripped"])
-
-
-@cli.command(
-    "album",
-    hidden=True,
-    epilog="Read-only browse over the archive: the memento book of "
-    "shipped work. A card with no gift says so - 43% of archived done nodes "
-    "carry no PR, and a gap in the record is itself record. `fno backlog get "
-    "<id>` still resolves one archived node by id; `fno backlog unarchive "
-    "<id>` brings one back into the working graph.",
-)
-def cmd_album(
-    limit: int = typer.Option(20, "--limit", help="Cards per page."),
-    offset: int = typer.Option(0, "--offset", help="Skip the first N cards."),
-    project: Optional[str] = typer.Option(None, "--project", help="Filter to one project."),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Emit the page as a JSON card array."
-    ),
-) -> None:
-    """Browse shipped work: done nodes from the archive, newest first.
-
-    Every archive reader before this was a fallback on a lookup miss - given
-    an id you could retrieve one archived node, but nothing let you page
-    through what shipped. This is that one read verb, and it adds nothing to
-    the archive's shape: the sweep already writes every field a card shows.
-    Done nodes only - the album is merged work, and superseded entries (the
-    214 in the archive against 1741 done) are not ships. Card fields: title,
-    id, completed_at, and pr_url present only when one was recorded.
-    """
-    from fno.graph.store import read_archive_entries
-    from fno.tracker import active_backend_name
-
-    # The album renders the local archive's shipped work: guarded local-store
-    # display, refused (named) under an external selection.
-    if active_backend_name() != "graph":
-        typer.echo(
-            "fno backlog album: the album renders the local archive; unavailable under an external tracker backend",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    # The album shows shipped (done, not superseded) archive residents.
-    entries = [
-        e for e in read_archive_entries()
-        if isinstance(e, dict) and derived_status(e) == "done"
-        and not e.get("superseded_by")
-    ]
-    if project:
-        entries = [e for e in entries if e.get("project") == project]
-
-    def _sort_key(e: dict) -> str:
-        return e.get("completed_at") or e.get("updated") or e.get("created_at") or ""
-
-    entries.sort(key=_sort_key, reverse=True)
-    page = entries[max(offset, 0) : max(offset, 0) + max(limit, 0)]
-
-    if json_output:
-        cards = []
-        for e in page:
-            card = {
-                "id": e.get("id"),
-                "title": e.get("title"),
-                "completed_at": e.get("completed_at"),
-            }
-            # Same honesty rule as the text mode: a url-less pr_number is a
-            # real gift (reconcile records the pair independently), so the
-            # machine surface must not drop it when the url is absent.
-            if e.get("pr_number"):
-                card["pr_number"] = e["pr_number"]
-            if e.get("pr_url"):
-                card["pr_url"] = e["pr_url"]
-            cards.append(card)
-        typer.echo(json.dumps(cards, indent=2))
-        return
-
-    if not entries:
-        typer.echo("The album is empty.")
-        return
-
-    if not page:
-        # An offset past the last card is out of range, not an inverted range;
-        # an empty page at a valid offset is the zero-width limit, not the offset.
-        if max(offset, 0) >= len(entries):
-            typer.echo(f"album: {len(entries)} shipped, offset {max(offset, 0)} is past the end")
-        else:
-            typer.echo(f"album: {len(entries)} shipped, --limit {limit} shows nothing")
-        return
-
-    typer.echo(
-        f"album: {len(entries)} shipped, showing {max(offset, 0) + 1}-{max(offset, 0) + len(page)}"
-    )
-    for e in page:
-        ts = _sort_key(e)
-        date = ts[:10] if ts else "?"
-        title = e.get("title") or e.get("slug") or e.get("id")
-        if e.get("pr_number"):
-            gift = f"PR #{e['pr_number']}"
-        elif e.get("pr_url"):
-            gift = f"PR {str(e['pr_url']).rstrip('/').rsplit('/', 1)[-1]}"
-        else:
-            gift = "no gift"
-        typer.echo(f"{date}  {e.get('id')}  {title}  {gift}")
-
-    remaining = len(entries) - len(page) - max(offset, 0)
-    if remaining > 0:
-        typer.echo(f"... {remaining} more. Raise --limit or page with --offset.")
-
-
-@cli.command(
-    "unarchive",
-    hidden=True,
-    epilog="Reverses `archive` for one node. Follow it with `fno backlog reopen "
-    "<id> --reason ...` if the node also needs to stop being done.",
-)
-def cmd_unarchive(
-    task_id: str = typer.Argument(..., help="Feature ID (ab-XXXXXXXX)"),
-) -> None:
-    """Clear one node's archive stamp: it answers default reads again.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno.graph import api
-    from fno.graph._intake import _find_node
-    from fno.graph.store import read_archive_entries
-
-    _require_node_id(task_id)
-
-    # The default read excludes archived rows, so presence here is live-only.
-    if _find_node(wire_rows(path=_graph_path()), task_id) is not None:
-        typer.echo(f"warning: {task_id} is already in the working graph", err=True)
-        return
-
-    archived = read_archive_entries()
-    # Fuzzy-resolve, matching the working-graph lookup and `reopen`'s probe.
-    row = _find_node(archived, task_id)
-    if row is None:
-        # A reminted archive entry keeps its old id as previous_id.
-        row = next((e for e in archived if e.get("previous_id") == task_id), None)
-    if row is None:
-        typer.echo(
-            f"Error: {task_id} is in neither the working graph nor the archive",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    resolved = row.get("id") or task_id
-    # The store op clears archived_at under the lock; one row, one write.
-    payload = api.unarchive_node(resolved, path=_graph_path())
-    if not payload.success:
-        typer.echo(f"Error: {resolved} could not be unarchived", err=True)
-        raise typer.Exit(code=1)
-    typer.echo(f"Unarchived {resolved}")
 
 
 # -- Internal helpers for intake / update (avoid circular imports) --
@@ -6863,9 +5921,6 @@ def cmd_supersede(
 # by hand-editing graph.json before this; cmd_undefer clears deferred_at but
 # leaves superseded_by set, so a superseded node stayed superseded)
 # ---------------------------------------------------------------------------
-
-
-
 
 
 def _relevant_exec_scope(root: str, by_id: dict) -> set[str]:

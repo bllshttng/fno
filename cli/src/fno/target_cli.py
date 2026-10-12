@@ -661,6 +661,12 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
         f"  set_by: {hold.set_by}\n"
         f"  release_when: {hold.release_when}\n"
         f"  review_on: {hold.review_on}\n"
+        + (
+            f"  exempt: {hold.exempt}\n"
+            if hold.exempt
+            else ""
+        )
+        +
         "Remove dispatch_hold only after the release condition is confirmed. "
         "Nothing was claimed.",
         err=True,
@@ -706,6 +712,96 @@ def _evidence_region_files(node: dict) -> list[str]:
     return paths
 
 
+_RETRO_SOURCE_TIMEOUT_S = 5.0
+_RETRO_REGION_WINDOW = 8
+_RETRO_REGION_MAX_BYTES = 1200
+
+
+def _fetch_retro_comment(
+    source_pr: int, finding_hash: str, root: str, *, repo: Optional[str] = None
+) -> Optional[dict]:
+    """PR ``source_pr``'s inline comment whose body hash-joins ``finding_hash``,
+    or ``None`` on any failure."""
+    from fno.retro.dedup import content_hash
+
+    path = (
+        f"repos/{repo}/pulls/{source_pr}/comments"
+        if repo
+        else f"repos/:owner/:repo/pulls/{source_pr}/comments"
+    )
+    try:
+        proc = subprocess.run(
+            ["gh", "api", path, "--paginate", "--slurp"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=_RETRO_SOURCE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        raw = json.loads(proc.stdout) if proc.stdout.strip() else []
+    except (json.JSONDecodeError, ValueError):
+        return None
+    # --slurp wraps pages as [[page1...],[page2...]]; flatten defensively.
+    flat: list[dict] = []
+    if isinstance(raw, list):
+        for elem in raw:
+            if isinstance(elem, list):
+                flat.extend(x for x in elem if isinstance(x, dict))
+            elif isinstance(elem, dict):
+                flat.append(elem)
+    for c in flat:
+        if content_hash(str(c.get("body", ""))) == finding_hash:
+            return c
+    return None
+
+
+def _read_merged_region(root: str, path: str, line: object) -> str:
+    """Bounded excerpt of ``path`` around ``line`` in the merged tree:
+    ``git show HEAD:<path>``, else a read that stays inside ``root``; "" when
+    neither resolves. ``path`` comes from a GitHub comment, so an absolute or
+    parent-escaping path is refused before any read."""
+    if not isinstance(root, str) or not isinstance(path, str):
+        return ""
+    norm = os.path.normpath(path)
+    if os.path.isabs(norm) or norm == ".." or norm.startswith(".." + os.sep):
+        return ""
+    content: Optional[str] = None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "show", f"HEAD:{path}"],
+            capture_output=True,
+            text=True,
+            timeout=_RETRO_SOURCE_TIMEOUT_S,
+        )
+        if proc.returncode == 0:
+            content = proc.stdout
+    except (OSError, subprocess.SubprocessError):
+        content = None
+    if content is None:
+        target = os.path.abspath(os.path.join(root, path))
+        try:
+            if os.path.commonpath([root, target]) != root or not os.path.exists(target):
+                return ""
+        except ValueError:
+            return ""
+        try:
+            with open(target, encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError:
+            return ""
+    file_lines = content.splitlines()
+    if not file_lines:
+        return ""
+    anchor = min(line if isinstance(line, int) and line >= 1 else 1, len(file_lines))
+    lo = max(0, anchor - 1 - _RETRO_REGION_WINDOW)
+    hi = min(len(file_lines), anchor + _RETRO_REGION_WINDOW)
+    return "\n".join(file_lines[lo:hi])[:_RETRO_REGION_MAX_BYTES]
+
+
 def _fetch_dispatch_region_file(
     node: dict, source_pr: int, finding_hash: str, repo: str
 ) -> Optional[str]:
@@ -714,8 +810,6 @@ def _fetch_dispatch_region_file(
     if not isinstance(root, str) or not os.path.isdir(root):
         return None
     try:
-        from fno.graph.maintain import _fetch_retro_comment, _read_merged_region
-
         comment = _fetch_retro_comment(
             source_pr, finding_hash, root, repo=repo
         )
@@ -792,18 +886,16 @@ def _retro_dispatch_preflight(
     if not node:
         return
 
-    from fno.graph.maintain import is_retro_triage_node, parse_retro_trailer
+    from fno.retro.dedup import _TRAILER_RE
 
-    if (
-        node.get("completed_at")
-        or node.get("superseded_by")
-        or not is_retro_triage_node(node)
-    ):
+    if node.get("completed_at") or node.get("superseded_by"):
         return
-    parsed = parse_retro_trailer(node.get("details"))
-    if parsed is None:
+    # The full machine trailer `land` writes, never prose that mentions it.
+    trailer = _TRAILER_RE.search(str(node.get("details") or ""))
+    if trailer is None:
         return
-    source_pr, finding_hash = parsed
+    source_pr = None if trailer.group("pr") == "None" else int(trailer.group("pr"))
+    finding_hash = trailer.group("hash")
     if source_pr is None:
         typer.echo(
             "WARN target init: Tier 1 skipped (retro node has source_pr=None); proceeding.",

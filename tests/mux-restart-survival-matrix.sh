@@ -301,6 +301,18 @@ start_server() {
             local attempt
             for attempt in 1 2 3 4 5; do
                 if python3 "$ATTACH_CLIENT" "$SOCK" "$TMP_DIR/repo" >/dev/null 2>&1; then
+                    # The fresh attach answers with its placeholder layout
+                    # before the shell registers (the spawn runs off the core
+                    # loop); every caller reads pane ls right after, so wait
+                    # the home shell in, bounded, before declaring the attach
+                    # landed.
+                    for _ in {1..50}; do
+                        if "$MUX_BIN" mux pane ls --session "$SESSION" --json 2>/dev/null \
+                            | python3 -c 'import json,sys; rows=json.load(sys.stdin); exit(0 if rows else 1)'; then
+                            return 0
+                        fi
+                        sleep 0.2
+                    done
                     return 0
                 fi
                 sleep 0.5

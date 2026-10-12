@@ -7,17 +7,15 @@ or a garbage band with no canonical field is refused, never guessed at.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.store import read_graph_strict
 
-runner = CliRunner()
 
 
 @pytest.fixture
@@ -48,7 +46,7 @@ def _seed(g: Path, n: int) -> list[str]:
 def test_migrate_difficulty_dry_run_apply_then_empty(tmp_graph):
     ids = _seed(tmp_graph, 21)
 
-    r = runner.invoke(app, ["backlog", "migrate-difficulty"])
+    r = native_backlog("backlog", "migrate-difficulty")
     assert r.exit_code == 0, r.output
     receipt = json.loads(r.output)
     assert sorted(receipt["candidates"]) == sorted(ids)
@@ -57,7 +55,7 @@ def test_migrate_difficulty_dry_run_apply_then_empty(tmp_graph):
     for e in read_graph_strict(tmp_graph):
         assert "difficulty" not in e, "dry-run must not write"
 
-    r2 = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r2 = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r2.exit_code == 0, r2.output
     entries = {e["id"]: e for e in read_graph_strict(tmp_graph)}
     for i, nid in enumerate(ids):
@@ -70,7 +68,7 @@ def test_migrate_difficulty_dry_run_apply_then_empty(tmp_graph):
         assert hist[-1]["source"] == "migration"
         assert hist[-1].get("ts")
 
-    r3 = runner.invoke(app, ["backlog", "migrate-difficulty"])
+    r3 = native_backlog("backlog", "migrate-difficulty")
     assert r3.exit_code == 0, r3.output
     receipt3 = json.loads(r3.output)
     assert receipt3["candidate_count"] == 0
@@ -85,7 +83,7 @@ def test_migrate_difficulty_refuses_divergent_pairs(tmp_graph):
         ["backlog", "migrate-difficulty"],
         ["backlog", "migrate-difficulty", "--apply"],
     ):
-        r = runner.invoke(app, argv)
+        r = native_backlog(*argv)
         assert r.exit_code == 2, r.output
         assert "x-0001" in r.output
     row = read_graph_strict(tmp_graph)[0]
@@ -98,7 +96,7 @@ def test_migrate_difficulty_survives_null_history(tmp_graph):
     seed_graph(tmp_graph, json.dumps({"entries": [
         {"id": "x-0002", "model_tier": "high", "difficulty_history": None},
     ]}))
-    r = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r.exit_code == 0, r.output
     row = read_graph_strict(tmp_graph)[0]
     assert row["difficulty"] == "high"
@@ -115,7 +113,7 @@ def test_migrate_difficulty_normalizes_and_refuses_bad_bands(tmp_graph):
         {"id": "x-0003", "model_tier": "HIGH"},
         {"id": "x-0004", "model_tier": "turbo"},
     ]}))
-    r = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r.exit_code == 2, r.output
     assert "x-0004 model_tier='turbo'" in r.output
     rows = {e["id"]: e for e in read_graph_strict(tmp_graph)}
@@ -129,7 +127,7 @@ def test_migrate_difficulty_normalizes_and_refuses_bad_bands(tmp_graph):
     commit_rows_via_store(tmp_graph, lambda _e: [
         {"id": "x-0003", "model_tier": "HIGH"},
     ])
-    r2 = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r2 = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r2.exit_code == 0, r2.output
     row = read_graph_strict(tmp_graph)[0]
     assert row["difficulty"] == "high"
@@ -142,7 +140,7 @@ def test_migrate_difficulty_refuses_non_string_band(tmp_graph):
     seed_graph(tmp_graph, json.dumps({"entries": [
         {"id": "x-0005", "model_tier": 3},
     ]}))
-    r = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r.exit_code == 2, r.output
     assert "x-0005 model_tier=3" in r.output
     assert read_graph_strict(tmp_graph)[0].get("difficulty") is None
@@ -157,7 +155,7 @@ def test_migrate_difficulty_refuses_garbage_canonical_band(tmp_graph):
         {"id": "x-000a", "difficulty": "turbo", "model_tier": 7},
         {"id": "x-000b", "difficulty": "turbo", "model_tier": "high"},
     ]}))
-    r = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r.exit_code == 2, r.output
     for rid in ("x-000a", "x-000b"):
         assert rid in r.output
@@ -178,7 +176,7 @@ def test_migrate_difficulty_drains_machine_leftovers(tmp_graph):
         {"id": "x-0008", "model_tier": 3, "difficulty": "low"},
         {"id": "x-0009", "model_tier": "high"},
     ]}))
-    r = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r.exit_code == 2, r.output
     assert "x-0007" in r.output and "hand-picked band" in r.output
     rows = {e["id"]: e for e in read_graph_strict(tmp_graph)}
@@ -190,7 +188,7 @@ def test_migrate_difficulty_drains_machine_leftovers(tmp_graph):
              {"id": "x-0008", "model_tier": 3, "difficulty": "low"},
              {"id": "x-0009", "model_tier": "high"}]
     commit_rows_via_store(tmp_graph, lambda _e: _make)
-    r2 = runner.invoke(app, ["backlog", "migrate-difficulty", "--apply"])
+    r2 = native_backlog("backlog", "migrate-difficulty", "--apply")
     assert r2.exit_code == 0, r2.output
     rows = {e["id"]: e for e in read_graph_strict(tmp_graph)}
     assert all("model_tier" not in e for e in rows.values())

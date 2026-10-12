@@ -28,8 +28,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub(crate) use crate::additional_prs::PrStamp;
-pub(crate) use crate::additional_prs::PrState;
+pub(crate) use crate::additional_prs::{PrStamp, PrState};
 use crate::events::EventEmitter;
 use crate::gc::{
     gc_decide, row_handle, row_label, tree_action, GcAction, GcRow, KeepReason, TreeAction,
@@ -37,6 +36,7 @@ use crate::gc::{
 use crate::graph_store::{self, WorkState};
 use crate::node_route;
 use crate::paths::AgentsHome;
+use crate::planning_lane::plan_file_exists;
 
 /// (change 3) How long a row has sat unresolved: now minus
 /// `last_message_at`, else `created_at`; a stamp that cannot parse names no
@@ -118,6 +118,10 @@ pub struct GcSummary {
     /// `(id, detail)`: a typed user turn inside the attended window - the
     /// user is talking to this session; a done ledger never overrides it.
     pub kept_attended: Vec<(String, String)>,
+    /// `(id, detail)`: a typed turn whenever it was written - the
+    /// permanent keep behind the windowed attended hold. The row never
+    /// retires on a sweep, like an operator row.
+    pub kept_user_typed: Vec<(String, String)>,
     /// `(id, detail)`: the fresh truth probe answered nothing within its
     /// bound and the in-process quiet witness could not lift the row either.
     /// An unread instrument is never reported as `active`, never an invented age.
@@ -315,6 +319,7 @@ impl GcSummary {
             + self.kept_open_work_stale.len()
             + self.kept_active.len()
             + self.kept_attended.len()
+            + self.kept_user_typed.len()
             + self.kept_probe_unread.len()
             + self.kept_transcript_unresolved.len()
             + self.kept_graph_unreadable.len()
@@ -485,29 +490,6 @@ pub struct GraphRead {
     /// twice. The local confirmed-merged evidence the delivery predicate
     /// reads - no network, and an unrecorded extra never inflates it.
     pub delivery_merged_refs: HashMap<String, usize>,
-}
-
-/// Does the node's `plan_path` name an existing file (marker 2)? A leading
-/// `~/` expands against `$HOME`; a relative path joins the node's `cwd`.
-/// An unresolvable path (no HOME, no cwd, no file) refuses: it proves no
-/// plan was written here.
-fn plan_file_exists(plan_path: &str, cwd: Option<&str>) -> bool {
-    let path = match plan_path.strip_prefix("~/") {
-        Some(rest) => match std::env::var("HOME") {
-            Ok(home) => std::path::PathBuf::from(home).join(rest),
-            Err(_) => return false,
-        },
-        None => std::path::PathBuf::from(plan_path),
-    };
-    let path = if path.is_relative() {
-        match cwd {
-            Some(cwd) => std::path::PathBuf::from(cwd).join(path),
-            None => return false,
-        }
-    } else {
-        path
-    };
-    path.is_file()
 }
 
 /// The planning hold's detail (d-81c6da7e). One builder: the hold the sweep
@@ -1483,18 +1465,8 @@ fn settle_blocker_detail(graph: &GraphRead, node: &str) -> String {
     }
 }
 
-/// The one retirement pass. Every I/O seam (`read_graph`, `store_matches`,
-/// `age_many`, `stop_confirmed`, `tree_probe`, `prune_tree`) is injected so a
-/// test stages the world; production wiring is [`crate::gc::gc_sweep`] /
-/// [`crate::gc::gc_sweep_dry_run`]. `agents_read` is the same kind of seam
-/// for the `claude agents --json --all` snapshot: read at most once per
-/// sweep, lazily, only when a row actually reaches the stop gate - steady
-/// state keeps zero subprocesses on the hot path.
-///
-/// `age_many` is the transcript-age seam: one batched call answers every
-/// candidate row's age in SECONDS, keyed by [`row_handle`]. The production
-/// default reads the newest timestamped transcript entry through the shared
-/// truth probe. A row the seam does not answer reads `None`, never quiet.
+/// The one retirement pass without a release ruling; [`run_with_release`]
+/// carries the full contract over the same injected seams.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     home: &AgentsHome,
@@ -1533,7 +1505,14 @@ pub(crate) fn run(
 
 /// [`run`] with a release ruling: the sweep lifts exactly one gate
 /// on the matching row, and only while its current hold still equals the
-/// one the release captured. Every other gate stays.
+/// one the release captured. Every other gate stays. Every I/O seam
+/// (`read_graph`, `store_matches`, `age_many`, `stop_confirmed`,
+/// `tree_probe`, `prune_tree`) is injected so a test stages the world;
+/// production wiring is [`crate::gc::gc_sweep`] / [`crate::gc::gc_sweep_dry_run`].
+/// `agents_read` is read at most once per sweep, lazily, only when a row
+/// reaches the stop gate - steady state keeps zero subprocesses on the hot
+/// path. `age_many` answers every candidate row's age in SECONDS, keyed by
+/// [`row_handle`]; a row the seam does not answer reads `None`, never quiet.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_with_release(
     home: &AgentsHome,
@@ -1826,6 +1805,7 @@ pub(crate) fn run_with_release(
             now,
             hold_age_s,
             hold_age_basis,
+            e.spawn_payload.as_deref(),
         ) {
             summary
                 .kept_attended
@@ -2135,8 +2115,20 @@ pub(crate) fn run_with_release(
                 .is_some_and(node_route::NodeSource::is_transcript),
             node_held_elsewhere,
             open_work_retire_s,
+            typed_turn_age_s: None,
         };
-        let (mut action, mut reason) = gc_decide(&row, grace_secs);
+        let (mut action, mut reason) = {
+            let verdict = gc_decide(&row, grace_secs);
+            crate::gc::resolve_typed_turn(&mut row, verdict, grace_secs, || {
+                crate::attended::typed_turn_age_ever_for_row(
+                    store_matches(e),
+                    home,
+                    sid,
+                    now,
+                    e.spawn_payload.as_deref(),
+                )
+            })
+        };
         // d-81c6da7e: a release matched to the planning hold answers the
         // marker question by ruling. Flip the row's released flag and
         // decide again - the second verdict flows through the same gates,
@@ -2183,6 +2175,11 @@ pub(crate) fn run_with_release(
                 Some(KeepReason::Operator) => summary.kept_operator.push(id),
                 Some(KeepReason::Teamed) => summary.kept_teamed.push(id),
                 Some(KeepReason::NotSpawn { origin }) => summary.kept_not_spawn.push((id, origin)),
+                Some(KeepReason::UserTyped { age_s }) => {
+                    summary
+                        .kept_user_typed
+                        .push((id.clone(), format!("typed user turn {age_s}s ago")));
+                }
                 Some(KeepReason::NoProvenance) => {
                     summary.kept_no_provenance.push(id.clone());
                     // The keep gets the same clocked-hold shape every

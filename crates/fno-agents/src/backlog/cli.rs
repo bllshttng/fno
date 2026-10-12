@@ -143,6 +143,22 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // The ported tracker-owned verbs own graph state: under an external
+    // backend they refuse before any read or write. Help still answers.
+    if matches!(
+        resolved.legacy,
+        "archive"
+            | "unarchive"
+            | "maintain"
+            | "migrate-priorities"
+            | "migrate-difficulty"
+            | "migrate-updated-at"
+    ) && !carries(resolved.tail, &["--help", "-h"])
+    {
+        if let Some(code) = super::workflows::refuse_non_graph_backend(resolved.legacy) {
+            return code;
+        }
+    }
     match resolved.legacy {
         // The folded corpus/history reader: fully native, engine owns the
         // whole surface (inventory, migrate, history, stale, findings).
@@ -193,6 +209,9 @@ pub fn run(args: &[String]) -> i32 {
         // The lane pin is native: id gate, operator fence, lane/epic scoping
         // and midpoint arithmetic over the single-row write seam.
         "rank" => super::rank_cli::run(resolved.tail),
+        // The vote is native: identity, style gate and the one same-voter
+        // refusal over the single-row write seam. No Python twin remains.
+        "encounter" => super::encounter_cli::run(resolved.tail),
         // The create verbs are native end to end as of this wave: parse,
         // gates, locked write with the rollup inside it, receipts.
         "add" => super::create_cli::run(resolved.tail),
@@ -263,6 +282,28 @@ pub fn run(args: &[String]) -> i32 {
         // owns every triage tail: the wheel's triage route forwards here,
         // so a forward back would loop.
         "triage" => super::triage_cli::run(resolved.tail),
+        // The projections: the shared kanban classifier, the post-publish
+        // view pass, and the read verbs over it.
+        "render-views" => super::projections::run_render_views(resolved.tail),
+        "view" => super::projections::run_view(resolved.tail),
+        "board" => super::projections::run_board(resolved.tail),
+        "bases" => super::projections::run_bases(resolved.tail),
+        "roadmap" => super::projections::run_roadmap(resolved.tail),
+        "album" => super::projections::run_album(resolved.tail),
+        // Archive residency, the hygiene pass, the daily groom, and the
+        // one-shot row migrations.
+        "archive" => super::maintenance_archive::run_archive(resolved.tail),
+        "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
+        "maintain" => super::maintenance::run_maintain(resolved.tail),
+        "groom" => super::groom::run_groom(resolved.tail),
+        "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
+        "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
+        "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
+        // The publish verb is native end to end: the public projection
+        // renders through `fno board-render`, and the three targets (static
+        // dir, uploader command, GitHub Pages) are the verb's own. The
+        // catalog row sits in the board group.
+        "publish" => super::publish::run(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

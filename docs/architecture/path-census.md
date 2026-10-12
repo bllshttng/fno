@@ -30,7 +30,7 @@ stays as the single idempotency floor).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno backlog groom` pipeline | `cli/src/fno/backlog/groom.py:239-365` | KEEP, canonical | — |
+| 1 | `fno backlog groom` pipeline | `crates/fno-agents/src/backlog/groom.rs` (`groom_pass`) | KEEP, canonical | — |
 | 2 | `scripts/nightly-groom.sh` | whole file, execs the verb | DELETE | #573 |
 | 3 | `fno backlog triage health` | `graph/cli.py` | KEEP, separate metrics verb | — |
 

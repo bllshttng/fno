@@ -1,5 +1,4 @@
 A	$(fno config paths shell-stub)	py=cli/src/fno/setup/migrate_paths.py;rs=crates/fno-agents/src/paths_cli.rs	# CLASSIFY protocol|msg-twin|data
-A	(?:~/(?:[^]+)|/(?:users|home)/[^/]+(?:/[^]+)?)	py=cli/src/fno/graph/roadmap_public.py;rs=crates/fno-agents/src/backlog/title_gate.rs|crates/fno/src/backlog_snapshot.rs	# CLASSIFY protocol|msg-twin|data
 A	(`fno agents spawn --provider <vendor> --model <m>`).	py=cli/src/fno/_flag_aliases.py;rs=crates/fno-agents/src/mail_inject.rs	# CLASSIFY protocol|msg-twin|data
 A	(it landed via merged pr #{merged})	py=cli/src/fno/pr/_base_lineage.py;rs=crates/fno-agents/src/gate_probes.rs	# CLASSIFY protocol|msg-twin|data
 A	(not yet implemented; planned for a future story)	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
@@ -15,7 +14,7 @@ A	--provider was split at the axis rename: the cli binary is --harness/-h;	py=cl
 A	--tab needs a nonblank selector or pane-group name	py=cli/src/fno/agents/spawn_defaults.py;rs=crates/fno-agents/src/bin/client.rs	# CLASSIFY protocol|msg-twin|data
 A	--tail must be >= 0 (got {tail})	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	--workspace/-s needs a nonblank workspace name	py=cli/src/fno/agents/spawn_defaults.py;rs=crates/fno-agents/src/bin/client.rs|crates/fno/src/mux_cli/pane_args.rs	# CLASSIFY protocol|msg-twin|data
-A	-//apple//dtd plist 1.0//en	py=cli/src/fno/backlog/groom.py|cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/install.rs	# CLASSIFY protocol|msg-twin|data
+A	-//apple//dtd plist 1.0//en	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/backlog/groom.rs|crates/fno-agents/src/pr_watch/install.rs	# CLASSIFY protocol|msg-twin|data
 A	.agents/context/product.md	py=skills/execute/orchestrator.py;rs=crates/fno-agents/src/blueprint_judge.rs	# CLASSIFY protocol|msg-twin|data
 A	/scripts/ci/preflight.sh	py=cli/src/fno/pr/_preflight.py;rs=crates/fno-agents/src/verify_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	/var/lib/dbus/machine-id	py=cli/src/fno/claims/hostid.py;rs=crates/fno-agents/src/claims.rs|crates/fno/src/agents_view.rs	# CLASSIFY protocol|msg-twin|data
@@ -48,7 +47,6 @@ A	anthropic_default_haiku_model	py=cli/src/fno/route_cli.py;rs=crates/fno-agents
 A	anthropic_default_opus_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/client_tests.rs|crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_sonnet_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	auto-closed: all children complete	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
-A	auto-closed: all children complete; own plan deliverables unverified (plan_path set, no pr)	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	auto_merge.require_checks_pass	py=cli/src/fno/config/optouts.py|cli/src/fno/config/registry.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/finalize.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog.epic_max_open_children	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/backlog/epic_cap.rs|crates/fno-agents/src/graph_store.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog_done_operator_initiated	py=cli/src/fno/done/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
@@ -109,7 +107,7 @@ A	error: cycle detected - {bid} (transitively) depends on {task_id}	py=cli/src/f
 A	error: feature {task_id} not found	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	error: no such node '{parent}'	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/next.rs	# CLASSIFY protocol|msg-twin|data
 A	error: node cannot block itself ({task_id})	py=cli/src/fno/graph/_intake.py;rs=crates/fno-agents/src/backlog/node_ref.rs	# CLASSIFY protocol|msg-twin|data
-A	error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'	py=cli/src/fno/backlog/requeue.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
+A	error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'	py=cli/src/fno/backlog/requeue.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/maintenance_archive.rs|crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	error: unknown blocker id '{bid}'	py=cli/src/fno/graph/_intake.py;rs=crates/fno-agents/src/backlog/node_ref.rs	# CLASSIFY protocol|msg-twin|data
 A	error: {flag} '{token}' does not resolve to a node	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/node_ref.rs	# CLASSIFY protocol|msg-twin|data
 A	error: {flag} cannot reference the node itself ({self_id})	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/node_ref.rs	# CLASSIFY protocol|msg-twin|data
@@ -133,7 +131,7 @@ A	fno_agents_response_deadline_ms	py=scripts/diagnostics/codex-lead-continuation
 A	fno_bus_lock_timeout_secs	py=cli/src/fno/bus/log.py;rs=crates/fno-agents/src/announce.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_control_plane_scheduler	py=cli/src/fno/control_plane.py;rs=crates/fno-agents/src/backlog/advance.rs|crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	fno_cursor_agent_provider	py=cli/src/fno/agents/harnesses/cursor_agent.py;rs=crates/fno-agents/src/cursor_agent.rs	# CLASSIFY protocol|msg-twin|data
-A	fno_global_settings_path	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_loader.py|cli/src/fno/config_io.py|cli/src/fno/conftest.py|cli/src/fno/hermetic.py;rs=crates/fno-agents/src/agents_config.rs|crates/fno-agents/src/backlog/advance_settings.rs|crates/fno-agents/src/backlog/settings.rs|crates/fno-agents/src/claude_ask.rs|crates/fno-agents/src/claude_roster.rs|crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/claude_workspace_trust.rs|crates/fno-agents/src/law_match.rs|crates/fno-agents/src/pr_draft_ready.rs|crates/fno-agents/src/route_gather.rs|crates/fno-agents/src/route_slot.rs|crates/fno-agents/src/slot_cutover.rs|crates/fno-agents/src/test_run.rs|crates/fno-agents/src/tick_ledger.rs|crates/fno/src/agents_view.rs|crates/fno/src/digest_overlay.rs|crates/fno/src/sideline_color.rs	# CLASSIFY protocol|msg-twin|data
+A	fno_global_settings_path	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_loader.py|cli/src/fno/config_io.py|cli/src/fno/conftest.py|cli/src/fno/hermetic.py;rs=crates/fno-agents/src/agents_config.rs|crates/fno-agents/src/backlog/advance_settings.rs|crates/fno-agents/src/backlog/encounter_cli.rs|crates/fno-agents/src/backlog/settings.rs|crates/fno-agents/src/claude_ask.rs|crates/fno-agents/src/claude_roster.rs|crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/claude_workspace_trust.rs|crates/fno-agents/src/law_match.rs|crates/fno-agents/src/otlp_export.rs|crates/fno-agents/src/pr_draft_ready.rs|crates/fno-agents/src/pr_steward.rs|crates/fno-agents/src/route_gather.rs|crates/fno-agents/src/route_slot.rs|crates/fno-agents/src/slot_cutover.rs|crates/fno-agents/src/test_run.rs|crates/fno-agents/src/tick_ledger.rs|crates/fno/src/agents_view.rs|crates/fno/src/digest_overlay.rs|crates/fno/src/sideline_color.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_launch_account_source	py=cli/src/fno/agents/launch_provenance.py;rs=crates/fno-agents/src/state.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_lead_walk_session_key	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/loop_lead.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_mux_shell_integration	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno/src/client/server_spawn.rs|crates/fno/src/pty.rs	# CLASSIFY protocol|msg-twin|data
@@ -164,7 +162,7 @@ A	harness=explicit({chosen_harness})	py=cli/src/fno/agents/harness_map.py;rs=cra
 A	harness_capabilities.toml	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs|crates/fno/src/agents_view.rs	# CLASSIFY protocol|msg-twin|data
 A	holder must be non-empty	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	hooks/worktree-remove.sh	py=cli/src/fno/setup/cli_hooks.py|cli/src/fno/setup_cli.py;rs=crates/fno/src/uninstall.rs	# CLASSIFY protocol|msg-twin|data
-A	http://www.apple.com/dtds/propertylist-1.0.dtd	py=cli/src/fno/backlog/groom.py|cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/install.rs	# CLASSIFY protocol|msg-twin|data
+A	http://www.apple.com/dtds/propertylist-1.0.dtd	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/backlog/groom.rs|crates/fno-agents/src/pr_watch/install.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.anthropic.com/api/oauth/profile	py=cli/src/fno/adapters/providers/managed.py;rs=crates/fno-agents/src/claude_vault.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/anthropic	py=cli/src/fno/agents/model_routing.py|evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/footnote_harness/endpoint.rs|crates/fno-agents/src/footnote_harness/tests.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/codex_route.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
@@ -179,6 +177,7 @@ A	kept_transcript_unresolved	py=cli/src/fno/agents/retirement.py;rs=crates/fno-a
 A	key and holder must be non-empty	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/claims.rs	# CLASSIFY protocol|msg-twin|data
 A	lane cap full (max_lanes={max_lanes})	py=cli/src/fno/claims/cli.py;rs=crates/fno-agents/src/claim_lanes_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	launchd:sh.fno.pr-watcher	py=cli/src/fno/pr_watch/cli.py;rs=crates/fno-agents/src/tick_ledger.rs	# CLASSIFY protocol|msg-twin|data
+A	live claim state is unavailable	py=cli/src/fno/graph/selection_evidence.py;rs=crates/fno-agents/src/backlog/maintenance_tests.rs	# CLASSIFY protocol|msg-twin|data
 A	locked_by_harness_session	py=cli/src/fno/backlog/note_notify.py;rs=crates/fno-agents/src/backlog/find_cli.rs|crates/fno-agents/src/backlog/mod.rs|crates/fno-agents/src/backlog/model.rs|crates/fno-agents/src/backlog/nodes.rs|crates/fno-agents/src/backlog/patch.rs|crates/fno-agents/src/backlog/render.rs|crates/fno-agents/src/backlog/update_cli.rs|crates/fno-agents/src/graph_keeper.rs|crates/fno-agents/src/graph_store.rs|crates/fno-agents/src/org_fold.rs|crates/fno/src/backlog_model.rs|crates/fno/src/backlog_view.rs|crates/fno/src/board_reader.rs	# CLASSIFY protocol|msg-twin|data
 A	matched worktree; no readable target manifest	py=cli/src/fno/pr/_review_hold.py;rs=crates/fno-agents/src/pr_status/reviews.rs	# CLASSIFY protocol|msg-twin|data
 A	menu_walk needs ordered model and effort targets	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
@@ -197,7 +196,7 @@ A	no active drive authority	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/sr
 A	no closure claims to bind	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/backlog/binding.rs	# CLASSIFY protocol|msg-twin|data
 A	no local worktree on this branch	py=cli/src/fno/pr/_review_hold.py;rs=crates/fno-agents/src/pr_status/reviews.rs	# CLASSIFY protocol|msg-twin|data
 A	no node carries #{number} at {url}	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/org_board/prs.rs	# CLASSIFY protocol|msg-twin|data
-A	no node resolves to '{node_id}'	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/backlog/create_cli.rs|crates/fno-agents/src/backlog/node_ref.rs|crates/fno-agents/src/backlog/patch.rs|crates/fno-agents/src/graph_keeper.rs|crates/fno-agents/src/merge_hold.rs|crates/fno/src/store_client.rs	# CLASSIFY protocol|msg-twin|data
+A	no node resolves to '{node_id}'	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/backlog/encounters.rs|crates/fno-agents/src/backlog/node_ref.rs|crates/fno-agents/src/backlog/patch.rs|crates/fno-agents/src/graph_keeper.rs|crates/fno-agents/src/merge_hold.rs|crates/fno/src/store_client.rs	# CLASSIFY protocol|msg-twin|data
 A	no provable session identity	py=cli/src/fno/claims/self_identity.py;rs=crates/fno-agents/src/backlog/create_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	no unique codex rollout for this cwd after spawn	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/feed.rs|crates/fno-agents/src/removals.rs	# CLASSIFY protocol|msg-twin|data
 A	no url, back-pointer not read	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/org_board/prs.rs	# CLASSIFY protocol|msg-twin|data
@@ -239,6 +238,7 @@ A	refs/remotes/origin/head	py=cli/src/fno/mail/cli.py|cli/src/fno/review/cli.py|
 A	refused-newer-than-transcript	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
 A	refused: {task_id} cross-check failed: {message}	py=cli/src/fno/graph/_reconcile.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	registry read failed: {exc}	py=cli/src/fno/agents/dispatch.py|cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/attach.rs	# CLASSIFY protocol|msg-twin|data
+A	repos/:owner/:repo/pulls/{source_pr}/comments	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/backlog/maintenance_validity.rs	# CLASSIFY protocol|msg-twin|data
 A	repos/:owner/:repo/statuses/{head}	py=cli/src/fno/pr/_reviews.py;rs=crates/fno-agents/src/loopcheck/coverage_status.rs	# CLASSIFY protocol|msg-twin|data
 A	repos/{slug}/pulls/{pr}/files?per_page=100&page={page}	py=cli/src/fno/pr/_rest.py;rs=crates/fno-agents/src/pr_status/reviews.rs	# CLASSIFY protocol|msg-twin|data
 A	resolved command is empty	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/backlog/dispatch_resolve.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
@@ -269,8 +269,8 @@ A	ship count unconfirmed, retryable read failure	py=cli/src/fno/graph/_reconcile
 A	single_flight_join_budget_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_ttl_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	skills-dir; no `claude plugin update`	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs|crates/fno/src/setup_autowire_tests.rs	# CLASSIFY protocol|msg-twin|data
-A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
-A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py|cli/src/fno/graph/maintain.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
+A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance_tests.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
+A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-verdict-fresher-event	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
 A	status pattern needs model and effort groups	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	stopped: {name} ({short_id})	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/bin/client.rs	# CLASSIFY protocol|msg-twin|data
@@ -309,3 +309,5 @@ A	{ts} {kind} {sender} -> {recipient} rid={rid} caller={ck}	py=cli/src/fno/agent
 A	{} file(s) (footnote {}) -> {}	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 R	status-derivation-helper:cli/src/fno/graph/cli.py::cmd_epic_status	# offender - carry a reason or fix in this PR
 A	--model must not be empty	py=cli/src/fno/dispatch_flags.py;rs=crates/fno-agents/src/backlog/advance_cli.rs	# Shared flag refusal on the retained Python dispatch-pin parser and native advance door.
+A	couldn't find remote ref	py=cli/src/fno/worktree_cli/cli.py;rs=crates/fno-agents/src/backlog/publish.rs	# CLASSIFY protocol|msg-twin|data each side matches git's own fetch-refusal wording independently; external tool error, not ported logic
+A	claude_code_session_attended	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/spawn_gate_admission.rs|crates/fno-agents/src/test_run.rs|crates/fno/src/process_admission.rs	# harness marker constant: hermetic.py classifies it, the Rust origin predicates read it; one protocol, two languages

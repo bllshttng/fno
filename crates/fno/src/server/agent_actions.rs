@@ -4,8 +4,9 @@
 
 use std::time::Duration;
 
-use super::{first_line_or, fno_bin};
+use super::{first_line_or, fno_bin, ResumeOutcome};
 use crate::spawn_journal::ReentryVerdict;
+use crate::tree::{Rect, TabId};
 
 /// The reentry refused exit, mirrored (crates/fno never links fno-agents);
 /// twin of `reentry::REENTRY_REFUSED_EXIT`.
@@ -547,6 +548,107 @@ pub(super) async fn run_mail_send(name: &str, text: &str) -> String {
 }
 
 impl super::Core {
+    /// Resume a paneless row through its own harness - the
+    /// `Command::ResumeAgent` arm, moved beside the gesture actions it
+    /// shares the notice channel with. Catalog gate first, the same
+    /// posture as AttachAgent: the name must match a surfaced row, and the
+    /// SERVER re-derives resumability (the client's Layout can be stale) -
+    /// a row that gained a live pane between publish and click is refused
+    /// here, never double-spawned. The gate walk lives in
+    /// [`super::Core::resume_one`], shared with the bulk restore driver so
+    /// the two surfaces cannot drift. On a spawn, the same pane-rebind the
+    /// restore walk fires moves the row's registry entry onto the fresh
+    /// pane.
+    pub(super) fn resume_agent_gesture(
+        &mut self,
+        client_id: u64,
+        view: (u64, TabId),
+        vp: Rect,
+        name: String,
+    ) {
+        let (rows, cols) = self
+            .clients
+            .iter()
+            .find(|c| c.id == client_id)
+            .map(|c| c.dims)
+            .unwrap_or((vp.rows, vp.cols));
+        match self.resume_one(&name, None, client_id, view, (rows, cols), false) {
+            ResumeOutcome::Focused { pane, squad, tab } => {
+                self.set_view(client_id, squad, tab);
+                if let Some(tab) = self.viewed_tab_mut((squad, tab)) {
+                    tab.focus = pane;
+                }
+                self.notice(client_id, "already resumed; focused existing pane");
+                self.push_layout(true);
+            }
+            ResumeOutcome::Refused { reason } => {
+                self.notice(client_id, reason);
+            }
+            // The claude re-entry plan fired off-loop; the
+            // ReentryPlanReady replay re-enters this command with the
+            // verdict staged. Nothing to report yet.
+            ResumeOutcome::PlanPending => {}
+            ResumeOutcome::Resumed {
+                pane,
+                squad,
+                tab,
+                notice,
+                rebind_identity,
+            } => {
+                if let Some(notice) = notice {
+                    self.notice(client_id, notice);
+                }
+                self.set_view(client_id, squad, tab);
+                if let Some(tab) = self.viewed_tab_mut((squad, tab)) {
+                    tab.focus = pane;
+                }
+                self.push_layout(true);
+                self.notice(client_id, format!("resumed {name}"));
+                if let Some((harness, session)) = &rebind_identity {
+                    self.resume_gesture_rebind(client_id, harness, session, pane);
+                }
+            }
+            // The gesture never dry-runs.
+            ResumeOutcome::Planned => {}
+        }
+    }
+
+    /// The single-row gesture's post-resume rebind: the resume just spawned
+    /// the row's pane, and the registry row still names the dead one, so
+    /// mail, pane send and `fno agents resume` refuse the row until the next
+    /// full restore. Fires the same bounded [`run_pane_rebind`] the restore
+    /// walk fires, off-loop, the receipt riding the gesture's own notice
+    /// channel (`DispatchResult`). Best effort: every skip or failure
+    /// degrades to its notice, never the resume outcome. `harness` and
+    /// `session` are the resumed row's identity, resolved by the caller's
+    /// resume walk - never re-derived here.
+    pub(super) fn resume_gesture_rebind(&self, id: u64, harness: &str, session: &str, pane: u64) {
+        let Some(pid) = self.panes.get(&pane).and_then(|p| p.pty.child_pid()) else {
+            return;
+        };
+        if !super::workspace_restore::rebind_runtime_ready() {
+            return;
+        }
+        let mux_session = self.session_name.clone();
+        let codex = harness == "codex";
+        let harness = harness.to_string();
+        let session = session.to_string();
+        let core_tx = self.self_tx.clone();
+        tokio::spawn(async move {
+            let mut notice =
+                match run_pane_rebind(&harness, &session, &mux_session, pane, pid).await {
+                    Ok(line) => line,
+                    Err(reason) => format!("registry row rebind failed: {reason}"),
+                };
+            if codex {
+                notice.push_str("; codex may show its resume prompt in the pane - answer it there");
+            }
+            let _ = core_tx
+                .send(super::CoreMsg::DispatchResult { id, notice })
+                .await;
+        });
+    }
+
     /// Shell `fno-agents <verb> <name>` OFF the core loop, mirroring
     /// `dispatch_next`: the one-line outcome routes back as a `DispatchResult`
     /// notice, but the AUTHORITATIVE row change is the registry poll's exited

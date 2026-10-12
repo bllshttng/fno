@@ -117,6 +117,11 @@ def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
         ]
     )
 
+    # The machine names successors: seal the pending draw so the typed name
+    # counts as accepting it.
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Rowan", "epic-x")
     result = _spawn(
         "spawn", "--name", "Rowan", "-H", "claude", "term",
         "--substrate", "thread", "--cwd", str(bg_home), "--promote", "epic-x", "--succeed",

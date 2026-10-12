@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.branch_provenance_cache import CACHE_RELPATH, provenance_lines, read_cache, write_cache
+from fno.branch_provenance_cache import CACHE_RELPATH, read_cache, write_cache
 from fno.worktree_stranded import CLEAN, STRANDED, Row
 
 
@@ -120,73 +120,3 @@ def test_every_reported_class_is_cached(tmp_path, klass):
     row = _row(klass, "x-1", 2, "3 hours ago", has_remote=True, pr_number=9, live=klass == "LIVE")
     write_cache(tmp_path, [row])
     assert [r["klass"] for r in read_cache(tmp_path)] == [klass]
-
-
-# -- the board section the cache feeds --
-
-
-def _cache_rows():
-    return [
-        {
-            "branch": "feature/x-04ce-review-fixes",
-            "node": "x-04ce",
-            "klass": "STRANDED",
-            "unpushed": 23,
-            "has_remote": False,
-            "age": "33 hours ago",
-            "pr_number": None,
-            "live": False,
-            "path": "/wt/a",
-        },
-        {
-            "branch": "fix/x-129b-payload-cache-head",
-            "node": None,
-            "klass": "UNKNOWN",
-            "unpushed": 0,
-            "has_remote": True,
-            "age": "12 hours ago",
-            "pr_number": None,
-            "live": True,
-            "path": "/wt/b",
-        },
-    ]
-
-
-def test_provenance_lines_render_mapped_and_unmapped_rows(tmp_path):
-    """An unmapped branch is exactly the interesting case: rendered by name,
-    never dropped."""
-    cache_path(tmp_path).parent.mkdir(parents=True)
-    cache_path(tmp_path).write_text(json.dumps(_cache_rows()))
-
-    lines = provenance_lines([tmp_path])
-
-    assert lines[0] == "## Branch Provenance"
-    assert (
-        "- **x-04ce** (feature/x-04ce-review-fixes): "
-        "no remote, 23 unpushed, no PR, newest commit 33 hours ago" in lines
-    )
-    assert (
-        "- *(unmapped)* (fix/x-129b-payload-cache-head): "
-        "has remote, 0 unpushed, no PR, LIVE, newest commit 12 hours ago" in lines
-    )
-
-
-def test_failed_remote_probe_reads_unknown_not_absent(tmp_path):
-    """A failed rev-parse must never print 'no remote': that asserts an
-    absence the probe never proved (AGENTS.md, positive-marker rule)."""
-    row = dict(_cache_rows()[0], has_remote=None)
-    cache_path(tmp_path).parent.mkdir(parents=True)
-    cache_path(tmp_path).write_text(json.dumps([row]))
-
-    lines = provenance_lines([tmp_path])
-    assert "remote unknown" in lines[2]
-
-
-def test_provenance_lines_omitted_when_cache_empty(tmp_path):
-    assert provenance_lines([tmp_path]) == []
-
-
-def test_provenance_lines_fail_open_on_bad_cache(tmp_path):
-    cache_path(tmp_path).parent.mkdir(parents=True)
-    cache_path(tmp_path).write_text("{not json")
-    assert provenance_lines([tmp_path]) == []

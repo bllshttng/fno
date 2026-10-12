@@ -7,6 +7,7 @@
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -133,7 +134,7 @@ pub(crate) fn is_current_watch(watch: &Watch, evidence: &[Evidence]) -> bool {
     })
 }
 
-fn millis_now() -> i64 {
+pub(crate) fn millis_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -141,15 +142,67 @@ fn millis_now() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
+/// The wait blockers whose watch parks a provider seat: the session has
+/// pushed and the remaining blocker is external (CI pending, an outstanding
+/// review, the merge slot), so the seat sits idle until the settle arm's or
+/// expiry arm's wake resumes the session.
+const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot"];
+
+/// Registry-row identity -> the blocker of the session's CURRENT watch, for
+/// the seat-wait blockers. Two identities per watch: the manifest session id
+/// and, for codex, the thread id the registry row keys. Supersession is the
+/// same rule the wake arms read: a later loop_check row with a non-watching
+/// intent, or any later terminal row, ends the watch and the seat works
+/// again.
+pub(crate) fn watch_blockers(evidence: &[Evidence]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for watch in watches(evidence) {
+        if !SEAT_WAIT_BLOCKERS.contains(&watch.blocker.as_str())
+            || !is_current_watch(&watch, evidence)
+            // A delivered wake ends the park even before the session's next
+            // loop_check row: the seat is about to work again, and a wake
+            // whose session never resumes must not hold the seat either.
+            || evidence.iter().any(|row| {
+                row.session_id.as_deref() == Some(watch.session_id.as_str())
+                    && row.kind == WAKE_EVENT
+                    && row.data.get("watch_event_id").and_then(Value::as_str)
+                        == Some(watch.event_id.as_str())
+            })
+        {
+            continue;
+        }
+        out.insert(watch.session_id.clone(), watch.blocker.clone());
+        let thread = evidence
+            .iter()
+            .find(|row| row.event_id == watch.event_id)
+            .and_then(|row| row.data.get("codex_thread_id"))
+            .and_then(Value::as_str)
+            .filter(|thread| !thread.trim().is_empty());
+        if let Some(thread) = thread {
+            out.insert(thread.to_string(), watch.blocker.clone());
+        }
+    }
+    out
+}
+
 fn event_id(line: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(line.as_bytes()))
 }
 
 pub(crate) fn read_evidence(home: &AgentsHome, now_ms: i64) -> Result<Vec<Evidence>, String> {
+    read_evidence_since(home, now_ms, WINDOW_MS)
+}
+
+/// The same fold over a caller-chosen window (a bounded seat-park read).
+pub(crate) fn read_evidence_since(
+    home: &AgentsHome,
+    now_ms: i64,
+    window_ms: i64,
+) -> Result<Vec<Evidence>, String> {
     let mut types = vec![WATCH_IDLE, WAKE_EVENT];
     types.extend_from_slice(ACTIVITY_AND_TERMINAL);
     let query = crate::event_store::EventQuery {
-        since_ms: Some(now_ms.saturating_sub(WINDOW_MS)),
+        since_ms: Some(now_ms.saturating_sub(window_ms)),
         limit: Some(MAX_EVENTS + 1),
         ..crate::event_store::EventQuery::of_types(&types)
     };
@@ -224,7 +277,7 @@ pub(crate) fn read_evidence(home: &AgentsHome, now_ms: i64) -> Result<Vec<Eviden
             }))
         })
         .filter_map(|row| match row {
-            Ok(Some(row)) if row.ts_ms >= now_ms.saturating_sub(WINDOW_MS) => Some(Ok(row)),
+            Ok(Some(row)) if row.ts_ms >= now_ms.saturating_sub(window_ms) => Some(Ok(row)),
             Ok(Some(_)) | Ok(None) => None,
             Err(error) => Some(Err(error)),
         })
@@ -392,7 +445,7 @@ pub(crate) fn current_node_claims(
     Ok(claims)
 }
 
-fn registry_session_id(entry: &crate::state::RegistryEntry) -> Option<&str> {
+pub(crate) fn registry_session_id(entry: &crate::state::RegistryEntry) -> Option<&str> {
     entry
         .harness_session_id
         .as_deref()

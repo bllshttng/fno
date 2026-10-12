@@ -218,14 +218,6 @@ def test_child_rank_stays_scoped_between_two_live_epics():
     ]
 
 
-def test_rank_band_is_single_source():
-    # Locked Decision 4: board and selection MUST share one `_rank_band`
-    # helper so they can never drift. Both import the same object.
-    from fno.graph._intake import _rank_band as intake_band
-    from fno.graph.render import _rank_band as render_band
-    assert intake_band is render_band
-
-
 def test_swimlane_mode_preserves_work_order_inside_each_project():
     """The board may group projects, but its per-project suffix is work order."""
     epic = {

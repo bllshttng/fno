@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from fno.cli import app
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 runner = CliRunner()
 
@@ -531,32 +532,6 @@ def test_done_no_audit_tag_when_not_driving(tmp_graph, monkeypatch):
 
 # --- view ---
 
-def test_ac1_hp_graph_view_renders_html_and_prints_path(tmp_graph, tmp_path, monkeypatch, native_board_render):
-    """AC1-HP: fno graph view rerenders HTML and echoes the path."""
-    monkeypatch.setenv("FNO_NO_OPEN", "1")
-    html_path = tmp_path / "graph.html"
-
-    _native_verb("add", "ViewTarget")
-    r = _invoke("backlog", "view")
-    assert r.exit_code == 0, r.output
-    assert str(html_path) in r.output
-    assert html_path.exists()
-    text = html_path.read_text(encoding="utf-8")
-    assert "ViewTarget" in text
-    assert "<html" in text
-
-
-def test_ac2_err_graph_view_empty_graph_still_renders(tmp_graph, tmp_path, monkeypatch, native_board_render):
-    """AC2-ERR: view on an empty graph produces an HTML shell, not an error."""
-    monkeypatch.setenv("FNO_NO_OPEN", "1")
-    html_path = tmp_path / "graph.html"
-
-    r = _invoke("backlog", "view")
-    assert r.exit_code == 0, r.output
-    assert html_path.exists()
-    assert "<html" in html_path.read_text(encoding="utf-8")
-
-
 # --- tree ---
 
 # --- status ---
@@ -715,14 +690,6 @@ def _rank(*args: str):
     )
 
 
-def _render_board(g: Path) -> None:
-    """The board render is the keeper's async job after a native write; render
-    explicitly so the ordering assertions read the fresh pin."""
-    from fno.graph.render import render_graph_md
-
-    render_graph_md(_read_graph(g), g.parent / "graph.md")
-
-
 def test_ac1_hp_rank_top_pins_to_lane_front(tmp_graph):
     """AC1-HP: `rank A --top` pins A's rank and leaves unranked peers alone."""
     a = _add("AlphaCard", project="fno", priority="p1")  # Now/fno
@@ -735,20 +702,6 @@ def test_ac1_hp_rank_top_pins_to_lane_front(tmp_graph):
     # A is now ranked, B remains unranked.
     assert _rank_of(tmp_graph, a) is not None
     assert _rank_of(tmp_graph, b) is None
-
-
-def test_ac1_ui_ranked_card_leads_lane_after_before(tmp_graph):
-    """AC1-UI: --before a ranked anchor places the card ahead of it on the board."""
-    a = _add("FirstCard", project="fno", priority="p1")
-    b = _add("SecondCard", project="fno", priority="p1")
-    assert _rank(a, "--top", "--operator").returncode == 0
-    r = _rank(b, "--before", a, "--operator")
-    assert r.returncode == 0, r.stderr
-    assert _rank_of(tmp_graph, b) < _rank_of(tmp_graph, a)
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    now_body = md.split("## Now", 1)[1].split("\n## ", 1)[0]
-    assert now_body.index("SecondCard") < now_body.index("FirstCard")
 
 
 def test_rank_child_defaults_to_within_epic_scope(tmp_graph):
@@ -823,27 +776,6 @@ def test_rank_within_epic_refused_without_live_epic_parent(tmp_graph):
         assert _rank_of(tmp_graph, target) is None
 
 
-def test_rank_within_epic_orders_children_on_board(tmp_graph):
-    """AC1-HP end to end: a child rank reorders cards inside its epic group."""
-    entries = [
-        {"id": "ab-epic004", "title": "Epic", "type": "epic",
-         "status": "ready", "priority": "p1", "project": "fno"},
-        {"id": "ab-later1", "title": "LaterCard", "status": "ready",
-         "priority": "p2", "project": "fno", "parent": "ab-epic004"},
-        {"id": "ab-first1", "title": "FirstCard", "status": "ready",
-         "priority": "p2", "project": "fno", "parent": "ab-epic004"},
-    ]
-    _seed_graph_text(tmp_graph, json.dumps({"entries": entries}) + "\n")
-
-    r = _rank("ab-first1", "--top", "--within-epic", "--operator")
-    assert r.returncode == 0, r.stderr
-    assert "epic ab-epic004" in r.stdout
-
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    assert md.index("FirstCard") < md.index("LaterCard")
-
-
 def test_rank_uses_in_progress_epic_board_lane(tmp_graph):
     entries = [
         {"id": "ab-epic002", "title": "Epic", "type": "epic",
@@ -861,20 +793,6 @@ def test_rank_uses_in_progress_epic_board_lane(tmp_graph):
     assert result.returncode == 0, result.stderr
     assert "In Progress/fno" in result.stdout
     assert _rank_of(tmp_graph, "ab-epic002") < _rank_of(tmp_graph, "ab-anchor2")
-
-
-def test_ac1_after_ranked_anchor_places_behind(tmp_graph):
-    """--after a ranked anchor places the card behind it (own midpoint branch)."""
-    a = _add("LeadCard", project="fno", priority="p1")
-    b = _add("TrailCard", project="fno", priority="p1")
-    assert _rank(a, "--top", "--operator").returncode == 0
-    r = _rank(b, "--after", a, "--operator")
-    assert r.returncode == 0, r.stderr
-    assert _rank_of(tmp_graph, b) > _rank_of(tmp_graph, a)
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    now_body = md.split("## Now", 1)[1].split("\n## ", 1)[0]
-    assert now_body.index("LeadCard") < now_body.index("TrailCard")
 
 
 def test_rank_self_anchor_rejected(tmp_graph):
@@ -982,12 +900,12 @@ def test_ac1_hp_graph_archive(tmp_graph):
     ])
 
     # Dry-run default: nothing moves.
-    r = _invoke("backlog", "archive")
+    r = native_backlog("backlog", "archive")
     assert r.exit_code == 0
     assert "dry-run" in r.output
     assert read_archive_entries(tmp_graph) == []
 
-    r = _invoke("backlog", "archive", "--apply", "--older-than-days", "0")
+    r = native_backlog("backlog", "archive", "--apply", "--older-than-days", "0")
     assert r.exit_code == 0
 
     archived_ids = {e["id"] for e in read_archive_entries(tmp_graph)}
@@ -1127,15 +1045,15 @@ def test_priority_migration_command_is_dry_run_then_idempotent(tmp_graph):
             {"id": "ab-old00002", "title": "Legacy 2", "priority": "p0"},
         ]
     }))
-    dry = _invoke("backlog", "migrate-priorities")
+    dry = native_backlog("backlog", "migrate-priorities")
     assert dry.exit_code == 0, dry.output
     assert json.loads(dry.stdout)["legacy_p0"] == 2
     assert _read_graph(tmp_graph)[0]["priority"] == "p0"
-    applied = _invoke("backlog", "migrate-priorities", "--apply")
+    applied = native_backlog("backlog", "migrate-priorities", "--apply")
     assert json.loads(applied.stdout)["rebanded_to_p1"] == 2
-    second = _invoke("backlog", "migrate-priorities", "--apply")
+    second = native_backlog("backlog", "migrate-priorities", "--apply")
     assert json.loads(second.stdout)["already_migrated"] == 2
-    rollback = _invoke("backlog", "migrate-priorities", "--rollback")
+    rollback = native_backlog("backlog", "migrate-priorities", "--rollback")
     assert json.loads(rollback.stdout)["restored_to_p0"] == 2
     assert all(row["priority"] == "p0" for row in _read_graph(tmp_graph))
 
@@ -1263,31 +1181,6 @@ def test_legacy_entry_without_additional_prs_loads_with_default(tmp_graph):
     assert not data.get("additional_prs")
 
 
-def test_render_md_includes_additional_prs_on_done_nodes(tmp_graph):
-    """Tree rendering surfaces additional_prs URLs for done nodes."""
-    _seed_graph_text(tmp_graph, json.dumps({"entries": [
-        {"id": "ab-87878787", "title": "Multi", "priority": "p2",
-         "type": "feature", "domain": "code", "parent": None,
-         "plan_path": "x.md", "completed_at": "2026-01-01T00:00:00Z",
-         "pr_number": 540, "pr_url": "https://github.com/x/y/pull/540",
-         "additional_prs": [
-             {"number": 542, "url": "https://github.com/x/y/pull/542", "note": "wrap-up"},
-             {"number": 543, "url": "https://github.com/x/y/pull/543"},
-         ],
-         "created_at": "2026-01-01T00:00:00Z"}
-    ]}))
-    from fno.graph.store import read_graph_strict
-    from fno.graph.render import render_graph_md
-    entries = read_graph_strict(tmp_graph)
-    md_path = tmp_graph.parent / "graph.md"
-    render_graph_md(entries, md_path)
-    text = md_path.read_text()
-    assert "https://github.com/x/y/pull/540" in text
-    assert "https://github.com/x/y/pull/542" in text
-    assert "wrap-up" in text
-    assert "https://github.com/x/y/pull/543" in text
-
-
 # --- --completion-note setter ---
 
 def test_update_completion_note_unknown_node_errors(tmp_graph):
@@ -1304,7 +1197,7 @@ def test_update_completion_note_unknown_node_errors(tmp_graph):
 
 # The unpatched transport, captured at collection: the note-evidence stubs
 # below delegate every non-gate verb to it.
-from fno.rust_binary import verb_call as _real_verb_call
+from fno.rust_binary import verb_call as _real_verb_call  # noqa: E402
 
 
 def _note_node():
@@ -1586,8 +1479,10 @@ def test_done_cascade_closes_all_done_parent_epic(tmp_graph):
     a container with no PR of its own; it is done when its children are). Replaces
     the old 'walker closes the epic via next' path."""
     entries = [
+        # No plan_path: an epic carrying its own plan work is not auto-closed
+        # any more, and this test pins the container auto-close, not that hold.
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "p",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-cdone001", "title": "Done child", "status": "done", "project": "p",
          "parent": "ab-epic0000", "completed_at": "2026-01-01T00:00:00Z", "blocked_by": []},
         # Last open child, no PR refs -> `done` closes it with no gh cross-check.
@@ -1629,7 +1524,7 @@ def test_done_cascade_closes_grandparent_chain(tmp_graph):
     when the leaf (the only open node in the chain) lands."""
     entries = [
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "p",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-sub00001", "title": "Sub-epic", "status": "ready", "project": "p",
          "parent": "ab-epic0000", "blocked_by": []},
         {"id": "ab-leaf0002", "title": "Leaf", "status": "ready", "project": "p",
@@ -1651,7 +1546,7 @@ def test_done_cascade_closes_cross_project_parent(tmp_graph):
     closure gap codex flagged (advance() is project-scoped and cannot)."""
     entries = [
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "web",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-leaf0001", "title": "Leaf", "status": "ready", "project": "etl",
          "parent": "ab-epic0000", "blocked_by": [],
          "artifact_url": "https://example.test/artifact"},
@@ -1950,7 +1845,7 @@ def test_maintain_apply_defers_stale_ready(tmp_graph):
             "contained_in": "ab-old", "created_at": _recent_iso(1),
         },
     ])
-    r = _invoke("backlog", "maintain", "--apply", "--json")
+    r = _door_graph(tmp_graph, "maintain", "--apply", "--json", "--no-validity")
     data = json.loads(r.stdout)
     applied = [x["node_id"] for x in data["stale_ready"]["applied"]]
     assert "ab-old" in applied
@@ -1982,7 +1877,7 @@ def test_maintain_apply_skips_in_review_node(tmp_graph):
         "plan_path": "/nonexistent/plan.md", "priority": "p2",
         "created_at": "2026-01-01T00:00:00+00:00", "pr_number": 42,
     }])
-    r = _invoke("backlog", "maintain", "--apply", "--json")
+    r = _door_graph(tmp_graph, "maintain", "--apply", "--json", "--no-validity")
     data = json.loads(r.stdout)
     applied = [x["node_id"] for x in data["stale_ready"]["applied"]]
     assert "ab-inrev" not in applied

@@ -5,6 +5,7 @@ slug in JSON, `ready` slug-leading rows, and the idempotent `backfill-slugs` ver
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 import json
 from pathlib import Path
@@ -73,7 +74,7 @@ def test_roadmap_only_public_no_leaks(tmp_graph):
         {"id": "ab-33333333", "title": "Other project pub", "slug": "op", "status": "ready",
          "priority": "p1", "project": "other", "public": True},  # wrong project -> excluded
     ])
-    result = runner.invoke(app, ["backlog", "roadmap", "--project", "fno"])
+    result = native_backlog("backlog", "roadmap", "--project", "fno")
     assert result.exit_code == 0, result.output
     out = result.stdout
     assert "Public feature" in out
@@ -88,62 +89,49 @@ def test_roadmap_only_public_no_leaks(tmp_graph):
     assert "## Now" in out
 
 
-def test_roadmap_backlog_html_hands_off_public_render(tmp_graph, tmp_path, monkeypatch):
+def _front_stub(tmp_path: Path, *, code: int, stdout: str = "", stderr: str = "") -> Path:
+    """A front binary that records its argv and stdin request, then answers."""
+    stub = tmp_path / "front-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s" "$*" > "{tmp_path}/front.argv"\n'
+        f'cat > "{tmp_path}/front.request"\n'
+        f"printf '%s' '{stdout}'\n"
+        f"printf '%s' '{stderr}' >&2\n"
+        f"exit {code}\n"
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def test_roadmap_backlog_html_hands_off_public_render(tmp_graph, tmp_path):
     """--backlog-html hands the project to board-render's public mode.
 
     Selection and the title gate run in the Rust renderer; the request
     carries only the target path and the project scope, and a failed render
     exits 1 with the reason.
     """
-    import subprocess
-
     _seed(tmp_graph, [
         {"id": "ab-11111111", "title": "Public feature", "slug": "pub", "status": "ready",
          "priority": "p1", "project": "fno"},
-        {"id": "ab-22222223", "title": "Explicitly private", "slug": "private",
-         "status": "ready", "priority": "p2", "project": "fno", "public": False},
-        {"id": "ab-33333333", "title": "Leaky at /Users/bb/tmp", "slug": "leak",
-         "status": "ready", "priority": "p2", "project": "fno"},
     ])
-    seen: dict = {}
-
-    def fake_run(argv, **kwargs):
-        seen["argv"] = argv
-        seen["request"] = json.loads(kwargs["input"])
-        return subprocess.CompletedProcess(
-            argv, 0,
-            stdout='{"written": [{"path": "x", "cards": 1}], "failed": []}',
-            stderr="",
-        )
-
-    def refusing_run(argv, **kwargs):
-        return subprocess.CompletedProcess(
-            argv, 1, stdout="",
-            stderr="board-render: bad request JSON: unknown field `public`",
-        )
-
-    monkeypatch.setattr(
-        "fno.rust_binary.resolve_front_binary", lambda: tmp_path / "stub-front"
-    )
-    monkeypatch.setattr(subprocess, "run", fake_run)
     backlog = tmp_path / "backlog.html"
+    argv = ("backlog", "roadmap", "--project", "fno", "--backlog-html", str(backlog))
 
-    result = runner.invoke(
-        app,
-        ["backlog", "roadmap", "--project", "fno", "--backlog-html", str(backlog)],
-    )
+    ok = _front_stub(tmp_path, code=0, stdout='{"written": [], "failed": []}')
+    result = native_backlog(*argv, env_override={"FNO_BIN": str(ok)})
     assert result.exit_code == 0, result.output
-    assert seen["argv"][-1] == "board-render"
-    assert seen["request"]["targets"] == [{"path": str(backlog)}]
-    assert seen["request"]["public"] == {"project": "fno"}
+    assert (tmp_path / "front.argv").read_text() == "board-render"
+    request = json.loads((tmp_path / "front.request").read_text())
+    assert request["targets"] == [{"path": str(backlog)}]
+    assert request["public"] == {"project": "fno"}
 
-    monkeypatch.setattr(subprocess, "run", refusing_run)
-    failed = runner.invoke(
-        app,
-        ["backlog", "roadmap", "--project", "fno", "--backlog-html", str(backlog)],
+    refusing = _front_stub(
+        tmp_path, code=1, stderr="board-render: bad request JSON: unknown field `public`"
     )
+    failed = native_backlog(*argv, env_override={"FNO_BIN": str(refusing)})
     assert failed.exit_code == 1
-    assert "predates the public board render" in (failed.stdout + (failed.stderr or ""))
+    assert "predates the public board render" in failed.output
 
 
 def test_roadmap_includes_archive_only_shipped_row(tmp_graph, tmp_path):
@@ -156,69 +144,33 @@ def test_roadmap_includes_archive_only_shipped_row(tmp_graph, tmp_path):
          "archived_at": "2026-08-21T00:00:00Z"},
     ])
 
-    result = runner.invoke(app, ["backlog", "roadmap", "--project", "fno"])
+    result = native_backlog("backlog", "roadmap", "--project", "fno")
 
     assert result.exit_code == 0, result.output
     assert "## Shipped" in result.stdout
     assert "Archive shipped marker" in result.stdout
 
 
-def test_view_refuses_when_the_board_render_fails(tmp_graph, monkeypatch):
-    def _failing():
-        return 1
-
-    monkeypatch.setattr("fno.graph.roadmap_public.render_local_targets", _failing)
-
-    result = runner.invoke(app, ["backlog", "view"])
-
-    assert result.exit_code != 0
-    assert "local board render failed" in (result.stdout + (result.stderr or ""))
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["backlog", "roadmap", "--project", "fno"],
-    ],
-)
-def test_html_views_refuse_stale_local_graph_under_external_tracker(
-    tmp_graph, monkeypatch, argv
-):
+def test_roadmap_refuses_stale_local_graph_under_external_tracker(tmp_graph):
     _seed(tmp_graph, [
         {"id": "ab-local001", "title": "STALE-LOCAL-MARKER", "status": "ready",
          "priority": "p1", "project": "fno"},
     ])
-    monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
 
-    result = runner.invoke(app, argv)
+    result = native_backlog(
+        "backlog", "roadmap", "--project", "fno",
+        env_override={"FNO_TRACKER_BACKEND": "github"},
+    )
 
     assert result.exit_code == 2
-    output = result.stdout + (result.stderr or "")
-    assert "stale local" in output.lower() or "external" in output.lower()
-    assert "STALE-LOCAL-MARKER" not in output
+    assert "external tracker" in result.output
+    assert "STALE-LOCAL-MARKER" not in result.output
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["backlog", "roadmap", "--project", "fno"],
-    ],
-)
-def test_html_views_refuse_corrupt_live_graph_even_with_healthy_archive(
-    tmp_graph, tmp_path, monkeypatch, argv
-):
-    from fno.graph import _constants as graph_constants
-    from fno.graph import store as graph_store
-
-    bad_graph = tmp_path / "corrupt-graph.json"
-    bad_db = bad_graph.with_suffix(".db")
-    bad_db.write_text("{broken", encoding="utf-8")
-    monkeypatch.setattr(graph_constants, "GRAPH_JSON", bad_graph)
-    monkeypatch.setattr(graph_store, "GRAPH_JSON", bad_graph)
-    monkeypatch.setattr("fno.paths.graph_json", lambda: bad_graph)
-    monkeypatch.setattr(
-        graph_constants, "GRAPH_ARCHIVE_JSON", tmp_path / "graph-archive.json"
-    )
+def test_roadmap_refuses_corrupt_live_graph_even_with_healthy_archive(tmp_path, monkeypatch):
+    graph = tmp_path / "graph.json"
+    graph.with_suffix(".db").write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     (tmp_path / "graph-archive.json").write_text(
         json.dumps({"entries": [
             {"id": "ab-archive1", "title": "ARCHIVE-ONLY-SUCCESS-MARKER",
@@ -227,12 +179,11 @@ def test_html_views_refuse_corrupt_live_graph_even_with_healthy_archive(
         encoding="utf-8",
     )
 
-    result = runner.invoke(app, argv)
+    result = native_backlog("backlog", "roadmap", "--project", "fno")
 
     assert result.exit_code != 0
-    output = result.stdout + (result.stderr or "")
-    assert "canonical graph read failed" in output
-    assert "ARCHIVE-ONLY-SUCCESS-MARKER" not in output
+    assert "canonical graph read failed" in result.output
+    assert "ARCHIVE-ONLY-SUCCESS-MARKER" not in result.output
 
 
 def test_public_title_gate_omits_leaky_rows_and_publishes_the_rest(tmp_graph):
@@ -247,7 +198,7 @@ def test_public_title_gate_omits_leaky_rows_and_publishes_the_rest(tmp_graph):
          "status": "ready", "priority": "p2", "project": "fno"},
     ])
 
-    result = runner.invoke(app, ["backlog", "roadmap", "--project", "fno"])
+    result = native_backlog("backlog", "roadmap", "--project", "fno")
 
     assert result.exit_code == 0, result.output
     assert "Clean row publishes" in result.stdout
@@ -287,7 +238,7 @@ def test_roadmap_uses_live_epic_priority_and_shared_order(
          "priority": "p3", "project": "fno", "public": True},
     ])
 
-    md = runner.invoke(app, ["backlog", "roadmap", "--project", "fno"]).stdout
+    md = native_backlog("backlog", "roadmap", "--project", "fno").stdout
     md_now = md.split("## Now", 1)[1].split("## Next", 1)[0]
     md_next = md.split("## Next", 1)[1]
     assert md_now.index("Promoted child") < md_now.index("Loose now")
@@ -305,7 +256,7 @@ def test_roadmap_folds_triage_into_later(tmp_graph):
         {"id": "ab-88888888", "title": "Plain p3 item", "slug": "p3", "status": "ready",
          "priority": "p3", "project": "fno", "public": True},
     ])
-    out = runner.invoke(app, ["backlog", "roadmap", "--project", "fno"]).stdout
+    out = native_backlog("backlog", "roadmap", "--project", "fno").stdout
     assert "## Later" in out
     assert "Queued p1 item" in out   # folded in despite being Triage internally
     assert "Plain p3 item" in out

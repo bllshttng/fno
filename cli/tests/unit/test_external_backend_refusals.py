@@ -79,10 +79,13 @@ def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
 
     if (
-        argv[:2] in (["backlog", "update"], ["backlog", "add"], ["backlog", "queue"])
+        argv[:2] in (
+            ["backlog", "update"], ["backlog", "add"], ["backlog", "queue"], ["backlog", "maintain"],
+            ["backlog", "encounter"],
+        )
         or argv[:2] == ["backlog", "session"]
     ):
-        # The update, add and session leaves answer natively now; their guard
+        # The update, add, maintain and session leaves answer natively now; their guard
         # rode along, so the refusal asserts at the binary under the same env.
         from fno.rust_binary import find_dev_binary
 

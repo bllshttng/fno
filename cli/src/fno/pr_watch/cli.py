@@ -511,6 +511,21 @@ def _tick_outcome(result, tick_failed: Optional[str], timed_out: bool) -> str:
     return "ok"
 
 
+
+def _replay_views() -> None:
+    """Replay the native view pass. The provenance cache moves no store
+    version, so the keeper's render pass would never see the change."""
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is not None:
+        subprocess.run(
+            [str(binary), "backlog", "render-views"],
+            capture_output=True, check=False, timeout=600,
+        )
+
 @cli.command()
 def tick() -> None:
     """Poll open-PR backlog nodes and fire /fno:ship pr check or /fno:ship pr merged.
@@ -1433,9 +1448,7 @@ def tick() -> None:
                     f"acted={acted_n} failed={failed_n}"
                 )
                 if changed:
-                    from fno.graph.render import render_graph_md
-                    from fno.graph.store import read_graph_strict
-                    render_graph_md(read_graph_strict())
+                    _replay_views()
             except _WatchdogBudgetSpent as exc:
                 log.info("pr-watch: stranded leg skipped: %s", exc)
             except Exception as exc:  # noqa: BLE001 - never let the stranded sweep break pr-watch
@@ -1705,9 +1718,30 @@ def ensure_watcher_activated() -> str:
 
 def deactivate_watcher() -> str:
     """Unload the watcher (keep the plist) when pr_watch.enabled is set false."""
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    return m.unload_only(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # No binary, no deactivation leg. The caller's warning names the remedy
+        # and the config write stays enabled for doctor to flag.
+        return "unload-failed"
+    try:
+        proc = subprocess.run(
+            [str(binary), "pr-watch", "uninstall", "--unload-only"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # A wedged launchctl (a documented hang mode here) or an
+        # unexecutable binary degrades to the caller's loud warning.
+        return "unload-failed"
+    word = proc.stdout.strip()
+    known = {"not-installed", "already-unloaded", "unloaded", "unload-failed"}
+    return word if word in known else "unload-failed"
 
 
 # ---------------------------------------------------------------------------
@@ -1722,9 +1756,24 @@ def uninstall() -> None:
     Preserves ~/.fno/pr-watcher-state.json so a reinstall does not re-fire
     previously handled PRs.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    m.uninstall(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr watch uninstall: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    argv = [str(binary), "pr-watch", "uninstall"]
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 # ---------------------------------------------------------------------------

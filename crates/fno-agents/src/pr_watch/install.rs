@@ -674,6 +674,58 @@ pub(crate) fn ensure_activated(
     }
 }
 
+/// The coupling word the config forward reads verbatim: `not-installed`,
+/// `already-unloaded`, `unloaded` or `unload-failed`.
+pub(crate) fn unload_only(launch_agents_dir: &Path) -> &'static str {
+    let plist_path = launch_agents_dir.join(PLIST_FILENAME);
+    if !plist_path.exists() {
+        return "not-installed";
+    }
+    if !launchctl_is_loaded() {
+        return "already-unloaded";
+    }
+    if run_launchctl(&["unload", &plist_path.display().to_string()]) == 0 {
+        "unloaded"
+    } else {
+        "unload-failed"
+    }
+}
+
+/// Best-effort uninstall: unload, remove the plist, keep the watermark store
+/// so a reinstall does not re-fire handled PRs. A failed plist removal exits
+/// nonzero, as the Python unlink did; the unload itself stays best effort.
+pub fn run_uninstall(args: &[String]) -> i32 {
+    for arg in args {
+        if arg != "--unload-only" {
+            eprintln!("fno-agents pr-watch uninstall: unknown argument {arg}");
+            return 2;
+        }
+    }
+    let agents_dir = launch_agents_dir();
+    if args.iter().any(|arg| arg == "--unload-only") {
+        println!("{}", unload_only(&agents_dir));
+        return 0;
+    }
+    let plist_path = agents_dir.join(PLIST_FILENAME);
+    if plist_path.exists() {
+        // The unload is best effort: the removal happens either way, exactly
+        // as the Python leg did it.
+        run_launchctl(&["unload", &plist_path.display().to_string()]);
+        if let Err(err) = std::fs::remove_file(&plist_path) {
+            eprintln!(
+                "fno-agents pr-watch uninstall: failed to remove {}: {err}",
+                plist_path.display()
+            );
+            return 1;
+        }
+        println!("Removed: {}", plist_path.display());
+    } else {
+        println!("Nothing to remove: {} does not exist", plist_path.display());
+    }
+    println!("Watermark store preserved (reinstall picks up existing history).");
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

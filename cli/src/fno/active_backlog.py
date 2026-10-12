@@ -12,6 +12,7 @@ raising, so the daemon never crashes on an operator config typo.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,13 +51,17 @@ def touch_nudge() -> None:
 def _workspace_paths() -> dict[str, str]:
     """project name -> normalized absolute path, from the workspace map.
 
-    Reuses ``graph.maintain.load_workspaces`` so this resolver cannot drift from
-    the project/cwd map ``fno backlog maintain`` / ``health`` already use.
+    Reads the canonical settings-file resolver (project-local + global), so
+    this map cannot drift from the one ``fno backlog maintain`` uses.
     """
     try:
-        from fno.graph.maintain import load_workspaces
+        from fno.graph._intake import _iter_settings_projects
 
-        return load_workspaces()
+        return {
+            name: os.path.normpath(os.path.expanduser(raw))
+            for name, raw in _iter_settings_projects()
+            if isinstance(name, str) and isinstance(raw, str)
+        }
     except Exception:
         return {}
 

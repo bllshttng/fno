@@ -1216,10 +1216,10 @@ def _validate_company_work(entries: list[dict]) -> None:
 def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     """Everything that follows a landed publish, shared by the commit cycle
     and the typed-op cycle: the dropped-row warning, the closure claim
-    releases, the readiness overlay, the board renders, and the drain-daemon
-    nudge. The file leg ran all of these after its lock dropped; the client
-    runs them after the keeper's publish lands, which is the same position
-    relative to other writers."""
+    releases, the readiness overlay, and the drain-daemon nudge. The file leg
+    ran all of these after its lock dropped; the client runs them after the
+    keeper's publish lands, which is the same position relative to other
+    writers."""
     path = Path(path)
     dropped = outcome.get("dropped", 0)
     backup = outcome.get("backup")
@@ -1243,19 +1243,9 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     for release in outcome.get("closure_releases", []):
         release_node_claim_at_closure(release["id"], rung=release["rung"])
 
-    # The client renders in-call when the write landed on the configured
-    # store; the keeper's trigger replays the pass for native writers and
-    # retries failures. A scratch graph renders only its own siblings.
-    from fno import paths as _paths
-
-    try:
-        configured = Path(_paths.graph_json()) == path
-    except Exception:  # noqa: BLE001 - an unresolvable config still owes a render
-        configured = False
-    try:
-        render_view_projections(outcome["entries"], configured, path)
-    except Exception as exc:  # noqa: BLE001 - a render failure never fails the write
-        print(f"Warning: post-publish render failed: {exc}", file=sys.stderr)
+    # The derived views (graph.md, the board targets) are the keeper's
+    # settled render pass, the same for every writer: a write never waits on
+    # a render.
     # Wake the active-backlog drain daemon: best-effort, never
     # wedges the mutation.
     try:
@@ -1265,70 +1255,6 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     except Exception:
         pass
     return outcome["entries"]
-
-
-def render_canonical_views() -> int:
-    """Replay the canonical post-publish views from a fresh read. The store's
-    NATIVE writers (the mux reorder verbs) land graph bytes through the keeper
-    without the Python post-publish pass; this is the pass they replay, so a
-    native write leaves the same derived views (graph.md, the configured board
-    targets) a CLI write would. Every step is best-effort: a render failure
-    never rewrites history. Returns the count of failed views so the caller
-    can refuse a false success."""
-    from fno import paths as _paths
-
-    failures: list[str] = []
-    graph = Path(_paths.graph_json())
-    entries = read_graph_strict(graph)
-    try:
-        entries = apply_readiness_overlay_via_store(entries)
-    except Exception:  # noqa: BLE001 - a render-freshness pass never fails a landed publish
-        pass
-    # Canonical BY CONTRACT: the caller picks the store; the config-resolved graph's targets refresh.
-    render_view_projections(entries, True, graph, failures=failures)
-    return len(failures)
-
-
-def render_view_projections(
-    entries: list[dict], is_canonical: bool, path: Path, *, failures: list[str] | None = None
-) -> list[dict]:
-    """The view projections a landed publish owes; returns the overlay-applied
-    entries. A ``failures`` list collects one entry per failed view; the default keeps the stderr warning."""
-    from fno.graph.render import render_graph_md
-    from fno.graph import _constants as _gc
-    from fno.paths import vault_root
-
-    # recompute (server-side) does not derive `blocked` (a read-time overlay);
-    # re-apply it before rendering, or a newly blocked/unblocked sibling renders stale in graph.md.
-    try:
-        entries = apply_readiness_overlay_via_store(entries)
-    except Exception:  # noqa: BLE001 - a render-freshness pass never fails a landed publish
-        pass
-    def _fail(message: str) -> None:
-        # Collectors get the reason; fire-and-forget keeps stderr.
-        (failures.append(message) if failures is not None
-         else print(f"Warning: {message}", file=sys.stderr))
-
-    md_target = _gc.GRAPH_MD if is_canonical else path.with_name("graph.md")
-    try:
-        _obsidian = vault_root() is not None
-    except Exception:
-        _obsidian = False
-    try:
-        render_graph_md(entries, md_target, obsidian=_obsidian)
-    except OSError as e:
-        _fail(f"graph.md render failed: {e}")
-    _archived = entries_with_archive(entries)
-    if is_canonical:
-        try:
-            from fno.graph.roadmap_public import render_local_targets
-
-            failed = render_local_targets()
-            if failed:
-                _fail(f"local board render: {failed} target(s) failed")
-        except Exception as e:
-            _fail(f"local board render failed: {e}")
-    return entries
 
 
 def _emit_graph_tx_event(**data: Any) -> None:
@@ -1492,26 +1418,6 @@ def append_progress_note(
     # alone is the op's word, not the published file's.
     landed, _ = _confirm_note_landed(Path(path), resolved, note)
     return landed, result.get("plan_path")
-
-
-def append_encounter(
-    path: Path, node_id: str, record: dict
-) -> "tuple[bool, str | None, str | None]":
-    """Append one encounter, refusing a second from the same voter.
-
-    Returns ``(appended, error, reason)``. ``reason`` is one of ``"missing"``,
-    ``"duplicate"``, or ``"unidentified"`` -- a caller picks an exit code from
-    a symbol, never from this function's prose.
-    """
-    resolved = _resolve_node_id(Path(path), node_id)
-    if resolved is None:
-        return False, f"no node resolves to '{node_id}'", "missing"
-    result = _run_op(Path(path), "append_encounter", {"node_id": resolved, "record": record})
-    return (
-        bool(result.get("appended")),
-        result.get("error"),
-        result.get("reason"),
-    )
 
 
 def append_wave_note(path: Path, node_id: str, note: dict) -> tuple[bool, str | None]:

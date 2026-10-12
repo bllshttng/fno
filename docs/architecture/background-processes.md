@@ -33,7 +33,7 @@ The gated table: every `sh.fno.*` label an installer in this repo writes. Column
 | label | installed by | runs | cadence | arms it hosts | health read | safe stop |
 |---|---|---|---|---|---|---|
 | `sh.fno.pr-watcher` | `fno do pr watch install` (`cli/src/fno/pr_watch/_install.py`, constant `_LABEL`) | `fno-py do pr watch tick` | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
-| `sh.fno.groom` | `fno backlog groom --install-agent` (`cli/src/fno/backlog/groom.py`, `install_groom_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom` (no uninstall verb exists) |
+| `sh.fno.groom` | `fno backlog groom --install-agent` (`crates/fno-agents/src/backlog/groom.rs`, `install_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom` (no uninstall verb exists) |
 
 Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loops table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
 
@@ -80,11 +80,13 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `slot_cutover` | `daemon` | `fno-agents-daemon` | switches to a globally declared managed Claude account when the proven account is low or exhausted | 120 s |
 | `slot_login_health` | `daemon` | `fno-agents-daemon` | health-checks every shared-slot managed Claude login and raises one operator notice when one dies | 120 s |
 | `merge_close` | `daemon` | `fno-agents-daemon` | merge-close sweeps | 900 s |
+| `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 60 s |
 | `team_ledger` | `daemon` | `fno-agents-daemon` | renders rundown.html | 300 s |
 | `lead_eval` | `daemon` | `fno-agents-daemon` | writes missing eval parts for ended Claude leads | 600 s |
 | `fleet_page` | `daemon` | `fno-agents-daemon` | renders fleet.html | 1800 s |
 | `attention` | `daemon` | `fno-agents-daemon` | selects attention rows into the status payload | 30 s |
 | `notice_route` | `daemon` | `fno-agents-daemon` | routes reconcile warnings to the owning lead and folds repeated failures into one node | 300 s |
+| `otlp_export` | `daemon` | `fno-agents-daemon` | exports the tick ledger's control-plane rows to the configured OTLP endpoint when `telemetry.otlp.enabled` is on | 300 s |
 | `heal` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the PR auto-heal drive, gated on `auto_heal.enabled` | 600 s |
 | `evals` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the eval bank's demand leg | per `evals.schedule_days` |
 | `stranded` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the stranded-session sweep | one tick in three |

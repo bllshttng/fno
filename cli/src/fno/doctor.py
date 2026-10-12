@@ -1227,18 +1227,40 @@ def _groom_health() -> dict[str, Any]:
     nothing reported the silence. This is the report.
     """
     try:
-        from fno.backlog.groom import GROOM_LABEL, GROOM_STALE_HOURS, groom_staleness
-
-        state, hours = groom_staleness()
-        plist = Path.home() / "Library" / "LaunchAgents" / f"{GROOM_LABEL}.plist"
+        # The native probe exits 0 exactly when a pass is due (never ran, or
+        # past its stale threshold), so the exit code IS the stale verdict.
+        proc, probe = _groom_verb("--check")
+        plist = Path.home() / "Library" / "LaunchAgents" / "sh.fno.groom.plist"
         return {
-            "state": state,
-            "hours": hours,
-            "stale": state == "never" or (state == "ran" and hours is not None and hours > GROOM_STALE_HOURS),
+            "state": probe["state"],
+            "hours": probe["hours"],
+            "stale": proc.returncode == 0,
             "agent_installed": plist.exists(),
         }
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         return {"state": "unknown", "hours": None, "stale": False, "agent_installed": False}
+
+
+def _groom_verb(flag: str) -> tuple[subprocess.CompletedProcess, dict[str, Any]]:
+    """One native `backlog groom <flag>` call and its parsed JSON receipt."""
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise RuntimeError("fno-agents binary not found")
+    proc = subprocess.run(
+        [str(binary), "backlog", "groom", flag],
+        capture_output=True, text=True, timeout=120,
+    )
+    return proc, json.loads(proc.stdout)
+
+
+def _groom_install_agent() -> dict[str, Any]:
+    """Install the daily groom LaunchAgent through the native verb."""
+    try:
+        return _groom_verb("--install-agent")[1]
+    except Exception as exc:  # noqa: BLE001 - --fix is advisory
+        return {"status": "failed", "detail": str(exc)[:200]}
 
 
 def _archive_id_collisions() -> dict[str, Any]:
@@ -4643,9 +4665,7 @@ def doctor_command(
             and not gr.get("agent_installed")
             and not json_out
         ):
-            from fno.backlog.groom import install_groom_agent
-
-            receipt = install_groom_agent()
+            receipt = _groom_install_agent()
             typer.echo(
                 f"fno doctor: --fix groom agent: {receipt.get('status')}"
                 f" ({receipt.get('detail') or receipt.get('plist')})",

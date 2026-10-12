@@ -11,10 +11,12 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 /// Claim keys that decide dispatch. With `store.remote_url` set they live on
-/// the shared primary, so two machines never hold one node. Every other key
-/// names a machine-local resource (`build:cargo`, `session:`, `worker:`) and
-/// stays in this machine's graph.db.
-pub(crate) const SHARED_PREFIXES: &[&str] = &["node:", "dispatch:", "reconcile:"];
+/// the shared primary, so two machines never hold one node. `name:` keys are
+/// the successor-name draw's cross-host gate: two machines never hold one
+/// lead name. Every other key names a machine-local resource
+/// (`build:cargo`, `session:`, `worker:`) and stays in this machine's
+/// graph.db.
+pub(crate) const SHARED_PREFIXES: &[&str] = &["node:", "dispatch:", "reconcile:", "name:"];
 
 pub(crate) fn shared(key: &str) -> bool {
     SHARED_PREFIXES.iter().any(|p| key.starts_with(p))

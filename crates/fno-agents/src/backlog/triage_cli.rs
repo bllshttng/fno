@@ -378,7 +378,7 @@ const CONSISTENCY_SCHEMA: &str = r#"{
 /// llm_call): FNO_LLM_STUB replaces the binary under tests, a real call is
 /// `claude -p --output-format json` with the prompt on stdin, schema and
 /// system prompt ride their flags, and any failure names its cause.
-fn llm_one_shot(
+pub(super) fn llm_one_shot(
     prompt: &str,
     schema: Option<&str>,
     system_prompt: Option<&str>,

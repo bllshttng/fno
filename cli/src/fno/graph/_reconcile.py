@@ -1514,6 +1514,16 @@ def clear_reopen_warning_if_child_matches(parent: dict, child: object) -> None:
         parent.pop("reopen_warning", None)
 
 
+def _parse_iso(value: object) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
     """True when a deliberate reopen postdates every child's close.
 
@@ -1541,7 +1551,6 @@ def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
     a different coat. A parent carrying no ``reopened_at`` is unaffected, which
     is every node that was never reopened.
     """
-    from fno.graph.board import _parse_iso
 
     reopened_raw = parent.get("reopened_at")
     if not isinstance(reopened_raw, str) or not reopened_raw.strip():
@@ -1561,7 +1570,6 @@ def _reopen_outranks_merge(node: dict, merged_at: object) -> bool:
     Merge-keyed twin of :func:`_reopen_outranks_child_closes`; full contract:
     docs/architecture/backlog-graph-verb-contracts.md
     """
-    from fno.graph.board import _parse_iso
 
     reopened_raw = node.get("reopened_at")
     if not isinstance(reopened_raw, str) or not reopened_raw.strip():
@@ -1591,7 +1599,6 @@ def _merge_postdates_reopen(
     Expiry half of :func:`_reopen_outranks_merge`; full contract:
     docs/architecture/backlog-graph-verb-contracts.md
     """
-    from fno.graph.board import _parse_iso
 
     reopened_raw = node.get("reopened_at")
     reopened = _parse_iso(reopened_raw) if isinstance(reopened_raw, str) else None
@@ -1645,6 +1652,10 @@ def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> 
         return True
     if _reopen_outranks_child_closes(parent, kids):
         return True  # reopened after its children finished -> the human call holds
+    if parent.get("plan_path") and not (
+        parent.get("pr_number") or parent.get("additional_prs")
+    ):
+        return True  # own plan work: deliverables unverified, the close false-fires
     return not children_all_closed(parent, kids)
 
 
