@@ -1044,6 +1044,18 @@ mod tests {
         r2_and_r3_legs();
     }
 
+    #[test]
+    fn confirmed_status_report_is_not_a_decision_ask() {
+        // 2026-10-12: the ASK marker "confirm" substring-matched "confirmed",
+        // so a numbered status report blocked Stop as an unfiled ask. The
+        // confirm asks that remain are the pointed ones.
+        let status =
+            "Checks are green and the merge is confirmed safe.\n1. PR 3376 open\n2. CI green";
+        assert!(!decision_ask(status));
+        let ask = "Please confirm the pick.\n1. merge now\n2. hold";
+        assert!(decision_ask(ask));
+    }
+
     fn r1_unpromoted_and_cap_legs() {
         // AC5: unpromoted, no manifest, default config - the same ask allows.
         let rig = Rig::new(false);
