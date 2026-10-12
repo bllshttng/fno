@@ -482,9 +482,9 @@ pub(crate) fn launch_agents_dir() -> PathBuf {
 }
 
 /// True when the watcher's label appears in `launchctl list` output. The
-/// env pin is test-only: the parity fixtures inject the load state the way
-/// the Python tests monkeypatch `_launchctl_is_loaded`, so the goldens do
-/// not depend on the capture machine's own registration.
+/// env pin is a test-only escape hatch; the parity fixtures inject the load
+/// state by answering `launchctl list` through the PATH stub, so the
+/// goldens do not depend on the capture machine's own registration.
 pub(crate) fn launchctl_is_loaded() -> bool {
     if let Ok(pin) = std::env::var("FNO_TEST_PR_WATCH_LOADED") {
         return pin == "1";
