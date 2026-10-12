@@ -1810,7 +1810,7 @@ def _changed_steps(
         # xdist costs more than it saves on a handful of files.
         par = " -n auto --maxprocesses=4 --dist=loadgroup" if len(targets) > 3 else ""
         steps.append((f"Pytest (changed subset, {len(targets)} file(s))", ".",
-                      f"uv run --project cli pytest --tb=long -v -p no:randomly{par} "
+                      f"uv run --project cli pytest --tb=short -q{par} "
                       + " ".join(shlex.quote(t) for t in targets)))
     # The pytest shard DELETES the debug binary on exit (the @requires_rust
     # seam), so any shell harness after pytest needs a build of its own there;
