@@ -603,23 +603,47 @@ impl IsolatedRoot {
     }
 
     fn fno(&self, argv: &[&str]) -> (Option<i32>, String) {
-        let fno_bin = std::env::var("FNO_PROBE_FNO").unwrap_or_else(|_| "fno".to_string());
-        let mut cmd = Command::new(fno_bin);
-        cmd.args(argv);
-        cmd.env("READINESS_SMOKE", "1");
-        self.child_env(&mut cmd);
-        run_command_bounded(cmd, INSTRUMENT_TIMEOUT_S)
+        self.fno_bounded(argv, INSTRUMENT_TIMEOUT_S)
     }
 
     /// The same subprocess under a custom bound: the spawn waits up to
     /// `LIVE_SPAWN_TIMEOUT_S`, the short polls up to `PROBE_TIMEOUT_S`.
     fn fno_bounded(&self, argv: &[&str], secs: u64) -> (Option<i32>, String) {
-        let fno_bin = std::env::var("FNO_PROBE_FNO").unwrap_or_else(|_| "fno".to_string());
-        let mut cmd = Command::new(fno_bin);
+        let mut cmd = Command::new(probe_fno_bin());
         cmd.args(argv);
         cmd.env("READINESS_SMOKE", "1");
         self.child_env(&mut cmd);
         run_command_bounded(cmd, secs)
+    }
+}
+
+/// The fno porcelain a probe drives. A relative override with a slash
+/// (`target/debug/fno`) resolves against the caller's cwd now, because the
+/// child runs in the isolated root, where that path does not exist.
+fn probe_fno_bin() -> PathBuf {
+    let bin = PathBuf::from(std::env::var("FNO_PROBE_FNO").unwrap_or_else(|_| "fno".to_string()));
+    if bin.is_relative() && bin.components().count() > 1 {
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(bin);
+        }
+    }
+    bin
+}
+
+/// One headless turn through the declared `headless_resume` argv. A
+/// `fno-agents <verb>` form runs as `fno agents <verb>`, so the turn uses the
+/// FNO_PROBE_FNO build the run drives.
+fn ask_headless(root: &IsolatedRoot, argv: &[String], message: &str) -> (Option<i32>, String) {
+    if argv[0] == "fno-agents" {
+        let mut ask: Vec<&str> = vec!["agents"];
+        ask.extend(argv[1..].iter().map(String::as_str));
+        ask.push(message);
+        root.fno_bounded(&ask, LIVE_SPAWN_TIMEOUT_S)
+    } else {
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]).arg(message);
+        root.child_env(&mut cmd);
+        run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S)
     }
 }
 
@@ -1002,32 +1026,71 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     );
     lines.push(claim);
 
+    // A headless one-shot has exited after its answer: mail reaches no live
+    // process, so every later turn goes through the declared headless_resume
+    // form.
+    let resume_argv = contract
+        .as_ref()
+        .filter(|_| substrate == Some("headless") && !session_id.is_empty())
+        .and_then(|contract| {
+            contract
+                .render_session_argv_with_ids(harness, "headless_resume", Some(&session_id), None)
+                .ok()
+        })
+        .filter(|argv| !argv.is_empty());
+
     // MAIL BOTH WAYS: a sent message changes the worker's output.
     let mail_nonce = format!(
         "{:032x}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0) as u128
     );
-    let (_mail_code, _) = root.fno(&[
-        "agents",
-        "mail",
-        "send",
-        &name,
-        &format!("PROBE_MAIL={mail_nonce}"),
-    ]);
-    let (_, logs_before_mail) = root.fno(&["agents", "logs", &name]);
+    let mail_message = format!("PROBE_MAIL={mail_nonce}");
     let reply_marker = format!("PROBE_REPLY={mail_nonce}");
-    let mail = retry_marker(
-        "MAIL BOTH WAYS",
-        "worker response to sent message",
-        || {
-            let (_, logs_after) = root.fno(&["agents", "logs", &name]);
-            if logs_after.contains(&reply_marker) && !logs_before_mail.contains(&reply_marker) {
-                return reply_marker.clone();
+    let mail = if substrate == Some("headless") {
+        match &resume_argv {
+            Some(argv) => {
+                let (_, logs_before_mail) = root.fno(&["agents", "logs", &name]);
+                let (ask_code, reply) = ask_headless(root, argv, &mail_message);
+                retry_marker(
+                    "MAIL BOTH WAYS",
+                    "worker response to sent message",
+                    || {
+                        let (_, logs_after) = root.fno(&["agents", "logs", &name]);
+                        if ask_code == Some(0)
+                            && !logs_before_mail.contains(&reply_marker)
+                            && (reply.contains(&reply_marker) || logs_after.contains(&reply_marker))
+                        {
+                            return reply_marker.clone();
+                        }
+                        String::new()
+                    },
+                    Duration::from_millis(500),
+                )
             }
-            String::new()
-        },
-        Duration::from_millis(500),
-    );
+            None => LineVerdict::new(
+                "MAIL BOTH WAYS",
+                "skip",
+                "worker response to sent message",
+                1,
+                "no session id to render the declared headless_resume form".to_string(),
+            ),
+        }
+    } else {
+        let (_mail_code, _) = root.fno(&["agents", "mail", "send", &name, &mail_message]);
+        let (_, logs_before_mail) = root.fno(&["agents", "logs", &name]);
+        retry_marker(
+            "MAIL BOTH WAYS",
+            "worker response to sent message",
+            || {
+                let (_, logs_after) = root.fno(&["agents", "logs", &name]);
+                if logs_after.contains(&reply_marker) && !logs_before_mail.contains(&reply_marker) {
+                    return reply_marker.clone();
+                }
+                String::new()
+            },
+            Duration::from_millis(500),
+        )
+    };
     lines.push(mail);
 
     // VIEW: the harness's own pane, read through its reference.
@@ -1068,38 +1131,13 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     // A headless one-shot has already exited after its answer, so the stop
     // is given; the declared headless_resume form carries the next turn.
     if substrate == Some("headless") {
-        let resume_argv = contract
-            .as_ref()
-            .filter(|_| !session_id.is_empty())
-            .and_then(|contract| {
-                contract
-                    .render_session_argv_with_ids(
-                        harness,
-                        "headless_resume",
-                        Some(&session_id),
-                        None,
-                    )
-                    .ok()
-            });
-        match resume_argv {
-            Some(argv) if !argv.is_empty() => {
+        match &resume_argv {
+            Some(argv) => {
                 let seed_marker = format!("PROBE_SEED={nonce}");
                 let survive_marker = format!("PROBE_SURVIVE={nonce}");
                 let (_, logs_at_start) = root.fno(&["agents", "logs", &name]);
-                let request = format!("PROBE_SURVIVE_REQUEST={nonce}");
-                // `fno-agents <verb>` is `fno agents <verb>`: the porcelain
-                // keeps this turn on the FNO_PROBE_FNO build the run drives.
-                let (resume_code, reply) = if argv[0] == "fno-agents" {
-                    let mut ask: Vec<&str> = vec!["agents"];
-                    ask.extend(argv[1..].iter().map(String::as_str));
-                    ask.push(&request);
-                    root.fno_bounded(&ask, LIVE_SPAWN_TIMEOUT_S)
-                } else {
-                    let mut cmd = Command::new(&argv[0]);
-                    cmd.args(&argv[1..]).arg(&request);
-                    root.child_env(&mut cmd);
-                    run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S)
-                };
+                let (resume_code, reply) =
+                    ask_headless(root, argv, &format!("PROBE_SURVIVE_REQUEST={nonce}"));
                 let survive = retry_marker(
                     "SURVIVE",
                     "prior turn after process stop",
@@ -1119,7 +1157,7 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
                 );
                 lines.push(survive);
             }
-            _ => lines.push(LineVerdict::new(
+            None => lines.push(LineVerdict::new(
                 "SURVIVE",
                 "skip",
                 "prior turn after process stop",
