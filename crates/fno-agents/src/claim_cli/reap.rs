@@ -11,8 +11,6 @@
 //! Documented port divergences (all unreachable from the frozen goldens):
 //! - Roster-backed probe arms degrade fail-closed to
 //!   `roster-read-degraded` (no `RosterReading` in crates).
-//! - `handover-pane-probe-blocked` answers "not blocked" unconditionally
-//!   (the worktree-policy resolver has no Rust leg).
 //! - A sweep-read failure prints one stderr line and exits 1 where Python's
 //!   traceback escapes (same exit code, different stderr).
 //! - Root dedup keys on `fs::canonicalize` of the resolved claims dir;
@@ -273,7 +271,7 @@ fn probe_abandonment(
         if native_state == "live" {
             return note_token(ctx, rec, "handover-live", None);
         }
-        if handover_pane_probe_blocked() {
+        if handover_pane_probe_blocked(rec) {
             return note_token(ctx, rec, "handover-pane-probe-blocked", None);
         }
         let node_id = rec.key.strip_prefix("node:").unwrap_or("");
@@ -304,10 +302,43 @@ fn probe_abandonment(
     note_token(ctx, rec, "roster-read-degraded", None)
 }
 
-fn handover_pane_probe_blocked() -> bool {
-    // Python consults resolve_worktree_policy(...).policy == "never" and
-    // treats a resolver crash as blocked. No Rust resolver exists yet.
-    false
+/// Port of `cli._claim_worktree_cwd`: first non-empty string among the
+/// metadata `worktree` and `cwd` fields.
+fn claim_meta_repo(rec: &ClaimRecord) -> Option<PathBuf> {
+    for field in ["worktree", "cwd"] {
+        if let Some(Value::String(s)) = rec.metadata.get(field) {
+            if !s.is_empty() {
+                return Some(PathBuf::from(s.as_str()));
+            }
+        }
+    }
+    None
+}
+
+/// Port of `cli._handover_pane_probe_blocked`: consult the worktree policy
+/// through the Python verb (single-resolver doctrine); blocked for `never`
+/// and every failure path, matching Python's `except: return True` (a dead
+/// handover holder is kept, not probed).
+fn handover_pane_probe_blocked(rec: &ClaimRecord) -> bool {
+    let repo = claim_meta_repo(rec)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
+    let repo_arg = repo.to_string_lossy().into_owned();
+    let Some((code, stdout)) = run_with_timeout(
+        &bin,
+        &["agents", "workspace", "worktree", "policy", "--repo", &repo_arg],
+        10,
+    ) else {
+        return true;
+    };
+    if code != 0 {
+        return true;
+    }
+    match stdout.lines().next() {
+        Some("never") => true,
+        Some(_) => false,
+        None => true,
+    }
 }
 
 /// Port of `cli._mux_pane_absent_for`: None = the pane question went
@@ -766,5 +797,70 @@ fn restore_reaped_optouts(summary: &mut ReapSummary) {
                     .push((claim.key.clone(), format!("opt-out restore failed: {err}")));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::claims::{hostname, SCHEMA_VERSION};
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    /// The pid-shared downgrade (the Python TestSharedPid shape): the sweep
+    /// row judged the claim dead on a shared pid, and the keyed re-sweep
+    /// reads the same pid live. The collapse back to suspect must win over
+    /// the fresh live verdict, and the unprobed-suspect accounting must show
+    /// it. The `session:` holder reaches the roster degrade arm with no
+    /// subprocess, so the kept bucket is `suspect_unprobed`, never `live`.
+    #[test]
+    fn pid_shared_downgrade_collapses_fresh_live_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = ClaimRecord {
+            schema_version: SCHEMA_VERSION,
+            key: "node:test-e".into(),
+            holder: "session:abc".into(),
+            acquired_at: now_ms(),
+            pid: Some(std::process::id() as i32),
+            host: hostname(),
+            pid_unavailable: false,
+            expires_at: None,
+            reason: None,
+            harness: None,
+            session_id: None,
+            pid_provenance: None,
+            machine_id: None,
+            metadata: serde_json::Map::new(),
+        };
+        let path = locator(dir.path(), &rec.key);
+        std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+        let row = serde_json::json!({
+            "key": rec.key,
+            "state": "dead",
+            "basis": "pid-shared",
+            "bucket": "dead",
+            "provably_dead": true,
+        });
+        let mut ctx = ProbeCtx::default();
+        let mut summary = ReapSummary::new(Vec::new(), true);
+        reap_one(&rec, &row, dir.path(), true, now_ms(), &mut ctx, &mut summary)
+            .unwrap();
+        assert!(path.exists(), "claim file must survive the downgrade");
+        assert_eq!(summary.reaped, 0, "downgraded suspect is never reaped");
+        assert_eq!(summary.kept_live, 0, "fresh live verdict must collapse");
+        assert_eq!(summary.kept_suspect_unprobed, 1);
+        assert_eq!(
+            ctx.reasons.get("node:test-e").map(String::as_str),
+            Some("roster-read-degraded")
+        );
+        assert_eq!(
+            summary.kept_suspect_unprobed_by.get("roster-read-degraded"),
+            Some(&1)
+        );
     }
 }
