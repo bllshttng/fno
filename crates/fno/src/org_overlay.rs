@@ -1348,8 +1348,16 @@ mod tests {
         assert!(want.org, "expanded wants the org fold");
         assert!(!want.gate, "the fresh gate reading is inside its TTL");
 
+        // Both expanded halves land. The org tree derives from an empty
+        // gather: no agents, no scopes, an empty Lead list.
         panel.apply(FoldPart::Lanes(Some(live())));
+        panel.apply(FoldPart::Org(crate::org_model::OrgInputs {
+            backlog: Default::default(),
+            fold: Ok(serde_json::json!({ "scope_nodes": {}, "owned_scopes": {} })),
+            measured_at: 0,
+        }));
         panel.fold_at = Some(Instant::now() - CACHE_TTL - Duration::from_secs(1));
+        panel.org_at = Some(Instant::now() - ORG_TTL - Duration::from_secs(1));
         panel.toggle();
         assert!(
             panel.refresh_deadline().is_some(),
