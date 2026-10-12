@@ -89,8 +89,15 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
         .card
         .title = "an eighty character node title about org views ".repeat(2) + "end marker";
     let (wrapped, wmap) = b.body(27);
-    for l in &wrapped {
-        assert!(l.text.chars().count() <= 27, "{:?}", l.text);
+    for (j, l) in wrapped.iter().enumerate() {
+        assert!(
+            l.text.chars().count() <= 27,
+            "line {j} of {} spans {}: {:?} | all: {:?}",
+            wrapped.len(),
+            l.text.chars().count(),
+            l.text,
+            wrapped.iter().map(|l| l.text.clone()).collect::<Vec<_>>()
+        );
     }
     let owned: Vec<_> = wmap.iter().filter(|l| **l == node_index).collect();
     assert!(
@@ -352,7 +359,13 @@ fn graph_renders_a_node_link_drawing() {
             rows[y as usize].push(c);
         }
     }
-    assert_eq!(lead, 1, "one lead dot");
+    assert_eq!(
+        lead,
+        1,
+        "one lead dot (dots in layout: {}, nonblank cells: {})",
+        graph.dots.len(),
+        rows.iter().filter(|r| !r.chars().all(|c| c == ' ')).count()
+    );
     assert_eq!(node, 2, "two node dots");
     assert_eq!(worker, 3, "three worker dots");
     assert_eq!(blocks, 0, "no box-graph arrow survives");

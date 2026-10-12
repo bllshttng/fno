@@ -96,7 +96,9 @@ impl OrgBoard {
         }
     }
     pub(crate) fn selected(&self) -> Option<Selected> {
-        self.rows().get(self.cursor).map(|r| r.selected.clone())
+        self.mode_rows(0, 0)
+            .get(self.cursor)
+            .map(|r| r.selected.clone())
     }
     fn session_shown(&self, current: bool) -> bool {
         self.filter == OrgSessions::All
@@ -468,7 +470,11 @@ impl OrgBoard {
     /// continuation lines with an ellipsis; `d` detail shows a tail whole.
     /// The cursor band covers every line of the cursor row.
     fn body(&self, width: usize) -> (Vec<BLine>, Vec<usize>) {
-        let rows = self.rows();
+        let rows = if self.mode == OrgMode::Table {
+            self.mode_rows(width, 0)
+        } else {
+            self.rows()
+        };
         let guides = tree_guides(&rows);
         let mut lines = Vec::new();
         let mut map = Vec::new();

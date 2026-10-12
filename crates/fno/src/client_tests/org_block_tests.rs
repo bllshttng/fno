@@ -37,7 +37,8 @@ fn the_org_block_shrinks_the_sideline_and_yields_when_too_short() {
     let full = view.sideline_visible_rows() + view.org_block_rows();
 
     view.org.toggle();
-    let expanded = view.org.expanded_lines(&view.agent_ages(), 99).len();
+    let text_w = view.sideline_paint_w().saturating_sub(1);
+    let expanded = view.org.expanded_lines(&view.agent_ages(), text_w).len();
     assert_eq!(view.org_block_rows(), expanded);
     assert_eq!(view.sideline_visible_rows(), full - expanded);
 
