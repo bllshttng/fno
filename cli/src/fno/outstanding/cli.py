@@ -181,7 +181,7 @@ def ask(
     question_file: Path | None = typer.Option(
         None,
         "--question-file",
-        help="Read the question from a file ('-' = stdin); QUESTION_CAP truncation still applies.",
+        help="Read the question from a file ('-' = stdin, 'template' prints a filled one); QUESTION_CAP truncation still applies.",
     ),
     ask: str = typer.Option(None, "--ask", help="One action that closes the question."),
     option: List[str] = typer.Option(
@@ -212,22 +212,30 @@ def ask(
     from fno.rust_binary import VerbUnavailable, verb_call
     from fno.text_or_file import read_text_arg
 
+    # 'template' rides --question-file: the Python flag surface is shrink-only.
+    template = question_file is not None and str(question_file) == "template"
+    if template:
+        question_file = None
     question = read_text_arg(question, question_file, what="the question")
-    if not question:
+    if not question and not template:
         typer.echo(
             "error: provide the question - positionally or --question-file", err=True
         )
         raise typer.Exit(code=2)
 
     ident = resolve_self_identity()
-    try:
-        laws = _law_rows()
-    except Exception as exc:  # noqa: BLE001 - fail open: record the question
-        laws = []
-        typer.echo(f"outstanding: live-law lookup failed ({exc}); recording anyway", err=True)
+    if template:
+        laws = []  # nothing is recorded, so no law row can refuse it
+    else:
+        try:
+            laws = _law_rows()
+        except Exception as exc:  # noqa: BLE001 - fail open: record the question
+            laws = []
+            typer.echo(f"outstanding: live-law lookup failed ({exc}); recording anyway", err=True)
     asker = canonical_handle(ident.session_id) if ident.session_id and ident.harness else None
     payload = {
-        "question": question, "ask": ask, "options": option, "blocks": blocks,
+        "question": question or "", "template": template,
+        "ask": ask, "options": option, "blocks": blocks,
         "node": node, "subject": subject, "session_id": _session_id(),
         "cwd": str(Path.cwd()), "asker": asker, "laws": laws,
         "storage_root": str(_storage_root()),
@@ -238,6 +246,12 @@ def ask(
     try:
         answer = verb_call("question-intake", payload)
     except VerbUnavailable:
+        if template:
+            typer.echo(
+                "error: --template needs the fno-agents binary; fix the install and retry",
+                err=True,
+            )
+            raise typer.Exit(3)
         # No native door on this install: record the question in the project
         # journal in the door's own envelope shape. A missing binary never
         # loses an operator question.
@@ -277,12 +291,17 @@ def ask(
         )
         typer.echo(qid)
         return
+    if template and not answer.get("template"):
+        typer.echo("error: the fno-agents binary predates the question template; "
+                   "run fno doctor update --rust", err=True)
+        raise typer.Exit(3)
     # Every human word rides the answer's lines, composed Rust-side.
     for line in answer.get("lines") or ():
-        typer.echo(line, err=True)
+        typer.echo(line, err=not template, nl=not template)
     if (code := answer.get("exit_code")) and code != 0:
         raise typer.Exit(code)
-    typer.echo(answer["qid"])
+    if not template:
+        typer.echo(answer["qid"])
 
 
 @outstanding_app.command("clear")
