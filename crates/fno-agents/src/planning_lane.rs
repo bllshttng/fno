@@ -1,5 +1,28 @@
 use crate::gc_sweep::GraphRead;
 
+/// Does the node's `plan_path` name an existing file (marker 2)? A leading
+/// `~/` expands against `$HOME`; a relative path joins the node's `cwd`.
+/// An unresolvable path (no HOME, no cwd, no file) refuses: it proves no
+/// plan was written here.
+pub(crate) fn plan_file_exists(plan_path: &str, cwd: Option<&str>) -> bool {
+    let path = match plan_path.strip_prefix("~/") {
+        Some(rest) => match std::env::var("HOME") {
+            Ok(home) => std::path::PathBuf::from(home).join(rest),
+            Err(_) => return false,
+        },
+        None => std::path::PathBuf::from(plan_path),
+    };
+    let path = if path.is_relative() {
+        match cwd {
+            Some(cwd) => std::path::PathBuf::from(cwd).join(path),
+            None => return false,
+        }
+    } else {
+        path
+    };
+    path.is_file()
+}
+
 pub struct PlanningSignals {
     pub assignments: Vec<(String, String)>,
     pub closed: Vec<String>,
