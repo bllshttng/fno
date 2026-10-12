@@ -23,14 +23,14 @@ from typing import Any, Callable, NamedTuple, Optional
 
 from urllib.parse import quote as _url_quote
 
-from .io import (ClaimAlreadyHeld, ClaimCorrupted, ClaimGoneAway, claim_path, encode_key, dedup_claims_roots, global_claims_root, read_claim_file)
+from .io import (ClaimAlreadyHeld, ClaimCorrupted, ClaimGoneAway, claim_path)
 from .verdict import (
     ClaimSweepOmission,
     ClaimVerdictError,
     ClaimVerdictUnavailable,
     claim_verdicts,
 )
-from .types import (MAX_ENCODED_FILENAME_BYTES, MAX_KEY_LENGTH, MAX_TTL_MS, MIN_TTL_MS, Claim, ClaimState, now_ms)
+from .types import (MAX_ENCODED_FILENAME_BYTES, MAX_KEY_LENGTH, MAX_TTL_MS, MIN_TTL_MS, Claim, ClaimState)
 
 
 class ClaimHeldByOther(Exception):
