@@ -92,6 +92,7 @@ mod cancel_sentinel;
 pub mod canonical_check;
 pub mod capability_leaves;
 pub mod capacity;
+pub mod capacity_grant;
 pub mod cargo_build_dirs;
 pub(crate) mod cargo_builds;
 pub(crate) mod cargo_orphans;
