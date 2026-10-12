@@ -59,7 +59,7 @@ pub(super) fn binding_suffix(a: &AgentRow) -> String {
             .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.state == "open")
             .count();
         if open > 0 {
-            format!(" +{open} open")
+            format!(" +{others} open")
         } else {
             String::new()
         }
