@@ -472,16 +472,33 @@ fn graph_renders_a_node_link_drawing() {
     let graph = b2.refresh_graph(27, 20);
     assert_eq!(graph.dots.len(), 40, "ten leads, ten nodes, twenty workers");
     let buf = crate::client::org_graph::frame(&graph, 27, 20, (0, 0), Some("lead:lead0"), &colors);
-    let mut painted = 0u32;
+    let mut painted_cells: std::collections::HashSet<(u16, u16)> = Default::default();
     for y in 0..20u16 {
         for x in 0..27u16 {
             let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
             if matches!(c, '\u{25c6}' | '\u{25cf}' | '\u{2022}') {
-                painted += 1;
+                painted_cells.insert((x, y));
             }
         }
     }
-    assert_eq!(painted, 40, "every dot paints in the narrow view");
+    let cells_pos = crate::client::org_graph::dot_cells(&graph, 27, 20, (0, 0));
+    let unpainted: Vec<String> = graph
+        .dots
+        .iter()
+        .zip(&cells_pos)
+        .filter(|(_, (cx, cy))| !painted_cells.contains(&(*cx, *cy)))
+        .map(|(d, (cx, cy))| format!("{} @ ({cx},{cy}) grid ({},{})", d.key, d.x, d.y))
+        .collect();
+    assert_eq!(
+        painted_cells.len(),
+        40,
+        "every dot paints in the narrow view; unpainted: {unpainted:?} dots: {:?}",
+        graph
+            .dots
+            .iter()
+            .map(|d| format!("{} {} {}", d.key, d.x, d.y))
+            .collect::<Vec<_>>()
+    );
     let mut label_rows: Vec<String> = vec![String::new(); 20];
     for y in 0..20u16 {
         for x in 0..27u16 {
