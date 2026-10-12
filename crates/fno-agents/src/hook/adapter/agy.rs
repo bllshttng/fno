@@ -36,11 +36,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// PreInvocation is agy's turn start: the conversation id files the
-    /// report, the invocation-only fields ride nothing.
+    /// The three payload shapes: PreInvocation (agy's turn start) and Stop
+    /// both file under the camelCase conversation id, the tolerant axes ride
+    /// only when a payload actually names them, and a PreToolUse tool name
+    /// rides verbatim (the mapping to claude tool names stays with the lead
+    /// guard's translation).
     #[test]
-    fn pre_invocation_files_under_the_conversation_id() {
-        let ev = normalize(
+    fn agy_payloads_normalize_to_the_hook_event_shape() {
+        let pre = normalize(
             "PreInvocation",
             &json!({
                 "invocationNum": 3,
@@ -49,17 +52,12 @@ mod tests {
                 "workspacePaths": ["/workspace/project"]
             }),
         );
-        assert_eq!(ev.session_id, "ec33ebf9-0cba-4100-8142-c61503f6c587");
-        assert_eq!(ev.tool, "");
-        assert_eq!(ev.model, "");
-        assert_eq!(ev.effort, "");
-        assert_eq!(ev.posture, None);
-    }
+        assert_eq!(pre.session_id, "ec33ebf9-0cba-4100-8142-c61503f6c587");
+        assert_eq!(pre.tool, "");
+        assert_eq!(pre.model, "");
+        assert_eq!(pre.effort, "");
+        assert_eq!(pre.posture, None);
 
-    /// The Stop payload: same session id, and the tolerant axes ride only
-    /// when a payload actually names them.
-    #[test]
-    fn stop_files_under_the_conversation_id_and_rides_tolerant_axes() {
         let bare = normalize(
             "Stop",
             &json!({
@@ -79,21 +77,15 @@ mod tests {
         );
         assert_eq!(axes.model, "glm-5.3");
         assert_eq!(axes.effort, "high");
-    }
 
-    /// A PreToolUse payload names its tool verbatim (the adapter decides
-    /// nothing about state, and the mapping to claude tool names stays with
-    /// the lead guard's translation).
-    #[test]
-    fn tool_call_names_ride_verbatim() {
-        let ev = normalize(
+        let tool = normalize(
             "PreToolUse",
             &json!({
                 "conversationId": "conv-3",
                 "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}
             }),
         );
-        assert_eq!(ev.tool, "run_command");
-        assert_eq!(ev.session_id, "conv-3");
+        assert_eq!(tool.tool, "run_command");
+        assert_eq!(tool.session_id, "conv-3");
     }
 }
