@@ -1805,6 +1805,7 @@ pub(crate) fn run_with_release(
             now,
             hold_age_s,
             hold_age_basis,
+            e.spawn_payload.as_deref(),
         ) {
             summary
                 .kept_attended
@@ -2119,7 +2120,13 @@ pub(crate) fn run_with_release(
         let (mut action, mut reason) = {
             let verdict = gc_decide(&row, grace_secs);
             crate::gc::resolve_typed_turn(&mut row, verdict, grace_secs, || {
-                crate::attended::typed_turn_age_ever_for_row(store_matches(e), home, sid, now)
+                crate::attended::typed_turn_age_ever_for_row(
+                    store_matches(e),
+                    home,
+                    sid,
+                    now,
+                    e.spawn_payload.as_deref(),
+                )
             })
         };
         // d-81c6da7e: a release matched to the planning hold answers the

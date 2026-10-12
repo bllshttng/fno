@@ -4594,20 +4594,15 @@ def _apply_completion_fields(node: dict, *, merge_status: Optional[str] = None) 
         node["merge_status"] = merge_status
 
 
-def _auto_closed_note(entry: dict) -> str:
+def _auto_closed_note(_entry: dict) -> str:
     """completion_note for a container closed by all-children-complete ().
 
     Both close paths (_cascade_close_parents, _sweep_close_done_epics) reach
-    here holding the parent dict. A container with its own plan_path but no
-    PR may carry deliverables the children never built; the cascade closes it
-    anyway, so an untracked false-done needs a flag. When plan_path is set and
-    pr_number is not, the note marks the deliverables UNVERIFIED - not that
-    they are missing (a filesystem stat measured 75% false positives from
-    renames and path conventions), only that no PR proves them. A flag, not a
-    gate: the close still happens, it just becomes findable.
+    here holding the parent dict. A plan-having, PR-less container is no
+    longer closed at all: the own-plan-work hold stops both close paths, so
+    the old UNVERIFIED flag branch is retired with the false close it
+    flagged.
     """
-    if entry.get("plan_path") and not entry.get("pr_number"):
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)"
     return "auto-closed: all children complete"
 
 
