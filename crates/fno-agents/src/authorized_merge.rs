@@ -1815,10 +1815,8 @@ impl Probes for RealProbes {
     }
 
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
-        // The decide path is polled (the merge gate fires it on every stop
-        // gate poll and merge attempt), so it admits against the fleet
-        // budget: a hold refuses in process and reads as the failed read it
-        // is, never as a verdict about the PR.
+        // The decide path is polled, so it admits: a hold refuses in process
+        // and reads as the failed read it is, never a verdict about the PR.
         if let Some(line) = crate::gh_budget::admit_fleet(args) {
             return Ok((false, line));
         }
