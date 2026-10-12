@@ -629,6 +629,15 @@ pub fn run(args: &[String]) -> i32 {
                 json!({"node":node,"code":code,"reason":message}),
                 None,
             );
+            if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+                crate::friction::record_gate_refusal(
+                    &home.events_jsonl(),
+                    "join",
+                    Some(node.as_str()),
+                    &message,
+                    &message,
+                );
+            }
             eprintln!("backlog join: {message}");
             code
         }

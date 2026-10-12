@@ -840,24 +840,6 @@ def _prompt_difficulty_value(value: str) -> str:
         raise click.UsageError(f"{exc}. {DIFFICULTY_HELP}") from exc
 
 
-def _encounter_provenance(harness: str | None) -> dict[str, str]:
-    """Model/effort provenance for an encounter record, or nothing.
-
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    provenance: dict[str, str] = {}
-    if harness != "claude":
-        return provenance
-    effort = (os.environ.get("CLAUDE_EFFORT") or "").strip()
-    if effort:
-        provenance["effort"] = effort
-    if (os.environ.get("ANTHROPIC_BASE_URL") or "").strip():
-        model = (os.environ.get("ANTHROPIC_MODEL") or "").strip()
-        if model:
-            provenance["model"] = model
-    return provenance
-
-
 def _validate_priority_or_exit(priority: str, *, blocks_everything: bool = False) -> None:
     """The shared priority gate: PRIORITY_ORDER membership, then the write rule.
 
@@ -2017,140 +1999,6 @@ def cmd_intake(
 
 
 # -- update --
-
-
-@cli.command("encounter", hidden=True)
-def cmd_encounter(
-    task_id: str = typer.Argument(..., help="Node id this session hit while doing something else."),
-    evidence: str = typer.Option(
-        ...,
-        "--evidence",
-        "-e",
-        help="What it cost, in a sentence or two. Required, and capped by config.style.word_cap.encounter.",
-    ),
-    as_operator: bool = typer.Option(
-        False,
-        "--operator",
-        help="Record this as the operator's vote under the stable 'operator' voter key. A declaration, not proof; one per node, and the casting session's id is kept on the record when provable.",
-    ),
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit the appended record as JSON."),
-) -> None:
-    """Record ONE encounter with this node, from this session, with evidence.
-
-    An encounter is a thing that happened and cannot be edited or withdrawn:
-    there is no correction verb, and a later correction is a `fno backlog note`.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno import rust_binary
-    from fno.claims.self_identity import resolve_self_identity
-    from fno.config import load_settings
-    from fno.graph.store import append_encounter
-    from fno.harness_identity import canonical_handle
-
-    evidence = evidence.strip()
-    if not evidence:
-        typer.echo(
-            "Error: an encounter with no evidence is a poll. Name what it cost.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    try:
-        identity = resolve_self_identity()
-    except Exception:  # noqa: BLE001 - an unresolvable identity is a refusal, not a crash
-        identity = None
-    session_id = getattr(identity, "session_id", None)
-    session_id = session_id if isinstance(session_id, str) else None
-    harness = getattr(identity, "harness", None)
-    harness = harness if isinstance(harness, str) else None
-    # `--operator` is a declaration, not proof; see the contract doc.
-    if not as_operator and (not session_id or not harness):
-        typer.echo(
-            "Error: no provable session identity, so this encounter would not be "
-            "readable back to a transcript. Run `fno whoami` to see what this "
-            "session can prove.",
-            err=True,
-        )
-        raise typer.Exit(code=5)
-
-    # Rule 7's escapes, inherited per docs/style-rules.md. Evidence and identity
-    # stay required above: the cap is length policy, not the falsifiability one.
-    if os.environ.get("FNO_STYLE_ENFORCE") != "0":
-        cap = load_settings().style.word_cap.encounter
-        err, receipt = rust_binary.style_receipt(evidence, "encounter", cap)
-        # A door error, a violation, or a silent binary (no dict) refuses: the gate never vanishes.
-        clean = isinstance(receipt, dict) and (receipt.get("exception") or not receipt.get("violations"))
-        if not clean:
-            typer.echo(err or (receipt or {}).get("report") or "style gate unreadable", err=True)
-            raise typer.Exit(code=4)
-
-    record: dict[str, object] = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "evidence": evidence,
-    }
-    if as_operator:
-        record.update({"voter_key": "operator", "voter_kind": "operator"})
-        # The canonical provenance keys every encounter carries, so a reader
-        # keyed on `session_id` (the falsifiability contract, and every
-        # pre-operator record) sees who cast the vote. `voter_key` stays
-        # `operator` for the dedupe and the demand split, and takes precedence
-        # over `session_id` in voter_key resolution, so provenance cannot
-        # fork the operator lane into per-session voters.
-        if session_id:
-            record["session_id"] = session_id
-            record["fno_id"] = canonical_handle(session_id)
-        if harness:
-            record["harness"] = harness
-        record.update(_encounter_provenance(harness))
-    else:
-        assert session_id is not None and harness is not None
-        record.update(
-            {
-                "session_id": session_id,
-                "voter_key": session_id,
-                "voter_kind": "agent",
-                "harness": harness,
-                "fno_id": canonical_handle(session_id),
-            }
-        )
-        record.update(_encounter_provenance(harness))
-    appended, error, reason = append_encounter(_graph_path(), task_id, record)
-    if not appended:
-        typer.echo(f"Error: {error}", err=True)
-        if reason == "duplicate":
-            typer.echo(
-                "Add a `fno backlog note` instead if there is more to say.",
-                err=True,
-            )
-            raise typer.Exit(code=3)
-        raise typer.Exit(code=1)
-
-    # Counted inside this verb rather than in a helper. The helper was its own
-    # enclosing function, so its graph read had no verb boundary for the
-    # external-backend guard to sit on; here the read rides the guard this
-    # tracker-owned verb already carries.
-    from fno.graph._intake import _find_node
-
-    try:
-        stored = _find_node(wire_rows(path=_graph_path()), task_id)
-        total = len(stored.get("encounters") or []) if stored else 0
-    except Exception:  # noqa: BLE001 - a receipt count must not fail a landed write
-        total = 0
-    if json_output:
-        typer.echo(
-            json.dumps(
-                {"id": task_id, "encounter": record, "total": total}, separators=(",", ":")
-            )
-        )
-    else:
-        if as_operator:
-            typer.echo(f"encounter recorded on {task_id} (operator, {total} total)")
-        else:
-            assert session_id is not None
-            typer.echo(
-                f"encounter recorded on {task_id} "
-                f"(session {canonical_handle(session_id)}, {total} total)"
-            )
 
 
 @cli.command("demand", hidden=True)
@@ -4746,20 +4594,15 @@ def _apply_completion_fields(node: dict, *, merge_status: Optional[str] = None) 
         node["merge_status"] = merge_status
 
 
-def _auto_closed_note(entry: dict) -> str:
+def _auto_closed_note(_entry: dict) -> str:
     """completion_note for a container closed by all-children-complete ().
 
     Both close paths (_cascade_close_parents, _sweep_close_done_epics) reach
-    here holding the parent dict. A container with its own plan_path but no
-    PR may carry deliverables the children never built; the cascade closes it
-    anyway, so an untracked false-done needs a flag. When plan_path is set and
-    pr_number is not, the note marks the deliverables UNVERIFIED - not that
-    they are missing (a filesystem stat measured 75% false positives from
-    renames and path conventions), only that no PR proves them. A flag, not a
-    gate: the close still happens, it just becomes findable.
+    here holding the parent dict. A plan-having, PR-less container is no
+    longer closed at all: the own-plan-work hold stops both close paths, so
+    the old UNVERIFIED flag branch is retired with the false close it
+    flagged.
     """
-    if entry.get("plan_path") and not entry.get("pr_number"):
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)"
     return "auto-closed: all children complete"
 
 
