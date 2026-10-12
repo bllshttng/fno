@@ -389,20 +389,29 @@ impl OrgBoard {
         memo.as_ref().expect("graph memo filled").5.clone()
     }
     pub(crate) fn lines(&self, width: usize, height: usize) -> Vec<BLine> {
+        self.lines_with_map(width, height).0
+    }
+
+    /// The board's lines plus the row index each line belongs to, built in
+    /// one pass so a frame's paint and its follow offset share the body.
+    fn lines_with_map(&self, width: usize, height: usize) -> (Vec<BLine>, Vec<usize>) {
         if let Some(detail) = &self.detail {
-            return detail.lines(width);
+            return (detail.lines(width), Vec::new());
         }
         if self.keys_help {
-            return [
-                "Org keys",
-                "hjkl/arrows move · h/l fold/open",
-                "Tab tree/table/graph · s current/former/all",
-                "F full screen · / find · esc agents",
-                "enter or a second tap acts · space peek · x stop · P portal · d detail",
-            ]
-            .into_iter()
-            .map(BLine::plain)
-            .collect();
+            return (
+                [
+                    "Org keys",
+                    "hjkl/arrows move · h/l fold/open",
+                    "Tab tree/table/graph · s current/former/all",
+                    "F full screen · / find · esc agents",
+                    "enter or a second tap acts · space peek · x stop · P portal · d detail",
+                ]
+                .into_iter()
+                .map(BLine::plain)
+                .collect(),
+                Vec::new(),
+            );
         }
         let mut header = Vec::new();
         for (i, (_, mode)) in mode_tabs().into_iter().enumerate() {
@@ -432,16 +441,16 @@ impl OrgBoard {
                     header.push(seg(format!(" · \u{25b6} {}", d.label), BRole::Meta));
                 }
             }
-            return vec![BLine::of(&header)];
+            return (vec![BLine::of(&header)], Vec::new());
         }
         let mut lines = vec![BLine::of(&header)];
         if self.mode == OrgMode::Table {
             let mail = self.any_unread();
             lines.push(BLine::meta(super::org_table::header(width, mail)));
         }
-        let (body, _map) = self.body(width);
+        let (body, map) = self.body(width);
         lines.extend(body);
-        lines
+        (lines, map)
     }
 
     /// Whether any worker row carries unread mail: the one condition that
@@ -707,7 +716,7 @@ pub(crate) fn paint(
             cells[r * cols + c] = Cell::default();
         }
     }
-    let lines = b.lines(width, height);
+    let (lines, map) = b.lines_with_map(width, height);
     if b.mode == OrgMode::Graph && b.detail.is_none() && !b.keys_help {
         super::backlog_style::paint_panel(
             cells,
@@ -733,7 +742,8 @@ pub(crate) fn paint(
             if b.detail.is_some() {
                 None
             } else {
-                body_follow_for(b, width)
+                let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
+                map.get(b.cursor).map(|l| l + offset)
             },
             &view.theme,
         );
@@ -753,14 +763,6 @@ pub(crate) fn paint(
         &view.theme,
     );
 }
-/// The follow offset paint hands [`paint_panel`]: the first line of the
-/// cursor row, offset by the header (plus the Table's own header row).
-fn body_follow_for(b: &OrgBoard, width: usize) -> Option<usize> {
-    let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
-    let (_, map) = b.body(width);
-    map.get(b.cursor).map(|l| l + offset)
-}
-
 /// The Graph mode's body: a degenerate tree renders its one honest line;
 /// otherwise the canvas frame blits under the header row.
 fn paint_graph_body(
