@@ -896,7 +896,7 @@ mod tests {
                 fno_law: r#"{"decisions":[{"id":"d-2191724b","authority_source":"operator","scope":"global"}]}"#
                     .to_string(),
                 fno_find: String::new(),
-                fno_idea: r#"{"id":"x-abc1"}"#.to_string(),
+                fno_idea: r#"{"id":"x-aaaa"}"#.to_string(),
                 notes: RefCell::new(Vec::new()),
                 calls: RefCell::new(Vec::new()),
                 backoff: false,
@@ -1048,7 +1048,7 @@ mod tests {
         let st = read_stage(&dir, SLUG, 104);
         assert_eq!(st.stage.as_deref(), Some("intaken"));
         assert_eq!(st.issue, Some(7));
-        assert_eq!(st.node.as_deref(), Some("x-abc1"));
+        assert_eq!(st.node.as_deref(), Some("x-aaaa"));
 
         // d. intaken: one read produces the verdict note.
         let io = FakeIo::new();
@@ -1063,7 +1063,7 @@ mod tests {
             &dir,
             SLUG,
             105,
-            r#"{"stage":"intaken","issue":7,"node":"x-abc1"}"#,
+            r#"{"stage":"intaken","issue":7,"node":"x-aaaa"}"#,
         );
         let pages = vec![pull_row(105, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_analysed");
@@ -1082,7 +1082,7 @@ mod tests {
             &dir,
             SLUG,
             106,
-            r#"{"stage":"analysed","issue":7,"node":"x-abc1","question":"What breaks without this?"}"#,
+            r#"{"stage":"analysed","issue":7,"node":"x-aaaa","question":"What breaks without this?"}"#,
         );
         let pages = vec![pull_row(106, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_asked_clarity");
@@ -1103,7 +1103,7 @@ mod tests {
             &dir,
             SLUG,
             107,
-            r#"{"stage":"analysed","issue":7,"node":"x-abc1"}"#,
+            r#"{"stage":"analysed","issue":7,"node":"x-aaaa"}"#,
         );
         let pages = vec![pull_row(107, true), pull_row(108, false)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_idle");
@@ -1165,7 +1165,7 @@ mod tests {
             &dir,
             SLUG,
             110,
-            r#"{"stage":"intaken","issue":7,"node":"x-abc1"}"#,
+            r#"{"stage":"intaken","issue":7,"node":"x-aaaa"}"#,
         );
         let pages = vec![pull_row(110, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_error");
@@ -1193,7 +1193,7 @@ mod tests {
             &dir,
             SLUG,
             111,
-            r#"{"stage":"intaken","issue":7,"node":"x-abc1"}"#,
+            r#"{"stage":"intaken","issue":7,"node":"x-aaaa"}"#,
         );
         let pages = vec![pull_row(111, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_analysed");
