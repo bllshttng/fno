@@ -2245,7 +2245,7 @@ fn roots_in_heal_order(a: &Args) -> Vec<std::path::PathBuf> {
     // inside each rank.
     order.sort_by_key(|root| {
         last_seen
-            .get(&root.to_string_lossy())
+            .get(root.to_string_lossy().as_ref())
             .map(|i| i + 1)
             .unwrap_or(0)
     });
