@@ -78,6 +78,8 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-verb seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
 
+A harness can also launch its own way. The [native launch table](../../docs/HARNESSES.md) holds each harness's own line.
+
 **Citizens vs limbs.** `fno agents spawn` makes an addressable, durable roster citizen. A native subagent is a one-shot, observable-only limb. Spawn work that must outlive you, hold a claim, or receive mail. Use a limb for a result consumed next turn. [Details](docs/architecture/coordination.md).
 
 **Mail is user-shaped.** A worker whose own invocation is refused has one fallback: `fno agents mail send <worker> --raw '/<verb>'`. A mail probe proves user-triggered behavior, never autonomy. The valid test is a transcript scan with no user-shaped prompt before the call: `scripts/diagnostics/autonomy-probe-audit.py`. No live lead means [advisory self-review](docs/architecture/review-lanes.md).
