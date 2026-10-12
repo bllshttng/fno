@@ -1497,6 +1497,20 @@ pub fn telemetry_claude_otel(cwd: &Path) -> bool {
     .unwrap_or(true)
 }
 
+/// Opt-in OTLP export: `telemetry.otlp.enabled`, default false. The
+/// exporter stays home until the operator names it.
+pub fn otlp_export_enabled(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("telemetry")?
+            .as_table()?
+            .get("otlp")?
+            .as_table()?
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+    })
+    .unwrap_or(false)
+}
+
 /// `[slot_cutover] enabled` (default false): whether the shared Claude slot may switch.
 pub fn slot_cutover_enabled(cwd: &Path) -> bool {
     resolve(cwd, |t| {
