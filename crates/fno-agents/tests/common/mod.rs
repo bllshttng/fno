@@ -32,8 +32,8 @@ pub fn make_script(dir: &Path, name: &str, body: &str) -> PathBuf {
 /// checkout's venv (a fresh worktree has no .venv of its own), then a bare
 /// python3.
 pub fn python_executable() -> PathBuf {
-    let cli = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli");
-    let venv = cli.join(".venv/bin/python");
+    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
+    let venv = cli_src.join("../.venv/bin/python");
     if venv.is_file() {
         return venv;
     }
