@@ -363,11 +363,8 @@ fn graph_renders_a_node_link_drawing() {
         crate::client::org_graph::hit_test(&graph, 60, 20, (0, 0), Some("lead:finch"), cx, cy)
             .expect("a tap on the lead dot selects it");
     assert_eq!(key, "lead:finch");
-}
 
-// Two registry rows sharing one label keep distinct unowned keys.
-#[test]
-fn unowned_keys_keep_pane_identity() {
+    // Two registry rows sharing one label keep distinct unowned keys.
     let bare = |pane| crate::proto::AgentRow {
         name: "shared label".into(),
         pane_id: Some(pane),
@@ -382,6 +379,97 @@ fn unowned_keys_keep_pane_identity() {
     assert_ne!(
         keys[0], keys[1],
         "equal labels retain different pane identities"
+    );
+
+    // (x-93ab) AC5-ERR: forty dots fit a 27x20 view, and the selected
+    // dot's label paints while colliding labels are skipped instead of
+    // cut. Two workers per node keeps the dot count at forty.
+    let mut view2 = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+
+    let mut rows = Vec::new();
+    let mut agents = Vec::new();
+    for i in 0..10 {
+        let node = format!("x-{}", i + 1);
+        rows.push(json!({"id": node, "status":"ready","title":"Node","scope": format!("t{i}"), "sessions":[{"session_id": format!("s{i}a")},{"session_id": format!("s{i}b")},{"session_id": format!("s{i}c")}]}));
+        agents.push(AgentRow {
+            name: format!("lead{i}").into(),
+            role_scope: Some(format!("t{i}")),
+            role_level: Some(1),
+            ..Default::default()
+        });
+        for (w, sid) in [("wa", "a"), ("wb", "b")] {
+            agents.push(AgentRow {
+                name: format!("{w}{i}").into(),
+                harness_session_id: Some(format!("{sid}{i}").into()),
+                node: Some(node.clone()),
+                ..Default::default()
+            });
+        }
+    }
+
+    let mut scope_nodes = serde_json::Map::new();
+    let mut owned = serde_json::Map::new();
+    for i in 0..10 {
+        scope_nodes.insert(
+            format!("t{i}"),
+            json!({"status":"ok","nodes":[{"id": format!("x-{}", i + 1)}]}),
+        );
+        owned.insert(format!("x-{}", i + 1), json!(format!("t{i}")));
+    }
+    open(&mut view2);
+    let gen = view2.org_generation;
+    apply_fold(
+        &mut view2,
+        gen,
+        OrgInputs {
+            backlog: crate::backlog_model::Inputs {
+                rows,
+                agents,
+                ..Default::default()
+            },
+            fold: Ok(json!({"scope_nodes": scope_nodes, "owned_scopes": owned})),
+            measured_at: now(),
+        },
+    );
+    let b2 = view2.org_board.as_mut().unwrap();
+    b2.mode = OrgMode::Graph;
+    b2.filter = OrgSessions::Current;
+    let colors = crate::client::org_graph::GraphColors::of(&view2.theme);
+    let graph = b2.refresh_graph(27, 20);
+    assert_eq!(graph.dots.len(), 40, "ten leads, ten nodes, twenty workers");
+    let buf = crate::client::org_graph::frame(&graph, 27, 20, (0, 0), Some("lead:lead0"), &colors);
+    let mut painted = 0u32;
+    for y in 0..20u16 {
+        for x in 0..27u16 {
+            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
+            if matches!(c, '\u{25c6}' | '\u{25cf}' | '\u{2022}') {
+                painted += 1;
+            }
+        }
+    }
+    assert_eq!(painted, 40, "every dot paints in the narrow view");
+    let mut label_rows: Vec<String> = vec![String::new(); 20];
+    for y in 0..20u16 {
+        for x in 0..27u16 {
+            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
+            label_rows[y as usize].push(c);
+        }
+    }
+    assert!(
+        label_rows.iter().any(|r| r.contains("lead0")),
+        "the selected dot's label paints: {label_rows:?}"
     );
 }
 
@@ -447,98 +535,4 @@ fn org_board_for_graph() -> View {
     b.mode = OrgMode::Graph;
     b.filter = OrgSessions::Current;
     view
-}
-
-// (x-93ab) AC5-ERR: forty dots fit a 27x20 view, and the selected dot's
-// label paints while colliding labels are skipped instead of cut.
-#[test]
-fn graph_fits_forty_dots_in_a_narrow_view() {
-    use serde_json::json;
-    let mut view = View::new(
-        (24, 100),
-        "main".into(),
-        LayoutView {
-            squads: Vec::new(),
-            active_squad: 0,
-            panes: Vec::new(),
-            focus: 0,
-            area: (0, 0),
-            agents: Vec::new(),
-            focus_node: None,
-        },
-    );
-
-    let mut rows = Vec::new();
-    let mut agents = Vec::new();
-    for i in 0..10 {
-        let node = format!("x-{}", i + 1);
-        rows.push(json!({"id": node, "status":"ready","title":"Node","scope": format!("t{i}"), "sessions":[{"session_id": format!("s{i}a")},{"session_id": format!("s{i}b")},{"session_id": format!("s{i}c")}]}));
-        agents.push(AgentRow {
-            name: format!("lead{i}").into(),
-            role_scope: Some(format!("t{i}")),
-            role_level: Some(1),
-            ..Default::default()
-        });
-        for (w, sid) in [("wa", "a"), ("wb", "b"), ("wc", "c")] {
-            agents.push(AgentRow {
-                name: format!("{w}{i}").into(),
-                harness_session_id: Some(format!("{sid}{i}").into()),
-                node: Some(node.clone()),
-                ..Default::default()
-            });
-        }
-    }
-
-    let mut scope_nodes = serde_json::Map::new();
-    let mut owned = serde_json::Map::new();
-    for i in 0..10 {
-        scope_nodes.insert(
-            format!("t{i}"),
-            json!({"status":"ok","nodes":[{"id": format!("x-{}", i + 1)}]}),
-        );
-        owned.insert(format!("x-{}", i + 1), json!(format!("t{i}")));
-    }
-    open(&mut view);
-    let gen = view.org_generation;
-    apply_fold(
-        &mut view,
-        gen,
-        OrgInputs {
-            backlog: crate::backlog_model::Inputs {
-                rows,
-                agents,
-                ..Default::default()
-            },
-            fold: Ok(json!({"scope_nodes": scope_nodes, "owned_scopes": owned})),
-            measured_at: now(),
-        },
-    );
-    let b = view.org_board.as_mut().unwrap();
-    b.mode = OrgMode::Graph;
-    b.filter = OrgSessions::Current;
-    let colors = crate::client::org_graph::GraphColors::of(&view.theme);
-    let graph = b.refresh_graph(27, 20);
-    assert_eq!(graph.dots.len(), 40, "ten leads, ten nodes, twenty workers");
-    let buf = crate::client::org_graph::frame(&graph, 27, 20, (0, 0), Some("lead:lead0"), &colors);
-    let mut painted = 0u32;
-    for y in 0..20u16 {
-        for x in 0..27u16 {
-            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
-            if matches!(c, '\u{25c6}' | '\u{25cf}' | '\u{2022}') {
-                painted += 1;
-            }
-        }
-    }
-    assert_eq!(painted, 40, "every dot paints in the narrow view");
-    let mut label_rows: Vec<String> = vec![String::new(); 20];
-    for y in 0..20u16 {
-        for x in 0..27u16 {
-            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
-            label_rows[y as usize].push(c);
-        }
-    }
-    assert!(
-        label_rows.iter().any(|r| r.contains("lead0")),
-        "the selected dot's label paints: {label_rows:?}"
-    );
 }

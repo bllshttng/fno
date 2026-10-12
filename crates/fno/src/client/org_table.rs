@@ -74,7 +74,7 @@ pub(crate) fn row(row: &Row, now: u64, width: usize, mail: bool) -> String {
     let Selected::Session(s) = &row.selected else {
         return cells(&values, width, mail);
     };
-    let a = s.agent.as_deref();
+    let a = s.agent.as_ref();
     values[0] = s
         .agent
         .as_ref()
