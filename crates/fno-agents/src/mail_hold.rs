@@ -1692,7 +1692,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -1827,7 +1827,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &SID.to_string(),
-                now + chrono::Duration::seconds(3600),
+                Some(now + chrono::Duration::seconds(3600)),
                 3600,
                 "wall",
                 None,
@@ -1940,7 +1940,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &SID.to_string(),
-                now + chrono::Duration::seconds(3600),
+                Some(now + chrono::Duration::seconds(3600)),
                 3600,
                 "wall",
                 None,
@@ -2105,7 +2105,7 @@ pub(crate) mod tests {
             // An unstamped row with a stray clock still delivers.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2123,7 +2123,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now - chrono::Duration::seconds(60),
+                Some(now - chrono::Duration::seconds(60)),
                 600,
                 "wall",
                 None,
@@ -2134,7 +2134,7 @@ pub(crate) mod tests {
             assert!(v.deliver, "a clock whose until is past delivers");
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2175,7 +2175,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2207,7 +2207,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2257,7 +2257,7 @@ pub(crate) mod tests {
             // Answering-phase conversation clock: no wall time, the answer end.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(ANSWER_BACKSTOP_S),
+                Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
                 ANSWER_BACKSTOP_S,
                 "wall",
                 None,
@@ -2272,7 +2272,7 @@ pub(crate) mod tests {
             // Conversation clock inside its grace: reads as the wall clock it is.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(GRACE_S - 10),
+                Some(now + chrono::Duration::seconds(GRACE_S - 10)),
                 GRACE_S,
                 "wall",
                 None,
@@ -2288,7 +2288,7 @@ pub(crate) mod tests {
             // Idle clock: "or later", because activity restarts it.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(300),
+                Some(now + chrono::Duration::seconds(300)),
                 300,
                 "idle",
                 Some(now + chrono::Duration::seconds(600)),
@@ -2313,7 +2313,7 @@ pub(crate) mod tests {
             // Live clock: --gate prints hold. stdin carries no body.
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2354,7 +2354,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2385,7 +2385,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2449,7 +2449,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2589,7 +2589,7 @@ pub(crate) mod tests {
             // a: lapsed 90s past its until -> picked.
             write_clock(
                 &identity_key(sid_a),
-                now - chrono::Duration::seconds(90),
+                Some(now - chrono::Duration::seconds(90)),
                 600,
                 "wall",
                 None,
@@ -2600,7 +2600,7 @@ pub(crate) mod tests {
             // still be circling.
             write_clock(
                 &identity_key(sid_b),
-                now - chrono::Duration::seconds(30),
+                Some(now - chrono::Duration::seconds(30)),
                 600,
                 "wall",
                 None,
@@ -2610,7 +2610,7 @@ pub(crate) mod tests {
             // c: live clock -> its own timer is winning.
             write_clock(
                 &identity_key(sid_c),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
