@@ -1479,8 +1479,10 @@ def test_done_cascade_closes_all_done_parent_epic(tmp_graph):
     a container with no PR of its own; it is done when its children are). Replaces
     the old 'walker closes the epic via next' path."""
     entries = [
+        # No plan_path: an epic carrying its own plan work is not auto-closed
+        # any more, and this test pins the container auto-close, not that hold.
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "p",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-cdone001", "title": "Done child", "status": "done", "project": "p",
          "parent": "ab-epic0000", "completed_at": "2026-01-01T00:00:00Z", "blocked_by": []},
         # Last open child, no PR refs -> `done` closes it with no gh cross-check.
@@ -1522,7 +1524,7 @@ def test_done_cascade_closes_grandparent_chain(tmp_graph):
     when the leaf (the only open node in the chain) lands."""
     entries = [
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "p",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-sub00001", "title": "Sub-epic", "status": "ready", "project": "p",
          "parent": "ab-epic0000", "blocked_by": []},
         {"id": "ab-leaf0002", "title": "Leaf", "status": "ready", "project": "p",
@@ -1544,7 +1546,7 @@ def test_done_cascade_closes_cross_project_parent(tmp_graph):
     closure gap codex flagged (advance() is project-scoped and cannot)."""
     entries = [
         {"id": "ab-epic0000", "title": "Epic", "status": "ready", "project": "web",
-         "blocked_by": [], "plan_path": "x.md"},
+         "blocked_by": []},
         {"id": "ab-leaf0001", "title": "Leaf", "status": "ready", "project": "etl",
          "parent": "ab-epic0000", "blocked_by": [],
          "artifact_url": "https://example.test/artifact"},

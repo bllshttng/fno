@@ -919,3 +919,76 @@ fn x586d_done_node_session_with_a_typed_turn_two_minutes_old_survives_the_sweep(
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
+
+// ── x-7066: a person typed here, so the row keeps - past every window ───
+
+/// The x-586d incident, aged past every window: done and merged, the age
+/// seam 2 hours quiet, and a typed turn 17 minutes old - inside NO window
+/// the sweep holds. The lazy read behind the policy verdict is the keep.
+#[test]
+fn x7066_a_typed_turn_past_every_window_still_keeps_the_row() {
+    let (dir, home) = staged_graph_home();
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let transcripts = tempfile::tempdir().unwrap();
+    let typed = typed_turn_transcript(transcripts.path(), "s-typed.jsonl", 17 * 60);
+    stage_graph(
+        dir.path(),
+        json!([{
+            "id": "N1",
+            "status": "done",
+            "merge_status": "merged",
+            "sessions": [
+                {"phase": "execute", "harness": "claude", "session_id": "s-typed", "started_at": "2026-09-01T01:00:00Z", "ended_at": "2026-09-01T02:00:00Z"}
+            ]
+        }]),
+    );
+    state::update_registry(&home.registry_json(), |r| {
+        r.entries
+            .push(x2774_spawn("row-typed", "t-typed", "s-typed"));
+    })
+    .unwrap();
+    let picks = |e: &state::RegistryEntry| match e.harness_session_id.as_deref() {
+        Some("s-typed") => Some(vec![typed.clone()]),
+        _ => None,
+    };
+    let roster = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+        crate::claude_roster::ClaudeAgentRow::new("t-typed", Some("done")),
+    ]);
+    let summary = gc_sweep::run(
+        &home,
+        &emitter,
+        900,
+        false,
+        7,
+        &gc_sweep::read_graph_entries,
+        &picks,
+        &uniform_ages(2 * 3600),
+        &|_| true,
+        &|_| crate::daemon::CascadeOutcome::NotApplicable,
+        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
+        &move || roster.clone(),
+        &|_| (None, None),
+        &|_| None,
+    );
+    assert!(
+        summary.retired.is_empty(),
+        "a row the user typed into never retires: {summary:?}"
+    );
+    assert!(
+        summary.kept_attended.is_empty(),
+        "the turn is past the attended window, so the early hold is not what kept it: {summary:?}"
+    );
+    assert_eq!(summary.kept_user_typed.len(), 1, "{summary:?}");
+    assert_eq!(summary.kept_user_typed[0].0, "t-typed");
+    let detail = &summary.kept_user_typed[0].1;
+    let age: i64 = detail
+        .strip_prefix("typed user turn ")
+        .and_then(|rest| rest.strip_suffix("s ago"))
+        .and_then(|num| num.parse().ok())
+        .unwrap_or(i64::MAX);
+    assert!(
+        age >= 17 * 60,
+        "the keep names the typed turn, no window bound: {summary:?}"
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+}

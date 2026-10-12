@@ -244,7 +244,9 @@ def test_container_rollup_does_not_pin_parent_with_deferred_child():
 
 def test_container_rollup_closes_when_every_child_is_done():
     entries = [
-        _entry("ab-parent004"),
+        # plan_path None: a parent carrying its own plan work holds against
+        # the rollup now, and this test pins the plain container auto-close.
+        _entry("ab-parent004", plan_path=None),
         _entry("ab-child006", parent="ab-parent004", completed_at="2026-01-01T00:00:00Z"),
         _entry("ab-child007", parent="ab-parent004", completed_at="2026-01-02T00:00:00Z"),
     ]

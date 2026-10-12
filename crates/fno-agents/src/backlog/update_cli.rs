@@ -1188,6 +1188,65 @@ fn plan_mutation(
     })
 }
 
+/// Whole-word check for a node id in a hold's free text, the way
+/// `named_question_ids` matches `q-` ids: word boundaries, case-insensitive.
+fn hold_text_names_id(haystack: &str, id: &str) -> bool {
+    match regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(id))) {
+        Ok(re) => re.is_match(haystack),
+        Err(_) => false,
+    }
+}
+
+/// Removing a blocker a held hold still names strands the hold: the worker
+/// it parks keeps parking after the blocker row is gone, and the hold's
+/// release condition names a blocker no longer on the row. Refuse and name
+/// the release verb; lift the hold, then rerun the removal. An INVALID hold
+/// (unreadable, not active) never refuses: there is nothing to strand.
+fn hold_names_blockers(
+    node: &Value,
+    node_id: &str,
+    removing: &[String],
+    rows: &[Value],
+) -> Result<(), Refusal> {
+    if removing.is_empty() {
+        return Ok(());
+    }
+    let by_id: BTreeMap<String, Value> = rows
+        .iter()
+        .filter_map(|e| entry_id(e).map(|id| (id.to_string(), e.clone())))
+        .collect();
+    let Some(receipt) = crate::backlog_ready::hold_verdict_receipt(node, &by_id) else {
+        return Ok(());
+    };
+    if !receipt.held {
+        return Ok(());
+    }
+    let text = format!("{}\n{}", receipt.reason, receipt.release_when);
+    let named: Vec<String> = removing
+        .iter()
+        .filter(|b| hold_text_names_id(&text, b))
+        .cloned()
+        .collect();
+    if named.is_empty() {
+        return Ok(());
+    }
+    Err(refused(
+        format!(
+            "Error: cannot remove blocker(s) {named} from {node_id}: an active \
+             dispatch hold at {owner} names it: reason={reason} \
+             release_when={release_when}; release the hold first with \
+             `fno do pr hold release {owner} --evidence <proof>`, then rerun \
+             the removal.",
+            named = named.join(", "),
+            node_id = node_id,
+            owner = receipt.owner,
+            reason = receipt.reason,
+            release_when = receipt.release_when,
+        ),
+        3,
+    ))
+}
+
 /// The wave-2/3/4 mutator arms, in cmd_update's field order. The whole rows
 /// vector comes in because related's symmetry writes peer rows, caused-by
 /// and parent resolve against the graph, and parent's contained-release
@@ -1249,6 +1308,24 @@ fn apply_mutators(
             let desired = dedupe(parse_list(replace));
             node_ref::validate_blockers(&desired, rows, &args.task_id)
                 .map_err(|(m, e)| refused(m, e))?;
+            // A replace that drops blockers removes them: the same stranding
+            // hazard --remove-blocker refuses, so the same guard runs here.
+            let current: Vec<String> = rows[idx]
+                .get("blocked_by")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let removed: Vec<String> = current
+                .iter()
+                .filter(|b| !desired.contains(b))
+                .cloned()
+                .collect();
+            hold_names_blockers(&rows[idx], &node_id, &removed, rows)?;
             rows[idx]
                 .as_object_mut()
                 .expect("row is an object")
@@ -1256,6 +1333,7 @@ fn apply_mutators(
         } else {
             let add = parse_list(&args.add_blocker);
             let remove = parse_list(&args.remove_blocker);
+            hold_names_blockers(&rows[idx], &node_id, &remove, rows)?;
             node_ref::validate_blockers(&add, rows, &args.task_id)
                 .map_err(|(m, e)| refused(m, e))?;
             let mut current: Vec<String> = rows[idx]
@@ -2202,6 +2280,73 @@ mod tests {
         assert!(!model_token_ok("two words"));
         assert!(!model_token_ok("bad*glob"));
         assert!(!model_token_ok(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn removing_a_blocker_a_held_hold_names_refuses() {
+        // The held plan names the blocker in its reason; the removal refuses and
+        // names the release verb. An INVALID hold never
+        // refuses, and a removal the hold does not name passes.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(
+            &plan,
+            "---\nstatus: ready\ndispatch_hold:\n  reason: waiting on t-fcb4\n  release_when: t-fcb4 clears\n  review_on: 2099-08-20\n  set_by: lead\n---\n",
+        )
+        .unwrap();
+        let held = serde_json::json!({
+            "id": "t-bf51", "slug": "bf51", "title": "bf51",
+            "blocked_by": ["t-fcb4"],
+            "plan_path": plan.display().to_string(),
+            "cwd": dir.path().display().to_string(),
+        });
+        let blocker = serde_json::json!({
+            "id": "t-fcb4", "slug": "fcb4", "title": "fcb4",
+            "cwd": dir.path().display().to_string(),
+        });
+        let rows = vec![held, blocker];
+
+        let err = hold_names_blockers(&rows[0], "t-bf51", &["t-fcb4".to_string()], &rows)
+            .expect_err("a held hold naming the blocker refuses");
+        match err {
+            Refusal { message, exit } => {
+                assert_eq!(exit, 3);
+                assert!(message.contains("t-fcb4"), "{message}");
+                assert!(message.contains("hold release"), "{message}");
+            }
+        }
+
+        // A removal the hold does not name passes.
+        assert!(
+            hold_names_blockers(&rows[0], "t-bf51", &["t-other".to_string()], &rows).is_ok(),
+            "an unnamed removal passes"
+        );
+
+        // An INVALID hold (a malformed block, not an active one) never
+        // refuses: there is nothing to strand.
+        let broken = dir.path().join("broken.md");
+        std::fs::write(
+            &broken,
+            "---\nstatus: ready\ndispatch_hold:\n  reason: waiting on t-fcb4\n---\n",
+        )
+        .unwrap();
+        let broken_row = serde_json::json!({
+            "id": "t-bf51", "slug": "bf51", "title": "bf51",
+            "blocked_by": ["t-fcb4"],
+            "plan_path": broken.display().to_string(),
+            "cwd": dir.path().display().to_string(),
+        });
+        let broken_rows = vec![broken_row, rows[1].clone()];
+        assert!(
+            hold_names_blockers(
+                &broken_rows[0],
+                "t-bf51",
+                &["t-fcb4".to_string()],
+                &broken_rows,
+            )
+            .is_ok(),
+            "an INVALID hold never refuses"
+        );
     }
 
     #[test]
