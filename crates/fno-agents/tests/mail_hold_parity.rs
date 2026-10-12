@@ -37,9 +37,10 @@ fn binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_fno-agents")
 }
 
-/// The freeze capture's env block, applied over the inherited environment (the pins win; the blanks silence the other harness markers). Delivery re-enters `current_exe()`, so no PATH or interpreter is needed; `FNO_AGENT_SELF` must stay unset for the registration to run at all.
+/// The freeze capture's env block, applied over the inherited environment (the pins win; the blanks silence the other harness markers). Delivery re-enters `current_exe()`, so no PATH or interpreter is needed; `FNO_AGENT_SELF` must stay unset for the registration to run at all. The test-owner env rides along so the keeper attributes the spawned client and its detached release timer to this test process.
 fn hold_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
-    cmd.env("HOME", root)
+    cmd.envs(fno_agents::test_run::self_owner_env())
+        .env("HOME", root)
         .env("FNO_STATE_DIR", root)
         .env("FNO_HOME", root)
         .env("FNO_AGENTS_HOME", root.join("agents-home"))

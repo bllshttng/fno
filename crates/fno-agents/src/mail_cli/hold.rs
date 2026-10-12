@@ -206,12 +206,16 @@ pub fn run_hold_release(args: &[String]) -> i32 {
             // wait out, so leave quietly without touching the registry.
             return 0;
         };
-        let remaining = (until - chrono::Utc::now()).num_seconds();
-        if remaining <= 0 {
+        // Whole-second truncation releases early: a 0.4s remainder read as
+        // 0 and the loop broke before the deadline. Milliseconds keep the
+        // sub-second slice, and nap covers it when under the poll interval.
+        let remaining_ms = (until - chrono::Utc::now()).num_milliseconds();
+        if remaining_ms <= 0 {
             break;
         }
-        let nap = (remaining as f64).min(poll_s.max(1.0));
-        std::thread::sleep(Duration::from_secs_f64(nap));
+        let nap = Duration::from_millis(remaining_ms as u64)
+            .min(Duration::from_secs_f64(poll_s.max(1.0)));
+        std::thread::sleep(nap);
     }
     let held_for_s = started.elapsed().as_secs() as i64;
     let result = release(&handle, held_for_s);
