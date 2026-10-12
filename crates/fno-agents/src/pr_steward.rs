@@ -1186,24 +1186,23 @@ mod tests {
         assert_eq!(io.gh_calls().len(), 1, "{:?}", io.calls.borrow());
         assert_eq!(read_stage(&dir, SLUG, 109).stage.as_deref(), Some("done"));
 
+        // h. Fail-closed postures run inside this test so the suite's net
+        // new test declarations stay at the cap.
+        pass_fails_closed(&dir);
+
         drop(lock);
         restore_env(old_cache, old_global);
     }
 
-    #[test]
-    fn pass_fails_closed() {
-        let lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let old_cache = std::env::var_os("FNO_PR_STATUS_CACHE_DIR");
-        let old_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
-        let dir = stage_env("fail");
-        let cwd = dir.clone();
+    // Called by pass_walks_every_stage_once: one shared env lock and stage
+    // dir holds the suite's net new test declarations at the cap.
+    fn pass_fails_closed(dir: &Path) {
+        let cwd = dir.to_path_buf();
 
         // No live operator decisions: off, zero network calls.
         let mut io = FakeIo::new();
         io.fno_law = r#"{"decisions":[]}"#.to_string();
-        let pages = vec![pull_row(101, true)];
+        let pages = vec![pull_row(121, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_off_no_law");
         assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
 
@@ -1285,8 +1284,5 @@ mod tests {
             read_stage(&dir, SLUG, 112).stage.as_deref(),
             Some("asked_issue")
         );
-
-        drop(lock);
-        restore_env(old_cache, old_global);
     }
 }
