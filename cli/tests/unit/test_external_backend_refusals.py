@@ -81,6 +81,7 @@ def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
     if (
         argv[:2] in (
             ["backlog", "update"], ["backlog", "add"], ["backlog", "queue"], ["backlog", "maintain"],
+            ["backlog", "encounter"],
         )
         or argv[:2] == ["backlog", "session"]
     ):

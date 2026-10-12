@@ -288,7 +288,7 @@ fn verify_evidence(reply: &str, bundle: &str) -> bool {
 
 /// One `fno agents spawn --substrate headless` round-trip. Matches the
 /// retired Python `_default_spawn`: never a bare `claude -p`.
-fn default_spawn(
+pub(crate) fn default_spawn(
     name: &str,
     prompt: &str,
     cwd: &Path,

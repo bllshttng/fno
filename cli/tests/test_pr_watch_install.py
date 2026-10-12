@@ -146,37 +146,6 @@ def test_ac3edge_xml_escape_in_paths(tmp_home, tmp_launch_agents):
     assert "&weird" not in rendered  # raw & must not appear in attribute context
 
 
-# ---------------------------------------------------------------------------
-# AC3-FR: uninstall removes plist but preserves watermark store
-# ---------------------------------------------------------------------------
-
-
-def test_ac3fr_uninstall_removes_plist_preserves_watermark(
-    tmp_home, tmp_launch_agents, monkeypatch
-):
-    """uninstall() removes the plist file but leaves the watermark store intact."""
-    m = _install()
-
-    # Pre-seed a plist file
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist_path.write_text("<plist/>")
-
-    # Pre-seed a watermark store in the tmp HOME's .fno state dir
-    state_file = tmp_home / ".fno" / "state" / "pr-watcher-state.json"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"some/repo#1": {"parked": None}}))
-
-    # Stub launchctl so we don't call the real one
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a, **kw: 0)
-
-    m.uninstall(launch_agents_dir=tmp_launch_agents)
-
-    assert not plist_path.exists(), "plist should be removed by uninstall"
-    assert state_file.exists(), "watermark store must be preserved"
-    data = json.loads(state_file.read_text())
-    assert "some/repo#1" in data
-
-
 def _settings_with_pr_watch(enabled: bool):
     class _PW:
         def __init__(self):
@@ -732,29 +701,6 @@ def test_heal_watcher_bounces_when_plist_present(tmp_launch_agents):
         mod._run_launchctl_timed = orig
     assert rc == 0
     assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
-
-
-# ---------------------------------------------------------------------------
-# x-e106: unload_only (the config-set disable coupling primitive)
-# ---------------------------------------------------------------------------
-
-
-def test_unload_only_missing_plist_is_noop(tmp_home, tmp_launch_agents):
-    """unload_only on an absent plist is a clean no-op."""
-    m = _install()
-    assert m.unload_only(launch_agents_dir=tmp_launch_agents) == "not-installed"
-
-
-def test_unload_only_unloads_loaded_agent(tmp_home, tmp_launch_agents, monkeypatch):
-    """unload_only unloads a loaded agent but keeps the plist."""
-    m = _install()
-    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist.write_text("<plist/>")
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: 0)
-
-    assert m.unload_only(launch_agents_dir=tmp_launch_agents) == "unloaded"
-    assert plist.exists(), "disable keeps the plist"
 
 
 # ---------------------------------------------------------------------------

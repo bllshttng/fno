@@ -644,6 +644,19 @@ class AgentEntry:
     requested_provider: Optional[str] = None
     requested_effort: Optional[str] = None
 
+    # v41: the seed payload the spawner handed this session at birth, verbatim
+    # as delivered (post-render, post-brevity-enrichment). The attended guard
+    # exempts a harness-rendered slash-command turn matching this text: a
+    # spawn seeded with a slash command writes one user-shaped
+    # CommandInvocation turn that is the machine's, never a person's, so it
+    # must not hold the row against stop or reap for 15 minutes. Stamped by
+    # the mint doors that hold the delivered message; None on adopt, keeper
+    # thread lane B (payload delivered after the mint), and daemon-hosted
+    # mints. ABSENCE MEANS UNKNOWN, the `origin` discipline. Rust's
+    # RegistryEntry mirrors it as additive-optional passthrough so a daemon
+    # write-back preserves the stamp.
+    spawn_payload: Optional[str] = None
+
     # v26 served facts; the Rust sweep writes them, python is a passthrough.
     liveness: Optional[str] = None
     liveness_measured_at: Optional[str] = None

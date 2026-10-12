@@ -11,6 +11,32 @@ fn host(base_url: &str) -> &str {
     rest.split('/').next().unwrap_or("")
 }
 
+/// The `config.model_routing.providers.<provider>` record the endpoint reads,
+/// with the zero-config zai lane filling every field the config leaves absent
+/// or empty: the same built-in record Python's model_routing
+/// `_DEFAULT_PROVIDERS` carries. `None` when neither names the provider.
+pub fn provider_record(cwd: &Path, provider: &str) -> Option<toml::Table> {
+    let mut record =
+        crate::agents_config::config_table_merged(cwd, &["model_routing", "providers", provider]);
+    if provider == "zai" {
+        let table = record.get_or_insert_with(toml::Table::new);
+        for (field, value) in [
+            ("base_url", "https://api.z.ai/api/anthropic"),
+            ("api_key_env", "ZAI_API_KEY"),
+            ("api_key_file", "~/.fno/.env"),
+        ] {
+            let set = table
+                .get(field)
+                .and_then(toml::Value::as_str)
+                .is_some_and(|v| !v.is_empty());
+            if !set {
+                table.insert(field.into(), toml::Value::String(value.into()));
+            }
+        }
+    }
+    record
+}
+
 /// Resolve the endpoint: the spawn front's route env first, then the
 /// `config.model_routing.providers.<FNO_ROUTE_PROVIDER>` record. Never a
 /// Claude.ai login: an Anthropic host with no API key refuses.
@@ -35,31 +61,17 @@ pub fn resolve_endpoint(
             route: "env".into(),
         }
     } else if let Some(provider) = route_provider {
-        let table = crate::agents_config::config_table_merged(
-            cwd,
-            &["model_routing", "providers", &provider],
-        );
-        // The zero-config zai lane: the same built-in record Python's
-        // model_routing `_DEFAULT_PROVIDERS` carries; a config field wins.
-        let builtin = |n: &str| match (provider.as_str(), n) {
-            ("zai", "base_url") => Some("https://api.z.ai/api/anthropic"),
-            ("zai", "api_key_env") => Some("ZAI_API_KEY"),
-            ("zai", "api_key_file") => Some("~/.fno/.env"),
-            _ => None,
-        };
-        if table.is_none() && builtin("base_url").is_none() {
+        let Some(table) = provider_record(cwd, &provider) else {
             return Err(format!(
                 "provider {provider:?} is not configured: add config.model_routing.providers.{provider}"
             ));
-        }
+        };
         let field = |n: &str| {
             table
-                .as_ref()
-                .and_then(|t| t.get(n))
+                .get(n)
                 .and_then(toml::Value::as_str)
                 .filter(|v| !v.is_empty())
                 .map(str::to_string)
-                .or_else(|| builtin(n).map(str::to_string))
         };
         let openai = field("protocol")
             .unwrap_or_else(|| "anthropic".into())

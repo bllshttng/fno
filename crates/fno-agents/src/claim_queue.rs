@@ -76,6 +76,22 @@ pub fn depth(queue_dir: &Path) -> usize {
     scan(queue_dir, None).map_or(0, |(survivors, _)| survivors.len())
 }
 
+/// Pids stamped on the live tickets of one lane dir, order ignored: the
+/// test feed reads who waits, not where. A ticket with no parsable pid is
+/// skipped, never guessed; the same scan reaps the dead ones.
+pub(crate) fn waiter_pids(queue_dir: &Path) -> Vec<u32> {
+    scan(queue_dir, None)
+        .unwrap_or_default()
+        .0
+        .iter()
+        .filter_map(|seq| {
+            read_stamp(&queue_dir.join(format!("{seq:06}")))
+                .and_then(|stamp| stamp.pid)
+                .and_then(|pid| u32::try_from(pid).ok())
+        })
+        .collect()
+}
+
 /// Take a ticket at the back of the queue, stamped with this process. The
 /// number is allocated ABOVE the highest surviving ticket, never in the hole
 /// a dequeued front left: restarting the scan at 1 would reissue 000001
@@ -484,6 +500,27 @@ mod tests {
         )
         .expect("stamp ticket");
         d
+    }
+
+    /// AC1-QUEUE: the waiter-pid read returns the pids stamped on live
+    /// tickets and skips a ticket whose stamp parses no pid, never guessing
+    /// one.
+    #[test]
+    fn waiter_pids_reads_live_tickets_and_skips_unstamped() {
+        let dir = queue_dir_for(Path::new("/tmp/claim-q-waiter-pids.lock"));
+        let _ = std::fs::remove_dir_all(&dir);
+        ticket_at(
+            &dir,
+            1,
+            std::process::id() as i32,
+            self_create_ms(),
+            &crate::claims::machine_id(),
+        );
+        let blank = dir.join("000002");
+        std::fs::create_dir_all(&blank).expect("mkdir blank ticket");
+        std::fs::write(blank.join("holder"), "host=q-host\nmachine=\n").expect("stamp blank");
+        assert_eq!(waiter_pids(&dir), vec![std::process::id()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC1-HP: with a live older ticket in the queue, a fresh contender's

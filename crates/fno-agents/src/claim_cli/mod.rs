@@ -12,6 +12,7 @@ pub mod acquire;
 pub mod reap;
 pub mod refresh;
 pub mod release;
+pub mod session_pid;
 
 use serde_json::Value;
 use std::path::PathBuf;
