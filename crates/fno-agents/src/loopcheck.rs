@@ -1441,6 +1441,7 @@ pub(crate) fn decide_with_payload(
                         rounds_used: pr_info.range_tiling.rounds_used,
                         rounds_max: pr_info.range_tiling.rounds_max,
                         unaddressed_blocking: pr_info.unaddressed_findings.len(),
+                        hard_blocker: pr_info.range_tiling.hard_blocker,
                     },
                 );
                 // Read 4's newest activity timestamp folds into the

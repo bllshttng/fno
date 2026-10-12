@@ -100,7 +100,15 @@ pub(crate) fn record(sinks: &Sinks<'_>, input: &FrictionInput<'_>) -> Option<&'s
 /// The gate-refusal door: `gate` (spawn, join or done) refused this
 /// process's own session. The row goes beside the refusal's own row in
 /// `events`; the session is the one this process can prove, else nothing.
-pub(crate) fn record_gate_refusal(events: &Path, gate: &str, node: Option<&str>, reason: &str) {
+/// `key` is the refusal's stable identity; a reason that carries live
+/// figures passes a key without them, so one refusal re-fired is one row.
+pub(crate) fn record_gate_refusal(
+    events: &Path,
+    gate: &str,
+    node: Option<&str>,
+    key: &str,
+    reason: &str,
+) {
     let get = |name: &str| std::env::var(name).ok();
     let ident = crate::spawn_context::resolve_self_identity(
         &get,
@@ -118,7 +126,7 @@ pub(crate) fn record_gate_refusal(events: &Path, gate: &str, node: Option<&str>,
             node,
             harness: ident.harness.as_deref(),
             origin: Origin::GateRefusal,
-            key: format!("{gate}\n{}", cap(reason)),
+            key: format!("{gate}\n{}", cap(key)),
             gate: Some(gate),
             pr: None,
             head_sha: None,
@@ -143,16 +151,28 @@ pub(crate) struct PrRead<'a> {
     pub rounds_used: i64,
     pub rounds_max: i64,
     pub unaddressed_blocking: usize,
+    /// A hard local finding is still open at this head.
+    pub hard_blocker: bool,
 }
 
 /// The PR doors: a review round spent without a pass (one row per round
-/// count) and a red CI check (one row per head).
+/// count) and a red CI check (one row per head). `rounds_used` counts every
+/// reviewed head, pass or fail, so a round counts as friction only while a
+/// blocking finding from it is still open.
 pub(crate) fn on_pr_read(sinks: &Sinks<'_>, pr: &PrRead<'_>) {
+    on_pr_read_with(sinks, pr, record);
+}
+
+fn on_pr_read_with(
+    sinks: &Sinks<'_>,
+    pr: &PrRead<'_>,
+    record: impl Fn(&Sinks<'_>, &FrictionInput<'_>) -> Option<&'static str>,
+) {
     let head8: String = pr.head_sha.chars().take(8).collect();
-    if pr.rounds_used >= 1 {
+    if pr.rounds_used >= 1 && (pr.hard_blocker || pr.unaddressed_blocking > 0) {
         let evidence = format!(
-            "PR #{} spent review round {}/{} without a pass at {head8}; {} blocking finding(s) unaddressed",
-            pr.number, pr.rounds_used, pr.rounds_max, pr.unaddressed_blocking
+            "PR #{} spent review round {}/{} without a pass at {head8}; {} inline blocking finding(s) unaddressed, hard local finding open: {}",
+            pr.number, pr.rounds_used, pr.rounds_max, pr.unaddressed_blocking, pr.hard_blocker
         );
         let _ = record(
             sinks,
@@ -663,6 +683,38 @@ mod tests {
         ledger.write(&w.friction, SID).unwrap();
         assert_eq!(go(&w, &help("a fresh signal arrives"), true), Some("cap"));
         assert!(!w.friction.join(format!("{SID}.offer")).exists());
+    }
+
+    #[test]
+    fn a_clean_review_round_is_not_friction() {
+        let w = world(&[]);
+        let sinks = Sinks {
+            project: &w.events,
+            global: &w.events,
+        };
+        let mut pr = PrRead {
+            harness_session: Some(SID),
+            node: Some("zz-0001"),
+            harness: Some("claude"),
+            number: 7,
+            head_sha: "abcdef0123456789",
+            ci_failure: false,
+            failing_checks: &[],
+            rounds_used: 1,
+            rounds_max: 2,
+            unaddressed_blocking: 0,
+            hard_blocker: false,
+        };
+        let off =
+            |s: &Sinks<'_>, i: &FrictionInput<'_>| record_with(s, i, &w.graph, &w.friction, false);
+        on_pr_read_with(&sinks, &pr, off);
+        assert!(rows(&w).is_empty());
+        pr.hard_blocker = true;
+        on_pr_read_with(&sinks, &pr, off);
+        let rows = rows(&w);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["data"]["origin"], "review_round");
+        assert_eq!(rows[0]["data"]["stage"], "review");
     }
 
     #[test]

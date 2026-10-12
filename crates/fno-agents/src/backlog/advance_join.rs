@@ -635,6 +635,7 @@ pub fn run(args: &[String]) -> i32 {
                     "join",
                     Some(node.as_str()),
                     &message,
+                    &message,
                 );
             }
             eprintln!("backlog join: {message}");

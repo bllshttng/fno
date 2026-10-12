@@ -763,6 +763,7 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                         "done",
                         Some(task_id),
                         &msg,
+                        &msg,
                     );
                 }
                 return evidence.exit_code();
