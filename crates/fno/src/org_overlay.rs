@@ -1164,7 +1164,7 @@ mod tests {
         assert!(text.contains("memory dark (macmon not on PATH)"), "{text}");
         assert!(!text.contains("more fit"), "{text}");
 
-        // (x-93ab) AC1-ERR: the full refusal wraps whole words at a 27-col
+        // AC1-ERR: the full refusal wraps whole words at a 27-col
         // sideline; no word is lost.
         let mut org = live();
         org.lane_count = None;
@@ -1247,7 +1247,7 @@ mod tests {
         assert!(text.contains("80% busy of 12 cores"), "{text}");
         assert!(text.contains("2 working"), "{text}");
 
-        // (x-93ab) AC1-HP: the expanded reading fits a 27-col sideline by
+        // AC1-HP: the expanded reading fits a 27-col sideline by
         // wrapping whole words; continuations indent to the value column.
         let narrow = opened(live()).expanded_lines(&AC6_AGES, 27);
         for l in &narrow {
@@ -1291,7 +1291,7 @@ mod tests {
             lines[3],
             "team   5 leads · 2 working · 2 idle · 1 stale · 1 dead · 1 unknown age"
         );
-        // (x-93ab) a 27-col sideline: whole segments drop, letters never do.
+        // a 27-col sideline: whole segments drop, letters never do.
         let narrow = opened(live()).minimized_lines(&AC6_AGES, 27);
         assert_eq!(narrow.len(), MINIMIZED_ROWS, "{narrow:?}");
         for l in &narrow {

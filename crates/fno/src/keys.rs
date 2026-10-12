@@ -2058,7 +2058,7 @@ mod tests {
         assert_eq!(binding.event, Event::OpenOrgView);
         assert!(matches!(binding.section, KeySection::Global));
 
-        // (x-93ab) the org block keeps its key while org-view takes the
+        // the org block keeps its key while org-view takes the
         // free uppercase slot beside it.
         let org = key_bindings()
             .into_iter()

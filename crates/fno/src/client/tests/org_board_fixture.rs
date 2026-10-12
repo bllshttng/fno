@@ -70,7 +70,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
                 .any(|j| t.contains(j))),
         "rows read in words: {texts:?}"
     );
-    // (x-93ab) AC3-HP: a long node title wraps whole at a 27-col column,
+    // AC3-HP: a long node title wraps whole at a 27-col column,
     // every line stays inside the column, and the map ties every wrapped
     // line back to its row.
     let node_index = b
@@ -209,7 +209,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     );
 }
 
-// (x-93ab) AC4: the Table paints one row per worker, in lead-then-node
+// AC4: the Table paints one row per worker, in lead-then-node
 // order, with columns that earn a place and a basis where a reading is
 // missing.
 #[test]
@@ -316,7 +316,7 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
     }
 }
 
-// (x-93ab) AC5-HP: the fixture org renders as a node-link drawing: dots
+// AC5-HP: the fixture org renders as a node-link drawing: dots
 // over braille lines, labels beside, and no box-text graph left behind.
 #[test]
 fn graph_renders_a_node_link_drawing() {
@@ -381,7 +381,7 @@ fn graph_renders_a_node_link_drawing() {
         "equal labels retain different pane identities"
     );
 
-    // (x-93ab) AC5-ERR: forty dots fit a 27x20 view, and the selected
+    // AC5-ERR: forty dots fit a 27x20 view, and the selected
     // dot's label paints while colliding labels are skipped instead of
     // cut. Two workers per node keeps the dot count at forty.
     let mut view2 = View::new(
