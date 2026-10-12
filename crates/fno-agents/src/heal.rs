@@ -821,10 +821,12 @@ struct Args {
     deadline: Option<std::time::Instant>,
     /// What one pre-loop read (the `gh` listing, the worktree scan) may
     /// block. The root gate in [`run_roots_apply`] never starts a root
-    /// whose remaining slice cannot fit one read, so every read that
-    /// starts still ends by the deadline instead of eating the roots
-    /// behind it. Parsed as [`crate::pr_push::READ_TIMEOUT`]; tests shrink
-    /// it so an overrun is provable in seconds, never minutes.
+    /// whose remaining slice cannot fit one read, so the listing -- the
+    /// one network read, and the one that overran in the field -- ends by
+    /// the deadline. The later local reads can still overrun once; a root
+    /// that does leaves no tick row and leads the next tick. Parsed as
+    /// [`crate::pr_push::READ_TIMEOUT`]; tests shrink it so an overrun is
+    /// provable in seconds, never minutes.
     read_bound: std::time::Duration,
     /// Prepended when resolving a remedy's binary (`cargo`, `uv`). Empty
     /// means resolve off PATH. It exists so a test can inject a stub WITHOUT
@@ -2256,10 +2258,10 @@ fn roots_in_heal_order(a: &Args) -> Vec<std::path::PathBuf> {
 /// what is left of [`DRIVE_BUDGET`]; a root that spends less passes its
 /// unspent time on. The gate is admission, not preemption: a root whose
 /// remaining slice cannot fit one pre-loop read (`read_bound`) never
-/// starts, so the reads it would have paid (listing, worktree scan, main
-/// HEAD -- each bounded at one read past its slot) cannot eat the roots
-/// behind it. A root that overruns its slice anyway leaves no tick row,
-/// and the journal order hands it the first slot next tick. Each root's
+/// starts, so the listing it would have paid cannot eat the roots behind
+/// it. The later local reads (worktree scan, main HEAD) can still overrun
+/// once past a spent slice; the root that does leaves no tick row, and the
+/// journal order hands it the first slot next tick. Each root's
 /// `run_all_apply` writes its own `pr_heal_tick` row, and `root` on the
 /// row names whose.
 fn run_roots_apply(a: &Args, dry_run: bool) -> i32 {
