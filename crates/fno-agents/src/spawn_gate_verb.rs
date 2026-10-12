@@ -478,6 +478,14 @@ mod probe {
         // refusal returns, not only on the accepted tail.
         out.insert("effective".into(), json!(cap));
         out.insert("effective_ceiling".into(), json!(ceiling));
+        out.insert("cap_clause".into(), json!(learned.clause()));
+        out.insert("floor".into(), json!(floor));
+        out.insert(
+            "grant".into(),
+            json!(learned.grant.as_ref().filter(|g| g.active).map(|g| {
+                json!({"cap": g.cap, "expires_epoch": g.expires_epoch, "decision_id": g.decision_id})
+            })),
+        );
         if !learned.known {
             out.insert(
                 "effective_note".into(),
@@ -1415,6 +1423,9 @@ mod tests {
         let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
         assert_eq!(answer["slots"], 3, "{answer:?}");
         assert_eq!(answer["max_live"], 28);
+        assert!(answer["cap_clause"].as_str().unwrap().contains("28"));
+        assert_eq!(answer["floor"], 1);
+        assert!(answer["grant"].is_null());
         let tests = answer["tests"]
             .as_object()
             .expect("tests object on request");
