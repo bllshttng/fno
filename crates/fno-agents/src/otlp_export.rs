@@ -260,10 +260,6 @@ struct ExportState {
     last_delivered_ts: Option<String>,
     #[serde(default)]
     held_error: Option<String>,
-    #[serde(default)]
-    endpoint_host: Option<String>,
-    #[serde(default)]
-    forced_off_by: Option<String>,
 }
 
 fn state_path(home: &crate::paths::AgentsHome) -> PathBuf {
@@ -339,33 +335,36 @@ pub(crate) struct BeatReport {
     pub detail: Vec<String>,
 }
 
-/// One beat: dedupe against state, post the pending window once, record the
-/// verdict. At-least-once: a hold (no status, 5xx) ships nothing and
-/// retries next beat; a permanent 4xx drops the rows (never retried); a 2xx
-/// records delivered. Undated rows never ship: `timeUnixNano` cannot lie
-/// about them.
-pub(crate) fn run_beat(
-    cfg: &OtlpConfig,
-    home: &crate::paths::AgentsHome,
-    rows: Vec<FeedRow>,
-    poster: &mut dyn crate::attention_http::HttpPost,
+/// The rows a beat owes: dated, inside the lookback window, neither
+/// delivered nor dropped, oldest first, capped at MAX_BATCH. run_beat and
+/// `preview` share this selection, so a preview prints exactly the batch
+/// the next beat posts. The detail lines name what selection left behind.
+fn select_pending<'a>(
+    rows: &'a [FeedRow],
+    state: &ExportState,
     now_ms: i64,
-) -> BeatReport {
-    let mut detail = Vec::new();
-    let undated = rows
-        .iter()
-        .filter(|r| crate::event_store::parse_rfc3339_ms(&r.ts).is_none())
-        .count();
+) -> (Vec<(String, &'a FeedRow)>, Vec<String>) {
+    let mut detail: Vec<String> = Vec::new();
+    let cutoff = now_ms - LOOKBACK_S as i64 * 1000;
+    let mut undated = 0usize;
+    let mut pending: Vec<(String, &FeedRow)> = Vec::new();
+    for r in rows {
+        let Some(ms) = crate::event_store::parse_rfc3339_ms(&r.ts) else {
+            undated += 1;
+            continue;
+        };
+        if ms < cutoff {
+            continue;
+        }
+        let id = row_id(r);
+        if state.delivered.contains_key(&id) || state.dropped.contains_key(&id) {
+            continue;
+        }
+        pending.push((id, r));
+    }
     if undated > 0 {
         detail.push(format!("otlp: {undated} undated rows skipped"));
     }
-    let mut state = load_state(home);
-    let mut pending: Vec<(String, &FeedRow)> = rows
-        .iter()
-        .filter(|r| crate::event_store::parse_rfc3339_ms(&r.ts).is_some())
-        .map(|r| (row_id(r), r))
-        .filter(|(id, _)| !state.delivered.contains_key(id) && !state.dropped.contains_key(id))
-        .collect();
     // Oldest first: the export catches up in feed order.
     pending.sort_by_key(|(_, r)| crate::event_store::parse_rfc3339_ms(&r.ts).unwrap_or(i64::MAX));
     if pending.len() > MAX_BATCH {
@@ -375,6 +374,23 @@ pub(crate) fn run_beat(
         ));
         pending.truncate(MAX_BATCH);
     }
+    (pending, detail)
+}
+
+/// One beat: dedupe against state, post the pending window once, record the
+/// verdict. At-least-once: a hold (no status, 5xx) ships nothing and
+/// retries next beat; a permanent 4xx drops the rows (never retried); a 2xx
+/// records delivered. Undated rows never ship: `timeUnixNano` cannot lie
+/// about them. Selection is `select_pending`, shared with `preview`.
+pub(crate) fn run_beat(
+    cfg: &OtlpConfig,
+    home: &crate::paths::AgentsHome,
+    rows: Vec<FeedRow>,
+    poster: &mut dyn crate::attention_http::HttpPost,
+    now_ms: i64,
+) -> BeatReport {
+    let mut state = load_state(home);
+    let (pending, mut detail) = select_pending(&rows, &state, now_ms);
     if pending.is_empty() {
         let skip = if rows.is_empty() {
             "no_rows"
@@ -435,7 +451,6 @@ pub(crate) fn run_beat(
         detail.push(format!("otlp: held {} record(s) for retry", pending.len()));
     }
     prune(&mut state, now_ms);
-    state.endpoint_host = Some(cfg.host.clone());
     append_receipt(
         home,
         &json!({
@@ -452,6 +467,28 @@ pub(crate) fn run_beat(
         skip,
         detail,
     }
+}
+
+/// What the next beat would post, for `fno agents feed --otlp`: the same
+/// resolve, state and selection as run_beat, minus the post and the state
+/// write. An off or refused posture still previews, with content attrs
+/// off, so an operator sees the shape before opting in.
+pub(crate) fn preview(
+    cwd: &Path,
+    home: &crate::paths::AgentsHome,
+    rows: &[FeedRow],
+) -> (String, Vec<String>) {
+    let log_content = match resolve(cwd) {
+        Resolved::On(cfg) => cfg.log_content,
+        _ => false,
+    };
+    let state = load_state(home);
+    let (pending, detail) = select_pending(rows, &state, now_ms());
+    let payload = body(
+        &pending.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
+        log_content,
+    );
+    (payload, detail)
 }
 
 /// The one-line posture `fno agents feed --otlp` prints to stderr.
@@ -557,9 +594,6 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
         match resolve(&cwd) {
             Resolved::Off { forced_off_by } => {
                 mark("emit");
-                let mut state = load_state(&home);
-                state.forced_off_by = forced_off_by.map(str::to_string);
-                save_state(&home, &state);
                 let why = forced_off_by
                     .map(|v| format!("forced off by {v}"))
                     .unwrap_or_else(|| "telemetry.otlp.enabled is false".to_string());
@@ -578,12 +612,15 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
                 mark("collect");
                 let now = now_ms();
                 let since_s = (now / 1000).saturating_sub(LOOKBACK_S as i64) as u64;
-                let rows = crate::feed::collect_window(&home, Some(since_s), None);
+                let (rows, leg_notes) = crate::feed::collect_window(&home, Some(since_s), None);
                 mark("post");
                 let mut poster = crate::attention_http::CurlPost;
                 let report = run_beat(&cfg, &home, rows, &mut poster, now);
                 mark("emit");
-                emit_tick_row(&home, report.acted, report.skip, &report.detail.join("; "));
+                // A store-skip note explains a thin window; it reads first.
+                let mut detail = leg_notes;
+                detail.extend(report.detail);
+                emit_tick_row(&home, report.acted, report.skip, &detail.join("; "));
             }
         }
     });
@@ -617,6 +654,7 @@ mod tests {
         status: Option<u16>,
         body: String,
         calls: usize,
+        posted: Vec<String>,
     }
 
     impl crate::attention_http::HttpPost for FakePost {
@@ -627,11 +665,48 @@ mod tests {
             _body: &str,
         ) -> crate::attention_http::PostResult {
             self.calls += 1;
+            self.posted.push(_body.to_string());
             crate::attention_http::PostResult {
                 status: self.status,
                 body: self.body.clone(),
             }
         }
+    }
+
+    static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(crate::claims::test_env_lock);
+
+    /// Snapshot the vars the gate chain reads, so a test can set and restore
+    /// them without leaking state to a parallel test.
+    fn hermetic_env() -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+        [
+            "FNO_CONFIG",
+            "FNO_NO_CANONICAL_CONFIG",
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "FNO_OTLP_HEADERS",
+            "FNO_TEST_OTLP_HEADERS",
+            "OTEL_SDK_DISABLED",
+            "DO_NOT_TRACK",
+        ]
+        .iter()
+        .map(|k| (*k, std::env::var_os(k)))
+        .collect()
+    }
+
+    fn restore_env(saved: &[(&'static str, Option<std::ffi::OsString>)]) {
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+
+    /// Write a config file and point $FNO_CONFIG at it: the sole candidate
+    /// when set, read as-is.
+    fn write_cfg(dir: &Path, toml: &str) {
+        std::fs::write(dir.join("config.toml"), toml).unwrap();
+        std::env::set_var("FNO_CONFIG", dir.join("config.toml"));
     }
 
     /// The three status classes decide the row's fate: a 2xx delivers and
@@ -748,5 +823,189 @@ mod tests {
         let id = row_id(&r);
         r.title = "edited".to_string();
         assert_eq!(row_id(&r), id, "a title edit must not resend the row");
+    }
+
+    /// The preview and the beat agree: same selection, same order, same
+    /// body. An undated row stays home with a note; a delivered row is not
+    /// sent twice. Rows carry a far-future stamp so the real clock in
+    /// `preview` never drops them from the lookback window.
+    #[test]
+    fn preview_matches_the_beat_body_and_selection() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let saved = hermetic_env();
+        std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
+        std::env::remove_var("FNO_CONFIG");
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path());
+        let mut rows = vec![
+            row("2099-01-01T00:00:00Z", "node_shipped", "n1"),
+            row("2099-01-01T00:01:00Z", "node_started", "n2"),
+        ];
+        rows.push(FeedRow {
+            kind: "node_started".to_string(),
+            title: "node_started n3".to_string(),
+            node: Some("n3".to_string()),
+            ..Default::default()
+        });
+
+        // The preview shows the two dated rows, keeps the undated one home
+        // with a note, and never sends.
+        let (body, detail) = preview(Path::new("/"), &home, &rows);
+        assert!(body.contains("n1") && body.contains("n2"));
+        assert!(!body.contains("n3"), "an undated row never ships");
+        assert!(
+            detail.iter().any(|d| d.contains("undated")),
+            "the undated row is named in the detail: {detail:?}"
+        );
+
+        // The beat posts exactly what the preview printed.
+        let mut poster = FakePost {
+            status: Some(200),
+            ..Default::default()
+        };
+        let report = run_beat(
+            &beat_cfg(),
+            &home,
+            rows.clone(),
+            &mut poster,
+            1_760_000_000_000,
+        );
+        assert_eq!(
+            report.acted, 2,
+            "two dated rows post; the undated one stays home"
+        );
+        assert_eq!(
+            body, poster.posted[0],
+            "preview equals the posted body byte for byte"
+        );
+
+        // After the beat the preview is quiet: delivered rows do not resend.
+        let (again, _) = preview(Path::new("/"), &home, &rows);
+        assert!(
+            !again.contains("n1") && !again.contains("n2"),
+            "delivered rows do not resend"
+        );
+
+        restore_env(&saved);
+    }
+
+    /// The gate chain decides in a fixed order: kill switches first, then
+    /// the enabled flag, then endpoint shape, then headers. Every refusal
+    /// names what it read; every kill switch outranks the config file.
+    #[test]
+    fn resolve_gates() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let saved = hermetic_env();
+        std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
+        std::env::remove_var("FNO_CONFIG");
+        std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::remove_var("OTEL_SDK_DISABLED");
+        std::env::remove_var("DO_NOT_TRACK");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+
+        // No config: off, with no switch to blame.
+        assert!(
+            matches!(
+                resolve(cwd),
+                Resolved::Off {
+                    forced_off_by: None
+                }
+            ),
+            "no config reads off with no switch named"
+        );
+
+        // enabled = true: past the enabled gate; headers unset refuses
+        // rather than shipping an unauthenticated export.
+        write_cfg(
+            cwd,
+            "[telemetry.otlp]\nenabled = true\nendpoint = \"https://collector.example/v1/logs\"\n",
+        );
+        assert!(
+            matches!(resolve(cwd), Resolved::Refused(ref msg) if msg.contains("FNO_OTLP_HEADERS")),
+            "unset headers refuse the unauthenticated export"
+        );
+
+        // A kill switch outranks the enabled config and names itself.
+        std::env::set_var("DO_NOT_TRACK", "1");
+        assert!(
+            matches!(
+                resolve(cwd),
+                Resolved::Off {
+                    forced_off_by: Some("DO_NOT_TRACK")
+                }
+            ),
+            "DO_NOT_TRACK outranks the enabled config"
+        );
+        std::env::set_var("OTEL_SDK_DISABLED", "true");
+        std::env::remove_var("DO_NOT_TRACK");
+        assert!(
+            matches!(
+                resolve(cwd),
+                Resolved::Off {
+                    forced_off_by: Some("OTEL_SDK_DISABLED")
+                }
+            ),
+            "OTEL_SDK_DISABLED outranks the enabled config"
+        );
+
+        // The full chain passes: endpoint, host, headers, content gate.
+        std::env::remove_var("OTEL_SDK_DISABLED");
+        std::env::set_var("FNO_OTLP_HEADERS", "Authorization=Bearer t, X-One=1");
+        match resolve(cwd) {
+            Resolved::On(cfg) => {
+                assert_eq!(cfg.endpoint, "https://collector.example/v1/logs");
+                assert_eq!(cfg.host, "collector.example");
+                assert!(!cfg.log_content);
+                assert_eq!(
+                    cfg.headers,
+                    vec![
+                        ("Authorization".to_string(), "Bearer t".to_string()),
+                        ("X-One".to_string(), "1".to_string())
+                    ]
+                );
+            }
+            Resolved::Off { .. } | Resolved::Refused(_) => {
+                panic!("enabled with headers resolves on")
+            }
+        }
+
+        // A non-http endpoint refuses.
+        write_cfg(
+            cwd,
+            "[telemetry.otlp]\nenabled = true\nendpoint = \"ftp://collector.example\"\n",
+        );
+        assert!(
+            matches!(resolve(cwd), Resolved::Refused(_)),
+            "a non-http endpoint refuses"
+        );
+
+        // A header entry with no '=' refuses.
+        write_cfg(
+            cwd,
+            "[telemetry.otlp]\nenabled = true\nendpoint = \"https://collector.example/v1/logs\"\n",
+        );
+        std::env::set_var("FNO_OTLP_HEADERS", "novalue");
+        assert!(
+            matches!(resolve(cwd), Resolved::Refused(ref msg) if msg.contains("novalue")),
+            "a header entry without '=' refuses"
+        );
+
+        // A headers_env override reroutes where headers come from.
+        write_cfg(
+            cwd,
+            "[telemetry.otlp]\nenabled = true\nendpoint = \"https://collector.example/v1/logs\"\nheaders_env = \"FNO_TEST_OTLP_HEADERS\"\n",
+        );
+        std::env::remove_var("FNO_OTLP_HEADERS");
+        assert!(
+            matches!(resolve(cwd), Resolved::Refused(ref msg) if msg.contains("FNO_TEST_OTLP_HEADERS")),
+            "the override env is the one that gets read"
+        );
+        std::env::set_var("FNO_TEST_OTLP_HEADERS", "a=b");
+        assert!(matches!(resolve(cwd), Resolved::On(_)));
+
+        restore_env(&saved);
     }
 }

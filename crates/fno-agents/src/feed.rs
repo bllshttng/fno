@@ -1740,16 +1740,23 @@ fn graph_leg(home: &AgentsHome) -> (Vec<Value>, Option<String>) {
 }
 
 /// The full window for a non-interactive reader: every leg on, no page, no
-/// prefilter, notes swallowed. The OTLP exporter reads through this so the
-/// daemon arm and the CLI preview see exactly the rows the verb prints.
+/// prefilter. Returns the rows plus each store-skip note, so a caller can say
+/// why a leg contributed nothing when its store failed instead of reporting
+/// the window as simply quiet. The OTLP exporter reads through this, so the
+/// daemon arm and the `--otlp` preview see the same window.
 pub(crate) fn collect_window(
     home: &AgentsHome,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
-) -> Vec<FeedRow> {
-    let (questions_raw, _note) = questions_leg(home, since_epoch, until_epoch);
-    let (graph_entries, _note) = graph_leg(home);
-    let (removals, _notes) = crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
+) -> (Vec<FeedRow>, Vec<String>) {
+    let mut notes: Vec<String> = Vec::new();
+    let (questions_raw, note) = questions_leg(home, since_epoch, until_epoch);
+    notes.extend(note);
+    let (graph_entries, note) = graph_leg(home);
+    notes.extend(note);
+    let (removals, removal_notes) =
+        crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
+    notes.extend(removal_notes);
     let spawns_raw = agents_journal(
         home,
         &["agent_spawned", "agent_spawn_refused"],
@@ -1769,7 +1776,8 @@ pub(crate) fn collect_window(
         since_epoch,
         until_epoch,
     );
-    let (main_raw, _note) = main_store_journal(home, since_epoch, until_epoch);
+    let (main_raw, note) = main_store_journal(home, since_epoch, until_epoch);
+    notes.extend(note);
     let Projection { rows, .. } = project(
         &questions_raw,
         &graph_entries,
@@ -1780,13 +1788,14 @@ pub(crate) fn collect_window(
         &main_raw,
         None,
     );
-    filter_rows(
+    let rows = filter_rows(
         rows,
         &Page::default(),
         &Prefilter::default(),
         since_epoch,
         until_epoch,
-    )
+    );
+    (rows, notes)
 }
 
 /// The `fno-agents feed` verb. A missing or unreadable store is not fatal: the
@@ -1896,26 +1905,34 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
         eprintln!("fno-agents feed: skipped {skipped_entries} non-object graph entr(ies)");
     }
 
-    let mut page = args.page;
-    // A page the caller did not size is the head page: the newest 200.
-    page.limit = page.limit.or(Some(200));
-    let rows = filter_rows(rows, &page, &args.pre, args.since_epoch, args.until_epoch);
-
     if args.otlp {
         // A preview, never a send: the body is what a beat WOULD post, and
         // the posture line names the resolved config. Off machines can still
         // preview, so an operator sees the shape before opting in; content
-        // attrs stay off unless the config turns them on.
+        // attrs stay off unless the config turns them on. Selection runs over
+        // the full window the flags select, the beat's own input, never the
+        // newest-200 head page the panel prints.
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let log_content = match crate::otlp_export::resolve(&cwd) {
-            crate::otlp_export::Resolved::On(cfg) => cfg.log_content,
-            _ => false,
-        };
-        let refs: Vec<&FeedRow> = rows.iter().collect();
-        println!("{}", crate::otlp_export::body(&refs, log_content));
+        let window = filter_rows(
+            rows,
+            &Page::default(),
+            &args.pre,
+            args.since_epoch,
+            args.until_epoch,
+        );
+        let (body, notes) = crate::otlp_export::preview(&cwd, home, &window);
+        println!("{body}");
+        for note in &notes {
+            eprintln!("fno-agents feed: {note}");
+        }
         eprintln!("{}", crate::otlp_export::status_line(&cwd, home));
         return 0;
     }
+
+    let mut page = args.page;
+    // A page the caller did not size is the head page: the newest 200.
+    page.limit = page.limit.or(Some(200));
+    let rows = filter_rows(rows, &page, &args.pre, args.since_epoch, args.until_epoch);
 
     if args.json {
         println!(
@@ -3127,5 +3144,12 @@ mod tests {
         assert_eq!(rows[2].lead.as_deref(), Some("candor"));
         assert!(!rows[2].lead_current, "a fallback name is not the live one");
         assert_eq!(rows[2].owner.as_deref(), Some("Lead of x-gone (candor)"));
+    }
+
+    /// The preview prints a body, not JSON: the two output flags refuse.
+    #[test]
+    fn otlp_refuses_json() {
+        let err = parse_args(&["--otlp".into(), "--json".into()]).unwrap_err();
+        assert_eq!(err, "--otlp and --json cannot combine");
     }
 }
