@@ -1539,6 +1539,50 @@ pub fn work_state(index: &HashMap<String, Vec<(String, String)>>, session_id: &s
     }
 }
 
+/// True when a row carries plan work of its own with no PR to evidence it:
+/// the shape the children rollup once false-closed, where the UNVERIFIED
+/// completion note used to be the only flag. No rollup may close such a
+/// row; its own door does, on its own evidence.
+pub fn has_own_plan_work(entry: &Value) -> bool {
+    entry
+        .get("plan_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+        && entry.get("pr_number").and_then(Value::as_i64).is_none()
+}
+
+/// One comparison core for the reopen guard: a deliberate reopen postdating
+/// every child completion holds against an automatic close. Ambiguity
+/// favours the human: an unreadable reopen stamp protects, an unreadable
+/// child stamp protects. `reopened` is None when there is no reopen.
+pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&str>]) -> bool {
+    let Some(raw) = reopened else { return false };
+    if raw.trim().is_empty() {
+        return false;
+    }
+    let Some(reopened) = parse_rfc3339_stamp(raw) else {
+        return true;
+    };
+    for closed in kid_completed.iter().flatten() {
+        if let Some(closed_t) = parse_rfc3339_stamp(closed) {
+            if closed_t >= reopened {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// RFC3339 stamp parser for the guard comparisons: None on blank or
+/// unreadable. Naive and Z-suffixed spellings both ride chrono's parser the
+/// way the Python twin's does.
+fn parse_rfc3339_stamp(raw: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(raw).ok()
+}
+
 /// Recompute status for all entries based on graph state
 /// (statuses.recompute_statuses). The write path's derivation: blocked_by is
 /// deliberately NOT derived here - dependency satisfaction is answered fresh
@@ -1822,14 +1866,30 @@ pub fn recompute_statuses_with_plan_rungs(
             .map(|c| c.get("status").and_then(Value::as_str).map(str::to_string))
             .collect();
         // A container carrying live work of its own is NOT done just because
-        // its children are.
+        // its children are: a lock or an open PR reads live from the
+        // derivation above; a bound plan's own deliverables are unverified
+        // until its own door closes the row; and a deliberate reopen holds
+        // until a NEW child close postdates it.
         let own_work_live = matches!(
             parent_status.as_deref(),
             Some("in_review") | Some("in_progress")
         );
+        let holds = {
+            let kid_stamps: Vec<Option<&str>> = children_by_parent[&pid]
+                .iter()
+                .filter_map(|ci| entries.get(*ci))
+                .map(|k| k.get("completed_at").and_then(Value::as_str))
+                .collect();
+            own_work_live
+                || has_own_plan_work(&entries[pidx])
+                || reopen_outranks_stamps(
+                    entries[pidx].get("reopened_at").and_then(Value::as_str),
+                    &kid_stamps,
+                )
+        };
         if !child_statuses.is_empty() && child_statuses.iter().all(|s| s.as_deref() == Some("done"))
         {
-            if !own_work_live {
+            if !holds {
                 entries[pidx]
                     .as_object_mut()
                     .unwrap()
@@ -3515,10 +3575,41 @@ mod tests {
         let mut entries = vec![
             json!({"id": "parent", "parent": null}),
             json!({"id": "kid", "parent": "parent", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // Own plan work: the parent's own deliverables are unverified, so
+            // the children rollup never closes it.
+            json!({"id": "plan-parent", "parent": null, "status": "ready",
+                   "plan_path": "plans/p.md"}),
+            json!({"id": "plan-kid", "parent": "plan-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // A deliberate reopen postdating every child's close holds.
+            json!({"id": "reopened-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-02-01T00:00:00+00:00"}),
+            json!({"id": "reopened-kid", "parent": "reopened-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // A reopen that a NEW child close postdates expires: re-close.
+            json!({"id": "stale-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "stale-kid", "parent": "stale-parent",
+                   "completed_at": "2026-03-01T00:00:00+00:00"}),
         ];
         recompute_statuses(&mut entries);
         // Parent with all-done children and no live work of its own -> done.
         assert_eq!(s_str(&entries[0], "status"), Some("done"));
+        assert_eq!(
+            s_str(&entries[2], "status"),
+            Some("ready"),
+            "own plan work holds against the rollup"
+        );
+        assert_eq!(
+            s_str(&entries[4], "status"),
+            Some("idea"),
+            "a deliberate reopen outranks the child closes"
+        );
+        assert_eq!(
+            s_str(&entries[6], "status"),
+            Some("done"),
+            "a new child close postdating the reopen re-closes"
+        );
     }
 
     #[test]

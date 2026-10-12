@@ -20,6 +20,7 @@ use super::settings;
 use super::supersession::normalize_surface;
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
+use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
 
 // ---------------------------------------------------------------------------
 // argv parsing
@@ -287,23 +288,16 @@ pub(crate) fn children_all_closed(parent: &Value, kids: &[&Value]) -> bool {
 }
 
 /// True when a deliberate reopen postdates every child's close (the
-/// _reopen_outranks_child_closes twin). Ambiguity favours the human.
+/// _reopen_outranks_child_closes twin). Ambiguity favours the human: an
+/// unreadable reopen protects, an unreadable child stamp protects.
 pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> bool {
-    let reopened = match parse_iso(parent.get("reopened_at")) {
-        Some(t) => t,
-        None => {
-            let raw = text_at(parent, "reopened_at").unwrap_or("");
-            return !raw.trim().is_empty();
-        }
-    };
-    for kid in kids {
-        if let Some(closed) = parse_iso(kid.get("completed_at")) {
-            if closed >= reopened {
-                return false;
-            }
-        }
-    }
-    true
+    reopen_outranks_stamps(
+        text_at(parent, "reopened_at"),
+        &kids
+            .iter()
+            .map(|k| text_at(k, "completed_at"))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// True when a deliberate reopen postdates the merge being closed on (the
@@ -340,16 +334,11 @@ fn clear_reopen_warning_if_child_matches(parent: &mut Value, child_id: Option<&s
     }
 }
 
-pub(crate) fn auto_closed_note(entry: &Value) -> String {
-    let has_plan = truthy_field(entry, "plan_path")
-        || entry
-            .get("plan_path")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
-    let has_pr = entry.get("pr_number").and_then(Value::as_u64).is_some();
-    if has_plan && !has_pr {
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)".into();
-    }
+/// completion_note for a container closed by all-children-complete. A
+/// plan-having, PR-less container is never closed any more (the
+/// has_own_plan_work hold), so the old UNVERIFIED flag branch is retired
+/// with the false close it flagged.
+pub(crate) fn auto_closed_note(_entry: &Value) -> String {
     "auto-closed: all children complete".into()
 }
 
@@ -431,7 +420,11 @@ pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec
         let parent_is_done = truthy_field(&entries[idx], "completed_at");
         let outranks = reopen_outranks_child_closes(&entries[idx], &kid_refs);
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
-        if parent_is_done || outranks || !all_closed {
+        // Own plan work holds the close: the parent's own deliverables are
+        // unverified, and the UNVERIFIED note that used to flag this close
+        // is retired with it.
+        let holds_plan = has_own_plan_work(&entries[idx]);
+        if parent_is_done || outranks || holds_plan || !all_closed {
             clear_reopen_warning_if_child_matches(&mut entries[idx], Some(node_id));
             break;
         }
@@ -1024,7 +1017,13 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     // The CANONICAL id, not the argument: a partial-id spelling resolves
     // here, and the cascade walks full ids.
     let task_id: String = text_at(node, "id").map(String::from).unwrap_or(task_id);
-    if !truthy_field(&node, "completed_at") {
+    // The done fact, not the derived column (is_done_door_fact's twin at
+    // the patch door): `status: done` is also written by the children
+    // rollup. A derived-done row (no completed_at) reopens and its
+    // reopened_at stamps the hold the derivation respects; only a row that
+    // reads neither done fact is truly nothing to reopen.
+    let reads_done = truthy_field(node, "completed_at") || text_at(node, "status") == Some("done");
+    if !reads_done {
         eprintln!("warning: {task_id} is not done; nothing to reopen");
         return 0;
     }
@@ -1103,7 +1102,9 @@ pub fn run_reopen(tail: &[String]) -> i32 {
             not_found.replace(true);
             return Ok(false);
         };
-        if !truthy_field(&rows[idx], "completed_at") {
+        if !truthy_field(&rows[idx], "completed_at")
+            && text_at(&rows[idx], "status") != Some("done")
+        {
             raced.replace(true);
             return Ok(false);
         }
