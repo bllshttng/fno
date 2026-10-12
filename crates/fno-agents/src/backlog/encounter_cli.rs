@@ -92,17 +92,16 @@ pub(crate) fn vote_provenance(harness: Option<&str>) -> Map<String, Value> {
     if harness != Some("claude") {
         return out;
     }
-    let env = |name: &str| {
-        std::env::var(name)
-            .ok()
+    let set = |v: Result<String, std::env::VarError>| {
+        v.ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     };
-    if let Some(effort) = env("CLAUDE_EFFORT") {
+    if let Some(effort) = set(std::env::var("CLAUDE_EFFORT")) {
         out.insert("effort".into(), Value::String(effort));
     }
-    if env("ANTHROPIC_BASE_URL").is_some() {
-        if let Some(model) = env("ANTHROPIC_MODEL") {
+    if set(std::env::var("ANTHROPIC_BASE_URL")).is_some() {
+        if let Some(model) = set(std::env::var("ANTHROPIC_MODEL")) {
             out.insert("model".into(), Value::String(model));
         }
     }
