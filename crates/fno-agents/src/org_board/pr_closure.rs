@@ -253,6 +253,17 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// The whole `pr-closure-*` verb door. parse/render stay on the JSON
+/// forwarder transport above; the produce verbs (branch-ids, ensure,
+/// trailer, bind-created, context) live in [`super::pr_closure_produce`].
+/// The trailer leg is argv-driven and must never block on stdin.
+pub fn run_verb(args: &[String]) -> i32 {
+    match args.first().map(String::as_str) {
+        Some("pr-closure-parse" | "pr-closure-render") => run(args),
+        _ => super::pr_closure_produce::run(args),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

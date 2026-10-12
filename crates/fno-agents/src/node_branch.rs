@@ -77,9 +77,12 @@ pub(crate) fn node_ids(head_ref: &str) -> Vec<String> {
             i += 1;
             continue;
         };
-        let candidate = &head_ref[i..hex_end];
-        if !ids.iter().any(|c| c == candidate) {
-            ids.push(candidate.to_string());
+        // Order-preserved, deduplicated, like the Python scanner's seen-set
+        // (`branch_node_ids` in cli/src/fno/pr/closure.py): a repeated id
+        // yields once.
+        let candidate = head_ref[i..hex_end].to_string();
+        if !ids.iter().any(|c| c == &candidate) {
+            ids.push(candidate);
         }
         i = hex_end;
     }
@@ -298,6 +301,35 @@ mod tests {
         assert_eq!(node_ids("feature/xd863-close"), vec!["xd863"]);
         assert!(node_ids("feature/xd863g").is_empty());
         assert!(node_ids("feature/xg863").is_empty());
+    }
+
+    // Shapes frozen from the Python scanner's finditer semantics; the golden
+    // pr-closure-branch-ids cases pin the same yields end to end.
+    #[test]
+    fn ids_match_the_python_scanner_on_hard_shapes() {
+        // A repeated id yields once: the Python scanner dedups through a
+        // seen-set, order preserved.
+        assert_eq!(
+            node_ids("x-aaaa-fix-x-cccc-then-x-aaaa"),
+            vec!["x-aaaa".to_string(), "x-cccc".to_string()]
+        );
+        // Prefix backoff: hex keeps its 4-8 bound by shrinking the prefix.
+        assert_eq!(
+            node_ids("x-aaaaaaaaaaaa/aaaaaaaaaaa"),
+            vec!["aaaaaaaaaaaa".to_string(), "aaaaaaaaaaa".to_string()]
+        );
+        assert_eq!(node_ids("x-aaaaaaaaa"), vec!["aaaaaaaaa".to_string()]);
+        // An overlong prefix leaves nothing; underscore and dot are not
+        // delimiters, so they seal a segment off from the scan.
+        assert!(node_ids("toolongprefix-aaaa").is_empty());
+        assert!(node_ids("x_aaaa_fix").is_empty());
+        assert!(node_ids("x-aaaa.tar.gz").is_empty());
+        // Documented false positive: both halves parse as id body.
+        assert_eq!(node_ids("cache-dead"), vec!["cache-dead".to_string()]);
+        assert_eq!(
+            node_ids("feature/fix-auth-and-x-aaaa"),
+            vec!["x-aaaa".to_string()]
+        );
     }
 
     // -- the kind map -----------------------------------------------------------
