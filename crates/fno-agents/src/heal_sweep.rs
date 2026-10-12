@@ -25,6 +25,19 @@ pub(crate) fn open_pr_numbers(pages: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// Flatten a slurped REST pulls listing into single pull rows. Consumers that
+/// walk rows one action deep (`pr_steward`) take rows, never pages.
+pub(crate) fn pull_rows(pages: &[Value]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for page in pages {
+        match page {
+            Value::Array(rows) => out.extend(rows.iter().cloned()),
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
 /// The open PRs in a slurped REST pulls listing as `(number, head sha, row)`:
 /// everything the unchanged-skip gate reads without a per-PR pulls call. The
 /// listing is the same PR object schema the single-pull read answers, so
@@ -163,5 +176,25 @@ mod tests {
         // An unreadable payload is never evidence of unchanged.
         assert_eq!(checks_digest(&json!("not an array")), None);
         assert_eq!(checks_digest(&json!(null)), None);
+    }
+
+    #[test]
+    fn pull_rows_flatten_pages() {
+        let page = |nums: &[u64]| {
+            json!(nums
+                .iter()
+                .map(|n| json!({"number": n}))
+                .collect::<Vec<_>>())
+        };
+        let pages = vec![page(&[1, 2]), page(&[3])];
+        let nums: Vec<u64> = pull_rows(&pages)
+            .iter()
+            .map(|r| r["number"].as_u64().unwrap())
+            .collect();
+        assert_eq!(nums, vec![1, 2, 3]);
+
+        // A non-array page (gh_api_pages wraps a lone body) is one row.
+        let lone = vec![json!({"number": 9})];
+        assert_eq!(pull_rows(&lone).len(), 1);
     }
 }

@@ -226,7 +226,15 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
         match st.stage.as_deref() {
             None | Some("asked_issue") => {
                 if let Some(issue) = linked_issue(&body_of(pull), &slug, pr) {
-                    match intake(io, cwd, &slug, pr, issue, &login_of(pull)) {
+                    match intake(
+                        io,
+                        cwd,
+                        &slug,
+                        pr,
+                        issue,
+                        &login_of(pull),
+                        author_id_of(pull),
+                    ) {
                         Ok(Some(node)) => {
                             st.stage = Some("intaken".to_string());
                             st.issue = Some(issue);
@@ -464,7 +472,9 @@ pub(crate) fn sanitize_question(q: &str) -> Option<String> {
         return None;
     }
     const FORBIDDEN: [&str; 10] = ["http", "www.", "@", "`", "<", ">", "[", "](", "\n", "\r"];
-    if FORBIDDEN.iter().any(|bad| trimmed.contains(bad)) {
+    // Case cannot smuggle a link past the filter: HTTPS:// is still a URL.
+    let lower = trimmed.to_lowercase();
+    if FORBIDDEN.iter().any(|bad| lower.contains(bad)) {
         return None;
     }
     Some(trimmed.to_string())
@@ -504,6 +514,7 @@ fn intake(
     pr: u64,
     issue: u64,
     login: &str,
+    author_id: i64,
 ) -> Result<Option<String>, String> {
     let raw = match io.gh(&[format!("/repos/{slug}/issues/{issue}")]) {
         Ok(r) => r,
@@ -519,18 +530,13 @@ fn intake(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let author_id = row.pointer("/user/id").and_then(Value::as_i64).unwrap_or(0);
-    let title = row
-        .get("title")
-        .and_then(Value::as_str)
-        .unwrap_or(key.as_str())
-        .to_string();
 
+    // Dedup on the minted marker, not the live title: a rename between passes must not mint a duplicate.
     let find_out = io
         .fno(&[
             "backlog".to_string(),
             "find".to_string(),
-            cut_chars(&title, FIND_TITLE_CAP),
+            format!("Outside issue {key}"),
         ])
         .unwrap_or_default();
     if let Some(node) = node_for_key(&find_out, &key) {
@@ -788,6 +794,12 @@ fn login_of(pull: &Value) -> &str {
     pull.pointer("/user/login")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
+}
+
+fn author_id_of(pull: &Value) -> i64 {
+    pull.pointer("/user/id")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
 }
 
 fn assoc_of(pull: &Value) -> &str {

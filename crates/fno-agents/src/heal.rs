@@ -2662,9 +2662,11 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         fno_bin: &fno_bin,
         cwd: std::path::Path::new(&a.cwd),
     };
+    // gh_api_pages hands back pages of pull rows; the steward walks rows.
+    let pulls = crate::heal_sweep::pull_rows(&pages);
     bump(
         &mut counts,
-        crate::pr_steward::run_pass(&steward_io, steward_io.cwd, &pages, dry_run),
+        crate::pr_steward::run_pass(&steward_io, steward_io.cwd, &pulls, dry_run),
     );
     emit_tick_event(
         a,
