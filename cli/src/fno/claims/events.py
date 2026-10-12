@@ -158,18 +158,6 @@ def emit_claim_force_overridden(
 # so adding a helper now would be dead code.
 
 
-def emit_claim_reaped(
-    claim: Claim, *, root: str, age_ms: int, basis: Optional[str] = None
-) -> None:
-    """GC archived one provably-dead claim. Per-file record."""
-    data = _common(claim)
-    data["root"] = root
-    data["age_ms"] = int(age_ms)
-    if basis is not None:
-        data["basis"] = basis
-    _emit(_build("claim_reaped", data))
-
-
 def emit_claim_reap_swept(summary: dict[str, Any]) -> None:
     """One `fno agents claim reap --apply` run completed, including a run that
     reaped nothing - a silent sweep and a dead sweep must not look the same.
@@ -222,7 +210,6 @@ __all__ = [
     "emit_claim_force_overridden",
     "emit_claim_idempotent_reacquired",
     "emit_claim_reap_swept",
-    "emit_claim_reaped",
     "emit_claim_refreshed",
     "emit_claim_rebound",
     "emit_claim_released",
