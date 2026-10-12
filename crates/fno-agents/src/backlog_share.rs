@@ -1239,6 +1239,7 @@ mod tests {
     /// The fixtures write rows the way any writer does, through the open
     /// seam; the store module owns the table, so its name rides a constant.
     const NODES: &str = "nodes";
+    const AGENT_SESSIONS: &str = "agent_sessions";
 
     struct Machine {
         _dir: tempfile::TempDir,
@@ -1495,11 +1496,11 @@ mod tests {
             .db
             .lock()
             .unwrap()
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA foreign_keys=OFF;
-                 DELETE FROM agent_sessions WHERE id = 's-new';
-                 PRAGMA foreign_keys=ON;",
-            )
+                 DELETE FROM {AGENT_SESSIONS} WHERE id = 's-new';
+                 PRAGMA foreign_keys=ON;"
+            ))
             .unwrap();
         retitle(&a, "x-1", "again");
         let refusal = flush(&a.graph).unwrap_err();
