@@ -250,7 +250,12 @@ fn wait_for_raw_frame(
             | Ok(ServerMsg::ServerStats { .. })
             | Ok(ServerMsg::AgentRowsReceipt { .. })
             // (v83) Launcher progress: asserted by the launcher suites.
-            | Ok(ServerMsg::AgentLaunch(_)) => {}
+            | Ok(ServerMsg::AgentLaunch(_))
+            // (v110) Desktop notice and its receipt: the notice rides to the
+            // client's tty (asserted by the notify unit tests), the receipt
+            // answers the one-shot notify connection.
+            | Ok(ServerMsg::DesktopNotice { .. })
+            | Ok(ServerMsg::NoticeSent { .. }) => {}
             Ok(ServerMsg::Bye { reason }) => panic!("unexpected Bye: {reason}"),
             Err(fno::proto::ProtoError::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}

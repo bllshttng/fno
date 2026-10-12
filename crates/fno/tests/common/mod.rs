@@ -1174,6 +1174,12 @@ impl FakeClient {
             ServerMsg::AgentLaunch(u) => self.launch_updates.push(u),
             // Addressed reply receipts are consumed by the interactive client.
             ServerMsg::PaneInputResult(_) => {}
+            // (v110) Desktop notice: the real client writes it to the user's
+            // tty; the FakeClient absorber has none - ignore.
+            ServerMsg::DesktopNotice { .. } => {}
+            // (v110) Notify receipt: one-shot control reply, never an
+            // attached client.
+            ServerMsg::NoticeSent { .. } => {}
         }
     }
 
