@@ -593,6 +593,16 @@ fn record_epoch(record: &Value) -> Option<f64> {
         .map(|dt| dt.timestamp() as f64 + dt.timestamp_subsec_nanos() as f64 / 1e9)
 }
 
+/// A transcript's age in seconds (its last record's epoch against now) for
+/// the claim list silence report: `None` when the transcript or its
+/// timestamps cannot be read. Walks the store fresh (no shared listing),
+/// like the single-row Python lookup.
+pub(crate) fn transcript_age_s(session_id: &str, cwd: &str, agent: &str) -> Option<f64> {
+    let facts = tail_facts(session_id, cwd, agent, &[])?;
+    let epoch = facts.last_epoch?;
+    Some((now_epoch_s() - epoch).max(0.0))
+}
+
 /// Tail-read one transcript and derive the classifier's input: the newest
 /// record epoch, the LAST role-bearing record's role and flattened text.
 /// `None` means the transcript could not be resolved, read, or decoded.

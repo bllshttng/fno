@@ -9,6 +9,7 @@
 //! Python leaf (`tests/claim_acquire_parity.rs`) are the contract.
 
 pub mod acquire;
+pub mod list;
 pub mod refresh;
 pub mod release;
 
@@ -152,6 +153,36 @@ fn owned_registry_effort(harness: &str, session_id: &str) -> Option<String> {
             .map(str::to_string);
     }
     None
+}
+
+/// The registry row's harness for one session id, for the claim list
+/// silence report: reads the shared registry, and answers "claude" when
+/// the registry is unreadable, malformed, or no row names the session. A
+/// matching row answers its `harness`, empty or absent, exactly like the
+/// Python lookup it ports.
+pub(crate) fn harness_for_session(session_id: &str) -> String {
+    let path = crate::paths::AgentsHome::shared_registry_json();
+    let Ok(raw) = crate::registry_store::read(&path) else {
+        return "claude".to_string();
+    };
+    let Some(rows) = raw.get("agents").and_then(Value::as_array) else {
+        return "claude".to_string();
+    };
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        if obj.get("harness_session_id").and_then(Value::as_str) != Some(session_id) {
+            continue;
+        }
+        return obj
+            .get("harness")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "claude".to_string());
+    }
+    "claude".to_string()
 }
 
 /// The (harness, session_id) an execute provenance row is written under:

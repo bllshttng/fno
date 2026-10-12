@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Callable, List, Mapping, NamedTuple, Optional
+from typing import List, Mapping, Optional
 
 import typer
 
@@ -27,7 +27,6 @@ import typer
 # test_claims_cli.py). Constants and exception classes are safe to bind: the
 # suite patches functions, not classes.
 from . import core as _claims_core
-from . import io as _claims_io
 from . import roster as _roster
 from .core import (
     HANDOVER_HOLDER_PREFIX as _HANDOVER_HOLDER_PREFIX,
@@ -834,122 +833,6 @@ def status(
         typer.echo(clause, err=True)
 
 
-def _merge_claims_across_roots(
-    deduped_roots: list[tuple[Optional[Path], Path]],
-    *,
-    prefix: str,
-    include_stale: bool,
-) -> tuple[list[dict], dict[str, str], dict[str, int]]:
-    """Merge per-root claim listings into one best-state-wins view.
-
-    Returns ``(all_rows, row_roots, totals)``. A key present in more than one
-    root (a bug elsewhere writing to the wrong root, or a deliberate
-    FNO_CLAIMS_ROOT migration leaving stale claims under the old root - see
-    the version-skew note on CLAIMS_ROOT_ENV in io.py) is one logical claim,
-    so every purpose (row, root attribution, totals bucket) must agree on
-    ONE winning sighting rather than splitting across roots. That winner is
-    the most informative state seen (live beats suspect beats stale beats
-    corrupted beats free) - a first-scanned root's stale leftover from an
-    old FNO_CLAIMS_ROOT migration must not hide a live claim a later root
-    holds for the same key, which pure first-root-wins did. First root is
-    only the tiebreak between two EQUAL-priority sightings of the same key.
-    """
-    _STATE_PRIORITY = {"live": 0, "suspect": 1, "stale": 2, "corrupted": 3, "free": 4}
-    best_state: dict[str, str] = {}
-    best_root: dict[str, str] = {}
-    best_row: dict[str, Optional[dict]] = {}
-
-    for candidate_root, cdir in deduped_roots:
-        rows, _counts, states_by_key = _claims_core.list_claims_with_counts(
-            prefix=prefix or None, include_stale=include_stale, root=candidate_root,
-        )
-        row_by_key = {r["key"]: r for r in rows}
-        for key, state in states_by_key.items():
-            priority = _STATE_PRIORITY.get(state, len(_STATE_PRIORITY))
-            current = best_state.get(key)
-            # Both sides default to worst-priority (never best): an unrecognized
-            # `current` must stay displaceable by any recognized state, not
-            # freeze the winner the way defaulting to 0 (best) would.
-            if current is not None and priority >= _STATE_PRIORITY.get(
-                current, len(_STATE_PRIORITY)
-            ):
-                continue
-            best_state[key] = state
-            best_root[key] = str(cdir)
-            best_row[key] = row_by_key.get(key)
-
-    all_rows = [row for row in best_row.values() if row is not None]
-    all_rows.sort(key=lambda r: r["key"])
-    row_roots = {key: root for key, root in best_root.items() if best_row.get(key) is not None}
-    # Only stale/corrupted/free ever feed the empty-store message below;
-    # live/suspect/total would just be dead weight summed on every list call.
-    totals = {"stale": 0, "corrupted": 0, "free": 0}
-    for state in best_state.values():
-        if state in totals:
-            totals[state] += 1
-    return all_rows, row_roots, totals
-
-
-# age_s None means unreadable, not silent or healthy - a separate bucket.
-ClaimSilenceRow = NamedTuple("ClaimSilenceRow", [("key", str), ("holder", str), ("age_s", Optional[float])])
-# scanned = live claims examined, always populated: a detector silent on a
-# healthy fleet is indistinguishable from one that never ran.
-ClaimSilenceReport = NamedTuple(
-    "ClaimSilenceReport",
-    [("scanned", int), ("silent", List[ClaimSilenceRow]), ("unreadable", List[ClaimSilenceRow])],
-)
-
-
-def _default_claim_age_lookup(session_id: str, cwd: str) -> Optional[float]:
-    """Seconds since the transcript last advanced. Never raises."""
-    try:
-        import time as _time
-
-        from fno.agents.watchdog import harness_for_session, tail_facts
-
-        facts = tail_facts(session_id, cwd, agent=harness_for_session(session_id))
-        if facts is None or facts.last_event_epoch is None:
-            return None
-        return max(0.0, _time.time() - facts.last_event_epoch)
-    except Exception:  # noqa: BLE001 - unreadable answers nothing
-        return None
-
-
-def _claim_silence_report(
-    rows: List[dict],
-    *,
-    threshold_s: float,
-    age_lookup: Callable[[str, str], Optional[float]],
-) -> ClaimSilenceReport:
-    """Pure over injected rows + age lookup. Reports only - never feed
-    `reap_cmd`, whose probe demands proof by finding the holder, not this."""
-    scanned, silent, unreadable = 0, [], []
-    for row in rows:
-        if row.get("state") != "live":
-            continue
-        scanned += 1
-        key, holder = row.get("key", ""), row.get("holder") or ""
-        session_id = _holder_session_id(holder)
-        cwd = _claim_worktree_cwd(row)
-        age_s = age_lookup(session_id, cwd) if session_id and cwd else None
-        if age_s is None:
-            unreadable.append(ClaimSilenceRow(key, holder, None))
-        elif age_s > threshold_s:
-            silent.append(ClaimSilenceRow(key, holder, age_s))
-    return ClaimSilenceReport(scanned=scanned, silent=silent, unreadable=unreadable)
-
-
-def _render_claim_silence_report(report: ClaimSilenceReport, *, threshold_s: float) -> str:
-    """Always a positive marker, never empty on a healthy fleet."""
-    m = threshold_s / 60.0
-    line = f"scanned {report.scanned} live claim(s); {len(report.silent)} silent past {m:g}m"
-    for r in report.silent:
-        line += f"\n  SILENT {r.key} holder={r.holder} age={(r.age_s or 0) / 60.0:.1f}m"
-    for r in report.unreadable:
-        line += f"\n  unreadable {r.key} holder={r.holder}"
-    return line
-
-
 @cli.command(name="list")
 def list_cmd(
     prefix: str = typer.Option("", "--prefix", help="Filter keys starting with this prefix"),
@@ -976,65 +859,54 @@ def list_cmd(
     narrowing to a single guessed root would
     silently reintroduce the same miss; only an explicit --root narrows.
     """
-    if root is not None:
-        roots: list[Optional[Path]] = [root]
-    else:
-        # _node_aware_root("") already resolves to None (no colon, no route),
-        # so no separate `if prefix` branch is needed here.
-        roots = [_claims_io.global_claims_root(), _node_aware_root(prefix)]
+    return _forward_list(prefix, include_stale, json_output, root, silent_after)
 
-    deduped_roots = _claims_io.dedup_claims_roots(roots)
-    all_rows, row_roots, totals = _merge_claims_across_roots(
-        deduped_roots, prefix=prefix, include_stale=include_stale
-    )
-    n_roots = len(deduped_roots)
 
-    if silent_after is not None:
-        ttl_ms = _parse_ttl(silent_after)
-        if ttl_ms is None:
-            raise typer.BadParameter("--silent-after requires a duration, e.g. '15m'")
-        threshold_s = ttl_ms / 1000.0
-        report = _claim_silence_report(
-            all_rows, threshold_s=threshold_s, age_lookup=_default_claim_age_lookup
-        )
-        if json_output:
-            typer.echo(json.dumps({
-                "scanned": report.scanned,
-                "silent": [r._asdict() for r in report.silent],
-                "unreadable": [r._asdict() for r in report.unreadable],
-            }))
-        else:
-            typer.echo(_render_claim_silence_report(report, threshold_s=threshold_s))
-        return
+def _forward_list(
+    prefix, include_stale, json_output, root, silent_after,
+) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct. The leaf's
+    logic lives in crates/fno-agents/src/claim_cli/list.rs (Python owns
+    transport only, per the dual-implementation protocol)."""
+    import subprocess
 
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = []
+    if prefix:
+        argv.extend(("--prefix", prefix))
+    if include_stale:
+        argv.append("--include-stale")
     if json_output:
-        # Bare list, matching the original shape: a scripted caller already
-        # does `for r in json.loads(...)`. The filtered-count fix below is a
-        # human-output problem only - JSON already answers unambiguously
-        # (an empty list here really does mean zero rows in this mode).
-        typer.echo(json.dumps(all_rows))
-        return
-
-    if not all_rows:
-        # AC7: a store that is mostly stale must never print the bare
-        # string "no claims" - that reads identically to an empty store.
-        # The --include-stale hint only makes sense when the flag wasn't
-        # already given and there is actually something it would surface -
-        # otherwise it tells the caller to pass a flag they already passed.
-        hint = ""
-        if not include_stale and (totals["stale"] or totals["corrupted"]):
-            hint = "; --include-stale to list them"
+        argv.append("--json")
+    if root is not None:
+        argv.extend(("--root", str(root)))
+    if silent_after is not None:
+        # An empty value IS forwarded: the refusal shapes are leaf behavior
+        # (a frozen golden), not transport.
+        argv.extend(("--silent-after", silent_after))
+    binary = resolve_binary()
+    if binary is None:
         typer.echo(
-            f"no live claims ({totals['stale']} stale, {totals['corrupted']} corrupted, "
-            f"{totals['free']} released mid-scan across "
-            f"{n_roots} root{'s' if n_roots != 1 else ''}){hint}"
+            "fno agents claim list: the fno-agents binary was not found "
+            "(reinstall fno, run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN).",
+            err=True,
         )
-        return
-    for r in all_rows:
-        typer.echo(
-            f"{r['state']:9} {r['key']:32} holder={r.get('holder', '-')} "
-            f"pid={r.get('pid', '-')} host={r.get('host', '-')} root={row_roots[r['key']]}"
-        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer (a CliRunner caller must see it).
+    result = subprocess.run(
+        [str(binary), "claim", "list", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 #: Re-exported so every caller keeps its existing import site. The definition
