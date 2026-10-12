@@ -623,5 +623,51 @@ mod tests {
             crate::mail_arm::interval_from_secs(Some(30)),
             std::time::Duration::from_secs(30)
         );
+        // The pull arm's retry contract: an injection that fails leaves the
+        // row in the pending pool, so a later pull still delivers it after a
+        // younger row did (the fetch re-selects every pending row each beat).
+        // The fake inject answers no remote call, and the seen ledger is
+        // absent under the temp home, so the loop never dials the store.
+        let bus_row = |seq: i64, id: &str| crate::mail_bus::BusRow {
+            seq,
+            msg_id: id.to_string(),
+            from_id: "s@h/s".into(),
+            to_name: "quill".into(),
+            payload: "hello".into(),
+            raw: false,
+            expire_at: 1_800_000_000,
+        };
+        let home = std::path::Path::new("/tmp/fno-mail-arm-retry-test");
+        let remote = Remote::parse("http://127.0.0.1:1", None).expect("parses");
+        let mut older_failed = false;
+        let mut inject = |row: &crate::mail_bus::BusRow| {
+            if row.msg_id == "older" && !older_failed {
+                older_failed = true;
+                false
+            } else {
+                true
+            }
+        };
+        let rows = vec![bus_row(1, "older"), bus_row(2, "newer")];
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(&remote, rows, home, &mut inject),
+            1,
+            "the failed row does not count as delivered"
+        );
+        assert!(older_failed);
+        let retried = vec![bus_row(1, "older")];
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(&remote, retried, home, &mut inject),
+            1,
+            "the next beat delivers the row the earlier beat could not"
+        );
+        // The finality rule: a signal kill (no code) and the transient
+        // refusals (failed durable write 12, unknown name 13) stay pending;
+        // every other non-zero exit is final and marks the row refused.
+        assert!(!crate::mail_arm::refusal_is_final(None));
+        assert!(!crate::mail_arm::refusal_is_final(Some(12)));
+        assert!(!crate::mail_arm::refusal_is_final(Some(13)));
+        assert!(crate::mail_arm::refusal_is_final(Some(1)));
+        assert!(crate::mail_arm::refusal_is_final(Some(2)));
     }
 }

@@ -131,21 +131,57 @@ fn home_root() -> PathBuf {
 }
 
 /// Deliver pending rows in seq order. A row leaves the pending pool only
-/// through a successful local send (exit 0): a refusal or a send that
-/// failed waits for the next beat, and the TTL bounds it. The seen ledger
-/// records msg_ids after a zero exit, so a redelivered row never injects
-/// twice (at-least-once, edge 5).
+/// through a successful local send (exit 0) or a final refusal (below): a
+/// transient failure waits for the next beat, and the TTL bounds it. The
+/// seen ledger records msg_ids after a zero exit, so a redelivered row
+/// never injects twice (at-least-once, edge 5).
 pub(crate) fn pull_rows(remote: &Remote, rows: Vec<BusRow>, home: &std::path::Path) -> usize {
+    pull_rows_with(remote, rows, home, &mut |row| inject_row(remote, home, row))
+}
+
+/// The row loop behind `pull_rows`, with the injection leg as a parameter so
+/// the retry contract is testable without spawning a real send.
+pub(crate) fn pull_rows_with(
+    remote: &Remote,
+    rows: Vec<BusRow>,
+    home: &std::path::Path,
+    inject: &mut dyn FnMut(&BusRow) -> bool,
+) -> usize {
     let mut delivered = 0;
     for row in rows {
         if seen(remote, home, &row) {
             continue;
         }
-        if inject_row(remote, home, &row) {
+        if inject(&row) {
             delivered += 1;
         }
     }
     delivered
+}
+
+/// True when a non-zero local-send exit will repeat on every retry, so the
+/// row is marked refused instead of riding pending to the TTL. Exit 12 is
+/// the receiver's own durable-floor write failing (transient), 13 an unknown
+/// name (the roster may still join); both wait for the next beat. A signal
+/// kill carries no code and waits too.
+fn refusal_is_final(code: Option<i32>) -> bool {
+    !matches!(code, None | Some(12) | Some(13))
+}
+
+/// The send's stderr as one log-sized line: whitespace collapsed, then cut
+/// on a char boundary, so a refusal's reason reaches the daemon log without
+/// a multi-line splatter.
+fn brief(text: &[u8], cap: usize) -> String {
+    let joined = String::from_utf8_lossy(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cut: String = joined.chars().take(cap).collect();
+    if cut.len() < joined.len() {
+        format!("{cut}...")
+    } else {
+        cut
+    }
 }
 
 /// True when the row was already delivered by an earlier beat.
@@ -175,9 +211,12 @@ fn record_seen(home: &std::path::Path, msg_id: &str) -> Result<(), String> {
 
 /// The delivery leg: the receiver's own local send answers. Its registry
 /// resolves the name (an unknown name refuses, exit 13, and the row stays
-/// pending for the TTL), and its holds apply untouched (edge 8). Returns
-/// true when the row is done (delivered or refused), false to leave it
-/// pending for the next beat.
+/// pending for the TTL), and its holds apply untouched (edge 8). A final
+/// refusal (any other non-zero exit, see `refusal_is_final`) marks the row
+/// refused, so the sender's `mail status` shows the loss instead of a
+/// pending row that every retry refuses again. Returns true when the row is
+/// done (delivered or refused), false to leave it pending for the next
+/// beat.
 fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // Edge 6: a raw row is a command typed into a pane. Anyone on the
     // tailnet can write a bus row, and the sender-written from_id proves
@@ -201,7 +240,25 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             // itself does not replay: this process ran it once).
             false
         }
-        Ok(_) => false,
+        Ok(output) => {
+            let code = output.status.code();
+            if refusal_is_final(code) {
+                // The receiver's own send refused the body for good (the
+                // style gate, the forged-envelope check, the size cap): a
+                // retry replays the same refusal, so marking refused is what
+                // makes the loss visible to the sender's `mail status`.
+                eprintln!(
+                    "mail-arm: local send for {} refused (exit {code:?}): {}",
+                    row.msg_id,
+                    brief(&output.stderr, 300)
+                );
+                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+                }
+                return true;
+            }
+            false
+        }
         Err(e) => {
             eprintln!("mail-arm: local send for {}: {e}", row.msg_id);
             false
