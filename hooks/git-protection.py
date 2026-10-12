@@ -1685,14 +1685,9 @@ def _find_pr_create_segments(segments):
     return out
 
 
-# The general node-id grammar is used for closure markers. The branch guess is
-# narrower because this hook has no graph: compact prefixes other than the
-# historical x family are common ordinary words.
+# The general node-id grammar is used for closure markers. Branch segments
+# are read by the fno-agents binary, which owns the scanner and the graph.
 _HOOK_NODE_ID_BODY = r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}"
-_HOOK_BRANCH_NODE_ID_BODY = r"(?:[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}|x[0-9a-f]{4,8})"
-_HOOK_BRANCH_NODE_ID_RE = re.compile(
-    rf"(?:^|[/-])({_HOOK_BRANCH_NODE_ID_BODY})(?=$|[/-])"
-)
 _CLOSURE_MARKER_RE = re.compile(
     # Composition evidence in the command itself: the generator variable, the
     # retired `Backlog-Closure:` spelling, or the new `Fixes <id>` line.
@@ -1702,13 +1697,31 @@ _CLOSURE_MARKER_RE = re.compile(
 _BODY_FILE_CAP = 1 << 20  # a wrong path must never make the hook read something large
 
 
-def _branch_node_ids(head_ref):
-    """Delimiter-bounded node ids in a branch name, in order, deduplicated."""
-    ids = []
-    for match in _HOOK_BRANCH_NODE_ID_RE.finditer(head_ref or ""):
-        if match.group(1) not in ids:
-            ids.append(match.group(1))
-    return ids
+def _real_branch_node_ids(head_ref):
+    """Delimiter-bounded node ids in a branch name, from the fno-agents verb.
+
+    The hook stays stdlib-only and graph-free: the verb owns the scanner.
+    Every failure (missing binary, timeout, nonzero exit, bad JSON) answers
+    [] with one stderr line, so the hook fails open to the ALLOW it owes.
+    """
+    argv = [os.environ.get("FNO_AGENTS_BIN", "fno-agents"), "pr-closure-branch-ids"]
+    payload = json.dumps({"head_ref": head_ref or "", "verify": True})
+    try:
+        proc = subprocess.run(
+            argv, input=payload, capture_output=True, text=True, timeout=5,
+        )
+        ids = json.loads(proc.stdout)["ids"]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
+        cause = getattr(exc, "stderr", None) or exc
+        print(f"[fno closure trailer] could not read branch node ids ({cause}); "
+              "run fno doctor update --rust", file=sys.stderr)
+        return []
+    if proc.returncode != 0:
+        cause = (proc.stderr or "").strip() or f"exit {proc.returncode}"
+        print(f"[fno closure trailer] could not read branch node ids ({cause}); "
+              "run fno doctor update --rust", file=sys.stderr)
+        return []
+    return [str(i) for i in ids]
 
 
 def _body_file_is_unjudgeable(path, touched_elsewhere=frozenset()):
@@ -1782,8 +1795,8 @@ def _closure_trailer_refusal(command="", hatch=False, head=None, body_files=(),
 
     Measured 2026-08-19: five PRs in one evening red on
     scripts/ci/check-pr-node-closure.sh for one reason - the generator
-    (`fno do pr closure-trailer`) already existed and nothing ran it. The Python
-    creation paths now call fno.pr.closure.ensure_closure_trailer themselves;
+    (`fno do pr closure-trailer`) already existed and nothing ran it. The CLI
+    creation paths compose the trailer themselves via the fno-agents verbs;
     this covers the prose path, where an agent types the command.
 
     The ceiling, stated because it bounds the promise. A `--body` reaches gh
@@ -1807,7 +1820,7 @@ def _closure_trailer_refusal(command="", hatch=False, head=None, body_files=(),
     # a substring search over the command.
     if hatch or os.environ.get("FNO_PR_CLOSURE_OK", "") == "1":
         return None
-    ids = _branch_node_ids(head if head else get_current_branch())
+    ids = _real_branch_node_ids(head if head else get_current_branch())
     if not ids:
         return None
     # The one remaining whole-command read, and it stays one on purpose: this
@@ -1825,12 +1838,12 @@ def _closure_trailer_refusal(command="", hatch=False, head=None, body_files=(),
     # This message NAMES candidates and never prescribes a trailer to paste.
     # A refusal is the highest-trust text a blocked agent reads, so advice here
     # is a PRODUCER of claims, and this producer has no graph to check against.
-    # `_branch_node_ids` reads the id GRAMMAR, which ordinary English also fits:
+    # The verb reads the id GRAMMAR, which ordinary English also fits:
     # on `fix-dead-code` it yields `fix-dead`. The old message told the author
     # to write `Backlog-Closure: fix-dead`, which greens CI and then makes
-    # `bind_closure_claims` refuse the WHOLE binding at merge, so the real node
-    # never closes and nothing says so. `ensure_closure_trailer` refuses that
-    # exact claim on the producer side; this text used to advise it.
+    # the merge-time bind refuse the WHOLE binding, so the real node
+    # never closes and nothing says so. The producer refuses that
+    # exact claim; this text used to advise it.
     # So it points at the generator, which DOES read the graph.
     return (
         f"[fno closure trailer] branch segments that fit the node-id grammar: "

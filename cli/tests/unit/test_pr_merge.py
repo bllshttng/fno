@@ -26,6 +26,32 @@ _REAL_AUTHORIZED_MERGE = _merge._authorized_merge
 _REAL_HOLD_FOR_PR = _hold.hold_for_pr
 
 
+@pytest.fixture(autouse=True)
+def _hold_reads_a_quiet_pr(monkeypatch):
+    """hold_for_pr now reads the PR through the binary verbs.
+
+    Answer the two reads with an untrailerred, unheld PR so every merge-path
+    test proceeds past the hold lookup without a binary call; a test that
+    needs a specific body re-stubs `fno.rust_binary.verb_call` itself.
+    """
+    import fno.rust_binary as rb
+
+    real_verb_call = rb.verb_call
+
+    def _quiet(verb, payload, unavailable=None, **kwargs):
+        if verb == "pr-closure-context":
+            return {
+                "number": payload.get("pr"),
+                "url": "https://example/pr",
+                "body": "",
+            }
+        if verb == "pr-closure-parse":
+            return {"ids": []}
+        return real_verb_call(verb, payload, unavailable or rb.VerbUnavailable, **kwargs)
+
+    monkeypatch.setattr(rb, "verb_call", _quiet)
+
+
 class FakeRun:
     """Dispatch canned Results by command, recording every call.
 
@@ -139,31 +165,6 @@ class FakeRun:
                     # _pr_url's fetch (`--json url -q .url`), the one shape the
                     # old permissive tail served deliberately.
                     return Result(0, self.view_url + "\n", "")
-                if "number,body,url,state,mergedAt" in cmd[-1]:
-                    # fetch_pr_closure_context's one-shot read (hold lookup +
-                    # closure trailer binding). The field list is always the
-                    # last element. body empty => no trailer ids, so an unheld
-                    # lookup returns None and the merge proceeds.
-                    pr_no = next((a for a in cmd[3:] if a.isdigit()), "0")
-                    return Result(
-                        0,
-                        json.dumps(
-                            {
-                                "number": int(pr_no),
-                                "body": "",
-                                "url": self.view_url,
-                                "state": "OPEN",
-                                "mergedAt": (
-                                    json.loads(self.merged_at)
-                                    if self.merged_at.strip()
-                                    else None
-                                ),
-                                "files": [],
-                            }
-                        )
-                        + "\n",
-                        "",
-                    )
                 raise AssertionError(
                     f"FakeRun: no canned response for gh pr view (add one, never a fall-through): {cmd!r}"
                 )

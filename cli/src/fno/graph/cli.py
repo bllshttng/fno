@@ -724,52 +724,6 @@ def cmd_epic_status(
 cli.add_typer(_epic_cli, name="epic", hidden=True)
 
 
-def _stamp_ship_on_pr_link(node_id: str) -> None:
-    """Stamp the ship lifecycle row when a node is first PR-linked.
-
-    The PR link is ship's START (the PR is open, awaiting review/merge), so the
-    row carries started_at only - no ended_at, since merge is recorded elsewhere
-    or not at all. The row records whoever ran the link - a role or an ambient
-    session can be that - not the implementer or the merger, and no terminal
-    ever closes it, so readers must treat it as a link event, never occupancy.
-    ``fno do pr bind-created`` is the second such site and calls this too.
-    Best-effort: an unresolvable identity or a graph failure skips with a named
-    stderr reason and never fails the update. Idempotent: append_session_record
-    collapses a re-stamp of the same (phase, harness, session_id).
-    """
-    from datetime import datetime, timezone
-
-    from fno.graph.store import append_session_record
-
-    from fno.claims.self_identity import resolve_self_identity
-
-    ident = resolve_self_identity()
-    harness = (ident.harness or "").strip()
-    session_id = (ident.session_id or "").strip()
-    if not harness or not session_id:
-        typer.echo(
-            f"update: no ambient identity to stamp ship provenance for {node_id} "
-            f"(missing {'harness' if not harness else 'session_id'}); "
-            "run the link inside a session. Skipped.",
-            err=True,
-        )
-        return
-    try:
-        append_session_record(
-            _graph_path(),
-            node_id,
-            phase="ship",
-            harness=harness,
-            session_id=session_id,
-            started_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        )
-    except (Exception, SystemExit) as exc:
-        typer.echo(
-            f"update: ship provenance stamp skipped for {node_id}: {exc}",
-            err=True,
-        )
-
-
 def _resolve_asserted_id(
     token: str,
     entries: list,

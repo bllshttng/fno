@@ -1,12 +1,12 @@
 //! Golden parity for the raw `pr-closure-*` produce verbs.
 //!
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: cli/src/fno/pr/closure.py
 //!
 //! Each case in the fixture `cases.json` builds the same hermetic graph,
-//! config, and git fixture the oracle's builder makes, runs the Rust verb,
-//! and, under `FNO_CAPTURE_GOLDEN=1`, also runs the oracle for the same
-//! case and freezes the oracle's bytes. Both sides are masked identically
+//! config, and git fixture the deleted oracle's builder made, runs the Rust
+//! verb, and compares the bytes against goldens frozen from that oracle
+//! while the port was differential. Both sides are masked identically
 //! (case paths become `<CASE>`, error details become `<ERR>`) before the
 //! golden comparison, so the frozen goldens never embed a machine's
 //! tempdir. Freeze: `FNO_CAPTURE_GOLDEN=1 cargo -p fno-agents --test

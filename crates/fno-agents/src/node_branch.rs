@@ -77,9 +77,8 @@ pub(crate) fn node_ids(head_ref: &str) -> Vec<String> {
             i += 1;
             continue;
         };
-        // Order-preserved, deduplicated, like the Python scanner's seen-set
-        // (`branch_node_ids` in cli/src/fno/pr/closure.py): a repeated id
-        // yields once.
+        // Order-preserved, deduplicated (the pr_closure_produce goldens pin
+        // this): a repeated id yields once.
         let candidate = head_ref[i..hex_end].to_string();
         if !ids.iter().any(|c| c == &candidate) {
             ids.push(candidate);

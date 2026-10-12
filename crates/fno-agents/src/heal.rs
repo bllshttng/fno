@@ -1398,8 +1398,7 @@ pub(crate) fn worse_of(a: i32, b: i32) -> i32 {
 
 /// Node ids a PR head ref names, as delimiter-bounded segments. Re-exported
 /// from the shared `org_board::prs` predicate, so the heal drive loop, the
-/// board, and the merge owner all read one rule (parity with
-/// `cli/src/fno/pr/closure.py`).
+/// board, and the merge owner all read one rule.
 pub(crate) use crate::org_board::prs::branch_node_ids;
 
 /// Every worktree of this checkout's repo, as (branch, path) pairs parsed
