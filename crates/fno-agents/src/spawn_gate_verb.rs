@@ -27,11 +27,15 @@ use crate::spawn_gate_lanes;
 /// is a loud non-zero: the transport turns that into a gate-unavailable
 /// refusal, never an admit.
 pub fn run_spawn_gate(args: &[String]) -> i32 {
-    // The reserve mode is argv-typed, so a lead can type it in one line; the
-    // gate and probe modes keep their stdin JSON payloads.
+    // The reserve and grant modes are argv-typed, so a person can type them in
+    // one line; the gate and probe modes keep their stdin JSON payloads.
     if args.first().map(String::as_str) == Some("reserve") {
         let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         return reserve_spawn_gate(&config_cwd, &args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("grant") {
+        let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        return crate::capacity_grant::run(&config_cwd, &args[1..]);
     }
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
@@ -49,7 +53,7 @@ pub fn run_spawn_gate(args: &[String]) -> i32 {
         Some("gate") => gate_answer(&payload),
         Some("probe") => probe_answer(&payload),
         other => {
-            eprintln!("spawn-gate: unknown mode {other:?}; want \"gate\" or \"probe\"");
+            eprintln!("spawn-gate: unknown mode {other:?}; want \"gate\" or \"probe\" (argv actions: reserve, grant)");
             return 1;
         }
     };
