@@ -1636,9 +1636,19 @@ mod tests {
             .expect("a stale done leaves through the update door");
         assert_eq!(receipt.status.to, "ready");
         // A derived-done row that holds nothing against the rollup (no plan
-        // work) still routes to reopen, which stamps the durable hold.
+        // work) still routes to reopen, which stamps the durable hold. The
+        // all-done children are what hold the pre-image derivation on done;
+        // without them the rung ladder re-derives idea before the gate.
         let derived_done = node("x-11", json!({ "status": "done" }));
-        let (_d, graph) = write_graph(&[derived_done]);
+        let derived_kid = node(
+            "x-11c",
+            json!({
+                "status": "done",
+                "parent": "x-11",
+                "completed_at": "2026-01-01T00:00:00+00:00"
+            }),
+        );
+        let (_d, graph) = write_graph(&[derived_done, derived_kid]);
         let message = refusal_of(&graph, &req("x-11", Some("idea"), &[]));
         assert!(message.contains("fno backlog reopen"), "{message}");
     }
