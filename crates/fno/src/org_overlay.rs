@@ -1312,13 +1312,17 @@ mod tests {
     #[test]
     fn minimized_panel_wants_only_the_gate_half() {
         let mut panel = Panel::default();
+        assert!(
+            panel.refresh_deadline().is_some(),
+            "the due gate half arms the timer"
+        );
         let want = panel.take_want(&[]).expect("minimized wants the gate");
         assert!(want.gate, "the gate half is always due when unread");
         assert!(!want.lanes, "minimized never wants the lanes fold");
         assert!(!want.org, "minimized never wants the org fold");
         assert!(
-            panel.refresh_deadline().is_some(),
-            "the due gate half arms the timer"
+            panel.refresh_deadline().is_none(),
+            "the deadline is None while the gate half runs"
         );
 
         panel.apply(FoldPart::Gate(Ok(GateReading {
@@ -1329,7 +1333,10 @@ mod tests {
             panel.take_want(&[]).is_none(),
             "a fresh gate reading leaves nothing due while minimized"
         );
-        assert!(panel.refresh_deadline().is_none());
+        assert!(
+            panel.refresh_deadline().is_some(),
+            "the next gate refresh schedules at the TTL"
+        );
 
         panel.toggle();
         assert!(
@@ -1345,8 +1352,8 @@ mod tests {
         panel.fold_at = Some(Instant::now() - CACHE_TTL - Duration::from_secs(1));
         panel.toggle();
         assert!(
-            panel.refresh_deadline().is_none(),
-            "minimized arms no timer while the gate is fresh"
+            panel.refresh_deadline().is_some(),
+            "the minimized glance still schedules its gate refresh"
         );
         panel.gate_at = Some(Instant::now() - CACHE_TTL - Duration::from_secs(1));
         let want = panel.take_want(&[]).expect("the stale gate re-arms");
