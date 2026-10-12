@@ -192,8 +192,7 @@ pub(crate) fn spawn(
                 };
                 (stamp, raw)
             };
-            if let Some((queue, prs, drivers)) = state.tick(stamp, move || raw, last_live.as_ref())
-            {
+            if let Some((queue, join)) = state.tick(stamp, move || raw, last_live.as_ref()) {
                 let holders = last_live.clone().unwrap_or_default();
                 if core_tx
                     .send(CoreMsg::BacklogCards {
@@ -201,8 +200,7 @@ pub(crate) fn spawn(
                         lanes: queue.lanes,
                         stale: queue.stale,
                         holders,
-                        prs,
-                        drivers,
+                        join,
                     })
                     .await
                     .is_err()

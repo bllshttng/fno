@@ -10,7 +10,10 @@ use crate::proto::{AgentRow, BacklogCard};
 pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     let node = a.node.as_deref().filter(|s| !s.is_empty());
     let node_w = node.map_or(0, |s| s.width());
-    let pr_w = a.pr.map(|n| format!("#{n}").width()).filter(|w| *w <= 6);
+    let suffix = binding_suffix(a);
+    let pr_w =
+        a.pr.map(|n| format!("#{n}{suffix}").width())
+            .filter(|w| *w <= 18);
     let pr = pr_w.filter(|w| *w <= text_w).map(|w| text_w - w..text_w);
     let gap = usize::from(node_w > 0 && pr.is_some()) * 3;
     let node_end = pr
@@ -25,6 +28,41 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
         node: node_span,
         separator,
         pr,
+    }
+}
+
+/// The other-bindings count that follows the PR text: ` +N PRs` when any
+/// other binding carries a pr, else ` +N open` when another binding stays
+/// open. Empty when the row drives nothing else. `N` counts the other
+/// bindings; wire order is the fold's strongest-first order, the wire
+/// carrying no ts.
+pub(super) fn binding_suffix(a: &AgentRow) -> String {
+    let others = a
+        .bindings
+        .iter()
+        .filter(|b| Some(b.node.as_str()) != a.node.as_deref())
+        .count();
+    if others == 0 {
+        return String::new();
+    }
+    let others_with_pr = a
+        .bindings
+        .iter()
+        .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.pr.is_some())
+        .count();
+    if others_with_pr > 0 {
+        format!(" +{others_with_pr} PRs")
+    } else {
+        let open = a
+            .bindings
+            .iter()
+            .filter(|b| Some(b.node.as_str()) != a.node.as_deref() && b.state != "done")
+            .count();
+        if open > 0 {
+            format!(" +{open} open")
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -318,5 +356,81 @@ pub(super) fn slug(a: &AgentRow, backlog: &[BacklogCard]) -> String {
         Some(s) if !s.is_empty() && rest.is_empty() => s.to_string(),
         Some(s) if !s.is_empty() => format!("{rest}-{s}"),
         _ => strip_model(&a.name),
+    }
+}
+
+#[cfg(test)]
+mod binding_display_tests {
+    use super::*;
+    use crate::proto::SessionBinding;
+
+    fn row(bindings: Vec<SessionBinding>) -> AgentRow {
+        AgentRow {
+            name: "w".into(),
+            node: Some("x-cur".into()),
+            pr: Some(3159),
+            bindings,
+            ..Default::default()
+        }
+    }
+
+    fn binding(node: &str, pr: Option<u64>, state: &str, inferred: bool) -> SessionBinding {
+        SessionBinding {
+            node: node.into(),
+            pr,
+            source: "claim".into(),
+            state: state.into(),
+            inferred,
+        }
+    }
+
+    #[test]
+    fn suffix_is_empty_without_other_bindings() {
+        assert_eq!(binding_suffix(&row(vec![])), "");
+        let only_current = row(vec![binding("x-cur", Some(3159), "open", false)]);
+        assert_eq!(binding_suffix(&only_current), "");
+    }
+
+    #[test]
+    fn suffix_counts_others_carrying_prs() {
+        let a = row(vec![
+            binding("x-cur", Some(3159), "open", false),
+            binding("x-oth1", Some(100), "open", false),
+            binding("x-oth2", Some(200), "merged", false),
+        ]);
+        assert_eq!(binding_suffix(&a), " +2 PRs");
+    }
+
+    #[test]
+    fn suffix_counts_open_others_without_prs() {
+        let a = row(vec![
+            binding("x-cur", Some(3159), "open", false),
+            binding("x-oth1", None, "open", false),
+            binding("x-oth2", None, "review", false),
+        ]);
+        assert_eq!(binding_suffix(&a), " +2 open");
+    }
+
+    #[test]
+    fn suffix_is_empty_when_others_are_done_without_prs() {
+        let a = row(vec![
+            binding("x-cur", Some(3159), "open", false),
+            binding("x-oth1", None, "done", false),
+        ]);
+        assert_eq!(binding_suffix(&a), "");
+    }
+
+    #[test]
+    fn pr_span_width_covers_node_pr_and_count() {
+        // `x-cur · #3159 +1 PRs` at the right edge of 40 columns.
+        let a = row(vec![
+            binding("x-cur", Some(3159), "open", false),
+            binding("x-oth", Some(100), "open", false),
+        ]);
+        let spans = identity_spans(&a, 40);
+        let pr = spans.pr.expect("pr span renders");
+        assert_eq!(pr, 28..40);
+        assert_eq!(spans.node, Some(20..25));
+        assert_eq!(spans.separator, Some(25..28));
     }
 }

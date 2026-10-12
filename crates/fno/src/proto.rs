@@ -374,7 +374,9 @@ fn default_true() -> bool {
 /// v107 adds `BacklogCard.link` (serde default), the node's stored GitHub-or-Linear
 /// URL the node tap opens when no plan lives in the vault; floor stays 58.
 /// v109: `WorkspaceRestore.member_session` targets one exact native session.
-pub const PROTO_VERSION: u32 = 109;
+/// v110: `AgentRow.bindings`, the node bindings a row drives, strongest
+/// first; missing on a pre-v110 row, off the wire when empty; floor stays 58.
+pub const PROTO_VERSION: u32 = 110;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -995,6 +997,19 @@ pub enum Reach {
 /// fact, beats everything) > `badge` (in-TTL inside-leg report) > liveness
 /// (both `None`/`false` - a plain row). `squad` is the squad the row renders
 /// under; `None` is the catch-all for rows whose cwd matches no squad.
+/// (v110) One node binding on an [`AgentRow`]: the node the row's session
+/// drives, its pr when the board knows one, and how the binding was found.
+/// `inferred` is false only for an explicit bind and a live claim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionBinding {
+    pub node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    pub source: String,
+    pub state: String,
+    pub inferred: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRow {
     pub squad: Option<u64>,
@@ -1314,6 +1329,10 @@ pub struct AgentRow {
     /// reach command - the server re-derives the real tier.
     #[serde(default)]
     pub reach: Reach,
+    /// (v110) The node bindings this row carries, strongest first. Empty
+    /// stays off the wire; a pre-v110 row decodes to an empty set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<SessionBinding>,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
@@ -3986,7 +4005,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 109);
+        assert_eq!(PROTO_VERSION, 110);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4038,6 +4057,35 @@ mod tests {
                 .contains("held_conversation"),
             "false stays absent from the wire"
         );
+        // v110: `AgentRow.bindings` rides the same way - a missing key on a
+        // pre-v110 row decodes to an empty set, and an empty set stays off
+        // the wire so the sideline's `+N PRs` marker is the only trace.
+        let pre = r#"{"squad":null,"name":"pre-v110","pane_id":null,
+                      "badge":null,"reason":null,"exited":false}"#;
+        let old_row: AgentRow = serde_json::from_str(pre).unwrap();
+        assert!(
+            old_row.bindings.is_empty(),
+            "a row without bindings decodes to an empty set"
+        );
+        assert!(
+            !serde_json::to_string(&old_row)
+                .unwrap()
+                .contains("bindings"),
+            "an empty binding set stays off the wire"
+        );
+        let bound_wire = r#"{"squad":null,"name":"z","pane_id":null,
+            "badge":null,"reason":null,"exited":false,
+            "bindings":[{"node":"x-cb30","pr":3159,"source":"branch",
+                         "state":"open","inferred":true}]}"#;
+        let bound: AgentRow = serde_json::from_str(bound_wire).unwrap();
+        assert_eq!(bound.bindings.len(), 1);
+        assert_eq!(bound.bindings[0].node, "x-cb30");
+        assert_eq!(bound.bindings[0].pr, Some(3159));
+        assert_eq!(bound.bindings[0].source, "branch");
+        assert_eq!(bound.bindings[0].state, "open");
+        assert!(bound.bindings[0].inferred);
+        let back: AgentRow = serde_json::from_str(&serde_json::to_string(&bound).unwrap()).unwrap();
+        assert_eq!(back, bound, "bindings round-trip losslessly");
         // A teamed row round-trips losslessly.
         let mut teamed = row.clone();
         teamed.role_level = Some(1);
