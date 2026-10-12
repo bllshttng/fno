@@ -493,12 +493,14 @@ impl OrgBoard {
             if is_session && pieces.len() > 3 {
                 pieces.truncate(3);
                 let last = pieces.len() - 1;
-                if pieces[last].text.chars().count() + 1 <= width {
-                    pieces[last].text.push('\u{2026}');
-                    pieces[last].roles.push(pieces[last].default_role);
+                let line = &mut pieces[last];
+                if line.text.chars().count() + 1 <= width {
+                    line.text.push('\u{2026}');
+                    let role = line.default_role;
+                    line.roles.push(role);
                 } else {
-                    pieces[last].text.pop();
-                    pieces[last].text.push('\u{2026}');
+                    line.text.pop();
+                    line.text.push('\u{2026}');
                 }
             }
             for p in pieces {

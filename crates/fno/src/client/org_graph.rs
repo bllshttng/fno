@@ -417,7 +417,7 @@ pub(crate) fn frame(
 
     let labels = label_cells(graph, width, height, pan, selected);
     for (dot, label) in graph.dots.iter().zip(labels.iter()) {
-        let Some((lx, ly, len)) = label.copied() else {
+        let Some((lx, ly, len)) = *label else {
             continue;
         };
         let is_sel = selected.is_some_and(|s| s == dot.key.as_str());
@@ -450,7 +450,7 @@ pub(crate) fn hit_test(
     }
     let labels = label_cells(graph, width, height, pan, selected);
     for (dot, label) in graph.dots.iter().zip(labels.iter()) {
-        if let Some((lx, ly, len)) = label.copied() {
+        if let Some((lx, ly, len)) = *label {
             if ly == y && x >= lx && x < lx + len {
                 return Some(dot.key.clone());
             }
