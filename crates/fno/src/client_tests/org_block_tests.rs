@@ -21,23 +21,20 @@ fn the_org_block_shrinks_the_sideline_and_yields_when_too_short() {
         },
     );
     view.org.toggle(); // the fold runs expanded-only; a reading can only land there
-    assert!(view.org.take_want());
-    view.org.apply(Some(crate::org_overlay::Org {
-        lane_count: None,
-        per_lane_cpu_cores: None,
-        per_lane_mem_gb: None,
-        cost_source: String::new(),
-        refused_reason: String::new(),
-        census: Default::default(),
-        arms: Vec::new(),
-    }));
+    assert!(view.org.take_want(&[]).is_some());
+    view.org.apply(crate::org_overlay::FoldPart::Lanes(Some(
+        crate::org_overlay::Org::default(),
+    )));
 
     view.org.toggle(); // back to minimized for the glance-shape checks
-    assert_eq!(view.org_block_rows(), 4, "minimized is four lines");
+    assert_eq!(view.org_block_rows(), 5, "minimized is five lines");
     let full = view.sideline_visible_rows() + view.org_block_rows();
 
     view.org.toggle();
-    let expanded = view.org.expanded_lines(&view.agent_ages()).len();
+    let expanded = view
+        .org
+        .expanded_lines(&view.layout.agents, view.sideline_paint_w(), 40)
+        .len();
     assert_eq!(view.org_block_rows(), expanded);
     assert_eq!(view.sideline_visible_rows(), full - expanded);
 
@@ -71,16 +68,10 @@ fn the_org_fold_holds_no_rows_in_the_board_view() {
         },
     );
     view.org.toggle(); // the fold runs expanded-only; a reading can only land there
-    assert!(view.org.take_want());
-    view.org.apply(Some(crate::org_overlay::Org {
-        lane_count: None,
-        per_lane_cpu_cores: None,
-        per_lane_mem_gb: None,
-        cost_source: String::new(),
-        refused_reason: String::new(),
-        census: Default::default(),
-        arms: Vec::new(),
-    }));
+    assert!(view.org.take_want(&[]).is_some());
+    view.org.apply(crate::org_overlay::FoldPart::Lanes(Some(
+        crate::org_overlay::Org::default(),
+    )));
     view.sideline_view = crate::view_store::SidelineView::Backlog;
 
     assert_eq!(

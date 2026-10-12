@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const SUITE_CLAIM_KEY: &str = "test:suite";
+pub(crate) const SUITE_CLAIM_KEY: &str = "test:suite";
 const BUILD_CLAIM_KEY: &str = "build:cargo";
 /// The agent compile slots. Slot 0 keeps the one-slot key, so every reader
 /// that names `build:cargo` still sees the first holder.
@@ -1572,6 +1572,16 @@ fn steal_parked_slot(
 pub(crate) fn cargo_slot_keys(worktree: &Path) -> Vec<String> {
     let cap = crate::agents_config::max_cargo_runs(worktree) as usize;
     (0..cap).map(|i| format!("test:cargo-run:{i}")).collect()
+}
+
+/// Every claim key that marks a test run at this checkout: the suite door
+/// plus one run slot per cargo seat. `test:priority` is a lane marker, not
+/// a run, so it stays out. One owner of the spellings, shared with the
+/// session-cost test feed.
+pub(crate) fn test_door_keys(worktree: &Path) -> Vec<String> {
+    let mut keys = vec![SUITE_CLAIM_KEY.to_string()];
+    keys.extend(cargo_slot_keys(worktree));
+    keys
 }
 
 /// Whether this cargo's admission family holds a run slot right now: its
