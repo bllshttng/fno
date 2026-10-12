@@ -8,19 +8,22 @@ use super::View;
 use crate::proto::{cell_flags, Cell, Color};
 
 impl View {
-    /// Rows the org block owns at the bottom of the sideline: four when
-    /// minimized, the expanded reading's height when expanded, and ZERO when
-    /// the terminal cannot hold it beside at least one sideline row - the
-    /// block yields, the rows never do. Zero too when the sideline shows the
-    /// backlog board: the board paints the full column, and rows the block
-    /// does not paint there must not come off the hit math's region.
+    /// Rows the org block owns at the bottom of the sideline: the minimized
+    /// glance's `MINIMIZED_ROWS`, the expanded reading's height when
+    /// expanded, and ZERO when the terminal cannot hold it beside at least
+    /// one sideline row - the block yields, the rows never do. The strip row
+    /// comes off the block's budget first: it is chrome the block may never
+    /// paint into. Zero too when the sideline shows the backlog board: the
+    /// board paints the full column, and rows the block does not paint there
+    /// must not come off the hit math's region.
     pub(super) fn org_block_rows(&self) -> usize {
         if self.sideline_view != crate::view_store::SidelineView::Agents {
             return 0;
         }
         let block = if self.org.is_expanded() {
-            let available =
-                (self.term.0 as usize).saturating_sub(self.bottom_row_is_chrome() as usize);
+            let available = (self.term.0 as usize)
+                .saturating_sub(1)
+                .saturating_sub(self.bottom_row_is_chrome() as usize);
             self.org
                 .expanded_lines(
                     &self.layout.agents,
@@ -31,7 +34,9 @@ impl View {
         } else {
             crate::org_overlay::MINIMIZED_ROWS
         };
-        let available = (self.term.0 as usize).saturating_sub(self.bottom_row_is_chrome() as usize);
+        let available = (self.term.0 as usize)
+            .saturating_sub(1)
+            .saturating_sub(self.bottom_row_is_chrome() as usize);
         if available > block {
             block
         } else {
@@ -41,12 +46,17 @@ impl View {
 
     /// The block's lines rendered once, with the row count the sideline
     /// must reserve for them: zero when the terminal cannot hold the block
-    /// beside at least one row - the block yields, the rows never do.
+    /// beside at least one row - the block yields, the rows never do. The
+    /// strip row comes off the budget first, the same rule
+    /// `org_block_rows` yields by, so both resolvers agree at the boundary
+    /// height.
     pub(super) fn org_block_layout(&self, term_rows: usize) -> (usize, Vec<String>) {
         if self.sideline_view != crate::view_store::SidelineView::Agents {
             return (0, Vec::new());
         }
-        let available = term_rows.saturating_sub(self.bottom_row_is_chrome() as usize);
+        let available = term_rows
+            .saturating_sub(1)
+            .saturating_sub(self.bottom_row_is_chrome() as usize);
         let lines = if self.org.is_expanded() {
             self.org.expanded_lines(
                 &self.layout.agents,
@@ -57,7 +67,9 @@ impl View {
             self.org
                 .minimized_lines(&self.layout.agents, self.sideline_paint_w())
         };
-        let available = term_rows.saturating_sub(self.bottom_row_is_chrome() as usize);
+        let available = term_rows
+            .saturating_sub(1)
+            .saturating_sub(self.bottom_row_is_chrome() as usize);
         let reserved = if available > lines.len() {
             lines.len()
         } else {
