@@ -64,9 +64,8 @@ impl crate::pr_status_facts::GhProbe for HealProbe<'_> {
 
 /// heal's job-log read through the shared cache: same `{owner}/{repo}`
 /// placeholder path, but a log one status read already fetched costs no
-/// second download. `slug_key` keys the row; the repo's origin slug. An
-/// unresolvable slug falls back to the placeholder read, so the log and
-/// the remedy it drives survive a missing origin exactly as before.
+/// second download. `slug_key` keys the row to the repo's origin slug. An
+/// unresolvable slug falls back to the placeholder read exactly as before.
 fn cached_job_log(a: &Args, slug_key: &str, job_id: &str) -> String {
     let (owner, repo) = match repo_slug_parts(slug_key) {
         Some(parts) => parts,
@@ -162,11 +161,10 @@ pub(crate) enum Remedy {
     /// Append a closure trailer per node id to the PR body. No commit, no
     /// push: the workflow's `types` includes `edited`, so the edit re-fires it.
     EditBody { nodes: Vec<String> },
-    /// `gh run rerun <id>` (full rerun) for a cancelled run: it reached no
-    /// verdict, so rerunning it IS reaching a verdict. `--failed` is wrong
-    /// here: it reruns only `failure` conclusions and a cancelled run has
-    /// none. Issued at most once per (head sha, run id); a second red verdict
-    /// on the same pair escalates.
+    /// `gh run rerun <id>` (full rerun) for a cancelled-run remedy: it reached
+    /// no verdict, so rerunning it IS reaching a verdict. `--failed` reruns
+    /// only `failure` conclusions; a cancelled run has none. At most once per
+    /// (head sha, run id); a second red verdict on the same pair escalates.
     Rerun { run_id: String },
     /// `gh run rerun <id> --failed` for a rerunnable escalation (a
     /// test-shaped or unknown red): only the failed jobs rerun. Same
@@ -289,13 +287,10 @@ const SIGNATURES: &[Signature] = &[
         name: "cancelled",
         plan: "rerun: gh run rerun <run>, at most once per head sha",
         matches: |c| c.bucket == "cancel",
-        // Measured on three open PRs: every `unknown` heal reported was a
-        // CANCELLED check whose log carried one line. A cancelled run
-        // concluded nothing, so a rerun is not papering over a defect; it is
-        // how the run reaches a verdict at all. 3 of the 15 red open PRs
-        // measured on 2026-09-16 were exactly this class. Without a run id
-        // in the link there is nothing to rerun, so the row escalates as
-        // before.
+        // Measured: every `unknown` heal reported was a CANCELLED check whose
+        // log carried one line (3 of 15 red open PRs, 2026-09-16). A cancelled
+        // run concluded nothing, so a rerun is how it reaches a verdict. No
+        // run id in the link: nothing to rerun, so the row escalates.
         resolve: |c| match run_id(c.link) {
             Some(id) => Remedy::Rerun { run_id: id },
             None => Remedy::Escalate {
@@ -340,12 +335,10 @@ const SIGNATURES: &[Signature] = &[
         name: "ruff-lint",
         plan: "auto: ruff check --fix over cli/src, exactly the gate's scope",
         matches: |c| ruff_re().is_match(c.log),
-        // The remedy mirrors the GATE, not ruff's fuller surface. The gate is
-        // `uv run ruff check --no-respect-gitignore src/`; it runs no
-        // `ruff format` and never looks at `tests/`. A remedy that reached
-        // wider would rewrite files the gate does not read -- `ruff format`
-        // over this tree touches more than a thousand of them -- which is a
-        // heal nobody asked for wearing a red check as its excuse.
+        // The remedy mirrors the GATE, not ruff's fuller surface: `uv run
+        // ruff check --no-respect-gitignore src/`, no `ruff format`, never
+        // `tests/`. Wider rewrites files the gate does not read -- `ruff
+        // format` over this tree touches more than a thousand.
         resolve: |_| Remedy::Auto {
             run: vec![Cmd::new(
                 "cli",
@@ -2317,10 +2310,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         // head with a rerun in its history (the rerun ladder's second
         // verdict needs the re-classification), and any dry run, whose
         // exit-0 contract means nothing red.
-        let mut digest_read = match listing_head.as_deref() {
-            Some(h) => read_checks(a, h).ok(),
-            None => None,
-        };
+        let mut digest_read = listing_head.as_deref().and_then(|h| read_checks(a, h).ok());
         let digest = digest_read.as_ref().and_then(checks_digest);
         if let (Some(h), Some(dg)) = (&listing_head, &digest) {
             sweep_states.insert(
@@ -2666,6 +2656,18 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             }
         }
     }
+    let fno_bin = seam_bin(a, "fno");
+    let steward_io = crate::pr_steward::RealIo {
+        gh_bin: a.gh_bin.as_str(),
+        fno_bin: &fno_bin,
+        cwd: std::path::Path::new(&a.cwd),
+    };
+    // gh_api_pages hands back pages of pull rows; the steward walks rows.
+    let pulls = crate::heal_sweep::pull_rows(&pages);
+    bump(
+        &mut counts,
+        crate::pr_steward::run_pass(&steward_io, steward_io.cwd, &pulls, dry_run),
+    );
     emit_tick_event(
         a,
         &counts,
@@ -3276,10 +3278,8 @@ mod tests {
     }
 
     // ── the verb: push discipline ───────────────────────────────────────────
-    //
-    // Driven through stub `gh` and `git` executables rather than a real
-    // remote, so the two properties that matter (exactly one push, and never
-    // a push over a run in flight) are provable rather than argued.
+    // Stub `gh` and `git`, not a real remote: exactly one push, never a push
+    // over a run in flight, provable rather than argued.
 
     use crate::write_exec_stub as write_exec;
 
@@ -3738,6 +3738,7 @@ exit 0
         );
         let events = log_of(d, "events.jsonl");
         assert!(events.contains("\"healed\":1"), "{events}");
+        assert!(events.contains("\"steward_off_no_law\":1"), "{events}");
         assert!(events.contains("\"skip_claim_held\":1"), "{events}");
         assert!(events.contains("\"skip_outside\":1"), "{events}");
 
