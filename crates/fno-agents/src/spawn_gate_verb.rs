@@ -504,7 +504,7 @@ mod probe {
         out.insert("max_live".into(), json!(cap));
 
         // The test feed rides only when the payload asks, so gate-status and
-        // the kings pay nothing for it.
+        // the leads pay nothing for it.
         if payload
             .get("tests")
             .and_then(Value::as_bool)

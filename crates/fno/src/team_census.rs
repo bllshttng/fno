@@ -87,7 +87,7 @@ pub struct Team {
 
 /// Fold the census. Members are the non-exited rows the probe's registry
 /// `slot_rows` name; every other non-exited row is `observed`, never live.
-/// A member goes to the OrgTree Lead whose holder it is (its own crown
+/// A member goes to the OrgTree Lead whose holder it is (its own row
 /// wins) or whose node sessions name it, first Lead in OrgTree order when
 /// two claim it, so the Lead lines never sum past the fleet. A member no
 /// Lead claims is `unowned`. A reservation is counted once, fleet-wide,
@@ -157,7 +157,7 @@ pub fn census(rows: &[AgentRow], gate: &GateReading, org: Option<&OrgTree>) -> T
         }
     }
 
-    // Lead attribution: crowns first, then the node-session join, first
+    // Lead attribution: holder rows first, then the node-session join, first
     // Lead in OrgTree order where two claim the same row.
     let mut owner: HashMap<&str, usize> = HashMap::new();
     let mut row_pr: HashMap<&str, (bool, bool)> = HashMap::new();
@@ -296,7 +296,7 @@ fn merge_into(slot: &mut GroupCounts, row: &mut GroupCounts) {
     *row = GroupCounts::default();
 }
 
-/// The Lead label in the order the sideline's own label walk uses: crown
+/// The Lead label in the order the sideline's own label walk uses: role
 /// title, else scope, else holder name.
 fn lead_label(lead: &crate::org_model::OrgLead) -> String {
     lead.holder
@@ -587,13 +587,13 @@ mod tests {
     #[test]
     fn lead_lines_attribute_members_and_keep_reservations_fleet_wide() {
         let rows = vec![
-            row("king", Some(900)),
+            row("chief", Some(900)),
             row("worker-a", Some(10)),
             row("worker-b", None),
             row("drifter", Some(20)),
         ];
         let gate = gate_with(vec![
-            slot_row("king", None),
+            slot_row("chief", None),
             slot_row("worker-a", None),
             slot_row("worker-b", None),
             slot_row("drifter", None),
@@ -601,7 +601,7 @@ mod tests {
         ]);
         let org = crate::org_model::OrgTree {
             leads: vec![org_lead(
-                "king",
+                "chief",
                 Some("Fleet Lead"),
                 &[("worker-a", None), ("worker-b", None)],
             )],
@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(team.leads.len(), 1);
         assert_eq!(
             team.leads[0].counts.live, 3,
-            "the Lead holds king + 2 workers"
+            "the Lead holds chief + 2 workers"
         );
         assert_eq!(team.leads[0].counts.working, 1, "only worker-a is working");
         assert_eq!(team.leads[0].counts.unknown_age, 1, "worker-b has no age");
@@ -649,7 +649,7 @@ mod tests {
         ]);
         let org = crate::org_model::OrgTree {
             leads: vec![org_lead(
-                "king",
+                "chief",
                 None,
                 &[
                     ("worker-a", Some((1, Some("merged")))),
