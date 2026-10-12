@@ -22,11 +22,10 @@ the message (a local tool dispatched, or the event landed and an enabled sink
 routes it); non-zero only when no channel exists at all. The AC2-FR shape is
 unchanged - the code stays an honest channel count, in both directions.
 
- adds the third leg, ahead of the local toast: ``fno mux notify`` posts the
-notice through every attached mux client (OSC 777, so the alert comes from
-the terminal, not Script Editor); zero clients or any non-delivery falls
-back to the local tool. Under pytest the mux leg is skipped and a REAL
-local dispatch raises - see the guard below.
+ adds the third leg: ``fno mux notify`` posts the notice through attached
+mux clients (OSC 777, terminal not Script Editor); zero clients falls back
+to the local tool. Under pytest the mux leg is skipped and a REAL local
+dispatch raises (the guard below).
 """
 from __future__ import annotations
 
@@ -44,29 +43,22 @@ _NO_TOOL_MSG = (
     "macOS or notify-send on Linux); notification not sent."
 )
 
-# The subprocess seam at import: a test that fakes subprocess.run makes the
-# identity False, so fakes are exempt from the real-alert guard.
+# The subprocess seam at import: a faked subprocess.run makes the identity
+# False, exempting fakes from the real-alert guard.
 _REAL_SUBPROCESS_RUN = subprocess.run
 
 
-def _under_pytest() -> bool:
-    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
-
-
 def _mux_clients(title: str, message: str) -> int | None:
-    """Clients that took the notice via ``fno mux notify``, else None (also
-    None under a hermetic stamp or pytest: an optimization leg, never worth a
-    real side effect in a test)."""
-    if _suppressed() or _under_pytest():
+    """Attached clients that took the notice, else None (also None under a
+    hermetic stamp or pytest: an optimization leg, never worth a real test
+    side effect)."""
+    if _suppressed() or os.environ.get("PYTEST_CURRENT_TEST"):
         return None
     try:
         proc = subprocess.run(
-            # `--json` before `--`: a leading-dash title or message parses as
-            # a positional, never a flag.
+            # `--json` before `--`: a dash-leading title parses as positional.
             [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
             env={**os.environ, "FNO_PY_HANDOFF": "1"},
         )
         return int(json.loads(proc.stdout).get("clients", 0)) if proc.returncode == 0 else None
@@ -75,12 +67,11 @@ def _mux_clients(title: str, message: str) -> int | None:
 
 
 def _refuse_real_os_alert() -> None:
-    """Raise when a REAL OS alert would fire under pytest (the 2026-10-01
-    leak class); a faked subprocess seam is exempt."""
-    if _under_pytest() and subprocess.run is _REAL_SUBPROCESS_RUN:
+    """Raise when a REAL OS alert would fire under pytest; fakes exempt."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.run is _REAL_SUBPROCESS_RUN:
         raise RuntimeError(
-            "fno notify: refusing a real OS notification under pytest; fake "
-            "fno.notify._impl.subprocess.run or set FNO_TEST_HERMETIC=1"
+            "fno notify: real OS notification refused under pytest; fake "
+            "subprocess.run or set FNO_TEST_HERMETIC=1"
         )
 
 
@@ -212,9 +203,7 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
-    # The client-first leg: an attached mux terminal shows the alert with the
-    # terminal's own identity, so it outranks the Script Editor toast. Zero
-    # attached clients (or any non-delivery) falls through to the local tool.
+    # Client-first: an attached terminal's toast outranks Script Editor's.
     if _mux_clients(title, message):
         return 0, ""
 
