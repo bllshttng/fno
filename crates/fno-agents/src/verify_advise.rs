@@ -9,6 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::events::now_rfc3339 as now_rfc3339_utc;
+
 const SPAWN_TIMEOUT_S: u64 = 90;
 
 fn ac_heading() -> &'static regex::Regex {
@@ -334,10 +336,6 @@ struct VerdictData<'a> {
     verdict: &'a str,
     source: &'a str,
     session_id: &'a str,
-}
-
-fn now_rfc3339_utc() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub(crate) struct AdviseArgs {
