@@ -46,6 +46,15 @@ fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String> {
     Ok(conn)
 }
 
+fn mtime_secs(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 const SUMMARIES_SQL: &str = "SELECT conversation_id, workspace_uris FROM conversation_summaries";
 
 /// The agy transcript source. `roots` scopes the fold to the requested
@@ -109,12 +118,12 @@ impl TranscriptSource for AgySource {
             if !meta.is_file() {
                 continue;
             }
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            // The conversation writes through WAL, so the db file's stamp
+            // lags until a checkpoint; the -wal stamp keeps an active
+            // conversation inside a windowed fold.
+            let mtime = mtime_secs(&db).max(mtime_secs(
+                &self.conversations_dir.join(format!("{id}.db-wal")),
+            ));
             if !within_window(mtime, days, now) {
                 continue;
             }
