@@ -1690,13 +1690,20 @@ mod tests {
 
         let lines = panel.expanded_lines(&[], 200, 40);
 
-        // Two lines now: the machine fold's degrade and the team section's
-        // honest unknown, since the probe failed with it.
-        assert_eq!(lines.len(), 2, "{lines:?}");
+        // Three lines: the machine fold's degrade, the team section's honest
+        // unknown - the probe failed with it - and the read line, which
+        // always shows the fold's age and names the failed refresh.
+        assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(lines[0].contains("fold failed"), "{lines:?}");
         assert!(lines[0].contains("10s"), "{lines:?}");
         assert!(
             lines[1].contains("team") && lines[1].contains("unknown"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("read")
+                && lines[2].contains("age unknown")
+                && lines[2].contains("last refresh failed"),
             "{lines:?}"
         );
 
