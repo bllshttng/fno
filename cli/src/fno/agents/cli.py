@@ -536,7 +536,7 @@ def _spawn_guard_decision(
 
     try:
         _reserve_dispatch_slot()
-    except CLAIM_UNAVAILABLE:
+    except CLAIM_UNAVAILABLE as held_exc:
         # A dead spawner's reservation blocks nothing. `spawn-cli:<pid>` is one
         # process that launches and exits, so it cannot come back under a new
         # pid and its TTL protects an empty slot. A queued spawn that never got
@@ -566,9 +566,25 @@ def _spawn_guard_decision(
         if cleared is None:
             # A live spawner is mid-launch: benign dedup, and naming a
             # force-release here would be worse advice than none.
+            held_by = getattr(held_exc, "holder", "") or str(
+                claim_status(res_key).get("holder") or ""
+            )
+            if not held_by:
+                # Nobody is on disk, so this was never a held slot:
+                # CLAIM_UNAVAILABLE also catches ClaimVerdictError, which a
+                # transient native exit raises. Refuse as an error the caller
+                # may retry, never as a held reservation naming no one.
+                return {
+                    "verdict": "error",
+                    "detail": (
+                        f"could not acquire dispatch reservation {res_key} "
+                        f"({held_exc}); no holder is on disk, retry"
+                    ),
+                }, 3
             return {
                 "verdict": "already-running",
                 "reason": "reservation-held",
+                "holder": held_by,
                 # A remedy is EARNED, and this names the buckets that earn it
                 # rather than the ones that do not. The exclusion polarity gave
                 # force-release advice to every bucket nobody had thought about
@@ -582,18 +598,21 @@ def _spawn_guard_decision(
             }, 0
         try:
             _reserve_dispatch_slot()
-        except CLAIM_UNAVAILABLE:
+        except CLAIM_UNAVAILABLE as retry_exc:
             return {
                 "verdict": "already-running",
                 "reason": "reservation-held",
+                "holder": getattr(retry_exc, "holder", "") or "unknown",
                 "remedy": _remedy_for(res_key),
             }, 0
         except Exception as exc:
+            _release_dispatch_claims((res_key, holder))
             return {
                 "verdict": "error",
                 "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
             }, 3
     except Exception as exc:
+        _release_dispatch_claims((res_key, holder))
         return {
             "verdict": "error",
             "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
@@ -2183,6 +2202,22 @@ def cmd_spawn(
 
         sandbox_settings = load_sandbox_write_policy(sandbox_write_policy)
 
+    if wait is not None and no_wait:
+        print("error: --wait and --no-wait are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(code=2)
+    wait_seconds = 0.0
+    if wait is not None:
+        try:
+            wait_seconds = _parse_wait_seconds(wait)
+        except ValueError:
+            print(
+                f"error: --wait wants a positive duration like 5m, 90s or 1h (got {wait!r})",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
+
+    from fno.agents.spawn_gate import WAITABLE_REFUSAL_REASONS, GateRefused, run_gate
+
     # The node guard sits BELOW the resume-provider resolution on purpose:
     # it acquires `dispatch:<id>` (and the handover `node:<id>`), and every
     # exit above it strands those keys for their whole TTL with nothing
@@ -2287,21 +2322,6 @@ def cmd_spawn(
     # exactly one evaluation per spawn (LD1). --wait loops HERE in the CLI,
     # not in the gate: the gate core has a Rust twin under a parity harness,
     # and a retry wrapper touches neither.
-    if wait is not None and no_wait:
-        print("error: --wait and --no-wait are mutually exclusive", file=sys.stderr)
-        raise typer.Exit(code=2)
-    wait_seconds = 0.0
-    if wait is not None:
-        try:
-            wait_seconds = _parse_wait_seconds(wait)
-        except ValueError:
-            print(
-                f"error: --wait wants a positive duration like 5m, 90s or 1h (got {wait!r})",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-
-    from fno.agents.spawn_gate import WAITABLE_REFUSAL_REASONS, GateRefused, run_gate
 
     # Anything outside the gate's own waitable set (policy or config)
     # exits at once - waiting out a verdict the gate will not revisit is
