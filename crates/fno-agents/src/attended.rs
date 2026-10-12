@@ -6,7 +6,7 @@
 //! with. A done ledger never overrides an attended session.
 
 use crate::provenance::{
-    classify_turn, is_user_turn, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
+    classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
 };
 use crate::state::RegistryEntry;
 use serde_json::Value;
@@ -29,6 +29,47 @@ fn typed(p: Provenance) -> bool {
     )
 }
 
+/// First `open`..`close` block body in `text`, trimmed.
+fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let start = text.find(open)? + open.len();
+    let rest = &text[start..];
+    let body = match rest.find(close) {
+        Some(end) => &rest[..end],
+        None => rest,
+    };
+    Some(body.trim())
+}
+
+/// True when a CommandInvocation turn's text is the row's recorded spawn
+/// payload: the machine's seed, never a person's turn. Two shapes on the
+/// wire - the raw payload (harnesses that log the prompt verbatim) and
+/// claude's rendering of a seeded slash command, where the payload's first
+/// token becomes `<command-name>` and the remainder lands inside
+/// `<command-args>`. Compared on the reminder-stripped text the classifier
+/// reads; anything subtler fails open, keeping today's hold rather than
+/// exempting a turn a person typed.
+fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
+    let text = crate::provenance::system_reminder_re()
+        .replace_all(text, "")
+        .to_string();
+    let text = text.trim();
+    let seed = seed.trim();
+    if text.is_empty() || seed.is_empty() {
+        return false;
+    }
+    if text == seed {
+        return true;
+    }
+    let Some(name) = xml_block(text, "<command-name>", "</command-name>") else {
+        return false;
+    };
+    let args = xml_block(text, "<command-args>", "</command-args>").unwrap_or("");
+    let mut seed_parts = seed.splitn(2, char::is_whitespace);
+    let verb = seed_parts.next().unwrap_or("");
+    let rest = seed_parts.next().unwrap_or("").trim();
+    name == verb && args == rest
+}
+
 /// The bus index both arms classify with, read off the state root the way
 /// `liveness_sweep` reads it.
 fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
@@ -39,12 +80,15 @@ fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
 
 /// Age in seconds of the newest typed user turn across `paths`, `None`
 /// when no transcript holds one. A row without a parseable timestamp
-/// cannot testify; a future stamp reads as now.
+/// cannot testify; a future stamp reads as now. `spawn_payload` is the
+/// row's recorded seed: a CommandInvocation turn matching it is the
+/// machine's spawn payload, never a person, and never holds.
 pub(crate) fn newest_typed_turn_age_s(
     paths: &[PathBuf],
     bus: &BusIndex,
     session: &str,
     now: i64,
+    spawn_payload: Option<&str>,
 ) -> Option<i64> {
     let mut newest: Option<i64> = None;
     for path in paths {
@@ -67,7 +111,17 @@ pub(crate) fn newest_typed_turn_age_s(
             let Ok(obj) = serde_json::from_slice::<Value>(&line) else {
                 continue;
             };
-            if !is_user_turn(&obj) || !typed(classify_turn(&obj, bus, session)) {
+            if !is_user_turn(&obj) {
+                continue;
+            }
+            let prov = classify_turn(&obj, bus, session);
+            let text = turn_text(&obj);
+            if matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
+                && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&text, seed))
+            {
+                continue;
+            }
+            if !typed(prov) {
                 continue;
             }
             let Some(ts) = turn_ts_epoch(&obj) else {
@@ -92,12 +146,13 @@ pub(crate) fn sweep_hold(
     now: i64,
     hold_age_s: Option<i64>,
     hold_age_basis: &'static str,
+    spawn_payload: Option<&str>,
 ) -> Option<crate::gc_sweep::Hold> {
     if quiet {
         return None;
     }
     let hits = hits?;
-    let typed_age = newest_typed_turn_age_s(&hits, &bus_for(home), sid, now)?;
+    let typed_age = newest_typed_turn_age_s(&hits, &bus_for(home), sid, now, spawn_payload)?;
     (typed_age <= WINDOW_SECS).then(|| crate::gc_sweep::Hold {
         id: id.to_string(),
         reason: "attended",
@@ -118,7 +173,7 @@ pub(crate) fn stop_refusal(home: &crate::paths::AgentsHome, e: &RegistryEntry) -
     let now = crate::daemon::now_epoch_secs();
     let sid = e.harness_session_id.as_deref().unwrap_or("");
     let bus = bus_for(home);
-    let typed_age = newest_typed_turn_age_s(&hits, &bus, sid, now)?;
+    let typed_age = newest_typed_turn_age_s(&hits, &bus, sid, now, e.spawn_payload.as_deref())?;
     (typed_age <= WINDOW_SECS).then(|| format!("typed user turn {typed_age}s ago"))
 }
 
@@ -149,11 +204,11 @@ mod tests {
         .unwrap();
         let bus = BusIndex::empty();
         assert_eq!(
-            newest_typed_turn_age_s(&[path.clone()], &bus, "s1", now),
+            newest_typed_turn_age_s(&[path.clone()], &bus, "s1", now, None),
             Some(120),
             "the newest TYPED turn decides; the keepalive and the mail never hold"
         );
-        assert_eq!(newest_typed_turn_age_s(&[], &bus, "s1", now), None);
+        assert_eq!(newest_typed_turn_age_s(&[], &bus, "s1", now, None), None);
         let machine_only = dir.path().join("s2.jsonl");
         std::fs::write(
             &machine_only,
@@ -164,7 +219,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            newest_typed_turn_age_s(&[machine_only], &bus, "s2", now),
+            newest_typed_turn_age_s(&[machine_only], &bus, "s2", now, None),
             None,
             "machine-only transcript: nothing testifies"
         );
@@ -188,9 +243,106 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(old))
             .unwrap();
         assert_eq!(
-            newest_typed_turn_age_s(&[aged], &bus, "s3", now),
+            newest_typed_turn_age_s(&[aged], &bus, "s3", now, None),
             None,
             "a file quiet past the window is skipped"
         );
+    }
+
+    #[test]
+    fn the_spawn_seed_command_never_holds_but_another_command_still_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::daemon::now_epoch_secs();
+        let ts = |age: i64| {
+            chrono::DateTime::from_timestamp(now - age, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        // A spawn seeded with a slash command renders one user turn of
+        // claude command XML, the args swallowing the brevity block that
+        // trailed the payload.
+        let seed =
+            "/fno:target 42\n\n<fno_relay_compression>\nkeep it short\n</fno_relay_compression>";
+        let rendered = format!(
+            "{}\n",
+            json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":
+                "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>42\n\n<fno_relay_compression>\nkeep it short\n</fno_relay_compression>"}})
+        );
+        let path = dir.path().join("seeded.jsonl");
+        std::fs::write(&path, &rendered).unwrap();
+        let bus = BusIndex::empty();
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, Some(seed)),
+            None,
+            "the recorded seed's own command turn is the machine's, never a person"
+        );
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, None),
+            Some(60),
+            "without a recorded payload the command still holds, as before"
+        );
+        // A raw (unrendered) single-line transcript row matches by exact
+        // text: a bare command is the one shape that classifies
+        // CommandInvocation on a harness that logs the prompt verbatim.
+        let raw_path = dir.path().join("raw.jsonl");
+        std::fs::write(
+            &raw_path,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(45),"message":{"role":"user","content":"/fno:target 42"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            newest_typed_turn_age_s(&[raw_path], &bus, "w", now, Some("/fno:target 42")),
+            None,
+            "the raw seed row is the same machine turn"
+        );
+        // A DIFFERENT command a person typed later still holds the row.
+        let person_path = dir.path().join("person.jsonl");
+        std::fs::write(
+            &person_path,
+            format!(
+                "{}\n{}\n",
+                rendered.trim_end(),
+                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"<command-message>fno:review</command-message>\n<command-name>/fno:review</command-name>\n<command-args>medium</command-args>"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            newest_typed_turn_age_s(&[person_path], &bus, "w", now, Some(seed)),
+            Some(30),
+            "a hand-run command that is not the seed still counts as the operator"
+        );
+    }
+
+    #[test]
+    fn the_seed_matcher_is_exact_and_fails_open() {
+        let seed = "/fno:target 42\n\n<block>";
+        assert!(is_spawn_seed_turn(seed, seed), "raw equality");
+        assert!(is_spawn_seed_turn(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>42\n\n<block></command-args>",
+            seed
+        ), "the claude rendering matches");
+        assert!(
+            is_spawn_seed_turn(
+                "<command-name>/fno:target</command-name>\n<command-args>42\n\n<block>",
+                seed
+            ),
+            "an unclosed args block still matches on the open form"
+        );
+        assert!(!is_spawn_seed_turn(
+            "<command-name>/fno:review</command-name>\n<command-args>42\n\n<block></command-args>",
+            seed
+        ), "a different verb is a person");
+        assert!(
+            !is_spawn_seed_turn(
+                "<command-name>/fno:target</command-name>\n<command-args>other</command-args>",
+                seed
+            ),
+            "different args are a person"
+        );
+        assert!(!is_spawn_seed_turn("", seed));
+        assert!(!is_spawn_seed_turn("prose about /fno:target 42", seed));
     }
 }

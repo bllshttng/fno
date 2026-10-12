@@ -1826,6 +1826,7 @@ pub(crate) fn run_with_release(
             now,
             hold_age_s,
             hold_age_basis,
+            e.spawn_payload.as_deref(),
         ) {
             summary
                 .kept_attended

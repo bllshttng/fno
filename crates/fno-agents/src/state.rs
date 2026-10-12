@@ -981,6 +981,17 @@ pub struct RegistryEntry {
     pub requested_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_effort: Option<String>,
+    /// v41: the seed payload the spawner handed this session at birth,
+    /// verbatim as delivered (post-render, post-brevity-enrichment). The
+    /// attended guard exempts a harness-rendered slash-command turn matching
+    /// this text: a spawn seeded with a slash command writes one user-shaped
+    /// CommandInvocation turn that is the machine's, never a person's, so it
+    /// must not hold the row against stop or reap for 15 minutes. Python's
+    /// mint doors stamp it; absence means unknown (adopt, keeper lane B,
+    /// daemon-hosted mints), never "no seed". Same X3 passthrough duty as
+    /// `requested_*`: without this mirror a daemon write drops the stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_payload: Option<String>,
     /// The fenced `--` tokens a codex thread spawn carried, verbatim (schema
     /// v31). Startup recovery re-parses them into the same `thread/resume.config`
     /// the start built, so a daemon restart does not silently drop the

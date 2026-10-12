@@ -581,10 +581,8 @@ def _stamp_status(
         else:
             resolved_last = last_message_at  # str or None
 
-        # Use ``dataclasses.replace`` for the same reason ``reconcile_agents``
-        # does: future AgentEntry fields are preserved automatically without
-        # needing to re-list every constructor argument (Gemini PR #319 review,
-        # consistent with the PR #317 Gemini-medium fix).
+        # ``dataclasses.replace``: future AgentEntry fields are preserved
+        # automatically without re-listing every constructor argument.
         out: list[AgentEntry] = []
         for entry in entries:
             if entry.name != name:
@@ -721,8 +719,7 @@ def _codex_create_path(
         )
         # Propagate codex's exit code (or the provider's structured code
         # like 12 for tee-open EACCES or 127 for missing binary) instead
-        # of collapsing to 1. Gemini PR #305 round 3 flagged the prior
-        # collapse as losing structured error context.
+        # of collapsing to 1.
         raise DispatchAskError(
             f"codex exited {exc.exit_code} (see {output_path} for details)",
             exit_code=exc.exit_code if exc.exit_code != 0 else 1,
@@ -757,6 +754,8 @@ def _codex_create_path(
         # the node this spawn was FOR (the caller's provenance pass),
         # never this process's ambient value.
         node=node,
+        # v41: the delivered seed, for the attended seed exemption.
+        spawn_payload=message or None,
         # The one-shot codex create lane: non-interactive by construction.
         substrate="headless",
     )
@@ -1765,6 +1764,8 @@ def _claude_create_path(
         role_level=role_level,
         role_scope=role_scope,
         role_grantor=role_grantor_val,
+        # v41: the delivered seed, for the attended seed exemption.
+        spawn_payload=message or None,
     )
 
     role_declined = False
@@ -2777,9 +2778,8 @@ def dispatch_spawn(
             # 4a2. Build the dispatch context so the create helpers' emits
             # (agent_ask_started/agent_ask_done) carry the same request_id /
             # caller / from_name attribution the old dispatch_ask create
-            # branch had (codex P2, PR #457). try/finally mirrors
-            # dispatch_ask's 3c block so the ctx cannot leak to a sibling
-            # dispatch on the same thread.
+            # branch had. try/finally mirrors dispatch_ask's 3c block so
+            # the ctx cannot leak to a sibling dispatch on the same thread.
             ctx_for_dispatch = build_context(
                 to_name=name,
                 to_provider=harness,
@@ -3962,10 +3962,10 @@ def reconcile_agents(
     from fno.agents.codex_pane import codex_backfill_stamp_applies
 
     # Tri-state per-codex-side capability: True (readable + present),
-    # False (file missing — fresh install), None (file present but
-    # unreadable — permission/device error). Codex P1 finding on
-    # PR #315: lumping "unreadable" with "fresh install" would
-    # mass-orphan every codex agent on a host with a permission glitch.
+    # False (file missing, fresh install), None (file present but
+    # unreadable, a permission or device error). Lumping "unreadable" with
+    # "fresh install" would mass-orphan every codex agent on a host
+    # with a permission glitch.
     codex_index_state: Optional[str] = None  # "ready" | "missing" | "unreadable"
     known_codex_ids: set[str] = set()
     claude_path_present: Optional[bool] = None

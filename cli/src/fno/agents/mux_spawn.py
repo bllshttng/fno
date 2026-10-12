@@ -4603,6 +4603,8 @@ def dispatch_spawn_pane(
                     requested_model=model or route_model,
                     requested_provider=resolved_lane_provider,
                     requested_effort=effort,
+                    # v41: the delivered seed, for the attended seed exemption.
+                    spawn_payload=message or None,
                     cwd=str(cwd),
                     # Written in the SAME registry transaction as the status, so
                     # a concurrent reconcile cannot land one without the other
