@@ -4301,12 +4301,10 @@ config_dir = "~/.claude-alt"
         for (name, expected) in LIVE_NAMES {
             assert_eq!(find_known(&known, name).as_deref(), *expected, "{name}");
         }
-    }
-
-    #[test]
-    fn ambiguous_bare_hex_node_id_resolves_to_none() {
-        let known = HashMap::from([("x-4444".to_string(), ()), ("y-4444".to_string(), ())]);
-        assert_eq!(find_known(&known, "t-4444-finish"), None);
+        // Two registry rows differing only in the bare-hex slot make a bare
+        // hex lookup ambiguous: it resolves to none rather than guessing.
+        let ambiguous = HashMap::from([("x-4444".to_string(), ()), ("y-4444".to_string(), ())]);
+        assert_eq!(find_known(&ambiguous, "t-4444-finish"), None);
     }
 
     #[test]
@@ -4411,13 +4409,9 @@ config_dir = "~/.claude-alt"
         let now = rfc3339_like_to_secs("2026-07-09T01:07:00Z").unwrap();
         let ages = newest_fire_ages(&t.events(), now);
         assert_eq!(ages.get(SID), Some(&120), "{ages:?}");
-    }
-
-    #[test]
-    fn newest_fire_ages_is_empty_without_a_store() {
-        // AC7-HP: no rows -> no badges, never an error.
-        let t = Tmp::new("fire-ages-empty");
-        assert!(newest_fire_ages(&t.events(), 1_800_000_000).is_empty());
+        // No rows -> no badges, never an error.
+        let empty = Tmp::new("fire-ages-empty");
+        assert!(newest_fire_ages(&empty.events(), 1_800_000_000).is_empty());
     }
 
     #[test]
@@ -4561,7 +4555,7 @@ config_dir = "~/.claude-alt"
     }
 
     #[test]
-    fn reconcile_holds_a_record_observed_unknown() {
+    fn reconcile_state_rows() {
         // codex P2: a tracked id observed as Unknown (present but indeterminate)
         // is HELD as unknown, never deleted as absent.
         let mut obs = HashMap::new();
@@ -4572,10 +4566,7 @@ config_dir = "~/.claude-alt"
         );
         assert_eq!(out.len(), 1, "an unknown-observed record is not deleted");
         assert_eq!(out[0].state, ExternalState::Unknown);
-    }
 
-    #[test]
-    fn reconcile_state_rows() {
         // AC1-FR: stopping + terminal -> stopped; + live -> failed (retry); +
         // absent -> removed (dropped).
         let mut obs = HashMap::new();

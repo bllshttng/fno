@@ -1014,10 +1014,12 @@ mod tests {
     }
 
     #[test]
-    fn history_rows_carry_pr_state_and_newest_open_wins_current() {
+    fn current_picks_explicit_then_live_then_newest_history() {
         // AC2-HP: one session's history spans a merged PR, another merged
         // PR, and the open node - all three bind, and the only open one is
-        // the current.
+        // the current. AC3-EDGE: an explicit bind wins outright; a live
+        // claim beats a ts-carrying history row; two inferred opens pick
+        // the newest.
         let mut join = BacklogJoin::default();
         join.by_session.insert(
             "s1".into(),
@@ -1057,12 +1059,7 @@ mod tests {
         assert_eq!(got[0].pr, Some(1));
         assert_eq!(got[0].state, "merged");
         assert_eq!(pick_current(&got).map(|b| b.node.as_str()), Some("x-cccc"));
-    }
 
-    #[test]
-    fn current_picks_explicit_then_live_then_newest_history() {
-        // AC3-EDGE: an explicit bind wins outright; a live claim beats a
-        // ts-carrying history row; two inferred opens pick the newest.
         let mut join = BacklogJoin::default();
         join.by_session.insert(
             "s1".into(),

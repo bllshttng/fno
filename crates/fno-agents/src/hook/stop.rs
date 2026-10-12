@@ -1390,17 +1390,15 @@ mod tests {
         assert!(resident_matches(&state, "rollout-7-h-uuid-1234"));
         assert!(!resident_matches(&state, "other"));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn resident_match_falls_back_to_bare_session_id() {
-        let dir = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let state = dir.join("target-state.md");
+        // No harness_session_id: the bare fno_id matches its own id, and
+        // refuses a rollout-suffixed lookalike.
+        let dir2 = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir2).unwrap();
+        let state = dir2.join("target-state.md");
         std::fs::write(&state, "---\nfno_id: h-uuid-9\n").unwrap();
         assert!(resident_matches(&state, "h-uuid-9"));
         assert!(!resident_matches(&state, "h-uuid-9-extra"));
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
     }
 
     /// The foreign-session guard's allow journals a correlated
@@ -1461,13 +1459,10 @@ mod tests {
         );
         std::env::remove_var("FNO_SPACES_DIR");
         std::env::remove_var("GLOBAL_EVENTS_PATH");
-    }
 
-    #[test]
-    fn a_steps_mode_manifest_allows_without_the_loop_check() {
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // A steps-mode manifest also allows unjudged: the journal names the
+        // steps-mode class, and the return lands before translate, so no
+        // claim releases and no finalize runs - the run keeps its claim.
         let dir = tempfile::TempDir::new().unwrap();
         std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
         std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
@@ -1493,9 +1488,6 @@ mod tests {
             dir.path().to_path_buf(),
         );
         assert_eq!(rc, 0, "a steps-mode run allows its stops unjudged");
-
-        // The journal names the steps-mode class, and the return landed before
-        // translate: no claim release, no finalize, the run keeps its claim.
         let project = crate::paths::events_path(dir.path());
         let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
         let journal =
@@ -1599,6 +1591,18 @@ mod tests {
         assert_eq!(
             arbitrate_continuation("target", &fire, manifest),
             GoalArbitration::Delegated
+        );
+        // With no goal truth at all the loop check keeps ownership.
+        let bare = collect_fire(
+            "session-full",
+            "/tmp/rollout-session-full.jsonl",
+            None,
+            "turn-42".to_string(),
+            None,
+        );
+        assert_eq!(
+            arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
+            GoalArbitration::None
         );
     }
 
@@ -1729,7 +1733,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_goal_owner_is_a_named_refusal() {
+    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
+        // A goal with no continuation_owner is a named refusal, not a guess.
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active"
@@ -1738,10 +1743,6 @@ mod tests {
         assert!(
             matches!(refusal, GoalArbitration::Refusal(reason) if reason.contains("missing continuation owner"))
         );
-    }
-
-    #[test]
-    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active",

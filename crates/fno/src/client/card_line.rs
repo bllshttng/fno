@@ -389,6 +389,12 @@ mod binding_display_tests {
         assert_eq!(binding_suffix(&row(vec![])), "");
         let only_current = row(vec![binding("x-cur", Some(3159), "open", false)]);
         assert_eq!(binding_suffix(&only_current), "");
+        // A merged other without a pr is closed news: still no suffix.
+        let closed = row(vec![
+            binding("x-cur", Some(3159), "open", false),
+            binding("x-oth1", None, "merged", false),
+        ]);
+        assert_eq!(binding_suffix(&closed), "");
     }
 
     #[test]
@@ -399,25 +405,13 @@ mod binding_display_tests {
             binding("x-oth2", Some(200), "merged", false),
         ]);
         assert_eq!(binding_suffix(&a), " +2 PRs");
-    }
-
-    #[test]
-    fn suffix_counts_open_others_without_prs() {
-        let a = row(vec![
+        // Others without prs count as open slots instead.
+        let b = row(vec![
             binding("x-cur", Some(3159), "open", false),
             binding("x-oth1", None, "open", false),
             binding("x-oth2", None, "merged", false),
         ]);
-        assert_eq!(binding_suffix(&a), " +2 open");
-    }
-
-    #[test]
-    fn suffix_is_empty_when_others_are_closed_without_prs() {
-        let a = row(vec![
-            binding("x-cur", Some(3159), "open", false),
-            binding("x-oth1", None, "merged", false),
-        ]);
-        assert_eq!(binding_suffix(&a), "");
+        assert_eq!(binding_suffix(&b), " +2 open");
     }
 
     #[test]
