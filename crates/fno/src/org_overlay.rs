@@ -912,6 +912,12 @@ fn wrap_reading(lines: Vec<BlockLine>, width: usize) -> Vec<String> {
         let mut first = true;
         for word in words {
             let w = word.chars().count();
+            if !cur.is_empty() && used + 1 + w > budget {
+                out.push(prefixed(l.label, lw, first, &cur));
+                first = false;
+                cur.clear();
+                used = 0;
+            }
             if cur.is_empty() && w > budget {
                 // An unbreakable token wider than the column (a path) hard
                 // splits across lines: the painter's edge stop would clip
@@ -930,13 +936,6 @@ fn wrap_reading(lines: Vec<BlockLine>, width: usize) -> Vec<String> {
                 cur.push_str(rest);
                 used = cur.chars().count();
                 continue;
-            }
-            let sep = usize::from(!cur.is_empty());
-            if !cur.is_empty() && used + sep + w > budget {
-                out.push(prefixed(l.label, lw, first, &cur));
-                first = false;
-                cur.clear();
-                used = 0;
             }
             if !cur.is_empty() {
                 cur.push(' ');

@@ -77,13 +77,11 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
             .map(|n| n.current.len() + n.former.len())
             .max()
             .unwrap_or(0);
-        let workers_r = if max_sessions <= 1 { 0.0 } else { 2.0 };
+        let workers_r = if max_sessions == 0 { 0.0 } else { 2.0 };
         let node_r = ring(lead.nodes.len());
-        let base_r = if lead.nodes.len() <= 1 {
-            0.0
-        } else {
-            node_r.max(2.0)
-        };
+        // A node never sits on its lead's cell: one worker dot over the
+        // lead glyph reads as no lead at all.
+        let base_r = node_r.max(2.0);
         let cluster = base_r + workers_r + 1.0;
         if cluster > max_cluster {
             max_cluster = cluster;
@@ -144,12 +142,20 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
 
             let workers: Vec<&crate::org_model::OrgSession> =
                 node.current.iter().chain(&node.former).collect();
-            let wr = if workers.len() <= 1 { 0.0 } else { 2.0 };
-            let kcount = workers.len();
+            // Workers chain outward from their node, away from the lead.
+            // A radial ring re-aims along the node-lead axis, and a worker
+            // landing on the lead's cell erased the lead glyph.
+            let axis = (nx - lx, ny - ly);
+            let span = (axis.0 * axis.0 + axis.1 * axis.1).sqrt();
+            let unit = if span > f64::EPSILON {
+                (axis.0 / span, axis.1 / span)
+            } else {
+                (0.0, -1.0)
+            };
             for (k, session) in workers.iter().enumerate() {
-                let wa = -std::f64::consts::FRAC_PI_2 + k as f64 * TAU / kcount as f64;
-                let wx = nx + wr * wa.cos();
-                let wy = ny + wr * wa.sin();
+                let off = 2.0 + k as f64 * 2.0;
+                let wx = nx + unit.0 * off;
+                let wy = ny + unit.1 * off;
                 let name = session
                     .agent
                     .as_ref()
@@ -402,8 +408,11 @@ pub(crate) fn frame(
             taken[cy * width + cx] = true;
         }
     }
+    // Dots come leads-first, so a cell two dots share keeps the senior
+    // glyph; a vanished lead reads as no lead at all.
+    let mut held = vec![false; width * height];
     for (dot, (cx, cy)) in graph.dots.iter().zip(cells_pos.iter().copied()) {
-        if cx >= width || cy >= height {
+        if cx >= width || cy >= height || held[cy * width + cx] {
             continue;
         }
         let glyph = match dot.kind {
@@ -413,6 +422,7 @@ pub(crate) fn frame(
         };
         let fg = crate::ratatui_blit::rt_color(colors.dot_color(dot));
         buf[(cx as u16, cy as u16)].set_char(glyph).set_fg(fg);
+        held[cy * width + cx] = true;
     }
 
     let labels = label_cells(graph, width, height, pan, selected);
