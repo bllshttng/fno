@@ -21,14 +21,26 @@ The return contract widens accordingly: 0 when at least one channel accepted
 the message (a local tool dispatched, or the event landed and an enabled sink
 routes it); non-zero only when no channel exists at all. The AC2-FR shape is
 unchanged - the code stays an honest channel count, in both directions.
+
+ adds the third leg, ahead of the local toast: when a mux server has
+attached clients, the notice rides ``fno mux notify`` and lands as OSC 777
+on the attached terminal's tty, so the desktop alert comes from the terminal
+(Ghostty), not from Script Editor. The receipt's ``clients`` count decides:
+at least one client took it and the local toast is skipped; zero (no mux, no
+attached client, old Rust front) and the osascript fallback runs as before.
+Under pytest the mux leg is skipped and a REAL local tool dispatch is
+refused outright - the guard below raises instead of toasting, so a test
+that reaches the real subprocess is a failure, never a screen notification.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
 import shutil
 import subprocess
+import sys
 
 _log = logging.getLogger(__name__)
 
@@ -36,6 +48,68 @@ _NO_TOOL_MSG = (
     "fno inbox notify: no OS notification tool available (need osascript on "
     "macOS or notify-send on Linux); notification not sent."
 )
+
+# The real subprocess seam, captured at import. A test that replaces
+# ``subprocess.run`` (the documented way to fake a dispatch) makes the
+# identity check below False, so the fake is allowed; the identity holding
+# under pytest means a REAL OS alert was about to fire - that is the leak
+# this module refuses.
+_REAL_SUBPROCESS_RUN = subprocess.run
+
+
+def _under_pytest() -> bool:
+    """True while code runs inside a pytest test (active test or imported)."""
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules
+
+
+def _refuse_real_os_alert() -> None:
+    """Raise when a REAL OS notification is about to fire under pytest.
+
+    The 2026-10-01 leak: a control-plane alert with a test-fixture body
+    reached the operator's screen. Hermetic stamping (``FNO_TEST_HERMETIC``)
+    covers the suites that set it; this guard covers the ones that forget.
+    A faked subprocess (``monkeypatch.setattr(_impl.subprocess, "run", ...)``)
+    is exempt - the identity against :data:`_REAL_SUBPROCESS_RUN` is False -
+    so every existing dispatch-pinning test keeps working.
+    """
+    if _under_pytest() and subprocess.run is _REAL_SUBPROCESS_RUN:
+        raise RuntimeError(
+            "fno notify: refusing a real OS notification under pytest; "
+            "monkeypatch fno.notify._impl.subprocess.run or set FNO_TEST_HERMETIC=1"
+        )
+
+
+def _mux_clients(title: str, message: str) -> int | None:
+    """Attached clients that took the notice via ``fno mux notify``, or None.
+
+    None on every non-delivery: no Rust front on PATH, no mux server, no
+    attached client, an old front without the verb, or a pytest run (the mux
+    leg is an optimization, never worth a real side effect in a test).
+    """
+    if _suppressed() or _under_pytest():
+        return None
+    fno = shutil.which("fno")
+    if not fno:
+        return None
+    try:
+        proc = subprocess.run(
+            # `--json` before `--`: a leading-dash title or message must
+            # parse as a positional, never as a flag.
+            [fno, "mux", "notify", "--json", "--", title, message],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "FNO_PY_HANDOFF": "1"},
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return int(json.loads(proc.stdout).get("clients", 0))
+    except Exception:
+        return None
 
 
 def _suppressed() -> bool:
@@ -76,6 +150,7 @@ def _dispatch_local(title: str, message: str) -> bool:
         esc_title = title.replace("\\", "\\\\").replace('"', '\\"')
         if _suppressed():
             return True
+        _refuse_real_os_alert()
         try:
             subprocess.run(
                 [
@@ -97,6 +172,7 @@ def _dispatch_local(title: str, message: str) -> bool:
         # but still bound it with a timeout and swallow failures for parity.
         if _suppressed():
             return True
+        _refuse_real_os_alert()
         try:
             # argv-fence: exempt (a notification body, not a spawn seed: a
             # leading-dash body drops one toast, it never idles a worker).
@@ -163,6 +239,12 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     """
     title = title or "target"
     message = message or "Complete"
+
+    # The client-first leg: an attached mux terminal shows the alert with the
+    # terminal's own identity, so it outranks the Script Editor toast. Zero
+    # attached clients (or any non-delivery) falls through to the local tool.
+    if _mux_clients(title, message):
+        return 0, ""
 
     local = _dispatch_local(title, message)
     row = _emit_operator_notice(title, message, pointer)
