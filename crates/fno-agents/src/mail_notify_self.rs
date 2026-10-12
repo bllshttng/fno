@@ -202,7 +202,7 @@ pub(crate) fn advance_main_cursor(bus_dir: &Path, msgs: &[Value], name: &str, ms
 /// Best-effort `agent_mail_drained` receipt, one per drained id, so a sender
 /// can join events.jsonl to a terminal drained state. Swallowed on failure:
 /// a missing receipt degrades to the cursor fallback.
-fn emit_marker(handle: &str, m: &Value, reason: &str) {
+pub(crate) fn emit_marker(handle: &str, m: &Value, reason: &str) {
     let emitter = crate::events::EventEmitter::new(
         crate::paths::AgentsHome::from_env().events_jsonl(),
         "agents",

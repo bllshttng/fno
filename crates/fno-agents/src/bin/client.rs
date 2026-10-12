@@ -300,24 +300,22 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `version` / `-V` / `--version`: report which commit this binary was built
-    // from -- the prerequisite for Rust-side `fno doctor`
-    // staleness. `--json` emits the machine surface `fno doctor` reads off the
-    // resolved binary path. Side-effect-free, like `--emit-schema`/`help`: it
-    // never starts the daemon and is NOT a routable daemon verb, so it stays out
-    // of CLIENT_VERB_USAGE / RUST_CLIENT_VERBS (callers invoke the binary
-    // directly). Matched here rather than as a dispatch arm so the routable-verb
-    // parity guard (test_rust_client_verbs_match_client_rs) does not see it.
+    // from -- the prerequisite for Rust-side `fno doctor` staleness. `--json`
+    // emits the machine surface `fno doctor` reads off the resolved binary path.
+    // Side-effect-free, like `--emit-schema`/`help`: it never starts the daemon
+    // and is NOT a routable daemon verb, so it stays out of CLIENT_VERB_USAGE /
+    // RUST_CLIENT_VERBS (callers invoke the binary directly). Matched here rather
+    // than as a dispatch arm so the routable-verb parity guard does not see it.
     if matches!(verb, "version" | "-V" | "--version") {
         let json = fno_agents::json_output::requested(&args[1..]);
         fno_agents::version::print_version(json);
         return 0;
     }
 
-    // `mail-inject` is the one-shot LIVE-DELIVERY verb `fno agents mail send` calls to
-    // inject a turn into a live `claude --bg` session over the daemon control.sock.
-    // Binary-direct (Python `_deliver_live` subprocess), NOT a routable `fno agents`
-    // verb -- matched with `matches!` (like `version`) so the parity guard does not
-    // see it. Connects to an existing daemon; never lazy-starts one.
+    // `mail-inject`: the one-shot live-delivery verb `fno agents mail send` calls
+    // to inject a turn into a live `claude --bg` session. Binary-direct, not
+    // routable (the `matches!` shape hides it from the parity guard); it connects
+    // to an existing daemon and never lazy-starts one.
     if matches!(verb, "mail-inject") {
         // The control drain rides this action as a mode flag: the PreToolUse
         // hook calls it binary-direct at every tool boundary, so a frozen
@@ -333,8 +331,7 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_inject::run_mail_inject(&args[1..]).await;
     }
 
-    // `mail-record` is binary-direct like `mail-inject`: the origin-record
-    // leaf `fno agents mail send/reply` calls; unregistered (shrink-only list).
+    // `mail-record`: binary-direct origin-record leaf `mail send/reply` calls.
     if matches!(verb, "mail-record") {
         return fno_agents::decision_trace::run_mail_record(&args[1..]);
     }
@@ -343,13 +340,16 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_envelope::run(&args[1..]);
     }
 
+    if matches!(verb, "mail") {
+        return fno_agents::mail_cli::run(&args[1..]);
+    }
+
     // Cross-host relay verb; binary-direct like `mail-inject`. Contract: mail_remote's module docs.
     if matches!(verb, "mail-remote") {
         return fno_agents::mail_remote::run(&args[1..]);
     }
 
-    // Binary-direct mail transport for the events and note Python adapters.
-    // It is intentionally not a routable `fno agents` verb.
+    // Binary-direct mail transport for the events/note Python adapters; not routable.
     if matches!(verb, "machine-mail-send") {
         return fno_agents::machine_mail::run(&args[1..]).await;
     }
