@@ -916,12 +916,16 @@ fn wrap_reading(lines: Vec<BlockLine>, width: usize) -> Vec<String> {
                 // An unbreakable token wider than the column (a path) hard
                 // splits across lines: the painter's edge stop would clip
                 // it whole, and a split keeps every character visible.
-                let mut rest = word.as_str();
+                let mut rest = word;
                 while rest.chars().count() > budget {
-                    let chunk: String = rest.chars().take(budget).collect();
-                    out.push(prefixed(l.label, lw, first, &chunk));
+                    let split = rest
+                        .char_indices()
+                        .nth(budget)
+                        .map(|(i, _)| i)
+                        .unwrap_or(rest.len());
+                    out.push(prefixed(l.label, lw, first, &rest[..split]));
                     first = false;
-                    rest = rest.chars().skip(budget).collect();
+                    rest = &rest[split..];
                 }
                 cur.push_str(rest);
                 used = cur.chars().count();
