@@ -216,7 +216,7 @@ The usual remedy is to file what remains as its own node.
 Ancestor epics the cascade auto-closed come back with the child.
 An epic closed on its own evidence is left alone and named, because reopening it discards a judgment the verb never made.
 
-Two facts hold a reopen against the children rollup, which otherwise re-derives `done` from the closed children on the next read. A parent with a bound plan and no PR of its own is never auto-closed: its own deliverables are unverified, so it closes through its own door on its own evidence. A reopen that postdates every child's close stamps `reopened_at`, and the rollup respects that stamp until a new child close lands.
+Two facts hold a reopen against the children rollup, which otherwise re-derives `done` from the closed children on the next read. A parent with a bound plan and no PR of its own is never auto-closed. Its deliverables are unverified, so it closes through its own door on its own evidence. A reopen that postdates every child's close stamps `reopened_at`, and the rollup respects that stamp until a new child close lands.
 
 ## Deferred kinds
 
