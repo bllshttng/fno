@@ -1727,13 +1727,18 @@ def deactivate_watcher() -> str:
         # No binary, no deactivation leg. The caller's warning names the remedy
         # and the config write stays enabled for doctor to flag.
         return "unload-failed"
-    proc = subprocess.run(
-        [str(binary), "pr-watch", "uninstall", "--unload-only"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [str(binary), "pr-watch", "uninstall", "--unload-only"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # A wedged launchctl (a documented hang mode here) or an
+        # unexecutable binary degrades to the caller's loud warning.
+        return "unload-failed"
     word = proc.stdout.strip()
     known = {"not-installed", "already-unloaded", "unloaded", "unload-failed"}
     return word if word in known else "unload-failed"

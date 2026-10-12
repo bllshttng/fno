@@ -762,3 +762,42 @@ fn unload_only_unloads_but_keeps_the_plist() {
     assert_eq!(golden.streams[0].trim(), "unloaded");
     assert!(plist.is_file(), "--unload-only keeps the plist on disk");
 }
+
+/// A removal that fails must not read as success: the Python unlink let the
+/// error propagate as a nonzero exit, so the port reports the failure and
+/// skips the Removed receipt instead of printing it unconditionally.
+#[test]
+fn uninstall_reports_a_failed_removal() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let case = Case {
+        label: "uninstall failed removal check",
+        mode: Mode::Uninstall { unload_only: false },
+        interval: 0,
+        model: false,
+        stdin: None,
+        legacy: false,
+        agents_dir_is_file: false,
+        plist: true,
+        launchctl: LaunchCtl {
+            list: Some("sh.fno.pr-watcher"),
+            ..LaunchCtl::default()
+        },
+    };
+    let dir = write_case(tmp.path(), &case);
+    let plist = dir
+        .join("home")
+        .join("Library")
+        .join("LaunchAgents")
+        .join("sh.fno.pr-watcher.plist");
+    // remove_file cannot remove a directory, which makes the failure
+    // deterministic on every platform the suite runs on.
+    std::fs::remove_file(&plist).unwrap();
+    std::fs::create_dir(&plist).unwrap();
+    let golden = rust_leg(&dir, &case);
+    assert_eq!(golden.exit, Some(1));
+    assert!(
+        !golden.streams[0].contains("Removed"),
+        "a failed removal must not print the Removed receipt"
+    );
+    assert!(plist.is_dir(), "the blocker must survive for diagnosis");
+}

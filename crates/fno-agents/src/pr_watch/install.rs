@@ -692,8 +692,8 @@ pub(crate) fn unload_only(launch_agents_dir: &Path) -> &'static str {
 }
 
 /// Best-effort uninstall: unload, remove the plist, keep the watermark store
-/// so a reinstall does not re-fire handled PRs. The Python leaf always exited
-/// 0; so does this.
+/// so a reinstall does not re-fire handled PRs. A failed plist removal exits
+/// nonzero, as the Python unlink did; the unload itself stays best effort.
 pub fn run_uninstall(args: &[String]) -> i32 {
     for arg in args {
         if arg != "--unload-only" {
@@ -711,7 +711,13 @@ pub fn run_uninstall(args: &[String]) -> i32 {
         // The unload is best effort: the removal happens either way, exactly
         // as the Python leg did it.
         run_launchctl(&["unload", &plist_path.display().to_string()]);
-        let _ = std::fs::remove_file(&plist_path);
+        if let Err(err) = std::fs::remove_file(&plist_path) {
+            eprintln!(
+                "fno-agents pr-watch uninstall: failed to remove {}: {err}",
+                plist_path.display()
+            );
+            return 1;
+        }
         println!("Removed: {}", plist_path.display());
     } else {
         println!("Nothing to remove: {} does not exist", plist_path.display());
