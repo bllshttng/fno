@@ -31,6 +31,7 @@ pub mod done_evidence;
 pub(crate) mod drift_emit;
 pub(crate) mod drift_scan;
 pub mod edges;
+pub mod encounter_cli;
 pub mod encounters;
 pub mod entities;
 pub mod epic_cap;

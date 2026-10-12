@@ -663,7 +663,7 @@ pub fn run_done(tail: &[String]) -> i32 {
 fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     // External backend: the shared gates then exactly one tracker.close are
     // the seam's job (still Python-owned).
-    if external_backend_selected() {
+    if crate::graph_get::external_backend_selected() {
         return forward_to_python("done", tail);
     }
     if !has_node_id_prefix(task_id) {
@@ -1386,10 +1386,6 @@ fn find_node<'a>(rows: &'a [Value], task_id: &str) -> Option<&'a Value> {
         };
     }
     None
-}
-
-fn external_backend_selected() -> bool {
-    active_backend_name() != "graph"
 }
 
 pub(crate) fn active_backend_name() -> String {
