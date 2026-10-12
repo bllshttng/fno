@@ -873,7 +873,7 @@ def _forward_list(
     from fno._subprocess_util import propagate_returncode
     from fno.rust_binary import resolve_binary
 
-    argv = []
+    argv: list[str] = []
     if prefix:
         argv.extend(("--prefix", prefix))
     if include_stale:
