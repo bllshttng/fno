@@ -1648,6 +1648,141 @@ fn main_store_journal(
     }
 }
 
+/// The questions leg: the four question kinds plus the empty type read typed
+/// off questions.jsonl (corrupt rows still count). The store's other kinds,
+/// 119k+ attention_delivery rows alone, never reach the parser, so they stop
+/// reading as malformed. An unreadable store is an empty leg plus the note
+/// the caller prints.
+fn questions_leg(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> (String, Option<String>) {
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let questions_path = fno_dir.join("questions.jsonl");
+    let questions_query = crate::event_store::EventQuery {
+        since_ms: since_epoch.map(|s| s as i64 * 1000),
+        until_ms: until_epoch.map(|u| u as i64 * 1000),
+        ..crate::event_store::EventQuery::of_types(&[
+            "operator_question",
+            "operator_question_closed",
+            "operator_decision",
+            "day_boundary",
+        ])
+    };
+    match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
+        Ok(raw) => (raw, None),
+        Err(e) => (
+            String::new(),
+            Some(format!(
+                "questions store unreadable, skipped: {} ({e})",
+                questions_path.display()
+            )),
+        ),
+    }
+}
+
+/// The lifecycle leg reads the store, never the file. An absent store is
+/// still a skipped store for the feed's purposes: the operator should know
+/// the lifecycle leg is absent, so its absence keeps its own note (AC3)
+/// where a present-but-empty store is just empty.
+fn graph_leg(home: &AgentsHome) -> (Vec<Value>, Option<String>) {
+    let path = graph_path(home);
+    if !crate::backlog::database_path(&path).exists() {
+        return (Vec::new(), Some("graph store skipped (absent)".to_string()));
+    }
+    match crate::graph_store::read_rows_where(
+        &path,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "id",
+                    "title",
+                    "parent",
+                    "cwd",
+                    "sessions",
+                    "created_at",
+                    "completed_at",
+                    "status",
+                    "merge_status",
+                    "pr_number",
+                    "pr_url",
+                    "source_session_id",
+                    "source_harness",
+                    "source_model",
+                    "source_effort",
+                    "source_parent_session",
+                    "source_team",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    {
+        Ok(list) => (list, None),
+        Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
+    }
+}
+
+/// The full window for a non-interactive reader: every leg on, no page, no
+/// prefilter, notes swallowed. The OTLP exporter reads through this so the
+/// daemon arm and the CLI preview see exactly the rows the verb prints.
+pub(crate) fn collect_window(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> Vec<FeedRow> {
+    let (questions_raw, _note) = questions_leg(home, since_epoch, until_epoch);
+    let (graph_entries, _note) = graph_leg(home);
+    let (removals, _notes) = crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
+    let spawns_raw = agents_journal(
+        home,
+        &["agent_spawned", "agent_spawn_refused"],
+        since_epoch,
+        until_epoch,
+    );
+    let team_raw = team_journals(home);
+    let closes_raw = agents_journal(
+        home,
+        &[
+            "pane_closed",
+            "server_stopped",
+            "composer_shell_ran",
+            "composer_shell_refused",
+            "daemon_started",
+        ],
+        since_epoch,
+        until_epoch,
+    );
+    let (main_raw, _note) = main_store_journal(home, since_epoch, until_epoch);
+    let Projection { rows, .. } = project(
+        &questions_raw,
+        &graph_entries,
+        &removals,
+        &spawns_raw,
+        &team_raw,
+        &closes_raw,
+        &main_raw,
+        None,
+    );
+    filter_rows(
+        rows,
+        &Page::default(),
+        &Prefilter::default(),
+        since_epoch,
+        until_epoch,
+    )
+}
+
 /// The `fno-agents feed` verb. A missing or unreadable store is not fatal: the
 /// rows the other store yielded still emit, with one stderr line naming the
 /// store skipped. Non-JSON output is one line per row, `ts kind node session title`.
@@ -1660,88 +1795,19 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
 
-    let fno_dir = home
-        .root()
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".fno"));
-    let questions_path = fno_dir.join("questions.jsonl");
-    // Typed read: the four question kinds plus the empty type (corrupt rows
-    // still count). The store's other kinds, 119k+ attention_delivery rows
-    // alone, never reach the parser, so they stop reading as malformed.
-    let questions_query = crate::event_store::EventQuery {
-        since_ms: args.since_epoch.map(|s| s as i64 * 1000),
-        until_ms: args.until_epoch.map(|u| u as i64 * 1000),
-        ..crate::event_store::EventQuery::of_types(&[
-            "operator_question",
-            "operator_question_closed",
-            "operator_decision",
-            "day_boundary",
-        ])
-    };
-    let questions_raw = if leg_skipped(&args.pre, QUESTION_KINDS) {
-        String::new()
+    let (questions_raw, questions_note) = if leg_skipped(&args.pre, QUESTION_KINDS) {
+        (String::new(), None)
     } else {
-        match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
-            Ok(raw) => raw,
-            Err(e) => {
-                eprintln!(
-                    "fno-agents feed: questions store unreadable, skipped: {} ({e})",
-                    questions_path.display()
-                );
-                String::new()
-            }
-        }
+        questions_leg(home, args.since_epoch, args.until_epoch)
     };
+    if let Some(note) = questions_note {
+        eprintln!("fno-agents feed: {note}");
+    }
 
-    let (graph_entries, graph_note): (Vec<Value>, Option<String>) = {
-        // The lifecycle leg reads the store, never the file. An absent store
-        // is still a skipped store for the feed's purposes: the operator
-        // should know the lifecycle leg is absent, so its absence keeps its
-        // own note (AC3) where a present-but-empty store is just empty.
-        let path = graph_path(home);
-        if leg_skipped(&args.pre, GRAPH_KINDS) {
-            (Vec::new(), None)
-        } else if !crate::backlog::database_path(&path).exists() {
-            (Vec::new(), Some("graph store skipped (absent)".to_string()))
-        } else {
-            match crate::graph_store::read_rows_where(
-                &path,
-                &crate::backlog::RowQuery {
-                    fields: Some(
-                        [
-                            "id",
-                            "title",
-                            "parent",
-                            "cwd",
-                            "sessions",
-                            "created_at",
-                            "completed_at",
-                            "status",
-                            "merge_status",
-                            "pr_number",
-                            "pr_url",
-                            "source_session_id",
-                            "source_harness",
-                            "source_model",
-                            "source_effort",
-                            "source_parent_session",
-                            "source_team",
-                        ]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    ),
-                    with_blockers: true,
-                    ..Default::default()
-                },
-            )
-            .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-            {
-                Ok(list) => (list, None),
-                Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
-            }
-        }
+    let (graph_entries, graph_note) = if leg_skipped(&args.pre, GRAPH_KINDS) {
+        (Vec::new(), None)
+    } else {
+        graph_leg(home)
     };
     if let Some(note) = graph_note {
         eprintln!("fno-agents feed: {note}");
