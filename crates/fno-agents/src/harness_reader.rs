@@ -1086,11 +1086,20 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
                 let seed_marker = format!("PROBE_SEED={nonce}");
                 let survive_marker = format!("PROBE_SURVIVE={nonce}");
                 let (_, logs_at_start) = root.fno(&["agents", "logs", &name]);
-                let mut cmd = Command::new(&argv[0]);
-                cmd.args(&argv[1..])
-                    .arg(format!("PROBE_SURVIVE_REQUEST={nonce}"));
-                root.child_env(&mut cmd);
-                let (resume_code, reply) = run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S);
+                let request = format!("PROBE_SURVIVE_REQUEST={nonce}");
+                // `fno-agents <verb>` is `fno agents <verb>`: the porcelain
+                // keeps this turn on the FNO_PROBE_FNO build the run drives.
+                let (resume_code, reply) = if argv[0] == "fno-agents" {
+                    let mut ask: Vec<&str> = vec!["agents"];
+                    ask.extend(argv[1..].iter().map(String::as_str));
+                    ask.push(&request);
+                    root.fno_bounded(&ask, LIVE_SPAWN_TIMEOUT_S)
+                } else {
+                    let mut cmd = Command::new(&argv[0]);
+                    cmd.args(&argv[1..]).arg(&request);
+                    root.child_env(&mut cmd);
+                    run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S)
+                };
                 let survive = retry_marker(
                     "SURVIVE",
                     "prior turn after process stop",
