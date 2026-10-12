@@ -649,6 +649,19 @@ mod tests {
         }
     }
 
+    /// `observedTimeUnixNano` is the wall clock at body-build time, so two
+    /// builds never match byte for byte; compare everything but that stamp.
+    fn sans_observed_time(payload: &str) -> Value {
+        let mut doc: Value = serde_json::from_str(payload).unwrap();
+        let records = doc["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+            .as_array_mut()
+            .unwrap();
+        for r in records {
+            r["observedTimeUnixNano"] = json!("0");
+        }
+        doc
+    }
+
     #[derive(Default)]
     struct FakePost {
         status: Option<u16>,
@@ -792,7 +805,8 @@ mod tests {
         poster.status = Some(204);
         let r = run_beat(&beat_cfg(), &home, held, &mut poster, 1_760_000_000_000);
         assert_eq!(r.acted, 1);
-        assert_eq!(poster.calls, 3);
+        // Four posts: deliver, drop, the held attempt, then this one.
+        assert_eq!(poster.calls, 4);
     }
 
     /// `log_content` gates every free-text attribute and the body; the row
@@ -877,8 +891,9 @@ mod tests {
             "two dated rows post; the undated one stays home"
         );
         assert_eq!(
-            body, poster.posted[0],
-            "preview equals the posted body byte for byte"
+            sans_observed_time(&body),
+            sans_observed_time(&poster.posted[0]),
+            "preview equals the posted body but for the observation time"
         );
 
         // After the beat the preview is quiet: delivered rows do not resend.
