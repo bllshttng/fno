@@ -1189,20 +1189,20 @@ mod tests {
         let cwd = dir.clone();
 
         // No live operator decisions: off, zero network calls.
-        let io = FakeIo::new();
+        let mut io = FakeIo::new();
         io.fno_law = r#"{"decisions":[]}"#.to_string();
         let pages = vec![pull_row(101, true)];
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_off_no_law");
         assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
 
         // Garbage law output: off.
-        let io = FakeIo::new();
+        let mut io = FakeIo::new();
         io.fno_law = "not json".to_string();
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_off_no_law");
         assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
 
         // Budget backoff: off before any network call.
-        let io = FakeIo::new();
+        let mut io = FakeIo::new();
         io.backoff = true;
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_budget_backoff");
         assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
