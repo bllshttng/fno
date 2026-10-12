@@ -463,12 +463,17 @@ def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
             "--node", "x-1111",
         ],
     )
-    assert seen["argv"] == [
-        "/fake/fno-agents", "pr-closure-bind-created",
-        "--url", "https://github.com/o/r/pull/9",
-        "--repo", "/tmp/repo",
-        "--node", "x-1111",
-    ]
+    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # from argv, never stdin - the passthrough inherits the caller's stdin,
+    # and a TTY there would hang a stdin read.
+    assert seen["argv"][0:2] == ["/fake/fno-agents", "pr-closure-bind-created"]
+    assert len(seen["argv"]) == 3
+    payload = json.loads(seen["argv"][2])
+    assert payload == {
+        "url": "https://github.com/o/r/pull/9",
+        "repo": "/tmp/repo",
+        "node": "x-1111",
+    }
     assert result.exit_code == 0
 
 

@@ -1,7 +1,8 @@
 //! The produce half of the `pr-closure-*` verb family: branch-ids, ensure,
 //! trailer, bind-created, and context. Each verb reads one JSON payload on
-//! stdin (trailer is argv-driven) and answers with the exact bytes the
-//! Python verbs printed, pinned by `tests/golden/pr_closure_produce/`.
+//! stdin (trailer is argv-driven; bind-created takes its payload as one
+//! JSON argv element, matching its CLI door) and answers with the exact
+//! bytes the Python verbs printed, pinned by `tests/golden/pr_closure_produce/`.
 //!
 //! Envelopes are hand-built strings, not `serde_json::json!`, because key
 //! order is part of the parity contract (`json!` sorts keys; Python dicts
@@ -31,7 +32,11 @@ pub(crate) fn run(args: &[String]) -> i32 {
         "pr-closure-trailer" => leg_trailer(&args[1..]),
         "pr-closure-branch-ids" => run_case_verb(verb, leg_branch_ids),
         "pr-closure-ensure" => run_case_verb(verb, leg_ensure),
-        "pr-closure-bind-created" => run_case_verb(verb, leg_bind),
+        "pr-closure-bind-created" => run_argv_verb(
+            verb,
+            leg_bind,
+            args.get(1).map(String::as_str).unwrap_or(""),
+        ),
         "pr-closure-context" => run_case_verb(verb, leg_context),
         _ => {
             eprint!(
@@ -57,7 +62,26 @@ fn run_case_verb(verb: &str, leg: Leg) -> i32 {
             return 2;
         }
     };
-    let (code, out, err) = leg(&parsed);
+    run_leg(leg, &parsed)
+}
+
+/// bind-created's door: its CLI caller forwards the flags as one JSON argv
+/// element (the authorized-merge pattern), because the shared
+/// `_forward_to_binary` passthrough inherits the caller's stdin and a TTY
+/// there would hang a stdin read.
+fn run_argv_verb(verb: &str, leg: Leg, payload: &str) -> i32 {
+    let parsed: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            eprint!("{verb}: argv payload was not JSON: {e}\n");
+            return 2;
+        }
+    };
+    run_leg(leg, &parsed)
+}
+
+fn run_leg(leg: Leg, parsed: &serde_json::Value) -> i32 {
+    let (code, out, err) = leg(parsed);
     if !out.is_empty() {
         print!("{out}");
     }
@@ -368,8 +392,19 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let node = payload.get("node").and_then(|v| v.as_str());
     let trimmed = node.map(str::trim).filter(|s| !s.is_empty());
+    // The CLI door advertises --repo; an empty or absent key keeps the
+    // process cwd (the historical behavior every existing caller relies on).
+    let work_dir = match payload
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(repo) => PathBuf::from(repo),
+        None => current_dir(),
+    };
     let head_ref = if trimmed.is_none() {
-        match read_current_branch(&current_dir()) {
+        match read_current_branch(&work_dir) {
             Ok(b) => b,
             Err(e) => return bind_envelope(&refused(Some(e)), &[]),
         }

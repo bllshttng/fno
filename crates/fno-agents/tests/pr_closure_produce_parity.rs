@@ -1,7 +1,8 @@
 //! Golden parity for the raw `pr-closure-*` produce verbs.
 //!
 //! parity-stage: characterization
-//! parity-oracle: cli/src/fno/pr/closure.py
+//! parity-oracle: tests/fixtures/pr_closure_produce/oracle.py (frozen copy
+//! of the retired cli/src/fno/pr/closure.py)
 //!
 //! Each case in the fixture `cases.json` builds the same hermetic graph,
 //! config, and git fixture the deleted oracle's builder made, runs the Rust
@@ -293,7 +294,9 @@ fn invocation(case: &Value) -> (Vec<String>, Option<String>) {
         // exactly as the oracle legs do.
         "branch-ids" => (vec!["pr-closure-branch-ids".to_string()], Some(stdin)),
         "ensure" => (vec!["pr-closure-ensure".to_string()], Some(stdin)),
-        "bind" => (vec!["pr-closure-bind-created".to_string()], Some(stdin)),
+        // bind-created takes its payload as one JSON argv element, matching
+        // its CLI door (a TTY passthrough stdin must never be read).
+        "bind" => (vec!["pr-closure-bind-created".to_string(), stdin], None),
         other => panic!("cases.json carries an unknown verb: {other}"),
     }
 }
@@ -380,8 +383,11 @@ fn bind_stamp_prints_nothing_on_stderr() {
     let case_dir = build_fixture(root.path(), &case, 0);
     let payload = serde_json::to_string(&case).unwrap();
     let got = run_child(
-        &["pr-closure-bind-created".to_string()],
-        Some(&payload),
+        // bind-created takes its payload as one JSON argv element (its CLI
+        // door); stdin passes no bytes, so a regression to a stdin read
+        // sees EOF and exits 2 here instead of passing.
+        &["pr-closure-bind-created".to_string(), payload],
+        None,
         &case_dir,
         false,
         &home,

@@ -165,8 +165,8 @@ done
 # AT LEAST ONE claimed, never all of them. This gate has no graph (see the
 # format-check note above), so it cannot tell a real node id from ordinary
 # English that fits the same grammar. The producer CAN, and refuses to claim
-# an id the graph does not carry, because one unknown id makes
-# bind_closure_claims refuse the WHOLE binding at merge.
+# an id the graph does not carry, because one unknown id makes the
+# merge-time bind-created leg refuse the WHOLE binding at merge.
 #
 # Demanding all of them therefore made some branches unsatisfiable rather than
 # merely strict: on "feature/x-cccc-cache-dead" the producer writes x-cccc and

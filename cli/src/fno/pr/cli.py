@@ -973,9 +973,8 @@ def bind_created(
     ),
 ) -> None:
     """Bind a raw ``gh pr create`` result to its one real node."""
-    argv = ["--url", url]
-    if repo is not None:
-        argv.extend(["--repo", repo])
-    if node is not None:
-        argv.extend(["--node", node])
-    _forward_to_binary("pr-closure-bind-created", argv)
+    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # from argv, never stdin - the passthrough below inherits the caller's
+    # stdin, and a TTY there would hang a stdin read.
+    payload = json.dumps({"url": url, "repo": repo, "node": node})
+    _forward_to_binary("pr-closure-bind-created", [payload])
