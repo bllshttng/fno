@@ -109,7 +109,6 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
         .view
         .card
         .title = saved_title;
-    drop(b);
     let b = view.org_board.as_mut().unwrap();
     b.cursor = 0;
     assert_eq!(
