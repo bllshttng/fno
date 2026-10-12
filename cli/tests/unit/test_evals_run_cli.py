@@ -239,11 +239,9 @@ def test_lane_and_cohort_flags_pass_through_to_run_task(tmp_path: Path, monkeypa
 
 
 def _macro_journal(path: Path, *, old: bool = False) -> None:
-    # Relative to now: macro's default window is 30d, so a hard-coded fresh
-    # date ages out of it and the leaderboard empties (red on main at exactly
-    # 2026-10-12T10:00:00Z). Old rows sit past the window on purpose.
-    age = timedelta(days=40) if old else timedelta(hours=1)
-    ts = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # A fixed recent date ages out of the 30-day macro window; stay one day back.
+    recent = datetime.now(timezone.utc) - timedelta(days=1)
+    ts = "2025-01-01T10:00:00Z" if old else recent.strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [
         {"ts": ts, "type": "loop_check_watch_idle", "data": {"session_id": "s1", "node_id": "n1", "reason": "ci"}},
         {"ts": ts, "type": "termination", "data": {"session_id": "s1", "node_id": "n1", "reason": "Budget"}},
