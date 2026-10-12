@@ -282,7 +282,7 @@ The line reads `kept {id} (attended: typed user turn {age}s ago)`. The transcrip
 
 ### user typed
 
-The line reads `kept {id} (user typed: typed user turn {age}s ago)`. The transcript holds a typed user turn with no window on it, and the keep is permanent, like an operator row (`gc.rs` `KeepReason::UserTyped`). The attended hold above is the early gate; this one is the policy's own, read only for a row the verdict would already retire, so a never-typed row pays no transcript scan. The read is memoized by the file's stat trio, so an unchanged transcript is read end-to-end once per process and an append misses and rescans. A person took this session on as a conversation partner. A retirement here reaps the session, and its worktree, out from under them.
+The line reads `kept {id} (user typed: typed user turn {age}s ago)`. The transcript holds a typed user turn with no window on it, and the keep is permanent, like an operator row (`gc.rs` `KeepReason::UserTyped`). The attended hold above is the early gate. This one is the policy's own. It reads only a row the verdict is about to retire. A never-typed row pays no transcript scan. The read is memoized by the file's stat trio, so an unchanged transcript is read end-to-end once per process and an append misses and rescans. A person took this session on as a conversation partner. A retirement here reaps the session, and its worktree, out from under them.
 
 ### live claim
 
