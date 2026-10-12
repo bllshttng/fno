@@ -263,28 +263,26 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
     let mut poll = || {
-        // A live fleet hold rides out on the cache alone: no head read, no
-        // live mint. A fresh row serves fresh, a stale row serves degraded,
-        // and the only network a hold can still spend is a cold cache's
-        // first mint. Retrying on a fixed interval is exactly what sustains
-        // GitHub's secondary refusal. The head guard below is the normal
-        // tick: one light read whose block is both the fresh-serve guard and
-        // the key material, so the tick spends the read once; a refused read
-        // guards with an empty sha, so only the degraded ride-out remains
-        // until it recovers.
+        // A live fleet hold skips only the NETWORK head read: the block is
+        // the empty-sha guard, and the cache's own key-minting read attempt
+        // gets budget-refused in process (zero wire calls), falling to the
+        // degraded serve. The sha guard still holds, so a fresh row minted
+        // for an old head can never serve as fresh mid-hold. Retrying on a
+        // fixed interval is what sustains GitHub's secondary refusal. The
+        // normal tick below spends one light head read whose block is both
+        // the fresh-serve guard and the key material.
         let hold_live = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
             .backoff_remaining_s
             > 0;
-        let (code, payload, lines, tick_calls) = if hold_live {
-            super::cache::cached_status(cwd_str, pr, false, None)
+        let (head, head_calls) = if hold_live {
+            (None, 0)
         } else {
-            let (head, head_calls) = super::cache::head_read(cwd, pr);
-            let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
-            let (code, payload, lines, tick_calls) =
-                super::cache::cached_status(cwd_str, pr, false, Some(&block));
-            (code, payload, lines, tick_calls + head_calls)
+            super::cache::head_read(cwd, pr)
         };
-        (code, payload, lines, tick_calls)
+        let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
+        let (code, payload, lines, tick_calls) =
+            super::cache::cached_status(cwd_str, pr, false, Some(&block));
+        (code, payload, lines, tick_calls + head_calls)
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
