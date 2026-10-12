@@ -504,92 +504,6 @@ def _pr_payload_is_code(repo: str, pr_number: int) -> bool:
     return any(not _is_documentation_path(p) for p in names)
 
 
-def _manifest_harness(repo: str) -> Optional[str]:
-    """The harness stamped on this run's target manifest, or None.
-
-    `fno do target init` writes it from the process-tree identity resolver, so
-    it names the run being judged even when the merging process carries
-    inherited foreign markers. Reads through _read_state_field (one manifest
-    parser per file); the explicit `unknown` sentinel resolves to None, never
-    to a harness name."""
-    from pathlib import Path
-
-    try:
-        manifest = Path(_manifest_file(repo))
-    except Exception:  # noqa: BLE001 - an unreadable manifest is no attribution
-        return None
-    value = _read_state_field(str(manifest), "harness").strip()
-    if not value or value.lower() in {"unknown", "none"}:
-        return None
-    return value.lower()
-
-
-def _ambient_harness() -> Optional[str]:
-    """The single-family ambient harness, or None (absent or ambiguous).
-
-    Ambient markers describe the process ASKING, never the run being judged,
-    so this is only a FALLBACK input to the floor - the manifest names the
-    run, and where it speaks the ambient answer is not consulted."""
-    from fno.harness_identity import present_harness_markers
-
-    families = {harness for _marker, harness, _value in present_harness_markers()}
-    return next(iter(families)) if len(families) == 1 else None
-
-
-def _harness_can_self_review(repo: str) -> bool:
-    """Whether the self-review floor engages for this run.
-
-    The run's harness decides, alone: the target manifest's `harness:` field
-    when it carries one, else the single-family ambient resolve (the merging
-    caller is usually the authoring session). One input, not a vote - the
-    stop gate reads the authoring session's harness, init stamps that same
-    answer onto the manifest, and OR-ing a second input here is how the two
-    gates come to disagree on one PR. A harness with a native self-review
-    verb floors; a KNOWN verbless harness (gemini/agy) does not - but only
-    when the ambient read agrees on that family, because the manifest alone
-    cannot vouch for the PR being merged and the floor would otherwise
-    demand an attestation no native verb there produces.
-    Unattributable - no manifest, ambiguous or absent markers, or an
-    unrecognized spelling - floors: ambiguity about who authored the change
-    is not permission to skip its review. The pre-change shape read ONLY
-    ambient markers and treated multi-family ambiguity as 'no floor', which
-    silently disengaged review on any claude session started from a codex
-    shell. Mirrors self_review_floor_applies in loopcheck.rs: the two gates
-    agree wherever both read the same run. One residual divergence is
-    deliberate and safe - a stale VERBFUL manifest floors a merge performed
-    by a verbless session whose own stop gate would not floor, because the
-    manifest names the run the PR belongs to; that direction only demands a
-    review, never drops one."""
-    from fno.harness_names import KNOWN_HARNESSES
-    from fno.review_capability import harness_can_self_review
-
-    harness = _manifest_harness(repo)
-    ambient = _ambient_harness()
-    if harness is None:
-        harness = ambient
-    if harness is None:
-        applies = True
-    elif harness_can_self_review(harness):
-        applies = True
-    else:
-        # A KNOWN verbless harness releases the floor only when the ambient
-        # read AGREES on the same verbless family. The manifest is an
-        # init-time snapshot that outlives its session and belongs to
-        # whichever root the merging process stands in, so it cannot release
-        # alone: a dead run's `harness: gemini` must not disengage the floor
-        # for an unrelated PR merged from that checkout by a bare or poisoned
-        # shell. An absent, ambiguous, contradicting, or verbful ambient is
-        # not agreement - floor. The safe disagreement costs one review, the
-        # unsafe one costs the review.
-        verbless = {h for h in KNOWN_HARNESSES if not harness_can_self_review(h)}
-        if harness not in verbless:
-            # An unrecognized spelling is still an unattributed run: floors.
-            applies = True
-        else:
-            applies = ambient != harness
-    return applies
-
-
 def _review_lane_configured(
     repo: str, pr_number: int = 0, *, code_payload: bool = False
 ) -> bool:
@@ -650,7 +564,6 @@ def _review_lane_configured(
         if (
             getattr(r, "self_review_required", True)
             and (pr_number or code_payload)
-            and _harness_can_self_review(repo)
             and (code_payload or _pr_payload_is_code(repo, pr_number))
         ):
             return True
@@ -689,7 +602,6 @@ def _code_review_attestation_required(repo: str, pr_number: int = 0) -> bool:
             not lane_configured
             and getattr(review, "self_review_required", True)
             and pr_number
-            and _harness_can_self_review(repo)
             and _pr_payload_is_code(repo, pr_number)
         )
     except Exception:

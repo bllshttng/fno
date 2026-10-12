@@ -1,6 +1,4 @@
-use super::super::self_review_floor::{
-    classify_payload, harness_can_self_review, payload_is_code, REVIEWER_INVOCATIONS,
-};
+use super::super::self_review_floor::{classify_payload, payload_is_code, REVIEWER_INVOCATIONS};
 use super::*;
 
 #[test]
@@ -362,19 +360,6 @@ fn self_review_gate_held_reason_names_code_review_and_its_verb() {
         reason.contains("local work to DO, not a wait"),
         "got: {reason}"
     );
-}
-
-#[test]
-fn self_review_gate_floors_every_harness() {
-    // The fno-owned review lane runs as ordinary tool calls wherever the
-    // plugin runs, so every harness self-reviews now - no KNOWN harness
-    // is verbless any more.
-    assert!(harness_can_self_review(Some("claude")));
-    assert!(harness_can_self_review(Some("codex")));
-    assert!(harness_can_self_review(Some("opencode")));
-    assert!(harness_can_self_review(Some("gemini")));
-    assert!(harness_can_self_review(Some("agy")));
-    assert!(harness_can_self_review(None));
 }
 
 #[test]

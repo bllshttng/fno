@@ -262,10 +262,6 @@ def test_self_review_invocation_docstring_answers_two_questions_not_one():
 def test_self_review_invocation_is_the_lane_on_every_harness():
     import fno.review_capability as rc
 
-    # The owned lane runs wherever the plugin runs, so no harness is floored
-    # off the pre-ship review anymore.
-    for harness in ("claude", "codex", "opencode", "agy", "gemini", None, "unknown"):
-        assert rc.harness_can_self_review(harness) is True, harness
     # One recommendation for every harness: the fno lane with a level. WHICH
     # reviewer is harness-independent; only the SPELLING differs per surface.
     # agy has no plugin namespace, so its slash palette takes the verb bare -
