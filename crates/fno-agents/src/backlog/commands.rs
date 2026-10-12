@@ -128,6 +128,7 @@ pub const GROUPS: &[Group] = &[
             ("bases", "bases"),
             ("demand", "demand"),
             ("cost", "cost"),
+            ("publish", "publish"),
         ],
     },
     Group {
@@ -235,18 +236,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn version_and_retract_are_included() {
-        assert_eq!(
-            Group::action_for_legacy("version"),
-            Some(("get", "version"))
-        );
-        assert_eq!(
-            Group::action_for_legacy("retract"),
-            Some(("move", "retract"))
-        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::backlog_model::{self, Query};
 use crate::backlog_view;
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
@@ -244,7 +244,11 @@ fn render_one(
     // Every card's detail view, keyed by id, plus the Obsidian deep link the
     // writer computes from the row's plan_path.
     let ids: Vec<String> = flat.iter().map(|c| c.id.clone()).collect();
-    let mut nodes: HashMap<String, Value> = HashMap::with_capacity(ids.len());
+    // A BTreeMap, not a HashMap: serde walks a HashMap in its randomized
+    // order, so two renders of the same graph would embed the node views in
+    // different orders and the publish verb's unchanged check would never
+    // fire. Sorted by id, unchanged rows give byte-identical pages.
+    let mut nodes: BTreeMap<String, Value> = BTreeMap::new();
     for id in &ids {
         if nodes.contains_key(id) {
             continue;
@@ -274,6 +278,7 @@ fn render_one(
     }
     let mut payload = json!({
         "schema": 1,
+        "public": public,
         "generated_at": now_secs(),
         "vault": vault,
         "backend": board.backend,
@@ -324,17 +329,11 @@ fn agents_from_registry(raw: &str, now: u64) -> Vec<crate::proto::AgentRow> {
 // ---------------------------------------------------------------------------
 
 /// The payload's top-level fields the public page may carry. `vault` is
-/// private-mode only.
+/// private-mode only, and `generated_at` is dropped so unchanged rows give
+/// byte-identical pages (the publish verb's unchanged check compares file
+/// bytes).
 const PUBLIC_PAYLOAD_FIELDS: &[&str] = &[
-    "schema",
-    "generated_at",
-    "backend",
-    "scope",
-    "flow",
-    "facets",
-    "columns",
-    "cards",
-    "nodes",
+    "schema", "public", "backend", "scope", "flow", "facets", "columns", "cards", "nodes",
 ];
 
 /// The card fields the public page may carry: the board facts only. `lead`
@@ -457,6 +456,10 @@ fn to_public_payload(payload: Value) -> Value {
     }
     if let Some(facets) = out.get_mut("facets") {
         *facets = allowlist_copy(facets, PUBLIC_FACET_FIELDS);
+    }
+    // No public row is ever done, so the empty lane header drops.
+    if let Some(cols) = out.get_mut("columns").and_then(Value::as_array_mut) {
+        cols.retain(|c| c.as_str() != Some("Done"));
     }
     out
 }
