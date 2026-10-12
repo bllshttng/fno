@@ -576,7 +576,11 @@ fn curl_config(
         quoted(url)
     );
     for (name, value) in headers {
-        config.push_str(&format!("header = \"{}: {}\"\n", quoted(name), quoted(value)));
+        config.push_str(&format!(
+            "header = \"{}: {}\"\n",
+            quoted(name),
+            quoted(value)
+        ));
     }
     config.push_str(&format!(
         "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
