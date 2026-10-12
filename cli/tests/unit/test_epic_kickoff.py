@@ -198,13 +198,15 @@ def test_cascade_close_clears_mission_active(monkeypatch):
     assert "mission_active" not in epic
 
 
-def test_auto_close_flag_set_on_both_close_paths():
-    """A plan_path+no-pr container is flagged UNVERIFIED on BOTH close paths.
+def test_auto_close_holds_on_both_close_paths():
+    """A plan_path+no-pr container is NOT closed on EITHER close path.
 
-    reconcile auto-fires on SessionStart via _sweep_close_done_epics, so a flag
-    set only by the cascade (_cascade_close_parents) is reverted on the next
-    session. Pinning both paths is the load-bearing part of x-b9a5: a test that
-    covers only the cascade passes on a fix the sweep silently reverts.
+    The old UNVERIFIED completion_note flag was the mitigation: the close
+    still fired and the note marked the deliverables unverified. The
+    own-plan-work hold replaces it: the plan-having parent stays open on
+    both the cascade (child-close walk) and the sweep (reconcile
+    self-heal), and both paths auto-fire on a fresh session, so pinning
+    both is still load-bearing.
     """
     from fno.graph.cli import _cascade_close_parents, _sweep_close_done_epics
 
@@ -215,27 +217,26 @@ def test_auto_close_flag_set_on_both_close_paths():
              "completed_at": "2026-08-06T00:00:00Z"},
         ]
 
-    expected = (
-        "auto-closed: all children complete; "
-        "own plan deliverables UNVERIFIED (plan_path set, no PR)"
-    )
-
-    # cascade path: the close that fires when a child lands
+    # cascade path: the walk that fires when a child lands
     cas = entries()
-    _cascade_close_parents(cas, "x-only")
-    assert next(e for e in cas if e["id"] == "x-EPIC")["completion_note"] == expected
+    assert _cascade_close_parents(cas, "x-only") == []
+    epic = next(e for e in cas if e["id"] == "x-EPIC")
+    assert epic.get("completed_at") is None
+    assert "completion_note" not in epic
 
     # sweep path: the reconcile self-heal that re-closes on SessionStart
     swe = entries()
-    _sweep_close_done_epics(swe)
-    assert next(e for e in swe if e["id"] == "x-EPIC")["completion_note"] == expected
+    assert _sweep_close_done_epics(swe) == []
+    epic = next(e for e in swe if e["id"] == "x-EPIC")
+    assert epic.get("completed_at") is None
+    assert "completion_note" not in epic
 
 
 def test_auto_close_short_note_without_unverified_marker():
-    """The UNVERIFIED marker is gated on plan_path AND no pr_number. A container
-    with no plan_path, or one that shipped its own PR, keeps the short note.
-    Pins the exact predicate so a future change cannot flag on plan_path alone
-    (x-b9a5)."""
+    """A container with no plan_path, or one that shipped its own PR, still
+    closes and keeps the short note. The own-plan-work hold is gated on
+    plan_path AND no PR ref, so the PR-shipped shape is not held; this
+    pins that predicate."""
     from fno.graph.cli import _cascade_close_parents
 
     def note_for(parent_extra):

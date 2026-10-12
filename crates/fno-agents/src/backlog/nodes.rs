@@ -1832,6 +1832,10 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
         open_do: bool,
         has_pr: bool,
         defect: Option<String>,
+        plan_path: Option<String>,
+        reopened_at: Option<String>,
+        completed_at: Option<String>,
+        has_any_pr: bool,
     }
     let claims = node_claims_by_id()?;
     let mut statement = connection
@@ -1846,7 +1850,12 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                            AND s.phase = 'execute' AND s.ended_at IS NULL),
                     EXISTS(SELECT 1 FROM pull_requests p WHERE p.node_id = n.id
                            AND p.seq = 0 AND p.number IS NOT NULL),
-                    n.ownership_defect
+                    EXISTS(SELECT 1 FROM pull_requests p WHERE p.node_id = n.id
+                           AND p.number IS NOT NULL),
+                    n.ownership_defect,
+                    n.plan_path,
+                    n.reopened_at,
+                    n.completed_at
              FROM nodes n",
         )
         .map_err(|error| error.to_string())?;
@@ -1867,7 +1876,11 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 holder: claim.locked_by,
                 open_do: row.get::<_, i64>(6)? != 0,
                 has_pr: row.get::<_, i64>(7)? != 0,
-                defect: row.get(8)?,
+                has_any_pr: row.get::<_, i64>(8)? != 0,
+                defect: row.get(9)?,
+                plan_path: row.get(10)?,
+                reopened_at: row.get(11)?,
+                completed_at: row.get(12)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -2000,9 +2013,29 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
             .filter(|row| row.parent.as_deref() == Some(pid.as_str()))
             .map(|row| row.status.clone())
             .collect();
-        let own_work_live = matches!(rows[pidx].status.as_str(), "in_review" | "in_progress");
+        // The same holds the whole-graph pass reads: own plan work (the
+        // has_own_plan_work typed twin; any PR row is evidence, an
+        // additional-PR list included) and a deliberate reopen postdating
+        // every child close (reopen_outranks_stamps).
+        let holds = {
+            let kid_stamps: Vec<Option<&str>> = rows
+                .iter()
+                .filter(|row| row.parent.as_deref() == Some(pid.as_str()))
+                .map(|row| row.completed_at.as_deref())
+                .collect();
+            matches!(rows[pidx].status.as_str(), "in_review" | "in_progress")
+                || (rows[pidx]
+                    .plan_path
+                    .as_deref()
+                    .is_some_and(|p| !p.trim().is_empty())
+                    && !rows[pidx].has_any_pr)
+                || crate::graph_store::reopen_outranks_stamps(
+                    rows[pidx].reopened_at.as_deref(),
+                    &kid_stamps,
+                )
+        };
         if !child_statuses.is_empty() && child_statuses.iter().all(|s| s == "done") {
-            if !own_work_live {
+            if !holds {
                 rows[pidx].status = "done".into();
             }
         } else if child_statuses
@@ -2186,8 +2219,19 @@ mod tests {
         crate::backlog::save_aggregate(&connection, &row("x-p", serde_json::json!({}))).unwrap();
         let child = serde_json::json!({"parent": "x-p", "completed_at": "2026-09-01T00:00:00Z"});
         crate::backlog::save_aggregate(&connection, &row("x-c", child)).unwrap();
+        // Own plan work holds: the single-row pass leaves the rung status.
+        crate::backlog::save_aggregate(
+            &connection,
+            &row(
+                "x-q",
+                serde_json::json!({"status": "ready", "plan_path": "plans/q.md"}),
+            ),
+        )
+        .unwrap();
+        let q_child = serde_json::json!({"parent": "x-q", "completed_at": "2026-09-01T00:00:00Z"});
+        crate::backlog::save_aggregate(&connection, &row("x-qc", q_child)).unwrap();
         let version =
-            |connection: &Connection| versions(connection, Some(&["x-p"])).unwrap()["x-p"];
+            |connection: &Connection| versions(connection, Some(&["x-p", "x-q"])).unwrap();
         let before = version(&connection);
         recompute_status(&connection).unwrap();
         let status: String = connection
@@ -2196,12 +2240,23 @@ mod tests {
             })
             .unwrap();
         assert_eq!(status, "done", "the parent rolls up from its done child");
-        assert_eq!(version(&connection), before + 1);
+        let after = version(&connection);
+        assert_eq!(after["x-p"], before["x-p"] + 1);
+        assert_eq!(after["x-q"], before["x-q"], "a held parent writes nothing");
         recompute_status(&connection).unwrap();
         assert_eq!(
             version(&connection),
-            before + 1,
+            after,
             "a pass that moves nothing writes nothing"
+        );
+        let q_status: String = connection
+            .query_row("SELECT status FROM nodes WHERE id = 'x-q'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            q_status, "ready",
+            "own plan work holds in the single-row pass"
         );
     }
 

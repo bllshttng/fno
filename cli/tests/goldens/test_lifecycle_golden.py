@@ -98,6 +98,23 @@ def test_reopen_reads_the_completion_not_the_status_field(tmp_path):
     assert out == "", out
     assert err == "warning: x-aaaa1111 is not done; nothing to reopen\n", err
 
+    # The exception is the rollup's own shape: a status-done row whose
+    # children are all closed is a children-rollup derived done, and reopen
+    # stamps the reopened_at hold the rollup respects.
+    derived_root = tmp_path / "derived"
+    derived_root.mkdir()
+    derived = make_sandbox(
+        derived_root,
+        [
+            seed_node("x-aaaa1111", "done"),
+            seed_node("x-bbbb2222", "done", parent="x-aaaa1111", completed_at="2026-09-27T10:00:00+00:00"),
+        ],
+    )
+    warm(derived, "x-aaaa1111")
+    code, out, err = door(derived, ["reopen", "x-aaaa1111", "-R", "epic work continues"])
+    assert code == 0, err
+    assert out == "Reopened x-aaaa1111\n", out
+
 
 # -- defer / undefer --
 

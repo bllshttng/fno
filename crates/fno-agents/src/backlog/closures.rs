@@ -14,6 +14,7 @@ use crate::backlog::workflows::{
     release_contained_row, reopen_outranks_child_closes, reopen_outranks_merge,
     reparent_live_children, text_at,
 };
+use crate::graph_store::has_own_plan_work;
 
 /// Open epics (parents) that pass `children_all_closed` - closeable now.
 pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
@@ -35,7 +36,10 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
         {
             continue;
         }
-        if children_all_closed(parent, &kids) && !reopen_outranks_child_closes(parent, &kids) {
+        if children_all_closed(parent, &kids)
+            && !reopen_outranks_child_closes(parent, &kids)
+            && !has_own_plan_work(parent)
+        {
             out.insert(pid.to_string());
         }
     }
@@ -371,6 +375,7 @@ pub(crate) fn sweep_reparent_stranded_orphans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backlog::workflows::cascade_close_parents;
     use serde_json::json;
 
     fn seed(id: &str, parent: Option<&str>) -> Value {
@@ -416,6 +421,33 @@ mod tests {
         assert_eq!(entries[0]["status"], "done");
         let note = entries[0]["completion_note"].as_str().unwrap_or_default();
         assert!(note.contains("all children complete"), "{note}");
+    }
+
+    #[test]
+    fn a_parent_with_its_own_plan_work_is_never_rollup_closed() {
+        // The strandable sweep and the done cascade read the same hold: a
+        // plan-having parent's own deliverables are unverified, so no
+        // children rollup closes it. Positive controls live in the two
+        // plan-less fixtures above and below.
+        let mut entries = vec![
+            json!({"id": "x-plan", "plan_path": "plans/p.md", "status": "ready"}),
+            json!({"id": "x-kid", "parent": "x-plan", "status": "done",
+                   "completed_at": "2026-10-01T00:00:00Z"}),
+        ];
+        assert!(
+            strandable_epic_ids(&entries).is_empty(),
+            "the self-heal sweep does not strand-close a plan-having parent"
+        );
+        assert_eq!(sweep_close_done_epics(&mut entries), Vec::<String>::new());
+        assert_eq!(entries[0]["status"], "ready");
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-kid"),
+            Vec::<String>::new(),
+            "the done cascade leaves the plan-having parent open"
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        assert_eq!(entries[0]["status"], "ready");
     }
 
     #[test]

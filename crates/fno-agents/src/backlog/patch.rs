@@ -695,6 +695,25 @@ fn stamp_deferred(
     Ok(())
 }
 
+/// The done door's fact, not the derived column: `status: done` is also a
+/// DERIVED status (the children rollup writes it), so the gate reads
+/// completion. A stamped completed_at routes to reopen (the work is in
+/// main). A status-done row with no stamp is a rollup write; the update
+/// door owns leaving it only when the row holds against that rollup (own
+/// plan work); otherwise reopen owns it and stamps the durable reopened_at
+/// hold the derivation respects.
+fn is_done_door_fact(row: &Value, status: &str) -> bool {
+    if status != "done" {
+        return false;
+    }
+    match row.get("completed_at").and_then(Value::as_str) {
+        // Legacy defer sentinels are not completions; the derivation reads
+        // them the same way.
+        Some(stamp) => !stamp.starts_with("deferred:"),
+        None => !crate::graph_store::has_own_plan_work(row),
+    }
+}
+
 /// One planning pass over a full row set: resolve, patch a working copy,
 /// recompute from the plan-rung map, and validate. No I/O, no commit.
 fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusal> {
@@ -751,7 +770,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
                 "refused: {id} --status {word} is owned by another door: {owner}"
             )));
         }
-        if old_status == "done" {
+        if is_done_door_fact(&rows[idx], old_status.as_str()) {
             return Err(PatchRefusal::refused(format!(
                 "refused: {id} is done; leaving done is owned by another door: fno backlog reopen {id}"
             )));
@@ -1602,6 +1621,35 @@ mod tests {
         );
         let (_d, graph) = write_graph(&[done_node]);
         let message = refusal_of(&graph, &req("x-9", Some("idea"), &[]));
+        assert!(message.contains("fno backlog reopen"), "{message}");
+        // A rollup-derived stale done (status done, completion cleared) is
+        // not the done door's fact for a plan-holding row: the update door
+        // owns leaving it, or the row deadlocks (reopen says not done,
+        // update says done). The rung door still owns the WORD: a plan
+        // deriving ready takes ready, not idea.
+        let stale_done = node(
+            "x-10",
+            json!({ "status": "done", "plan_path": "plans/p.md" }),
+        );
+        let (_d, graph) = write_graph(&[stale_done]);
+        let receipt = apply(&graph, &req("x-10", Some("ready"), &[]))
+            .expect("a stale done leaves through the update door");
+        assert_eq!(receipt.status.to, "ready");
+        // A derived-done row that holds nothing against the rollup (no plan
+        // work) still routes to reopen, which stamps the durable hold. The
+        // all-done children are what hold the pre-image derivation on done;
+        // without them the rung ladder re-derives idea before the gate.
+        let derived_done = node("x-11", json!({ "status": "done" }));
+        let derived_kid = node(
+            "x-11c",
+            json!({
+                "status": "done",
+                "parent": "x-11",
+                "completed_at": "2026-01-01T00:00:00+00:00"
+            }),
+        );
+        let (_d, graph) = write_graph(&[derived_done, derived_kid]);
+        let message = refusal_of(&graph, &req("x-11", Some("idea"), &[]));
         assert!(message.contains("fno backlog reopen"), "{message}");
     }
 
