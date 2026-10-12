@@ -1,8 +1,10 @@
 //! The pi source against a fixture store: the header cwd scopes the
 //! listing, and the render turns pi user messages into claude-shaped rows.
 
-use super::*;
+use crate::pi_transcript::*;
+use crate::provenance::TranscriptSource;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn fixture_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fno-pi-fixture-{tag}"));

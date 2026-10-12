@@ -194,6 +194,3 @@ fn render(raw: &str, session_id: &str) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod agy_transcript_tests;

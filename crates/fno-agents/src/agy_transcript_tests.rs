@@ -3,9 +3,11 @@
 //! render turns that conversation's typed-input rows into claude-shaped
 //! user rows.
 
-use super::*;
+use crate::agy_transcript::*;
 use crate::intel::selected_harnesses;
+use crate::provenance::TranscriptSource;
 use std::fs;
+use std::path::PathBuf;
 
 /// One conversation ("1111...") under /fixture/agy-a with two typed rows; a
 /// summaries row with no db file never lists; one history row for a foreign

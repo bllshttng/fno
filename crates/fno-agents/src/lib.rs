@@ -60,6 +60,9 @@ pub mod agy_hooks;
 pub mod agy_launch;
 pub mod agy_mint;
 pub mod agy_transcript;
+#[cfg(test)]
+#[path = "agy_transcript_tests.rs"]
+mod agy_transcript_tests;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
@@ -345,6 +348,9 @@ pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
 pub mod pi_transcript;
+#[cfg(test)]
+#[path = "pi_transcript_tests.rs"]
+mod pi_transcript_tests;
 pub mod plan_doc;
 pub mod planning_lane;
 pub mod plans_dirs;

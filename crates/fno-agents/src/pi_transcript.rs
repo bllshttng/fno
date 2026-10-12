@@ -12,7 +12,7 @@ use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, first_cwd_row, in_roots, within_window,
     SessionFile, TranscriptSource, Turn,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -202,6 +202,3 @@ fn render(raw: &str) -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod pi_transcript_tests;
