@@ -579,7 +579,9 @@ fn intake(
     let out = io.fno(&args);
     let _ = std::fs::remove_file(&details_path);
     let out = out?;
-    receipt_id(&out).ok_or_else(|| "idea receipt has no id".to_string())
+    receipt_id(&out)
+        .map(Some)
+        .ok_or_else(|| "idea receipt has no id".to_string())
 }
 
 fn details_text(html_url: &str, slug: &str, pr: u64, login: &str, author_id: i64) -> String {
