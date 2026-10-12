@@ -238,7 +238,19 @@ def test_lane_and_cohort_flags_pass_through_to_run_task(tmp_path: Path, monkeypa
 
 
 def _macro_journal(path: Path, *, old: bool = False) -> None:
-    ts = "2025-01-01T10:00:00Z" if old else "2026-09-12T10:00:00Z"
+    if old:
+        # A stamp far outside the 30d fold window, so the empty-window case
+        # stays empty whatever day CI runs.
+        ts = "2025-01-01T10:00:00Z"
+    else:
+        # Relative to now: a hard date aged out of the 30d default window and
+        # emptied the leaderboard on 2026-10-12, thirty days after it was
+        # written.
+        from datetime import datetime, timedelta, timezone
+
+        ts = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
     rows = [
         {"ts": ts, "type": "loop_check_watch_idle", "data": {"session_id": "s1", "node_id": "n1", "reason": "ci"}},
         {"ts": ts, "type": "termination", "data": {"session_id": "s1", "node_id": "n1", "reason": "Budget"}},
