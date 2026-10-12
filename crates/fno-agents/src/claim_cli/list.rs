@@ -98,7 +98,7 @@ pub fn run(args: &[String]) -> i32 {
             Some(r) => {
                 crate::claims::list_in(&[r.join(crate::claims::CLAIMS_DIRNAME)], prefix_opt, true)
             }
-            None => crate::claims::list(prefix_opt, None, true),
+            None => crate::claims::list_in(&[cdir.clone()], prefix_opt, true),
         };
         let rows = match listed {
             Ok(rows) => rows,
