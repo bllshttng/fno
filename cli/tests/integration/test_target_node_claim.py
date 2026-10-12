@@ -87,13 +87,29 @@ exit 0
 GRAPH_GET = """#!/usr/bin/env python3
 \"\"\"Fixture-graph reader behind the sandbox mock's `backlog get`.
 
-An absent node exits 1; a present node prints the requested --field as JSON,
-or the whole row without one. --strict is accepted and ignored: the fixture
-has no archive leg, so presence in the mirror IS liveness.
+Reads the store the way the product does (fno.graph.store), with a raw-JSON
+fallback for bare-list seeds. An absent node exits 1; a present node prints
+the requested --field as JSON, or the whole row without one. --strict is
+accepted and ignored: the fixture has no archive leg, so store presence IS
+liveness.
 \"\"\"
 import json
 import os
 import sys
+
+
+def _rows(path):
+    try:
+        from fno.graph.store import read_graph_strict
+
+        return read_graph_strict(path)
+    except Exception:
+        pass
+    with open(path, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    if isinstance(doc, list):
+        return doc
+    return doc.get("entries") or doc.get("nodes") or []
 
 
 def main() -> int:
@@ -101,15 +117,19 @@ def main() -> int:
     node_id = next((a for a in raw if not a.startswith("--") and a != "get"), None)
     field = sys.argv[sys.argv.index("--field") + 1] if "--field" in raw else None
     path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "graph.json")
-    with open(path, encoding="utf-8") as handle:
-        doc = json.load(handle)
-    rows = doc if isinstance(doc, list) else doc.get("entries") or doc.get("nodes") or []
+    rows = _rows(path)
     node = next(
         (r for r in rows if isinstance(r, dict) and r.get("id") == node_id), None
     )
     if node is None:
         return 1
-    print(json.dumps(node.get(field) if field else node))
+    value = node.get(field) if field else node
+    # The verb's text output prints scalars bare (ab-deadbeef, True, 123);
+    # only containers ride the JSON spelling.
+    if isinstance(value, (str, bool, int, float)) or value is None:
+        print(value)
+    else:
+        print(json.dumps(value))
     return 0
 
 
