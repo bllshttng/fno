@@ -7,12 +7,12 @@
 //! (`unknown`), never `operator`. The header row's `cwd` decides the
 //! project. The store is only ever read.
 
-use crate::opencode_transcript::{push_row, rfc3339_ms};
+use crate::opencode_transcript::push_user_row;
 use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, first_cwd_row, in_roots, within_window,
     SessionFile, TranscriptSource, Turn,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -174,13 +174,7 @@ fn render(raw: &str) -> String {
             continue;
         }
         let ts = msg.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        push_row(
-            &mut out,
-            &json!({
-                "type": "user", "timestamp": rfc3339_ms(ts),
-                "message": {"role": "user", "content": text.join("\n")},
-            }),
-        );
+        push_user_row(&mut out, ts, &text.join("\n"));
     }
     out
 }

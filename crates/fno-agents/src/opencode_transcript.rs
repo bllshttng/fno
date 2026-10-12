@@ -246,13 +246,7 @@ fn render_message(out: &mut String, m_data: &str, parts: &[(String, i64)]) {
             }
         }
         if !typed.is_empty() {
-            push_row(
-                out,
-                &serde_json::json!({
-                    "type": "user", "timestamp": rfc3339_ms(ts),
-                    "message": {"role": "user", "content": typed.join("\n")},
-                }),
-            );
+            push_user_row(out, ts, &typed.join("\n"));
         }
         for text in synthetic {
             push_row(
@@ -283,6 +277,19 @@ fn render_message(out: &mut String, m_data: &str, parts: &[(String, i64)]) {
 pub(crate) fn push_row(out: &mut String, row: &Value) {
     out.push_str(&row.to_string());
     out.push('\n');
+}
+
+/// The claude-shaped user row every renderer emits: the shared wire shape
+/// the classifier reads. `isMeta` rows (synthetic text) build their own via
+/// [`push_row`].
+pub(crate) fn push_user_row(out: &mut String, ts_ms: i64, content: &str) {
+    push_row(
+        out,
+        &serde_json::json!({
+            "type": "user", "timestamp": rfc3339_ms(ts_ms),
+            "message": {"role": "user", "content": content},
+        }),
+    );
 }
 
 pub(crate) fn rfc3339_ms(ms: i64) -> String {

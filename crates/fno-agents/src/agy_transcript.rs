@@ -10,13 +10,13 @@
 //! share the row shape, so every turn reads the classifier's residual
 //! (`unknown`), never `operator`. The store is only ever read.
 
-use crate::opencode_transcript::{push_row, rfc3339_ms};
+use crate::opencode_transcript::push_user_row;
 use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, within_window, SessionFile, TranscriptSource,
     Turn,
 };
 use rusqlite::OpenFlags;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -190,13 +190,7 @@ fn render(raw: &str, session_id: &str) -> String {
             continue;
         };
         let ts = row.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        push_row(
-            &mut out,
-            &json!({
-                "type": "user", "timestamp": rfc3339_ms(ts),
-                "message": {"role": "user", "content": text},
-            }),
-        );
+        push_user_row(&mut out, ts, text);
     }
     out
 }
