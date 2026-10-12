@@ -1484,6 +1484,7 @@ pub(crate) struct Prefilter {
 #[derive(Debug)]
 struct FeedArgs {
     json: bool,
+    otlp: bool,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
     page: Page,
@@ -1493,6 +1494,7 @@ struct FeedArgs {
 fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     let mut args = FeedArgs {
         json: false,
+        otlp: false,
         since_epoch: None,
         until_epoch: None,
         page: Page::default(),
@@ -1502,6 +1504,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
+            "--otlp" => args.otlp = true,
             "--since-epoch" => {
                 args.since_epoch = Some(
                     it.next()
@@ -1545,6 +1548,9 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     }
     if args.page.before.is_some() && args.page.after.is_some() {
         return Err("--before and --after cannot combine: page from one edge".into());
+    }
+    if args.otlp && args.json {
+        return Err("--otlp and --json cannot combine".into());
     }
     let live = |v: Option<String>| v.filter(|s| !s.is_empty());
     args.pre.node = live(args.pre.node);
@@ -1894,6 +1900,22 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     // A page the caller did not size is the head page: the newest 200.
     page.limit = page.limit.or(Some(200));
     let rows = filter_rows(rows, &page, &args.pre, args.since_epoch, args.until_epoch);
+
+    if args.otlp {
+        // A preview, never a send: the body is what a beat WOULD post, and
+        // the posture line names the resolved config. Off machines can still
+        // preview, so an operator sees the shape before opting in; content
+        // attrs stay off unless the config turns them on.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let log_content = match crate::otlp_export::resolve(&cwd) {
+            crate::otlp_export::Resolved::On(cfg) => cfg.log_content,
+            _ => false,
+        };
+        let refs: Vec<&FeedRow> = rows.iter().collect();
+        println!("{}", crate::otlp_export::body(&refs, log_content));
+        eprintln!("{}", crate::otlp_export::status_line(&cwd, home));
+        return 0;
+    }
 
     if args.json {
         println!(
