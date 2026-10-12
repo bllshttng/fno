@@ -486,7 +486,7 @@ fn graph_renders_a_node_link_drawing() {
         .dots
         .iter()
         .zip(&cells_pos)
-        .filter(|(_, (cx, cy))| !painted_cells.contains(&(*cx, *cy)))
+        .filter(|(_, (cx, cy))| !painted_cells.contains(&(*cx as u16, *cy as u16)))
         .map(|(d, (cx, cy))| format!("{} @ ({cx},{cy}) grid ({},{})", d.key, d.x, d.y))
         .collect();
     assert_eq!(
