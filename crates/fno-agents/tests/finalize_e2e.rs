@@ -695,6 +695,14 @@ fn finalize_postmortem_on_interrupted_or_aborted() {
 #[test]
 fn finalize_ship_gated() {
     let env = setup("S-ship", false);
+    // The advisory needs ACs: an AC-free plan records not_applicable and
+    // never reaches the verifier spawn this test pins (the exactly-once test
+    // overwrites the plan the same way).
+    fs::write(
+        env.cwd.join("plan.md"),
+        "## Acceptance Criteria\n\nAC1-HP: x\n",
+    )
+    .unwrap();
     let out = run_finalize(&env, "DonePRGreen");
     assert!(out.status.success());
     let c = calls(&env);
