@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# fno hook: SessionStart - register session start
+# fno hook: SessionStart - report session start
 # SessionStart hook: report this session to the fno daemon so the agent
 # registry holds its full session id, transcript path and start source - for a
-# SPAWNED worker, or an operator session that opted in.
+# SPAWNED worker, and (decision D3 revised) for every hand-started session
+# too: the daemon mints a row when no row holds the id, and a session with no
+# launch record is the user's own (origin operator, an occupant toward the
+# live cap, never refused, managed, mailed or reaped).
 #
 # Two branches:
 #   worker (FNO_AGENT_SELF set): one thin call to `fno-agents session-report`,
@@ -12,17 +15,14 @@
 #     guessing ids from transcripts. The verb never lazy-starts a daemon and
 #     spools the payload to a capped file when the daemon is down, so a
 #     session start never blocks on it. Fail-open, exit 0 always.
-#   operator (no row of its own): registers a new row so peers can
-#     `fno agents mail send` to it. Gated on agents.auto_register_sessions;
-#     runs the Python entry point, which classifies a resumed id against the
-#     recorded one (succession vs branch) with transcript reachability
-#     evidence the daemon ingest deliberately does not gather.
+#   every other session: the same thin call, no --agent-self. The daemon
+#     mints an operator row when no row holds the id.
 #
-# Hook contract: NEVER blocks session start. The worker path is bounded by the
+# Hook contract: NEVER blocks session start. Every path is bounded by the
 # shared wall-clock helper (a missing helper exits 0 - same as
-# inside-leg-report.sh); the Python path itself swallows any error into a
-# `session_register_failed` event (AC7-ERR). stdout stays empty so this hook
-# contributes nothing to the session preamble.
+# inside-leg-report.sh); the pane-worker restamp is the one Python leg left,
+# and it swallows any error into a `session_register_failed` event (AC7-ERR).
+# stdout stays empty so this hook contributes nothing to the session preamble.
 #
 # Harness coverage: the SAME script reports for every harness fno has a
 # session-start hook surface for - claude (hooks/context-hooks.json), codex
@@ -36,7 +36,6 @@ export PATH
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${GEMINI_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI_DIR="$(cd "$HOOK_DIR/.." && pwd)/cli"
 
 # The report RPC reaches a daemon socket that can stall; bounded with the
 # shared wall-clock helper rather than the harness's hook timeout. Sourcing
@@ -103,40 +102,17 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Every session leaves a record of the machine it began on, beside its
-# transcript, whether or not it joins the roster. --origin-only writes that
-# one file and sends nothing to the daemon. A tty stdin (a manual run) reads
-# nothing instead of hanging.
-PAYLOAD=""
-[[ ! -t 0 ]] && PAYLOAD="$(cat)"
-if [[ -n "$BIN" ]]; then
-    ORIGIN_ARGS=(report --kind session --origin-only --harness "$HARNESS")
-    [[ -n "$SESSION_ID" ]] && ORIGIN_ARGS+=(--session-id "$SESSION_ID")
-    printf '%s' "$PAYLOAD" | with_timeout 2 "$BIN" "${ORIGIN_ARGS[@]}" >/dev/null 2>&1 || true
-fi
-
-# ---------------------------------------------------------------------------
-# Operator branch: a hand-started session joins the roster only when asked.
-# (config: agents.auto_register_sessions; /fno-me is the deliberate join.)
-if [[ "$(fno config get agents.auto_register_sessions 2>/dev/null || true)" != "true" ]]; then
+# Every session reports (decision D3 revised): the daemon mints a row for a
+# session no row holds yet. A session with no launch record is the user's
+# own: origin operator, an occupant toward the live cap, never refused,
+# managed, mailed or reaped. The same thin verb carries the raw payload on
+# stdin; fail-open, exit 0 always; stdout stays empty.
+if [[ -z "$BIN" ]] || [[ -z "$SESSION_ID" ]]; then
     exit 0
 fi
-
-# Nothing to register without a session id (the entry point also guards this).
-[[ -n "$SESSION_ID" ]] || exit 0
-
-cd "$REPO_ROOT" 2>/dev/null || true
-
-ARGS=(--harness "$HARNESS" --session-id "$SESSION_ID" --cwd "$REPO_ROOT")
-
-# Claude sends the SessionStart flavor (startup | resume | clear) in the
-# hook-input JSON, consumed above: read the flavor from the captured payload
-# instead of stdin, which the origin call already emptied.
-if [[ "$HARNESS" == "claude" && -n "$PAYLOAD" ]]; then
-    SOURCE="$(printf '%s' "$PAYLOAD" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)"
-    [[ -n "$SOURCE" ]] && ARGS+=(--source "$SOURCE")
-fi
-
-uv run --project "$CLI_DIR" python3 -m fno.agents.register_session "${ARGS[@]}" 2>/dev/null || true
+SESSION_ARGS=(report --kind session --harness "$HARNESS")
+[[ -n "$SESSION_ID" ]] && SESSION_ARGS+=(--session-id "$SESSION_ID")
+STDIN_SRC="/dev/null"; [[ ! -t 0 ]] && STDIN_SRC="/dev/stdin"
+with_timeout 2 "$BIN" "${SESSION_ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" || true
 
 exit 0

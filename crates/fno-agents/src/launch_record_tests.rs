@@ -22,13 +22,15 @@ fn a_claude_bg_launch_names_its_worker_and_node() {
 #[test]
 fn every_harness_launch_in_one_command_is_seen() {
     let got = parse_command(
-        r#"cd /w && codex exec "fix it"; opencode run "x" && pi -p "y" | agy -p "$fno:review x-cd34"; fno agents spawn --name t-x-ef56 -H codex --node x-ef56 '/fno:target x-ef56'"#,
+        r#"cd /w && codex exec "fix it"; opencode run --title t1 "x" && pi -p "y" | agy -p "$fno:review x-cd34"; fno agents spawn --name t-x-ef56 -H codex --node x-ef56 '/fno:target x-ef56'"#,
         "/repo",
     );
     let harnesses: Vec<&str> = got.iter().map(|l| l.harness.as_str()).collect();
     assert_eq!(harnesses, ["codex", "opencode", "pi", "agy", "codex"]);
     assert_eq!(got[0].cwd, "/w");
     assert_eq!(got[3].node.as_deref(), Some("x-cd34"));
+    // The prompt-harness arm reads --title as the name (the opencode form).
+    assert_eq!(got[1].name.as_deref(), Some("t1"));
     // A spawn takes its name, harness and node from its own flags.
     assert_eq!(got[4].name.as_deref(), Some("t-x-ef56"));
     assert_eq!(got[4].node.as_deref(), Some("x-ef56"));
@@ -45,28 +47,7 @@ fn reads_and_help_are_not_launches() {
         "codex --help",
         "opencode",
         "echo pi",
-    ] {
-        assert!(parse_command(cmd, "/repo").is_empty(), "{cmd}");
-    }
-}
-
-/// AC5: the keeper-hosted native launch rides the pane-run fence, and the
-/// argv after `--` is parsed as the command it is.
-#[test]
-fn a_pane_run_unwraps_the_fenced_native_argv() {
-    let got = one(
-        r#"fno mux pane run -- codex --remote unix:// "$fno:target x-ab12""#,
-        "/repo",
-    );
-    assert_eq!(got.harness, "codex");
-    assert_eq!(got.node.as_deref(), Some("x-ab12"));
-    assert_eq!(got.cwd, "/repo");
-}
-
-/// AC6 plus the rest of the codex subcommand table: none of them is a launch.
-#[test]
-fn a_codex_resume_and_subcommands_are_not_launches() {
-    for cmd in [
+        // AC6: a resume is a rejoin, not a launch; the subcommand table too.
         "codex resume 0197abcd-1234-7abc-9def-0123456789ab --remote unix://run.sock",
         "codex app-server daemon start",
         "codex thread list",
@@ -77,29 +58,22 @@ fn a_codex_resume_and_subcommands_are_not_launches() {
     }
 }
 
-/// The interactive codex launch records: the first non-flag word is the
-/// prompt, `--remote` value included.
+/// AC5: the keeper-hosted native launch rides the pane-run fence, and the
+/// argv after `--` is parsed as the command it is. The unfenced interactive
+/// codex line records the same way: the first non-flag word is the prompt,
+/// `--remote` value included.
 #[test]
-fn an_interactive_codex_launch_is_recorded() {
+fn a_pane_run_unwraps_the_fenced_native_argv() {
     let got = one(
-        r#"codex --remote unix://run.sock "$fno:target x-ab12""#,
+        r#"fno mux pane run -- codex --remote unix:// "$fno:target x-ab12""#,
         "/repo",
     );
     assert_eq!(got.harness, "codex");
     assert_eq!(got.node.as_deref(), Some("x-ab12"));
     assert_eq!(got.cwd, "/repo");
-}
-
-/// The prompt-harness arm reads `--title` as the name (the opencode form).
-#[test]
-fn an_opencode_title_names_the_worker() {
-    let got = one(
-        "opencode run --attach http://127.0.0.1:4096 --title w1 -m zai/glm-5.3 --command fno:target x-ab12",
-        "/repo",
-    );
-    assert_eq!(got.harness, "opencode");
-    assert_eq!(got.name.as_deref(), Some("w1"));
-    assert_eq!(got.node.as_deref(), Some("x-ab12"));
+    let bare = one(r#"codex --remote unix://run.sock "$fno:target x-ab12""#, "/repo");
+    assert_eq!(bare.harness, "codex");
+    assert_eq!(bare.node.as_deref(), Some("x-ab12"));
 }
 
 /// A dispatcher with no Bash hook writes the same record a hook would, slot
