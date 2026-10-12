@@ -7782,8 +7782,10 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41) Script-layout replies: control-connection only,
-                    // never sent to an attached client - ignore, don't desync.
+                    // (v41+) Script-layout and one-shot control-verb replies:
+                    // control-connection only, never sent to an attached
+                    // client - ignore, don't desync. The attach handshake
+                    // carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
@@ -7793,10 +7795,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
                     | ServerMsg::TabClosed { .. }
-                    // (v60/v71/v75/v78) one-shot control-verb replies.
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
+                Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
                     // exec first, OSC 52 to the outer terminal as fallback
@@ -7811,16 +7813,6 @@ async fn attach_and_run(
                         let outcome = crate::clipboard::deliver(&text, raw_out);
                         let _ = tx.send((chars, outcome));
                     });
-                }
-                Ok(ServerMsg::DesktopNotice { title, body }) => {
-                    // (v110) A desktop notification re-emitted from a pane's
-                    // OSC 9/99/777 (titled with the pane name) or an `fno
-                    // notify` delivery: write the OSC 777 escape to the outer
-                    // terminal, which raises the toast. Inline and
-                    // best-effort - a bounded, allocation-light write (no
-                    // exec to hang on, unlike Copy), and a terminal that
-                    // drops OSC 777 loses the toast, never the session.
-                    crate::notify::deliver(&title, &body, raw_out);
                 }
                 Ok(ServerMsg::OpenLink { url }) => {
                     // External opens run off-loop; a cold browser must not stall
