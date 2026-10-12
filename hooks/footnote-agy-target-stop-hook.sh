@@ -366,7 +366,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
         # invoked against a stop it does not own.
         if [[ "$PRE_MANIFEST_NO_FILE" -eq 1 && -n "$EARLY_TRANSCRIPT_PATH" && -n "$BIN" ]]; then
             "$BIN" distress-scan --transcript "$EARLY_TRANSCRIPT_PATH" \
-                --run "$CONVERSATION_ID" --cwd "$ROOT" --harness agy >&2 || true
+                --run "$CONVERSATION_ID" --harness-session "$CONVERSATION_ID" \
+                --cwd "$ROOT" --harness agy >&2 || true
         fi
     fi
     emit '{}'

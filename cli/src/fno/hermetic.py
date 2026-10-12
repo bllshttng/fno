@@ -98,6 +98,12 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "CLAUDE_CLI",
     "CLI",  # legacy harness selector; CLI=codex flips harness resolution
     "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP",
+    # The claude harness's own unattended markers. The agent-origin predicates
+    # (spawn_gate_admission.rs, process_admission.rs) read them, so a suite
+    # inheriting a developer's CLAUDECODE=1 would flip every gate decision
+    # under test.
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ATTENDED",
     # Cargo-owned build-script output. A Python test must not inherit a
     # developer's Rust build directory; Cargo supplies its own value to build
     # scripts when it invokes them.
