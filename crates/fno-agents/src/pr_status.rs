@@ -261,10 +261,7 @@ pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> Re
         // sustains the refusal. The first refusal still probes (no hold
         // exists yet) - that is the read that OPENS the hold.
         let hold_live = {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now = crate::gh_budget::now_ms();
             crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now).backoff_remaining_s
                 > 0
         };

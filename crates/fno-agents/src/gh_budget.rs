@@ -105,7 +105,7 @@ pub fn cap_from_env() -> u32 {
         .unwrap_or(DEFAULT_POINTS_PER_MIN)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
