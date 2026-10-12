@@ -301,6 +301,25 @@ fn run_owned(
         return 0;
     }
 
+    // ── Steps mode: a run driven step-by-step never gates on the loop-check ──
+    // A manifest stamped turn_mode: steps marks a run its own skill advances
+    // one instructed step at a time, not a target loop. The stop allows here,
+    // before translate: the claim stays held and nothing finalizes, so the
+    // run keeps its state for the next step.
+    if !state_is_pending && first_raw_field(&manifest, &["turn_mode"]).as_deref() == Some("steps") {
+        emit_stop_decision(
+            hook_cwd,
+            fire,
+            Some(&state),
+            driver,
+            "none",
+            "allow",
+            "steps-mode",
+            &manifest,
+        );
+        return 0;
+    }
+
     // ── An active owner with no transcript file: unavailable bounded block ────
     let transcript_ok =
         !fire.transcript_path.as_os_str().is_empty() && fire.transcript_path.is_file();
@@ -1445,6 +1464,63 @@ mod tests {
     }
 
     #[test]
+    fn a_steps_mode_manifest_allows_without_the_loop_check() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        let state = dir.path().join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nharness_session_id: sess-new\nturn_mode: steps\n",
+        )
+        .unwrap();
+        let fire = collect_fire(
+            "sess-new",
+            "/tmp/fno-x4847/sess-new.jsonl",
+            None,
+            "turn-3".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &dir.path(),
+            &fire,
+            "{}",
+            state,
+            "lead",
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(rc, 0, "a steps-mode run allows its stops unjudged");
+
+        // The journal names the steps-mode class, and the return landed before
+        // translate: no claim release, no finalize, the run keeps its claim.
+        let project = crate::paths::events_path(dir.path());
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal =
+            crate::event_store::journal_text_checked(&project, &query).expect("journal readable");
+        let row = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str) == Some("sess-new")
+            })
+            .unwrap_or_else(|| panic!("no stop_decision for sess-new in {}", project.display()));
+        assert_eq!(
+            row.pointer("/data/class").and_then(Value::as_str),
+            Some("steps-mode")
+        );
+        assert_eq!(
+            row.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+    }
+
+    #[test]
     fn releases_claim_covers_exactly_the_finished_terminals() {
         use crate::loopcheck::TerminationReason as T;
         assert!(T::DonePRGreen.releases_claim());
@@ -1755,6 +1831,10 @@ mod tests {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // Declared root: this test used to ride whatever FNO_SPACES_DIR a
+        // concurrently running test had set, so it passed only while that
+        // ambient value survived its neighbor's cleanup.
+        let _root = crate::paths::DeclaredRoot::declare_held("stop-tick");
         let saved_home = std::env::var_os("HOME");
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", dir.path());

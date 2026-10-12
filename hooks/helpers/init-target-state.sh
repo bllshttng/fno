@@ -1229,6 +1229,11 @@ if [[ ! -f "$STATE_FILE" ]]; then
   if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
     _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
   fi
+  # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
+  # unless set, so absence is the looping default the stop gate already serves;
+  # ordinary|regular are input synonyms for steps, never stamped values.
+  _turn_mode_line=""
+  [[ "${TARGET_TURN_MODE:-}" == "steps" ]] && _turn_mode_line="turn_mode: steps"$'\n' || true
   # Work-evidence baseline for the do-provenance stamp; `null` fails it closed.
   _initial_head=$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD 2>/dev/null || echo null)
 
@@ -1285,7 +1290,7 @@ has_ui: $has_ui
 # Attended / advisory inputs (consumed by fno-agents loop-check)
 attended: $_attended
 advisory: $_advisory
-${_authority_line}${_budget_lines}# Auto-merge inputs
+${_authority_line}${_budget_lines}${_turn_mode_line}# Auto-merge inputs
 auto_merge_enabled: $AUTO_MERGE_ENABLED
 auto_merge_approved: $AUTO_MERGE_APPROVED
 auto_merge_source: $AUTO_MERGE_SOURCE
