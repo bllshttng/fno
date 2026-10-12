@@ -106,6 +106,7 @@ pub fn run(op: &str, payload: &Value) -> String {
 fn verdict_receipt(v: &crate::backlog_ready::HoldVerdictReceipt) -> String {
     let mut out = receipt(if v.held { "held" } else { "invalid" }, 0, "");
     if let Some(obj) = out.as_object_mut() {
+        obj.insert("exempt".into(), Value::String(v.exempt.clone()));
         obj.insert("owner".into(), Value::String(v.owner.clone()));
         obj.insert("guard_reason".into(), Value::String(v.guard_reason.clone()));
         obj.insert("reason".into(), Value::String(v.reason.clone()));
@@ -365,6 +366,18 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
         )
         .to_string();
     }
+    let exempt = match payload_exempt(payload) {
+        Ok(ids) => ids,
+        Err(err) => return err.to_string(),
+    };
+    if exempt.iter().any(|x| x.eq_ignore_ascii_case(node_id)) {
+        return receipt(
+            "refused",
+            2,
+            "exempt frees a child of the hold, never the held node itself",
+        )
+        .to_string();
+    }
     let probe = match resolve_plan(entry, node_id) {
         Ok(p) => p,
         // A hold no longer needs a plan file. The node row carries
@@ -378,6 +391,7 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
                 &release_when,
                 &set_by,
                 &review_on,
+                &exempt,
             )
         }
     };
@@ -404,6 +418,9 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
     );
     hold.insert("review_on".into(), Value::String(review_on.clone()));
     hold.insert("set_by".into(), Value::String(set_by.to_string()));
+    if !exempt.is_empty() {
+        hold.insert("exempt".into(), Value::from(exempt.clone()));
+    }
     let mut top = Map::new();
     top.insert("dispatch_hold".into(), Value::Object(hold.clone()));
     let block = match serde_yaml_ng::to_string(&Value::Object(top)) {
@@ -458,7 +475,16 @@ fn set_node_hold(
     release_when: &str,
     set_by: &str,
     review_on: &str,
+    exempt: &[String],
 ) -> String {
+    if exempt.iter().any(|x| x.eq_ignore_ascii_case(node_id)) {
+        return receipt(
+            "refused",
+            2,
+            "exempt frees a child of the hold, never the held node itself",
+        )
+        .to_string();
+    }
     if !matches!(dispatch_hold(entry), HoldState::Absent) {
         let obj = entry.get("dispatch_hold").and_then(Value::as_object);
         let say = |k: &str| {
@@ -486,6 +512,9 @@ fn set_node_hold(
     );
     hold.insert("review_on".into(), Value::String(review_on.to_string()));
     hold.insert("set_by".into(), Value::String(set_by.to_string()));
+    if !exempt.is_empty() {
+        hold.insert("exempt".into(), Value::from(exempt.to_vec()));
+    }
     let rows = match mutate_node_hold(graph, node_id, Some(Value::Object(hold.clone()))) {
         Ok(rows) => rows,
         Err(err) => return err.to_string(),
@@ -592,6 +621,31 @@ fn mutate_node_hold(graph: &Path, node_id: &str, hold: Option<Value>) -> Result<
 
 fn payload_str<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
     payload.get(key).and_then(Value::as_str)
+}
+
+/// The optional per-child exemption list a set payload may carry: absent or
+/// null is none, an array of non-blank node ids is the list (deduped, in
+/// order), anything else refuses the op.
+fn payload_exempt(payload: &Value) -> Result<Vec<String>, Value> {
+    match payload.get("exempt") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => {
+            let mut ids: Vec<String> = Vec::new();
+            for item in items {
+                match item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(id) => {
+                        let id = id.to_string();
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                    None => return Err(receipt("refused", 2, "exempt must be a list of node ids")),
+                }
+            }
+            Ok(ids)
+        }
+        Some(_) => Err(receipt("refused", 2, "exempt must be a list of node ids")),
+    }
 }
 
 fn release_hold(
@@ -1218,6 +1272,92 @@ mod tests {
         let disarm = r["disarm"].as_str().unwrap();
         assert!(disarm.starts_with("issued") || disarm.starts_with("failed"));
         assert!(matches!(dispatch_hold(&hold_entry(&fx)), HoldState::Held));
+    }
+
+    // --- the per-child exemption ---
+
+    #[test]
+    fn an_exemption_frees_the_named_child_and_only_that_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        std::fs::write(&plan, PLAN_BODY).unwrap();
+        let parent = json!({
+            "id": "t-parent",
+            "slug": "parent",
+            "plan_path": plan.display().to_string(),
+            "cwd": dir.path().display().to_string(),
+        });
+        let child = json!({
+            "id": "t-child",
+            "slug": "child",
+            "contained_in": "t-parent",
+            "cwd": dir.path().display().to_string(),
+        });
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(&graph, &[parent, child]).unwrap();
+
+        let payload = json!({
+            "op": "hold-set",
+            "node": "t-parent",
+            "reason": "condition R",
+            "release_when": "when W",
+            "set_by": "team",
+            "exempt": ["t-child"],
+            "graph": graph.display().to_string(),
+        });
+        let out = run("hold-set", &payload);
+        let set: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(set["outcome"], "held", "{out}");
+        assert_eq!(set["hold"]["exempt"], json!(["t-child"]), "{out}");
+
+        // The named child reads unheld: its ancestry hold skips it.
+        let out = run(
+            "hold-verdict",
+            &json!({
+                "op": "hold-verdict", "node": "t-child",
+                "graph": graph.display().to_string(),
+            }),
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["outcome"],
+            "absent",
+            "{out}"
+        );
+
+        // The parent still reads held, and the receipt carries the list.
+        let out = run(
+            "hold-verdict",
+            &json!({
+                "op": "hold-verdict", "node": "t-parent",
+                "graph": graph.display().to_string(),
+            }),
+        );
+        let receipt: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(receipt["outcome"], "held", "{out}");
+        assert_eq!(receipt["owner"], "t-parent", "{out}");
+        assert_eq!(receipt["exempt"], "t-child", "{out}");
+
+        // A non-list exempt refuses the set and writes nothing.
+        let fx = fixture(json!({}));
+        let mut payload = set_payload(fx.graph.display().to_string());
+        payload["exempt"] = json!("t-af4e");
+        let out = run("hold-set", &payload);
+        let r: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(r["exit_code"], 2, "{out}");
+        assert!(out.contains("exempt must be a list of node ids"), "{out}");
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+
+        // A self-id refuses: a hold cannot exempt its own node.
+        let fx = fixture(json!({}));
+        let mut payload = set_payload(fx.graph.display().to_string());
+        payload["exempt"] = json!(["t-0001"]);
+        let out = run("hold-set", &payload);
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["exit_code"],
+            2,
+            "{out}"
+        );
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
     }
 
     // --- node-level holds: a merge hold works without a plan file ----

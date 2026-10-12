@@ -458,13 +458,15 @@ def test_hold_check_cli_refuses_with_reason_and_setter(tmp_path, monkeypatch):
         plan_body=(
             "---\nstatus: ready\ndispatch_hold:\n"
             "  reason: Blocking finding\n  release_when: Finding fixed\n"
-            "  review_on: 2099-08-20\n  set_by: lead:119e3c52\n---\n"
+            "  review_on: 2099-08-20\n  set_by: lead:119e3c52\n"
+            "  exempt: [x-af4e, x-b2c3]\n---\n"
         ),
     )
     result = CliRunner().invoke(app, ["do", "pr", "hold-check", "42", "--repo", str(tmp_path)])
     assert result.exit_code == 3, result.output
     assert "dispatch-hold:x-5a5c" in result.output
     assert "set_by=lead:119e3c52" in result.output
+    assert "exempt=x-af4e,x-b2c3" in result.output
 
 
 def test_hold_for_pr_refuses_on_ambiguous_pr_to_node_match(tmp_path, monkeypatch):

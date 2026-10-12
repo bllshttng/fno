@@ -54,6 +54,7 @@ class DispatchHold:
     review_on: str = ""
     set_by: str = ""
     detail: str = ""
+    exempt: str = ""
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ def dispatch_hold_verdict(
     )
     fields = {
         k: str(receipt.get(k) or "")
-        for k in ("reason", "release_when", "review_on", "set_by", "detail")
+        for k in ("reason", "release_when", "review_on", "set_by", "detail", "exempt")
     }
     return DispatchHoldVerdict(
         str(receipt.get("owner") or "unknown"), DispatchHold(state, **fields)
@@ -305,6 +306,16 @@ def plan_rung(entry: object) -> Rung:
         # guess precisely so the caller can fail open here. Collapsing it into
         # NONE would be the same two-failure-modes-one-value mistake this
         # resolver exists to undo, one function upstream.
+        return Rung.UNREADABLE
+
+    if not os.path.exists(probe):
+        # A plan file that vanished while its node sat in review must not park
+        # a green PR: the plan did its job once the PR opened. A
+        # MISSING file on an in_review node reads as that rung. Every other
+        # unreadable shape stays UNREADABLE, and an in_progress node keeps
+        # failing closed.
+        if str(entry.get("status") or "") == "in_review":
+            return Rung.IN_REVIEW
         return Rung.UNREADABLE
 
     raw, readable = _read_status_scalar(probe)
