@@ -2615,7 +2615,7 @@ mod tests {
         let (map, warnings) = resolve_keymap(
             None,
             &[
-                ("split-left".into(), "G".into()),
+                ("split-left".into(), "Z".into()),
                 ("split-up".into(), "u".into()),
             ],
         );
@@ -2625,8 +2625,8 @@ mod tests {
             .iter()
             .find(|kb| kb.action == "split-left")
             .expect("materialized");
-        assert_eq!(left.key, b'G');
-        assert_eq!(left.disp, "G");
+        assert_eq!(left.key, b'Z');
+        assert_eq!(left.disp, "Z");
         assert_eq!(left.event, Event::Cmd(Command::SplitDir(Dir::Left)));
         let up = rows
             .iter()

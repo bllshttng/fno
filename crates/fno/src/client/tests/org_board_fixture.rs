@@ -362,9 +362,10 @@ fn graph_renders_a_node_link_drawing() {
     assert_eq!(
         lead,
         1,
-        "one lead dot (dots in layout: {}, nonblank cells: {})",
+        "one lead dot (dots in layout: {}, nonblank rows: {}, rows: {:?})",
         graph.dots.len(),
-        rows.iter().filter(|r| !r.chars().all(|c| c == ' ')).count()
+        rows.iter().filter(|r| !r.chars().all(|c| c == ' ')).count(),
+        rows
     );
     assert_eq!(node, 2, "two node dots");
     assert_eq!(worker, 3, "three worker dots");

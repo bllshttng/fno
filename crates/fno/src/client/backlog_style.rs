@@ -115,7 +115,7 @@ impl BLine {
         };
         for piece in remainder.wrap(tail_w) {
             let mut indented = BLine {
-                text: format!("{indent}{}", piece.text),
+                text: indent.to_string(),
                 roles: vec![BRole::Meta; indent.chars().count()],
                 default_role: piece.default_role,
                 band: piece.band,
