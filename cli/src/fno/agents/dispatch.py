@@ -1409,6 +1409,7 @@ def _claude_create_path(
     # the row this resume forks FROM (fork_lineage.lineage_row_for);
     # states every axis the caller left unstated.
     lineage_row: object | None = None,
+    carried: Optional[dict] = None,
     # The model token the ROUTE named (-P vendor/model or --route
     # vendor,model). Recorded on the row beside an explicit --model; never fed
     # to the child argv, so launch behavior is untouched.
@@ -1673,15 +1674,13 @@ def _claude_create_path(
     if revive and resume_session_id:
         print(
             f"fno agents spawn: forked {canonical_handle(resume_session_id)} into a "
-            f"new session (new id, new row, new fno binding): {short_id} continues "
-            f"the transcript; the source id is not preserved.\n"
-            f"Watch the new one: fno agents peek {short_id}",
+            f"new session: {short_id} keeps its name, id and spawner from the "
+            f"source row; watch it: fno agents peek {short_id}",
             file=sys.stderr,
         )
 
-    # Best-effort ambient capture; never raises. The
-    # spawn_trigger was already popped before bg_create above.
-    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, lineage_row)
+    # Best-effort ambient capture; never raises.
+    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, carried or {})
     lineage_reason = _report_unlinked_parent(spawned_by_session)
 
     # Role stamp (US9), same contract as the pane path: the grantor is the
@@ -1721,6 +1720,7 @@ def _claude_create_path(
         # silent, byte-identical stamps where there is none.
         **fork_lineage.axis_overrides(
             src,
+            carried=carried,
             model=model,
             route_model=route_model,
             verified_model=verified_model,
@@ -2666,10 +2666,8 @@ def dispatch_spawn(
             row_launch_account_source = launch_account_source
             # the row this resume forks FROM, matched by uuid alone.
             lineage_row = fork_lineage.lineage_row_for(entries, resume_session_id)
-            if lineage_row is not None and node is None:
-                # A wake fork (new name, no caller node) carries the lineage
-                # row's node so the join survives the revive.
-                node = lineage_row.node
+            kept = fork_lineage.carried(resume_session_id)
+            node = node or kept.get("node")
             if resume_session_id and row_launch_account is None:
                 row_launch_account = getattr(lineage_row, "launch_account", None)
                 # A revive inherits the source row's provenance; None is honest.
@@ -2866,6 +2864,7 @@ def dispatch_spawn(
                         resume_session_id=resume_session_id,
                         revive=revive,
                         lineage_row=lineage_row,
+                        carried=kept,
                         add_dir=add_dir,
                         agent=agent,
                         tools=tools,
@@ -6484,7 +6483,8 @@ def wake_and_deliver(
     from fno.agents.spawn_gate import GateRefused, run_gate
     from fno.agents.launch_provenance import launch_account_for_session
 
-    parent = tuple(getattr(entry, f"spawned_by_{k}", None) for k in ("session", "harness", "cwd"))
+    carried = fork_lineage.carried(session_uuid)
+    parent = tuple(carried.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
     gate = None
     revived_reservation = False
     if route_provider is not None:
