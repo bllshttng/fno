@@ -10,6 +10,11 @@ concurrency:
 
 on:
   workflow_dispatch:
+    inputs:
+      paint_binary:
+        description: "Build and upload the macOS arm64 fno binary without paint-path selection. For a paint gate armed outside the repo (the canonical or global config tier a runner cannot read); pull_request selection stays config-driven."
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: &cli_ci_paths
@@ -1313,3 +1318,75 @@ jobs:
               && [ "${{ github.event_name }}" = "pull_request" ] \
               && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
           } || exit 1
+
+  # Selection half of the paint-artifact pair. Runs the same read the merge
+  # gate's visual-approval hold runs (merge.visual_paint_paths, matched with
+  # path_matches_paint semantics; see scripts/ci/paint-paths-select.sh), so a
+  # PR the gate would hold is a PR this job answers paint=true. The checkout
+  # is a runner's only config tier: a gate armed in the canonical or global
+  # config never arms CI, and the paint_binary dispatch input above is the
+  # explicit lever for that case.
+  paint-paths:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Select paint paths
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/ci/paint-paths-select.sh
+
+    outputs:
+      paint: ${{ steps.select.outputs.paint }}
+
+  # Build half of the paint-artifact pair: a PR touching a configured paint
+  # surface gets the branch's fno binary built on macOS arm64, so the visual
+  # look never needs a local cargo build. The paint worker fetches it with
+  # `gh run download <run> -n fno-macos-arm64`. Public repo, so the macOS
+  # minutes and the artifact storage cost nothing. Uncached on purpose: one
+  # build per paint PR, and a cache no other job shares is dead weight.
+  paint-binary:
+    needs: [paint-paths]
+    if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.paint_binary) || needs.paint-paths.outputs.paint == 'true') }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Same reason as release-binaries: build.rs bakes in the last commit
+          # that touched crates/, and a shallow clone's one commit would stamp
+          # a HEAD the binary never shipped with.
+          fetch-depth: 0
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the fno front-door binary (release, arm64)
+        working-directory: crates/fno
+        run: cargo build --release --bin fno
+
+      - name: Upload the paint binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: fno-macos-arm64
+          path: crates/fno/target/release/fno
+          retention-days: 7
+          # A missing binary must red here, not hand the paint worker an empty
+          # download directory to puzzle over.
+          if-no-files-found: error
