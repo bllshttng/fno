@@ -63,7 +63,7 @@ Read the signal with ``fno backlog demand``. This verb never writes rank and nev
 
 There is no correction verb: an encounter is a thing that happened and cannot be edited or withdrawn. An edit path would make the record deniable, which is the property this signal exists to prevent. A later correction is a ``fno backlog note``.
 
-Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or an unknown node), 3 duplicate, 4 style, 5 unprovable identity. 2 is the usage error and is deliberately unused here: an identity refusal sharing a code with a mistyped flag is a refusal nothing can verify.
+Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or an unknown node), 3 duplicate, 4 style, 5 unprovable identity. 2 is the usage error and is deliberately unused here. An identity refusal that shares a code with a mistyped flag is a refusal nothing can verify.
 
 The record carries model and effort only for claude, and reads them from the env. A codex session launched from a claude shell inherits those names. Written onto a codex vote, they name a model that did not cast it. `CLAUDE_EFFORT` is the claude binary's own name. If `ANTHROPIC_BASE_URL` is not set beside it, `ANTHROPIC_MODEL` does not count. The launcher that owns the route sets both, and a lone model string proves nothing. A harness with nothing to report omits the keys.
 
