@@ -370,7 +370,12 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # either. Thirteen: the reconcile port's Rust graph fixtures use x-dddd as
     # a node id literal in closures.rs tests; the scanner reads the parenthesized
     # string as a seed token, and a `--` fence inside a vec![] fixture would be
-    # decoration on a line that spawns nothing.
-    assert counts.get("exempt", 0) == 13, counts
+    # decoration on a line that spawns nothing. Fourteen: the verify_advise
+    # verifier pushes its seed onto the internal `agents spawn` argv, whose
+    # `--` is reserved for the passthrough lane (pane substrate only), so no
+    # fence or equal-form exists; the prompt is template-rendered in
+    # spawn_verifier, never user input, and message-last is the positional's
+    # legal spot in a click parser.
+    assert counts.get("exempt", 0) == 14, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

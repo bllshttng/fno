@@ -122,12 +122,11 @@ pub(crate) fn spawn_verifier(
     } else {
         format!("verifier-advise-{short}")
     };
-    let argv = vec![
+    let mut argv = vec![
         "agents".to_string(),
         "spawn".to_string(),
         "--name".to_string(),
         name,
-        prompt.to_string(),
         "--harness".to_string(),
         "claude".to_string(),
         "--substrate".to_string(),
@@ -139,6 +138,10 @@ pub(crate) fn spawn_verifier(
         "--timeout".to_string(),
         SPAWN_TIMEOUT_S.to_string(),
     ];
+    // argv-fence: exempt - `agents spawn` reserves `--` for its passthrough
+    // lane, so no fence exists; the seed is a template-rendered verifier
+    // prompt, never user input, and cannot lead with a flag token.
+    argv.push(prompt.to_string());
     let (rc, stdout, stderr) = crate::blueprint_judge::headless_spawn(&argv, SPAWN_TIMEOUT_S + 30)?;
     if rc != 0 {
         let detail = crate::backlog::advance::gate_refusal_detail(&stderr);
