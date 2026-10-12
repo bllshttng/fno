@@ -80,7 +80,10 @@ pub fn thresholds(cwd: &std::path::Path) -> CapacityThresholds {
             .unwrap_or(DEFAULT_CUT_FRACTION),
         raise_per_core: float("raise_load_per_core", DEFAULT_RAISE_LOAD_PER_CORE),
         raise_hold_seconds: uint("raise_hold_seconds", DEFAULT_RAISE_HOLD_SECONDS),
-        floor: uint("floor", DEFAULT_FLOOR as u64).min(u32::MAX as u64) as u32,
+        floor: read("floor")
+            .and_then(|v| v.as_integer())
+            .filter(|v| *v > 0)
+            .map_or(DEFAULT_FLOOR, |v| v.min(u32::MAX as i64) as u32),
     }
 }
 
@@ -342,12 +345,12 @@ pub fn read_state(home: &AgentsHome) -> Option<CapacityState> {
 /// floor set between two ticks binds at once.
 pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
     let ceiling = ceiling.max(1);
-    match read_state(home) {
+    let eff = match read_state(home) {
         Some(state) if state.effective >= 1 => {
             let learned = (state.effective as usize).min(ceiling);
             let cap = learned.max(floor.min(ceiling));
             let known = cap < ceiling || state.reason.is_some();
-            let learned_cap = Effective {
+            Effective {
                 cap,
                 ceiling,
                 known,
@@ -355,16 +358,16 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
                 since: state.since,
                 held: (cap > learned).then_some(FloorHold { floor, learned }),
                 grant: None,
-            };
-            let now = Utc::now().timestamp();
-            crate::capacity_grant::apply(learned_cap, crate::capacity_grant::read(home), now)
+            }
         }
         _ => Effective {
             cap: ceiling,
             ceiling,
             ..Default::default()
         },
-    }
+    };
+    let now = Utc::now().timestamp();
+    crate::capacity_grant::apply(eff, crate::capacity_grant::read(home), now)
 }
 
 /// Local wall clock for a `since` stamp, "21:40" style.

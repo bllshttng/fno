@@ -81,8 +81,9 @@ pub fn sweep(home: &AgentsHome, now: i64) {
 }
 
 /// Fold a grant into a cap answer. Inside the window a grant above the
-/// learned cap lifts the cap to `grant.cap`, never past the ceiling. A grant
-/// at or under the learned cap lifts nothing and leaves no trace. For
+/// learned cap lifts the cap to `grant.cap`, never past the ceiling. Any
+/// active grant carries a view, even one at the learned cap, because the
+/// fleet CPU-share hold reads `granted()` and not the slot count. For
 /// [`ENDED_NOTE_SECS`] after its end the answer keeps the learned cap and
 /// carries an inactive view, so the clause says the grant ended.
 pub(crate) fn apply(mut eff: Effective, grant: Option<Grant>, now: i64) -> Effective {
@@ -90,11 +91,12 @@ pub(crate) fn apply(mut eff: Effective, grant: Option<Grant>, now: i64) -> Effec
     let learned = eff.cap;
     let lifted = (grant.cap as usize).min(eff.ceiling);
     let active = now < grant.expires_epoch;
+    if !active && now - grant.expires_epoch >= ENDED_NOTE_SECS {
+        return eff;
+    }
     if active && lifted > learned {
         eff.cap = lifted;
         eff.known = true;
-    } else if active || now - grant.expires_epoch >= ENDED_NOTE_SECS {
-        return eff;
     }
     eff.grant = Some(GrantView {
         cap: lifted,
@@ -433,6 +435,18 @@ mod tests {
         assert!(effective(&home, 24, 1).grant.is_none());
         sweep(&home, now);
         assert!(read(&home).is_none());
+
+        // A grant at the learned cap lifts no slot but still lifts the CPU hold.
+        write(
+            &home,
+            &Grant {
+                cap: 17,
+                ..grant.clone()
+            },
+        )
+        .unwrap();
+        let level = effective(&home, 24, 1);
+        assert_eq!((level.cap, level.granted()), (17, true));
 
         // An unparseable file reads as no file.
         std::fs::write(path(&home), "{not json").unwrap();
