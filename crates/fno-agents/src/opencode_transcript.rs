@@ -280,12 +280,12 @@ fn render_message(out: &mut String, m_data: &str, parts: &[(String, i64)]) {
     }
 }
 
-fn push_row(out: &mut String, row: &Value) {
+pub(crate) fn push_row(out: &mut String, row: &Value) {
     out.push_str(&row.to_string());
     out.push('\n');
 }
 
-fn rfc3339_ms(ms: i64) -> String {
+pub(crate) fn rfc3339_ms(ms: i64) -> String {
     chrono::DateTime::from_timestamp(ms.div_euclid(1000), 0)
         .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
         .unwrap_or_default()
