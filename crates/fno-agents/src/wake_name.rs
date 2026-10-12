@@ -1,15 +1,15 @@
-//! The wake-name tombstone: one JSON file beside the registry mapping a
-//! stopped worker's harness session uuid to the registry name it last held.
-//! `fno agents stop` keeps the row (Exited + the stop record), but the
-//! retirement sweep's later drop deletes it, and a wake that arrived after
-//! such a drop used to fall back to `wake-<handle>` - a name the board and
-//! mail never knew. Every registry-row drop stamps the name here (the stop
-//! seams, the rm tombstone stamp, and the retirement sweep's
-//! `commit_retirements`), and a wake that finds neither row nor tombstone
-//! reads the transcript's own naming records before the alias
-//! (`lookup_transcript`). One consumer (`reentry::wake_spawn_name`).
-//! No expiry: a name is the worker-to-node join for the uuid's lifetime;
-//! the per-uuid dedupe plus the record cap bound the file.
+//! The wake-identity tombstone: one JSON file beside the registry mapping a
+//! stopped worker's harness session uuid to the registry identity it last
+//! held (name, `fno_id`, the `spawned_by_*` parent edge and the node), so a
+//! revival comes back as the session it was. The stamp lives in the
+//! registry write's removal accounting, so every drop door records it with
+//! no caller change; the stop seams stamp too, for a wake that reads while
+//! the registry itself is unreadable (`stamp_from_row`). A wake that finds
+//! neither row nor tombstone reads the transcript's naming records before
+//! the alias (`lookup_transcript`). One consumer
+//! (`reentry::revival_identity`). No expiry: an identity is the
+//! worker-to-node join for the uuid's lifetime; the per-uuid dedupe plus
+//! the record cap bound the file.
 
 use crate::claude_ask::ClaudeHome;
 use crate::daemon::now_epoch_secs;
@@ -27,20 +27,78 @@ fn path(home: &AgentsHome) -> PathBuf {
     home.root().join(FILENAME)
 }
 
-/// Stamp `entry`'s uuid -> name pair. Best-effort by contract: a failed
-/// write costs a later wake its name, never the stop itself (the stop arms
-/// ignore the result, the same stance the rm tombstone takes).
-pub(crate) fn record(home: &AgentsHome, session_id: &str, name: &str) {
-    let _ = record_at(&path(home), session_id, name, now_epoch_secs());
+/// The identity a revival carries: the row's name plus every join the
+/// board, mail and ledger read. A record from before the carry holds a
+/// name only; no field is ever invented for an old record.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct Carried {
+    pub name: String,
+    pub fno_id: Option<String>,
+    pub spawned_by_session: Option<String>,
+    pub spawned_by_harness: Option<String>,
+    pub spawned_by_cwd: Option<String>,
+    pub node: Option<String>,
 }
 
-pub(crate) fn record_at(file: &Path, session_id: &str, name: &str, now: i64) -> Result<(), String> {
-    if session_id.trim().is_empty() || name.trim().is_empty() {
+fn clean(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|v| !v.is_empty())
+}
+
+impl Carried {
+    /// The name-only answer (transcript rung and alias): no recorded
+    /// identity keeps a fresh id and no parent.
+    pub(crate) fn named(name: impl Into<String>) -> Self {
+        Carried {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    /// The identity of a registry row; a blank value reads as absent.
+    pub(crate) fn from_row(entry: &crate::state::RegistryEntry) -> Self {
+        let field = |value: &Option<String>| clean(value).map(str::to_string);
+        Carried {
+            name: entry.name.clone(),
+            fno_id: field(&entry.fno_id),
+            spawned_by_session: field(&entry.spawned_by_session),
+            spawned_by_harness: field(&entry.spawned_by_harness),
+            spawned_by_cwd: field(&entry.spawned_by_cwd),
+            node: field(&entry.node),
+        }
+    }
+
+    fn to_row_json(&self, session_id: &str, at: i64) -> Value {
+        let mut row = json!({ "session_id": session_id, "name": self.name, "at": at });
+        for (key, value) in [
+            ("fno_id", &self.fno_id),
+            ("spawned_by_session", &self.spawned_by_session),
+            ("spawned_by_harness", &self.spawned_by_harness),
+            ("spawned_by_cwd", &self.spawned_by_cwd),
+            ("node", &self.node),
+        ] {
+            if let Some(v) = clean(value) {
+                row[key] = json!(v);
+            }
+        }
+        row
+    }
+}
+
+/// Stamp `session_id`'s identity. Best-effort: a failed write costs a
+/// later wake its identity, never the stop itself (the stop arms ignore
+/// the result, the same stance the rm tombstone takes).
+pub(crate) fn record_at(
+    file: &Path,
+    session_id: &str,
+    carried: &Carried,
+    now: i64,
+) -> Result<(), String> {
+    if session_id.trim().is_empty() || carried.name.trim().is_empty() {
         return Ok(());
     }
     crate::rm_tombstone::update_json_array(file, |mut entries| {
         entries.retain(|row| row.get("session_id").and_then(Value::as_str) != Some(session_id));
-        entries.push(json!({ "session_id": session_id, "name": name, "at": now }));
+        entries.push(carried.to_row_json(session_id, now));
         while entries.len() > CAP {
             entries.remove(0);
         }
@@ -48,27 +106,38 @@ pub(crate) fn record_at(file: &Path, session_id: &str, name: &str, now: i64) -> 
     })
 }
 
-/// The tombstoned name `session_id` held when its row stopped, read from the
-/// file beside `registry_path` (the daemon resolves the pair together, the
-/// same way the rm tombstone lookup does). A missing or unreadable file
+/// The tombstoned identity `session_id` held when its row stopped, read from
+/// the file beside `registry_path` (the daemon resolves the pair together,
+/// the same way the rm tombstone lookup does). A missing or unreadable file
 /// answers None: the caller's alias fallback applies.
-pub(crate) fn lookup_beside(registry_path: &Path, session_id: &str) -> Option<String> {
+pub(crate) fn lookup_beside(registry_path: &Path, session_id: &str) -> Option<Carried> {
     let file = registry_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(FILENAME);
     let raw = std::fs::read_to_string(file).ok()?;
     let entries: Vec<Value> = serde_json::from_str(&raw).ok()?;
+    let field = |row: &Value, key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
     entries.into_iter().rev().find_map(|row| {
         let id = row.get("session_id").and_then(Value::as_str)?;
         if id != session_id {
             return None;
         }
-        let name = row.get("name").and_then(Value::as_str)?;
-        if name.is_empty() {
-            return None;
-        }
-        Some(name.to_string())
+        let name = field(&row, "name")?;
+        Some(Carried {
+            name,
+            fno_id: field(&row, "fno_id"),
+            spawned_by_session: field(&row, "spawned_by_session"),
+            spawned_by_harness: field(&row, "spawned_by_harness"),
+            spawned_by_cwd: field(&row, "spawned_by_cwd"),
+            node: field(&row, "node"),
+        })
     })
 }
 
@@ -81,19 +150,25 @@ pub(crate) fn spawn_safe_name(value: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-/// The stamp a registry-row DROP uses: the retirement sweep (and every
-/// future drop path that holds a row) records the row's name here through
-/// this one door, the same best-effort contract the stop seams honor - a
-/// failed write costs a later wake its name, never the drop.
+/// The stamp a registry-row DROP uses: the write's removal accounting (and
+/// every stop seam that holds a row) records the identity here, the same
+/// best-effort contract the stop seams honor - a failed write costs a
+/// later wake its identity, never the drop.
 pub(crate) fn stamp_from_row(home: &AgentsHome, entry: &crate::state::RegistryEntry) {
-    if let Some(sid) = entry
+    let Some(sid) = entry
         .harness_session_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        record(home, sid, &entry.name);
-    }
+    else {
+        return;
+    };
+    let _ = record_at(
+        &path(home),
+        sid,
+        &Carried::from_row(entry),
+        now_epoch_secs(),
+    );
 }
 
 /// A transcript past this many bytes is skipped: the rung is best-effort,
@@ -163,23 +238,66 @@ mod tests {
         (dir, reg)
     }
 
-    /// AC-HP: stop then wake keeps the name - the node's repro at the store
-    /// level, with a re-stop rewriting the record.
+    /// AC1-HP: a stamp then read roundtrips the whole identity, with a
+    /// re-stamp rewriting the record. AC2-EDGE: a record written before the
+    /// carry shipped (name only) reads back with a name and no invented
+    /// field.
     #[test]
     fn record_then_lookup_roundtrips_and_dedupes() {
+        fn full(name: &str, fno: &str, sid: &str, cwd: &str) -> Carried {
+            Carried {
+                name: name.into(),
+                fno_id: Some(fno.into()),
+                spawned_by_session: Some(sid.into()),
+                spawned_by_harness: Some("claude".into()),
+                spawned_by_cwd: Some(cwd.into()),
+                node: Some("x-1".into()),
+            }
+        }
         let (_dir, reg) = staged();
         let file = reg.parent().unwrap().join(FILENAME);
-        record_at(&file, "aaaabbbb-cccc-dddd-eeee-ffff00001111", "t-old", 1).unwrap();
-        record_at(&file, "aaaabbbb-cccc-dddd-eeee-ffff00001111", "t-new", 2).unwrap();
-        let name = lookup_beside(&reg, "aaaabbbb-cccc-dddd-eeee-ffff00001111").unwrap();
-        assert_eq!(name, "t-new", "the last stop's name wins");
+        let uuid = "aaaabbbb-cccc-dddd-eeee-ffff00001111";
+        record_at(
+            &file,
+            uuid,
+            &full("t-old", "f-1", "lead-1111", "/lead/dir"),
+            1,
+        )
+        .unwrap();
+        record_at(
+            &file,
+            uuid,
+            &full("t-new", "f-2", "lead-2222", "/lead/dir2"),
+            2,
+        )
+        .unwrap();
+        let carried = lookup_beside(&reg, uuid).unwrap();
+        assert_eq!(carried.name, "t-new", "the last stop's identity wins");
+        assert_eq!(carried.fno_id.as_deref(), Some("f-2"));
+        assert_eq!(carried.spawned_by_session.as_deref(), Some("lead-2222"));
+        assert_eq!(carried.spawned_by_harness.as_deref(), Some("claude"));
+        assert_eq!(carried.spawned_by_cwd.as_deref(), Some("/lead/dir2"));
+        assert_eq!(carried.node.as_deref(), Some("x-1"), "the node joins too");
         // An empty uuid or name is refused at the write, so the alias
         // fallback answers instead of a blank record.
-        record_at(&file, "", "t", 3).unwrap();
-        record_at(&file, "aaaabbbb-cccc-dddd-eeee-ffff00001111", "  ", 3).unwrap();
+        record_at(&file, "", &Carried::named("t"), 3).unwrap();
+        record_at(&file, uuid, &Carried::named("  ".into()), 3).unwrap();
+        // A pre-carry record (name only, as every drop stamped before the
+        // carry) reads back with the name and nothing invented beside it.
+        let legacy = json!({ "session_id": "bbbbcccc-0000-0000-0000-000000000001", "name": "t-legacy", "at": 1 });
+        crate::rm_tombstone::update_json_array(&file, |mut entries| {
+            entries.push(legacy);
+            entries
+        })
+        .unwrap();
+        let legacy_read = lookup_beside(&reg, "bbbbcccc-0000-0000-0000-000000000001").unwrap();
+        assert_eq!(legacy_read.name, "t-legacy");
+        assert_eq!(legacy_read.fno_id, None, "no field is invented");
+        assert_eq!(legacy_read.spawned_by_session, None);
+        assert_eq!(legacy_read.node, None);
         let raw = std::fs::read_to_string(&file).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(rows.len(), 1, "the uuid holds one record");
+        assert_eq!(rows.len(), 2, "the uuid holds one record");
     }
 
     /// The cap trims oldest-first so the file stays bounded.
@@ -189,7 +307,7 @@ mod tests {
         let file = reg.parent().unwrap().join(FILENAME);
         for i in 0..CAP + 10 {
             let uuid = format!("aaaabbbb-cccc-dddd-eeee-ffff{i:012}");
-            record_at(&file, &uuid, &format!("t-{i}"), i as i64).unwrap();
+            record_at(&file, &uuid, &Carried::named(format!("t-{i}")), i as i64).unwrap();
         }
         let raw = std::fs::read_to_string(&file).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&raw).unwrap();
