@@ -1353,14 +1353,26 @@ jobs:
       paint: ${{ steps.select.outputs.paint }}
 
   # Build half of the paint-artifact pair: a PR touching a configured paint
-  # surface gets the branch's fno binary built on macOS arm64, so the visual
-  # look never needs a local cargo build. The paint worker fetches it with
-  # `gh run download <run> -n fno-macos-arm64`. Public repo, so the macOS
-  # minutes and the artifact storage cost nothing. Uncached on purpose: one
-  # build per paint PR, and a cache no other job shares is dead weight.
+  # surface gets the branch's fno binary built for macOS, so the visual look
+  # never needs a local cargo build. Two legs cover the paint fleet's
+  # machines: Apple Silicon native, and Intel x64. The paint worker fetches a
+  # leg with `gh run download <run> -n fno-macos-arm64` (or fno-macos-x64).
+  # Public repo, so the macOS minutes and the artifact storage cost nothing.
+  # Uncached on purpose: one build per paint PR, and a cache no other job
+  # shares is dead weight.
   paint-binary:
     needs: [paint-paths]
     if: ${{ !cancelled() && ((github.event_name == 'workflow_dispatch' && inputs.paint_binary) || needs.paint-paths.outputs.paint == 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # x64 cross-compiles on the Apple Silicon runner, the way
+          # release-binaries ships macos-x64: the native Intel macos-13 image
+          # is retired, and packaging (here: upload) never executes the
+          # x86_64 binary.
+          - { name: fno-macos-arm64, rust-target: aarch64-apple-darwin }
+          - { name: fno-macos-x64, rust-target: x86_64-apple-darwin }
     runs-on: macos-latest
     timeout-minutes: 45
     permissions:
@@ -1376,16 +1388,18 @@ jobs:
 
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.rust-target }}
 
-      - name: Build the fno front-door binary (release, arm64)
+      - name: Build the fno front-door binary (release, ${{ matrix.target.rust-target }})
         working-directory: crates/fno
-        run: cargo build --release --bin fno
+        run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
 
-      - name: Upload the paint binary
+      - name: Upload the paint binary (${{ matrix.target.name }})
         uses: actions/upload-artifact@v4
         with:
-          name: fno-macos-arm64
-          path: crates/fno/target/release/fno
+          name: ${{ matrix.target.name }}
+          path: crates/fno/target/${{ matrix.target.rust-target }}/release/fno
           retention-days: 7
           # A missing binary must red here, not hand the paint worker an empty
           # download directory to puzzle over.
