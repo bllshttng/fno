@@ -1006,7 +1006,7 @@ fn parse_team_events(team_raw: &str) -> Vec<TeamEvent> {
             .and_then(Value::as_str)
             .map(crate::event_store::event_type_alias)
         {
-            Some("agent_teamed") => {
+            Some("agent_promoted") => {
                 let Some(name) = s_field(&data, "name") else {
                     continue;
                 };
@@ -1595,7 +1595,7 @@ fn agents_journal(
 /// emitter wrote. Unbounded by the window: a team is granted before the
 /// events it owns.
 fn team_journals(home: &AgentsHome) -> String {
-    let types = ["agent_teamed", "agent_team_vacated"];
+    let types = ["agent_promoted", "agent_team_vacated"];
     let mut raw = agents_journal(home, &types, None, None);
     if let Some(parent) = home.root().parent() {
         let path = parent.join("events.jsonl");
@@ -2452,7 +2452,7 @@ mod tests {
         // The lead route: a node-less row whose parent session is a held
         // role holder's spawn rolls up to that holder; the node route keeps
         // setting lead beside owner.
-        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
+        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
         let spawns = concat!(
             r#"{"ts":"2026-09-02T16:00:00Z","type":"agent_spawned","source":"python","data":{"name":"successor","harness":"claude","harness_session_id":"20260904T151442Z-cl54345-58af0c","substrate":"pane","spawned_by_session":"s-op"}}"#,
             "\n",
@@ -2854,7 +2854,7 @@ mod tests {
         // AC5: the same team pair landing in both journals yields exactly
         // one granted and one vacated row.
         let team = [
-            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_teamed","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
+            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_promoted","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
             r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_team_vacated","source":"python","data":{"cause":"succession","grantor":"vellum","holder":"warden","level":2,"scope":"x-eeee","successor":"jolly-finch"}}"#,
         ]
         .join("\n");
@@ -2885,7 +2885,7 @@ mod tests {
                 "id": "x-epic", "title": "the epic", "created_at": "2026-09-28T16:00:00Z",
             }),
         ];
-        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
+        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
         let p = project("", &entries, &[], "", team, "", "", None);
         let child = p
             .rows
