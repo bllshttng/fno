@@ -25,9 +25,15 @@ impl super::Core {
                 wedged.push(c.id);
             }
         }
-        for id in wedged {
-            eprintln!("fno mux: client {id} reliable channel wedged on DesktopNotice; dropping it");
-            self.clients.retain(|c| c.id != id);
+        if !wedged.is_empty() {
+            // One retain + one layout push for the whole wedge batch: N
+            // teardowns never pay N layout pushes.
+            self.clients.retain(|c| !wedged.contains(&c.id));
+            for id in wedged {
+                eprintln!(
+                    "fno mux: client {id} reliable channel wedged on DesktopNotice; dropping it"
+                );
+            }
             self.push_layout(true);
         }
         queued
