@@ -263,7 +263,7 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
         "CODEX_THREAD_ID" => Some("cx".to_string()),
         _ => None,
     };
-    let (s, h) = ambient_parent_edge_from(stamped);
+    let (s, h, _) = ambient_parent_edge_from(stamped);
     assert_eq!((s, h), (None, None));
     // Two DISAGREEING families attribute NOTHING: no laundered lineage.
     let mixed = |k: &str| match k {
