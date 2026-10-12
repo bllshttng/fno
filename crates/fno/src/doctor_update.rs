@@ -1604,24 +1604,23 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         failed.push("fno-py reappearance (launchd refresh skipped)".into());
         return;
     }
-    let steps: Vec<(String, Vec<String>)> = vec![
-        (
-            "pr watch refresh".into(),
-            vec!["do".into(), "pr".into(), "watch".into(), "refresh".into()],
-        ),
-        (
-            "groom agent refresh".into(),
-            vec!["backlog".into(), "groom".into(), "--refresh-agent".into()],
-        ),
-    ];
-    for (name, args) in steps {
-        let code = run_inherit(&fno_py, &args);
-        if code != 0 {
-            eprintln!(
-                "fno doctor update: WARNING: post-install `{name}` exited {code}; continuing"
-            );
-            failed.push(format!("post-install {name}"));
-        }
+    let args: Vec<String> = vec!["do".into(), "pr".into(), "watch".into(), "refresh".into()];
+    let code = run_inherit(&fno_py, &args);
+    if code != 0 {
+        eprintln!(
+            "fno doctor update: WARNING: post-install `pr watch refresh` exited {code}; continuing"
+        );
+        failed.push("post-install pr watch refresh".into());
+    }
+    // groom lives in fno-agents only, and a wheel or Homebrew install puts
+    // fno-agents beside fno rather than under cargo home.
+    let args: Vec<String> = vec!["backlog".into(), "groom".into(), "--refresh-agent".into()];
+    let code = run_inherit(&fno_agents_bin(), &args);
+    if code != 0 {
+        eprintln!(
+            "fno doctor update: WARNING: post-install `groom agent refresh` exited {code}; continuing"
+        );
+        failed.push("post-install groom agent refresh".into());
     }
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [

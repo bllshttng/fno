@@ -296,6 +296,11 @@ pub fn run(args: &[String]) -> i32 {
         "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
         "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
         "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
+        // The publish verb is native end to end: the public projection
+        // renders through `fno board-render`, and the three targets (static
+        // dir, uploader command, GitHub Pages) are the verb's own. The
+        // catalog row sits in the board group.
+        "publish" => super::publish::run(resolved.tail),
         _ => forward_python(&resolved),
     }
 }
