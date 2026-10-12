@@ -828,17 +828,10 @@ fn resolve_allow_missing(path: &std::path::Path) -> std::path::PathBuf {
 
 /// Absolute git COMMON dir for `cwd`; `None` outside a repo or on any failure.
 ///
-/// A failing `git rev-parse` writes only to stderr, so empty stdout already
-/// covers every failure the exit code would report.
+/// Read through [`crate::git_paths`], which survives a git without
+/// `--path-format`.
 pub(crate) fn git_common_dir(cwd: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .ok()?;
-    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!common.is_empty()).then_some(common)
+    crate::git_paths::common_dir(cwd).map(|p| p.to_string_lossy().into_owned())
 }
 
 impl Provider for CodexProvider {

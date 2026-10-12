@@ -216,13 +216,11 @@ def _repo_roots() -> list[str]:
     """
     roots: list[str] = []
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, timeout=5,
-        )
-        common = out.stdout.strip()
+        from fno.paths import git_common_dir
+
+        common = git_common_dir(Path.cwd())
         if common:
-            roots.append(str(Path(common).parent))
+            roots.append(str(common.parent))
     except Exception:  # noqa: BLE001 -- outside a repo is not an error here
         pass
     # Externally-based worktrees are NOT under the canonical root and carry no
