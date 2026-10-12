@@ -153,6 +153,7 @@
       "sandbox_posture",
       "screen_state",
       "spawn_id",
+      "spawn_payload",
       "spawn_provenance",
       "spawn_trigger",
       "spawned_by_cwd",

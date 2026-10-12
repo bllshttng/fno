@@ -6,7 +6,7 @@
 //! with. A done ledger never overrides an attended session.
 
 use crate::provenance::{
-    classify_turn, is_user_turn, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
+    classify_turn, is_user_turn, turn_text, turn_ts_epoch, BusIndex, HarnessKind, Provenance,
 };
 use crate::state::RegistryEntry;
 use serde_json::Value;
@@ -31,6 +31,47 @@ fn typed(p: Provenance) -> bool {
     )
 }
 
+/// First `open`..`close` block body in `text`, trimmed.
+fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let start = text.find(open)? + open.len();
+    let rest = &text[start..];
+    let body = match rest.find(close) {
+        Some(end) => &rest[..end],
+        None => rest,
+    };
+    Some(body.trim())
+}
+
+/// True when a CommandInvocation turn's text is the row's recorded spawn
+/// payload: the machine's seed, never a person's turn. Two shapes on the
+/// wire - the raw payload (harnesses that log the prompt verbatim) and
+/// claude's rendering of a seeded slash command, where the payload's first
+/// token becomes `<command-name>` and the remainder lands inside
+/// `<command-args>`. Compared on the reminder-stripped text the classifier
+/// reads; anything subtler fails open, keeping today's hold rather than
+/// exempting a turn a person typed.
+fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
+    let text = crate::provenance::system_reminder_re()
+        .replace_all(text, "")
+        .to_string();
+    let text = text.trim();
+    let seed = seed.trim();
+    if text.is_empty() || seed.is_empty() {
+        return false;
+    }
+    if text == seed {
+        return true;
+    }
+    let Some(name) = xml_block(text, "<command-name>", "</command-name>") else {
+        return false;
+    };
+    let args = xml_block(text, "<command-args>", "</command-args>").unwrap_or("");
+    let mut seed_parts = seed.splitn(2, char::is_whitespace);
+    let verb = seed_parts.next().unwrap_or("");
+    let rest = seed_parts.next().unwrap_or("").trim();
+    name == verb && args == rest
+}
+
 /// The bus index both arms classify with, read off the state root the way
 /// `liveness_sweep` reads it.
 fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
@@ -42,7 +83,13 @@ fn bus_for(home: &crate::paths::AgentsHome) -> BusIndex {
 /// The newest typed turn in ONE transcript, as an age in seconds; `None`
 /// when the file holds none. A row without a parseable timestamp cannot
 /// testify; a future stamp reads as now.
-fn typed_age_in_file(path: &PathBuf, bus: &BusIndex, session: &str, now: i64) -> Option<i64> {
+fn typed_age_in_file(
+    path: &PathBuf,
+    bus: &BusIndex,
+    session: &str,
+    now: i64,
+    spawn_payload: Option<&str>,
+) -> Option<i64> {
     let Ok(file) = std::fs::File::open(path) else {
         return None;
     };
@@ -52,7 +99,16 @@ fn typed_age_in_file(path: &PathBuf, bus: &BusIndex, session: &str, now: i64) ->
         let Ok(obj) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
-        if !is_user_turn(&obj) || !typed(classify_turn(&obj, bus, session)) {
+        if !is_user_turn(&obj) {
+            continue;
+        }
+        let prov = classify_turn(&obj, bus, session);
+        if matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
+            && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed))
+        {
+            continue;
+        }
+        if !typed(prov) {
             continue;
         }
         let Some(ts) = turn_ts_epoch(&obj) else {
@@ -65,12 +121,16 @@ fn typed_age_in_file(path: &PathBuf, bus: &BusIndex, session: &str, now: i64) ->
 }
 
 /// Age in seconds of the newest typed user turn across `paths`, `None`
-/// when no transcript holds one.
+/// when no transcript holds one. A row without a parseable timestamp
+/// cannot testify; a future stamp reads as now. `spawn_payload` is the
+/// row's recorded seed: a CommandInvocation turn matching it is the
+/// machine's spawn payload, never a person, and never holds.
 pub(crate) fn newest_typed_turn_age_s(
     paths: &[PathBuf],
     bus: &BusIndex,
     session: &str,
     now: i64,
+    spawn_payload: Option<&str>,
 ) -> Option<i64> {
     let mut newest: Option<i64> = None;
     for path in paths {
@@ -85,7 +145,7 @@ pub(crate) fn newest_typed_turn_age_s(
                 continue;
             }
         }
-        if let Some(age) = typed_age_in_file(path, bus, session, now) {
+        if let Some(age) = typed_age_in_file(path, bus, session, now, spawn_payload) {
             newest = Some(newest.map_or(age, |n: i64| n.min(age)));
         }
     }
@@ -97,12 +157,16 @@ pub(crate) fn newest_typed_turn_age_s(
 /// and the mtime short-circuit cannot answer it - the incident row sat
 /// quiet 17 minutes when the sweep retired it, past every window here.
 /// The all-time read's one process-lifetime memo, keyed by the file's stat
-/// trio (path, len, mtime secs). An appended transcript misses (new len or
-/// mtime) and rescans; an unchanged one never pays the full read twice in
-/// this process - without it, a kept-forever row's transcript is read
+/// trio (path, len, mtime secs) PLUS the recorded seed the read exempts by:
+/// two rows can resolve to one transcript with different payloads, and a
+/// memo keyed without it would answer one row with another row's
+/// exemption. An appended transcript misses (new len or mtime) and
+/// rescans; an unchanged one never pays the full read twice in this
+/// process - without it, a kept-forever row's transcript is read
 /// end-to-end on every sweep pass.
-fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64), Option<i64>>> {
-    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64), Option<i64>>>> = OnceLock::new();
+fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
+    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
+        OnceLock::new();
     MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -111,6 +175,7 @@ pub(crate) fn newest_typed_turn_age_ever(
     bus: &BusIndex,
     session: &str,
     now: i64,
+    spawn_payload: Option<&str>,
 ) -> Option<i64> {
     let mut newest: Option<i64> = None;
     for path in paths {
@@ -129,7 +194,7 @@ pub(crate) fn newest_typed_turn_age_ever(
         let Ok((len, mtime)) = stat else {
             continue;
         };
-        let key = (path.clone(), len, mtime);
+        let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
         if let Some(hit) = scan_memo()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -140,7 +205,7 @@ pub(crate) fn newest_typed_turn_age_ever(
             }
             continue;
         }
-        let age = typed_age_in_file(path, bus, session, now);
+        let age = typed_age_in_file(path, bus, session, now, spawn_payload);
         let mut memo = scan_memo().lock().unwrap_or_else(|e| e.into_inner());
         if memo.len() >= 1024 {
             memo.clear();
@@ -165,12 +230,13 @@ pub(crate) fn sweep_hold(
     now: i64,
     hold_age_s: Option<i64>,
     hold_age_basis: &'static str,
+    spawn_payload: Option<&str>,
 ) -> Option<crate::gc_sweep::Hold> {
     if quiet {
         return None;
     }
     let hits = hits?;
-    let typed_age = newest_typed_turn_age_s(&hits, &bus_for(home), sid, now)?;
+    let typed_age = newest_typed_turn_age_s(&hits, &bus_for(home), sid, now, spawn_payload)?;
     (typed_age <= WINDOW_SECS).then(|| crate::gc_sweep::Hold {
         id: id.to_string(),
         reason: "attended",
@@ -190,9 +256,10 @@ pub(crate) fn typed_turn_age_ever_for_row(
     home: &crate::paths::AgentsHome,
     sid: &str,
     now: i64,
+    spawn_payload: Option<&str>,
 ) -> Option<i64> {
     let hits = hits?;
-    newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now)
+    newest_typed_turn_age_ever(&hits, &bus_for(home), sid, now, spawn_payload)
 }
 
 /// The stop-verb refusal: `Some(why)` when the row's store-resolved
@@ -205,7 +272,7 @@ pub(crate) fn stop_refusal(home: &crate::paths::AgentsHome, e: &RegistryEntry) -
     let now = crate::daemon::now_epoch_secs();
     let sid = e.harness_session_id.as_deref().unwrap_or("");
     let bus = bus_for(home);
-    let typed_age = newest_typed_turn_age_s(&hits, &bus, sid, now)?;
+    let typed_age = newest_typed_turn_age_s(&hits, &bus, sid, now, e.spawn_payload.as_deref())?;
     (typed_age <= WINDOW_SECS).then(|| format!("typed user turn {typed_age}s ago"))
 }
 
@@ -237,11 +304,11 @@ mod tests {
         .unwrap();
         let bus = BusIndex::empty();
         assert_eq!(
-            newest_typed_turn_age_s(&[path.clone()], &bus, "s1", now),
+            newest_typed_turn_age_s(&[path.clone()], &bus, "s1", now, None),
             Some(120),
             "the newest TYPED turn decides; the keepalive and the mail never hold"
         );
-        assert_eq!(newest_typed_turn_age_s(&[], &bus, "s1", now), None);
+        assert_eq!(newest_typed_turn_age_s(&[], &bus, "s1", now, None), None);
         let machine_only = dir.path().join("s2.jsonl");
         std::fs::write(
             &machine_only,
@@ -252,7 +319,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            newest_typed_turn_age_s(&[machine_only], &bus, "s2", now),
+            newest_typed_turn_age_s(&[machine_only], &bus, "s2", now, None),
             None,
             "machine-only transcript: nothing testifies"
         );
@@ -276,7 +343,7 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(old))
             .unwrap();
         assert_eq!(
-            newest_typed_turn_age_s(&[aged], &bus, "s3", now),
+            newest_typed_turn_age_s(&[aged], &bus, "s3", now, None),
             None,
             "a file quiet past the window is skipped"
         );
@@ -313,19 +380,24 @@ mod tests {
             .unwrap();
         let bus = BusIndex::empty();
         assert_eq!(
-            newest_typed_turn_age_s(&[path.clone()], &bus, "old", now),
+            newest_typed_turn_age_s(&[path.clone()], &bus, "old", now, None),
             None,
             "the windowed read skips the quiet file whatever its rows carry"
         );
         assert_eq!(
-            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now),
+            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
             Some(120),
             "the all-time read answers whatever the mtime says"
         );
-        assert_eq!(newest_typed_turn_age_ever(&[], &bus, "old", now), None);
+        assert_eq!(
+            newest_typed_turn_age_ever(&[], &bus, "old", now, None),
+            None
+        );
         // The memo short-circuits the read on an unchanged stat trio, and an
         // append (new len) misses and rescans - a stale cache must never
-        // swallow a later typed turn.
+        // swallow a later typed turn. The seed is part of the key: two rows
+        // resolving to one transcript with different recorded seeds must
+        // never read each other's exemption.
         let stat = std::fs::metadata(&path).unwrap();
         let key = (
             path.clone(),
@@ -335,13 +407,14 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs() as i64,
+            None,
         );
         scan_memo()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(key, Some(999));
         assert_eq!(
-            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now),
+            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
             Some(999),
             "an unchanged file answers from the memo, not from a rescan"
         );
@@ -358,9 +431,111 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            newest_typed_turn_age_ever(&[path], &bus, "old", now),
+            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
             Some(30),
             "the append is a new stat trio: the memo misses and the rescan answers"
         );
+        assert_eq!(
+            newest_typed_turn_age_ever(&[path], &bus, "old", now, Some("/fno:target 42")),
+            Some(30),
+            "a different recorded seed is a different memo key: the rescan answers"
+        );
+    }
+
+    #[test]
+    fn the_spawn_seed_command_never_holds_but_another_command_still_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::daemon::now_epoch_secs();
+        let ts = |age: i64| {
+            chrono::DateTime::from_timestamp(now - age, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        // A spawn seeded with a slash command renders one user turn of
+        // claude command XML, the args swallowing the brevity block that
+        // trailed the payload.
+        let seed =
+            "/fno:target 42\n\n<fno_relay_compression>\nkeep it short\n</fno_relay_compression>";
+        let rendered = format!(
+            "{}\n",
+            json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":
+                "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>42\n\n<fno_relay_compression>\nkeep it short\n</fno_relay_compression>"}})
+        );
+        let path = dir.path().join("seeded.jsonl");
+        std::fs::write(&path, &rendered).unwrap();
+        let bus = BusIndex::empty();
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, Some(seed)),
+            None,
+            "the recorded seed's own command turn is the machine's, never a person"
+        );
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, None),
+            Some(60),
+            "without a recorded payload the command still holds, as before"
+        );
+        // A raw (unrendered) single-line transcript row matches by exact
+        // text: a bare command is the one shape that classifies
+        // CommandInvocation on a harness that logs the prompt verbatim.
+        let raw_path = dir.path().join("raw.jsonl");
+        std::fs::write(
+            &raw_path,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(45),"message":{"role":"user","content":"/fno:target 42"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            newest_typed_turn_age_s(&[raw_path], &bus, "w", now, Some("/fno:target 42")),
+            None,
+            "the raw seed row is the same machine turn"
+        );
+        // A DIFFERENT command a person typed later still holds the row.
+        let person_path = dir.path().join("person.jsonl");
+        std::fs::write(
+            &person_path,
+            format!(
+                "{}\n{}\n",
+                rendered.trim_end(),
+                json!({"type":"user","timestamp":ts(30),"message":{"role":"user","content":"<command-message>fno:review</command-message>\n<command-name>/fno:review</command-name>\n<command-args>medium</command-args>"}})
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            newest_typed_turn_age_s(&[person_path], &bus, "w", now, Some(seed)),
+            Some(30),
+            "a hand-run command that is not the seed still counts as the operator"
+        );
+    }
+
+    #[test]
+    fn the_seed_matcher_is_exact_and_fails_open() {
+        let seed = "/fno:target 42\n\n<block>";
+        assert!(is_spawn_seed_turn(seed, seed), "raw equality");
+        assert!(is_spawn_seed_turn(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>42\n\n<block></command-args>",
+            seed
+        ), "the claude rendering matches");
+        assert!(
+            is_spawn_seed_turn(
+                "<command-name>/fno:target</command-name>\n<command-args>42\n\n<block>",
+                seed
+            ),
+            "an unclosed args block still matches on the open form"
+        );
+        assert!(!is_spawn_seed_turn(
+            "<command-name>/fno:review</command-name>\n<command-args>42\n\n<block></command-args>",
+            seed
+        ), "a different verb is a person");
+        assert!(
+            !is_spawn_seed_turn(
+                "<command-name>/fno:target</command-name>\n<command-args>other</command-args>",
+                seed
+            ),
+            "different args are a person"
+        );
+        assert!(!is_spawn_seed_turn("", seed));
+        assert!(!is_spawn_seed_turn("prose about /fno:target 42", seed));
     }
 }
