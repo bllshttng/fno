@@ -38,7 +38,6 @@ _NO_TOOL_MSG = (
     "macOS or notify-send on Linux); notification not sent."
 )
 
-# The subprocess seam at import: fakes are exempt from the real-alert guard.
 _REAL_SUBPROCESS_RUN = subprocess.run
 
 
@@ -47,11 +46,9 @@ def _mux_clients(title: str, message: str) -> int | None:
     if _suppressed() or os.environ.get("PYTEST_CURRENT_TEST"):
         return None
     try:
-        proc = subprocess.run(
-            [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message],
-            capture_output=True, text=True, timeout=5, check=False,
-            env={**os.environ, "FNO_PY_HANDOFF": "1"},
-        )
+        cmd = [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False,
+                              env={**os.environ, "FNO_PY_HANDOFF": "1"})
         return int(json.loads(proc.stdout).get("clients", 0)) if proc.returncode == 0 else None
     except Exception:
         return None
@@ -191,8 +188,7 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
-    # The journal leg first: it is load-bearing for status sinks, so even a
-    # mux delivery must not skip it (a codex round on this PR).
+    # The journal leg first: status sinks depend on it, mux delivery included.
     row = _emit_operator_notice(title, message, pointer)
     if _mux_clients(title, message):  # client-first; zero falls through
         return 0, ""
