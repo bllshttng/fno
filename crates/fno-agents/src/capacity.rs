@@ -221,7 +221,9 @@ impl Effective {
 
     /// The cap the loop learned, with the floor and any grant stripped off.
     fn learned_cap(&self) -> usize {
-        self.grant.as_ref().map_or(self.cap, |g| g.learned)
+        let held = self.held.as_ref().map(|h| h.learned);
+        let granted = self.grant.as_ref().map(|g| g.learned);
+        held.or(granted).unwrap_or(self.cap)
     }
 
     /// The command that lifts the cap to the ceiling for a window.
@@ -246,6 +248,24 @@ impl Effective {
                 self.grant_command()
             )
         })
+    }
+
+    /// Prints [`Self::override_hint`] on stderr when there is one.
+    pub fn eprint_hint(&self) {
+        if let Some(hint) = self.override_hint() {
+            eprintln!("{hint}");
+        }
+    }
+
+    /// The note a fleet CPU-share hold prints when an active grant admits it.
+    pub fn grant_hold_note(&self) -> String {
+        let until = self
+            .grant
+            .as_ref()
+            .map_or_else(String::new, |g| render_clock(g.expires_epoch));
+        format!(
+            "fleet CPU share is over the ceiling; admitted under the operator grant until {until}"
+        )
     }
 
     /// Adds the keys a slot refusal receipt carries beside its `max_live`:

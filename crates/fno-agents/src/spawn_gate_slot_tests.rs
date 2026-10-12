@@ -188,6 +188,50 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
         .spawn("successor", Some("session-lead"), Some("x-epic"))
         .expect("a sole teamed caller replaces its row")
         .release();
+
+    // Below the ceiling a refusal names the learned cap, the ceiling and the
+    // command that lifts it, and an active grant releases the same spawn on
+    // its next pass.
+    let home = crate::paths::AgentsHome::from_env();
+    let now = chrono::Utc::now().timestamp();
+    let learned_one = crate::capacity::CapacityState {
+        ceiling: 2,
+        effective: 1,
+        reason: Some("CPU-bound".into()),
+        since: Some(now - 60),
+        slots_learned: None,
+        over_since: None,
+        calm_since: None,
+        memory: None,
+        accounts: Vec::new(),
+        workers_live: None,
+        updated_epoch: now - 60,
+    };
+    crate::capacity::write_state(&home, &learned_one).unwrap();
+    fixture.write_entries(vec![fixture.lead("lead", "session-lead", "x-epic")]);
+    let refusal = fixture
+        .spawn("plain-2", Some("session-lead"), None)
+        .expect_err("the learned cap of 1 holds the lead's own slot");
+    let line = verdict_line(&refusal);
+    assert!(line.contains("learned_cap=1, ceiling=2"), "{line}");
+    assert!(
+        line.ends_with(
+            "remedy: fno agents spawn-gate grant --cap 2 --for 2h (the user's terminal only)"
+        ),
+        "{line}"
+    );
+    let grant = crate::capacity_grant::Grant {
+        cap: 2,
+        granted_epoch: now,
+        expires_epoch: now + 3600,
+        decision_id: "d-test".into(),
+        learned_at_grant: 1,
+    };
+    crate::capacity_grant::write(&home, &grant).unwrap();
+    fixture
+        .spawn("plain-2", Some("session-lead"), None)
+        .expect("a grant lifts the learned cap on the next pass")
+        .release();
 }
 
 #[test]

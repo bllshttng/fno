@@ -163,7 +163,8 @@ pub(crate) fn verdict_line(r: &Refusal) -> String {
             if matches!(
                 k.as_str(),
                 "status" | "reason" | "axis" | "held_on" | "remedy"
-            ) {
+            ) || (k.as_str() == "max_live" && map.get("learned_cap") == Some(v))
+            {
                 continue;
             }
             match v {
@@ -1700,7 +1701,17 @@ fn decide_gate(
             let admission = &cpu.payload;
             axes_read.insert("cpu".into(), serde_json::json!(admission.verdict));
             let figures = receipt_fields(admission);
-            match admission.verdict.as_str() {
+            // An active operator grant lifts the CPU-share hold; a blind
+            // instrument is not load, so refuse and undecidable stay.
+            let verdict = match (admission.verdict.as_str(), learned.granted()) {
+                ("hold", true) => {
+                    eprintln!("{NOTE} {}", learned.grant_hold_note());
+                    held_on_cpu = false;
+                    "admit"
+                }
+                (other, _) => other,
+            };
+            match verdict {
                 "refuse" | "undecidable" => {
                     // A blind read breaks both consecutive-sample runs.
                     under_streak = 0;
@@ -1754,6 +1765,7 @@ fn decide_gate(
                     guard.release_gate_mutex();
                     if flags.no_wait {
                         eprintln!("{}", admission.reason);
+                        learned.eprint_hint();
                         let mut receipt = serde_json::json!({
                             "status": "refused",
                             "reason": "fleet_cpu_share",
@@ -1960,6 +1972,7 @@ fn decide_gate(
                                 "refusing (--no-wait).",
                             );
                             eprintln!("spawn-gate: {line}");
+                            learned.eprint_hint();
                             let mut receipt = serde_json::json!({
                                 "status": "refused",
                                 "reason": "no_wait",
@@ -1979,6 +1992,7 @@ fn decide_gate(
                                     "question_id": qid,
                                 })).collect::<Vec<_>>(),
                             });
+                            learned.annotate(&mut receipt);
                             if let Some(reason) = last_succession_error {
                                 receipt["succession"] = serde_json::json!(reason);
                             }
@@ -2004,6 +2018,7 @@ fn decide_gate(
                                 "waiting for a free slot (--no-wait to fail fast, --force to bypass)",
                             );
                             eprintln!("spawn queued: {line}");
+                            learned.eprint_hint();
                             announced = true;
                             last_progress = Instant::now();
                         } else if last_progress.elapsed() >= QUEUE_PROGRESS_EVERY {
@@ -2064,6 +2079,7 @@ fn decide_gate(
                      inspect live workers with `fno agents top`, or retry with --no-wait/--force",
                     QUEUE_TIMEOUT.as_secs()
                 );
+                learned.eprint_hint();
             }
             let mut receipt = serde_json::json!({
                 "status": "refused",
@@ -2075,6 +2091,7 @@ fn decide_gate(
                 "count": last_slots,
                 "current_count": last_slots,
             });
+            learned.annotate(&mut receipt);
             if let Some(reason) = last_succession_error {
                 receipt["succession"] = serde_json::json!(reason);
             }
@@ -2197,7 +2214,10 @@ fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
     }
     match ram_floor_term(m.avail, floor_gb, m.swap, m.swapin_bps, max_swap_pct) {
         Some((reason, term)) => {
-            eprintln!("spawn-gate: {term}; refusing to spawn (--force to bypass)");
+            eprintln!(
+                "spawn-gate: {term}; refusing to spawn. The memory axis is hard: a cap grant does \
+                 not lift it. For this one spawn: --force."
+            );
             Err(Refusal::with_receipt(
                 EXIT_RAM_REFUSED,
                 serde_json::json!({
