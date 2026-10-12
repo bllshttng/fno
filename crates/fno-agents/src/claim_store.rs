@@ -623,13 +623,11 @@ pub(crate) fn budget_hold_read(
     if *until <= now {
         return Ok(None);
     }
-    let int = |v: Option<&SqlValue>| -> i64 {
-        match v {
-            Some(SqlValue::Integer(n)) => *n,
-            _ => 0,
-        }
+    let num = |i: usize| match row.get(i) {
+        Some(SqlValue::Integer(n)) => *n,
+        _ => 0,
     };
-    Ok(Some((*until, int(at(1)), int(at(2)))))
+    Ok(Some((*until, num(1), num(2))))
 }
 
 /// Write the shared hold. `root` is the same test seam `budget_hold_read`
