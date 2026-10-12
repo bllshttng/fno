@@ -31,7 +31,7 @@ trap 'rm -rf "$WORK"' EXIT
 export FNO_AGENTS_HOME="$WORK/agents"
 DIR="$FNO_AGENTS_HOME/friction"
 mkdir -p "$DIR"
-SID="7e4a973a-60eb-4453-9344-c6537a46d7ed"
+SID="cccccccc-3333-4333-8333-333333333333"
 OTHER="bbbbbbbb-2222-4222-8222-222222222222"
 
 # Skip: 200 runs with no offer file, timed for the PR body.

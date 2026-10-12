@@ -546,7 +546,7 @@ pub(crate) fn offer_for(session: &str, fp: &str) -> Result<Value, PathBuf> {
 mod tests {
     use super::*;
 
-    const SID: &str = "7e4a973a-60eb-4453-9344-c6537a46d7ed";
+    const SID: &str = "cccccccc-3333-4333-8333-333333333333";
 
     struct World {
         _dir: tempfile::TempDir,
@@ -570,7 +570,7 @@ mod tests {
     fn help<'a>(reason: &'a str) -> FrictionInput<'a> {
         FrictionInput {
             harness_session: Some(SID),
-            node: Some("x-0001"),
+            node: Some("zz-0001"),
             harness: Some("codex"),
             origin: Origin::Help,
             key: reason.to_string(),
@@ -629,18 +629,18 @@ mod tests {
     #[test]
     fn a_match_offers_open_nodes_once_and_never_the_working_node() {
         let w = world(&[
-            json!({"id": "x-0001", "title": "keeper lock hangs cargo test", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-0002", "title": "keeper lock hangs cargo test runs", "status": "ready", "priority": "p2"}),
-            json!({"id": "x-0003", "title": "keeper lock hangs cargo", "status": "done", "priority": "p2"}),
-            json!({"id": "x-0004", "title": "unrelated lock", "status": "ready", "priority": "p2"}),
+            json!({"id": "zz-0001", "title": "keeper lock hangs cargo test", "status": "ready", "priority": "p2"}),
+            json!({"id": "zz-0002", "title": "keeper lock hangs cargo test runs", "status": "ready", "priority": "p2"}),
+            json!({"id": "zz-0003", "title": "keeper lock hangs cargo", "status": "done", "priority": "p2"}),
+            json!({"id": "zz-0004", "title": "unrelated lock", "status": "ready", "priority": "p2"}),
         ]);
         let input = help("cargo keeper lock hangs the test run");
         assert_eq!(go(&w, &input, true), Some("offered"));
         let row = &rows(&w)[0];
-        assert_eq!(row["data"]["candidates"], json!(["x-0002"]));
+        assert_eq!(row["data"]["candidates"], json!(["zz-0002"]));
         let offer = std::fs::read_to_string(w.friction.join(format!("{SID}.offer"))).unwrap();
         assert!(
-            offer.contains("x-0002") && offer.contains("--friction"),
+            offer.contains("zz-0002") && offer.contains("--friction"),
             "{offer}"
         );
         // The same fingerprint from a new row source still debounces in the ledger.

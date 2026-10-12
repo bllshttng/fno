@@ -570,7 +570,7 @@ mod tests {
         let home = f._dir.path().join("agents");
         let _home = EnvVarGuard::set("FNO_AGENTS_HOME", home.to_str().unwrap());
         std::fs::create_dir_all(home.join("friction")).unwrap();
-        let ledger = json!({"offers": [{"fingerprint": "0123456789ab", "node": "x-a47a",
+        let ledger = json!({"offers": [{"fingerprint": "0123456789ab", "node": "zz-0009",
                              "stage": "execute", "candidates": ["zz-0001"]}], "seen": []});
         let path = home.join("friction").join(format!("{A}.json"));
         std::fs::write(path, ledger.to_string()).unwrap();
@@ -588,7 +588,7 @@ mod tests {
         ];
         assert_eq!(vote(&f.graph, &argv, Some(A)).0, 0);
         let stored = &encounters(&f.graph)[0];
-        assert_eq!(stored["working_node"], "x-a47a");
+        assert_eq!(stored["working_node"], "zz-0009");
         assert_eq!(stored["stage"], "execute");
         assert_eq!(stored["friction"], "0123456789ab");
     }
