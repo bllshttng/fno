@@ -1441,4 +1441,39 @@ mod tests {
         assert!(outbox(&a) > 0);
         route_to_primary(None);
     }
+
+    #[test]
+    fn an_update_that_names_a_new_parent_lands_with_its_parent() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "child");
+        flush(&a.graph).unwrap();
+
+        // The local entity trigger makes the agent_sessions parent; the
+        // primary has no such trigger, so the parent must ride the batch.
+        crate::backlog::open(&a.graph)
+            .unwrap()
+            .execute(
+                &format!("UPDATE {NODES} SET session_id = 's-new' WHERE id = 'x-1'"),
+                [],
+            )
+            .unwrap();
+        let flushed = flush(&a.graph);
+        let (on_node, on_parent): (Option<String>, i64) = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT session_id FROM nodes WHERE id = 'x-1'),
+                        (SELECT COUNT(*) FROM agent_sessions WHERE id = 's-new')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        route_to_primary(None);
+        flushed.unwrap();
+        assert_eq!((on_node.as_deref(), on_parent), (Some("s-new"), 1));
+    }
 }
