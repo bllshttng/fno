@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       paint_binary:
-        description: "Build and upload the macOS arm64 fno binary without paint-path selection. For a paint gate armed outside the repo (the canonical or global config tier a runner cannot read); pull_request selection stays config-driven."
+        description: "Build and upload the macOS fno binaries (arm64 and x64) without paint-path selection. For a paint gate armed outside the repo, in the canonical or global config tier a runner cannot read. pull_request selection stays config-driven."
         type: boolean
         default: false
   push:
