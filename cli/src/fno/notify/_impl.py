@@ -21,10 +21,6 @@ The return contract widens accordingly: 0 when at least one channel accepted
 the message (a local tool dispatched, or the event landed and an enabled sink
 routes it); non-zero only when no channel exists at all. The AC2-FR shape is
 unchanged - the code stays an honest channel count, in both directions.
-
- adds the third leg: ``fno mux notify`` posts the notice through attached mux
-clients (OSC 777); zero clients falls back. Under pytest the mux leg skips
-and a REAL local dispatch raises.
 """
 from __future__ import annotations
 
@@ -47,8 +43,7 @@ _REAL_SUBPROCESS_RUN = subprocess.run
 
 
 def _mux_clients(title: str, message: str) -> int | None:
-    """Attached clients that took the notice, else None; None too under a
-    hermetic stamp or pytest (never a real test side effect)."""
+    """Attached clients that took the notice via ``fno mux notify``, else None."""
     if _suppressed() or os.environ.get("PYTEST_CURRENT_TEST"):
         return None
     try:
@@ -65,9 +60,7 @@ def _mux_clients(title: str, message: str) -> int | None:
 def _refuse_real_os_alert() -> None:
     """Raise when a REAL OS alert would fire under pytest; fakes exempt."""
     if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.run is _REAL_SUBPROCESS_RUN:
-        raise RuntimeError(
-            "fno notify: real OS notification refused under pytest (fake subprocess.run or set FNO_TEST_HERMETIC=1)",
-        )
+        raise RuntimeError("real OS alert refused under pytest: fake subprocess.run or set FNO_TEST_HERMETIC=1")
 
 
 def _suppressed() -> bool:
@@ -198,8 +191,7 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
-    # Client-first: an attached terminal's toast outranks Script Editor's.
-    if _mux_clients(title, message):
+    if _mux_clients(title, message):  # client-first; zero falls through
         return 0, ""
 
     local = _dispatch_local(title, message)
