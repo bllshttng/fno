@@ -666,7 +666,7 @@ mod tests {
         assert!(text.contains("2 pr · 1 merged"), "{text}");
         let unowned_text = unowned_line(&team.unowned, 200).expect("the unowned line renders");
         assert!(
-            unowned_text.contains("unowned  1 live · 1 pr"),
+            unowned_text.contains("unowned  1 live · 1 working · 1 pr"),
             "{unowned_text}"
         );
         assert!(
