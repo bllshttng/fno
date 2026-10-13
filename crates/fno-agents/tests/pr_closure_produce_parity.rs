@@ -119,12 +119,21 @@ fn build_fixture(root: &Path, case: &Value, index: usize) -> PathBuf {
 // harness or capture variables.
 // -------------------------------------------------------------------------
 
+/// The pinned PATH for a child run. Ambient is /usr/bin:/bin; Stub prepends
+/// a stub bin dir to it; Empty pins nothing, so a gh lookup fails even on
+/// CI runners that ship an executable /usr/bin/gh.
+enum PathPlan<'a> {
+    Ambient,
+    Stub(&'a Path),
+    Empty,
+}
+
 fn pinned_env(
     cmd: &mut Command,
     case_dir: &Path,
     backend_github: bool,
     home: &Path,
-    stub_dir: Option<&Path>,
+    plan: PathPlan<'_>,
 ) {
     for var in [
         "FNO_CAPTURE_GOLDEN",
@@ -140,9 +149,10 @@ fn pinned_env(
         cmd.env("FNO_TRACKER_BACKEND", "github");
     }
     cmd.env("FNO_AGENTS_HOME", home);
-    let path = match stub_dir {
-        Some(dir) => format!("{}:/usr/bin:/bin", dir.display()),
-        None => "/usr/bin:/bin".to_string(),
+    let path = match plan {
+        PathPlan::Ambient => "/usr/bin:/bin".to_string(),
+        PathPlan::Stub(dir) => format!("{}:/usr/bin:/bin", dir.display()),
+        PathPlan::Empty => String::new(),
     };
     cmd.env("PATH", path);
 }
@@ -153,7 +163,7 @@ fn run_child(
     case_dir: &Path,
     backend_github: bool,
     home: &Path,
-    stub_dir: Option<&Path>,
+    plan: PathPlan<'_>,
 ) -> Golden {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
     cmd.args(argv)
@@ -162,7 +172,7 @@ fn run_child(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    pinned_env(&mut cmd, case_dir, backend_github, home, stub_dir);
+    pinned_env(&mut cmd, case_dir, backend_github, home, plan);
     let mut child = cmd.spawn().expect("spawn fno-agents");
     if let Some(payload) = stdin {
         // The child may answer and exit before draining the pipe; a broken
@@ -199,7 +209,7 @@ fn run_oracle(case_dir: &Path, backend_github: bool, home: &Path) -> Golden {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    pinned_env(&mut cmd, case_dir, backend_github, home, None);
+    pinned_env(&mut cmd, case_dir, backend_github, home, PathPlan::Ambient);
     cmd.env("PYTHONPATH", repo_root().join("cli/src"));
     let out = cmd.output().expect("run the oracle");
     let parsed: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
@@ -329,7 +339,7 @@ fn produce_verbs_match_the_python_oracle() {
             &case_dir,
             backend_github,
             &home,
-            None,
+            PathPlan::Ambient,
         );
 
         // One-stream discipline mirrors the freeze: a case whose oracle leg
@@ -393,7 +403,7 @@ fn bind_stamp_prints_nothing_on_stderr() {
         &case_dir,
         false,
         &home,
-        None,
+        PathPlan::Ambient,
     );
     assert_eq!(got.exit, Some(0));
     assert!(
@@ -445,14 +455,22 @@ fn context_envelope_and_failure_paths_are_pinned() {
         &case_dir,
         false,
         &home,
-        Some(&bin_dir),
+        PathPlan::Stub(&bin_dir),
     );
     assert_eq!(got.exit, Some(0));
     assert_eq!(got.streams[0], format!("{CONTEXT_ENVELOPE}\n"));
     assert_eq!(got.streams[1], "");
 
-    // No gh anywhere on PATH.
-    let got = run_child(&argv, Some(CONTEXT_PAYLOAD), &case_dir, false, &home, None);
+    // No gh anywhere on PATH. An empty PATH keeps the leg hermetic: CI
+    // runners ship an executable /usr/bin/gh, which the lookup would find.
+    let got = run_child(
+        &argv,
+        Some(CONTEXT_PAYLOAD),
+        &case_dir,
+        false,
+        &home,
+        PathPlan::Empty,
+    );
     assert_eq!(got.exit, Some(3));
     assert_eq!(got.streams[0], "");
     assert_eq!(
@@ -472,7 +490,7 @@ fn context_envelope_and_failure_paths_are_pinned() {
         &case_dir,
         false,
         &home,
-        Some(&bin_dir),
+        PathPlan::Stub(&bin_dir),
     );
     assert_eq!(got.exit, Some(3));
     assert_eq!(got.streams[0], "");
@@ -489,7 +507,7 @@ fn context_envelope_and_failure_paths_are_pinned() {
         &case_dir,
         false,
         &home,
-        Some(&bin_dir),
+        PathPlan::Stub(&bin_dir),
     );
     assert_eq!(got.exit, Some(3));
     assert_eq!(got.streams[0], "");
@@ -508,7 +526,7 @@ fn context_envelope_and_failure_paths_are_pinned() {
         &case_dir,
         false,
         &home,
-        Some(&bin_dir),
+        PathPlan::Stub(&bin_dir),
     );
     assert_eq!(got.exit, Some(3));
     assert_eq!(got.streams[0], "");
