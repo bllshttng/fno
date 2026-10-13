@@ -666,6 +666,12 @@ pub(crate) fn canonical_root_cache_reset() {
     cache.inflight.clear();
 }
 
+/// The cache is process-global and cargo runs tests in parallel threads.
+/// Two tests that reset it must not overlap: one reset can erase the
+/// other's in-flight marker and a waiter then re-resolves.
+#[cfg(test)]
+static CANONICAL_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// What the filesystem alone says about the repo around a cwd.
 enum RepoProbe {
     /// Something git may read differently (env redirect, malformed marker,
@@ -1648,6 +1654,9 @@ mod tests {
         // Negative answers cache the same way, so a non-repo cwd stops
         // re-forking git too. Hermetic by injection; no PATH mutation that a
         // parallel test's git spawn could race.
+        let _serial = CANONICAL_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         canonical_root_cache_reset();
         let repo = tmp("memo");
         let empty = tmp("memo-empty");
@@ -1692,6 +1701,9 @@ mod tests {
         // tasks; without single-flight each miss forks its own git. Four
         // threads, one cwd: the resolver must run exactly once and every
         // caller gets the same answer.
+        let _serial = CANONICAL_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         canonical_root_cache_reset();
         let repo = tmp("memo-concurrent");
         std::fs::create_dir_all(&repo).unwrap();

@@ -116,7 +116,9 @@ pub fn run_claim(args: &[String]) -> i32 {
         return crate::claim_cli::session_pid::run(&args[1..]);
     }
     if op == "list" {
-        return run_claim_list(&args[1..]);
+        // One dispatch line: argument parsing and the arm body live in
+        // claim_cli/list.rs, like every ported claim leaf.
+        return crate::claim_cli::list::run(&args[1..]);
     }
     if op == "release-stopped" {
         return run_release_stopped(&args[1..]);
@@ -512,60 +514,6 @@ pub(crate) fn reap_roots(
     summary
 }
 
-/// `fno-agents claim list [--prefix <prefix>] [--include-stale] [--root <dir>]`
-/// — return the same status-shaped lockfile rows as the Python list verb.
-fn run_claim_list(args: &[String]) -> i32 {
-    let mut prefix: Option<String> = None;
-    let mut root: Option<PathBuf> = None;
-    let mut include_stale = false;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--prefix" => match it.next() {
-                Some(value) => prefix = Some(value.clone()),
-                None => {
-                    eprintln!("fno-agents: claim list: --prefix requires a value");
-                    return 2;
-                }
-            },
-            "--root" => match it.next() {
-                Some(value) => root = Some(PathBuf::from(value)),
-                None => {
-                    eprintln!("fno-agents: claim list: --root requires a value");
-                    return 2;
-                }
-            },
-            "--include-stale" => include_stale = true,
-            "--json" | "-J" => {}
-            other => {
-                eprintln!("fno-agents: claim list: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
-    // An explicit --root names the one store to read; only the bare form
-    // also folds in the global root.
-    let listed = match root.as_deref() {
-        Some(root) => crate::claims::list_in(
-            &[root.join(crate::claims::CLAIMS_DIRNAME)],
-            prefix.as_deref(),
-            include_stale,
-        ),
-        None => crate::claims::list(prefix.as_deref(), None, include_stale),
-    };
-    let rows = match listed {
-        Ok(rows) => rows,
-        Err(error) => {
-            eprintln!("fno-agents: claim list: {error}");
-            return 1;
-        }
-    };
-    let payload: Vec<Value> = rows.iter().map(claim_status_value).collect();
-    println!("{}", Value::Array(payload));
-    0
-}
-
-#[allow(dead_code)]
 pub(crate) fn claim_status_value(rec: &crate::claims::ClaimRecord) -> Value {
     let (witness, witness_answer) = default_session_witness();
     let witness: crate::claims::SessionWitness = &witness;
