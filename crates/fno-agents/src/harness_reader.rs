@@ -853,16 +853,19 @@ pub fn wait_for_ci_cell(harness: &str) -> (&'static str, String) {
 }
 
 /// The route flags the probe spawn carries. `--provider` is a claude-only
-/// route; any other harness reads the provider from its own model id, spelled
-/// `provider/model`.
+/// route. footnote and opencode read the provider from their own model id,
+/// spelled `provider/model`. Every other harness takes the model as given.
 pub fn probe_route_args(harness: &str, provider: Option<&str>, model: Option<&str>) -> Vec<String> {
     let mut args = Vec::new();
+    let prefixed = matches!(harness, "footnote" | "opencode");
     let model = match (provider, model) {
         (Some(provider), model) if harness == "claude" => {
             args.extend(["--provider".to_string(), provider.to_string()]);
             model.map(str::to_string)
         }
-        (Some(provider), Some(model)) if !model.starts_with(&format!("{provider}/")) => {
+        (Some(provider), Some(model))
+            if prefixed && !model.starts_with(&format!("{provider}/")) =>
+        {
             Some(format!("{provider}/{model}"))
         }
         (_, model) => model.map(str::to_string),

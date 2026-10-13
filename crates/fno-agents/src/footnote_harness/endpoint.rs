@@ -114,9 +114,17 @@ pub fn resolve_endpoint(
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
     let named = provider.filter(|p| !p.is_empty()).map(str::to_string);
     let stamp = get(crate::codex_route::ROUTE_PROVIDER_ENV);
-    // A named record with no key falls through, so a row spawned on an env
-    // endpoint that carried a stamp still resumes on that endpoint.
-    let recorded = named.clone().and_then(|p| record_endpoint(cwd, p).ok());
+    let recorded = match named.as_deref() {
+        Some(p) if provider_record(cwd, p).is_some() => match record_endpoint(cwd, p.to_string()) {
+            Ok(ep) => Some(ep),
+            // An env endpoint stamped as this provider is the same vendor, so
+            // a row spawned on it still resumes there. Any other env endpoint
+            // is another vendor: refuse with the record's own reason.
+            Err(_) if stamp.as_deref() == Some(p) && get("ANTHROPIC_BASE_URL").is_some() => None,
+            Err(e) => return Err(e),
+        },
+        _ => None,
+    };
     let ep = if let Some(ep) = recorded {
         ep
     } else if let Some(base_url) = get("ANTHROPIC_BASE_URL") {

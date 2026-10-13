@@ -286,6 +286,11 @@ fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
     );
     assert_eq!(args("footnote", None, Some("glm-x")), "--model glm-x");
     assert_eq!(args("footnote", Some("zai"), None), "");
+    // A harness with no provider/model spelling takes the model as given.
+    assert_eq!(
+        args("codex", Some("openai"), Some("gpt-x")),
+        "--model gpt-x"
+    );
 }
 
 #[test]
