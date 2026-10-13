@@ -460,8 +460,20 @@ pub fn parse_args(args: &[String]) -> Result<ReviewLevelArgs, String> {
 }
 
 /// `fno do review resolve-level` binary door: print the JSON line, exit 0;
-/// usage errors print to stderr and exit 2 with empty stdout.
+/// `-h`/`--help` prints the usage text to stdout and exits 0 (the typer
+/// door's posture); usage errors print to stderr and exit 2 with empty
+/// stdout.
 pub fn run_review_level(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: fno do review resolve-level [level] [--provider P] [--root PATH]");
+        println!();
+        println!("Resolve a review level to the routing record and print it as one JSON line.");
+        println!("  [level]       low|medium|high|xhigh|max; default sizes from the diff");
+        println!("  --provider P  Override the provider axis for this resolution");
+        println!("  --root PATH   Resolve the diff at this project root");
+        println!("  -h, --help    Print this help and exit 0");
+        return 0;
+    }
     let parsed = match parse_args(args) {
         Ok(p) => p,
         Err(msg) => {
