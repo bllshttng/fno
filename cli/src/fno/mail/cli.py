@@ -4273,7 +4273,7 @@ def cmd_sent(
         argv += ["--from-name", from_name]
     if json_out:
         argv.append("--json")
-    _forward_mail(argv)
+    _forward_mail(argv, label="fno mail sent")
 
 
 @mail_app.command("withdraw")
@@ -4304,7 +4304,8 @@ def cmd_withdraw(
             "withdraw",
             msg_id,
             *(["--from-name", from_name] if from_name is not None else []),
-        ]
+        ],
+        label="fno mail withdraw",
     )
 
 
@@ -4426,7 +4427,7 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _forward_mail(argv: list[str]) -> None:
+def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
     The hold, team, sent, and withdraw verbs' bodies live in the Rust mail
@@ -4441,7 +4442,7 @@ def _forward_mail(argv: list[str]) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno agents mail {argv[0]}: the fno-agents binary was not found. "
+            f"{label}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
