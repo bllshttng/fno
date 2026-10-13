@@ -197,6 +197,15 @@ pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
         })
 }
 
+/// The send exits that name a row's recipient as undeliverable, ever: the
+/// registry has no such live name. Exit 16 is the current CLI's refusal
+/// (with closest-live-session suggestions on stderr); exit 13 is the
+/// pre-port spelling of the same refusal. A transient exit stays out, so
+/// only a send that can never land ends its row here.
+pub(crate) fn final_refusal(code: Option<i32>) -> bool {
+    matches!(code, Some(13) | Some(16))
+}
+
 /// The argv the front door forwards to its sibling `style-check`, with the
 /// receiver's configured mail word cap so the consult answers the same
 /// question the send's gate asked (the built-in default 80 applies when no
@@ -287,12 +296,15 @@ fn record_seen(home: &std::path::Path, msg_id: &str) -> Result<(), String> {
 }
 
 /// The delivery leg: the receiver's own local send answers. Its registry
-/// resolves the name (an unknown name refuses, exit 13, and the row stays
-/// pending for the TTL), and its holds apply untouched (edge 8). An exit 1
-/// whose style door names the body's violations marks the row refused, so
-/// the sender's `mail status` shows the loss instead of a pending row that
-/// every retry refuses again. Returns true when the row is done (delivered
-/// or refused), false to leave it pending for the next beat.
+/// resolves the name (an unknown recipient refuses deterministically - exit
+/// 16 today, exit 13 in the pre-port spelling of the same refusal), and its
+/// holds apply untouched (edge 8). An exit 1 whose style door names the
+/// body's violations marks the row refused, and so does an unknown
+/// recipient: the sender's `mail status` shows the loss instead of a
+/// pending row that every beat re-refuses at a send's cold start until the
+/// TTL (a week of a python spawn per beat per stuck row - the 2026-10-13
+/// daemon-burn finding). Returns true when the row is done (delivered or
+/// refused), false to leave it pending for the next beat.
 fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // Edge 6: a raw row is a command typed into a pane. Anyone on the
     // tailnet can write a bus row, and the sender-written from_id proves
@@ -327,6 +339,22 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             if code == Some(1) && style_door_refuses(&row.payload) {
                 eprintln!(
                     "mail-arm: local send for {} refused (exit {code:?}): {}",
+                    row.msg_id,
+                    brief(&output.stderr, 300)
+                );
+                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+                }
+                return true;
+            }
+            // An unknown recipient refuses the same way on every beat: the
+            // name is not in the receiver's registry and no later beat adds
+            // it. Retry cannot deliver, so the refusal is terminal like the
+            // style one above; the cold start it would re-pay each beat is
+            // the burn the 2026-10-13 audit measured.
+            if final_refusal(code) {
+                eprintln!(
+                    "mail-arm: local send for {} has no live recipient (exit {code:?}): {}",
                     row.msg_id,
                     brief(&output.stderr, 300)
                 );

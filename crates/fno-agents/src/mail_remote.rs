@@ -668,6 +668,14 @@ mod tests {
         ));
         assert!(!crate::mail_arm::door_confirms_refusal(b"{}"));
         assert!(!crate::mail_arm::door_confirms_refusal(b"not json"));
+        // The terminal refusals: an unknown recipient ends its row like the
+        // style refusal does (exit 16 today, 13 the pre-port spelling), and
+        // every transient exit stays pending for the next beat.
+        assert!(crate::mail_arm::final_refusal(Some(16)));
+        assert!(crate::mail_arm::final_refusal(Some(13)));
+        assert!(!crate::mail_arm::final_refusal(Some(1)));
+        assert!(!crate::mail_arm::final_refusal(Some(0)));
+        assert!(!crate::mail_arm::final_refusal(None));
         // The consult rides the front door's lint-style forwarding, with the
         // configured mail word cap appended when one is set.
         let argv = crate::mail_arm::style_door_argv(None);
