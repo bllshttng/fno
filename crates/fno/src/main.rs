@@ -207,6 +207,10 @@ enum Role {
     /// `fno agents mail pane-prepare`: the pane-send renderer. No aliases,
     /// so the carried tail is everything after the verb name.
     MailPanePrepare(Vec<OsString>),
+    /// `fno agents mail team`: the fleet broadcast. The verb and its tail
+    /// pass through byte-verbatim to the native leaf, which vets the body
+    /// and relays through `announce send`.
+    MailTeam(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -368,6 +372,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "pane-prepare" => Some(Role::MailPanePrepare(tail.to_vec())),
+        "team" => Some(Role::MailTeam(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "view" => Some(Role::MailViewRenamed),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
@@ -684,6 +693,9 @@ fn main() {
             &["mail"],
             &rest,
         )),
+        Role::MailTeam(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -890,6 +902,18 @@ mod tests {
             decide_role(&os(&["mail", "view"]), false),
             Role::MailViewRenamed
         ));
+        // The team broadcast claims its verb on both mounts, tail included.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "team", "--scope", "all", "hi"]),
+                false
+            ),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "team", "--scope", "all", "hi"]), false),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
         // The sent view claims its verb on both mounts, routed through the
         // native hold leaf's exec path.
         assert_eq!(

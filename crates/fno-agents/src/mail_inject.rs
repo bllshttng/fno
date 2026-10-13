@@ -1421,7 +1421,7 @@ fn opens_envelope_tag(head: &str, tag: &str) -> bool {
 
 /// Case-insensitive `haystack.contains(needle)`. `needle` is always an ASCII
 /// literal already in canonical case.
-fn contains_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(needle)
 }
 
