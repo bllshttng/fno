@@ -1,0 +1,191 @@
+//! The native lane exec: the door behind the preference path's exec swap.
+//! The ask names the lane's resolved values plus the launch context; the
+//! verb writes the launch record first (the dispatch reservation the gate
+//! counts - it carries the lane's provider), fills the lane template, then
+//! execs the native argv and streams its output. The row mints at the
+//! adopt: the session report claims the record and names the row from it,
+//! so this path mints nothing of its own.
+
+use serde_json::Value;
+use std::io::{self, Read};
+use std::path::PathBuf;
+use std::process::Command;
+
+pub fn run_launch_lane(args: &[String]) -> i32 {
+    if !args.is_empty() {
+        eprintln!("launch-lane: takes no flags; one stdin JSON payload");
+        return 2;
+    }
+    let mut input = String::new();
+    if io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("launch-lane: cannot read payload");
+        return 2;
+    }
+    let payload: Value = match serde_json::from_str(&input) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("launch-lane: bad payload: {error}");
+            return 2;
+        }
+    };
+    match exec_lane(&payload) {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("launch-lane: {message}");
+            2
+        }
+    }
+}
+
+fn str_field(payload: &Value, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn exec_lane(payload: &Value) -> Result<i32, String> {
+    let harness = str_field(payload, "harness");
+    let name = str_field(payload, "name");
+    let prompt = str_field(payload, "payload");
+    let launcher_session = str_field(payload, "launcher_session");
+    if harness.is_empty() || name.is_empty() {
+        return Err("payload needs harness and name".into());
+    }
+    if prompt.is_empty() {
+        return Err("payload needs a payload".into());
+    }
+    if launcher_session.is_empty() {
+        // A record naming no parent proves nothing, so the door refuses
+        // rather than launch ungated and unparented.
+        return Err(
+            "payload needs launcher_session: a record with no parent proves nothing".into(),
+        );
+    }
+    let cwd = {
+        let field = str_field(payload, "cwd");
+        if field.is_empty() {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        } else {
+            PathBuf::from(field)
+        }
+    };
+
+    // The record first: between exec and the session report no registry row
+    // exists, so the record is the seat the lane counts. An exec that fails
+    // after the write leaves the record holding the lane until its window
+    // lapses - the fail-safe direction, never the burst.
+    let home = crate::paths::AgentsHome::from_env();
+    crate::launch_record::write_record(
+        home.root(),
+        crate::launch_record::Launch {
+            harness: harness.clone(),
+            name: Some(name),
+            node: payload
+                .get("node")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            slot: payload
+                .get("slot")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            provider: payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            cwd: cwd.to_string_lossy().into_owned(),
+        },
+        &launcher_session,
+        payload.get("launcher_harness").and_then(Value::as_str),
+        &str_field(payload, "launcher_cwd"),
+        crate::claims::now_ms(),
+    )
+    .map_err(|error| format!("launch record: {error}"))?;
+
+    let template = crate::spawn_compose::resolve_template(
+        &harness,
+        payload.get("launch"),
+        payload.get("launch_optional"),
+    )?;
+    let values = crate::spawn_compose::fill_values(payload);
+    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
+    if tokens.is_empty() {
+        return Err("the filled argv is empty".into());
+    }
+    let status = Command::new(&tokens[0])
+        .args(&tokens[1..])
+        .current_dir(&cwd)
+        .status()
+        .map_err(|error| format!("exec {}: {error}", tokens[0]))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The door's full path: the record lands pending (with the provider, so
+    /// the gate counts it), the fill runs, and the child's exit code comes
+    /// back. The fake template keeps the test off the real claude.
+    #[test]
+    fn execs_the_native_line_and_writes_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
+        let out = exec_lane(&serde_json::json!({
+            "harness": "claude", "name": "w1",
+            "payload": "/fno:target x-1abc",
+            "launcher_session": "lead-1", "launcher_harness": "claude",
+            "provider": "zai", "node": "x-aaaa", "cwd": dir.path(),
+            "launch": ["sh", "-c", "echo launched"],
+        }))
+        .unwrap();
+        assert_eq!(out, 0);
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents-home"));
+        let pending =
+            crate::launch_record::pending_for_provider(home.root(), "zai", crate::claims::now_ms());
+        assert_eq!(pending, vec!["w1".to_string()], "the record holds the lane");
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+
+    /// A record with no parent proves nothing: the door refuses before the
+    /// record and before the exec.
+    #[test]
+    fn refuses_a_record_with_no_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
+        let error = exec_lane(&serde_json::json!({
+            "harness": "claude", "name": "w1",
+            "payload": "/fno:target x-1abc",
+            "launch": ["sh", "-c", "echo launched"],
+        }))
+        .unwrap_err();
+        assert!(error.contains("launcher_session"), "{error}");
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents-home"));
+        assert!(crate::launch_record::pending_for_provider(
+            home.root(),
+            "zai",
+            crate::claims::now_ms()
+        )
+        .is_empty());
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+
+    /// The child's own failure surfaces as its exit code: the launch may
+    /// have happened, so the record stays and the window lapses it.
+    #[test]
+    fn a_failing_child_returns_its_code() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
+        let out = exec_lane(&serde_json::json!({
+            "harness": "claude", "name": "w2",
+            "payload": "/x",
+            "launcher_session": "lead-1",
+            "cwd": dir.path(),
+            "launch": ["sh", "-c", "exit 3"],
+        }))
+        .unwrap();
+        assert_eq!(out, 3);
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+}

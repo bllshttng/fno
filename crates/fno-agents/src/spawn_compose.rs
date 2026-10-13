@@ -1761,6 +1761,78 @@ pub fn fill_launch(
     Ok(out)
 }
 
+/// Resolve one lane's launch template: a routing row's own `launch` list
+/// (with its optional sibling) over the harness's packaged default, with the
+/// default's optional set filtered to the holes the override still carries.
+/// Refuses a harness with neither - absence is the declared
+/// not-yet-templated state, never another harness's line. The row pieces
+/// arrive as raw JSON from the ask; non-string tokens refuse.
+pub fn resolve_template(
+    harness: &str,
+    row_launch: Option<&Value>,
+    row_optional: Option<&Value>,
+) -> Result<crate::harness_capabilities::LaunchTemplate, String> {
+    let parse_list = |value: &Value, what: &str| -> Result<Vec<String>, String> {
+        let items = value.as_array().ok_or(format!(
+            "spawn-overlay: {what} must be an argv list of strings"
+        ))?;
+        items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("spawn-overlay: {what} must be an argv list of strings"))
+            })
+            .collect()
+    };
+    let default_launch = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|error| error.to_string())?
+        .capabilities(harness)
+        .map_err(|error| error.to_string())?
+        .launch
+        .clone();
+    let (argv, optional) = match (row_launch, default_launch) {
+        (Some(raw), default) => {
+            let argv = parse_list(raw, "launch")?;
+            let optional = match row_optional {
+                Some(extra) => parse_list(extra, "launch_optional")?,
+                None => match default {
+                    Some(template) => template
+                        .optional
+                        .into_iter()
+                        .filter(|hole| argv.iter().any(|token| token == &format!("{{{hole}}}")))
+                        .collect(),
+                    None => Vec::new(),
+                },
+            };
+            (argv, optional)
+        }
+        (None, Some(default)) => (default.argv, default.optional),
+        (None, None) => {
+            return Err(format!(
+                "harness {harness} declares no native launch template"
+            ))
+        }
+    };
+    let template = crate::harness_capabilities::LaunchTemplate { argv, optional };
+    template
+        .validate(harness)
+        .map_err(|error| error.to_string())?;
+    Ok(template)
+}
+
+/// The ask's hole values: every closed-vocabulary hole present in the
+/// payload, empty when absent. The payload key IS the hole name, so the
+/// ask's `payload` field fills the `{payload}` hole unchanged.
+pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut values = std::collections::BTreeMap::new();
+    for hole in crate::harness_capabilities::LAUNCH_HOLES {
+        let value = payload.get(hole).and_then(Value::as_str).unwrap_or("");
+        values.insert(hole.to_string(), value.to_string());
+    }
+    values
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

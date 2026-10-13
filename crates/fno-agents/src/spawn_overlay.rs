@@ -310,54 +310,15 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
     if harness.is_empty() {
         return Err("spawn-overlay print: payload needs harness".into());
     }
-    let default_launch = crate::harness_capabilities::HarnessContract::packaged()
-        .map_err(|error| error.to_string())?
-        .capabilities(harness)
-        .map_err(|error| error.to_string())?
-        .launch
-        .clone();
-    let (argv, mut optional) = match (
-        payload.get("launch"),
-        payload.get("launch_optional"),
-        default_launch,
-    ) {
-        (Some(row_launch), row_optional, default) => {
-            let argv: Vec<String> = serde_json::from_value(row_launch.clone())
-                .map_err(|error| format!("spawn-overlay print: bad row launch: {error}"))?;
-            let optional = match row_optional {
-                Some(extra) => serde_json::from_value(extra.clone()).map_err(|error| {
-                    format!("spawn-overlay print: bad launch_optional: {error}")
-                })?,
-                None => match default {
-                    Some(template) => template
-                        .optional
-                        .into_iter()
-                        .filter(|hole| argv.iter().any(|token| token == &format!("{{{hole}}}")))
-                        .collect(),
-                    None => Vec::new(),
-                },
-            };
-            (argv, optional)
-        }
-        (None, _, Some(default)) => (default.argv.clone(), default.optional.clone()),
-        (None, _, None) => {
-            return Err(format!(
-                "harness {harness} declares no native launch template"
-            ))
-        }
-    };
     if payload.get("launch_optional").is_some() && payload.get("launch").is_none() {
         return Err("spawn-overlay print: launch_optional needs the row's launch list".into());
     }
-    let template = crate::harness_capabilities::LaunchTemplate { argv, optional };
-    template
-        .validate(harness)
-        .map_err(|error| error.to_string())?;
-    let mut values = std::collections::BTreeMap::new();
-    for hole in crate::harness_capabilities::LAUNCH_HOLES {
-        let value = payload.get(hole).and_then(Value::as_str).unwrap_or("");
-        values.insert(hole.to_string(), value.to_string());
-    }
+    let template = crate::spawn_compose::resolve_template(
+        harness,
+        payload.get("launch"),
+        payload.get("launch_optional"),
+    )?;
+    let values = crate::spawn_compose::fill_values(payload);
     let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
     Ok(json!({ "tokens": tokens }))
 }

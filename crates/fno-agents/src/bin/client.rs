@@ -59,6 +59,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "lead-escalation-text",
     "lead-history",
     "term-ledger",
+    "launch-lane",
     "route-slot",
     "route-settings",
     "list",
@@ -787,6 +788,13 @@ async fn run(args: Vec<String>) -> i32 {
     // lives in retask.rs.
     if verb == "rename" && args.len() == 1 {
         return fno_agents::retask::transport::run_payload();
+    }
+
+    // `launch-lane`: the native lane exec; the spawn's preference path sends
+    // one stdin JSON ask, the verb writes the launch record, fills the lane
+    // template and execs, streaming the child's output.
+    if verb == "launch-lane" {
+        return fno_agents::launch_exec::run_launch_lane(&args[1..]);
     }
 
     // `route-slot`: the delivery-slot resolver; Python's spawn seam, advance

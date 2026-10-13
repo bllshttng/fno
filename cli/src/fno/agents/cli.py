@@ -2723,6 +2723,96 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
+            # The native lane: a fresh routed claude thread spawn execs the
+            # lane's own bg line through the launch-lane door. The record is
+            # the dispatch reservation (it carries the lane's provider); the
+            # row mints at the adopt, from the record's name, node and parent
+            # edge, so this path runs no post-launch mint of its own. A lane
+            # spawn carrying axes the template does not express (a --model
+            # override, tier-3 passthrough, a role grant, a resume) keeps the
+            # dispatcher path.
+            native_lane = (
+                harness == "claude"
+                and substrate == "thread"
+                and not once
+                and not resume
+                and bool(route_env)
+                and role_level is None
+                and not (
+                    model or permission_mode or add_dir or agent or tools
+                    or deny_tools or passthrough or yolo or monitor
+                )
+            )
+            if native_lane:
+                from fno.agents.spawn_lineage import _capture_parent_edge
+
+                launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
+                if not launcher_session:
+                    print(
+                        "spawn: the native lane needs this session's own identity "
+                        "(the launch record names the parent); a spawn from outside "
+                        "any session keeps the dispatcher path.",
+                        file=sys.stderr,
+                    )
+                else:
+                    from fno.rust_binary import resolve_binary
+                    import subprocess as _subprocess
+
+                    from fno.agents.model_routing import route_settings_path_for
+
+                    settings_path = route_settings_path_for(
+                        route_env, account_env, env=dict(os.environ),
+                        sandbox=sandbox_settings,
+                    )
+                    ask: dict = {
+                        "harness": harness,
+                        "name": name,
+                        "payload": message or "",
+                        "settings": settings_path or "",
+                        "model": route_model or "",
+                        "effort": effort or "",
+                        "cwd": str(workdir),
+                        "provider": route_provider or "",
+                        "node": (prov_env or {}).get("FNO_NODE") or "",
+                        "launcher_session": launcher_session,
+                    }
+                    if launcher_harness:
+                        ask["launcher_harness"] = launcher_harness
+                    if launcher_cwd:
+                        # The parent cwd rides the record; a launcher outside
+                        # any tracked cwd records none.
+                        if launcher_cwd.strip():
+                            ask["launcher_cwd"] = launcher_cwd
+                    if lane_row is not None and lane_row.launch:
+                        ask["launch"] = list(lane_row.launch)
+                    door_env = dict(os.environ)
+                    config_dir = (account_env or {}).get("CLAUDE_CONFIG_DIR")
+                    if config_dir:
+                        # A separate supervisor per config dir: the account's
+                        # own env rides the door's process env, where the
+                        # daemon fork keeps it; the rest of the account
+                        # overlay already rides the settings file.
+                        door_env["CLAUDE_CONFIG_DIR"] = config_dir
+                    proc = _subprocess.run(
+                        [str(resolve_binary()), "launch-lane"],
+                        input=json.dumps(ask),
+                        text=True,
+                        capture_output=True,
+                        env=door_env,
+                    )
+                    if proc.stdout:
+                        sys.stdout.write(proc.stdout)
+                    if proc.stderr:
+                        sys.stderr.write(proc.stderr)
+                    if proc.returncode != 0:
+                        raise typer.Exit(code=proc.returncode)
+                    spawn_succeeded = True
+                    print(
+                        f"spawn: {name} launched on the native lane; the row "
+                        "lands at its SessionStart adopt",
+                        file=sys.stderr,
+                    )
+                    return
             result: SpawnResult = dispatch_spawn(
                 name=name,
                 message=message,

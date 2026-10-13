@@ -798,7 +798,120 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     assert ask["effort"] == "xhigh", "the row's effort seeded the spawn"
     assert ask["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
     assert aliases == ["zai-flash"]
-    assert gate_calls == []
+
+
+def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
+    """A fresh routed claude thread spawn execs the lane's own bg line through
+    the launch-lane door: the ask carries the lane's values and the record
+    context, the dispatcher path never runs, and the gate still releases."""
+    from fno.agents import spawn_gate
+    from fno.agents.cli import agents_app
+
+    gate_calls: list[Any] = []
+
+    class RecordingGate(_Gate):
+        release_calls: list[bool] = []
+
+        def release(self) -> None:
+            RecordingGate.release_calls.append(True)
+
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    from fno import route_resolve
+    from fno.agents import model_routing as mr
+    from fno.route_resolve import Inventory, InventoryRow
+
+    row = InventoryRow(
+        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.3-flash[1m]", effort="xhigh",
+    )
+    monkeypatch.setattr(
+        route_resolve,
+        "resolve_inventory",
+        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+    )
+    monkeypatch.setattr(
+        mr,
+        "route_settings_path_for",
+        lambda *a, **k: "/state/route-settings/lane-zai-flash.json",
+    )
+    from fno.agents import spawn_lineage
+
+    monkeypatch.setattr(
+        spawn_lineage,
+        "_capture_parent_edge",
+        lambda: ("lead-1", "claude", str(tmp_path)),
+    )
+    ask_file = tmp_path / "door-ask.json"
+    fake = tmp_path / "fake-agents"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"cat > {ask_file}\n"
+        'echo \'{"kind":"created","name":"w","provider":"claude","short_id":"c-1"}\'\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+         "--route", "zai-flash"],
+    )
+    assert result.exit_code == 0, result.output
+    ask = json.loads(ask_file.read_text(encoding="utf-8"))
+    assert ask["harness"] == "claude"
+    assert ask["name"] == "w"
+    assert ask["payload"] == "/fno:target x-1abc"
+    assert ask["settings"] == "/state/route-settings/lane-zai-flash.json"
+    assert ask["model"] == "glm-5.3-flash[1m]"
+    assert ask["effort"] == "xhigh"
+    assert ask["provider"] == "zai"
+    assert ask["launcher_session"] == "lead-1"
+    assert RecordingGate.release_calls, "the gate still releases"
+
+
+def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, monkeypatch) -> None:
+    """A lane spawn carrying an axis the template does not express (a --model
+    override) keeps the dispatcher path - the swap is for plain lane spawns,
+    and the template's model hole belongs to the route, not a flag."""
+    from fno.agents import spawn_gate
+    from fno.agents.cli import agents_app
+
+    gate_calls: list[Any] = []
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    from fno import route_resolve
+    from fno.route_resolve import Inventory, InventoryRow
+
+    row = InventoryRow(
+        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.3-flash[1m]", effort="xhigh",
+    )
+    monkeypatch.setattr(
+        route_resolve,
+        "resolve_inventory",
+        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+    )
+    dispatched: list[dict] = []
+
+    def fake_dispatch(**kw):
+        dispatched.append(kw)
+        from fno.agents.dispatch import SpawnResult
+
+        return SpawnResult(kind="created", name=kw["name"], provider="claude", short_id="c-1")
+
+    monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+         "--route", "zai-flash", "--model", "glm-5.3-flash[1m]"],
+    )
+    assert result.exit_code == 0, result.output
+    assert dispatched, "the --model override keeps the dispatcher path"
 
 
 def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
