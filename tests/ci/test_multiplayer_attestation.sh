@@ -64,6 +64,10 @@ echo "PASS: the primary holds A's attestation"
 # from the primary segment. This is the exact read (native rows verb,
 # review_attestation types) the Python merge gate consults through
 # journal_lines.
+# Diagnostics first: a silent empty segment must name its half.
+echo "diag: B direct pull: $(env HOME="$HOME_B" "$FNO_AGENTS_BIN" attest pull 2>&1 || true)"
+echo "diag: B slug: $(git config --get remote.origin.url 2>&1 || true)"
+echo "diag: B config: $(cat "$HOME_B/.fno/config.toml")"
 rows_b=$(env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
     --events "$journal_b" --type review_attestation 2>"$HOME_B/rows.err") \
     || fail "machine B rows read failed: $(cat "$HOME_B/rows.err")"
