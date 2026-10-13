@@ -2,31 +2,28 @@
 """recursive-grep guard entry. The body lives in recursive_grep_guard_impl.py.
 
 Python never caches bytecode for a __main__ script, so the previous
-single-file shape recompiled the whole guard on every Bash tool call. As an
-imported module the body compiles once into __pycache__ and every later
-spawn loads it instead.
+single-file shape recompiled the whole guard on every Bash tool call. The
+spawn path imports the impl module, whose bytecode compiles once into the
+interpreter's cache and every later spawn loads.
 
-Two callers reach this file: the fno-agents binary spawns it, and the test
-suite loads it through importlib and reaches guard internals here. The
-namespace relay keeps the second working, and the reload on that path keeps
-its re-exec semantics: a fresh body exec is how a load sees config written
-since the previous load.
+The suite also loads this file through importlib and reaches guard
+internals, and it monkeypatches functions here. That path execs the impl
+body into this module's own namespace, so a patch rebind lands in the same
+namespace the functions resolve and every load re-executes the body: the
+semantics the single-file shape had.
 """
-import importlib
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import recursive_grep_guard_impl as _impl
-
 if __name__ == "__main__":
+    import recursive_grep_guard_impl as _impl
+
     _impl.main()
 else:
-    globals().update(
-        {
-            name: value
-            for name, value in vars(importlib.reload(_impl)).items()
-            if not (name.startswith("__") and name.endswith("__"))
-        }
+    _body = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "recursive_grep_guard_impl.py"
     )
+    with open(_body, encoding="utf-8") as _fh:
+        exec(compile(_fh.read(), _body, "exec"), globals())
