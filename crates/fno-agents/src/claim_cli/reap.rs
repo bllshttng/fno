@@ -193,6 +193,7 @@ struct ProbeCtx {
     pane_cache: BTreeMap<String, Option<bool>>,
 }
 
+#[derive(Debug)]
 enum PerKeyError {
     GoneAway,
     Corrupted,
