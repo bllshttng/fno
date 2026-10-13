@@ -373,10 +373,9 @@ fn emit_drain_marker(
 }
 
 fn bus_dir(home: &AgentsHome) -> PathBuf {
-    crate::intel::bus_log_path(&home.root())
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| home.root().join("bus"))
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = crate::agents_config::state_dir(&cwd).unwrap_or_else(|| home.root().to_path_buf());
+    crate::intel::bus_dir_of(&root)
 }
 
 fn read_bus(bus: &Path) -> Vec<Value> {
