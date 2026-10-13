@@ -152,14 +152,14 @@ fn render_status(entries: &[&Value], project: Option<&str>, all: bool) -> i32 {
             // the first row's project value is row order, not detection.
             let owned: Vec<Value> = entries.iter().map(|e| (*e).clone()).collect();
             match super::triage::detect_project(&owned) {
-                Some(p) => buckets.push((
-                    p,
-                    entries
+                Some(p) => {
+                    let detected: Vec<&Value> = entries
                         .iter()
                         .copied()
                         .filter(|e| text_at(e, "project") == Some(p.as_str()))
-                        .collect(),
-                )),
+                        .collect();
+                    buckets.push((p, detected));
+                }
                 None => buckets.push(("(all)".to_string(), entries.to_vec())),
             }
         }

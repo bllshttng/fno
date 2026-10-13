@@ -3,7 +3,7 @@
 //! warning, the rollup candidate ladder, and the fold gate's candidate pool.
 //! Pure functions over row values; the sidecar read is the only I/O.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::OnceLock;
