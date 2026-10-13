@@ -90,7 +90,7 @@ def respawn_ok(src):
 WAKE_NAME_PREFIX = "wake-"
 
 
-def carried(session_uuid: str) -> dict:
+def carried(session_uuid: Optional[str]) -> dict:
     """The identity a revival carries for this uuid (Rust-owned); ``{}`` when unknown."""
     if not session_uuid:
         return {}

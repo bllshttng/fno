@@ -894,7 +894,10 @@ pub(crate) fn revival_identity(
 /// hold it (a fork's successor row carries the name a rename left). The
 /// single read the revival identity answers from; the tombstone fallback
 /// lives on the caller.
-fn named_row(registry: &Registry, session_id: &str) -> Option<&crate::state::RegistryEntry> {
+fn named_row<'a>(
+    registry: &'a Registry,
+    session_id: &str,
+) -> Option<&'a crate::state::RegistryEntry> {
     registry.entries.iter().rev().find(|e| {
         !e.name.is_empty()
             && (e.harness_session_id.as_deref() == Some(session_id)
