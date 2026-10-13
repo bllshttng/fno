@@ -1759,13 +1759,16 @@ mod tests {
         let (reg, watch_row) = stage_watch_home(&dir);
         let a = "aaaaaaaa-0000-0000-0000-00000000000a";
         let expires = chrono::Utc::now().timestamp_millis() + 600_000;
+        // Stamp the watch first, the resume second: supersession compares
+        // (ts, seq), so a resume stamped before the watch never ends it.
+        let watch_line = watch_row(a, "ci", expires);
         let resumed = format!(
             r#"{{"ts":"{}","type":"loop_check","source":"hook","data":{{"session_id":"{a}","intent":"work"}}}}"#,
             chrono::Utc::now().to_rfc3339()
         );
         std::fs::write(
             dir.join("events.jsonl"),
-            format!("{}\n{}\n", watch_row(a, "ci", expires), resumed),
+            format!("{}\n{}\n", watch_line, resumed),
         )
         .unwrap();
         seed_worker_a_claim(&dir);

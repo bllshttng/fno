@@ -88,6 +88,8 @@ Start a session with what you pass : a `/skill` passthrough, a node-id
 build, or a verbatim free-text seed. Strip a leading `spawn` verb if present;
 otherwise the whole argument is the spawn payload.
 
+A harness-native launch is also first-class. The native launch table in [docs/HARNESSES.md](../../docs/HARNESSES.md) holds each harness's own line. The fno keeper is the background form. The SessionStart hook adopts the session either way.
+
 ### Providers (all three are first-class)
 
 Default is claude on the `thread` substrate. When the user names a non-default provider, a `thread`/`headless` substrate, or a one-shot Q&A, load [references/workflow-routes.md](references/workflow-routes.md) for the provider/substrate matrix and per-provider receipt shapes; the default-path invariants hold everywhere: every spawn captures the worker's full resume UUID (best-effort) into the registry, and a codex/agy exec worker is a single autonomous pass, never loop-grade.

@@ -766,7 +766,8 @@ def _repo_scoped_number_matches(
                 continue
             node_slug = repo_slug_from_url((u or "").strip())
             # Case-insensitive, matching cli.py's _pr_touch_ids and
-            # closure.py's bind_closure_claims - a GitHub owner/repo slug is
+            # the Rust bind-created reader (bind_created_pr) - a GitHub
+            # owner/repo slug is
             # itself case-insensitive, and the two other repo-match sites
             # already lowercase; leaving this one exact-case let the same
             # real repo match one path and refuse another (round-10 review

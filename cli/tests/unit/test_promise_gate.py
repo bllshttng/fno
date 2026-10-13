@@ -773,23 +773,6 @@ def _outage_world(g: Path, tmp_path: Path, monkeypatch, node_id: str = "ab-out01
     monkeypatch.setattr(rec, "query_pr_merge_state", state)
     return str(plan)
 
-
-def _reconcile_scan(monkeypatch, held_id: str, plan: str):
-    import fno.graph._reconcile as rec
-
-    def _scan(entries, node_id=None, listings=None):
-        return [rec.MergeDriftRecord(
-            node_id=held_id,
-            plan_path=plan,
-            pr_number=42,
-            pr_url="https://github.com/o/r/pull/42",
-            pr_state="MERGED",
-            merged_at="2026-08-09T00:00:00Z",
-        )]
-
-    monkeypatch.setattr(rec, "scan_merge_drift", _scan)
-
-
 def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, monkeypatch):
     """AC2-HP. The outage fixture through every real close caller: node stays
     open and the receipt names a retryable read failure. This is the defect -

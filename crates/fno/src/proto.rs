@@ -374,7 +374,9 @@ fn default_true() -> bool {
 /// v107 adds `BacklogCard.link` (serde default), the node's stored GitHub-or-Linear
 /// URL the node tap opens when no plan lives in the vault; floor stays 58.
 /// v109: `WorkspaceRestore.member_session` targets one exact native session.
-pub const PROTO_VERSION: u32 = 109;
+/// v110: `ControlVerb::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
+/// desktop notifications ride to attached clients as OSC 777; floor stays 58.
+pub const PROTO_VERSION: u32 = 110;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -820,6 +822,15 @@ pub enum ControlVerb {
     /// `retire_session_members`, then re-projects from the store so the
     /// in-memory list cannot write the retired member back. -> [`ServerMsg::SessionRetired`]
     RetireSession { harness: String, session_id: String },
+    /// (v110) Post a desktop notification through every ATTACHED client's
+    /// tty: the server emits [`ServerMsg::DesktopNotice`] on each reliable
+    /// channel and answers with [`ServerMsg::NoticeSent`], whose count is the
+    /// delivery receipt (0 = no attached client, the caller falls back). The
+    /// shape is `(title, body)` only - notification codes only, no raw
+    /// passthrough: an arbitrary OSC payload is never accepted over the wire,
+    /// and the client-side builder strips control characters, so nothing a
+    /// caller sends can reach the outer terminal as an escape sequence.
+    Notify { title: String, body: String },
 }
 
 /// What a [`ControlVerb::LayoutGet`] dumps (v41, layout-api).
@@ -3986,7 +3997,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 109);
+        assert_eq!(PROTO_VERSION, 110);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

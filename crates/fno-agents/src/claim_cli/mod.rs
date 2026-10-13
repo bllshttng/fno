@@ -9,9 +9,11 @@
 //! Python leaf (`tests/claim_acquire_parity.rs`) are the contract.
 
 pub mod acquire;
+pub mod list;
 pub mod refresh;
 pub mod release;
 pub mod session_pid;
+pub mod status;
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -96,6 +98,22 @@ pub fn node_aware_root(key: &str) -> Option<PathBuf> {
     crate::claims_root::claims_root_for(key)
 }
 
+/// The registry path the Python leaf read (`paths.agents_registry_path`):
+/// a declared `FNO_AGENTS_HOME` wins, else the configured state root.
+/// `AgentsHome::shared_registry_json` pins the ambient `$HOME/.fno`, so a
+/// pinned state root would read the wrong graph store.
+fn agents_registry_path() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os(crate::paths::HOME_ENV).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(home).join("registry.json"));
+    }
+    let cwd = std::env::current_dir().ok()?;
+    Some(
+        crate::agents_config::state_dir(&cwd)?
+            .join("agents")
+            .join("registry.json"),
+    )
+}
+
 /// The registry effort for the owned identity, read through the shared
 /// registry path (mirrors `_owned_registry_effort`: unreadable or malformed
 /// state leaves effort unknown).
@@ -103,7 +121,7 @@ fn owned_registry_effort(harness: &str, session_id: &str) -> Option<String> {
     if harness.is_empty() || session_id.is_empty() {
         return None;
     }
-    let path = crate::paths::AgentsHome::shared_registry_json();
+    let path = agents_registry_path()?;
     let raw = crate::registry_store::read(&path).ok()?;
     let rows = raw.get("agents")?.as_array()?;
     let legacy_key = match harness {
@@ -153,6 +171,38 @@ fn owned_registry_effort(harness: &str, session_id: &str) -> Option<String> {
             .map(str::to_string);
     }
     None
+}
+
+/// The registry row's harness for one session id, for the claim list
+/// silence report: reads the shared registry, and answers "claude" when
+/// the registry is unreadable, malformed, or no row names the session. A
+/// matching row answers its `harness`, empty or absent, exactly like the
+/// Python lookup it ports.
+pub(crate) fn harness_for_session(session_id: &str) -> String {
+    let Some(path) = agents_registry_path() else {
+        return "claude".to_string();
+    };
+    let Ok(raw) = crate::registry_store::read(&path) else {
+        return "claude".to_string();
+    };
+    let Some(rows) = raw.get("agents").and_then(Value::as_array) else {
+        return "claude".to_string();
+    };
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        if obj.get("harness_session_id").and_then(Value::as_str) != Some(session_id) {
+            continue;
+        }
+        return obj
+            .get("harness")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "claude".to_string());
+    }
+    "claude".to_string()
 }
 
 /// The (harness, session_id) an execute provenance row is written under:
@@ -394,7 +444,7 @@ pub fn claim_json_string(claim: &crate::claims::ClaimRecord) -> String {
 
 /// `json.dumps` default separators over a serde value. Object keys iterate in
 /// serde_json's map order.
-fn spaced(v: &Value) -> String {
+pub(crate) fn spaced(v: &Value) -> String {
     match v {
         Value::Object(m) => {
             let parts: Vec<String> = m

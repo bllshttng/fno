@@ -4651,46 +4651,99 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _self_handle_or_exit() -> "tuple[str, object]":
-    """This session's canonical mail handle AND the identity it came from.
+def _forward_mail_hold(argv: list[str]) -> None:
+    """Forward one hold-front verb to the bundled fno-agents binary.
 
-    Returns both so the caller never re-resolves. A second resolve can answer
-    differently from the one this function validated, and then the row written
-    is not the row checked.
-
-    Fails closed on a contaminated env, for the same reason `--to-self` does
-    and with worse consequences. An inherited marker from a parent harness
-    makes a precedence-only resolve answer with the PARENT session. A
-    misaddressed `--to-self` sends one message to the wrong place, which is
-    visible and recoverable. A misaddressed hold stamps a DELIVERY POLICY on
-    another agent's row and arms a timer against their handle, silently holding
-    their mail.
-
-    The refusal is the shared one now. `resolve_harness_identity` already
-    refuses a mixed-family env, so nothing is laundered either way; what the
-    owned path adds is that a mixed env the process tree CAN decide resolves
-    instead of refusing, which is the difference between a real claude worker
-    holding its own mail and being told it has no identity.
+    The hold verbs' bodies live in the Rust mail front now; Python owns
+    transport only, the same split as the claims forward.
     """
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
-    from fno.harness_identity import canonical_handle
+    import subprocess
 
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        sys.stderr.write(
-            f"{exc}\na hold stamped on the wrong row holds another agent's mail\n"
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail hold: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
         )
-        raise typer.Exit(code=3) from exc
-    if not ident.harness or not ident.session_id:
-        sys.stderr.write(
-            "no provable harness identity - there is no session to hold mail for\n"
-        )
-        raise typer.Exit(code=3)
-    return canonical_handle(ident.session_id), ident
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "mail", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
-from fno.mail.hold_cli import cmd_hold, cmd_hold_release  # noqa: E402
+def cmd_hold(
+    minutes: int = typer.Option(
+        None,
+        "--minutes",
+        "-m",
+        help="Idle minutes before the hold lifts by itself (default 5). The "
+        "quiet window restarts every prompt and ends at 2x the requested window.",
+    ),
+    for_minutes: int = typer.Option(
+        None,
+        "--for",
+        help="Wall-clock minutes before the hold lifts. The deadline never moves.",
+    ),
+    off: bool = typer.Option(
+        False, "--off", help="Lift the hold now and deliver what it held."
+    ),
+    status: bool = typer.Option(
+        False, "--status", help="Report the current hold without changing it."
+    ),
+) -> None:
+    """Busy mode: hold this session's incoming mail, and drain it on a timer.
+
+    While the hold is on, mail addressed to this session never pastes into the
+    prompt line. It queues durable and the sender gets a receipt saying so.
+    Either clock DELIVERS without a new prompt, so a hold whose only drain
+    trigger is the operator cannot stall.
+    """
+    argv = ["hold"]
+    if minutes is not None:
+        argv += ["--minutes", str(minutes)]
+    if for_minutes is not None:
+        argv += ["--for", str(for_minutes)]
+    if off:
+        argv.append("--off")
+    if status:
+        argv.append("--status")
+    _forward_mail_hold(argv)
+
+
+def cmd_hold_release(
+    handle: str = typer.Option(..., "--handle", help="The held session's handle."),
+    poll_s: int = typer.Option(
+        15, "--poll-s", hidden=True, help="Seconds between clock re-reads."
+    ),
+) -> None:
+    """Sleep until ``handle``'s hold expires, then release it.
+
+    Re-reads the clock on every wake rather than sleeping once to the original
+    deadline, so an idle re-arm (the operator typed again) extends the hold
+    instead of being overrun by a timer that already committed to a time.
+
+    Exits quietly when the clock disappears or turns permanent: both mean
+    someone else took the hold off, and a second release would be a no-op that
+    still emitted a release event.
+    """
+    _forward_mail_hold(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
+
 
 mail_app.command("hold")(cmd_hold)
 mail_app.command("hold-release", hidden=True)(cmd_hold_release)

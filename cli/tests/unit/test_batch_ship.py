@@ -49,6 +49,25 @@ class FakeGh:
         return _cp(0, "")
 
 
+@pytest.fixture(autouse=True)
+def _ensure_passthrough(monkeypatch):
+    """Answer ship's producer call in process.
+
+    The closure producer lives in the fno-agents binary now; the batch lane
+    reaches it only through `fno.rust_binary.verb_call`. Every gh and git
+    call in this file is scripted with doubles, so a real binary call would
+    spawn against the developer's checkout mid-test. Passthrough: the
+    producer grammar has its own parity suite.
+    """
+    import fno.rust_binary as rb
+
+    def _passthrough(verb, payload, unavailable=None, **kwargs):
+        assert verb == "pr-closure-ensure", verb
+        return {"body": payload["body"]}
+
+    monkeypatch.setattr(rb, "verb_call", _passthrough)
+
+
 @pytest.fixture
 def graph(tmp_path, monkeypatch):
     """Point ship's graph mutations at a temp graph.json. Returns a writer."""

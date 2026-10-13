@@ -63,8 +63,14 @@ fn payload_field<'a>(p: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
+/// A params member that is itself an object (the claimed launch record rides
+/// as one; a string member is not).
+fn params_object<'a>(p: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    p.get(key).filter(|v| v.is_object())
+}
+
 /// Which row a report lands on, and what the match means for the id.
-enum Find {
+pub(crate) enum Find {
     /// `entry_holds_session` already answers true: the row records this id.
     Holds(usize),
     /// The claude short-id backfill match: a bg row awaiting its full uuid.
@@ -74,7 +80,7 @@ enum Find {
     Named(usize),
 }
 
-fn find_row(
+pub(crate) fn find_row(
     entries: &[RegistryEntry],
     harness: &str,
     session_id: &str,
@@ -102,9 +108,22 @@ fn find_row(
 }
 
 enum Outcome {
-    Stored { related_filled: bool },
+    Stored {
+        related_filled: bool,
+    },
+    /// No row held the id and the handler minted one: a launch-record child
+    /// (`native: true`) joins as the launcher's row; a session with no record
+    /// is the user's own (decision D3 revised, recorded on the node): origin
+    /// operator,
+    /// an occupant toward the cap, never refused, managed or reaped.
+    Minted {
+        native: bool,
+    },
     Unknown,
-    IdCap { primary: String, related: String },
+    IdCap {
+        primary: String,
+        related: String,
+    },
 }
 
 /// Poll for a row that does not exist yet (pane race) before taking the write
@@ -153,6 +172,14 @@ pub(crate) fn handle_session_report(
         .map(String::from)
         .or_else(|| str_field(p, "source"));
     let agent_self = str_field(p, "agent_self");
+    let report_cwd = payload_field(p, "cwd")
+        .map(String::from)
+        .or_else(|| str_field(p, "cwd"));
+    // A claimed launch record rides the request (run_session_report attaches
+    // it): the child that reported is the launcher's launch.
+    let launch_record: Option<crate::launch_record::Record> =
+        params_object(p, "launch_record").and_then(|v| serde_json::from_value(v.clone()).ok());
+    let launch_child_name = str_field(p, "launch_child_name");
     let wait_row = p
         .get("wait_row")
         .and_then(Value::as_bool)
@@ -169,6 +196,21 @@ pub(crate) fn handle_session_report(
         );
     }
 
+    // The mint prediction runs BEFORE the locked write: building the row does
+    // transcript IO (title, model), which must not hold the registry lock.
+    // The write closure re-decides absence under the lock.
+    let pending_mint = crate::native_adopt::prepare_mint(
+        home,
+        &harness,
+        &session_id,
+        launch_record.as_ref(),
+        launch_child_name.as_deref(),
+        agent_self.as_deref(),
+        transcript_path.as_deref(),
+        source.as_deref(),
+        report_cwd.as_deref(),
+    );
+
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
     // Set when this report is the successor's first self-identification: the
@@ -177,7 +219,20 @@ pub(crate) fn handle_session_report(
     let mut manifest_arm: Option<(String, String, Option<String>)> = None;
     if let Err(e) = state::update_registry(&home.registry_json(), |r| {
         let Some(find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref()) else {
-            outcome = Outcome::Unknown;
+            match &pending_mint {
+                Some(mint) => {
+                    let mut entry = mint.entry.clone();
+                    entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
+                    row_name = Some(entry.name.clone());
+                    r.entries.push(entry);
+                    outcome = Outcome::Minted {
+                        native: mint.native,
+                    };
+                }
+                None => {
+                    outcome = Outcome::Unknown;
+                }
+            }
             return;
         };
         let idx = match find {
@@ -261,6 +316,49 @@ pub(crate) fn handle_session_report(
     }
 
     match outcome {
+        Outcome::Minted { native } => {
+            // A native launch's birth names its parent through the record and
+            // carries `launch: "native"` (decision D7). Every key a spawned
+            // birth carries is present (pid unknown at adopt rides null); the
+            // superset test pins the rule.
+            if native {
+                if let Some(record) = &launch_record {
+                    let lineage = crate::state::Lineage::captured((
+                        Some(record.launcher_session.clone()),
+                        record.launcher_harness.clone(),
+                        record.launcher_cwd.clone(),
+                    ));
+                    let extras = json!({
+                        "spawn_id": crate::launch_record::file_key(record),
+                        "harness_session_id": session_id.clone(),
+                        "cwd": record.launch.cwd.clone(),
+                        "substrate": crate::launch_record::native_substrate_word(&harness),
+                        "pid": Value::Null,
+                        "launch": "native",
+                    });
+                    let name = row_name.clone().unwrap_or_default();
+                    let _ = emitter.emit(
+                        "agent_spawned",
+                        &crate::spawn_edge::birth_event(&name, &lineage, extras),
+                    );
+                }
+            }
+            let _ = emitter.emit(
+                "session_report_stored",
+                &json!({
+                    "name": row_name,
+                    "harness": harness,
+                    "session_id": session_id,
+                    "related_filled": false,
+                    "minted": if native { "native" } else { "operator" },
+                    "source": source,
+                }),
+            );
+            Response::ok(
+                req.id,
+                json!({"stored": true, "minted": if native { "native" } else { "operator" }}),
+            )
+        }
         Outcome::Stored { related_filled } => {
             let _ = emitter.emit(
                 "session_report_stored",
@@ -595,7 +693,13 @@ fn record_origin(params: &Value) {
 /// Claim the launch record this session is the child of, and stamp its
 /// node's first-launch edge (see `crate::launch_record`). Every harness sends
 /// this report, so this is the one claim point. A resume is not a launch.
-fn claim_launch(params: &Value, home: &AgentsHome) {
+/// Returns the claimed record and the child's own name (the launch-record
+/// claim already matched on it), so the report can carry both to the daemon
+/// and the adopt overlays the record onto the minted row.
+fn claim_launch(
+    params: &Value,
+    home: &AgentsHome,
+) -> (Option<crate::launch_record::Record>, Option<String>) {
     let field = |key: &str| {
         params
             .get("payload")
@@ -607,7 +711,7 @@ fn claim_launch(params: &Value, home: &AgentsHome) {
     };
     let session_id = field("session_id");
     if field("source") == "resume" || session_id.is_empty() {
-        return;
+        return (None, None);
     }
     let cwd = Some(field("cwd"))
         .filter(|c| !c.is_empty())
@@ -617,18 +721,20 @@ fn claim_launch(params: &Value, home: &AgentsHome) {
                 .map(|d| d.to_string_lossy().into_owned())
         })
         .unwrap_or_default();
+    let child_name = crate::launch_record::child_name_from_env();
     let child = crate::launch_record::Child {
         harness: field("harness"),
         session_id,
         cwd,
-        name: crate::launch_record::child_name_from_env(),
+        name: child_name.clone(),
         started_at_ms: crate::claims::now_ms(),
     };
-    crate::launch_record::claim_and_stamp(
+    let record = crate::launch_record::claim_and_stamp(
         home.root(),
         &crate::backlog::settings::graph_path(),
         &child,
     );
+    (record, child_name)
 }
 
 /// The `report` verb's dispatcher. `--kind session` selects the SessionStart
@@ -681,11 +787,20 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Some(payload) = read_stdin_payload() {
         params["payload"] = payload;
     }
-    claim_launch(&params, home);
+    let (record, child_name) = claim_launch(&params, home);
     record_origin(&params);
-    // --origin-only writes the record and sends nothing: the daemon learns
-    // nothing new, and a hand-started session spools no frame for it.
-    if params.get("origin_only").and_then(Value::as_bool) == Some(true) {
+    if let Some(record) = &record {
+        // A claimed record rides the request: the daemon adopts this session
+        // as the launcher's child even when no row exists yet.
+        params["launch_record"] = serde_json::to_value(record).unwrap_or(Value::Null);
+        if let Some(name) = child_name {
+            params["launch_child_name"] = Value::String(name);
+        }
+    }
+    // --origin-only writes the record and sends nothing - EXCEPT for a child
+    // that claimed a launch record: the adopt must never lose the parent edge
+    // to the origin-only path, so the report rides with the record attached.
+    if params.get("origin_only").and_then(Value::as_bool) == Some(true) && record.is_none() {
         return 0;
     }
     let req = Request::new(1, "agent.session_report", params);
@@ -725,7 +840,11 @@ mod tests {
     }
 
     fn emitter(home: &AgentsHome) -> EventEmitter {
-        EventEmitter::new(home.events_jsonl(), "test")
+        // The judge refuses an event whose type does not declare the emitter's
+        // source, and `let _ =` at the emit sites swallows that refusal. The
+        // report RPC runs inside the daemon, so the tests emit as "daemon" -
+        // the one source both minted types declare.
+        EventEmitter::new(home.events_jsonl(), "daemon")
     }
 
     fn req(params: Value) -> Request {
@@ -968,15 +1087,168 @@ mod tests {
         assert_eq!(row.transcript_path, None);
     }
 
+    /// Decision D3 revised: a session no row holds mints an operator row - the
+    /// user's own session. Occupant toward the cap, never managed.
     #[test]
-    fn unknown_row_drops_without_creating_one() {
+    fn an_unknown_session_mints_an_operator_row() {
         let (_d, home) = temp_home("unknown");
         let params = report_params("codex", "0197dddd-1234-7abc-9def-0123456789ab", json!({}));
         let resp = handle_session_report(&home, &emitter(&home), &req(params));
         let body = response_json(&resp);
-        assert_eq!(body["result"]["stored"], false);
-        assert_eq!(body["result"]["dropped"], "unknown_session");
-        assert!(read_rows(&home).is_empty());
+        assert_eq!(body["result"]["stored"], true);
+        assert_eq!(body["result"]["minted"], "operator");
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].origin.as_deref(), Some("operator"));
+        assert_eq!(rows[0].status, AgentStatus::Live);
+        assert_eq!(rows[0].substrate, None);
+        // No birth event: the user's session is not an agent birth. The mint
+        // says so through session_report_stored's minted field instead.
+        let births = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
+        )
+        .unwrap();
+        assert!(births.is_empty(), "{births:?}");
+        // A second report of the same id stamps the row it minted; it never
+        // mints twice.
+        let params = report_params("codex", "0197dddd-1234-7abc-9def-0123456789ab", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        assert!(response_json(&resp)["result"]["minted"].is_null());
+        assert_eq!(read_rows(&home).len(), 1);
+    }
+
+    /// The native adopt: a report whose launch record rides the request mints
+    /// the launcher's row - the launcher triple as the parent edge, the
+    /// record's node on the row, the record's name winning the name
+    /// precedence, and one `agent_spawned` birth carrying `launch: "native"`.
+    #[test]
+    fn a_launch_record_child_adopts_with_parent_node_and_birth() {
+        let (_d, home) = temp_home("native");
+        let record = crate::launch_record::Record {
+            launch: crate::launch_record::Launch {
+                harness: "claude".into(),
+                name: Some("w1".into()),
+                node: Some("x-aaaa".into()),
+                slot: None,
+                cwd: "/repo".into(),
+            },
+            launcher_session: "lead-7".into(),
+            launcher_harness: Some("claude".into()),
+            launcher_cwd: Some("/repo".into()),
+            launched_at_ms: 1_000,
+            command: String::new(),
+            child_session: Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d".into()),
+            claimed_at_ms: Some(2_000),
+        };
+        let params = json!({
+            "harness": "claude",
+            "session_id": "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d",
+            "launch_record": serde_json::to_value(&record).unwrap(),
+        });
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        let body = response_json(&resp);
+        assert_eq!(body["result"]["stored"], true, "{body}");
+        assert_eq!(body["result"]["minted"], "native");
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].origin.as_deref(), Some("spawn"));
+        assert_eq!(rows[0].name, "w1");
+        assert_eq!(rows[0].node.as_deref(), Some("x-aaaa"));
+        assert_eq!(rows[0].spawned_by_session.as_deref(), Some("lead-7"));
+        assert_eq!(rows[0].substrate.as_deref(), Some("thread"));
+        assert_eq!(rows[0].status, AgentStatus::Live);
+        let births = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
+        )
+        .unwrap();
+        assert_eq!(births.len(), 1, "{births:?}");
+        assert!(births[0].line.contains("launch"), "{}", births[0].line);
+    }
+
+    /// Decision D8: a record's name that collides with a live row takes a
+    /// numeric suffix, so the adopt never lands two live rows on one handle.
+    /// AC9: the native birth carries every key the spawned birth carries.
+    /// AC10: removing one key fails the helper, naming it.
+    #[test]
+    fn native_birth_keys_are_a_superset_of_the_spawned_ones() {
+        let lineage = crate::state::Lineage::captured((
+            Some("lead-1".into()),
+            Some("claude".into()),
+            Some("/repo".into()),
+        ));
+        let spawned = crate::spawn_edge::birth_event(
+            "w-spawned",
+            &lineage,
+            json!({
+                "spawn_id": "spawn-1",
+                "pid": 4242,
+                "harness_session_id": "sid-a",
+                "cwd": "/repo",
+                "substrate": "thread",
+            }),
+        );
+        let mut native = crate::spawn_edge::birth_event(
+            "w-native",
+            &lineage,
+            json!({
+                "spawn_id": "launch-1000-ab12cd34.json",
+                "pid": Value::Null,
+                "harness_session_id": "sid-b",
+                "cwd": "/repo",
+                "substrate": "thread",
+                "launch": "native",
+            }),
+        );
+        crate::native_adopt::assert_birth_superset(&native, &spawned);
+        native.as_object_mut().unwrap().remove("spawn_id");
+        let err = std::panic::catch_unwind(|| {
+            crate::native_adopt::assert_birth_superset(&native, &spawned)
+        })
+        .unwrap_err();
+        let msg = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(msg.contains("spawn_id"), "{msg}");
+    }
+
+    #[test]
+    fn a_colliding_native_name_takes_a_numeric_suffix() {
+        let (_d, home) = temp_home("suffix");
+        seed_registry(&home, claude_row());
+        let record = crate::launch_record::Record {
+            launch: crate::launch_record::Launch {
+                harness: "claude".into(),
+                name: Some("w1".into()),
+                node: None,
+                slot: None,
+                cwd: "/repo".into(),
+            },
+            launcher_session: "lead-8".into(),
+            launcher_harness: Some("claude".into()),
+            launcher_cwd: Some("/repo".into()),
+            launched_at_ms: 1_000,
+            command: String::new(),
+            child_session: Some("4444aaaa-2222-4333-8444-555566667777".into()),
+            claimed_at_ms: Some(2_000),
+        };
+        let params = json!({
+            "harness": "claude",
+            "session_id": "4444aaaa-2222-4333-8444-555566667777",
+            "launch_record": serde_json::to_value(&record).unwrap(),
+        });
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["minted"], "native");
+        let rows = read_rows(&home);
+        let minted = rows
+            .iter()
+            .find(|r| r.spawned_by_session.as_deref() == Some("lead-8"))
+            .expect("minted row");
+        assert_eq!(minted.name, "w1-2");
     }
 
     /// A `spawn --promote --succeed` transfer leaves the manifest

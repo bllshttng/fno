@@ -1,7 +1,6 @@
 //! The merge-drift scan: open nodes whose PR merged outside the ship gate,
 //! plus the reverse map that closes ref-less nodes by merged branch name.
-//! Ported from graph/_reconcile.py (`MergeDriftRecord`, `scan_merge_drift`,
-//! `reverse_map_unstamped`, the REST listings and their per-run cache).
+//! Ported from graph/_reconcile.py.
 
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -16,8 +15,7 @@ use crate::backlog_ready::node_is_open;
 use crate::loop_dispatch::which_binary;
 
 /// The reverse map and open-binding scans fire one gh call per distinct
-/// repo in their scope; a wall-clock budget bounds the fan-out the same
-/// way the Python sweep's REVERSE_MAP_BUDGET_S does.
+/// repo in their scope; a wall-clock budget bounds the fan-out.
 const REVERSE_MAP_BUDGET: Duration = Duration::from_secs(60);
 
 /// One open node carrying a PR whose GitHub state we resolved. `closeable`

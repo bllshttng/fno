@@ -469,6 +469,13 @@ mod probe {
         let (slot_row_entries, slot_reservations) =
             spawn_gate::slot_reading(&registry_path, &mut warnings);
         let slots = slot_row_entries.len() + slot_reservations.len();
+        // The user's own live sessions ride the same count; the gate shows
+        // them apart (decision D3 revised).
+        let yours = slot_row_entries
+            .iter()
+            .filter(|e| e.origin.as_deref() == Some("operator"))
+            .count();
+        out.insert("yours".into(), json!(yours));
         // The capacity fields ride EVERY verdict: saturation is when the
         // probe is most useful, so the numbers are in place before any
         // refusal returns, not only on the accepted tail.
@@ -533,7 +540,7 @@ mod probe {
                     "max_live",
                     format!("{slots} live worker slots >= {}", learned.clause()),
                     json!({"count": slots, "max_live": cap}),
-                    &[fleet_row(slots, cap)],
+                    &[fleet_row(slots, cap, yours)],
                     out,
                 );
             }
@@ -594,7 +601,7 @@ mod probe {
                         "max_swap_pct": swap_cap,
                         "swapin_mib_per_s": mem.swapin_bps.map(|r| r / spawn_gate::MIB),
                     }),
-                    &make_rows(None, slots, cap, ram_row, Vec::new()),
+                    &make_rows(None, slots, cap, yours, ram_row, Vec::new()),
                     out,
                 );
             }
@@ -615,7 +622,7 @@ mod probe {
                             "share_low": admission.payload.share_low,
                             "ceiling": admission.payload.ceiling,
                         }),
-                        &make_rows(None, slots, cap, ram_row, cpu_rows),
+                        &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                         out,
                     );
                 }
@@ -633,7 +640,7 @@ mod probe {
                             "share_low": admission.payload.share_low,
                             "share_high": admission.payload.share_high,
                         }),
-                        &make_rows(None, slots, cap, ram_row, cpu_rows),
+                        &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                         out,
                     );
                 }
@@ -669,7 +676,7 @@ mod probe {
                         "leads": leads,
                         "held_rows": reading.held_rows.clone().unwrap_or_default(),
                     }),
-                    &make_rows(None, slots, cap, ram_row, cpu_rows),
+                    &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                     out,
                 );
             }
@@ -706,7 +713,7 @@ mod probe {
                 "provider_cap",
                 format!("every dispatch lane at cap: {}", full.join(", ")),
                 json!({"lanes": lanes}),
-                &make_rows(Some(&lanes), slots, cap, ram_row, cpu_rows),
+                &make_rows(Some(&lanes), slots, cap, yours, ram_row, cpu_rows),
                 out,
             );
         }
@@ -734,7 +741,14 @@ mod probe {
         }
         out.insert(
             "rows".into(),
-            json!(make_rows(Some(&lanes), slots, cap, ram_row, cpu_rows)),
+            json!(make_rows(
+                Some(&lanes),
+                slots,
+                cap,
+                yours,
+                ram_row,
+                cpu_rows
+            )),
         );
         Value::Object(out)
     }
@@ -788,10 +802,13 @@ fn refuse_with(
 }
 
 /// The fleet-rows Gate dict.
-fn fleet_row(slots: usize, cap: usize) -> Value {
+fn fleet_row(slots: usize, cap: usize, yours: usize) -> Value {
     let mut row = Map::new();
     row.insert("name".into(), json!("fleet-rows"));
     row.insert("measured".into(), json!(slots.to_string()));
+    // Occupants: the user's own live sessions (origin operator). They count
+    // toward the cap and are shown apart (decision D3 revised).
+    row.insert("yours".into(), json!(yours));
     row.insert("threshold".into(), json!(cap.to_string()));
     row.insert(
         "verdict".into(),
@@ -811,6 +828,7 @@ fn make_rows(
     lanes: Option<&Value>,
     slots: usize,
     cap: usize,
+    yours: usize,
     ram_row: Option<Value>,
     cpu_rows: Vec<Value>,
 ) -> Vec<Value> {
@@ -847,7 +865,7 @@ fn make_rows(
             rows.push(Value::Object(row));
         }
     }
-    rows.push(fleet_row(slots, cap));
+    rows.push(fleet_row(slots, cap, yours));
     rows.extend(ram_row);
     rows.extend(cpu_rows);
     rows
@@ -1191,7 +1209,7 @@ mod tests {
 
     #[test]
     fn refuse_with_keeps_an_existing_refusal_without_adding_a_generic_row() {
-        let measured = fleet_row(3, 3);
+        let measured = fleet_row(3, 3, 0);
         let answer = refuse_with(
             "max_live",
             "fleet full".to_string(),

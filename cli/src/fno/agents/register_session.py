@@ -21,8 +21,7 @@ if TYPE_CHECKING:
 
 from fno.agents import events
 from fno.agents.mux_server import mux_server_env
-from fno.agents.registry import heal_mux_ref, register_existing_session, restamp_harness_session_id
-from fno.agents.spawn_defaults import resolve_lane_vendor
+from fno.agents.registry import heal_mux_ref, restamp_harness_session_id
 
 #: How long a spawned worker waits for its own row to appear before giving up.
 #: Covers the spawner's post-`mux pane run` tail with room to spare: child-pid
@@ -602,13 +601,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="The harness SessionStart flavor (claude: startup | resume | clear), "
         "threaded into the observation events for observability.",
     )
-    parser.add_argument("--name", default=None)
-    parser.add_argument("--log-path", default="")
     parser.add_argument(
         "--agent-self",
         default=None,
-        help="This worker's own registry row name (FNO_AGENT_SELF). Set only for "
-        "a footnote-SPAWNED worker; switches this call from register to restamp.",
+        help="This worker's own registry row name (FNO_AGENT_SELF). Set for a "
+        "footnote-SPAWNED worker's pane restamp; the hand-started register "
+        "branch is gone (the daemon mints the row at the session report).",
     )
     args = parser.parse_args(argv)
 
@@ -628,41 +626,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _heal_row_cwd(agent_self=args.agent_self, harness=args.harness, cwd=args.cwd)
         return rc
 
-    try:
-        vendor = resolve_lane_vendor([args.harness], env=os.environ, harness=args.harness)
-        entry = register_existing_session(
-            session_id=args.session_id,
-            cwd=args.cwd,
-            harness=args.harness,
-            provider=vendor,
-            name=args.name or None,
-            log_path=args.log_path,
-            origin="operator",
-            # the row describes THIS session, so its own exported
-            # FNO_NODE (a node-driven pane carries one) is the right source.
-            node=(os.environ.get("FNO_NODE") or "").strip() or None,
-        )
-    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
-        events.emit(
-            "session_register_failed",
-            provider=args.harness,
-            session_id=args.session_id,
-            error=str(exc),
-        )
-        print(f"register_session: warning: {exc}", file=sys.stderr)
-        return 0
-
-    events.emit(
-        "session_registered",
-        provider=entry.provider,
-        harness=entry.harness,
-        name=entry.name,
-        session_id=args.session_id,
-        cwd=entry.cwd,
+    # A call without --agent-self used to register an operator row here. The
+    # Rust daemon mints that row at the session report now (decision D3
+    # revised), so this entry point is the pane-worker restamp only.
+    print(
+        "register_session: no --agent-self; the hand-started register branch "
+        "is gone (the daemon mints the row at the session report)",
+        file=sys.stderr,
     )
-    # The default legible alias is minted by the daemon sweep (see
-    # session_names_fold.rs), so every row gains one within a tick.
-    print(f"register_session: registered {entry.name} ({entry.harness})", file=sys.stderr)
     return 0
 
 

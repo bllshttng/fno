@@ -28,7 +28,6 @@ from fno.graph._reconcile import (
     MergeDriftRecord,
     PrMergeState,
     emit_session_satisfied_for_record,
-    scan_merge_drift,
 )
 
 runner = CliRunner()
@@ -75,27 +74,6 @@ def _record(cwd: Path | None, *, session_id: str | None = "sid-1", pr_number: in
         session_id=session_id,
         cwd=str(cwd) if cwd is not None else None,
     )
-
-
-# ---------------------------------------------------------------------------
-# scan_merge_drift threads session_id + cwd onto the record
-# ---------------------------------------------------------------------------
-
-def test_scan_threads_session_id_and_cwd_onto_record(tmp_path):
-    # Live cwd: the forward-path dead-cwd guard (x-4114) degrades a gone cwd to
-    # None, so a threading test must anchor on a real dir to see it pass through.
-    live = str(tmp_path)
-    entries = [{
-        "id": "ab-own", "title": "t", "pr_number": 42,
-        "pr_url": "https://github.com/test-owner/test-repo/pull/42",
-        "additional_prs": [], "completed_at": None, "superseded_by": None,
-        "plan_path": None, "cwd": live, "session_id": "sid-xyz",
-    }]
-    records = scan_merge_drift(entries, query=lambda n, repo=None, cwd=None: PrMergeState(
-        number=n, state="MERGED", url="u", merged_at="2026-06-02T00:00:00Z"))
-    assert len(records) == 1
-    assert records[0].session_id == "sid-xyz"
-    assert records[0].cwd == live
 
 
 # ---------------------------------------------------------------------------
@@ -206,70 +184,3 @@ def test_emit_isolation_writes_only_to_owning_cwd(tmp_path):
     assert a_events[0]["data"]["gate_state_hash"] == hash_a
     # B is untouched.
     assert _events(cwd_b) == []
-
-
-# ---------------------------------------------------------------------------
-# CLI end-to-end: closing a drifted node emits the event (AC1-HP)
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def _no_revert_fetch(monkeypatch):
-    """Keep reconcile hermetic: never shell `gh pr list` from tests. W4 revert
-    detection has its own unit tests (test_causal_fields.py)."""
-    monkeypatch.setattr(rec, "fetch_recent_merged_prs", lambda **kw: [])
-
-
-def _patch_graph_path(monkeypatch, graph_path: Path) -> None:
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
-    monkeypatch.setattr(gc, "GRAPH_MD", graph_path.parent / "graph.md")
-    monkeypatch.setattr(gc, "GRAPH_ARCHIVE_JSON", graph_path.parent / "graph-archive.json")
-    monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
-    # Seam readers resolve fno.paths.graph_json at call time; pin the
-    # resolver to the same hermetic file (module-attr pins do not reach it).
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph_path)
-
-
-    """Worktree binding: two sibling worktrees each with their own state file.
-    Reconciling node A's record must write A's event ONLY to A's events.jsonl,
-    bound to A's gate_state_hash - B's events.jsonl stays empty."""
-    cwd_a = tmp_path / "wt-a"
-    cwd_b = tmp_path / "wt-b"
-    state_a = _write_state(cwd_a, session_id="sid-a", pr_number=42)
-    _write_state(cwd_b, session_id="sid-b", pr_number=43)
-    hash_a = _md5(state_a)
-
-    out = emit_session_satisfied_for_record(_record(cwd_a, session_id="sid-a", pr_number=42))
-    assert out is not None
-    a_events = [e for e in _events(cwd_a) if e["type"] == "session_satisfied"]
-    assert len(a_events) == 1
-    assert a_events[0]["data"]["session_id"] == "sid-a"
-    assert a_events[0]["data"]["gate_state_hash"] == hash_a
-    # B is untouched.
-    assert _events(cwd_b) == []
-
-
-# ---------------------------------------------------------------------------
-# CLI end-to-end: closing a drifted node emits the event (AC1-HP)
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def _no_revert_fetch(monkeypatch):
-    """Keep reconcile hermetic: never shell `gh pr list` from tests. W4 revert
-    detection has its own unit tests (test_causal_fields.py)."""
-    monkeypatch.setattr(rec, "fetch_recent_merged_prs", lambda **kw: [])
-
-
-def _patch_graph_path(monkeypatch, graph_path: Path) -> None:
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
-    monkeypatch.setattr(gc, "GRAPH_MD", graph_path.parent / "graph.md")
-    monkeypatch.setattr(gc, "GRAPH_ARCHIVE_JSON", graph_path.parent / "graph-archive.json")
-    monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
-    # Seam readers resolve fno.paths.graph_json at call time; pin the
-    # resolver to the same hermetic file (module-attr pins do not reach it).
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph_path)
-
-

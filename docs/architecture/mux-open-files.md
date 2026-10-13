@@ -12,7 +12,7 @@ This part has shipped. OSC 8 hyperlinks win over text matching in `Pane::link_sp
 
 A path becomes an internal `fno-file:` URI (`FILE_SCHEME`, `crates/fno/src/link.rs:177`) that carries the canonical absolute path. `file_uri_parts` (`crates/fno/src/link.rs:183`) parses it strictly: absolute, with no whitespace or control characters. The server sends only a URI that passes `is_openable` or `is_file_uri` (`crates/fno/src/server/open_link.rs:25`). `OPENABLE_SCHEMES` (`crates/fno/src/link.rs:24`) stays at `http://` and `https://`, so a pane can never make the platform opener run a scheme fno did not build.
 
-The client routes every clicked URI in `route` (`crates/fno/src/client/open_link.rs:29`). Today `Route::File` calls `open_fno_path` and drops the line (`crates/fno/src/client/open_link.rs:70`). The open router in section 6 replaces that one call. Nothing else in detection changes.
+The client routes every clicked URI in `route` (`crates/fno/src/client/open_link.rs:29`). Today `Route::File` calls `open_fno_path` and drops the line (`crates/fno/src/client/open_link.rs:83`). The open router in section 6 replaces that one call. Nothing else in detection changes.
 
 ## 2. The viewer
 

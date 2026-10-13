@@ -1,0 +1,1 @@
+hold NOT off: the registry write failed, so a1b2c3d4 still reads bus-only and mail is still held. Retry, or check `fno agents list` for the row.

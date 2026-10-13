@@ -69,10 +69,7 @@ pub(super) fn picker_argv(os: &str, ssh: bool) -> Option<Vec<String>> {
 }
 
 fn local_picker() -> Option<Vec<String>> {
-    let ssh = ["SSH_CONNECTION", "SSH_TTY"]
-        .iter()
-        .any(|k| std::env::var_os(k).is_some());
-    picker_argv(std::env::consts::OS, ssh)
+    picker_argv(std::env::consts::OS, crate::link::is_remote_session())
 }
 
 pub(super) fn pick(view: &mut View) {

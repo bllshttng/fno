@@ -677,7 +677,7 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
             }
         })
         .unwrap_or_else(|| "lanes unreadable".into());
-    let cap = s_str(gate_payload, "cap_clause").map(|clause| format!(" | cap {clause}"));
+    let cap = s_str(gate_payload, "cap_clause").map(|clause| format!(" | {clause}"));
     let cpu_str = gate_cpu.as_str().unwrap_or("").to_string();
     let disagree = match (meaning(&fp_str), meaning(&cpu_str)) {
         (Some(a), Some(b)) => a != b,
@@ -689,10 +689,11 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
         "gate_axis": gate_axis,
         "gate_cpu": gate_cpu,
         "disagree": disagree,
-        "unparsed_lines": footprint_payload
-            .get("unparsed_lines")
-            .and_then(|u| u.as_i64())
-            .unwrap_or(0),
+        "unparsed_lines": footprint_payload.get("unparsed_lines").and_then(|u| u.as_i64()).unwrap_or(0),
+        // Occupants: the user's own live sessions in the slot count, shown
+        // apart (decision D3 revised). The probe answers at top level; an
+        // older probe without the field reads as none.
+        "occupants_yours": gate_payload.get("yours").and_then(Value::as_u64).unwrap_or(0),
         "lanes": format!("{lanes}{}", cap.unwrap_or_default()),
     }))
 }
@@ -3740,10 +3741,10 @@ mod tests {
 
         let unreadable = r_capacity_pair(
             &json!({"admission": {"verdict": "admit"}, "unparsed_lines": 0}),
-            &json!({"verdict": "accepted", "cap_clause": "cap 24 of 24"}),
+            &json!({"verdict": "accepted", "cap_clause": "effective cap 24 of 24"}),
         )
         .unwrap();
-        assert_eq!(unreadable["lanes"], "lanes unreadable | cap cap 24 of 24");
+        assert_eq!(unreadable["lanes"], "lanes unreadable | effective cap 24 of 24");
         let unread_readings = sample_readings(board0(), org0(), unreadable, workers_none());
         let unread_data = build_data(&unread_readings, "x-bbbb");
         let unread_line = render_lines(
@@ -3757,7 +3758,7 @@ mod tests {
         .into_iter()
         .find(|line| line.starts_with("capacity:"))
         .unwrap();
-        assert!(unread_line.ends_with("| lanes lanes unreadable | cap cap 24 of 24"));
+        assert!(unread_line.ends_with("| lanes lanes unreadable | effective cap 24 of 24"));
 
         let capacity_line = |unparsed: i64| {
             let capacity = r_capacity_pair(

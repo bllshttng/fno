@@ -7322,12 +7322,11 @@ async fn attach_and_run(
     let (copy_tx, mut copy_rx) =
         tokio::sync::mpsc::unbounded_channel::<(usize, crate::clipboard::CopyOutcome)>();
 
-    // opening a clicked URL execs `open`/`xdg-open`, which can block for
-    // as long as a cold browser launch takes. Same shape as the copy leg above:
-    // run it on a blocking thread and report the outcome back here, so the
-    // select loop keeps drawing frames while the browser starts.
+    // the link leg: a tap runs the session-aware opener off-loop (a cold
+    // browser must not stall rendering; over ssh the tap copies to the
+    // terminal's clipboard instead), and reports (url, outcome) back here.
     let (link_tx, mut link_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(String, Result<(), String>)>();
+        tokio::sync::mpsc::unbounded_channel::<(String, crate::client::open_link::LinkOutcome)>();
 
     // the needs-me event-fold leg runs off the UI loop and reports back
     // here, tagged with the generation token it was kicked under, so a slow
@@ -7779,8 +7778,8 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41) Script-layout replies: control-connection only,
-                    // never sent to an attached client - ignore, don't desync.
+                    // (v41+) control-connection-only replies: ignore, don't
+                    // desync. The attach handshake carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
@@ -7790,10 +7789,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
                     | ServerMsg::TabClosed { .. }
-                    // (v60/v71/v75/v78) one-shot control-verb replies.
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
+                Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
                     // exec first, OSC 52 to the outer terminal as fallback
@@ -7982,7 +7981,7 @@ async fn attach_and_run(
                 // button, so BOTH outcomes get a notice - the browser may not
                 // even raise itself above the terminal.
                 let notice = match outcome {
-                    Ok(()) => format!("opened {}", crate::link::for_notice(&url)),
+                    Ok(opened) => opened.notice(&url),
                     Err(e) => {
                         let _ = raw_out(b"\x07");
                         format!("open failed: {e}")

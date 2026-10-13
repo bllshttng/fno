@@ -20,11 +20,6 @@ SINCE="${PORT_ORDER_SINCE:-30 days}"
 TRANSCRIPTS_DIR="${PORT_ORDER_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
 EVENTS="${PORT_ORDER_EVENTS:-$HOME/.fno/events.jsonl}"
 
-# Single files measured as their own row: path under the package, then the
-# label the table shows. The Fixes-line parser of the first entry is already
-# Rust; what remains is the rest of the file.
-EXTRA_FILE_LABEL="pr/closure.py remainder (branch resolution, claim binding, PR context fetch; Fixes parser already Rust)"
-
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
@@ -234,19 +229,6 @@ emit_table() {
         if [[ "$fin" == "0" ]]; then leaf=0; else leaf=1; fi
         printf '%d\t%s\t%s\t%d\t%s\t%s\t%d\t%s\n' "$leaf" "$mod" "$lines" "$fin" "$total" "$use" "$cross" "$churn_show" >> "$rows"
     done < <(module_list)
-
-    # extra single-file rows
-    local frel="$PKG/pr/closure.py"
-    if [[ -f "$ROOT/$frel" ]]; then
-        local flines ffin fcch fcross
-        flines=$(wc -l < "$ROOT/$frel" | tr -d ' ')
-        ffin=$( ( cd "$ROOT" && grep -RlE 'from[[:space:]]+fno\.pr\.closure|from[[:space:]]+\.closure[[:space:]]+import|pr\.closure' "$PKG" --include='*.py' || true ) | sort -u | wc -l | tr -d ' ' )
-        fcch=$(git -C "$ROOT" log --since="$SINCE" --name-only --pretty=format: origin/main -- "$frel" 2>/dev/null | grep -c . || true)
-        fcross=$ffin
-        local fleaf=1
-        [[ "$ffin" == "0" ]] && fleaf=0
-        printf '%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s/-\n' "$fleaf" "$EXTRA_FILE_LABEL" "$flines" "$ffin" "$fcch" "0" "$fcross" "$fcch" >> "$rows"
-    fi
 
     local sorted="$workdir/sorted.tsv"
     sort -t$'\t' -k1,1 -k4,4n -k5,5n -k6,6n -k2,2 -o "$sorted" "$rows"

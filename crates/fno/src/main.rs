@@ -85,6 +85,11 @@ enum Role {
     /// (v78) `mux stats [--json]`: server-instance telemetry (the human_touch
     /// emission-failure counter with its measurement window). Hidden, read-only.
     MuxStats(bool),
+    /// (v110) `mux notify <title> <message> [--json]`: one desktop
+    /// notification through every attached client's tty. Hidden transport for
+    /// `fno notify`'s client-first leg; the receipt's `clients` count is the
+    /// delivery verdict.
+    MuxNotify(String, String, bool),
     /// `mux pane <verb> ...`: the v4 script API. The operation is the typed
     /// tree's verdict; the argv is the re-sliced family tail. No TTY needed
     /// (control verbs are scriptable one-shots).
@@ -191,6 +196,10 @@ enum Role {
     /// tail runs `fno-agents mail-remote`; every other argv forwards
     /// byte-verbatim.
     RemoteMail(Vec<OsString>),
+    /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
+    /// do-not-disturb hold leaf. The verb and its tail pass through
+    /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
+    MailHold(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -332,6 +341,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "view" => Some(Role::MailViewRenamed),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
@@ -470,6 +484,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Ls { json } => Role::MuxLs(json.json),
             cli_args::MuxCmd::Doctor { json } => Role::MuxDoctor(json.json),
             cli_args::MuxCmd::Stats { json } => Role::MuxStats(json.json),
+            cli_args::MuxCmd::Notify {
+                title,
+                message,
+                json,
+            } => Role::MuxNotify(title, message, json.json),
             cli_args::MuxCmd::KillServer {
                 name,
                 json,
@@ -630,6 +649,11 @@ fn main() {
             &["mail-remote"],
             &rest,
         )),
+        Role::MailHold(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail hold|dnd|hold-release",
+            &["mail"],
+            &rest,
+        )),
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -667,6 +691,9 @@ fn main() {
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
+        Role::MuxNotify(title, message, json) => {
+            std::process::exit(fno::notify_verb::cli(&title, &message, json))
+        }
         Role::MuxSnapshot(tail) => match fno::client::snapshot::parse(&tail) {
             Ok(args) => std::process::exit(fno::client::snapshot::run(args)),
             Err(usage) => {
