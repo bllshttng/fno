@@ -1799,7 +1799,7 @@ def cmd_spawn(
     route_model: str | None = None
     # The routing row a lane-name route resolved, so the lane-specific
     # surfaces downstream (the print ask's launch list) read the row once.
-    lane_row: "InventoryRow | None" = None
+    lane_row: dict | None = None
     if route is not None:
         # Pane routing is a per-harness evidence claim, independent from both
         # pane autonomy and substrate preference. Missing capability stays
@@ -1836,15 +1836,15 @@ def cmd_spawn(
         )
 
         parsed = _parse_target(route)
-        lane_row = None
+        lane_row: dict | None = None
         if parsed is None:
             # The lane pin spelling: a declared row's NAME resolves the whole
             # coordinate - the dispatchers name one lane, never a flag
             # vocabulary. The pair spelling parses first, so a row named like
             # a pair cannot shadow it.
-            from fno.agents.model_routing import lane_row_by_name
+            from fno.agents.model_routing import declared_lane
 
-            lane_row = lane_row_by_name(route)
+            lane_row = declared_lane(name=route)
             if lane_row is None:
                 print(
                     f"--route takes 'provider,model' or a declared lane name; got {route!r}",
@@ -1852,7 +1852,7 @@ def cmd_spawn(
                 )
                 raise typer.Exit(code=2)
         if lane_row is not None:
-            vendor = lane_row.route.split("/", 1)[0] if lane_row.route else ""
+            vendor = (lane_row.get("route") or "").split("/", 1)[0]
             if not vendor:
                 print(
                     f"--route {route!r} names a lane that declares no route; "
@@ -1861,9 +1861,9 @@ def cmd_spawn(
                 )
                 raise typer.Exit(code=2)
             route_provider = vendor
-            route_model = lane_row.model
-            if effort is None and lane_row.effort:
-                effort = lane_row.effort
+            route_model = lane_row.get("model") or ""
+            if effort is None and lane_row.get("effort"):
+                effort = lane_row["effort"]
         else:
             route_provider = parsed[0]
             route_model = parsed[1]
@@ -2083,7 +2083,7 @@ def cmd_spawn(
         ) if route_env else None
         settings_path = route_settings_path_for(
             route_env, account_env, env=dict(os.environ), sandbox=None,
-            alias=lane.name if lane else None,
+            alias=(lane or {}).get("name"),
         )
         ask: dict = {
             "kind": "print",
@@ -2094,8 +2094,8 @@ def cmd_spawn(
             "model": route_model or model or "",
             "effort": effort or "",
         }
-        if lane is not None and lane.launch:
-            ask["launch"] = list(lane.launch)
+        if lane is not None and lane.get("launch"):
+            ask["launch"] = list(lane["launch"])
         answer = spawn_overlay_call(ask)
         tokens = answer.get("tokens")
         if not isinstance(tokens, list):
@@ -2783,8 +2783,8 @@ def cmd_spawn(
                         # any tracked cwd records none.
                         if launcher_cwd.strip():
                             ask["launcher_cwd"] = launcher_cwd
-                    if lane_row is not None and lane_row.launch:
-                        ask["launch"] = list(lane_row.launch)
+                    if lane_row is not None and lane_row.get("launch"):
+                        ask["launch"] = list(lane_row["launch"])
                     door_env = dict(os.environ)
                     config_dir = (account_env or {}).get("CLAUDE_CONFIG_DIR")
                     if config_dir:

@@ -697,7 +697,67 @@ pub fn run_mode(payload: &Value, cwd: &Path) -> Value {
         }
         "policy" => policy(cwd),
         "dispatch_model" => dispatch_model(payload, cwd),
+        "lane" => lane(payload, cwd),
         _ => json!({}),
+    }
+}
+
+/// One declared lane row, matched by NAME or by the resolved (provider,
+/// model) pair - the one owner of the match rule, beside the fold that
+/// produced the rows. `match: "name"` reads `name`; `match: "axes"` reads
+/// provider/model and admits exactly one declared claude row. An ambiguous
+/// or missing match answers `{"found": false}`; the caller degrades, never
+/// guesses.
+fn lane(payload: &Value, cwd: &Path) -> Value {
+    let rows = inventory(cwd)["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let found = match payload.get("match").and_then(Value::as_str).unwrap_or("") {
+        "name" => {
+            let name = payload.get("name").and_then(Value::as_str).unwrap_or("");
+            rows.iter()
+                .find(|row| row.get("name").and_then(Value::as_str) == Some(name))
+        }
+        "axes" => {
+            let provider = payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let model = payload
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let matches: Vec<&Value> = rows
+                .iter()
+                .filter(|row| {
+                    row.get("harness").and_then(Value::as_str) == Some("claude")
+                        && row.get("model").and_then(Value::as_str).map(str::trim) == Some(model)
+                        && row
+                            .get("route")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .split('/', 1)
+                            .next()
+                            == Some(provider)
+                })
+                .collect();
+            if matches.len() == 1 {
+                Some(matches[0])
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    match found {
+        Some(row) => {
+            let mut answer = row.clone();
+            answer["found"] = json!(true);
+            answer
+        }
+        None => json!({"found": false}),
     }
 }
 

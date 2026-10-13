@@ -63,11 +63,6 @@ class InventoryRow:
     # The declared access path's verified native-view label; empty is
     # unverified. Qualification metadata: carried, never ranked.
     operator_view: str = ""
-    # The row's own native launch argv, passed through raw from the config
-    # fold; None when the row declares none and the harness default answers.
-    # Validated where it fills (the spawn-overlay print kind), never here:
-    # the inventory read never refuses a spawn.
-    launch: Optional[list] = None
 
     @property
     def rank(self) -> int:
@@ -111,11 +106,6 @@ def _inventory_from_answer(answer: Mapping[str, Any]) -> Inventory:
                 else None
             ),
             operator_view=str(row.get("operator_view", "") or ""),
-            launch=(
-                [str(token) for token in row["launch"]]
-                if isinstance(row.get("launch"), list)
-                else None
-            ),
         )
     objective = str(answer.get("objective", "") or "")
     if objective not in _OBJECTIVES:

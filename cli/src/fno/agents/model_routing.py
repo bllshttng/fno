@@ -1216,37 +1216,34 @@ class RouteRestoreError(RuntimeError):
 
 
 def declared_lane(
-    provider: Optional[str], model: Optional[str]
-) -> Optional["InventoryRow"]:
-    """The one declared claude row matching the resolved (provider, model),
-    else None.
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    *,
+    name: Optional[str] = None,
+) -> Optional[dict]:
+    """The one declared lane row, matched by name or by the resolved
+    (provider, model), as a plain dict. The match rule lives in the
+    route-slot verb beside the inventory fold; ambiguous, unmatched or
+    unreadable answers read None - the spawn still launches, only the
+    lane-specific surfaces (the stable alias, the row's own launch argv)
+    degrade to the content-addressed file and the harness default."""
+    from fno.route_slot_client import route_slot_call
 
-    Ambiguous or unmatched lanes read None - the spawn still launches, only
-    the lane-specific surfaces (the stable alias, the row's own launch argv)
-    degrade to the content-addressed file and the harness default.
-    """
-    if not provider or not (model or "").strip():
+    ask: dict = {"mode": "lane"}
+    if name is not None:
+        ask["match"] = "name"
+        ask["name"] = name
+    else:
+        if not provider or not (model or "").strip():
+            return None
+        ask["match"] = "axes"
+        ask["provider"] = provider
+        ask["model"] = model
+    try:
+        answer = route_slot_call(ask)
+    except Exception:  # noqa: BLE001 - a lane read never breaks a spawn
         return None
-    from fno.route_resolve import InventoryRow, resolve_inventory
-
-    matches = [
-        row
-        for row in resolve_inventory().rows.values()
-        if row.harness == "claude"
-        and row.model == model
-        and (row.route.split("/", 1)[0] if row.route else "") == provider
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def lane_row_by_name(name: str) -> Optional["InventoryRow"]:
-    """The declared row whose name is exactly this, else None - the lane pin
-    spelling: ``--route zai-flash`` resolves the declared row, and the row's
-    own axes (route vendor, model, effort) answer the spawn. Names are the
-    inventory's dict keys, so one read settles it."""
-    from fno.route_resolve import resolve_inventory
-
-    return resolve_inventory().rows.get(name)
+    return dict(answer) if answer.get("found") else None
 
 
 def route_settings_path_for(

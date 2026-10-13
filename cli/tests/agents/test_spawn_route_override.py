@@ -687,15 +687,13 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
     from fno.agents import model_routing as mr
-    from fno.route_resolve import Inventory, InventoryRow
-
-    row = InventoryRow(
-        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.2",
-        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
-    )
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.2",
+        "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+    }
     monkeypatch.setattr(
-        mr, "declared_lane", lambda provider, model: row
+        mr, "declared_lane", lambda provider, model: dict(row)
     )
     monkeypatch.setattr(
         mr,
@@ -819,18 +817,17 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno import route_resolve
     from fno.agents import model_routing as mr
-    from fno.route_resolve import Inventory, InventoryRow
+    from fno.route_slot_client import route_slot_call
 
-    row = InventoryRow(
-        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.3-flash[1m]", effort="xhigh",
-    )
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh",
+    }
     monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+        route_slot_call,
+        "route_slot_call",
+        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
     monkeypatch.setattr(
         mr,
@@ -884,17 +881,16 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno import route_resolve
-    from fno.route_resolve import Inventory, InventoryRow
+    from fno.route_slot_client import route_slot_call
 
-    row = InventoryRow(
-        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.3-flash[1m]", effort="xhigh",
-    )
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh",
+    }
     monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+        route_slot_call,
+        "route_slot_call",
+        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
     dispatched: list[dict] = []
 
@@ -915,36 +911,32 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
 
 
 def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
-    """The lane is the one declared claude row matching the resolved
-    (provider, model), carrying the row's own launch argv verbatim.
-    Ambiguous or unmatched reads None - the digest path still carries the
-    settings, only the lane-specific surfaces degrade."""
-    from fno import route_resolve
+    """The lane forwarder: the row answer rides the verb's lane mode, matched
+    by axes or by name; ambiguous, unmatched and unreadable reads None."""
     from fno.agents import model_routing as mr
-    from fno.route_resolve import Inventory, InventoryRow
+    from fno.route_slot_client import route_slot_call
 
-    def inv_with(*rows: InventoryRow) -> Inventory:
-        return Inventory(rows={r.name: r for r in rows}, declared=True)
-
-    row = InventoryRow(
-        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.3-flash[1m]",
-        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]",
+        "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+    }
+    monkeypatch.setattr(
+        route_slot_call,
+        "route_slot_call",
+        lambda ask: dict(row, found=True),
     )
-    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row))
     lane = mr.declared_lane("zai", "glm-5.3-flash[1m]")
-    assert lane is not None and lane.name == "zai-flash"
-    assert lane.launch == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
-    twin = InventoryRow(
-        name="zai-flash-2", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.3-flash[1m]",
+    assert lane is not None and lane["name"] == "zai-flash"
+    assert lane["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
+    assert mr.declared_lane(name="zai-flash") == lane
+    monkeypatch.setattr(
+        route_slot_call,
+        "route_slot_call",
+        lambda ask: {"found": False},
     )
-    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row, twin))
     assert mr.declared_lane("zai", "glm-5.3-flash[1m]") is None
-    # The inverse lookup behind the lane pin spelling: the name IS the key.
-    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row))
-    assert mr.lane_row_by_name("zai-flash") is row
-    assert mr.lane_row_by_name("no-such-lane") is None
+    assert mr.declared_lane(name="zai-flash") is None
 
 
 def test_materialize_route_settings_is_0600_and_content_addressed(
