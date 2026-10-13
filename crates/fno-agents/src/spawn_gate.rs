@@ -1388,8 +1388,6 @@ fn decide_gate(
         maybe_emit_spawn_cap_escape();
         return Ok(GateGuard::default());
     }
-    let ceiling = agents_config::max_live(config_cwd) as usize;
-    let cap_floor = crate::capacity::thresholds(config_cwd).floor as usize;
     let floor_gb = agents_config::min_free_gb(config_cwd);
     let swap_cap = agents_config::max_swap_pct(config_cwd);
     // AC7: the retired trigger (max_load_per_cpu) is not read here;
@@ -1534,7 +1532,7 @@ fn decide_gate(
         // Each pass reads afresh: a refusal names only what IT read, never a
         // slot count from an earlier pass. The cap is read per pass too, so a
         // floor or grant written while a spawn is queued releases it.
-        let learned = crate::capacity::effective_from_env(ceiling, cap_floor);
+        let learned = crate::capacity::effective_for(config_cwd);
         let cap = learned.cap;
         last_succession_error = None;
         let mut axes_read = serde_json::Map::new();

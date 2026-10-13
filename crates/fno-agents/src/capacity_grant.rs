@@ -294,6 +294,13 @@ fn set_grant(ctx: &Ctx, now: i64, cap_arg: Option<&str>, for_arg: Option<&str>) 
     };
     let eff = crate::capacity::effective(ctx.home, ctx.ceiling, ctx.floor);
     let learned = eff.grant.as_ref().map_or(eff.cap, |g| g.learned);
+    if cap < learned {
+        eprintln!(
+            "spawn-gate grant: refused. --cap {cap} is under the learned cap {learned}, so it \
+             would lift nothing. Nothing was written."
+        );
+        return 2;
+    }
     let end = now + secs;
     let argv = door_argv(
         format!(
@@ -465,6 +472,7 @@ mod tests {
         assert_eq!(run_at(&agent, &args(&["--cap", "24", "--for", "2h"])), 3);
         assert_eq!(run_at(&agent, &args(&["--cap", "30"])), 2);
         assert_eq!(run_at(&agent, &args(&["--for", "9h"])), 2);
+        assert_eq!(run_at(&agent, &args(&["--cap", "10"])), 2);
         assert!(read(&home).is_none());
         let _ = std::fs::remove_dir_all(home.root());
     }
