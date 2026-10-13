@@ -4903,19 +4903,21 @@ pub(crate) fn control_roundtrip(
 }
 
 /// How long the envelope renderer gets. It reads the pane frame and runs the
-/// manifest engine over it, so it is a couple of subprocess hops, not a network
-/// call; a renderer that has not answered by now is wedged, and a wedged
-/// renderer must fail the send rather than release a bare paste.
+/// manifest engine over it, so it is a subprocess hop, not a network call; a
+/// renderer that has not answered by now is wedged, and a wedged renderer must
+/// fail the send rather than release a bare paste.
 ///
 /// Strictly GREATER than the child's own worst case, which is what makes the
-/// diagnostic honest. The nested pane read is bounded at 30s
-/// (`_MUX_SUBPROCESS_TIMEOUT_S`) and manifest-eval adds 2s, plus interpreter
-/// startup. At exactly 30s this side killed the child first and reported a
-/// wedged renderer for a slow pane, sending the reader to the wrong component.
-/// The child hits its own bound first now and says which hop was slow.
+/// diagnostic honest. The nested pane read is bounded at 30s on the renderer
+/// leg, and the manifest eval runs in-process there - the port removed the
+/// interpreter startup that used to add its own seconds. At exactly 30s this
+/// side killed the child first and reported a wedged renderer for a slow pane,
+/// sending the reader to the wrong component. The child hits its own bound
+/// first now and says which hop was slow.
 const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// Gate and envelope `bytes` for `session:pane` by shelling to the Python renderer (`fno agents mail pane-prepare`).
+/// Gate and envelope `bytes` for `session:pane` by shelling to the pane-send
+/// renderer, the native `fno-agents mail pane-prepare` verb.
 ///
 /// Fails closed on every arm: a missing renderer, a non-zero exit (the pane is
 /// showing an option prompt, hosts no registered agent, or the body cannot be
@@ -4924,8 +4926,11 @@ const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 /// close, so falling back to one when the renderer is unavailable would restore
 /// it exactly when something is already wrong.
 ///
-/// Re-invokes this binary by `current_exe`, which forwards non-mux verbs to the
-/// Python wheel. `FNO_BIN` overrides it for a test or a split install.
+/// The renderer program resolves through the digest overlay's paired
+/// `fno-agents` binary. The front binary is still resolved and handed to the
+/// child as `FNO_BIN`: the renderer's nested `mux pane read` hop resolves that
+/// variable or a bare `fno` on PATH, and this side can be running precisely
+/// because `fno` is not on PATH.
 fn prepare_pane_bytes(
     session: &str,
     pane: u64,
@@ -4934,14 +4939,14 @@ fn prepare_pane_bytes(
 ) -> Result<Vec<u8>, String> {
     use std::io::Write;
 
-    let exe = match std::env::var_os("FNO_BIN") {
+    let front = match std::env::var_os("FNO_BIN") {
         Some(v) => PathBuf::from(v),
         None => std::env::current_exe()
             .map_err(|e| format!("cannot locate the fno binary to render the envelope: {e}"))?,
     };
-    let mut command = crate::process_admission::std_command(&exe);
+    let program = crate::digest_overlay::fno_agents_bin();
+    let mut command = crate::process_admission::std_command(&program);
     command.args([
-        "agents",
         "mail",
         "pane-prepare",
         "--session-id",
@@ -4954,13 +4959,13 @@ fn prepare_pane_bytes(
         command.arg("--style-exception").arg(reason);
     }
     let child = command
-        // Hand the child the path we resolved. It runs a nested `mux pane read`
-        // for the prompt gate, and that hop resolves `FNO_BIN` or a bare `fno`
-        // on PATH. We are here via `current_exe` precisely because `fno` may not
-        // BE on PATH, so leaving this unset made the gate unable to read the
-        // frame on exactly those installs, and every non-raw send refused as
-        // "frame unreadable".
-        .env("FNO_BIN", &exe)
+        // Hand the child the front path we resolved. It runs a nested
+        // `mux pane read` for the prompt gate, and that hop resolves
+        // `FNO_BIN` or a bare `fno` on PATH. The front can be off PATH (the
+        // reason this crossing runs at all), so leaving this unset made the
+        // gate unable to read the frame on exactly those installs, and every
+        // non-raw send refused as "frame unreadable".
+        .env("FNO_BIN", &front)
         .env("FNO_MAIL_FENCE", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -4969,7 +4974,7 @@ fn prepare_pane_bytes(
         format!(
             "envelope renderer ({}) could not start: {e}. Refusing to type an \
                  unattributed payload; pass --raw for a genuine keystroke.",
-            exe.display()
+            program.display()
         )
     })?;
     // The write runs on its own thread, so it cannot deadlock against a child
