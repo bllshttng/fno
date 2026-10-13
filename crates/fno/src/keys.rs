@@ -460,6 +460,11 @@ pub enum Event {
     /// visible; this only expands or collapses it, and the client's view
     /// layer interprets that, not here.
     OpenTeam,
+    /// Open or close the Org board view in one press: the sideline's org
+    /// board (tree, table, graph), from any sideline view. From Org it
+    /// closes back to the agents list. The client's view layer interprets
+    /// this, like OpenTeam.
+    OpenOrgView,
     /// Toggle the activity feed panel on the right edge (e):
     /// questions, decisions and node lifecycle, newest first. The panel is
     /// chrome and consumes no keys; a click deep-links a row and the border
@@ -1326,6 +1331,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             "the org block (load, census, lanes)", // minimize/expand, sideline
         ),
         b(
+            b'G',
+            "org-view",
+            OpenOrgView,
+            Global,
+            "org view (tree, table, graph)",
+        ),
+        b(
             b'q',
             "notifications-bell",
             ToggleBell,
@@ -2035,6 +2047,27 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_org_view_binding_is_g_in_global() {
+        let binding = key_bindings()
+            .into_iter()
+            .find(|b| b.action == "org-view")
+            .expect("the org-view action is bound");
+
+        assert_eq!(binding.key, b'G');
+        assert_eq!(binding.event, Event::OpenOrgView);
+        assert!(matches!(binding.section, KeySection::Global));
+
+        // the org block keeps its key while org-view takes the
+        // free uppercase slot beside it.
+        let org = key_bindings()
+            .into_iter()
+            .find(|b| b.action == "org")
+            .expect("the org action is bound");
+        assert_eq!(org.key, b'C');
+        assert_eq!(org.event, Event::OpenTeam);
+    }
+
     fn scan_all(chunks: &[&[u8]]) -> Vec<Event> {
         // A single fixed instant: no chunk advances the clock, so the resize
         // repeat window (if a chord arms one) stays open across the chunks -
@@ -2582,7 +2615,7 @@ mod tests {
         let (map, warnings) = resolve_keymap(
             None,
             &[
-                ("split-left".into(), "G".into()),
+                ("split-left".into(), "Z".into()),
                 ("split-up".into(), "u".into()),
             ],
         );
@@ -2592,8 +2625,8 @@ mod tests {
             .iter()
             .find(|kb| kb.action == "split-left")
             .expect("materialized");
-        assert_eq!(left.key, b'G');
-        assert_eq!(left.disp, "G");
+        assert_eq!(left.key, b'Z');
+        assert_eq!(left.disp, "Z");
         assert_eq!(left.event, Event::Cmd(Command::SplitDir(Dir::Left)));
         let up = rows
             .iter()

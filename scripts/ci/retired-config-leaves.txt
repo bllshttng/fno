@@ -10,3 +10,4 @@
 recovery.watchdog_mail_to|deleted|use recovery.watchdog.mail_to
 recovery.watchdog_reap|deleted|use recovery.watchdog.reap
 target.auto_launch_on_blueprint|deleted|a lead, the merge continuation or the active-backlog drain runs fno backlog advance [--epic <epic>]; blueprint completion dispatches nothing
+think_spawn.on_retro|deleted|the A2 retro think-spawn retired with the Python backlog runtime; the close path stamps plan and projects, it never dispatches; keep on_work_start via fno do target

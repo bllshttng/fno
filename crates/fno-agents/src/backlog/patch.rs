@@ -572,7 +572,7 @@ fn put_key(
 /// Clear the supersession facts and the replacer's `supersedes` backref (the
 /// stale claim would keep the chain reading as live). The deferral triple is
 /// NOT touched: `--leave superseded` may legally land on deferred.
-fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: &mut Vec<Change>) {
+pub(crate) fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: &mut Vec<Change>) {
     let id = entry_id(&rows[idx]).unwrap_or_default().to_string();
     let replacer = rows[idx]
         .get("superseded_by")

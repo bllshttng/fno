@@ -45,6 +45,20 @@ fno agents claim acquire node:x-test --holder b-test --ttl 30m
 
 Expected: B exits 1 with `held_by_other` and names A's holder. Then run real targets on both machines from one backlog. No node is dispatched twice.
 
+Prove a review attestation crosses machines too. On machine A, commit one through the emit door (the commit mirrors it to the primary):
+
+```bash
+fno doctor event emit-envelope --events "$HOME_A/.fno/spaces/proof/events.jsonl" --file env.json
+```
+
+On machine B, read the gate's attestation source and find A's row (B's journals are empty, so the row proves the primary leg):
+
+```bash
+fno doctor event rows --events "$HOME_B/.fno/spaces/proof/events.jsonl" --type review_attestation
+```
+
+Expected: B's read lists A's head, stamped with the writing machine (`attest_machine`). A review on one machine now covers a merge on the other. A merge from a peer no longer pays a second review round. A pull with no table on the primary reads as no rows, never an outage. The CI-judged version of this drill is `tests/ci/test_multiplayer_attestation.sh` (workflow `multiplayer-attestation`).
+
 ## 4. Pull the network on one machine
 
 Turn off Wi-Fi on machine B during a run. Expected:

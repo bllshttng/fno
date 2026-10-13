@@ -8,8 +8,6 @@ debounced.
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 from typer.testing import CliRunner
 
@@ -64,9 +62,15 @@ def emitted_events(monkeypatch):
 
 
 def _unread_count(runner, name: str) -> int:
-    res = runner.invoke(app, ["agents", "mail", "unread", "--name", name, "--json"])
-    assert res.exit_code == 0, res.output
-    return len(json.loads(res.stdout.strip().splitlines()[-1]))
+    # Store-layer count via the bus log's own read primitives: the unread read
+    # verb is the native binary's leaf, and the pytest smoke shard runs without
+    # that binary by design. No acks happen in these tests, so deliverable
+    # minus withdrawn is exactly what the reader would report.
+    from fno.bus.log import is_deliverable, iter_messages, withdrawn_ids
+
+    msgs = [m for m in iter_messages() if m.to == name]
+    withdrawn = withdrawn_ids(msgs)
+    return sum(1 for m in msgs if is_deliverable(m) and m.id not in withdrawn)
 
 
 def test_question_send_escalates_to_human(runner, mailbox, notified):
@@ -388,7 +392,7 @@ def test_store_healing_never_downgrades_an_operator_stamp(mailbox):
     session. The comment above that branch was written against exactly this
     clobber; the healer became the caller that delivers it.
     """
-    from fno.agents.registry import register_existing_session, resolve_agent_in, load_registry
+    from fno.agents.registry import register_existing_session, load_registry
 
     sid = "3f2b71c0-11aa-4bb2-9cc3-5d6e7f809a1b"
     register_existing_session(
