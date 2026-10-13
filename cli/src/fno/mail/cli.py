@@ -4190,7 +4190,7 @@ def team_forward(ctx: typer.Context) -> None:
     passed through the same way and refused there, so this shim adds no
     Python flag surface.
     """
-    _forward_mail_hold(["team", *ctx.args])
+    _forward_mail(["team", *ctx.args], label="fno mail team")
 
 
 @mail_app.command("unread")
@@ -4264,107 +4264,16 @@ def cmd_sent(
     ``landed`` proves the text reached the recipient's own transcript, never
     that the agent read or acted on it -- that fourth state isn't observable.
     """
-    from fno.agents.self_stamp import stamp_from
-    from fno.bus.log import (
-        HOSTED_DELIVERY,
-        TYPED_DELIVERY,
-        dedupe_by_id,
-        iter_messages,
-        withdrawn_ids,
-    )
-    from fno.config import load_settings
-    from fno.mail.landed import _sent_unclaimed, age_minutes, landed_states
-
-    # `stamp_from`, not the precedence-only resolver: this must be the SAME
-    # handle the send path stamped into `from`, or the outbox lists mail this
-    # session did not send and hides mail it did. A session that inherited a
-    # foreign marker stamps "fno" and resolves to its spawner by precedence, so
-    # the two answers genuinely differ. Passing `--from-name` through is what
-    # makes the labelled send path listable at all: `stamp_from` returns an
-    # explicit label verbatim, so mail sent under one is invisible here without
-    # it -- an entire supported send path with no way to see its own strands.
-    handle = stamp_from(from_name)
-
-    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    # One id, one row, the receipt's state: a staged body row and its receipt
-    # share an id, and the outbox lists the send once, in its final state.
-    all_msgs = dedupe_by_id(iter_messages(), last=True)
+    # The body lives in the Rust mail front now; Python forwards, the same
+    # split as the hold verbs.
+    argv = ["sent"]
     if unclaimed_only:
-        msgs = _sent_unclaimed(handle, load_settings().inbox.unclaimed_ttl)
-        unclaimed_ids = {m.id for m in msgs}
-    else:
-        retracted = withdrawn_ids(all_msgs)
-        # TTL of -1, not 0: `_age_exceeds` is strict `>` and bus timestamps are
-        # whole seconds, so a message sent this second has age 0.0 and a TTL of 0
-        # would classify it CLAIMED - reporting a just-sent, unread message as
-        # picked up, which is the opposite of the truth this verb exists to tell.
-        unclaimed_ids = {m.id for m in _sent_unclaimed(handle, -1)}
-        msgs = [
-            m for m in all_msgs
-            if m.kind == "send" and m.from_ == handle and m.id not in retracted
-        ]
-
-    # `claimed`: durable cursor read past this row. A hosted row has none, so
-    # it reports `null` (see `landed`), never the unconditional `true` before.
-    claimed_flag: dict[str, Optional[bool]] = {
-        m.id: (None if m.delivery == HOSTED_DELIVERY
-               else False if m.delivery == TYPED_DELIVERY
-               else m.id not in unclaimed_ids)
-        for m in msgs
-    }
-    landed_flag = landed_states(all_msgs, msgs)
-
-    if json_out or not is_tty:
-        print(
-            json.dumps(
-                [
-                    {
-                        "id": m.id, "to": m.to, "to_kind": m.to_kind,
-                        "kind": m.kind, "ts": m.ts,
-                        "delivery": m.delivery or "durable",
-                        "claimed": claimed_flag[m.id],
-                        # A typed row is neither claimed nor claimABLE: it is
-                        # excluded from the unclaimed scan, withdraw refuses it,
-                        # and the recipient cannot drain it. Reporting only
-                        # `claimed: false` made it identical to an UNCLAIMED
-                        # durable row that can still clear, so this renderer and
-                        # `--unclaimed-only` disagreed about the same row.
-                        "claimable": m.delivery != TYPED_DELIVERY,
-                        "landed": landed_flag.get(m.id),
-                    }
-                    for m in msgs
-                ],
-                ensure_ascii=False,
-            )
-        )
-        return
-    if not msgs:
-        scope = "unclaimed " if unclaimed_only else ""
-        print(f"no {scope}mail sent from {handle}")
-        return
-    for m in msgs:
-        if m.delivery == HOSTED_DELIVERY:
-            verdict = landed_flag.get(m.id)
-            if verdict is True:
-                state = "landed"
-            elif verdict is False:
-                state = f"handed {age_minutes(m.ts) or 0}m ago, not in transcript"
-            else:
-                state = "handed, landing unknown"
-        # `typed`: a PTY prompt can discard bytes, so never claim it was consumed.
-        elif m.delivery == TYPED_DELIVERY:
-            state = "typed (unconfirmed)"
-        else:
-            state = "claimed" if claimed_flag[m.id] else "UNCLAIMED"
-        lane = m.to_kind or "?"
-        delivery = m.delivery or "durable"
-        print(f"{m.id}  -> {m.to}  [{lane}/{delivery}]  {m.ts}  {state}")
-    print(
-        "\nunclaimed means the recipient never read it. Wake it first - "
-        "fno agents peek <recipient> to check, fno agents resume <recipient> "
-        "to wake (the wake lane delivers); withdraw one only when stale: "
-        "fno agents mail withdraw <id>"
-    )
+        argv.append("--unclaimed")
+    if from_name is not None:
+        argv += ["--from-name", from_name]
+    if json_out:
+        argv.append("--json")
+    _forward_mail(argv, label="fno mail sent")
 
 
 @mail_app.command("withdraw")
@@ -4597,12 +4506,11 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _forward_mail_hold(argv: list[str]) -> None:
+def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold and team verbs' bodies live in the Rust mail front now; Python
-    owns transport only, the same split as the claims forward. ``argv[0]``
-    is the verb; the binary-not-found refusal names it.
+    The hold, team, and sent verbs' bodies live in the Rust mail front now;
+    Python owns transport only, the same split as the claims forward.
     """
     import subprocess
 
@@ -4612,7 +4520,7 @@ def _forward_mail_hold(argv: list[str]) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno agents mail {argv[0]}: the fno-agents binary was not found. "
+            f"{label}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
@@ -4670,7 +4578,7 @@ def cmd_hold(
         argv.append("--off")
     if status:
         argv.append("--status")
-    _forward_mail_hold(argv)
+    _forward_mail(argv)
 
 
 def cmd_hold_release(
@@ -4689,7 +4597,7 @@ def cmd_hold_release(
     someone else took the hold off, and a second release would be a no-op that
     still emitted a release event.
     """
-    _forward_mail_hold(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
+    _forward_mail(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
 
 
 mail_app.command("hold")(cmd_hold)
