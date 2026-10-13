@@ -561,11 +561,12 @@ pub(crate) async fn execute_selected(
             // Off-loop for the same reason ServerMsg::OpenLink is: a cold
             // browser launch must not stall the render loop.
             let launched = url.clone();
-            let outcome = tokio::task::spawn_blocking(move || crate::link::open_url(&launched))
-                .await
-                .unwrap_or_else(|_| Err("opener task failed".to_string()));
+            let outcome =
+                tokio::task::spawn_blocking(move || crate::link::open_url_for_session(&launched))
+                    .await
+                    .unwrap_or_else(|_| Err("opener task failed".to_string()));
             match outcome {
-                Ok(()) => view.set_notice(format!("opened {url}")),
+                Ok(opened) => view.set_notice(opened.notice(&url)),
                 Err(e) => view.set_notice(format!("open failed: {e}")),
             }
         }
