@@ -33,7 +33,7 @@
     "label": "merge gh missing",
     "entry": "merge",
     "pr": "7",
-    "path": "empty"
+    "path": "system"
   },
   {
     "label": "merge lock held",
@@ -99,7 +99,10 @@
     "pr": "7",
     "git": true,
     "origin": true,
-    "config": {"require_checks_pass": false},
+    "config": {
+      "require_checks_pass": false,
+      "delete_branch_on_merge": false
+    },
     "answers": {
       "authorized-merge-1": {
         "json": {"outcome": "authorized", "detail": "cleared"}
@@ -107,6 +110,20 @@
       "authorized-merge-2": {
         "json": {"outcome": "merged", "note": "merged pr 7"}
       }
+    },
+    "gh": {
+      "view-1": {"stdout": "https://github.com/acme/widget/pull/7\n"},
+      "view-2": {
+        "json": {
+          "state": "MERGED",
+          "headRefName": "feature/patch",
+          "url": "https://github.com/acme/widget/pull/7",
+          "mergedAt": "2026-10-13T00:00:00Z"
+        }
+      },
+      "view-3": {"stdout": "https://github.com/acme/widget/pull/7\n"},
+      "view-4": {"stdout": "https://github.com/acme/widget/pull/7\n"},
+      "api": {"exit": 3, "stderr": "simulated api failure"}
     }
   },
   {
@@ -116,7 +133,7 @@
     "argv": ["--accept-flake"],
     "git": true,
     "origin": true,
-    "config": {"require_checks_pass": true},
+    "config": {"require_checks_pass": true, "delete_branch_on_merge": false},
     "answers": {
       "authorized-merge-1": {
         "json": {"outcome": "authorized", "detail": "flake recovered"}
@@ -267,6 +284,7 @@
     "entry": "result",
     "pr": 7,
     "git": true,
+    "origin": true,
     "gh": {
       "view": {
         "json": {
@@ -281,11 +299,14 @@
     "entry": "result",
     "pr": 7,
     "git": true,
+    "origin": true,
+    "pull_head": true,
+    "merge_result_script": 3,
     "gh": {
       "view": {
         "json": {
           "baseRefName": "main",
-          "headRefOid": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+          "headRefOid": "__PULL_SHA__"
         }
       }
     }

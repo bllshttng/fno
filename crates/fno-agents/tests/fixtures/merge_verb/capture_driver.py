@@ -50,8 +50,10 @@ STRIP_VARS = [
 
 # Answers every merge/hold case can rely on. pr-worktree refusal 3 with "no
 # local worktree" is the transport's own not-found dialect. There is no
-# default gh api-jq answer: the remote branch delete early-outs unless
-# delete_branch_on_merge is set, and only that case carries one.
+# default gh api/api-jq answer: delete_branch_on_merge defaults True, so
+# every merged case reaches the remote-delete read, but its api/api-jq
+# shapes collide with the coverage REST read, so merged cases opt the
+# delete off in config and the cleanup-partial case carries the delete leg.
 DEFAULT_ANSWERS = {
     "pr-worktree": {"exit": 3, "stderr": "no local worktree for pr"},
     "claim-acquire": {
@@ -223,7 +225,8 @@ main()
 
 STUB_GH = r"""#!/usr/bin/python3
 # Stand-in for the gh CLI. Maps each argv shape to a named shape, journals
-# it, then answers from answers/gh-<shape>.json. Unmapped argv fails loud.
+# it with the argv, then answers from answers/gh-<shape>-<n>.json falling
+# back to answers/gh-<shape>.json. Unmapped argv fails loud.
 # pr merge --disable-auto without an answer is a silent success: the caller
 # uses it as a best-effort disarm.
 import json
@@ -242,6 +245,10 @@ def shape_of(argv):
         if "--disable-auto" in argv:
             return "merge-disable-auto"
         return "merge"
+    if len(argv) >= 2 and argv[0] == "repo" and argv[1] == "view":
+        # resolve_current_repo_slug's fallback when the git remote leg
+        # yields no github.com slug (the fixture's insteadOf rewrite).
+        return "repo-view"
     if argv and argv[0] == "api":
         if "--jq" in argv:
             return "api-jq"
@@ -269,18 +276,38 @@ def main():
     journals = os.path.join(root(), "journals")
     os.makedirs(journals, exist_ok=True)
     with open(os.path.join(journals, "gh.jsonl"), "a") as fh:
-        fh.write(json.dumps({"op": shape}, sort_keys=True) + "\n")
+        fh.write(
+            json.dumps({"op": shape, "argv": argv[:10]}, sort_keys=True) + "\n"
+        )
     if shape is None:
         sys.stderr.write("stub gh: unhandled argv: %s\n" % " ".join(argv))
         sys.exit(3)
-    path = os.path.join(root(), "answers", "gh-%s.json" % shape)
-    if not os.path.exists(path):
-        if shape == "merge-disable-auto":
-            sys.exit(0)
-        sys.stderr.write("stub gh: no answer for shape %s\n" % shape)
-        sys.exit(3)
-    with open(path) as fh:
-        emit(json.load(fh))
+    # Per-call answers first (gh-<shape>-<n>.json), then the shape default.
+    # Several consumers share a shape but need different bytes: three
+    # `pr view --json url -q .url` calls want a bare URL while the
+    # state/headRefName/url/mergedAt reader wants raw JSON.
+    counter = os.path.join(journals, "gh-counters.json")
+    counts = {}
+    if os.path.exists(counter):
+        with open(counter) as fh:
+            try:
+                counts = json.load(fh)
+            except ValueError:
+                counts = {}
+    n = int(counts.get(shape, 0)) + 1
+    counts[shape] = n
+    with open(counter, "w") as fh:
+        fh.write(json.dumps(counts, sort_keys=True))
+    answers = os.path.join(root(), "answers")
+    for name in ("%s-%d" % (shape, n), shape):
+        path = os.path.join(answers, "gh-%s.json" % name)
+        if os.path.exists(path):
+            with open(path) as fh:
+                emit(json.load(fh))
+    if shape == "merge-disable-auto":
+        sys.exit(0)
+    sys.stderr.write("stub gh: no answer for shape %s (call %d)\n" % (shape, n))
+    sys.exit(3)
 
 
 main()
@@ -424,13 +451,14 @@ def build_origin(case_dir):
     )
 
 
-def substitute_placeholders(case_dir, head_sha):
+def substitute_placeholders(case_dir, head_sha, pull_sha=None):
+    markers = (b"__CASE_DIR__", b"__HEAD_SHA__", b"__PULL_SHA__")
     for dirpath, dirnames, filenames in os.walk(str(case_dir)):
         dirnames[:] = [d for d in dirnames if d not in (".git", "origin.git")]
         for name in filenames:
             path = Path(dirpath) / name
             data = path.read_bytes()
-            if b"__CASE_DIR__" not in data and b"__HEAD_SHA__" not in data:
+            if not any(marker in data for marker in markers):
                 continue
             try:
                 text = data.decode("utf-8")
@@ -439,6 +467,8 @@ def substitute_placeholders(case_dir, head_sha):
             text = text.replace("__CASE_DIR__", str(case_dir))
             if head_sha:
                 text = text.replace("__HEAD_SHA__", head_sha)
+            if pull_sha:
+                text = text.replace("__PULL_SHA__", pull_sha)
             path.write_text(text)
 
 
@@ -493,14 +523,47 @@ def build_case(root_path, case, index):
         # only needs to exist and parse for the readable path.
         (case_dir / "graph.json").write_text('{"rows": []}\n')
     head_sha = None
+    pull_sha = None
     if case.get("git"):
         head_sha = build_git(case_dir)
+    if case.get("pull_head"):
+        # A divergent pull head: a second root commit the base branch does not
+        # contain, so the merge-result leg falls through to the merge-tree
+        # probe instead of the ancestor short-circuit. Built as a ref before
+        # the bare clone so the object reaches origin, then re-spelled as the
+        # refs/pull/<n>/head ref the leg fetches.
+        tree = git_run(["rev-parse", "HEAD^{tree}"], case_dir)
+        pull_sha = git_run(["commit-tree", tree, "-m", "pull head"], case_dir)
+        git_run(["update-ref", "refs/heads/pull-head", pull_sha], case_dir)
     if case.get("origin"):
         build_origin(case_dir)
+    if pull_sha:
+        git_run(
+            [
+                "-C",
+                str(case_dir / "origin.git"),
+                "update-ref",
+                "refs/pull/%s/head" % case["pr"],
+                "refs/heads/pull-head",
+            ],
+            case_dir,
+        )
+    if case.get("merge_result_script"):
+        # The merge-result leg shells out to the repo's merge-tree probe and
+        # maps its exit; a fixture stub with the real exit code freezes that
+        # verdict mapping without running the real merge-tree machinery.
+        script = case_dir / "scripts" / "ci" / "check-merge-result.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text(
+            "#!/bin/sh\n"
+            "echo \"merge-result: red - merge-tree conflict: fixture\"\n"
+            "exit %d\n" % case["merge_result_script"]
+        )
+        os.chmod(str(script), 0o755)
     (case_dir / "case.json").write_text(
         json.dumps(case, sort_keys=True, indent=2) + "\n"
     )
-    substitute_placeholders(case_dir, head_sha)
+    substitute_placeholders(case_dir, head_sha, pull_sha)
     return case_dir
 
 
@@ -578,6 +641,11 @@ def cmd_case(case_dir):
     env["GIT_CONFIG_SYSTEM"] = "/dev/null"
     if case.get("path") == "empty":
         env["PATH"] = ""
+    elif case.get("path") == "system":
+        # Real toolchain only: real git resolves the repo, no gh on PATH,
+        # while the fno-agents stubs stay reachable through their FNO_AGENTS_*
+        # env pins. This is the "gh CLI not installed" case.
+        env["PATH"] = "/usr/bin:/bin"
     else:
         env["PATH"] = "%s:/usr/bin:/bin" % stubbin
     env.update(case.get("env") or {})
