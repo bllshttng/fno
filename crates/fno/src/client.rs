@@ -7779,8 +7779,8 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41) Script-layout replies: control-connection only,
-                    // never sent to an attached client - ignore, don't desync.
+                    // (v41+) control-connection-only replies: ignore, don't
+                    // desync. The attach handshake carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
@@ -7790,10 +7790,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
                     | ServerMsg::TabClosed { .. }
-                    // (v60/v71/v75/v78) one-shot control-verb replies.
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
+                Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
                     // exec first, OSC 52 to the outer terminal as fallback

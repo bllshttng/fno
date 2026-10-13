@@ -533,152 +533,6 @@ def _forward_refresh(
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
-#: States in which nobody holds the key, so a reader is about to conclude the
-#: node is free for the taking. ``suspect`` is absent on purpose: a dead pid
-#: inside its TTL still protects the slot and already reads as held.
-_UNHELD_STATES = frozenset({"free", "stale"})
-
-
-def _roster_crosscheck(node_id: str, reading: Optional[RosterReading] = None) -> dict:
-    """The additive ``roster_*`` fields for one node key.
-
-    ``reading`` lets a sweep share one fleet read across every claim it
-    classifies; omitting it takes a fresh reading for a single lookup.
-    """
-    if reading is None:
-        reading = read_roster(timeout=_ROSTER_CROSSCHECK_TIMEOUT_S)
-    if not reading.consulted:
-        return {
-            "roster_consulted": False,
-            "roster_rows_scanned": 0,
-            "roster_rows_unresolved": 0,
-            "roster_workers": [],
-            "roster_skip_reason": reading.reason,
-        }
-    candidates = [
-        row["name"] for row in reading.unresolved_rows if Path(row.get("cwd") or "").name == node_id
-    ]
-    payload = {
-        "roster_consulted": True,
-        "roster_rows_scanned": reading.rows_scanned,
-        "roster_rows_unresolved": reading.rows_unresolved,
-        "roster_unresolved_candidates": candidates,
-        # Additive display only: occupancy itself is decided by the overlay
-        # join below, which also sees rows this node-attributed fold misses.
-        "roster_workers": reading.workers_on(node_id),
-    }
-    if reading.reason:
-        # The live probe degraded to the registry-only view and was tolerated:
-        # name it, so the payload never reads as a full-fleet answer.
-        payload["roster_probe"] = reading.reason
-    return payload
-
-
-def _roster_verdict_line(info: dict) -> str:
-    """One line naming what was consulted and what it found.
-
-    Each string is produced by exactly one outcome, so a caller asserts a
-    positive marker instead of grepping for the absence of the word free - an
-    absence has two explanations and cannot tell them apart, which is the
-    defect this whole cross-check exists to remove. One rider: the
-    finished-session clause rides any outcome it can coexist with.
-
-    Five outcomes, not three: a node whose only roster rows are finished
-    sessions is genuinely unworked, and printing the live-worker alarm for it
-    would train every reader to ignore the alarm; and rows the predicate
-    could not date read UNKNOWN, never live-by-default.
-    """
-    # The claim's OWN state, never the hardcoded word free. The cross-check runs
-    # for every unheld state, and `stale` is one of them, so a line saying free
-    # over a payload saying stale made stdout and stderr disagree about the same
-    # claim in the same breath.
-    state = info.get("state") or "free"
-    if not info.get("roster_consulted"):
-        return f"{state}, roster not consulted ({info.get('roster_skip_reason', 'unknown')})"
-    workers = info.get("roster_workers") or []
-
-    # The overlay join is the occupancy authority, and its answer arrives as
-    # `worked_by`: rows it resolved through the graph's own session ids, a set
-    # the node-attributed `roster_workers` fold cannot see.
-    worked_by = info.get("worked_by") or []
-    if worked_by:
-        line = f"UNCLAIMED but a live worker is on this node: {', '.join(worked_by)}"
-        unresolved = info.get("roster_rows_unresolved", 0)
-        if unresolved:
-            # task 2.1: the verdict is only as good as its coverage,
-            # so the engaged line names the fraction too.
-            scanned = info.get("roster_rows_scanned", 0)
-            line += f"; coverage degraded: {unresolved} of {scanned} rows unresolved"
-        return line
-
-    engaged, unmeasurable, _verdicts = classify_workers(workers)
-    if engaged:
-        rendered = ", ".join(f"{w['name']} (state={w['state']})" for w in engaged)
-        line = f"UNCLAIMED but a live worker is on this node: {rendered}"
-        unresolved = info.get("roster_rows_unresolved", 0)
-        if unresolved or unmeasurable:
-            scanned = info.get("roster_rows_scanned", 0)
-            line += (
-                f"; coverage degraded: {unresolved} of {scanned} rows unresolved"
-                + (f", {len(unmeasurable)} undated" if unmeasurable else "")
-            )
-        return line
-    if unmeasurable:
-        rendered = ", ".join(f"{w['name']} (state={w['state']})" for w in unmeasurable)
-        return (
-            f"{state}, no positively-live worker; {len(unmeasurable)} row(s) "
-            f"unmeasured, never live: {rendered}. "
-            f"Confirm with: fno agents peek {unmeasurable[0]['name']}"
-        )
-    # Two ways a row reads finished: the predicate said so (it is still in
-    # `workers`), or the session closed its own phase row on this node and the
-    # display field dropped it. The clause is built HERE, above the unresolved
-    # branch, because that branch returns and used to leave it unreachable: a
-    # node whose only row was a closed session read "no row resolved to this
-    # node" over a payload naming that row under `roster_closed_workers`.
-    finished = [w["name"] for w in workers] + list(info.get("roster_closed_workers") or [])
-    tail = ""
-    if finished:
-        tail = f"; {len(finished)} finished session(s) resolved to it: {', '.join(finished)}"
-    unresolved = info.get("roster_rows_unresolved", 0)
-    if unresolved:
-        scanned = (
-            f"{state}, no row resolved to this node "
-            f"({info['roster_rows_scanned']} scanned, {unresolved} unresolved){tail}"
-        )
-        candidates = info.get("roster_unresolved_candidates") or []
-        if candidates:
-            names = ", ".join(candidates)
-            return (
-                f"{scanned}; {len(candidates)} unresolved row's worktree names this node: "
-                f"{names}. Confirm with: fno agents peek {candidates[0]}"
-            )
-        # Degraded, not complete: the reader must be able to tell "nobody
-        # holds this and the roster was patchy" from "nobody holds this and
-        # the roster was complete", which both used to render as plain free.
-        return f"{scanned}; roster coverage degraded"
-    scanned = f"{state}, no live worker found (roster scanned: {info['roster_rows_scanned']} rows)"
-    return f"{scanned}{tail}"
-
-
-def _expiry_clause(info: dict) -> str:
-    """One stderr line when a live holder's TTL lapsed : the word live
-    alone cannot tell a fresh lease from one that lapsed an hour ago. Empty
-    for every non-live state - "holder live by" would lie about stale."""
-    if info.get("expired") is not True or info.get("state") != "live":
-        return ""
-    from .types import now_ms
-
-    expires_at = info.get("expires_at")
-    if isinstance(expires_at, (int, float)):
-        mins = max(0, int((now_ms() - expires_at) / 60_000))
-        age = f"{mins}m ago"
-    else:
-        age = "unknown age"
-    basis = info.get("basis") or "live"
-    return f"live (ttl expired {age}; holder live by {basis})"
-
-
 @cli.command()
 def status(
     key: str = typer.Argument(...),
@@ -712,126 +566,61 @@ def status(
     branch it hits when a claim has lapsed. Paying a harness subprocess there to
     compute a field it discards would tax every tool call to answer a question it never asked.
     """
-    key = _normalize_status_key(key)
-    info = _claims_core.claim_status(key=key, root=_node_aware_root(key))
-    _refuse_unknown_status_key(key, info)
-    node_id = key[len("node:"):] if key.startswith("node:") else ""
-    crosschecked = roster and bool(node_id) and info.get("state") in _UNHELD_STATES
-    if crosschecked:
-        # ONE fleet read, shared with the overlay below. require_live_probe
-        # matches the overlay so the registry-only view still carries
-        # attribution, and a tolerated degraded probe surfaces as
-        # `roster_probe` instead of reading as a full answer.
-        reading = read_roster(timeout=_ROSTER_CROSSCHECK_TIMEOUT_S, require_live_probe=False)
-        info.update(_roster_crosscheck(node_id, reading))
-    if crosschecked and info.get("roster_consulted"):
-        try:
-            from fno.graph.store import read_nodes_by_ids
-            from fno.paths import graph_json
+    return _forward_status(key, json_output, roster)
 
-            reply = read_nodes_by_ids(graph_json(), [node_id])
-            if reply is None:
-                # The fast path cannot answer (no keeper, a keeper that predates
-                # read_ids); the seam documents a full-read fallback so a stale
-                # keeper never reads as "no entry" and skips the closed-session
-                # filter below.
-                from fno.graph import api as graph_api_strict
 
-                reply = {
-                    "entries": [
-                        e for e in graph_api_strict.wire_rows(path=graph_json())
-                        if isinstance(e, dict) and e.get("id") == node_id
-                    ],
-                }
-            entry = next(iter(reply.get("entries") or []), None)
-        except Exception:  # noqa: BLE001 - a graph read failure never fakes a skip
-            entry = None
-        worked_names: list[str] = []
-        if entry is not None:
-            try:
-                from fno.graph.statuses import closed_worker_session_ids
-                from fno.graph.statuses import live_worked_node_ids
+def _forward_status(key, json_output, roster) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct.
 
-                worked = live_worked_node_ids(
-                    strict=True, entries=[entry], reading=reading
-                )
-                # The display field drops the same rows the overlay's
-                # worked_by excludes: a session whose own phase row closed
-                # never renders as an occupancy candidate, and the array is
-                # the field the FAQ tells an operator to trust. The dropped
-                # names ride their own field so the verdict line can still
-                # name them as finished rather than reporting nothing.
-                closed = closed_worker_session_ids(entry)
-                kept: list[dict] = []
-                finished: list[dict] = []
-                for w in info.get("roster_workers") or []:
-                    (finished if str(w.get("row_id") or "") in closed else kept).append(w)
-                info["roster_workers"] = kept
-                if finished:
-                    info["roster_closed_workers"] = [
-                        w.get("name") or "unknown" for w in finished
-                    ]
-            except Exception as exc:  # noqa: BLE001 - display callers degrade loudly
-                typer.echo(f"worked overlay degraded: {exc}", err=True)
-                worked = {}
-            worked_names = worked.get(node_id) or []
-        from fno.graph.statuses import UNMEASURABLE_LABEL_MARK
+    The port moved the leaf's logic (the state machine, the roster
+    crosscheck, the verdict line, the expiry clause) into
+    `crates/fno-agents/src/claim_cli/status.rs`; Python owns transport plus
+    the colon-less-key refusal, per the dual-implementation protocol.
+    """
+    import subprocess
 
-        reachable = [n for n in worked_names if UNMEASURABLE_LABEL_MARK not in n]
-        if reachable:
-            info["worked_by"] = reachable
-            # A positively-live worker on an unheld node is never `free`.
-            # task 2.1: degraded coverage enters the verdict, not a
-            # field beside it (31 of 53 rows went unresolved under a flat
-            # `live-worker`).
-            info["state"] = "unknown"
-            info["basis"] = (
-                "live-worker-degraded-coverage"
-                if info.get("roster_rows_unresolved", 0)
-                or any(UNMEASURABLE_LABEL_MARK in n for n in worked_names)
-                else "live-worker"
-            )
-        unresolved = info.get("roster_rows_unresolved", 0)
-        if info.get("roster_unresolved_candidates"):
-            # An unresolved row whose worktree names THIS node is an
-            # unanswered ownership read, so the composite verdict fails
-            # closed for dispatch consumers. A patchy roster that names
-            # nobody here used to fail closed fleet-wide: one unresolved row
-            # anywhere read every node in the fleet as unknown.
-            # 483b08dd6 (2026-09-06) shipped the general form of that -
-            # any unresolved row anywhere set state=unknown - and 144685877
-            # (2026-09-08) reverted it: at the measured wedge the fleet sat
-            # at 68 unresolved of 133 scanned, a majority, and a warm worker
-            # sat unimplementing because ownership was unprovable. A
-            # coverage-ratio arm was proposed for this exact reader,
-            # measured against those numbers, and refused by the role on
-            # 2026-09-11: a verdict about node N turns on evidence about
-            # node N, never on a count of rows that implicate no node at
-            # all. This per-node candidate check is the arm that survived.
-            info["state"] = "unknown"
-            info["basis"] = "unresolved-roster-row"
-        elif unresolved:
-            info["roster_coverage"] = "degraded"
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = []
+    if key is not None:
+        argv.append(key)
     if json_output:
-        typer.echo(json.dumps(info))
-        return
-    typer.echo(json.dumps(info, indent=2))
-    if crosschecked:
-        # STDERR: stdout stays parseable JSON on every path. `handoff.sh` pipes
-        # this command straight into jq without --json, and a trailing prose
-        # line makes that read fail exactly when the claim has lapsed, which is
-        # the case the operator most needs a truthful answer for.
-        line = _roster_verdict_line(info)
-        if info.get("roster_probe"):
-            line += f"; roster probe degraded: {info['roster_probe']}"
-        # Witness named when one answered: a verdict from a failing probe
-        # stays auditable on the loud line.
-        if info.get("session_basis"):
-            line += f"; session witness: {info['session_basis']}"
-        typer.echo(line, err=True)
-    clause = _expiry_clause(info)
-    if clause:  # stderr: stdout stays parseable JSON on every path
-        typer.echo(clause, err=True)
+        argv.append("--json")
+    if not roster:
+        argv.append("--no-roster")
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno agents claim status: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "claim", "status", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # The colon-less-key refusal stays on the Python surface: it reads the
+    # same dict the legacy body refused on, so the exit-2 contract holds
+    # across the swap. A payload the transport garbled leaves info empty
+    # and the refusal no-ops.
+    try:
+        info = json.loads(result.stdout) if result.stdout else {}
+    except ValueError:
+        info = {}
+    _refuse_unknown_status_key(_normalize_status_key(key), info)
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 def _merge_claims_across_roots(

@@ -2544,7 +2544,9 @@ fn human_lines(
             out.push(reparent_receipt_line(reparented, ""));
         }
         for (node_id, before, after) in &outcomes.reclaimed {
-            out.push(format!("reclaimed {node_id}: {before} -> {after}"));
+            out.push(format!(
+                "status drift {node_id}: stored {before}, derived {after} (not written)"
+            ));
         }
     }
     if !blocked_by_settlement.is_empty() {

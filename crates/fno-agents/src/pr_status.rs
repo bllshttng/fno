@@ -256,6 +256,25 @@ pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> Re
     };
     if text.to_lowercase().contains("rate limit") {
         let base = matched(&|l| l.to_lowercase().contains("rate limit"));
+        // A live fleet hold already names the class: GitHub is refusing this
+        // account, so the exempt classify probe would be a network call that
+        // sustains the refusal. The first refusal still probes (no hold
+        // exists yet) - that is the read that OPENS the hold.
+        let hold_live = {
+            let now = crate::gh_budget::now_ms();
+            crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now).backoff_remaining_s
+                > 0
+        };
+        if hold_live {
+            return RestReason::new(
+                format!(
+                    "{base} | this is the SECONDARY rate limit (request rate, not budget: a \
+fleet hold is already live, so the exempt classify probe is skipped). Back off - \
+retrying on a fixed interval sustains the refusal."
+                ),
+                "secondary",
+            );
+        }
         // The wording never decides: a measured secondary refusal read
         // "API rate limit exceeded" with no "secondary" anywhere. The one
         // exempt probe asks the CORE bucket - exhausted means core, healthy

@@ -816,52 +816,122 @@ def test_non_node_key_uses_cwd_not_global(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# node: keys cross-check the roster before rendering "free" (x-cd1e)
+# node: keys cross-check the roster before rendering "free"
+#
+# The leaf runs inside the bundled fno-agents binary; Python forwards argv and
+# re-emits its streams. A monkeypatch cannot cross that subprocess boundary,
+# so injection rides the seams that do: a PATH stub of `claude` (the only
+# binary the fleet read spawns) prints a canned `claude agents --json`
+# payload, CLAUDE_DIR_OVERRIDE pins the transcript root for witness plants,
+# FNO_AGENTS_HOME pins the agent registry to an empty dir so the real fleet
+# never joins the scan, and FNO_STATE_DIR seeds a graph the overlay join
+# reads. Fixtures that lived on the Python reader's warning plumbing (probe
+# headroom, unanticipated-warning polarity, a raising registry) have no seam
+# across the boundary and are gone; their surviving outcomes are pinned below.
 # ---------------------------------------------------------------------------
 
 
-def _row(name, state, node, cwd="/tmp/wt"):
-    from fno.agents.watchdog import Row
+def _stub_row(name, state, cwd, sid=None):
+    """One fleet row in the `claude agents --json` payload dialect."""
+    row = {"name": name, "state": state, "cwd": cwd}
+    if sid is not None:
+        row["sessionId"] = sid
+    return row
 
-    return Row(row_id=name, name=name, state=state, node=node, cwd=cwd)
+
+def _plant_worktree(root, node_id):
+    """A linked worktree as the attribution probe reads it: a `.git` file
+    (not a dir) plus `.fno/target-state.md` naming the node. Without this a
+    row with a session id reads unresolved, not attributed."""
+    from pathlib import Path
+
+    wt = Path(root) / ("wt-" + node_id)
+    (wt / ".fno").mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: /nowhere\n")
+    (wt / ".fno" / "target-state.md").write_text("graph_node_id: %s\n" % node_id)
+    return str(wt)
+
+
+def _plant_transcript(home, sid, age_s=60):
+    """A claude transcript whose last record is a fresh assistant turn: the
+    liveness witness the overlay fold consults for an undated row."""
+    from datetime import datetime, timedelta, timezone
+
+    proj = home / "projects" / "proj-x"
+    proj.mkdir(parents=True, exist_ok=True)
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
+    record = {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+        "timestamp": stamp,
+    }
+    (proj / (sid + ".jsonl")).write_text(json.dumps(record) + "\n")
+
+
+class _StubFleet:
+    """Reinstallable canned fleet. Each call rewrites the payload the stub
+    `claude` prints; ``home`` is the transcript root for witness plants."""
+
+    def __init__(self, payload, home):
+        self._payload = payload
+        self.home = home
+
+    def __call__(self, rows):
+        self._payload.write_text(json.dumps({"agents": rows}))
 
 
 @pytest.fixture
-def fake_roster(monkeypatch):
-    """Install a roster reading. ``rows``/``warnings`` mimic fleet_rows."""
+def stub_roster(tmp_path, monkeypatch):
+    """A fleet the binary can see. Returns a _StubFleet; call it with rows to
+    (re)install the payload, mirroring the old ``fake_roster(rows=[...])``."""
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir()
+    payload = bin_dir / "agents.json"
+    payload.write_text(json.dumps({"agents": []}))
+    script = bin_dir / "claude"
+    script.write_text("#!/bin/sh\ncat '%s'\n" % payload)
+    script.chmod(0o755)
 
-    def _install(rows=(), warnings=(), raises=None):
-        def _fake(*_a, **_kw):
-            if raises is not None:
-                raise raises
-            return list(rows), list(warnings)
+    home = tmp_path / "claude-home"
+    home.mkdir()
+    registry = tmp_path / "agents-home"
+    registry.mkdir()
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("CLAUDE_DIR_OVERRIDE", str(home))
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(registry))
+    return _StubFleet(payload, home)
 
-        monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _fake)
 
-    return _install
-
-
-def test_free_node_with_a_live_worker_says_so(cwd_tmp, fake_roster):
+def test_free_node_with_a_live_worker_says_so(cwd_tmp, stub_roster):
     """The state that produced tonight's duplicate PR must not print the same
     word as an idle node. Asserts the positive string, never the absence of
     the word free."""
-    fake_roster(rows=[_row("t-x76d1-rmtruth", "working", "x-76d1")])
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "working",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-w1")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert r.exit_code == 0, r.output
     assert "UNCLAIMED but a live worker is on this node: t-x76d1-rmtruth" in r.output
 
 
-def test_free_node_with_nobody_names_the_scan_it_consulted(cwd_tmp, fake_roster):
+def test_free_node_with_nobody_names_the_scan_it_consulted(cwd_tmp, stub_roster):
     """The row count is the positive marker: a scan of 40 rows finding nothing
     is a different answer from a scan that never ran, and both used to print
     the identical word."""
-    fake_roster(rows=[_row("t-other", "working", "x-other")])
+    stub_roster([
+        _stub_row("t-other", "working",
+                  _plant_worktree(cwd_tmp, "x-other"), sid="sess-o1")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "free, no live worker found (roster scanned: 1 rows)" in r.output
 
 
-def test_free_node_reports_unresolved_roster_rows(cwd_tmp, fake_roster):
-    fake_roster(rows=[_row("t-x76d1-near-miss", "working", None, "/tmp/x-76d1")])
+def test_free_node_reports_unresolved_roster_rows(cwd_tmp, stub_roster):
+    stub_roster([
+        _stub_row("t-x76d1-near-miss", "working", str(cwd_tmp / "x-76d1"),
+                  sid="sess-nm1")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1", "--json"])
     assert r.exit_code == 0
     info = json.loads(r.output)
@@ -872,57 +942,50 @@ def test_free_node_reports_unresolved_roster_rows(cwd_tmp, fake_roster):
     assert info["roster_unresolved_candidates"] == ["t-x76d1-near-miss"]
 
 
-def test_free_node_names_worktree_near_miss_in_human_line(cwd_tmp, fake_roster):
-    fake_roster(rows=[_row("t-x76d1-near-miss", "working", None, "/tmp/x-76d1")])
+def test_free_node_names_worktree_near_miss_in_human_line(cwd_tmp, stub_roster):
+    stub_roster([
+        _stub_row("t-x76d1-near-miss", "working", str(cwd_tmp / "x-76d1"),
+                  sid="sess-nm2")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "no row resolved to this node" in r.output
     assert "t-x76d1-near-miss" in r.output
     assert "fno agents peek t-x76d1-near-miss" in r.output
 
 
-def test_the_crosscheck_leaves_stdout_parseable_as_json(cwd_tmp, fake_roster):
+def test_the_crosscheck_leaves_stdout_parseable_as_json(cwd_tmp, stub_roster):
     """`handoff.sh` pipes this command into jq without --json. A prose line on
     stdout broke that read exactly when the claim had lapsed, which is the case
     the operator most needs a truthful holder for. The verdict goes to stderr."""
     import json as _json
 
-    fake_roster(rows=[_row("t-x76d1-rmtruth", "working", "x-76d1")])
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "working",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-w2")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"], catch_exceptions=False)
     assert r.exit_code == 0, r.output
     assert _json.loads(r.stdout)["state"] == "free"
     assert "UNCLAIMED but a live worker" in r.output
 
 
-def test_a_latency_notice_does_not_discard_a_complete_roster(cwd_tmp, fake_roster):
-    """The headroom notice fires at half the budget on a probe that RETURNED
-    every row, and read_roster asks for 10s, so it trips at 5.0s. Treating it as
-    a failed instrument threw the full listing away: `claim status` printed
-    "roster not consulted" forever and the abandonment probe answered None for
-    every SUSPECT claim, so nothing was reaped again."""
-    from fno.agents.watchdog import HEADROOM_WARNING_PREFIX
-
-    fake_roster(
-        rows=[_row("t-x76d1-rmtruth", "working", "x-76d1")],
-        warnings=[f"{HEADROOM_WARNING_PREFIX}took 5.4s of its 10s budget"],
-    )
-    r = runner.invoke(cli, ["status", "node:x-76d1"])
-    assert r.exit_code == 0, r.output
-    assert "UNCLAIMED but a live worker is on this node" in r.output
-    assert "roster not consulted" not in r.output
-
-
-def test_a_completeness_warning_still_degrades(cwd_tmp, fake_roster):
-    """The other half of the pair. A dropped-row warning IS a partial list, and
-    a truncated scan must never read as authoritative. It carries no advisory
-    marker, which is what makes it block."""
-    fake_roster(rows=[_row("t-other", "working", "x-other")],
-                warnings=["3 row(s) carried no session id, unmeasurable, skipped"])
+def test_a_completeness_warning_still_degrades(cwd_tmp, stub_roster):
+    """Rows that carry no session id are rows the scan cannot vouch for, and a
+    truncated scan must never read as authoritative, so the reader blocks: the
+    claim reads "roster not consulted", never a clean free. The cwds stay
+    plain: a linked-worktree cwd would make the row an attributed advisory
+    instead of a skipped count."""
+    stub_roster([
+        _stub_row("t-nosid-a", "working", str(cwd_tmp / "plain-a")),
+        _stub_row("t-nosid-b", "working", str(cwd_tmp / "plain-b")),
+        _stub_row("t-nosid-c", "working", str(cwd_tmp / "plain-c")),
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "roster not consulted" in r.output
     assert "carried no session id" in r.output
 
 
-def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, fake_roster):
+def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, stub_roster):
     """A status spelling claude has not shipped before is a fidelity note on a
     row that IS in the listing. Blocking on it printed "roster not consulted"
     forever and answered None for every SUSPECT claim, so nothing was reaped.
@@ -930,12 +993,10 @@ def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, fake_roster
     An unmapped word is no liveness evidence either: the row reads unmeasured,
     never engaged-by-default - the old conservative alarm fired on a label
     nobody had mapped, which is a verdict from a word, not a measurement."""
-    from fno.agents.watchdog import ADVISORY_WARNING_PREFIX
-
-    fake_roster(
-        rows=[_row("t-x76d1-rmtruth", "frobnicating", "x-76d1")],
-        warnings=[f"{ADVISORY_WARNING_PREFIX}unmapped row state 'frobnicating'"],
-    )
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "frobnicating",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-fr1")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "unmeasured, never live" in r.output
     assert "t-x76d1-rmtruth" in r.output
@@ -943,99 +1004,90 @@ def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, fake_roster
     assert "UNCLAIMED but a live worker" not in r.output
 
 
-def test_an_unanticipated_warning_degrades_by_default(cwd_tmp, fake_roster):
-    """The polarity, pinned. A warning nobody has thought about yet is exactly
-    the one that must not be waved through, so the marker is on the harmless
-    ones and everything else blocks."""
-    fake_roster(rows=[_row("t-x76d1-rmtruth", "working", "x-76d1")],
-                warnings=["something nobody has written a branch for yet"])
-    r = runner.invoke(cli, ["status", "node:x-76d1"])
-    assert "roster not consulted" in r.output
-
-
-def test_a_lying_done_row_still_raises_the_alarm(cwd_tmp, fake_roster, monkeypatch):
+def test_a_lying_done_row_still_raises_the_alarm(cwd_tmp, stub_roster, monkeypatch):
     """The roster called a WORKING session done on 2026-08-15, which is the
-    incident `_TERMINAL_STATES` carries a warning about. A transcript that is
-    positively still moving overrules the row, so an operator deciding whether
-    to staff this node is told a worker is on it."""
-    import time as _t
-
-    from fno.agents.watchdog import TailFacts
-
-    monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None, last_event_epoch=_t.time() - 60,
-            tail_text="", last_role="assistant", last_text="working the task",
-            pr_polls=None,
-        ),
+    incident the terminal-state note carries a warning about. A transcript
+    that is positively still moving overrules the row, so an operator deciding
+    whether to staff this node is told a worker is on it. The witness rides
+    the overlay join: a seeded graph session opens the phase and the fresh
+    transcript settles reachability."""
+    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
+    seed_graph(
+        cwd_tmp / "state" / "db" / "graph.json",
+        [{"id": "x-76d1", "title": "t", "domain": "code", "project": "p",
+          "sessions": [{"session_id": "sess-lying", "phase": "execute",
+                        "harness": "claude",
+                        "started_at": "2026-10-10T00:00:00Z",
+                        "ended_at": None}]}],
     )
-    fake_roster(rows=[_row("t-x76d1-rmtruth", "done", "x-76d1")])
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "done",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-lying")
+    ])
+    _plant_transcript(stub_roster.home, "sess-lying")
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "UNCLAIMED but a live worker is on this node" in r.output
 
 
-def test_an_aged_out_transcript_leaves_the_row_standing(cwd_tmp, fake_roster, monkeypatch):
-    """The other direction, and it is deliberately NOT what the reap probe does.
-    A wrong reap archives a live worker's claim; a wrong line here is an alarm
-    on an empty node, and one that fires on every finished session whose
-    transcript has aged out teaches operators to ignore the alarm."""
-    import time as _t
-
-    from fno.agents.watchdog import TailFacts
-
-    monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None, last_event_epoch=_t.time() - 11 * 3600,
-            tail_text="", last_role="assistant", last_text="...", pr_polls=None,
-        ),
-    )
-    fake_roster(rows=[_row("t-x76d1-rmtruth", "done", "x-76d1")])
+def test_a_done_row_without_a_witness_lands_finished(cwd_tmp, stub_roster):
+    """A `done` row is resumable, not driving; without a live witness it must
+    not raise the alarm. The transcript evidence only enters through the
+    overlay join, so a row whose session has no open phase row - one whose
+    transcript aged out reads the same - lands finished here either way. A
+    wrong line here is an alarm on an empty node, and one that fires on every
+    finished session teaches operators to ignore the alarm."""
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "done",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-fin1")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "no live worker found" in r.output
     assert "UNCLAIMED but a live worker" not in r.output
 
 
-def test_roster_read_failure_never_renders_a_clean_free(cwd_tmp, fake_roster):
-    """An instrument that did not run must not render as an answer."""
-    fake_roster(rows=[], warnings=["claude binary not found on PATH"])
+def test_roster_read_failure_never_renders_a_clean_free(cwd_tmp, stub_roster, monkeypatch):
+    """An instrument that did not run must not render as an answer.
+
+    Re-scoped for the binary leaf: a missing `claude` on PATH is a tolerated
+    degraded probe now (the registry-only fallback still consults
+    attribution), so the reading survives with the degradation riding the
+    verdict line instead of answering "roster not consulted". The blocking
+    polarity is pinned by the no-session-id test above."""
+    monkeypatch.setenv("PATH", str(cwd_tmp / "no-such-bin"))
     r = runner.invoke(cli, ["status", "node:x-76d1"])
-    assert "free, roster not consulted (claude binary not found on PATH)" in r.output
-    assert "no live worker found" not in r.output
+    assert "free, no live worker found" in r.output
+    assert "roster probe degraded" in r.output
+    assert "roster not consulted" not in r.output
 
 
-def test_roster_raising_degrades_loudly(cwd_tmp, fake_roster):
-    fake_roster(raises=RuntimeError("registry exploded"))
-    r = runner.invoke(cli, ["status", "node:x-76d1"])
-    assert r.exit_code == 0, r.output
-    assert "roster not consulted (RuntimeError: registry exploded)" in r.output
-
-
-def test_an_honestly_empty_fleet_is_not_a_failed_read(cwd_tmp, fake_roster):
+def test_an_honestly_empty_fleet_is_not_a_failed_read(cwd_tmp, stub_roster):
     """No rows AND no warning is a real zero. Reporting it as 'not consulted'
     would rebuild the ambiguity one layer up."""
-    fake_roster(rows=[], warnings=[])
+    stub_roster([])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
     assert "free, no live worker found (roster scanned: 0 rows)" in r.output
 
 
-def test_only_finished_sessions_do_not_raise_the_live_worker_alarm(cwd_tmp, fake_roster):
+def test_only_finished_sessions_do_not_raise_the_live_worker_alarm(cwd_tmp, stub_roster):
     """A `done` row is resumable, not driving. Printing the alarm for it would
     train every reader to ignore the alarm."""
-    fake_roster(rows=[_row("t-xb0dd-outage", "done", "x-b0dd")])
+    stub_roster([
+        _stub_row("t-xb0dd-outage", "done",
+                  _plant_worktree(cwd_tmp, "x-b0dd"), sid="sess-b0dd")
+    ])
     r = runner.invoke(cli, ["status", "node:x-b0dd"])
     assert "UNCLAIMED but a live worker" not in r.output
     assert "1 finished session(s) resolved to it: t-xb0dd-outage" in r.output
 
 
-def test_a_held_node_never_pays_for_the_crosscheck(cwd_tmp, monkeypatch):
+def test_a_held_node_never_pays_for_the_crosscheck(cwd_tmp, stub_roster):
     """A live claim already answers the question; the roster fields must not
-    appear and the harness must not be shelled out to."""
-    def _boom(*_a, **_kw):
-        raise AssertionError("roster consulted for a held node")
-
-    monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _boom)
+    appear. The stub is armed with an alarming attributed row: a crosscheck
+    that ran on a held node would surface in the payload."""
+    stub_roster([
+        _stub_row("t-x-held-live", "working",
+                  _plant_worktree(cwd_tmp, "x-held"), sid="sess-held")
+    ])
     # status routes a node: key to the GLOBAL root; acquire with the same
     # explicit root so both legs read one dir (cwd_tmp collapses them).
     acquire_claim(
@@ -1047,11 +1099,11 @@ def test_a_held_node_never_pays_for_the_crosscheck(cwd_tmp, monkeypatch):
     assert "roster_consulted" not in info
 
 
-def test_a_non_node_key_is_rendered_exactly_as_before(cwd_tmp, monkeypatch):
-    def _boom(*_a, **_kw):
-        raise AssertionError("roster consulted for a non-node key")
-
-    monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _boom)
+def test_a_non_node_key_is_rendered_exactly_as_before(cwd_tmp, stub_roster):
+    stub_roster([
+        _stub_row("t-x76d1-rmtruth", "working",
+                  _plant_worktree(cwd_tmp, "x-76d1"), sid="sess-w3")
+    ])
     r = runner.invoke(cli, ["status", "dispatch:x-76d1", "--json"])
     assert json.loads(r.output) == {"key": "dispatch:x-76d1", "state": "free"}
 
@@ -1177,11 +1229,13 @@ def test_status_live_fresh_lease_has_no_expiry_clause(cwd_tmp):
     assert "ttl expired" not in r.output
 
 
-def test_unresolved_roster_row_naming_another_node_stays_free(cwd_tmp, fake_roster):
+def test_unresolved_roster_row_naming_another_node_stays_free(cwd_tmp, stub_roster):
     """AC4-HP (x-74aa): an unresolved row whose worktree names some OTHER node
     is not evidence about this key; the state stays the claim's own free and
     only coverage reads degraded."""
-    fake_roster(rows=[_row("t-unrelated", "working", None, "/tmp/x-other-node")])
+    stub_roster([
+        _stub_row("t-unrelated", "working", "/tmp/x-other-node", sid="t-unrelated")
+    ])
     r = runner.invoke(cli, ["status", "node:x-76d1", "--json"])
     assert r.exit_code == 0
     info = json.loads(r.output)

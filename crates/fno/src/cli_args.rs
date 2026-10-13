@@ -67,6 +67,17 @@ pub enum MuxCmd {
         #[command(flatten)]
         json: JsonOnly,
     },
+    /// `mux notify <title> <message> [--json]` (hidden): one desktop
+    /// notification through every attached client's tty; the receipt's
+    /// `clients` count is the delivery verdict (0 = none took it, so the
+    /// caller - `fno notify` - falls back to osascript).
+    #[command(hide = true)]
+    Notify {
+        title: String,
+        message: String,
+        #[command(flatten)]
+        json: JsonOnly,
+    },
     /// `mux kill-server [<name>] [--end-unkept | --stale-idle | --all] [--json]`
     KillServer {
         /// Optional server name (default resolution: flag > env > default)

@@ -574,46 +574,26 @@ pub fn run_finalize(args: &[String]) -> i32 {
             }
         }
 
-        // W6 verifier advisory: AC-vs-diff verdict, recorded then
-        // ignored. Log-only and never pushed to `failed` - an advisory must
-        // never wedge the loop or hold session_finalized open for retry.
-        // Events paths are forwarded so the module's per-session exactly-once
-        // guard reads the same log finalize writes (a retried fire after a
-        // partial failure must not double-emit or re-spend on a spawn).
-        let mut adv = py_module(&cwd);
-        adv.arg("-m")
-            .arg("fno.verify_advise")
-            .arg("--node-id")
-            .arg(m.graph_node_id.as_deref().unwrap_or(""))
-            .arg("--plan-path")
-            .arg(m.plan_path.as_deref().unwrap_or(""))
-            .arg("--session-id")
-            .arg(&session_id)
-            .arg("--reason")
-            .arg(&reason)
-            .arg("--events")
-            .arg(&project_events)
-            .arg("--global-events")
-            .arg(&global_events);
-        match adv.output() {
-            Ok(out) if !out.status.success() => eprintln!(
-                "finalize: verify_advise failed with exit {:?}: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Ok(out) => {
-                // rc=0 is the module's contract even when its internals failed
-                // (verifier died, event emit failed): forward any stderr so
-                // those messages reach the stop hook's finalize log instead of
-                // dying in a dead channel (sigma silent-failure P1).
-                let err_raw = String::from_utf8_lossy(&out.stderr);
-                let err = err_raw.trim();
-                if !err.is_empty() {
-                    eprintln!("finalize: verify_advise: {err}");
-                }
-            }
-            Err(e) => eprintln!("finalize: verify_advise spawn failed: {e}"),
-        }
+        // W6 verifier advisory: AC-vs-diff verdict, recorded then ignored.
+        // Log-only and never pushed to `failed` - an advisory must never
+        // wedge the loop or hold session_finalized open for retry. Events
+        // paths are forwarded so the exactly-once guard reads the same log
+        // finalize writes (a retried fire must not double-emit or re-spend
+        // on a spawn).
+        let verdict = crate::verify_advise::run(
+            &crate::verify_advise::AdviseArgs {
+                node_id: m.graph_node_id.clone(),
+                plan_path: m.plan_path.clone(),
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+                cwd: cwd.clone(),
+                project_events: project_events.clone(),
+                global_events: global_events.clone(),
+                ledger: crate::paths_cli::ledger_json(&cwd),
+            },
+            &crate::verify_advise::spawn_verifier,
+        );
+        eprintln!("finalize: verify_advise: verdict={verdict}");
     }
 
     if delivery_ship {

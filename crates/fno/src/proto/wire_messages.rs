@@ -503,4 +503,21 @@ pub enum ServerMsg {
         forced: bool,
     },
     PaneInputResult(pane_input::PaneInputResult),
+    /// (v110) A desktop notification for the receiving client's terminal:
+    /// re-emitted pane OSC 9/99/777 (titled with the pane name) or one
+    /// `fno notify` delivery. The client renders it through
+    /// [`crate::notify::deliver`], which strips control characters and wraps
+    /// `777;notify;<title>;<body>` in `ESC ]` ... BEL. Reliable - a dropped
+    /// toast is a lost alert, the same discipline as [`Self::Copy`].
+    DesktopNotice {
+        title: String,
+        body: String,
+    },
+    /// (v110) Answer to [`ControlVerb::Notify`]: how many ATTACHED clients the
+    /// notice was queued to. `0` is the load-bearing zero: it means no
+    /// attached client took the notice, which is the caller's signal to fall
+    /// back (osascript). A wedged reliable channel counts as undelivered.
+    NoticeSent {
+        clients: u32,
+    },
 }

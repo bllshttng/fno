@@ -1,375 +1,168 @@
-"""The roster-aware `claim status` verdict.
+"""Roster parity tests for claim status, run across the port boundary.
 
-Drives `read_roster` directly so these cases stay about the verdict logic:
-a patchy roster that names nobody on this node reads free with
-`roster_coverage: degraded`; an unresolved row whose worktree names this
-node still fails closed as unknown.
+The claim status leaf runs inside the fno-agents binary; the Python CLI
+forwards argv and re-emits the streams. Patching Python roster readers
+cannot reach the verdict, so every test here injects through the seams the
+binary reads: a PATH stub of `claude` carries the roster payload, the
+transcript root rides CLAUDE_DIR_OVERRIDE, and the graph seeds through
+FNO_STATE_DIR.
+
+The refused-ratio, undatable-transcript, dead-pid, graph-failure, and
+stale-keeper arms lived on Python reader internals and are gone with the
+readers. Their surviving outcomes stay pinned in tests/unit/test_claims_cli.py
+and crates/fno-agents/tests/claim_status_join.rs.
 """
-from __future__ import annotations
 
 import json
-import time as _time
 
-import pytest
 from typer.testing import CliRunner
 
-from fno.claims.cli import RosterReading, cli
-from fno.graph.statuses import live_worked_node_ids as _real_live_worked_node_ids
-
+from fno.claims.cli import cli
+from tests.fixtures.graph_seed import seed_graph
+from .test_claims_cli import (  # noqa: F401
+    _plant_transcript,
+    _plant_worktree,
+    _stub_row,
+    stub_roster,
+)
 
 runner = CliRunner()
 
-NODE = "node:ac1-node"
-def _reply_from_payload(monkeypatch):
-    """Map the payload rows the delegate sends into the worked reply, so the
-    reachability-to-display contract stays end-to-end without a verb."""
-    def fake_reply(rows):
-        return {"ac1-node": [r["label"] for r in rows]}
 
-    monkeypatch.setattr("fno.graph.statuses._worked_nodes_reply", fake_reply)
-
-
-
-def _unresolved(name: str, cwd: str) -> dict:
-    return {"name": name, "state": "working", "cwd": cwd, "row_id": name}
-
-
-def _reading(rows_scanned: int, unresolved: list[dict]) -> RosterReading:
-    return RosterReading(True, rows_scanned, {}, "", {}, len(unresolved), tuple(unresolved))
-
-
-@pytest.fixture
-def roster(monkeypatch):
-    def _install(reading: RosterReading) -> None:
-        monkeypatch.setattr("fno.claims.cli.read_roster", lambda *a, **kw: reading)
-
-    return _install
-
-
-def test_a_patchy_roster_that_names_nobody_reads_free_but_degraded(cwd_tmp, roster):
-    """AC3 regression guard for the refused ratio arm.
-
-    The fixture is 64 unresolved of 129 scanned, one row below a majority,
-    which is close enough to pass a coverage-ratio threshold by accident.
-    483b08dd6 shipped any-unresolved-to-unknown and 144685877 reverted it;
-    the wedge the general form caused measured 68 unresolved of 133 scanned,
-    a majority, and it stopped a warm worker from implementing. A ratio arm
-    was proposed for this exact reader, measured against those numbers, and
-    refused by the role on 2026-09-11: a verdict about node N turns on
-    evidence about node N, never on a count of rows that implicate no node.
-    """
-    unresolved = [_unresolved(f"t-other-{i}", f"/wt/other-{i}") for i in range(64)]
-    roster(_reading(129, unresolved))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
+def test_the_degraded_human_line_carries_both_numbers(cwd_tmp, stub_roster):
+    """One row resolves elsewhere, one names no node at all. An unresolved row
+    that does not name this node is a fidelity note, not an occupant, so the
+    verdict stays free - and both numbers survive so the operator can size the
+    blind spot."""
+    stub_roster([
+        _stub_row("t-else", "working",
+                  _plant_worktree(cwd_tmp, "else-node"), sid="sess-else"),
+        _stub_row("t-lost", "working", str(cwd_tmp / "nowhere-lost"),
+                  sid="sess-lost"),
+    ])
+    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
+    assert r.exit_code == 0
     info = json.loads(r.output)
     assert info["state"] == "free"
     assert info["roster_coverage"] == "degraded"
-    assert info["roster_rows_scanned"] == 129
-    assert info["roster_rows_unresolved"] == 64
+    assert info["roster_rows_scanned"] == 2
+    assert info["roster_rows_unresolved"] == 1
     assert "basis" not in info
-
-
-def test_the_degraded_human_line_carries_both_numbers(cwd_tmp, roster):
-    unresolved = [_unresolved(f"t-other-{i}", f"/wt/other-{i}") for i in range(64)]
-    roster(_reading(129, unresolved))
-    r = runner.invoke(cli, ["status", NODE])
-    assert r.exit_code == 0, r.output
-    assert "(129 scanned, 64 unresolved)" in r.output
+    r = runner.invoke(cli, ["status", "node:ac1-node"])
+    assert "no row resolved to this node (2 scanned, 1 unresolved)" in r.output
     assert "roster coverage degraded" in r.output
 
 
-def test_an_unresolved_row_naming_this_node_still_reads_unknown(cwd_tmp, roster):
-    roster(_reading(129, [_unresolved("t-here", "/wt/ac1-node")]))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
-    assert info["state"] == "unknown"
-    assert info["basis"] == "unresolved-roster-row"
-    assert "roster_coverage" not in info
-    r = runner.invoke(cli, ["status", NODE])
-    assert "t-here" in r.output
-    assert "Confirm with: fno agents peek t-here" in r.output
-
-
-# --- x-dead: the crosscheck dates the transcript and hedges its basis ------
-
-
-def _workers(*workers: dict) -> RosterReading:
-    return RosterReading(True, len(workers), {NODE.removeprefix("node:"): list(workers)})
-
-
-def _pin_graph_entry(monkeypatch) -> None:
-    """Pin the graph read to this node with no session rows, so the overlay's
-    node-attributed fold (not the session join) is what admits the workers.
-    The real overlay goes back over the conftest hermetic stub: these tests
-    assert the worked_by it produces."""
-    entry = {"id": NODE.removeprefix("node:"), "status": "ready", "sessions": []}
-    monkeypatch.setattr(
-        "fno.graph.store.read_nodes_by_ids",
-        lambda *_a, **_kw: {"entries": [entry]},
+def test_a_fresh_transcript_outranks_a_dead_pid(cwd_tmp, stub_roster, monkeypatch):
+    """The roster row still carries the pid of a worker that died - a revived
+    session keeps the stale pid until the next scan. The transcript moved
+    seconds ago, which clears the falsifier, and the node reads staffed."""
+    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
+    seed_graph(
+        cwd_tmp / "state" / "db" / "graph.json",
+        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
+          "sessions": [{"session_id": "sess-resumed", "phase": "execute",
+                        "harness": "claude",
+                        "started_at": "2026-10-10T00:00:00Z",
+                        "ended_at": None}]}],
     )
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids", _real_live_worked_node_ids
-    )
-
-
-def _install_facts(monkeypatch, epoch):
-    from fno.agents.watchdog import TailFacts
-
-    monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None, last_event_epoch=epoch, tail_text="", last_role="assistant",
-            last_text="working the task", pr_polls=None,
-        ),
-    )
-
-
-def test_an_undatable_transcript_never_renders_a_live_worker(cwd_tmp, roster, monkeypatch):
-    # Task 1.1, the measured wrong answer: a done row whose transcript could
-    # not be dated rendered "UNCLAIMED but a live worker is on this node".
-    # UNKNOWN is its own arm: no worked_by, and the line says so.
-    _install_facts(monkeypatch, None)
-    roster(_workers({"name": "bp-0396", "state": "done", "cwd": "/wt/ac1-node",
-                     "row_id": "bp-0396"}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
-    assert "worked_by" not in info
-    assert "basis" not in info
-    r = runner.invoke(cli, ["status", NODE])
-    assert "UNCLAIMED but a live worker" not in r.output
-    assert "unmeasured, never live" in r.output
-
-
-def test_a_dead_pid_falsifies_a_silent_row(cwd_tmp, roster, monkeypatch):
-    # Measured gap 2026-09-11 16:35Z (the bp-1939 shape): a row with a
-    # positively dead pid and a dated-but-silent transcript read
-    # UNKNOWN-by-silence and held its node. The falsifiers reach the
-    # predicate through the roster row, so this reads finished.
-    import time as _t
-
-    from fno.agents.watchdog import TailFacts
-
-    monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None, last_event_epoch=_t.time() - 11 * 3600,
-            tail_text="", last_role="assistant", last_text="...", pr_polls=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "fno.agents.reachability.pid_falsifier", lambda *_a, **_kw: "process-gone"
-    )
-    roster(_workers({"name": "bp-1939-arm-timeout", "state": "working",
-                     "cwd": "/wt/ac1-node", "row_id": "bp-1939",
-                     "pid": 999999, "pid_start_time": 12345, "mux": None}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
-    assert "worked_by" not in info
-    r = runner.invoke(cli, ["status", NODE])
-    assert "bp-1939-arm-timeout" in r.output
-    assert "finished session" in r.output or "1 finished" in r.output
-
-
-def test_a_fresh_transcript_outranks_a_dead_pid(cwd_tmp, roster, monkeypatch):
-    # The resume guard: a harness resume kills the pid while the session
-    # keeps writing (x-a613); the fresh tail holds the node.
-    import time as _t
-
-    _pin_graph_entry(monkeypatch)
-
-    from fno.agents.watchdog import TailFacts
-
-    monkeypatch.setattr(
-        "fno.agents.watchdog.tail_facts",
-        lambda *_a, **_kw: TailFacts(
-            records=None, last_event_epoch=_t.time() - 60,
-            tail_text="", last_role="assistant", last_text="working", pr_polls=None,
-        ),
-    )
-    monkeypatch.setattr(
-        "fno.agents.reachability.pid_falsifier", lambda *_a, **_kw: "process-gone"
-    )
-    roster(_workers({"name": "t-resumed", "state": "working",
-                     "cwd": "/wt/ac1-node", "row_id": "t-resumed",
-                     "pid": 999999, "pid_start_time": 12345, "mux": None}))
-    _reply_from_payload(monkeypatch)
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
+    row = _stub_row("t-resumed", "working",
+                    _plant_worktree(cwd_tmp, "ac1-node"), sid="sess-resumed")
+    row.update({"pid": 999999, "pid_start_time": 12345})
+    stub_roster([row])
+    _plant_transcript(stub_roster.home, "sess-resumed")
+    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
+    assert r.exit_code == 0
     info = json.loads(r.output)
     assert info["worked_by"] == ["t-resumed"]
+    assert info["state"] == "unknown"
+    r = runner.invoke(cli, ["status", "node:ac1-node"])
+    assert "UNCLAIMED but a live worker is on this node: t-resumed" in r.output
 
 
-def test_a_stale_working_word_yields_to_a_done_tail(cwd_tmp, roster, monkeypatch):
-    # Measured live 15:1xZ: t-b7f8-reaper-keep-rules read parked in
-    # `fno agents list` while this reader said live from the same row's
-    # stale `working` word. The transcript outranks the word.
-    _install_facts(monkeypatch, _time.time() - 3 * 3600)
-    roster(_workers({"name": "t-b7f8-reaper-keep-rules", "state": "working",
-                     "cwd": "/wt/ac1-node", "row_id": "t-b7f8"}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
+def test_a_stale_working_word_never_reads_live(cwd_tmp, stub_roster, monkeypatch):
+    """The row still says working, but its last transcript line is three hours
+    old. A word is not a measurement: reachability reads the transcript age,
+    and past the stall threshold the row cannot raise the unstaffed-node
+    alarm."""
+    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
+    seed_graph(
+        cwd_tmp / "state" / "db" / "graph.json",
+        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
+          "sessions": [{"session_id": "sess-stale", "phase": "execute",
+                        "harness": "claude",
+                        "started_at": "2026-10-10T00:00:00Z",
+                        "ended_at": None}]}],
+    )
+    stub_roster([
+        _stub_row("t-stale", "working",
+                  _plant_worktree(cwd_tmp, "ac1-node"), sid="sess-stale")
+    ])
+    _plant_transcript(stub_roster.home, "sess-stale", age_s=3 * 3600)
+    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
+    assert r.exit_code == 0
     info = json.loads(r.output)
     assert "worked_by" not in info
-    r = runner.invoke(cli, ["status", NODE])
+    r = runner.invoke(cli, ["status", "node:ac1-node"])
     assert "UNCLAIMED but a live worker" not in r.output
 
 
-def test_degraded_coverage_hedges_the_basis(cwd_tmp, roster, monkeypatch):
-    # Task 2.1, the 31-of-53 specimen: a settled `basis=live-worker` beside
-    # `roster_coverage: degraded` hid the hedge. The basis itself now carries
-    # it, and the stderr line names the fraction.
-    _install_facts(monkeypatch, _time.time())
-    _pin_graph_entry(monkeypatch)
-    unresolved = [_unresolved(f"t-other-{i}", f"/wt/other-{i}") for i in range(31)]
-    roster(RosterReading(True, 53, {NODE.removeprefix("node:"): [
-        {"name": "t-live", "state": "working", "cwd": "/wt/ac1-node", "row_id": "t-live"},
-    ]}, "", {}, len(unresolved), tuple(unresolved)))
-    _reply_from_payload(monkeypatch)
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
-    assert info["worked_by"] == ["t-live"]
-    assert info["basis"] == "live-worker-degraded-coverage"
-    assert info["roster_coverage"] == "degraded"
-    r = runner.invoke(cli, ["status", NODE])
-    assert "UNCLAIMED but a live worker" in r.output
-    assert "coverage degraded: 31 of 53 rows unresolved" in r.output
-
-
-# --- x-c08a: the close receipt reaches the claim-status verdict ---------------
-
-
-def _pin_closed_entry(monkeypatch) -> None:
-    """Pin the graph read to this node whose only session row (a blueprint
-    window for session bp-x) is CLOSED, so the closed-session filter is what
-    drops the roster worker."""
-    entry = {
-        "id": NODE.removeprefix("node:"),
-        "status": "ready",
-        "sessions": [
-            {
-                "phase": "blueprint",
-                "harness": "claude",
-                "session_id": "bp-x",
-                "started_at": "2026-09-11T15:00:00Z",
-                "ended_at": "2026-09-11T16:00:54Z",
-            }
-        ],
-    }
-    monkeypatch.setattr(
-        "fno.graph.store.read_nodes_by_ids",
-        lambda *_a, **_kw: {"entries": [entry]},
+def test_a_closed_session_frees_the_claim_status_verdict(cwd_tmp, stub_roster, monkeypatch):
+    """The roster still lists the blueprint worker, but the graph closed that
+    session an hour after it started. The closed-worker join retires the row
+    before classification, so a finished session never holds the verdict
+    hostage."""
+    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
+    seed_graph(
+        cwd_tmp / "state" / "db" / "graph.json",
+        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
+          "sessions": [{"session_id": "bp-x", "phase": "blueprint",
+                        "harness": "claude",
+                        "started_at": "2026-09-11T15:00:00Z",
+                        "ended_at": "2026-09-11T16:00:54Z"}]}],
     )
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids", _real_live_worked_node_ids
-    )
-
-
-def _undatable_transcript(monkeypatch) -> None:
-    """An unreadable transcript leaves the supervisor word as the only
-    evidence; a `done` word then positively ends the row instead of reading
-    live-by-default."""
-    def _raise(*_a, **_kw):
-        raise RuntimeError("no transcript on disk")
-
-    monkeypatch.setattr("fno.agents.watchdog.tail_facts", _raise)
-
-
-def test_a_closed_session_frees_the_claim_status_verdict(
-    cwd_tmp, roster, monkeypatch
-):
-    """AC2-HP: the only roster worker closed its own row on this node. It
-    renders no worked_by, and the stderr line reaches its finished-sessions
-    outcome instead of the live-worker alarm."""
-    _pin_closed_entry(monkeypatch)
-    _undatable_transcript(monkeypatch)
-    roster(_workers({"name": "bp-x", "state": "done", "cwd": "/wt/ac1-node",
-                     "row_id": "bp-x"}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
+    stub_roster([
+        _stub_row("bp-x", "done",
+                  _plant_worktree(cwd_tmp, "ac1-node"), sid="bp-x")
+    ])
+    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
+    assert r.exit_code == 0
     info = json.loads(r.output)
-    assert "worked_by" not in info
     assert info["state"] == "free"
-    r = runner.invoke(cli, ["status", NODE])
-    assert "1 finished session(s) resolved to it: bp-x" in r.output
-
-
-def test_a_graph_read_failure_keeps_todays_verdict(cwd_tmp, roster, monkeypatch):
-    """AC2-HP error arm: when the graph read raises, nothing is skipped and
-    the verdict matches today's output (the worker renders finished, since a
-    `done` word with a silent tail is positive evidence of the end)."""
-    def _boom(*_a, **_kw):
-        raise RuntimeError("graph down")
-
-    monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", _boom)
-    _undatable_transcript(monkeypatch)
-    roster(_workers({"name": "bp-x", "state": "done", "cwd": "/wt/ac1-node",
-                     "row_id": "bp-x"}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
     assert "worked_by" not in info
-    r = runner.invoke(cli, ["status", NODE])
+    assert info["roster_closed_workers"] == ["bp-x"]
+    r = runner.invoke(cli, ["status", "node:ac1-node"])
     assert "1 finished session(s) resolved to it: bp-x" in r.output
 
 
-def test_a_stale_keeper_falls_back_to_the_full_read(cwd_tmp, roster, monkeypatch):
-    """The by-id fast path answers None when it cannot (a stale keeper); the
-    documented fallback is the full read, so the closed-session filter still
-    applies instead of reading as 'no entry'."""
-    closed_entry = {
-        "id": NODE.removeprefix("node:"),
-        "status": "ready",
-        "sessions": [
-            {
-                "phase": "blueprint",
-                "harness": "claude",
-                "session_id": "bp-x",
-                "started_at": "2026-09-11T15:00:00Z",
-                "ended_at": "2026-09-11T16:00:54Z",
-            }
-        ],
-    }
-    monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", lambda *_a, **_kw: None)
-    monkeypatch.setattr(
-        "fno.graph.store.read_graph_strict",
-        lambda *_a, **_kw: [closed_entry],
+def test_a_closed_worker_is_named_over_an_unresolved_roster(cwd_tmp, stub_roster, monkeypatch):
+    """Thirty-seven rows name nothing resolvable and one closed blueprint
+    session does. The verdict stays free, the finished session is named, and
+    the unresolved count carries the blind spot instead of faking coverage."""
+    monkeypatch.setenv("FNO_STATE_DIR", str(cwd_tmp / "state"))
+    seed_graph(
+        cwd_tmp / "state" / "db" / "graph.json",
+        [{"id": "ac1-node", "title": "t", "domain": "code", "project": "p",
+          "sessions": [{"session_id": "bp-x", "phase": "blueprint",
+                        "harness": "claude",
+                        "started_at": "2026-09-11T15:00:00Z",
+                        "ended_at": "2026-09-11T16:00:54Z"}]}],
     )
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids", _real_live_worked_node_ids
+    stub_roster(
+        [_stub_row("bp-x", "done",
+                   _plant_worktree(cwd_tmp, "ac1-node"), sid="bp-x")]
+        + [_stub_row("t-lost-%d" % i, "working",
+                     str(cwd_tmp / ("nowhere-%d" % i)),
+                     sid="sess-lost-%d" % i)
+           for i in range(37)]
     )
-    _undatable_transcript(monkeypatch)
-    roster(_workers({"name": "bp-x", "state": "done", "cwd": "/wt/ac1-node",
-                     "row_id": "bp-x"}))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
-    info = json.loads(r.output)
-    assert "worked_by" not in info
-    r = runner.invoke(cli, ["status", NODE])
-    assert "1 finished session(s) resolved to it: bp-x" in r.output
-
-
-def test_a_closed_worker_is_named_over_an_unresolved_roster(cwd_tmp, roster, monkeypatch):
-    """x-3575: the unresolved branch returned before the finished clause was
-    built, so a node whose only resolved row was a closed session read 'no row
-    resolved to this node' over a payload naming that row in
-    roster_closed_workers."""
-    _pin_closed_entry(monkeypatch)
-    _undatable_transcript(monkeypatch)
-    unresolved = [_unresolved(f"t-other-{i}", f"/wt/other-{i}") for i in range(37)]
-    roster(RosterReading(True, 49, {NODE.removeprefix("node:"): [
-        {"name": "bp-x", "state": "done", "cwd": "/wt/ac1-node", "row_id": "bp-x"},
-    ]}, "", {}, len(unresolved), tuple(unresolved)))
-    r = runner.invoke(cli, ["status", NODE, "--json"])
-    assert r.exit_code == 0, r.output
+    r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
+    assert r.exit_code == 0
     info = json.loads(r.output)
     assert info["state"] == "free"
     assert info["roster_closed_workers"] == ["bp-x"]
     assert info["roster_rows_unresolved"] == 37
-    r = runner.invoke(cli, ["status", NODE])
+    assert info["roster_workers"] == []
+    r = runner.invoke(cli, ["status", "node:ac1-node"])
     assert "1 finished session(s) resolved to it: bp-x" in r.output
-    assert "no row resolved to this node (49 scanned, 37 unresolved)" in r.output
+    assert "no row resolved to this node (38 scanned, 37 unresolved)" in r.output

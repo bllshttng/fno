@@ -26,7 +26,7 @@
 //! the fixture root masked first. The pinned instant (2026-09-27 11:30 UTC)
 //! renders `20260927` on any UTC machine; date-code goldens depend on that.
 
-use common::{assert_golden as assert_golden_common, capture_mode, Golden};
+use common::{assert_golden as assert_golden_common, capture_mode, python_executable, Golden};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -42,32 +42,6 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// Repo `cli/src` so Python can import the real `fno` package.
 fn pythonpath() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
-fn python_executable() -> PathBuf {
-    // Worktree venv, then the canonical checkout's venv (a fresh worktree has
-    // no .venv of its own), then a bare python3.
-    let venv = pythonpath().join("../.venv/bin/python");
-    if venv.is_file() {
-        return venv;
-    }
-    if let Ok(out) = Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-    {
-        if out.status.success() {
-            let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let canonical_venv = PathBuf::from(&dir)
-                .parent()
-                .map(|p| p.join("cli/.venv/bin/python"));
-            if let Some(p) = canonical_venv {
-                if p.is_file() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from("python3")
 }
 
 /// The fixture: one git repo `proj` plus the pinned config file, both under

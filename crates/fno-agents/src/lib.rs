@@ -205,6 +205,7 @@ pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
 pub mod gh_incident;
+pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
 pub mod graph_get;
@@ -520,6 +521,7 @@ pub mod transcript_activity;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
+pub mod verify_advise;
 pub mod verify_evidence;
 pub mod version;
 pub mod wait;

@@ -84,7 +84,10 @@ def test_notify_impl_darwin_dispatches_osascript(monkeypatch, tmp_path):
     code, err = _impl.send_notification("T", "M")
     assert code == 0
     assert err == ""
-    assert calls[0][0] == "osascript"
+    # The journal leg runs first (status sinks depend on it), so the fake's
+    # first recorded call is the journal append, not the toast; the toast
+    # must still be dispatched.
+    assert any(c[0] == "osascript" for c in calls)
 
 
 def _headless(monkeypatch):

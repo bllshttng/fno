@@ -918,6 +918,29 @@ def _dispatch_hold_refusal(command=""):
     return detail[0] if detail else f"PR {pr_number}: dispatch hold state unreadable"
 
 
+def _git_common_dir(timeout=5):
+    """Absolute git common dir of the cwd, or None outside a repo.
+
+    Mirrors fno.paths.git_common_dir, which this stdlib-only hook cannot import.
+    git under 2.31 echoes --path-format=absolute back and exits 0, so the first
+    read counts only as one absolute path; otherwise plain --git-common-dir is
+    joined to the cwd. A failed read is final, so the happy path stays one
+    subprocess."""
+    for flags in (["--path-format=absolute"], []):
+        out = subprocess.run(
+            ["git", "rev-parse", *flags, "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if out.returncode != 0:
+            return None
+        lines = out.stdout.splitlines()
+        if len(lines) == 1 and (not flags or os.path.isabs(lines[0])):
+            return Path(os.getcwd()) / lines[0]
+    return None
+
+
 def _review_hold_refusal(command=""):
     """Deny a bare merge while any review hold is present in this repo.
 
@@ -944,18 +967,13 @@ def _review_hold_refusal(command=""):
     if not _parse_merge_pr(command) or _targets_other_repo(command):
         return None
     try:
-        toplevel = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if toplevel.returncode != 0 or not toplevel.stdout.strip():
+        common = _git_common_dir()
+        if common is None:
             return None
         # --git-common-dir resolves to the CANONICAL checkout's .git even from a
         # linked worktree, which is where claims_dir() puts a repo-local key, so
         # a review running in a worktree is visible to a merge attempted anywhere.
-        claims = Path(toplevel.stdout.strip()).parent / ".fno" / "claims"
+        claims = common.parent / ".fno" / "claims"
         held = sorted(claims.glob("review%3Abranch%3A*.lock")) if claims.is_dir() else []
     except Exception:  # noqa: BLE001 - a dead probe is not a refusal here; the
         # sanctioned path still reads the real predicate, and this hook's own
