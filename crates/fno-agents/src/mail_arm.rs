@@ -132,31 +132,108 @@ fn home_root() -> PathBuf {
 
 /// Deliver pending rows in seq order. A row leaves the pending pool only
 /// through a successful local send (exit 0) or a style-refused body (below):
-/// a transient failure waits for the next beat, and the TTL bounds it. The
-/// seen ledger records msg_ids after a zero exit, so a redelivered row
-/// never injects twice (at-least-once, edge 5).
+/// any other failure stays pending, backs its next attempt down the retry
+/// ladder ([`retry_backoff`]), and the TTL bounds it. The seen ledger
+/// records msg_ids after a zero exit, so a redelivered row never injects
+/// twice (at-least-once, edge 5).
 pub(crate) fn pull_rows(remote: &Remote, rows: Vec<BusRow>, home: &std::path::Path) -> usize {
     pull_rows_with(remote, rows, home, &mut |row| inject_row(remote, home, row))
 }
 
 /// The row loop behind `pull_rows`, with the injection leg as a parameter so
-/// the retry contract is testable without spawning a real send.
+/// the retry contract is testable without spawning a real send. A failed
+/// row books its next attempt at now + [`retry_backoff`] into the retry
+/// ledger (`mail_retry.jsonl`), and a row not yet due is skipped without a
+/// send; a delivered row's entry is dropped.
 pub(crate) fn pull_rows_with(
     remote: &Remote,
     rows: Vec<BusRow>,
     home: &std::path::Path,
     inject: &mut dyn FnMut(&BusRow) -> bool,
 ) -> usize {
+    let mut retries = load_retries(home);
     let mut delivered = 0;
     for row in rows {
         if seen(remote, home, &row) {
             continue;
         }
+        if !retry_due(&retries, &row.msg_id) {
+            continue;
+        }
         if inject(&row) {
+            retries.remove(&row.msg_id);
+            save_retries(home, &retries);
             delivered += 1;
+        } else {
+            let attempts = retries
+                .get(&row.msg_id)
+                .map_or(0, |(n, _)| *n)
+                .saturating_add(1);
+            let due = now_epoch_secs() + retry_backoff(attempts).as_secs();
+            retries.insert(row.msg_id.clone(), (attempts, due));
+            save_retries(home, &retries);
         }
     }
     delivered
+}
+
+/// One pending row's retry memory: the attempt count the ladder reads and
+/// the epoch second its next send is due. A row the ledger never mentions
+/// is on its first attempt and always due.
+type RetryMap = std::collections::HashMap<String, (u32, u64)>;
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Load the retry ledger, dropping entries whose next due passed more than
+/// the bus TTL ago (the row itself expired; the memory should too).
+fn load_retries(home: &std::path::Path) -> RetryMap {
+    let stale_before = now_epoch_secs().saturating_sub(crate::mail_bus::MAIL_TTL_SECS as u64);
+    std::fs::read_to_string(crate::mail_remote::retry_path(home))
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter_map(|v| {
+                    let id = v.get("msg_id")?.as_str()?.to_string();
+                    let attempts = v.get("attempts")?.as_u64()? as u32;
+                    let due = v.get("next_due")?.as_u64()?;
+                    Some((id, (attempts, due)))
+                })
+                .filter(|(_, (_, due))| *due >= stale_before)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Rewrite the ledger with one line per entry. A no-delivery beat with no
+/// backing-off row writes nothing.
+fn save_retries(home: &std::path::Path, map: &RetryMap) {
+    if map.is_empty() {
+        let _ = std::fs::remove_file(crate::mail_remote::retry_path(home));
+        return;
+    }
+    let mut lines: Vec<String> = map
+        .iter()
+        .map(|(id, (attempts, due))| {
+            serde_json::json!({"msg_id": id, "attempts": attempts, "next_due": due}).to_string()
+        })
+        .collect();
+    lines.sort();
+    let _ = std::fs::write(
+        crate::mail_remote::retry_path(home),
+        lines.join("\n") + "\n",
+    );
+}
+
+/// A row is due on its first attempt, and past due once the clock reaches
+/// the booked second.
+fn retry_due(map: &RetryMap, msg_id: &str) -> bool {
+    map.get(msg_id)
+        .is_none_or(|(_, due)| now_epoch_secs() >= *due)
 }
 
 /// The send's stderr as one log-sized line: whitespace collapsed, then cut
@@ -197,13 +274,26 @@ pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
         })
 }
 
-/// The send exits that name a row's recipient as undeliverable, ever: the
-/// registry has no such live name. Exit 16 is the current CLI's refusal
-/// (with closest-live-session suggestions on stderr); exit 13 is the
-/// pre-port spelling of the same refusal. A transient exit stays out, so
-/// only a send that can never land ends its row here.
-pub(crate) fn final_refusal(code: Option<i32>) -> bool {
-    matches!(code, Some(13) | Some(16))
+/// The retry ladder between a failed delivery and its next attempt. One
+/// beat every 15 s re-ran a full python send for every pending row, and a
+/// row whose recipient is unknown (exit 16, the registry's refusal) fails
+/// identically until the recipient registers or the 7-day TTL expires -
+/// two stuck rows measured 8-9 spawns a minute, 0.3-0.4 cores of daemon
+/// child CPU. The ladder keeps the pending contract (a row delivers the
+/// moment its recipient exists) and pays the send's cold start on a
+/// doubling schedule instead of every beat.
+pub(crate) const RETRY_BACKOFF_BASE_S: u64 = 15;
+
+/// The ladder's cap. A row past the cap retries four times an hour, still
+/// inside the at-least-once contract the TTL bounds.
+pub(crate) const RETRY_BACKOFF_CAP_S: u64 = 900;
+
+pub(crate) fn retry_backoff(attempts: u32) -> std::time::Duration {
+    let shift = attempts.saturating_sub(1).min(10);
+    std::time::Duration::from_secs(RETRY_BACKOFF_BASE_S)
+        .checked_mul(1u32 << shift)
+        .unwrap_or(std::time::Duration::from_secs(RETRY_BACKOFF_CAP_S))
+        .min(std::time::Duration::from_secs(RETRY_BACKOFF_CAP_S))
 }
 
 /// The argv the front door forwards to its sibling `style-check`, with the
@@ -296,15 +386,15 @@ fn record_seen(home: &std::path::Path, msg_id: &str) -> Result<(), String> {
 }
 
 /// The delivery leg: the receiver's own local send answers. Its registry
-/// resolves the name (an unknown recipient refuses deterministically - exit
-/// 16 today, exit 13 in the pre-port spelling of the same refusal), and its
-/// holds apply untouched (edge 8). An exit 1 whose style door names the
-/// body's violations marks the row refused, and so does an unknown
-/// recipient: the sender's `mail status` shows the loss instead of a
-/// pending row that every beat re-refuses at a send's cold start until the
-/// TTL (a week of a python spawn per beat per stuck row - the 2026-10-13
-/// daemon-burn finding). Returns true when the row is done (delivered or
-/// refused), false to leave it pending for the next beat.
+/// resolves the name, and its holds apply untouched (edge 8). An exit 1
+/// whose style door names the body's violations marks the row refused, so
+/// the sender's `mail status` shows the loss instead of a pending row that
+/// every retry refuses again. Every other refusal, the unknown recipient
+/// among them (exit 16, the registry's "no live name" answer), stays
+/// pending and backs its next attempt down the [`retry_backoff`] ladder -
+/// a recipient that registers later still receives the row, and the beat
+/// no longer pays a send's cold start for it every 15 s. Returns true when
+/// the row is done (delivered or refused), false to leave it pending.
 fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // Edge 6: a raw row is a command typed into a pane. Anyone on the
     // tailnet can write a bus row, and the sender-written from_id proves
@@ -339,22 +429,6 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             if code == Some(1) && style_door_refuses(&row.payload) {
                 eprintln!(
                     "mail-arm: local send for {} refused (exit {code:?}): {}",
-                    row.msg_id,
-                    brief(&output.stderr, 300)
-                );
-                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
-                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
-                }
-                return true;
-            }
-            // An unknown recipient refuses the same way on every beat: the
-            // name is not in the receiver's registry and no later beat adds
-            // it. Retry cannot deliver, so the refusal is terminal like the
-            // style one above; the cold start it would re-pay each beat is
-            // the burn the 2026-10-13 audit measured.
-            if final_refusal(code) {
-                eprintln!(
-                    "mail-arm: local send for {} has no live recipient (exit {code:?}): {}",
                     row.msg_id,
                     brief(&output.stderr, 300)
                 );

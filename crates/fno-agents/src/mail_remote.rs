@@ -24,6 +24,13 @@ pub fn seen_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("mail_seen.jsonl")
 }
 
+/// The pull arm's retry ladder memory, beside the seen ledger: one JSON
+/// line per still-backing-off msg_id carrying its attempt count and next
+/// due time. Persisted so a daemon restart never resets a ladder.
+pub fn retry_path(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("mail_retry.jsonl")
+}
+
 /// What `split_target` refused.
 pub fn target_error(target: &str) -> String {
     format!(
@@ -648,10 +655,93 @@ mod tests {
         );
         let mut deliver_all = |_row: &crate::mail_bus::BusRow| true;
         let retried = vec![bus_row(1, "older")];
+        // The failed attempt above booked a ladder slot; clear the memory so
+        // this phase reads the delivery contract, not the ladder's.
+        let _ = std::fs::remove_file(crate::mail_remote::retry_path(home));
         assert_eq!(
             crate::mail_arm::pull_rows_with(&remote, retried, home, &mut deliver_all),
             1,
             "the next beat delivers the row the earlier beat could not"
+        );
+        // The retry ladder: a failed row books a next-due 15 s out, a beat
+        // inside that window injects nothing, a beat past the booked second
+        // injects again, and delivery clears the ledger. The home dir is
+        // cleaned first so a rerun starts from no memory.
+        let ladder_home = std::path::Path::new("/tmp/fno-mail-arm-ladder-test");
+        let _ = std::fs::remove_dir_all(ladder_home);
+        std::fs::create_dir_all(ladder_home).unwrap();
+        let mut fail_once = |_row: &crate::mail_bus::BusRow| false;
+        let row = bus_row(7, "laddered");
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(
+                &remote,
+                vec![row.clone()],
+                ladder_home,
+                &mut fail_once
+            ),
+            0,
+            "the failed send books the ladder, nothing delivers"
+        );
+        let booked = std::fs::read_to_string(crate::mail_remote::retry_path(ladder_home)).unwrap();
+        assert!(
+            booked.contains("\"msg_id\":\"laddered\""),
+            "the failed row booked a retry: {booked}"
+        );
+        // The failed send booked a due 15 s out; a beat now injects nothing.
+        let mut no_inject = |_row: &crate::mail_bus::BusRow| {
+            panic!("a row inside its backoff window never injects")
+        };
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(
+                &remote,
+                vec![row.clone()],
+                ladder_home,
+                &mut no_inject
+            ),
+            0,
+            "the second beat inside the window skips the send"
+        );
+        // Past the booked second the row injects again (the ledger carries a
+        // due ten seconds old, fresh enough to survive the load prune), and
+        // delivery clears the memory.
+        let past = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 10;
+        let due_line = format!("{{\"msg_id\":\"laddered\",\"attempts\":1,\"next_due\":{past}}}",);
+        std::fs::write(crate::mail_remote::retry_path(ladder_home), due_line + "\n").unwrap();
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(
+                &remote,
+                vec![row.clone()],
+                ladder_home,
+                &mut deliver_all
+            ),
+            1,
+            "a past-due row injects again"
+        );
+        assert!(
+            !crate::mail_remote::retry_path(ladder_home).exists(),
+            "delivery clears the retry memory"
+        );
+        // The ladder itself: doubling from the 15 s base, capped at 15 min.
+        assert_eq!(
+            crate::mail_arm::retry_backoff(1),
+            std::time::Duration::from_secs(15)
+        );
+        assert_eq!(
+            crate::mail_arm::retry_backoff(2),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            crate::mail_arm::retry_backoff(3),
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            crate::mail_arm::retry_backoff(12),
+            std::time::Duration::from_secs(900),
+            "the cap holds at fifteen minutes"
         );
         // The finality rule: the style door naming violations (with no
         // exception declared) is the deterministic refusal; a clean receipt,
@@ -668,14 +758,6 @@ mod tests {
         ));
         assert!(!crate::mail_arm::door_confirms_refusal(b"{}"));
         assert!(!crate::mail_arm::door_confirms_refusal(b"not json"));
-        // The terminal refusals: an unknown recipient ends its row like the
-        // style refusal does (exit 16 today, 13 the pre-port spelling), and
-        // every transient exit stays pending for the next beat.
-        assert!(crate::mail_arm::final_refusal(Some(16)));
-        assert!(crate::mail_arm::final_refusal(Some(13)));
-        assert!(!crate::mail_arm::final_refusal(Some(1)));
-        assert!(!crate::mail_arm::final_refusal(Some(0)));
-        assert!(!crate::mail_arm::final_refusal(None));
         // The consult rides the front door's lint-style forwarding, with the
         // configured mail word cap appended when one is set.
         let argv = crate::mail_arm::style_door_argv(None);
