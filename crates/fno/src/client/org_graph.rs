@@ -270,24 +270,42 @@ pub(crate) fn label_cells(
         if cx >= width || cy >= height {
             continue;
         }
-        let fits = |start: usize| -> bool {
-            start + label_len <= width && !(start..start + label_len).any(|x| taken[cy * width + x])
+        let fits = |start: usize, row: usize| -> bool {
+            start + label_len <= width
+                && !(start..start + label_len).any(|x| taken[row * width + x])
         };
         let is_selected = selected == Some(graph.dots[i].key.as_str());
-        let spot = if fits(cx + 2) {
-            Some(cx + 2)
-        } else if cx >= label_len + 1 && fits(cx - label_len - 1) {
-            Some(cx - label_len - 1)
-        } else if is_selected {
-            Some(cx + 2)
-        } else {
-            None
-        };
-        if let Some(start) = spot {
+        // Right of the dot, then left, then rows outward from the dot's
+        // own: a crowded row must not make the label cover a neighbouring
+        // dot's glyph. The selected label paints regardless, as the last
+        // resort.
+        let mut spot: Option<(usize, usize)> = None;
+        'walk: for dist in 0..height {
+            let rows = [
+                cy.checked_add(dist).filter(|r| *r < height),
+                cy.checked_sub(dist),
+            ];
+            for row in rows.into_iter().flatten() {
+                for start in [cx + 2, cx.saturating_sub(label_len + 1)] {
+                    if fits(start, row) {
+                        spot = Some((start, row));
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        let spot = spot.or_else(|| {
+            if is_selected {
+                Some((cx + 2, cy))
+            } else {
+                None
+            }
+        });
+        if let Some((start, row)) = spot {
             let start = start.min(width.saturating_sub(label_len));
-            out[i] = Some((start, cy, label_len));
+            out[i] = Some((start, row, label_len));
             for x in start..(start + label_len).min(width) {
-                taken[cy * width + x] = true;
+                taken[row * width + x] = true;
             }
         }
     }
