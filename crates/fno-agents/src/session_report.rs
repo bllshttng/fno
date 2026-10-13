@@ -840,17 +840,11 @@ mod tests {
     }
 
     fn emitter(home: &AgentsHome) -> EventEmitter {
-        EventEmitter::new(home.events_jsonl(), "test")
-    }
-
-    /// The framed events the emitter actually wrote: the report handler takes
-    /// a JSONL emitter, so the sqlite store stays uncreated in these tests and
-    /// `query_events` would refuse the missing file.
-    fn journal_events(home: &AgentsHome) -> Vec<Value> {
-        let text = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
-        text.lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .collect()
+        // The judge refuses an event whose type does not declare the emitter's
+        // source, and `let _ =` at the emit sites swallows that refusal. The
+        // report RPC runs inside the daemon, so the tests emit as "daemon" -
+        // the one source both minted types declare.
+        EventEmitter::new(home.events_jsonl(), "daemon")
     }
 
     fn req(params: Value) -> Request {
@@ -1110,11 +1104,11 @@ mod tests {
         assert_eq!(rows[0].substrate, None);
         // No birth event: the user's session is not an agent birth. The mint
         // says so through session_report_stored's minted field instead.
-        let journal = journal_events(&home);
-        let births: Vec<&Value> = journal
-            .iter()
-            .filter(|v| v["type"] == "agent_spawned")
-            .collect();
+        let births = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
+        )
+        .unwrap();
         assert!(births.is_empty(), "{births:?}");
         // A second report of the same id stamps the row it minted; it never
         // mints twice.
@@ -1165,13 +1159,13 @@ mod tests {
         assert_eq!(rows[0].spawned_by_session.as_deref(), Some("lead-7"));
         assert_eq!(rows[0].substrate.as_deref(), Some("thread"));
         assert_eq!(rows[0].status, AgentStatus::Live);
-        let journal = journal_events(&home);
-        let births: Vec<&Value> = journal
-            .iter()
-            .filter(|v| v["type"] == "agent_spawned")
-            .collect();
+        let births = crate::event_store::query_events(
+            &home.events_jsonl(),
+            &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
+        )
+        .unwrap();
         assert_eq!(births.len(), 1, "{births:?}");
-        assert!(births[0].to_string().contains("launch"), "{}", births[0]);
+        assert!(births[0].line.contains("launch"), "{}", births[0].line);
     }
 
     /// Decision D8: a record's name that collides with a live row takes a
