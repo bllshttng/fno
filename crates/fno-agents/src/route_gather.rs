@@ -484,6 +484,10 @@ fn build_inventory_answer(
             "effort": s("effort"),
             "cost_per_mtok_in": merged.get("cost_per_mtok_in").cloned().unwrap_or(Value::Null),
             "operator_view": s("operator_view"),
+            // The row's own launch argv rides the fold out: the spawn doors
+            // resolve_template from it, so dropping it here would send every
+            // declared lane down the packaged default line.
+            "launch": merged.get("launch").cloned().unwrap_or(Value::Null),
         }));
     }
     let objective = cfg_routing(cwd)

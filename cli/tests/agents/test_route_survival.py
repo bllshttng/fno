@@ -71,7 +71,7 @@ def _admitted_zai(monkeypatch, name: str = "router"):
     return run_gate(name, "bg", route_provider="zai")
 
 
-def _spawn_pane(monkeypatch, tmp_path, provider="claude", **kwargs):
+def _spawn_pane(monkeypatch, tmp_path, provider="claude", name="router", **kwargs):
     use_tmpdir(monkeypatch, tmp_path)
     for var in ("FNO_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID"):
         monkeypatch.delenv(var, raising=False)
@@ -99,7 +99,7 @@ def _spawn_pane(monkeypatch, tmp_path, provider="claude", **kwargs):
         )
 
     return mux_spawn.dispatch_spawn_pane(
-        name="router",
+        name=name,
         message="go",
         provider=provider,
         cwd=tmp_path,
@@ -213,9 +213,11 @@ def test_unrouted_spawn_records_no_route_path(tmp_path, monkeypatch) -> None:
     _spawn_pane(monkeypatch, tmp_path)
     assert load_registry()[0].route_settings_path is None
     _spawn_pane(
-        monkeypatch, tmp_path, account_env={"CLAUDE_CONFIG_DIR": "/x/.claude"}
+        monkeypatch, tmp_path, name="router-2",
+        account_env={"CLAUDE_CONFIG_DIR": "/x/.claude"},
     )
-    assert load_registry()[0].route_settings_path is None
+    rows = {r.name: r for r in load_registry()}
+    assert rows["router-2"].route_settings_path is None
 
 
 def test_ac7_registry_stores_the_path_never_the_route_contents(tmp_path, monkeypatch) -> None:

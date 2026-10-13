@@ -174,13 +174,61 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
 mod tests {
     use super::*;
 
+    /// The env-mutating tests take the crate's claims lock (one env suite at
+    /// a time) and snapshot the world pins: a sibling test's FNO_CONFIG would
+    /// otherwise name this test's config read mid-flight, and this test's
+    /// pins would leak into the sibling. FNO_STATE_DIR pins too, or the
+    /// settings write lands in the runner's real state root.
+    struct EnvPin {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvPin {
+        fn take(dir: &Path) -> Self {
+            let lock = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let saved: Vec<(&'static str, Option<std::ffi::OsString>)> = vec![
+                ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
+                ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
+                (
+                    "FNO_GLOBAL_SETTINGS_PATH",
+                    std::env::var_os("FNO_GLOBAL_SETTINGS_PATH"),
+                ),
+                ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
+            ];
+            std::env::remove_var("FNO_CONFIG");
+            std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+            std::env::set_var("FNO_STATE_DIR", dir.join("state"));
+            Self { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
     /// A `.fno/config.toml` carrying the one row the tests' provider/model
     /// axes resolve: its `launch` keeps the tests off the real claude.
     fn stage_row(dir: &Path) {
+        stage_row_with(dir, "exit 0");
+    }
+
+    fn stage_row_with(dir: &Path, exit: &str) {
         std::fs::create_dir_all(dir.join(".fno")).unwrap();
         std::fs::write(
             dir.join(".fno/config.toml"),
-            "[[routing.models]]\nname = \"t-lane\"\nharness = \"claude\"\nmodel = \"tm-1\"\nroute = \"zai/tm-1\"\nlaunch = [\"sh\", \"-c\", \"exit 0\"]\n",
+            format!(
+                "[[routing.models]]\nname = \"t-lane\"\nharness = \"claude\"\nmodel = \"tm-1\"\nroute = \"zai/tm-1\"\nlaunch = [\"sh\", \"-c\", \"{exit}\"]\n"
+            ),
         )
         .unwrap();
     }
@@ -192,6 +240,7 @@ mod tests {
     #[test]
     fn execs_the_native_line_and_writes_the_record() {
         let dir = tempfile::tempdir().unwrap();
+        let _env = EnvPin::take(dir.path());
         std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
         stage_row(dir.path());
         let out = exec_lane(&serde_json::json!({
@@ -206,7 +255,6 @@ mod tests {
         let pending =
             crate::launch_record::pending_for_provider(home.root(), "zai", crate::claims::now_ms());
         assert_eq!(pending, vec!["w1".to_string()], "the record holds the lane");
-        std::env::remove_var("FNO_AGENTS_HOME");
     }
 
     /// A record with no parent proves nothing: the door refuses before the
@@ -214,6 +262,7 @@ mod tests {
     #[test]
     fn refuses_a_record_with_no_parent() {
         let dir = tempfile::tempdir().unwrap();
+        let _env = EnvPin::take(dir.path());
         std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
         let error = exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w1",
@@ -228,17 +277,17 @@ mod tests {
             crate::claims::now_ms()
         )
         .is_empty());
-        std::env::remove_var("FNO_AGENTS_HOME");
     }
 
     /// The child's own failure surfaces as its exit code: the launch may
     /// have happened, so the record stays and the window lapses it. The lane
-    /// resolves from a staged config row; the child's exit still wins.
+    /// resolves from a staged failing row; the child's exit still wins.
     #[test]
     fn a_failing_child_returns_its_code() {
         let dir = tempfile::tempdir().unwrap();
+        let _env = EnvPin::take(dir.path());
         std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
-        stage_row(dir.path());
+        stage_row_with(dir.path(), "exit 3");
         let out = exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w2",
             "payload": "/x",
@@ -247,6 +296,5 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(out, 3);
-        std::env::remove_var("FNO_AGENTS_HOME");
     }
 }

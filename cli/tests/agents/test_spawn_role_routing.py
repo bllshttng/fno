@@ -36,7 +36,6 @@ def test_role_bearing_spawn_detected_across_forms() -> None:
 
 @pytest.mark.parametrize("substrate_args", [
     ["--substrate", "thread"],
-    ["-p"],            # headless spellings route the same Rust path
     ["--once"],
 ])
 def test_role_fix_load_bearing_on_autonomous_substrates(substrate_args) -> None:
@@ -146,7 +145,7 @@ def test_pane_detector_stops_at_the_passthrough_fence() -> None:
     assert _is_pane_substrate_spawn("spawn", ["spawn", "hi", "--", "--once", "x"])
     assert _is_pane_substrate_spawn("spawn", ["spawn", "hi", "--", "--substrate", "thread"])
     # Pre-fence spellings still count, and the --argv payload boundary holds.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "hi", "-p"])
+    assert not _is_pane_substrate_spawn("spawn", ["spawn", "hi", "-o"])
     assert not _is_pane_substrate_spawn(
         "spawn", ["spawn", "hi", "--substrate", "headless"]
     )

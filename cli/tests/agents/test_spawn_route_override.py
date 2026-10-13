@@ -689,16 +689,23 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
-    monkeypatch.setattr(
-        spawn_overlay_client,
-        "spawn_overlay_call",
-        lambda ask: asks.append(ask)
-        or {"tokens": ["claude", "--bg", "--settings", "/state/route-settings/lane-zai-flash.json",
-                       "--model", "glm-5.2", "--name", "w", "/fno:target x-1abc"]},
-    )
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable
+
+    def fake_overlay(ask, **k):
+        asks.append(ask)
+        if ask.get("harness") != "claude":
+            # The door refuses a harness with no native line; this stubs the
+            # transport so the CLI's exit mapping is what runs.
+            raise SpawnOverlayUnavailable(
+                "--print renders claude --bg lines; harness 'codex' has no native line yet."
+            )
+        return {"tokens": ["claude", "--bg", "--settings", "/state/route-settings/lane-zai-flash.json",
+                           "--model", "glm-5.2", "--name", "w", "seed work"]}
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", fake_overlay)
     result = runner.invoke(
         agents_app,
-        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+        ["spawn", "--name", "w", "seed work", "--harness", "claude",
          "--route", "zai,glm-5.2", "--effort", "xhigh", "--print"],
     )
     assert result.exit_code == 0, result.output
@@ -706,9 +713,9 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     assert line.startswith("claude --bg --settings /state/route-settings/lane-zai-flash.json"), line
     assert "--model glm-5.2" in line
     assert "--name w" in line
-    assert "'/fno:target x-1abc'" in line
-    [ask] = asks
-    assert ask["kind"] == "print" and ask["harness"] == "claude"
+    assert "'seed work'" in line
+    [ask] = [a for a in asks if a.get("kind") == "print"]
+    assert ask["harness"] == "claude"
     assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
     assert ask["account_env"] == {}
     assert ask["model"] == "glm-5.2" and ask["effort"] == "xhigh"
@@ -719,7 +726,7 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     # CLI maps the door refusal to a clean exit.
     refused = runner.invoke(
         agents_app,
-        ["spawn", "w", "hi", "--harness", "codex", "--print"],
+        ["spawn", "--name", "w", "hi", "--harness", "codex", "--print"],
     )
     assert refused.exit_code == 2, refused.output
     assert "no native line yet" in refused.output
@@ -739,15 +746,12 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno.route_slot_client import route_slot_call
-
     row = {
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
     monkeypatch.setattr(
-        route_slot_call,
-        "route_slot_call",
+        "fno.route_slot_client.route_slot_call",
         lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
     from fno.agents import spawn_overlay_client
@@ -756,16 +760,16 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     monkeypatch.setattr(
         spawn_overlay_client,
         "spawn_overlay_call",
-        lambda ask: asks.append(ask)
-        or {"tokens": ["claude", "--bg", "--name", "w", "/fno:target x-1abc"]},
+        lambda ask, **k: asks.append(ask)
+        or {"tokens": ["claude", "--bg", "--name", "w", "go"]},
     )
     result = runner.invoke(
         agents_app,
-        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+        ["spawn", "--name", "w", "go", "--harness", "claude",
          "--route", "zai-flash", "--print"],
     )
     assert result.exit_code == 0, result.output
-    [ask] = asks
+    ask = next(a for a in asks if a.get("kind") == "print")
     assert ask["model"] == "glm-5.3-flash[1m]"
     assert ask["effort"] == "xhigh", "the row's effort seeded the spawn"
     assert ask["route_env"].get("FNO_ROUTE_PROVIDER") == "zai"
@@ -791,15 +795,12 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno.route_slot_client import route_slot_call
-
     row = {
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
     monkeypatch.setattr(
-        route_slot_call,
-        "route_slot_call",
+        "fno.route_slot_client.route_slot_call",
         lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
     from fno.agents import spawn_lineage
@@ -813,7 +814,11 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     fake = tmp_path / "fake-agents"
     fake.write_text(
         "#!/bin/sh\n"
-        f"cat > {ask_file}\n"
+        'echo "$@" >> ' + str(tmp_path / "calls.log") + "\n"
+        "tee " + str(tmp_path / "stdin.log") + " > /dev/null\n"
+        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
+        'if [ "$1" = "spawn-overlay" ]; then cp '
+        + str(tmp_path / "stdin.log") + " " + str(ask_file) + "; fi\n"
         'echo \'{"exit":0}\'\n',
         encoding="utf-8",
     )
@@ -821,14 +826,14 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
     result = runner.invoke(
         agents_app,
-        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
-         "--route", "zai-flash"],
+        ["spawn", "--name", "w", "go", "--harness", "claude",
+         "--substrate", "thread", "--route", "zai-flash"],
     )
     assert result.exit_code == 0, result.output
     ask = json.loads(ask_file.read_text(encoding="utf-8"))
     assert ask["harness"] == "claude"
     assert ask["name"] == "w"
-    assert ask["payload"] == "/fno:target x-1abc"
+    assert ask["payload"] == "go"
     assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
     assert ask["account_env"] == {}
     assert ask["model"] == "glm-5.3-flash[1m]"
@@ -850,15 +855,12 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno.route_slot_client import route_slot_call
-
     row = {
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
-        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
     monkeypatch.setattr(
-        route_slot_call,
-        "route_slot_call",
+        "fno.route_slot_client.route_slot_call",
         lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
     dispatched: list[dict] = []
@@ -872,7 +874,7 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
     result = runner.invoke(
         agents_app,
-        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+        ["spawn", "--name", "w", "go", "--harness", "claude",
          "--route", "zai-flash", "--model", "glm-5.3-flash[1m]"],
     )
     assert result.exit_code == 0, result.output
@@ -938,7 +940,9 @@ def test_composed_route_and_account_spawn_scrubs_inherited_auth(
     )
     argv = seen["argv"]
     blob = json.load(open(argv[argv.index("--settings") + 1]))["env"]
-    assert blob["ANTHROPIC_API_KEY"] == ""
+    assert "ANTHROPIC_API_KEY" not in blob, (
+        "a self-authed route drops the credential it does not name"
+    )
     assert blob["CLAUDE_CODE_OAUTH_TOKEN"] == ""
     assert blob["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
 

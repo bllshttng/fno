@@ -2642,10 +2642,10 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
-            # The native lane: a routed claude thread spawn execs the lane's own bg line; other axes fall through.
+            # The native lane: a routed claude bg spawn (bg is resolve_spawn_gates' canonical thread) execs the lane's own line; other axes fall through.
             native_lane = (
                 harness == "claude"
-                and substrate == "thread"
+                and substrate == "bg"
                 and not (once or resume)
                 and bool(route_env)
                 and role_level is None
