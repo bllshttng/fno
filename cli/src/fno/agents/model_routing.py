@@ -927,6 +927,25 @@ def resolve_route(
     return route
 
 
+ANTHROPIC_API_HOST = "api.anthropic.com"
+
+
+def _base_url_host(base_url: str) -> str:
+    """The lowercased host of ``base_url``, or "" when there is none.
+
+    A bare authority like ``api.anthropic.com/v1`` carries no scheme, and
+    urlsplit reads the whole thing as a path, so give it one first.
+    """
+    from urllib.parse import urlsplit
+
+    base = base_url.strip()
+    if not base:
+        return ""
+    if "//" not in base:
+        base = "//" + base
+    return (urlsplit(base).hostname or "").lower()
+
+
 def _route_for_target(
     pname: str,
     model: str,

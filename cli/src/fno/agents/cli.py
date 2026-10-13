@@ -1116,10 +1116,7 @@ def cmd_spawn(
     print_mode: bool = typer.Option(
         False,
         "--print",
-        help=(
-            "Print the native line the spawn would exec, then exit. "
-            "Launches nothing."
-        ),
+        help="Print the native line the spawn would exec, then exit. Launches nothing.",
     ),
     sandbox_write_policy: str | None = typer.Option(
         None,
@@ -2002,9 +1999,8 @@ def cmd_spawn(
             file=sys.stderr,
         )
 
-    # --print: the verb refuses, composes the settings file and renders the
-    # native line; this leg is the ask and the display. Nothing is gated,
-    # registered or launched, and the render is the exec path's own fill.
+    # --print: the verb refuses, composes and renders; this leg is the ask
+    # and the display, and the render is the exec path's own fill.
     if print_mode:
         import shlex
 
@@ -2647,10 +2643,8 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
-            # The native lane: a fresh routed claude thread spawn execs the
-            # lane's own bg line through the launch kind; the record is
-            # the dispatch reservation and the row mints at the adopt. Axes
-            # the template cannot express keep the dispatcher path below.
+            # The native lane: a routed claude thread spawn execs the lane's
+            # own bg line; other axes fall through to the dispatcher below.
             native_lane = (
                 harness == "claude"
                 and substrate == "thread"
@@ -2680,10 +2674,8 @@ def cmd_spawn(
                         "node": (prov_env or {}).get("FNO_NODE") or "",
                         "launcher_session": launcher_session,
                     }
-                    if launcher_harness:
-                        ask["launcher_harness"] = launcher_harness
-                    if launcher_cwd and launcher_cwd.strip():
-                        ask["launcher_cwd"] = launcher_cwd
+                    if launcher_harness: ask["launcher_harness"] = launcher_harness
+                    if launcher_cwd and launcher_cwd.strip(): ask["launcher_cwd"] = launcher_cwd
                     proc = _subprocess.run(
                         [str(resolve_binary()), "spawn-overlay"],
                         input=json.dumps(ask), text=True, capture_output=True,
@@ -2692,19 +2684,12 @@ def cmd_spawn(
                     sys.stderr.write(proc.stderr or "")
                     if proc.returncode != 0:
                         raise typer.Exit(code=proc.returncode)
-                    # The launch kind answers {"exit": N} after the child's
-                    # stream: the child's own code is the launch's outcome.
-                    answer = {}
-                    for line in reversed((proc.stdout or "").splitlines()):
-                        if line.startswith("{"):
-                            try:
-                                candidate = json.loads(line)
-                            except ValueError:
-                                continue
-                            if isinstance(candidate, dict) and "exit" in candidate:
-                                answer = candidate
-                            break
-                    if answer.get("exit") not in (0, None):
+                    # The launch kind answers {"exit": N} after the stream.
+                    try:
+                        answer = json.loads((proc.stdout or "").strip().rsplit("\n", 1)[-1])
+                    except ValueError:
+                        answer = {}
+                    if isinstance(answer, dict) and answer.get("exit"):
                         raise typer.Exit(code=int(answer["exit"]))
                     spawn_succeeded = True
                     print(f"spawn: {name} launched on the native lane; the row lands at its SessionStart adopt", file=sys.stderr)
