@@ -423,8 +423,9 @@ async fn run(args: Vec<String>) -> i32 {
     // the /fno:ship pr create worker runs it against the attestation journal
     // (global state root by default) and appends its stdout to the body - and
     // review-level is the resolve-level leaf the Python caller reaches through
-    // the binary. Same `matches!` treatment as `claim`/`detect` so the
-    // routable-verb parity guard does not see them - they read state and print.
+    // the binary. The `review_doors::dispatch` match table routes them the
+    // way the `matches!` arms route `claim`/`detect`, outside the
+    // routable-verb parity guard - they read state and print.
     if let Some(code) = fno_agents::review_doors::dispatch(verb, &args[1..]) {
         return code;
     }
