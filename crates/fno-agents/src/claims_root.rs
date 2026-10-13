@@ -38,6 +38,10 @@ const GLOBAL_ID_PREFIXES: &[&str] = &[
     // claim lookup - it degrades to the machine-wide root like every other
     // global key, never to a refusal that no root can be found.
     "test",
+    // `gh-budget:fleet`, the GitHub request budget's shared refusal hold:
+    // GitHub limits the user, not the machine, so one host's backoff must
+    // read from the same store every other host admits against.
+    "gh-budget",
     // `build:cargo` (test_run.rs build-admit): one cargo build per machine.
     "build",
 ];

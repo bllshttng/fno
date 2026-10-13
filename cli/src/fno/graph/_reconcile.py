@@ -1440,6 +1440,10 @@ def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> 
         return True
     if _reopen_outranks_child_closes(parent, kids):
         return True  # reopened after its children finished -> the human call holds
+    if parent.get("plan_path") and not (
+        parent.get("pr_number") or parent.get("additional_prs")
+    ):
+        return True  # own plan work: deliverables unverified, the close false-fires
     return not children_all_closed(parent, kids)
 
 

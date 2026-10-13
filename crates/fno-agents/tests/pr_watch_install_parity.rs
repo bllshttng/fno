@@ -1,62 +1,38 @@
 //! parity-stage: characterization
-//! parity-oracle: cli/src/fno/pr_watch/_install.py:install
+//! parity-oracle: cli/src/fno/pr_watch/_install.py:uninstall
 //!
-//! Characterization for the pr-watch install port: the Rust verb
-//! (`fno-agents pr-watch install`, plus the `--ensure` coupling mode) is
-//! pinned by the frozen goldens under tests/golden/pr-watch-install/. While
-//! the Python leg lived, this file ran as a LIVE differential under
-//! `FNO_CAPTURE_GOLDEN=1`: both implementations answered the same fixture
-//! with the same env pins and the run asserted byte-identity of the stdout
-//! before the goldens froze. The Python `install` / `ensure_activated` /
-//! `retire_legacy_postmerge_agents` functions were deleted in the same
-//! change that landed the port, so the goldens stand as the contract and
-//! capture mode refuses.
+//! Characterization for the pr-watch install and uninstall ports: the Rust
+//! verbs (`fno-agents pr-watch install`, its `--ensure` coupling mode, and
+//! `fno-agents pr-watch uninstall`, plus `--unload-only`) are pinned by the
+//! frozen goldens under tests/golden/pr-watch-install/. While each Python leg
+//! lived, this file ran as a LIVE differential under `FNO_CAPTURE_GOLDEN=1`:
+//! both implementations answered the same fixture with the same env pins and
+//! the run asserted byte-identity of the stdout before the goldens froze.
+//! The wave-4 port deleted `install` / `ensure_activated` /
+//! `retire_legacy_postmerge_agents`; this change deletes `uninstall` /
+//! `unload_only` / `_launchctl_is_loaded`, so the goldens stand as the
+//! contract and capture mode refuses.
 //!
-//! Ten fixture states, the ones the plan named: the dry-run render, the
+//! Seventeen fixture states. Wave 4's nine: the dry-run render, the
 //! confirmed write + bounce + legacy retirement, the declined gate, the
 //! no-activate escape, a loud activation failure, and the four
 //! `ensure_activated` outcome words, plus the already-running short circuit
-//! and a legacy retirement through the coupling path. Every volatile byte
-//! (the case dir, the launchd uid) goes through a mask first - the golden
-//! describes the rule tree, not this machine.
+//! and a legacy retirement through the coupling path. Wave 5's eight: full
+//! uninstall over a loaded agent, without a plist, not-loaded, a best-effort
+//! unload failure, and the four `unload_only` outcome words. Every volatile
+//! byte (the case dir, the launchd uid) goes through a mask first - the
+//! golden describes the rule tree, not this machine.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use common::{assert_golden, capture_mode, make_script, slug, Golden};
+use common::{assert_golden, capture_mode, make_script, python_executable, slug, Golden};
 
 mod common;
 
 /// Repo `cli/src` so Python can import the real `fno` package.
 fn pythonpath() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
-fn python_executable() -> PathBuf {
-    // Worktree venv, then the canonical checkout's venv (a fresh worktree has
-    // no .venv of its own; its .git is a gitdir FILE pointing at the canonical
-    // repo, so the walk follows it), then a bare python3.
-    let venv = pythonpath().join("../.venv/bin/python");
-    if venv.is_file() {
-        return venv;
-    }
-    if let Ok(out) = Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-    {
-        if out.status.success() {
-            let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let canonical_venv = PathBuf::from(&dir)
-                .parent()
-                .map(|p| p.join("cli/.venv/bin/python"));
-            if let Some(p) = canonical_venv {
-                if p.is_file() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from("python3")
 }
 
 /// The only moving parts: the fixture root and the launchd uid in bounce
@@ -75,6 +51,7 @@ struct LaunchCtl {
     bootstrap_fails: u32,
     bootout_rc: i32,
     kickstart_rc: i32,
+    unload_rc: i32,
 }
 
 impl Default for LaunchCtl {
@@ -85,6 +62,7 @@ impl Default for LaunchCtl {
             bootstrap_fails: 0,
             bootout_rc: 0,
             kickstart_rc: 0,
+            unload_rc: 0,
         }
     }
 }
@@ -98,12 +76,15 @@ struct Case {
     legacy: bool,
     /// Replace the LaunchAgents dir with a file: the write-failed shape.
     agents_dir_is_file: bool,
+    /// Pre-seed the canonical plist: the uninstall cases' input state.
+    plist: bool,
     launchctl: LaunchCtl,
 }
 
 enum Mode {
     Install { dry_run: bool, no_activate: bool },
     Ensure,
+    Uninstall { unload_only: bool },
 }
 
 fn write_case(root: &Path, case: &Case) -> PathBuf {
@@ -137,6 +118,15 @@ fn write_case(root: &Path, case: &Case) -> PathBuf {
         .unwrap();
     }
 
+    // The uninstall cases' input state: the canonical plist already on disk.
+    if case.plist {
+        std::fs::write(
+            agents.join("sh.fno.pr-watcher.plist"),
+            "<plist><dict/></plist>",
+        )
+        .unwrap();
+    }
+
     // The launchctl stub both legs resolve through PATH. The bootstrap-fails
     // counter lives in the case dir so retries never leak between cases.
     make_script(
@@ -156,6 +146,7 @@ case "$1" in
     exit ${FNO_STUB_BOOTSTRAP_RC:-0} ;;
   kickstart) exit ${FNO_STUB_KICKSTART_RC:-0} ;;
   load) exit ${FNO_STUB_LOAD_RC:-0} ;;
+  unload) exit ${FNO_STUB_UNLOAD_RC:-0} ;;
   *) exit 0 ;;
 esac
 "#,
@@ -209,6 +200,10 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
             case.launchctl.load_rc.to_string(),
         ),
         (
+            "FNO_STUB_UNLOAD_RC".into(),
+            case.launchctl.unload_rc.to_string(),
+        ),
+        (
             "FNO_STUB_BOOTSTRAP_FAILS".into(),
             case.launchctl.bootstrap_fails.to_string(),
         ),
@@ -234,46 +229,59 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
 }
 
 fn case_args(case: &Case) -> Vec<String> {
-    let Mode::Install {
-        dry_run,
-        no_activate,
-    } = &case.mode
-    else {
-        return vec!["--ensure".to_string()];
-    };
-    let mut argv: Vec<String> = Vec::new();
-    if *dry_run {
-        argv.push("--dry-run".to_string());
+    match &case.mode {
+        Mode::Uninstall { unload_only } => {
+            let mut argv: Vec<String> = Vec::new();
+            if *unload_only {
+                argv.push("--unload-only".to_string());
+            }
+            argv
+        }
+        Mode::Install {
+            dry_run,
+            no_activate,
+        } => {
+            let mut argv: Vec<String> = Vec::new();
+            if *dry_run {
+                argv.push("--dry-run".to_string());
+            }
+            if case.interval > 0 {
+                argv.push("--interval".to_string());
+                argv.push(case.interval.to_string());
+            }
+            if case.model {
+                argv.push("--model".to_string());
+                argv.push("zz".to_string());
+            }
+            if *no_activate {
+                argv.push("--no-activate".to_string());
+            }
+            argv
+        }
+        Mode::Ensure => vec!["--ensure".to_string()],
     }
-    if case.interval > 0 {
-        argv.push("--interval".to_string());
-        argv.push(case.interval.to_string());
-    }
-    if case.model {
-        argv.push("--model".to_string());
-        argv.push("zz".to_string());
-    }
-    if *no_activate {
-        argv.push("--no-activate".to_string());
-    }
-    argv
 }
 
 /// The Rust leg through the built binary: the exact surface the Python leaf
 /// forwards to.
 fn rust_leg(dir: &Path, case: &Case) -> Golden {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
-    cmd.args(["pr-watch", "install"]);
+    match &case.mode {
+        Mode::Uninstall { .. } => cmd.args(["pr-watch", "uninstall"]),
+        _ => cmd.args(["pr-watch", "install"]),
+    };
     for arg in case_args(case) {
         cmd.arg(arg);
     }
     // The Python leaf always passes the resolved binary; the stub path is the
     // fixture's stand-in for it, the same value FNO_TEST_FNO_BINARY hands the
-    // oracle.
-    cmd.args([
-        "--fno-binary",
-        &dir.join("stub").join("fno-py").display().to_string(),
-    ]);
+    // oracle. The uninstall verb takes nothing else: no binary, no interval.
+    if !matches!(case.mode, Mode::Uninstall { .. }) {
+        cmd.args([
+            "--fno-binary",
+            &dir.join("stub").join("fno-py").display().to_string(),
+        ]);
+    }
     for (k, v) in pin_env(dir, case) {
         cmd.env(k, v);
     }
@@ -325,6 +333,12 @@ fn python_oracle(dir: &Path, case: &Case) -> Golden {
         Mode::Ensure => {
             cmd.args(["--mode", "ensure"]);
         }
+        Mode::Uninstall { unload_only } => {
+            cmd.args(["--mode", "uninstall"]);
+            if *unload_only {
+                cmd.arg("--unload-only");
+            }
+        }
     }
     if case.interval > 0 {
         cmd.args(["--interval", &case.interval.to_string()]);
@@ -372,6 +386,7 @@ fn cases() -> Vec<Case> {
             stdin: None,
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl::default(),
         },
         // The confirmed path: write, bounce, legacy retirement, heal line.
@@ -386,6 +401,7 @@ fn cases() -> Vec<Case> {
             stdin: Some("y\n"),
             legacy: true,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl::default(),
         },
         Case {
@@ -399,6 +415,7 @@ fn cases() -> Vec<Case> {
             stdin: Some("n\n"),
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl::default(),
         },
         Case {
@@ -412,6 +429,7 @@ fn cases() -> Vec<Case> {
             stdin: Some("y\n"),
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl::default(),
         },
         // The stub bootstrap refuses four times, so the retry ladder exhausts
@@ -427,6 +445,7 @@ fn cases() -> Vec<Case> {
             stdin: Some("y\n"),
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl {
                 bootstrap_fails: 4,
                 ..LaunchCtl::default()
@@ -440,6 +459,7 @@ fn cases() -> Vec<Case> {
             stdin: None,
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl {
                 list: Some("sh.fno.pr-watcher"),
                 ..LaunchCtl::default()
@@ -453,6 +473,7 @@ fn cases() -> Vec<Case> {
             stdin: None,
             legacy: true,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl::default(),
         },
         Case {
@@ -463,6 +484,7 @@ fn cases() -> Vec<Case> {
             stdin: None,
             legacy: false,
             agents_dir_is_file: false,
+            plist: false,
             launchctl: LaunchCtl {
                 load_rc: 9,
                 ..LaunchCtl::default()
@@ -476,7 +498,115 @@ fn cases() -> Vec<Case> {
             stdin: None,
             legacy: false,
             agents_dir_is_file: true,
+            plist: false,
             launchctl: LaunchCtl::default(),
+        },
+        // The wave-5 uninstall port. Both legs read the loaded state through
+        // the same stub list, and the unload failure is the stub's nonzero
+        // exit.
+        Case {
+            label: "uninstall unloads and removes",
+            mode: Mode::Uninstall { unload_only: false },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl {
+                list: Some("sh.fno.pr-watcher"),
+                ..LaunchCtl::default()
+            },
+        },
+        Case {
+            label: "uninstall without a plist",
+            mode: Mode::Uninstall { unload_only: false },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: false,
+            launchctl: LaunchCtl::default(),
+        },
+        Case {
+            label: "uninstall when not loaded still removes",
+            mode: Mode::Uninstall { unload_only: false },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl::default(),
+        },
+        // The stub unload refuses; the removal proceeds anyway and the exit
+        // stays 0, matching the Python leg's best-effort unload.
+        Case {
+            label: "uninstall failure is best effort",
+            mode: Mode::Uninstall { unload_only: false },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl {
+                list: Some("sh.fno.pr-watcher"),
+                unload_rc: 7,
+                ..LaunchCtl::default()
+            },
+        },
+        Case {
+            label: "unload only reports unloaded",
+            mode: Mode::Uninstall { unload_only: true },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl {
+                list: Some("sh.fno.pr-watcher"),
+                ..LaunchCtl::default()
+            },
+        },
+        Case {
+            label: "unload only without a plist",
+            mode: Mode::Uninstall { unload_only: true },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: false,
+            launchctl: LaunchCtl::default(),
+        },
+        Case {
+            label: "unload only when already unloaded",
+            mode: Mode::Uninstall { unload_only: true },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl::default(),
+        },
+        Case {
+            label: "unload only reports unload failed",
+            mode: Mode::Uninstall { unload_only: true },
+            interval: 0,
+            model: false,
+            stdin: None,
+            legacy: false,
+            agents_dir_is_file: false,
+            plist: true,
+            launchctl: LaunchCtl {
+                list: Some("sh.fno.pr-watcher"),
+                unload_rc: 9,
+                ..LaunchCtl::default()
+            },
         },
     ]
 }
@@ -520,6 +650,7 @@ fn ensure_retires_the_legacy_plist_from_disk() {
         stdin: None,
         legacy: true,
         agents_dir_is_file: false,
+        plist: false,
         launchctl: LaunchCtl::default(),
     };
     let dir = write_case(tmp.path(), &case);
@@ -533,4 +664,113 @@ fn ensure_retires_the_legacy_plist_from_disk() {
     assert_eq!(golden.exit, Some(0));
     assert_eq!(golden.streams[0].trim(), "activated");
     assert!(!legacy.exists(), "legacy plist must be retired");
+}
+
+/// Full uninstall: the plist leaves disk and the watermark store survives, so
+/// a reinstall does not re-fire handled PRs.
+#[test]
+fn uninstall_removes_the_plist_from_disk() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let case = Case {
+        label: "uninstall disk check",
+        mode: Mode::Uninstall { unload_only: false },
+        interval: 0,
+        model: false,
+        stdin: None,
+        legacy: false,
+        agents_dir_is_file: false,
+        plist: true,
+        launchctl: LaunchCtl {
+            list: Some("sh.fno.pr-watcher"),
+            ..LaunchCtl::default()
+        },
+    };
+    let dir = write_case(tmp.path(), &case);
+    let plist = dir
+        .join("home")
+        .join("Library")
+        .join("LaunchAgents")
+        .join("sh.fno.pr-watcher.plist");
+    let store = dir.join("state").join("pr-watcher-state.json");
+    std::fs::write(&store, r#"{"handled":["some/repo#1"]}"#).unwrap();
+    assert!(plist.is_file());
+    let golden = rust_leg(&dir, &case);
+    assert_eq!(golden.exit, Some(0));
+    assert!(golden.streams[0].contains("Watermark store preserved"));
+    assert!(!plist.exists(), "the plist must leave disk");
+    assert_eq!(
+        std::fs::read_to_string(&store).unwrap(),
+        r#"{"handled":["some/repo#1"]}"#,
+        "the watermark store must survive"
+    );
+}
+
+/// The --unload-only coupling word: the agent unloads, the plist stays so the
+/// config forward can report without removing anything.
+#[test]
+fn unload_only_unloads_but_keeps_the_plist() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let case = Case {
+        label: "unload only disk check",
+        mode: Mode::Uninstall { unload_only: true },
+        interval: 0,
+        model: false,
+        stdin: None,
+        legacy: false,
+        agents_dir_is_file: false,
+        plist: true,
+        launchctl: LaunchCtl {
+            list: Some("sh.fno.pr-watcher"),
+            ..LaunchCtl::default()
+        },
+    };
+    let dir = write_case(tmp.path(), &case);
+    let plist = dir
+        .join("home")
+        .join("Library")
+        .join("LaunchAgents")
+        .join("sh.fno.pr-watcher.plist");
+    let golden = rust_leg(&dir, &case);
+    assert_eq!(golden.exit, Some(0));
+    assert_eq!(golden.streams[0].trim(), "unloaded");
+    assert!(plist.is_file(), "--unload-only keeps the plist on disk");
+}
+
+/// A removal that fails must not read as success: the Python unlink let the
+/// error propagate as a nonzero exit, so the port reports the failure and
+/// skips the Removed receipt instead of printing it unconditionally.
+#[test]
+fn uninstall_reports_a_failed_removal() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let case = Case {
+        label: "uninstall failed removal check",
+        mode: Mode::Uninstall { unload_only: false },
+        interval: 0,
+        model: false,
+        stdin: None,
+        legacy: false,
+        agents_dir_is_file: false,
+        plist: true,
+        launchctl: LaunchCtl {
+            list: Some("sh.fno.pr-watcher"),
+            ..LaunchCtl::default()
+        },
+    };
+    let dir = write_case(tmp.path(), &case);
+    let plist = dir
+        .join("home")
+        .join("Library")
+        .join("LaunchAgents")
+        .join("sh.fno.pr-watcher.plist");
+    // remove_file cannot remove a directory, which makes the failure
+    // deterministic on every platform the suite runs on.
+    std::fs::remove_file(&plist).unwrap();
+    std::fs::create_dir(&plist).unwrap();
+    let golden = rust_leg(&dir, &case);
+    assert_eq!(golden.exit, Some(1));
+    assert!(
+        !golden.streams[0].contains("Removed"),
+        "a failed removal must not print the Removed receipt"
+    );
+    assert!(plist.is_dir(), "the blocker must survive for diagnosis");
 }

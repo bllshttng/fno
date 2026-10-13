@@ -1839,7 +1839,6 @@ K10	cli/tests/unit/test_tracker_consumer_seam.py	py	7
 K10	cli/tests/unit/test_unknown_subcommand_exit.py	py	3
 K10	cli/tests/unit/test_user_display_name.py	py	6
 K10	cli/tests/unit/test_verification_receipts.py	py	50
-K10	cli/tests/unit/test_verify_advise.py	py	22
 K10	cli/tests/unit/test_whoami_agent_name.py	py	4
 K10	cli/tests/unit/test_whoami_context_line.py	py	4
 K10	cli/tests/unit/test_worker_external.py	py	14

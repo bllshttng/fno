@@ -623,5 +623,67 @@ mod tests {
             crate::mail_arm::interval_from_secs(Some(30)),
             std::time::Duration::from_secs(30)
         );
+        // The pull arm's retry contract: an injection that fails leaves the
+        // row in the pending pool, so a later pull still delivers it after a
+        // younger row did (the fetch re-selects every pending row each beat).
+        // The fake inject answers no remote call, and the seen ledger is
+        // absent under the temp home, so the loop never dials the store.
+        let bus_row = |seq: i64, id: &str| crate::mail_bus::BusRow {
+            seq,
+            msg_id: id.to_string(),
+            from_id: "s@h/s".into(),
+            to_name: "quill".into(),
+            payload: "hello".into(),
+            raw: false,
+            expire_at: 1_800_000_000,
+        };
+        let home = std::path::Path::new("/tmp/fno-mail-arm-retry-test");
+        let remote = Remote::parse("http://127.0.0.1:1", None).expect("parses");
+        let mut fail_older = |row: &crate::mail_bus::BusRow| row.msg_id != "older";
+        let rows = vec![bus_row(1, "older"), bus_row(2, "newer")];
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(&remote, rows, home, &mut fail_older),
+            1,
+            "the failed row does not count as delivered"
+        );
+        let mut deliver_all = |_row: &crate::mail_bus::BusRow| true;
+        let retried = vec![bus_row(1, "older")];
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(&remote, retried, home, &mut deliver_all),
+            1,
+            "the next beat delivers the row the earlier beat could not"
+        );
+        // The finality rule: the style door naming violations (with no
+        // exception declared) is the deterministic refusal; a clean receipt,
+        // an excepted body, and unparseable output read transient, so the
+        // row stays pending for the next beat.
+        assert!(crate::mail_arm::door_confirms_refusal(
+            br#"{"violations":[{"rule":3,"sentence_index":3}]}"#
+        ));
+        assert!(!crate::mail_arm::door_confirms_refusal(
+            br#"{"violations":[]}"#
+        ));
+        assert!(!crate::mail_arm::door_confirms_refusal(
+            br#"{"exception":"quoted word","violations":[{"rule":3}]}"#
+        ));
+        assert!(!crate::mail_arm::door_confirms_refusal(b"{}"));
+        assert!(!crate::mail_arm::door_confirms_refusal(b"not json"));
+        // The consult rides the front door's lint-style forwarding, with the
+        // configured mail word cap appended when one is set.
+        let argv = crate::mail_arm::style_door_argv(None);
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some("doctor"),
+            "the front door classifies the check name"
+        );
+        assert!(argv.contains(&"--stdin".to_string()));
+        assert!(argv.contains(&"--json".to_string()));
+        assert!(!argv.iter().any(|word| word == "--word-cap"));
+        let capped = crate::mail_arm::style_door_argv(Some(60));
+        let cap_at = capped
+            .iter()
+            .position(|word| word == "--word-cap")
+            .expect("cap flag");
+        assert_eq!(capped[cap_at + 1], "60");
     }
 }

@@ -64,6 +64,7 @@ fn arm_key_value(cwd: &Path, key: &str) -> String {
         "auto_heal.enabled" => crate::agents_config::auto_heal_enabled(cwd),
         "active_backlog.enabled" => crate::agents_config::active_backlog_enabled(cwd),
         "slot_cutover.enabled" => crate::agents_config::slot_cutover_enabled(cwd),
+        "telemetry.otlp.enabled" => crate::agents_config::otlp_export_enabled(cwd),
         _ => return "unreadable".to_string(),
     };
     if answered { "true" } else { "false" }.to_string()
@@ -310,6 +311,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         upstream: None,
         arm_key: Some("auto_heal.enabled"),
         reader: Some("fno do pr watch status"),
+    },
+    ArmSpec {
+        arm: "otlp_export",
+        default_interval_s: crate::otlp_export::OTLP_INTERVAL_S,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: Some("telemetry.otlp.enabled"),
+        reader: Some("fno agents feed --otlp"),
     },
 ];
 

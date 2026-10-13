@@ -694,8 +694,7 @@ def _refuse_codex_code_spawn_without_git_grant(args: Sequence[str]) -> None:
         return
     print(
         "fno agents spawn: Codex code payloads require a resolved git grant; "
-        f"cwd={cwd}; git rev-parse --path-format=absolute --git-common-dir "
-        "failed; no worker launched",
+        f"cwd={cwd}; git rev-parse --git-common-dir failed; no worker launched",
         file=sys.stderr,
     )
     raise SystemExit(2)

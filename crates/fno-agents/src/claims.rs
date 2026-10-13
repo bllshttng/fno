@@ -1474,8 +1474,10 @@ pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<Stri
 /// marker must not be laundered into a parent record for the life of the row.
 /// Within one family the DURABLE marker leads (`CODEX_THREAD_ID` over legacy
 /// `CODEX_SESSION_ID`), the winner's VALUE is the parent session id, not just
-/// its harness kind, and two ids of one family that DISAGREE attribute
-/// nothing - the same degrade Python's `_vendor_identity` applies.
+/// its harness kind. One measured exception,
+/// [`codex_thread_parent_edge_from`]: within an all-codex marker set the two
+/// ids legitimately differ and the thread id names this process, so a codex
+/// worker's own spawn names its parent instead of minting with no edge.
 pub fn ambient_parent_edge() -> (Option<String>, Option<String>, Option<String>) {
     ambient_parent_edge_from(|k| std::env::var(k).ok())
 }
@@ -1490,8 +1492,55 @@ pub fn ambient_parent_edge_from(
         .or_else(|| std::env::current_dir().ok())
         .map(|p| p.to_string_lossy().trim().to_string())
         .filter(|s| !s.is_empty());
-    let (session, harness) = resolve_identity_from(get);
+    let resolved = resolve_identity_from(&get);
+    let (session, harness) = if resolved.0.is_some() {
+        resolved
+    } else {
+        // The exception fires only where nothing contradicts it: over a
+        // canonical stamp that refused it would relaunder exactly the foreign
+        // marker the refusal exists for.
+        let (_, _, disposition) = canonical_identity_from(&get);
+        if disposition == CanonicalDisposition::Absent {
+            codex_thread_parent_edge_from(&get)
+                .map(|(session, harness)| (Some(session), Some(harness)))
+                .unwrap_or(resolved)
+        } else {
+            resolved
+        }
+    };
     (session, harness, cwd)
+}
+
+/// The measured codex thread shape behind the daemon's "spawn request carried
+/// no parent edge" mints: codex sets `CODEX_SESSION_ID` to the ROOT session
+/// and `CODEX_THREAD_ID` per thread, so an all-codex env legitimately carries
+/// two different ids and the thread id names this process - the same measured
+/// rule `resolve_owned_identity` (harness_identity.py) and the daemon-side
+/// `spawn_context` resolver apply to a proven codex family. Fires only when
+/// every present marker is codex; a marker of any other family keeps the full
+/// refusal (a foreign codex marker in a claude child is never laundered).
+fn codex_thread_parent_edge_from(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Option<(String, String)> {
+    let mut thread: Option<String> = None;
+    for (marker, harness) in HARNESS_SESSION_MARKERS
+        .iter()
+        .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
+    {
+        let Some(value) = get(marker)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        if *harness != "codex" {
+            return None;
+        }
+        if *marker == "CODEX_THREAD_ID" {
+            thread.get_or_insert(value);
+        }
+    }
+    thread.map(|session| (session, "codex".to_string()))
 }
 
 pub(crate) fn make_claim(key: &str, holder: &str, opts: &AcquireOpts) -> ClaimRecord {

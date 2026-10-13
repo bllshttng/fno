@@ -367,6 +367,12 @@ impl AgentsHome {
         self.root.join("otel")
     }
 
+    /// The OTLP exporter's own state: `state.json` (delivery memory) and
+    /// `receipts.jsonl` (one line per post attempt).
+    pub fn otlp_export_dir(&self) -> PathBuf {
+        self.root.join("otlp_export")
+    }
+
     /// Directory of terminal-stop markers. `finalize` drops one file
     /// per fire-and-forget `claude --bg` session whose loop reached a terminal
     /// decision; the daemon sweep consumes it to `claude stop` the parked

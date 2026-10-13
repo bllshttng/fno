@@ -1718,9 +1718,30 @@ def ensure_watcher_activated() -> str:
 
 def deactivate_watcher() -> str:
     """Unload the watcher (keep the plist) when pr_watch.enabled is set false."""
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    return m.unload_only(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # No binary, no deactivation leg. The caller's warning names the remedy
+        # and the config write stays enabled for doctor to flag.
+        return "unload-failed"
+    try:
+        proc = subprocess.run(
+            [str(binary), "pr-watch", "uninstall", "--unload-only"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # A wedged launchctl (a documented hang mode here) or an
+        # unexecutable binary degrades to the caller's loud warning.
+        return "unload-failed"
+    word = proc.stdout.strip()
+    known = {"not-installed", "already-unloaded", "unloaded", "unload-failed"}
+    return word if word in known else "unload-failed"
 
 
 # ---------------------------------------------------------------------------
@@ -1735,9 +1756,24 @@ def uninstall() -> None:
     Preserves ~/.fno/pr-watcher-state.json so a reinstall does not re-fire
     previously handled PRs.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    m.uninstall(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr watch uninstall: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    argv = [str(binary), "pr-watch", "uninstall"]
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 # ---------------------------------------------------------------------------

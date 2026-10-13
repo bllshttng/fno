@@ -36,7 +36,7 @@ from typing import Any, Callable, NoReturn, Optional, Tuple
 import typer
 
 from fno._subprocess_util import propagate_returncode, run_bounded
-from fno.paths import resolve_plugin_script
+from fno.paths import git_common_dir, resolve_plugin_script
 from fno.tombstones import tombstone_group_cls
 
 # Below the Claude Bash tool's 600s call cap, well below the 10+ minute stalls this bound targets.
@@ -661,6 +661,12 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
         f"  set_by: {hold.set_by}\n"
         f"  release_when: {hold.release_when}\n"
         f"  review_on: {hold.review_on}\n"
+        + (
+            f"  exempt: {hold.exempt}\n"
+            if hold.exempt
+            else ""
+        )
+        +
         "Remove dispatch_hold only after the release condition is confirmed. "
         "Nothing was claimed.",
         err=True,
@@ -2896,12 +2902,10 @@ def _codex_native_repo(cwd: Path) -> Optional[Path]:
         return None
     if not _is_linked_worktree(resolved):
         return None
-    common = _git_out(
-        resolved, "rev-parse", "--path-format=absolute", "--git-common-dir"
-    )
-    if not common:
+    common = git_common_dir(resolved)
+    if common is None:
         return None
-    common_dir = Path(common).resolve()
+    common_dir = common.resolve()
     if common_dir.name != ".git":
         return None
     canonical = common_dir.parent.resolve()

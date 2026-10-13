@@ -498,6 +498,26 @@ mod probe {
             })
         }));
         out.insert("slot_rows".into(), json!(slot_rows_json));
+        // Every answer names its occupancy, not only the accepted one: a
+        // refused spawn deserves the same fleet reading as an admitted one.
+        out.insert("slots".into(), json!(slots));
+        out.insert("max_live".into(), json!(cap));
+
+        // The test feed rides only when the payload asks, so gate-status and
+        // the leads pay nothing for it.
+        if payload
+            .get("tests")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            out.insert(
+                "tests".into(),
+                match crate::session_cost::test_stages(&home) {
+                    Ok(tests) => tests,
+                    Err(error) => json!({"error": error}),
+                },
+            );
+        }
 
         let mut ram_row: Option<Value> = None;
         let mut cpu_rows: Vec<Value> = Vec::new();
@@ -696,7 +716,6 @@ mod probe {
         out.insert("warnings".into(), json!(warnings));
         out.insert("lanes".into(), lanes.clone());
         out.insert("live_workers".into(), json!(slots));
-        out.insert("max_live".into(), json!(cap));
         out.insert("share".into(), share_json(&reading));
         if let Some(payload_adm) = &cpu {
             out.insert("share_low".into(), json!(payload_adm.share_low));
@@ -1385,6 +1404,25 @@ mod tests {
         assert_eq!(answer["live_workers"], 3, "slots stay rows + reservations");
         assert_eq!(answer["verdict"], "accepted");
         assert_ne!(answer["reason"], "fleet-stop");
+
+        // AC2-HP: the probe answers `tests` on request, and the occupancy
+        // pair rides every answer.
+        let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
+        assert_eq!(answer["slots"], 3, "{answer:?}");
+        assert_eq!(answer["max_live"], 28);
+        let tests = answer["tests"]
+            .as_object()
+            .expect("tests object on request");
+        assert!(tests.contains_key("sessions"), "{tests:?}");
+        assert!(tests.contains_key("running"), "{tests:?}");
+        assert!(tests.contains_key("queued"), "{tests:?}");
+        assert!(tests.contains_key("unattributed"), "{tests:?}");
+
+        // AC2-ERR: without the key nothing extra is read, no tests key
+        // appears, and the occupancy pair still rides.
+        let answer = probe::answer(&json!({"only": ["lanes"]}));
+        assert!(answer.get("tests").is_none(), "{answer:?}");
+        assert_eq!(answer["slots"], 3);
 
         std::env::remove_var(crate::paths::HOME_ENV);
         std::env::remove_var("FNO_CLAIMS_ROOT");

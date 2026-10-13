@@ -465,19 +465,6 @@ def resolve_reviewers(
     return out
 
 
-def harness_can_self_review(harness: Optional[str]) -> bool:
-    """Whether this harness can run the review this machinery recommends.
-
-    The recommendation is the fno-owned review lane, which runs as ordinary
-    tool calls wherever the plugin runs, so every harness qualifies and the
-    answer is True unconditionally. The native per-harness verbs this used to
-    gate on remain the operator's explicit choice; no machinery depends on
-    them anymore, which is the point of owning the reviewer. Kept as a
-    function rather than inlined at the call sites so the question stays
-    nameable the day a harness appears without a skill mechanism."""
-    return True
-
-
 # The effort levels an autonomous agent may issue. `ultra` is billed
 # separately, so it is not merely discouraged here - it is absent from the
 # tuple, which makes `self_review_invocation` raise on it and `level_for_diff`

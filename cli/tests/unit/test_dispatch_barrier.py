@@ -99,7 +99,9 @@ def test_allowed_codex_panes_deduplicate_simultaneous_callers(monkeypatch, tmp_p
 
     assert [item["verdict"] for item in verdicts].count("dispatchable") == 1
     loser = next(item for item in verdicts if item["verdict"] != "dispatchable")
-    assert loser == {"verdict": "already-running", "reason": "reservation-held"}
+    assert loser["reason"] == "reservation-held"
+    assert loser["holder"] in ("A", "B")
+    assert "remedy" not in loser
 
 
 def test_barrier_catches_peer_after_acquire(monkeypatch, tmp_path):
@@ -243,8 +245,63 @@ def test_a_live_spawners_reservation_is_benign_dedup_with_no_remedy(
     verdict, exit_code = _spawn_guard_decision(
         "N", "spawn-cli:me", ttl="3m", handover_holder="spawn-handover:t-N"
     )
-    assert verdict == {"verdict": "already-running", "reason": "reservation-held"}
+    assert verdict == {
+        "verdict": "already-running",
+        "reason": "reservation-held",
+        "holder": "spawn-cli:other",
+    }
     assert exit_code == 0
+
+
+def test_an_acquire_that_raises_after_writing_hands_back_its_reservation(
+    monkeypatch, tmp_path
+):
+    """AC1-HP: the acquire wrote dispatch:N and then raised. Exit 3 must hand
+    the row back, or the retry refuses as already-running for the whole TTL
+    with nothing launched."""
+    _route_to(monkeypatch, tmp_path)
+    from fno.claims import core as claims_core
+
+    original_acquire = claims_core.acquire_claim
+
+    def raising_acquire(key, *args, **kwargs):
+        written = original_acquire(key, *args, **kwargs)
+        if key == "dispatch:N":
+            raise RuntimeError("events schema not found")
+        return written
+
+    monkeypatch.setattr(claims_core, "acquire_claim", raising_acquire)
+
+    verdict, exit_code = _spawn_guard_decision(
+        "N", "spawn-cli:me", ttl="3m", handover_holder="spawn-handover:t-N"
+    )
+    assert verdict["verdict"] == "error"
+    assert exit_code == 3
+    assert claims_core.claim_status("dispatch:N", root=tmp_path)["state"] == "free"
+
+
+def test_a_claim_store_error_is_an_error_not_a_held_reservation(
+    monkeypatch, tmp_path
+):
+    """AC2-ERR: CLAIM_UNAVAILABLE also catches ClaimVerdictError, so a
+    transient native exit used to answer reservation-held with no holder.
+    With nobody on disk the verdict is an error, never a held reservation."""
+    _route_to(monkeypatch, tmp_path)
+    from fno.claims import core as claims_core
+
+    def store_error(key, *args, **kwargs):
+        raise claims_core.ClaimVerdictError(
+            "fno-agents claim acquire failed: transient error: x"
+        )
+
+    monkeypatch.setattr(claims_core, "acquire_claim", store_error)
+
+    verdict, exit_code = _spawn_guard_decision(
+        "N", "spawn-cli:me", ttl="3m", handover_holder="spawn-handover:t-N"
+    )
+    assert verdict["verdict"] == "error"
+    assert exit_code == 3
+    assert verdict.get("reason") != "reservation-held"
 
 
 def test_an_abandoned_node_claim_is_cleared_and_the_node_dispatches(
@@ -822,6 +879,27 @@ def test_a_resume_route_without_a_provider_never_took_the_reservation(
             "spawn", "--name", "w1", "/fix hi",
             "--harness", "claude", "--substrate", "thread",
             "--node", "x-abcd", "--resume", "11111111-2222-3333-4444-555555555555",
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert guard_calls == []
+    assert claim_status("dispatch:x-abcd", root=tmp_path)["state"] == "free"
+
+
+def test_a_bad_wait_value_exits_before_the_reservation(monkeypatch, tmp_path):
+    """AC3-HP: the --wait parse refuses before the node guard runs, so a
+    typo in --wait cannot hold dispatch:<id> for its TTL."""
+    _spawn_env(monkeypatch, tmp_path)
+    from fno.claims.core import claim_status
+
+    guard_calls = _spy_guard(monkeypatch)
+
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn", "--name", "w1", "/fix hi",
+            "--harness", "claude", "--substrate", "thread",
+            "--node", "x-abcd", "--wait", "bogus",
         ],
     )
     assert result.exit_code == 2, result.output

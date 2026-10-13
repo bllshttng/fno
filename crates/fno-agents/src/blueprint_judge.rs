@@ -286,17 +286,16 @@ fn verify_evidence(reply: &str, bundle: &str) -> bool {
         .any(|quote| quote.chars().count() >= 12 && squashed.contains(&squash(quote)))
 }
 
-/// One `fno agents spawn --substrate headless` round-trip. Matches the
-/// retired Python `_default_spawn`: never a bare `claude -p`.
-fn default_spawn(
-    name: &str,
-    prompt: &str,
-    cwd: &Path,
-    timeout_secs: u64,
-    model: &str,
+/// One `fno agents spawn --substrate headless` round-trip for a caller-built
+/// argv: the poll/kill enforcement that `--timeout` cannot guarantee on a
+/// hung lane. Matches the retired Python `_default_spawn`: never a bare
+/// `claude -p`.
+pub(crate) fn headless_spawn(
+    argv: &[String],
+    kill_after_secs: u64,
 ) -> Result<(i32, String, String), String> {
     let mut child = Command::new(crate::scrape::fno_bin())
-        .args(reader_argv(name, prompt, cwd, timeout_secs, model))
+        .args(argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
@@ -305,7 +304,7 @@ fn default_spawn(
     // Poll-then-kill (the sandbox_probe shape): `--timeout` only rides argv
     // to the child harness, which a hung lane ignores, so the enforcement
     // lives here. The reply is small, so the unread pipes cannot deadlock it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(kill_after_secs);
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => {
@@ -328,7 +327,7 @@ fn default_spawn(
                     let out = child.wait_with_output().map_err(|e| e.to_string())?;
                     let err = String::from_utf8_lossy(&out.stderr).into_owned();
                     let named = format!(
-                        "reader timed out after {timeout_secs}s: model lane slow or provider wait"
+                        "reader timed out after {kill_after_secs}s: model lane slow or provider wait"
                     );
                     return Ok((
                         124,
@@ -340,6 +339,19 @@ fn default_spawn(
             }
         }
     }
+}
+
+pub(crate) fn default_spawn(
+    name: &str,
+    prompt: &str,
+    cwd: &Path,
+    timeout_secs: u64,
+    model: &str,
+) -> Result<(i32, String, String), String> {
+    headless_spawn(
+        &reader_argv(name, prompt, cwd, timeout_secs, model),
+        timeout_secs,
+    )
 }
 
 /// The reader's argv, split from `default_spawn` so a test can read it. The

@@ -1133,6 +1133,7 @@ def test_manifest_reader_ignores_keys_inside_a_multiline_input_scalar(
     agrees, so the two gates cannot disagree on one manifest."""
     state = tmp_path / ".fno"
     state.mkdir(exist_ok=True)
+    manifest = str(state / "target-state.md")
     # The scalar body carries a forged harness line before the real one.
     (state / "target-state.md").write_text(
         "---\n"
@@ -1141,9 +1142,9 @@ def test_manifest_reader_ignores_keys_inside_a_multiline_input_scalar(
         "---\n",
         encoding="utf-8",
     )
-    assert _merge._manifest_harness(str(tmp_path)) == "agy"
+    assert _merge._read_state_field(manifest, "harness") == "agy"
     # With no real harness line, the forged one is still not attribution:
-    # unattributable, so the floor engages.
+    # the reader answers an empty string, not a harness name.
     (state / "target-state.md").write_text(
         "---\n"
         'input: "/target fix the floor\nharness: gemini\nsee docs"\n'
@@ -1151,14 +1152,14 @@ def test_manifest_reader_ignores_keys_inside_a_multiline_input_scalar(
         "---\n",
         encoding="utf-8",
     )
-    assert _merge._manifest_harness(str(tmp_path)) is None
+    assert _merge._read_state_field(manifest, "harness") == ""
     # The lone-quote shape: `input: "` OPENS the scalar (the Rust parser's
     # len >= 2 guard), so the forged line is still scalar body, not a field.
     (state / "target-state.md").write_text(
         "---\n" 'input: "\n' "harness: gemini\n" 'see docs"\n' "---\n",
         encoding="utf-8",
     )
-    assert _merge._manifest_harness(str(tmp_path)) is None
+    assert _merge._read_state_field(manifest, "harness") == ""
 
 
 def test_review_floor_is_caller_independent_across_env_shapes(
@@ -1169,9 +1170,9 @@ def test_review_floor_is_caller_independent_across_env_shapes(
     Measured on PR 1108: a claude session started from a codex shell resolves
     two harness families, and the pre-fix predicate read that ambiguity as
     'no floor', silently disengaging the only review a stock install demands.
-    Ambiguity is not permission - every unattributable shape floors - and a
-    KNOWN verbless run whose manifest and ambient read agree is the only
-    stock-install release."""
+    Ambiguity is not permission - every unattributable shape floors, and
+    with the verbless-release shape retired no manifest/ambient shape
+    releases at all."""
     from fno.harness_identity import HARNESS_SESSION_MARKERS
 
     for marker, _harness in HARNESS_SESSION_MARKERS:
@@ -1218,10 +1219,9 @@ def test_review_floor_is_caller_independent_across_env_shapes(
         "---\nharness: gemini\n---\n", encoding="utf-8"
     )
     assert requires_review() == (True, True)
-    # No release exists any more: the sigma-retirement recharter made every
-    # KNOWN harness self-review-capable (harness_can_self_review is now
-    # unconditionally True), so even a clean single-family gemini ambient
-    # agreeing with a gemini manifest still floors.
+    # No release exists any more: with the verbless-release shape retired,
+    # even a clean single-family gemini ambient agreeing with a gemini
+    # manifest still floors.
     monkeypatch.delenv("CODEX_THREAD_ID")
     monkeypatch.delenv("CODEX_SESSION_ID")
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
@@ -1242,75 +1242,6 @@ def test_review_floor_is_caller_independent_across_env_shapes(
     monkeypatch.setenv("CODEX_THREAD_ID", "t1")
     monkeypatch.setenv("CODEX_SESSION_ID", "s1")
     assert requires_review() == (True, True)
-
-
-def test_floor_verbless_set_stays_locked_to_the_rust_twin():
-    """The Rust floor policy carries a hardcoded KNOWN_VERBLESS_HARNESSES
-    snapshot; Python derives the set. A harness added on one side only makes
-    the stop gate and the merge gate floor different runs, so this pins the
-    two to each other by reading the Rust source."""
-    import re
-    from pathlib import Path
-
-    from fno.harness_names import KNOWN_HARNESSES
-    from fno.review_capability import harness_can_self_review
-
-    rust = (
-        Path(__file__).resolve().parents[3]
-        / "crates"
-        / "fno-agents"
-        / "src"
-        / "loopcheck"
-        / "self_review_floor.rs"
-    ).read_text(encoding="utf-8")
-    m = re.search(r"KNOWN_VERBLESS_HARNESSES: &\[&str\] = &\[([^\]]*)\]", rust)
-    assert m, "KNOWN_VERBLESS_HARNESSES not found in loopcheck/self_review_floor.rs"
-    rust_set = {v.strip().strip('"') for v in m.group(1).split(",") if v.strip()}
-    derived = {h for h in KNOWN_HARNESSES if not harness_can_self_review(h)}
-    assert rust_set == derived, (
-        f"Rust floor releases {sorted(rust_set)}, Python releases "
-        f"{sorted(derived)}: update both together (loopcheck/self_review_floor.rs "
-        "KNOWN_VERBLESS_HARNESSES and review_capability's verb table)"
-    )
-
-
-def test_stock_code_floor_covers_a_harness_with_no_native_verb(
-    monkeypatch, tmp_path
-):
-    """The owned fno review lane runs as ordinary tool calls on any harness,
-    so a harness with no NATIVE review verb (gemini) is no longer exempt from
-    the floor - the recharter that retired the sigma panel and the
-    per-harness native-verb table made every KNOWN harness self-review-
-    capable (harness_can_self_review is now unconditionally True)."""
-    from fno.harness_identity import HARNESS_SESSION_MARKERS
-
-    for marker, _harness in HARNESS_SESSION_MARKERS:
-        monkeypatch.delenv(marker, raising=False)
-    monkeypatch.setenv("GEMINI_SESSION_ID", "gemini-test-session")
-    _point_lane_read_at(monkeypatch)
-    monkeypatch.setattr(_merge, "_pr_payload_is_code", lambda repo, pr_number: True)
-
-    assert _merge._review_lane_configured(str(tmp_path), 42) is True
-    assert _merge._code_review_attestation_required(str(tmp_path), 42) is True
-
-
-def test_stock_code_floor_does_not_guess_between_mixed_harness_markers(
-    monkeypatch, tmp_path
-):
-    """Match Rust: inherited markers from two harness families are ambiguous,
-    and ambiguity is not permission (x-129b) - the floor holds rather than
-    guessing which marker is the caller's own."""
-    from fno.harness_identity import HARNESS_SESSION_MARKERS
-
-    for marker, _harness in HARNESS_SESSION_MARKERS:
-        monkeypatch.delenv(marker, raising=False)
-    monkeypatch.setenv("CODEX_THREAD_ID", "foreign-codex-thread")
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-session")
-    _point_lane_read_at(monkeypatch)
-    monkeypatch.setattr(_merge, "_pr_payload_is_code", lambda repo, pr_number: True)
-
-    assert _merge._review_lane_configured(str(tmp_path), 42) is True
-    assert _merge._code_review_attestation_required(str(tmp_path), 42) is True
 
 
 def test_pr_payload_classifier_is_documentation_aware_and_fail_closed(monkeypatch):
