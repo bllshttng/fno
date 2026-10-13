@@ -51,7 +51,7 @@ fn unmeasurable(check: bool, reason: &str) -> i32 {
     }
 }
 
-fn str_field(entry: &Value, key: &str) -> &str {
+fn str_field<'a>(entry: &'a Value, key: &str) -> &'a str {
     entry.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
@@ -209,8 +209,7 @@ fn raw_send(
         );
     }
 
-    let home = AgentsHome::from_env();
-    let registry = home.shared_registry_json();
+    let registry = AgentsHome::shared_registry_json();
     let lookup_name = if self_ok {
         // --to-self resolves the ambient identity to its registry handle;
         // with no ambient identity the name passes through and the registry
@@ -309,7 +308,9 @@ fn raw_send(
         invocation_id = Some(minted);
     }
 
-    let entry_mux = entry.get("mux").and_then(Value::as_bool).unwrap_or(false);
+    // MuxRef serializes as an object ({session, pane_id}); serde defaults
+    // admit any object, and a bool never occurs on a real row.
+    let entry_mux = entry.get("mux").is_some_and(Value::is_object);
     if entry_mux && !session_id.is_empty() && str_field(&entry, "harness") == "codex" {
         let (verdict, reason, pane) = lane_heal(&session_id);
         let (action, detail) =
@@ -845,11 +846,11 @@ fn enforce_body_cap(stripped: &str, usage: bool) -> Option<i32> {
         return None;
     }
     let size = stripped.len();
-    if refuse > 0 && size > refuse {
+    if refuse > 0 && size > refuse as usize {
         eprintln!("error: mail body is {size} bytes (cap {refuse}). Relay mail is re-read every turn; put the detail in a node or doc and send a short pointer. Disable with FNO_MAIL_BODY_REFUSE=0 (warn-only) or both knobs 0.");
         return Some(if usage { 2 } else { 1 });
     }
-    if warn > 0 && size > warn {
+    if warn > 0 && size > warn as usize {
         eprintln!("note: mail body is {size} bytes (over the {warn}-byte brevity guide); prefer a short pointer with the detail in a node/doc.");
     }
     None
