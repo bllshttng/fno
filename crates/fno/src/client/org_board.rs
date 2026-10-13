@@ -1021,10 +1021,6 @@ pub(crate) async fn mouse(
         let index = if b.mode == OrgMode::Graph {
             let body_h = height.saturating_sub(1);
             let graph = b.refresh_graph(width, body_h);
-            let sel = b
-                .mode_rows(width, body_h)
-                .get(b.cursor)
-                .map(|r| r.key.clone());
             let x = rep.col as usize;
             let y = (rep.row as usize).saturating_sub(1);
             let Some(key) = super::org_graph::hit_test(&graph, width, body_h, x, y) else {
