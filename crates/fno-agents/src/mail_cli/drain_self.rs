@@ -5,7 +5,8 @@
 //! bodies render and flush BEFORE any cursor advances, so a crash re-surfaces
 //! the message next SessionStart (a harmless repeat), never a loss. No harness
 //! identity in env is a silent no-op (`[]` under `--json`), never an error, so
-//! the hook is safe on any surface; every path exits 0.
+//! the hook is safe on any surface. A failed stdout delivery exits 1 before
+//! any cursor advances, so the never-a-loss invariant holds on that path too.
 //!
 //! Two documented divergences from the Python leg, both output-only:
 //! - The ambiguous-identity case prints one fixed sentence instead of the
@@ -156,11 +157,21 @@ pub fn run_drain_self(args: &[String]) -> i32 {
             );
         }
     }
+    // Delivery gates the ack: a failed write or flush leaves every cursor
+    // where it is, so the mail re-surfaces next SessionStart. The Python leg
+    // got this from its unguarded flush raising BrokenPipeError before
+    // advance; exit 1 mirrors that crash exit.
+    let mut delivered = true;
     if !out.is_empty() {
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        let _ = lock.write_all(out.as_bytes());
-        let _ = lock.flush();
+        delivered = lock.write_all(out.as_bytes()).is_ok() && lock.flush().is_ok();
+    }
+    if !delivered {
+        eprintln!(
+            "error: drain-self: stdout write failed; leaving the cursor so the mail re-surfaces"
+        );
+        return 1;
     }
 
     // Inject-before-ack: advance the cursor to the last drained id only after

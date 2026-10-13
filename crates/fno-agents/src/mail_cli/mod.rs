@@ -26,7 +26,7 @@ pub fn run(rest: &[String]) -> i32 {
 }
 
 fn print_help() {
-    println!("fno-agents mail - the do-not-disturb (DND) hold for agent mail");
+    println!("fno-agents mail - the do-not-disturb (DND) hold and drain-self for agent mail");
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
