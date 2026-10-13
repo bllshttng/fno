@@ -549,8 +549,9 @@ impl View {
                                     .map(agent_lattice_state),
                             );
                             Some((
-                                header_band_text(
+                                super::header_band::header_band_hinted(
                                     &format!("{caret}{mark}{}", squad.name),
+                                    &super::header_band::folder_hint(&squad.canonical_cwd),
                                     &rollup,
                                     band_w,
                                 ),
