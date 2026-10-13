@@ -66,6 +66,14 @@ pub(crate) fn push_line(line: &str, slug: &str, remote: &Remote) -> Result<(), S
             if needs_stamp {
                 data.insert("repo".to_string(), json!(slug));
             }
+            // The writing machine id: a primary row is a review some machine
+            // wrote, and the gate's coverage listing names which. A row
+            // already carrying one keeps its original writer (a peer
+            // re-pushing a pulled line never claims it).
+            let machine = crate::claims::machine_id();
+            if !machine.is_empty() && !data.contains_key("attest_machine") {
+                data.insert("attest_machine".to_string(), json!(machine));
+            }
         }
     }
     let payload_hash = blake3::hash(envelope.to_string().as_bytes())
@@ -88,13 +96,20 @@ pub(crate) fn push_line(line: &str, slug: &str, remote: &Remote) -> Result<(), S
 
 /// This repo's attestation rows on the primary, envelope lines oldest
 /// first. The caller dedups against the local journals (the same row can
-/// live in both when this machine did the review).
+/// live in both when this machine did the review). No `ensure_table` here:
+/// a primary that never saw a push has no table, and a missing table is NO
+/// ROWS, not an outage - the SELECT answers `no such table` and the read
+/// degrades to machine-local coverage. (Creating the table on read would
+/// make every gate read a schema write on the shared store.)
 pub(crate) fn pull_lines(slug: &str, remote: &Remote) -> Result<Vec<String>, String> {
-    ensure_table(remote)?;
-    let reply = remote.execute(
+    let reply = match remote.execute(
         &format!("SELECT envelope FROM {TABLE} WHERE repo = ? ORDER BY ts, rowid"),
         &[SqlValue::Text(slug.to_string())],
-    )?;
+    ) {
+        Ok(reply) => reply,
+        Err(e) if e.contains("no such table") => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
     Ok(reply
         .rows
         .iter()
@@ -245,6 +260,67 @@ mod tests {
             "data": {"reviewer": reviewer, "head_sha": head, "verdict": "pass"},
         })
         .to_string()
+    }
+
+    #[test]
+    fn the_push_stamps_the_writing_machine_id() {
+        let primary = test_primary::start();
+        push_line(
+            &line("2026-10-13T09:00:00Z", "code-review", "abc123"),
+            "github.com/o/r",
+            &primary.remote,
+        )
+        .unwrap();
+        let rows = pull_lines("github.com/o/r", &primary.remote).unwrap();
+        let val: Value = serde_json::from_str(&rows[0]).unwrap();
+        // The stamp equals THIS machine's id, whatever the host answers: an
+        // unreadable host id is unknown, not a wrong stamp.
+        let machine = crate::claims::machine_id();
+        assert_eq!(
+            val.pointer("/data/attest_machine").and_then(Value::as_str),
+            if machine.is_empty() {
+                None
+            } else {
+                Some(machine.as_str())
+            },
+        );
+    }
+
+    #[test]
+    fn a_row_already_carrying_a_machine_keeps_its_writer() {
+        let primary = test_primary::start();
+        let mut val: Value =
+            serde_json::from_str(&line("2026-10-13T09:00:00Z", "peer", "bbb")).unwrap();
+        val["data"]["attest_machine"] = json!("foreign-machine");
+        push_line(&val.to_string(), "github.com/o/r", &primary.remote).unwrap();
+        let rows = pull_lines("github.com/o/r", &primary.remote).unwrap();
+        let val: Value = serde_json::from_str(&rows[0]).unwrap();
+        assert_eq!(
+            val.pointer("/data/attest_machine").and_then(Value::as_str),
+            Some("foreign-machine")
+        );
+    }
+
+    #[test]
+    fn a_pull_from_a_tableless_primary_reads_as_no_rows() {
+        let primary = test_primary::start();
+        assert_eq!(
+            pull_lines("github.com/o/r", &primary.remote).unwrap().len(),
+            0
+        );
+        // Ruling three's full shape: the read answered "no rows" without
+        // creating the table it read. A gate read on the shared store stays
+        // a read.
+        assert!(primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE name = 'review_attestation'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .is_err());
     }
 
     #[test]

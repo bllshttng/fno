@@ -21,6 +21,17 @@ PRIMARY_URL="${PRIMARY_URL:-http://127.0.0.1:18080}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# One read-only probe of the primary's schema, through the same Hrana
+# pipeline the carrier writes through. Ruling three's observable half: a
+# gate read on a primary that never saw a push answers "no rows" and
+# creates nothing, so the probe names what the pull must not have built.
+schema_probe() {
+    curl -fsS -X POST "$PRIMARY_URL/v2/pipeline" -H 'Content-Type: application/json' \
+        -d @- <<'JSON'
+{"requests":[{"type":"execute","stmt":{"sql":"SELECT name FROM sqlite_master WHERE type = 'table'"}}]}
+JSON
+}
+
 # Two simulated machines: fresh HOMEs, each pointing at the throwaway
 # primary. One checkout stands in for the repo on both machines: same repo,
 # same slug, two local stores.
@@ -34,6 +45,23 @@ done
 
 journal_a="$HOME_A/.fno/spaces/proof/events.jsonl"
 journal_b="$HOME_B/.fno/spaces/proof/events.jsonl"
+
+# Ruling three, end to end: on a fresh primary no push has ever run, so no
+# table exists. B's pull for a repo that never pushed must answer "no rows"
+# (exit 0, empty), never an outage, and must not create the table either.
+# The unit test pins the same no-creation on the Hrana double; this probe
+# pins it on the real sqld.
+no_rows=$(env HOME="$HOME_B" "$FNO_AGENTS_BIN" attest pull --repo github.com/o/never-pushed) \
+    || fail "a pull from a tableless primary must read as no rows (exit 0), not an outage"
+[ -z "$no_rows" ] || fail "the tableless pull answered rows: $no_rows"
+tables=$(schema_probe)
+echo "$tables" | grep -F review_attestation >/dev/null \
+    && fail "the tableless pull created the table it read: $tables"
+echo "PASS: a pull from a tableless primary reads no rows and creates nothing"
+
+# Machine A: commit a head-pinned attestation through the real emit door.
+# The commit hook does the mirroring; the script never calls the carrier
+# for the write, so the proof exercises the producer path end to end.
 
 # Machine A: commit a head-pinned attestation through the real emit door.
 # The commit hook does the mirroring; the script never calls the carrier
@@ -60,6 +88,12 @@ echo "$row" | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
     || fail "the primary does not hold A's attestation; pull answered: $row"
 echo "PASS: the primary holds A's attestation"
 
+# Ruling one: the push stamps the writing machine id into the row, so a
+# coverage listing can name which machine's review a row carries.
+echo "$row" | grep -F '"attest_machine":"' >/dev/null \
+    || fail "A's pushed row carries no writing-machine stamp; pull answered: $row"
+echo "PASS: the pushed row names its writing machine"
+
 # Machine B's gate read: B's journals are empty, so the row can only come
 # from the primary segment. This is the exact read (native rows verb,
 # review_attestation types) the Python merge gate consults through
@@ -75,7 +109,9 @@ rows_b=$(FNO_ATTEST_DEBUG=1 env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
 # strip the backslashes before matching the raw substring.
 echo "$rows_b" | tr -d '\\' | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
     || fail "machine B's gate read stayed machine-local (rows.err: $(cat "$HOME_B/rows.err")); rows answered: $rows_b"
-echo "PASS: machine B's gate read sees A's review"
+echo "$rows_b" | tr -d '\\' | grep -F '"attest_machine":"' >/dev/null \
+    || fail "machine B's gate read lost the writing-machine stamp; rows answered: $rows_b"
+echo "PASS: machine B's gate read sees A's review, stamped with A's machine"
 
 # A's own read answers ONE copy: the journal original plus the primary
 # mirror dedup to a single row, by the ts+data-minus-repo key.
@@ -88,4 +124,4 @@ if [ "$count" -ne 1 ]; then
 fi
 echo "PASS: A's read dedups its own row against the primary copy"
 
-echo "two-machine attestation proof: 4/4 checks passed"
+echo "two-machine attestation proof: 6/6 checks passed"
