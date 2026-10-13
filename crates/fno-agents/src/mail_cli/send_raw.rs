@@ -562,7 +562,9 @@ fn raw_send(
         "mail_send_raw"
     };
     emit_review_sent(
-        events_path_for(str_field(&entry, "cwd")),
+        // str_field yields "" for a missing cwd, and events_path_for treats an
+        // empty dir exactly like None (current-dir fallback), so Some is lossless.
+        events_path_for(Some(str_field(&entry, "cwd"))),
         review.as_ref(),
         invocation_id.as_deref(),
         transport,

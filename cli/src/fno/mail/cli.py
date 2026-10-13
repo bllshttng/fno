@@ -2973,6 +2973,12 @@ def cmd_send(
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
+        if name is None:
+            print(
+                "error: --raw needs a target (the agent name or session id to type at)",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
         if message is None:
             print("error: --raw needs a payload (the text to type)", file=sys.stderr)
             raise typer.Exit(code=2)
