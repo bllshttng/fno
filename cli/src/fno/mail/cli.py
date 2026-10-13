@@ -1315,27 +1315,6 @@ def cmd_status(
     typer.echo(f"sent unclaimed: {snapshot['sent_unclaimed']}")
 
 
-@mail_app.command("seed-provenance", hidden=True)
-def cmd_seed_provenance() -> None:
-    """Render this session's spawn-seed provenance envelope on stdout.
-
-    Reads the ``FNO_SEED_PROV_*`` fields the launcher exported and renders them
-    through the sole ``<fno_mail>`` renderer. Called by
-    ``hooks/spawn-seed-provenance-session-start.sh``, which owns the
-    ``source=startup`` gate and the hook JSON.
-
-    Exit 1 with no output when there is nothing to attribute: a hand-started
-    session, an operator spawn, or an unusable sidecar. The hook stays silent on
-    that, because a session with no peer sender has nothing to attribute.
-    """
-    from fno.mail.seed_provenance import render_from_env
-
-    rendered = render_from_env()
-    if rendered is None:
-        raise typer.Exit(code=1)
-    print(rendered)
-
-
 @mail_app.command("pane-prepare", hidden=True)
 def cmd_pane_prepare(
     session: Optional[str] = typer.Option(
@@ -4390,9 +4369,9 @@ def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
-    from fno.rust_binary import resolve_binary
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    binary = resolve_binary()
+    binary = find_dev_binary() or resolve_binary()
     if binary is None:
         typer.echo(
             f"{label}: the fno-agents binary was not found. "
@@ -4477,6 +4456,49 @@ def cmd_hold_release(
 
 mail_app.command("hold")(cmd_hold)
 mail_app.command("hold-release", hidden=True)(cmd_hold_release)
+
+
+def cmd_seed_provenance_front() -> None:
+    """Forward the hidden seed-provenance verb to the bundled fno-agents binary.
+
+    The render body lives in the Rust mail front now; Python owns transport
+    only, the same split as the hold forward. The launcher
+    (hooks/spawn-seed-provenance-session-start.sh) exports the FNO_SEED_PROV_*
+    sidecar, which owns the source=startup gate and the hook JSON.
+
+    Exit 1 with no output when there is nothing to attribute: a hand-started
+    session, an operator spawn, or an unusable sidecar. The hook stays silent
+    on that, because a session with no peer sender has nothing to attribute.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail seed-provenance: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    result = subprocess.run(
+        [str(binary), "mail", "seed-provenance"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+mail_app.command("seed-provenance", hidden=True)(cmd_seed_provenance_front)
 
 
 @mail_app.command("drain-self", hidden=True)
