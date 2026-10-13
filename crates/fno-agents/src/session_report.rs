@@ -1110,7 +1110,8 @@ mod tests {
         assert_eq!(rows[0].substrate, None);
         // No birth event: the user's session is not an agent birth. The mint
         // says so through session_report_stored's minted field instead.
-        let births: Vec<&Value> = journal_events(&home)
+        let journal = journal_events(&home);
+        let births: Vec<&Value> = journal
             .iter()
             .filter(|v| v["type"] == "agent_spawned")
             .collect();
@@ -1164,7 +1165,8 @@ mod tests {
         assert_eq!(rows[0].spawned_by_session.as_deref(), Some("lead-7"));
         assert_eq!(rows[0].substrate.as_deref(), Some("thread"));
         assert_eq!(rows[0].status, AgentStatus::Live);
-        let births: Vec<&Value> = journal_events(&home)
+        let journal = journal_events(&home);
+        let births: Vec<&Value> = journal
             .iter()
             .filter(|v| v["type"] == "agent_spawned")
             .collect();
