@@ -152,7 +152,8 @@ def test_a_closed_worker_is_named_over_an_unresolved_roster(cwd_tmp, stub_roster
         [_stub_row("bp-x", "done",
                    _plant_worktree(cwd_tmp, "ac1-node"), sid="bp-x")]
         + [_stub_row("t-lost-%d" % i, "working",
-                     str(cwd_tmp / "nowhere-%d" % i), sid="sess-lost-%d" % i)
+                     str(cwd_tmp / ("nowhere-%d" % i)),
+                     sid="sess-lost-%d" % i)
            for i in range(37)]
     )
     r = runner.invoke(cli, ["status", "node:ac1-node", "--json"])
