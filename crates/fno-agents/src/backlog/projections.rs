@@ -134,6 +134,13 @@ impl Board {
         }
     }
 
+    /// The read model's effective priorities. Demand reads these (the fold
+    /// Python's `make_effective_priority` served); the column is never an
+    /// input, so no read can reorder the board on its own.
+    pub(crate) fn effective(&self) -> &BTreeMap<String, String> {
+        &self.effective
+    }
+
     pub(crate) fn column(&self, e: &Value) -> Option<&'static str> {
         kanban_column(
             e,

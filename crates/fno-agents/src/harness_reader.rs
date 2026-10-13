@@ -852,6 +852,30 @@ pub fn wait_for_ci_cell(harness: &str) -> (&'static str, String) {
     }
 }
 
+/// The route flags the probe spawn carries. `--provider` is a claude-only
+/// route. footnote and opencode read the provider from their own model id,
+/// spelled `provider/model`. Every other harness takes the model as given.
+pub fn probe_route_args(harness: &str, provider: Option<&str>, model: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    let prefixed = matches!(harness, "footnote" | "opencode");
+    let model = match (provider, model) {
+        (Some(provider), model) if harness == "claude" => {
+            args.extend(["--provider".to_string(), provider.to_string()]);
+            model.map(str::to_string)
+        }
+        (Some(provider), Some(model))
+            if prefixed && !model.starts_with(&format!("{provider}/")) =>
+        {
+            Some(format!("{provider}/{model}"))
+        }
+        (_, model) => model.map(str::to_string),
+    };
+    if let Some(model) = model {
+        args.extend(["--model".to_string(), model]);
+    }
+    args
+}
+
 /// The live rubric against one harness, inside `root`. Every subprocess runs
 /// with the isolated env; nothing the run mints can reach the real fleet.
 fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, IsolationFacts) {
@@ -864,9 +888,9 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     let seed = probe_seed(&nonce, &name, &claim_key);
     let mut lines: Vec<LineVerdict> = Vec::new();
 
-    // A model-borrowing harness (footnote) needs -m and -P, and a strict
-    // routing config refuses any harness without them. The probe takes both
-    // from the env, beside FNO_PROBE_FNO.
+    // A model-borrowing harness (footnote) needs a model and a provider, and
+    // a strict routing config refuses any harness without them. The probe
+    // takes both from the env, beside FNO_PROBE_FNO.
     let contract = HarnessContract::packaged().ok();
     let substrate = contract
         .as_ref()
@@ -881,6 +905,7 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
         Some(provider) => root.route_provider(provider),
         None => Ok(()),
     };
+    let route_args = probe_route_args(harness, provider.as_deref(), model.as_deref());
     let spawn_cwd = std::env::temp_dir().to_string_lossy().into_owned();
     let mut spawn_argv: Vec<&str> = vec![
         "agents",
@@ -898,12 +923,7 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     if let Some(substrate) = substrate {
         spawn_argv.extend(["--substrate", substrate]);
     }
-    if let Some(provider) = provider.as_deref() {
-        spawn_argv.extend(["--provider", provider]);
-    }
-    if let Some(model) = model.as_deref() {
-        spawn_argv.extend(["--model", model]);
-    }
+    spawn_argv.extend(route_args.iter().map(String::as_str));
     let (spawn_code, mut spawn_output) = root.fno_bounded(&spawn_argv, LIVE_SPAWN_TIMEOUT_S);
     if let Err(why) = routed {
         spawn_output.push_str(&format!("\nprobe provider: {why}"));

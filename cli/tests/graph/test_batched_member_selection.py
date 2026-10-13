@@ -20,14 +20,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 from tests.fixtures.graph_seed import seed_graph
 
-from fno.graph.cli import cli, _is_batched_member
+from fno.graph.cli import _is_batched_member
 from tests.goldens._door import door_graph
 
-
-runner = CliRunner()
 
 # Recent so the G1 stale-ready guard never quarantines these selection
 # fixtures (a hardcoded past date rots past the threshold as wall-clock moves).
@@ -142,13 +139,13 @@ def test_next_returns_unbatched_sibling(graph_file):
 
 def test_ready_omits_batched_member_lists_sibling(graph_file):
     """`ready` hides the batched node, lists the unbatched one."""
-    graph_file([
+    graph = graph_file([
         _node("ab-aaaa1111", batch="batch-ab12cd34"),
         _node("ab-bbbb2222"),
     ])
-    result = runner.invoke(cli, ["ready", "--all"])
-    assert result.exit_code == 0
-    listed_ids = {e["id"] for e in json.loads(result.stdout)}
+    code, out, err = door_graph(graph, "ready", "--all")
+    assert code == 0, err
+    listed_ids = {e["id"] for e in json.loads(out)}
     assert "ab-aaaa1111" not in listed_ids
     assert "ab-bbbb2222" in listed_ids
 

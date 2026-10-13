@@ -74,6 +74,7 @@ pub mod attention_file;
 pub mod attention_http;
 pub mod attention_reply;
 pub mod attention_route;
+pub mod attest;
 pub mod authorized_merge;
 pub mod backlog;
 pub mod backlog_ready;

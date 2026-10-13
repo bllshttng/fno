@@ -74,8 +74,9 @@ fn launch_spec(
     timeout: Option<Duration>,
     node: Option<&str>,
     permission_mode: Option<&str>,
+    provider: Option<&str>,
 ) -> Result<LaunchSpec, String> {
-    let endpoint = endpoint::resolve_endpoint(cwd, &|k| std::env::var(k).ok())?;
+    let endpoint = endpoint::resolve_endpoint(cwd, &|k| std::env::var(k).ok(), provider)?;
     let manifest = crate::state_path::resolve("target-state", cwd);
     let (cost_cap_usd, wall_cap_minutes, plan_path, manifest_node) =
         manifest_fields(manifest.as_deref());
@@ -211,6 +212,7 @@ pub fn dispatch_once(
     let Some(model) = model.filter(|m| !m.is_empty()) else {
         return outcome(2, String::new(), "-H footnote needs -m <model>\n".into());
     };
+    let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     match load_registry(&home.registry_json()) {
         Ok(reg) if reg.find(name).is_some() => {
             return outcome(
@@ -231,7 +233,16 @@ pub fn dispatch_once(
     let node = params.get("node").and_then(Value::as_str);
     let mode = params.get("permission_mode").and_then(Value::as_str);
     let spec = match launch_spec(
-        "create", &sid, dir, cwd, model, message, timeout, node, mode,
+        "create",
+        &sid,
+        dir,
+        cwd,
+        model,
+        message,
+        timeout,
+        node,
+        mode,
+        provider.as_deref(),
     ) {
         Ok(s) => s,
         Err(e) => return outcome(2, String::new(), format!("{e}\n")),
@@ -309,6 +320,9 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     let model = entry.requested_model.clone().unwrap_or_default();
     // A resume keeps the mode the session was spawned with.
     let mode = entry.requested_permission_mode.clone();
+    // A resume reaches the provider the row recorded, whatever stamp the
+    // asking session carries.
+    let provider = entry.route_provider_id.clone();
     let message = params["message"].as_str().unwrap_or("").to_string();
     let timeout = params["timeout"].as_u64().map(Duration::from_secs);
     let Some(dir) = transcript::find_session_dir(&transcript::sessions_root(), &fno_id) else {
@@ -326,6 +340,7 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
         timeout,
         None,
         mode.as_deref(),
+        provider.as_deref(),
     ) {
         Ok(s) => s,
         Err(e) => {
