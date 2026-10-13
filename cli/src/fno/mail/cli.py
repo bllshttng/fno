@@ -4176,75 +4176,21 @@ def cmd_send(
             raise typer.Exit(code=NOT_LANDED_EXIT)
 
 
-def _team_sender_kind_and_from(from_name: Optional[str]) -> tuple[str, str]:
-    """Resolve the announce envelope identity.
-
-    A session whose harness identity this process can PROVE it owns stamps its
-    own handle as ``agent`` (Rust then demands a role of that row); everything
-    else (a bare shell, cron, an explicit alias) stamps ``operator``.
-    """
-    from fno.agents.self_stamp import stamp_from
-    from fno.harness_identity import resolve_owned_identity
-
-    try:
-        ident = resolve_owned_identity()
-    except Exception:  # noqa: BLE001 - identity is best-effort, never a crash
-        ident = None
-    owned = bool(ident is not None and ident.session_id and ident.harness)
-    return ("agent" if owned else "operator"), stamp_from(from_name)
-
-
 @mail_app.command("team", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def cmd_team(
-    ctx: typer.Context,
-    scope: str = typer.Option(..., "--scope", help="Fleet scope: all | leads | <role scope> | project:<p>."),
-    message: str | None = typer.Argument(None, help="One announcement body."),
-    from_name: str | None = typer.Option(None, "--from-name", help="Envelope identity (see send)."),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Send receipt as JSON."),
-) -> None:
+def team_forward(ctx: typer.Context) -> None:
     """Announce one body to a fleet scope as ONE bus line.
 
-    The bus line IS the announcement: every session reads it through its own
-    cursor at its next hook boundary, so a send costs one write at any fleet
-    size. Delivery proofs are a separate read (`fno-agents announce status
-    <id>`). The body is linted here (the single style implementation); the
-    Rust writer owns authority, the audience snapshot, and the locked append.
-
-    Announcement flags belong to the Rust writer and are relayed verbatim:
+    The body lives in the Rust mail front now; Python owns transport only,
+    the same split as the hold forward. The body checks (forged envelope,
+    brevity cap, style) and the announce writer run on the native leg.
+    Announcement flags belong to the Rust writer and relay verbatim:
     `--subject=S` (supersede key; the = spelling keeps click from parking
     the value in the positional body), `--expires=45m|24h|7d` (standing
     window, default 24h, max 7d), `--urgent`. Any unrecognized flag is
     passed through the same way and refused there, so this shim adds no
     Python flag surface.
     """
-    import shutil
-
-    if not message:
-        print("usage: fno agents mail team --scope <all|leads|<role>|project:<p>> <message>", file=sys.stderr)
-        raise typer.Exit(code=2)
-    _vet_body(message)
-
-    sender_kind, sender = _team_sender_kind_and_from(from_name)
-
-    binary = shutil.which("fno-agents")
-    if binary is None:
-        print("error: mail team needs the fno-agents binary on PATH (the announce writer)", file=sys.stderr)
-        raise typer.Exit(code=1)
-
-    args = [
-        binary, "announce", "send",
-        "--scope", scope,
-        "--from", sender,
-        "--sender-kind", sender_kind,
-        *ctx.args,
-    ]
-    if json_out:
-        args.append("--json")
-    proc = subprocess.run(args, input=message, capture_output=True, text=True)
-    sys.stdout.write(proc.stdout)
-    sys.stderr.write(proc.stderr)
-    if proc.returncode != 0:
-        raise typer.Exit(code=proc.returncode if proc.returncode > 0 else 1)
+    _forward_mail(["team", *ctx.args], label="fno mail team")
 
 
 @mail_app.command("unread")
@@ -4327,7 +4273,7 @@ def cmd_sent(
         argv += ["--from-name", from_name]
     if json_out:
         argv.append("--json")
-    _forward_mail_front(argv, "sent")
+    _forward_mail(argv, label="fno mail sent")
 
 
 @mail_app.command("withdraw")
@@ -4459,7 +4405,7 @@ def cmd_bus_ack(
     Spelled out because the old one-liner read as if ``<name>`` came first and
     cost a reader two failed invocations before they resorted to ``--help``.
     """
-    _forward_mail_front(["ack", msg_id, "--name", name], "ack")
+    _forward_mail(["ack", msg_id, "--name", name], label="fno mail ack")
 
 
 def _manifest_fields(*names: str) -> dict[str, Optional[str]]:
@@ -4513,11 +4459,11 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _forward_mail_front(argv: list[str], front: str) -> None:
+def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, sent and ack verbs' bodies live in the Rust mail front now; Python
-    owns transport only, the same split as the claims forward.
+    The hold, team, sent and ack verbs' bodies live in the Rust mail front
+    now; Python owns transport only, the same split as the claims forward.
     """
     import subprocess
 
@@ -4527,7 +4473,7 @@ def _forward_mail_front(argv: list[str], front: str) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno agents mail {front}: the fno-agents binary was not found. "
+            f"{label}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
@@ -4585,7 +4531,7 @@ def cmd_hold(
         argv.append("--off")
     if status:
         argv.append("--status")
-    _forward_mail_front(argv, "hold")
+    _forward_mail(argv)
 
 
 def cmd_hold_release(
@@ -4604,7 +4550,7 @@ def cmd_hold_release(
     someone else took the hold off, and a second release would be a no-op that
     still emitted a release event.
     """
-    _forward_mail_front(["hold-release", "--handle", handle, "--poll-s", str(poll_s)], "hold")
+    _forward_mail(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
 
 
 mail_app.command("hold")(cmd_hold)
