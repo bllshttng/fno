@@ -4,8 +4,10 @@
 //! Characterization harness for the `mail unread` port. The goldens were
 //! captured in-process from the Python leaf (via `uv run python`, redirected
 //! typer streams) while its body still ran: the cursor-bounded listing, the
-//! full rescan with no cursor, the empty inbox, and the corrupt-cursor
-//! warning followed by its full rescan. The frozen bytes are the contract
+//! full rescan with no cursor, the empty inbox, the corrupt-cursor warning
+//! followed by its full rescan, and the rotated-out cursor (a parseable
+//! cursor naming an id the retained log no longer holds) taking the same
+//! full rescan with no warning. The frozen bytes are the contract
 //! with no normalization: the fixture ids, bodies and timestamps are fixed
 //! strings, so the output carries no clock or path, and the byte-parity JSON
 //! writer in mail_cli::unread mirrors the oracle's
@@ -106,6 +108,8 @@ const CURSOR_M2: &str = "{\"last_seen_id\": \"m2\", \"ts\": \"2026-10-12T09:14:0
 
 const CURSOR_CORRUPT: &str = "{ invalid";
 
+const CURSOR_ROTATED: &str = "{\"last_seen_id\": \"mGONE\", \"ts\": \"2026-10-12T09:15:00Z\"}\n";
+
 struct Case {
     label: &'static str,
     args: &'static [&'static str],
@@ -132,6 +136,11 @@ const CASES: &[Case] = &[
         label: "unread corrupt cursor",
         args: &["unread", "--name", "worker"],
         cursor: Some(CURSOR_CORRUPT),
+    },
+    Case {
+        label: "unread cursor rotated out",
+        args: &["unread", "--name", "worker"],
+        cursor: Some(CURSOR_ROTATED),
     },
 ];
 

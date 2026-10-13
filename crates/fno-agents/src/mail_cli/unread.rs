@@ -4,7 +4,9 @@
 //! retained segment oldest-first, keeps the first row per id, drops
 //! retracted (withdraw), superseded (a hosted-delivery twin) and
 //! non-deliverable rows, then lists rows addressed to the reader and after
-//! its cursor. JSON output mirrors the oracle's
+//! its cursor - and when the cursor id has rotated out of the retained log,
+//! rescans every retained row rather than silently skipping unprocessed
+//! mail. JSON output mirrors the oracle's
 //! `json.dumps(..., ensure_ascii=False)` byte for byte.
 
 use std::collections::HashSet;
@@ -94,6 +96,11 @@ pub fn run(args: &[String]) -> i32 {
         if m.get("id").and_then(Value::as_str) == cursor.as_deref() {
             passed = true;
         }
+    }
+    if !passed {
+        // The cursor id rotated out of the retained log: the oracle rescans
+        // the retained rows rather than silently skipping unprocessed mail.
+        unread = deduped.iter().copied().filter(|m| mine(m)).collect();
     }
 
     if json_out || !std::io::stdout().is_terminal() {

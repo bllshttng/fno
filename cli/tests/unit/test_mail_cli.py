@@ -300,6 +300,40 @@ def test_send_then_unread_then_ack(runner, mailbox):
     assert scan_unread("web") == []
 
 
+def test_unread_forward_leaf_exits_127_without_the_binary(monkeypatch, capsys):
+    import typer
+
+    from fno.mail.cli import _forward_unread
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+    with pytest.raises(typer.Exit) as exc:
+        _forward_unread("worker", json_out=False)
+    assert exc.value.exit_code == 127
+    assert "fno-agents binary was not found" in capsys.readouterr().err
+
+
+def test_unread_forward_leaf_propagates_the_binary_exit_code(monkeypatch):
+    import types
+    from pathlib import Path
+
+    import typer
+
+    from fno.mail.cli import _forward_unread
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents"))
+    seen = {}
+
+    def fake_run(argv, check=False):
+        seen["argv"] = argv
+        return types.SimpleNamespace(returncode=3)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    with pytest.raises(typer.Exit) as exc:
+        _forward_unread("worker", json_out=True)
+    assert exc.value.exit_code == 3
+    assert seen["argv"] == ["/bin/fno-agents", "mail", "unread", "--name", "worker", "--json"]
+
+
 def _passing_mail_body(word_total: int) -> str:
     sentences: list[str] = []
     remaining = word_total
