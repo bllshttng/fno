@@ -778,8 +778,8 @@ fn raw_row_launch(cwd: &Path, name: &str) -> Option<Value> {
     let rows = crate::agents_config::config_value_deep(cwd, &["routing", "models"])?
         .as_array()?
         .iter()
-        .find(|row| row.get("name").map(toml_str_trim).as_deref() == Some(name))?;
-    rows.get("launch").cloned()
+        .find(|row| toml_str_trim(row.get("name")) == name)?;
+    rows.get("launch").map(|v| json!(v))
 }
 
 /// The one declared lane row for a resolved (provider, model) pair, for the
