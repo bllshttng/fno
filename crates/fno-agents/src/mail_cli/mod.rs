@@ -1,7 +1,8 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
 //! release timer, the session seed-provenance leaf, the `team` broadcast,
-//! and the outbound sent view. Dispatch only; the verbs live in [hold],
-//! [seed_provenance], [team], and [sent].
+//! the outbound sent view, and the ack leaf. Dispatch only; the verbs live
+//! in [hold], [seed_provenance], [team], [sent], and [ack].
+pub mod ack;
 pub mod hold;
 pub mod seed_provenance;
 pub mod sent;
@@ -19,9 +20,10 @@ pub fn run(rest: &[String]) -> i32 {
         "seed-provenance" => seed_provenance::run(&rest[1..]),
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
+        "ack" => ack::run_ack(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent | ack)"
             );
             2
         }
@@ -36,4 +38,5 @@ fn print_help() {
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
+    println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
 }

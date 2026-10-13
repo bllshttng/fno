@@ -302,6 +302,25 @@ fn run_owned(
         return 0;
     }
 
+    // ── Steps mode: a run driven step-by-step never gates on the loop-check ──
+    // A manifest stamped turn_mode: steps marks a run its own skill advances
+    // one instructed step at a time, not a target loop. The stop allows here,
+    // before translate: the claim stays held and nothing finalizes, so the
+    // run keeps its state for the next step.
+    if !state_is_pending && first_raw_field(&manifest, &["turn_mode"]).as_deref() == Some("steps") {
+        emit_stop_decision(
+            hook_cwd,
+            fire,
+            Some(&state),
+            driver,
+            "none",
+            "allow",
+            "steps-mode",
+            &manifest,
+        );
+        return 0;
+    }
+
     // ── An active owner with no transcript file: unavailable bounded block ────
     let transcript_ok =
         !fire.transcript_path.as_os_str().is_empty() && fire.transcript_path.is_file();
@@ -1372,17 +1391,15 @@ mod tests {
         assert!(resident_matches(&state, "rollout-7-h-uuid-1234"));
         assert!(!resident_matches(&state, "other"));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn resident_match_falls_back_to_bare_session_id() {
-        let dir = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let state = dir.join("target-state.md");
+        // No harness_session_id: the bare fno_id matches its own id, and
+        // refuses a rollout-suffixed lookalike.
+        let dir2 = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir2).unwrap();
+        let state = dir2.join("target-state.md");
         std::fs::write(&state, "---\nfno_id: h-uuid-9\n").unwrap();
         assert!(resident_matches(&state, "h-uuid-9"));
         assert!(!resident_matches(&state, "h-uuid-9-extra"));
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
     }
 
     /// The foreign-session guard's allow journals a correlated
@@ -1436,6 +1453,57 @@ mod tests {
         assert_eq!(
             row.pointer("/data/class").and_then(Value::as_str),
             Some("foreign-manifest")
+        );
+        assert_eq!(
+            row.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+
+        // A steps-mode manifest also allows unjudged: the journal names the
+        // steps-mode class, and the return lands before translate, so no
+        // claim releases and no finalize runs - the run keeps its claim.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        let state = dir.path().join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nharness_session_id: sess-new\nturn_mode: steps\n",
+        )
+        .unwrap();
+        let fire = collect_fire(
+            "sess-new",
+            "/tmp/fno-x4847/sess-new.jsonl",
+            None,
+            "turn-3".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &dir.path(),
+            &fire,
+            "{}",
+            state,
+            "lead",
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(rc, 0, "a steps-mode run allows its stops unjudged");
+        let project = crate::paths::events_path(dir.path());
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal =
+            crate::event_store::journal_text_checked(&project, &query).expect("journal readable");
+        let row = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str) == Some("sess-new")
+            })
+            .unwrap_or_else(|| panic!("no stop_decision for sess-new in {}", project.display()));
+        assert_eq!(
+            row.pointer("/data/class").and_then(Value::as_str),
+            Some("steps-mode")
         );
         assert_eq!(
             row.pointer("/data/decision").and_then(Value::as_str),
@@ -1524,6 +1592,18 @@ mod tests {
         assert_eq!(
             arbitrate_continuation("target", &fire, manifest),
             GoalArbitration::Delegated
+        );
+        // With no goal truth at all the loop check keeps ownership.
+        let bare = collect_fire(
+            "session-full",
+            "/tmp/rollout-session-full.jsonl",
+            None,
+            "turn-42".to_string(),
+            None,
+        );
+        assert_eq!(
+            arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
+            GoalArbitration::None
         );
     }
 
@@ -1654,7 +1734,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_goal_owner_is_a_named_refusal() {
+    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
+        // A goal with no continuation_owner is a named refusal, not a guess.
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active"
@@ -1663,10 +1744,6 @@ mod tests {
         assert!(
             matches!(refusal, GoalArbitration::Refusal(reason) if reason.contains("missing continuation owner"))
         );
-    }
-
-    #[test]
-    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active",
@@ -1756,6 +1833,10 @@ mod tests {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // Declared root: this test used to ride whatever FNO_SPACES_DIR a
+        // concurrently running test had set, so it passed only while that
+        // ambient value survived its neighbor's cleanup.
+        let _root = crate::paths::DeclaredRoot::declare_held("stop-tick");
         let saved_home = std::env::var_os("HOME");
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", dir.path());
