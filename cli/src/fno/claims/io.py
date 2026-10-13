@@ -134,7 +134,7 @@ def dedup_claims_roots(roots: list[Path | None]) -> list[tuple[Path | None, Path
 
     Returns ``(raw_root, resolved_dir)`` pairs: the raw value (``None`` or
     ``Path``) so a caller can pass an entry straight back into ``root=`` on
-    ``list_claims_with_counts``/``reap_dead_claims``/etc, paired with the
+    ``list_claims_with_counts``/etc, paired with the
     already-resolved dir so nothing calls ``claims_dir()`` on the same root
     twice. A cwd whose canonical repo root IS the global root collapses to
     one scan, not two; dedup is by ``Path.resolve()`` on the resolved claims
