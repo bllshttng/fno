@@ -402,7 +402,6 @@ fn graph_renders_a_layered_flowchart() {
         .iter()
         .enumerate()
         .map(|(i, a)| crate::client::org_graph::unowned_key(a, i))
-        .coll)
         .collect();
     assert_eq!(keys.len(), 2);
     assert_ne!(
@@ -474,7 +473,11 @@ fn graph_renders_a_layered_flowchart() {
     b2.mode = OrgMode::Graph;
     b2.filter = OrgSessions::Current;
     let graph2 = b2.refresh_graph(280, 24);
-    assert_eq!(graph2.boxes.len(), 40, "ten leads, ten nodes, twenty workers");
+    assert_eq!(
+        graph2.boxes.len(),
+        40,
+        "ten leads, ten nodes, twenty workers"
+    );
     let buf2 = crate::client::org_graph::frame(&graph2, 280, 24, Some("lead:lead0"), &colors);
     let mut painted = 0u32;
     for y in 0..24u16 {
