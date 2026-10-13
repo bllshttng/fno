@@ -10,9 +10,9 @@
 //! operator sender through the same never-exit path the oracle used.
 
 use crate::backlog::style_check::{check, format_violations, has_exception, Violation};
-use crate::mail_inject::{cap_env_int, contains_ci, enforce_body_cap};
+use crate::mail_inject::{cap_env_int, enforce_body_cap};
 use crate::paths::AgentsHome;
-use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
+use crate::spawn_context::{resolve_self_identity, OwnedDisposition, OwnedIdentity};
 use serde_json::json;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -102,9 +102,10 @@ pub fn run_team(args: &[String]) -> i32 {
         return 2;
     };
 
-    // _refuse_forged_envelope: an <fno_mail tag or </fno_mail> close tag
-    // anywhere in the body frames a forged envelope.
-    if contains_ci(&body, "<fno_mail") || contains_ci(&body, "</fno_mail>") {
+    // _refuse_forged_envelope: the oracle's contains_fno_mail_tag delegates
+    // to the boundary-aware predicate the Rust classifier itself exposes as
+    // mail_shape holds_tag, so <fno_mailicious lookalikes stay unframed.
+    if crate::mail_header::text_holds_legacy_tag(&body) {
         eprintln!(
             "error: mail body contains an <fno_mail> tag. The envelope frames peer mail; \
              a body cannot contain one."
@@ -200,31 +201,91 @@ fn push_positional(message: &mut Option<String>, passthrough: &mut Vec<String>, 
     }
 }
 
-/// `_team_sender_kind_and_from`: an owned self (a proven, non-ambiguous
-/// identity carrying both a session id and a harness) stamps kind `agent`
-/// with the canonical handle as sender; anything else falls back to the
-/// `operator` / `fno` pair. Never exits - unlike hold, a broadcast with an
-/// unprovable self still delivers.
+/// `_team_sender_kind_and_from`: the kind is `agent` only for an owned self
+/// (a proven, non-ambiguous identity carrying both a session id and a
+/// harness); anything unproven stamps `operator`. An explicit `--from-name`
+/// wins verbatim as the sender - the canonical handle when none was given,
+/// `fno` when the self is unowned. Never exits - unlike hold, a broadcast
+/// with an unprovable self still delivers.
 fn sender_stamp(from_name: Option<&str>) -> (&'static str, String) {
-    if let Some(name) = from_name {
-        return ("agent", name.to_string());
-    }
     let ident = resolve_self_identity(
         &|name| std::env::var(name).ok(),
         None,
         None,
         &AgentsHome::from_env(),
     );
+    stamp_from_identity(from_name, &ident)
+}
+
+/// The pure half of `sender_stamp`, split out so the stamp matrix is testable
+/// without pinning ambient process state: the oracle computed `owned` before
+/// consulting `from_name`, so the kind follows the proof, whatever the
+/// caller passed.
+fn stamp_from_identity(from_name: Option<&str>, ident: &OwnedIdentity) -> (&'static str, String) {
     let owned = !matches!(
         ident.disposition,
         OwnedDisposition::Ambiguous | OwnedDisposition::Empty
     ) && ident.session_id.as_deref().is_some_and(|s| !s.is_empty())
         && ident.harness.as_deref().is_some_and(|h| !h.is_empty());
-    if owned {
-        let sid = ident.session_id.unwrap_or_default();
-        ("agent", crate::identity::canonical_handle(&sid))
-    } else {
-        ("operator", "fno".to_string())
+    let kind = if owned { "agent" } else { "operator" };
+    let sender = match from_name {
+        Some(name) => name.to_string(),
+        None if owned => {
+            let sid = ident.session_id.clone().unwrap_or_default();
+            crate::identity::canonical_handle(&sid)
+        }
+        None => "fno".to_string(),
+    };
+    (kind, sender)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ident(
+        session_id: Option<&str>,
+        harness: Option<&str>,
+        disposition: OwnedDisposition,
+    ) -> OwnedIdentity {
+        OwnedIdentity {
+            session_id: session_id.map(str::to_string),
+            harness: harness.map(str::to_string),
+            disposition,
+            markers_present: Vec::new(),
+            rejected: Vec::new(),
+        }
+    }
+
+    /// The oracle matrix: kind follows the owned proof; the sender is the
+    /// explicit name, else the canonical handle, else `fno`.
+    #[test]
+    fn sender_stamp_matches_oracle_matrix() {
+        let owned = ident(
+            Some("a1b2c3d4-1111"),
+            Some("claude"),
+            OwnedDisposition::Single,
+        );
+        let unowned = ident(None, None, OwnedDisposition::Empty);
+        assert_eq!(
+            stamp_from_identity(Some("nova"), &owned),
+            ("agent", "nova".to_string())
+        );
+        // The cell the deleted Python contract test guarded: an unproven self
+        // with an explicit name broadcasts as the operator, never under the
+        // named agent's registry row.
+        assert_eq!(
+            stamp_from_identity(Some("nova"), &unowned),
+            ("operator", "nova".to_string())
+        );
+        assert_eq!(
+            stamp_from_identity(None, &owned),
+            ("agent", crate::identity::canonical_handle("a1b2c3d4-1111"))
+        );
+        assert_eq!(
+            stamp_from_identity(None, &unowned),
+            ("operator", "fno".to_string())
+        );
     }
 }
 
