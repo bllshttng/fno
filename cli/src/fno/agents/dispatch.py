@@ -6478,13 +6478,13 @@ def wake_and_deliver(
     except (RegistryVersionError, ValueError):
         return False, "registry-incomplete"
 
-    carried = fork_lineage.carried(session_uuid)
-    spawn_name = carried.get("name") or f"wake-{canonical_handle(session_uuid)}"
+    source = vars(entry) if entry is not None else fork_lineage.carried(session_uuid)
+    spawn_name = source.get("name") or f"wake-{canonical_handle(session_uuid)}"
     route_provider, route_env = fork_lineage.wake_route(entry, session_uuid)
     from fno.agents.spawn_gate import GateRefused, run_gate
     from fno.agents.launch_provenance import launch_account_for_session
 
-    parent = tuple(carried.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
+    parent = tuple(source.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
     gate = None
     revived_reservation = False
     if route_provider is not None:
