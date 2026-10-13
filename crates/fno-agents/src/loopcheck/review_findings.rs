@@ -229,9 +229,10 @@ fn merge_attestation_text(
         }
     }
     if primary_text.is_some() {
-        let mut rows: Vec<(String, String)> = merged
+        let mut rows: Vec<(String, usize, String)> = merged
             .lines()
-            .map(|line| {
+            .enumerate()
+            .map(|(idx, line)| {
                 let ts = serde_json::from_str::<serde_json::Value>(line)
                     .ok()
                     .and_then(|val| {
@@ -240,13 +241,13 @@ fn merge_attestation_text(
                             .map(str::to_string)
                     })
                     .unwrap_or_default();
-                (ts, line.to_string())
-            })
+                (ts, idx, line.to_string())
+            )
             .collect();
-        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         merged = rows
             .into_iter()
-            .map(|(_, line)| line)
+            .map(|(_, _, line)| line)
             .collect::<Vec<_>>()
             .join("\n");
     }
