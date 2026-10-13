@@ -45,6 +45,12 @@ pub(crate) fn push_line(line: &str, slug: &str, remote: &Remote) -> Result<(), S
     if envelope.get("type").and_then(Value::as_str) != Some("review_attestation") {
         return Err("attest push: only review_attestation lines ride the primary".to_string());
     }
+    if slug.is_empty() {
+        return Err(
+            "attest push: no repo identity here; the row would be unreachable on the primary, so the journal copy alone carries it"
+                .to_string(),
+        );
+    }
     let ts = envelope
         .get("ts")
         .and_then(Value::as_str)
