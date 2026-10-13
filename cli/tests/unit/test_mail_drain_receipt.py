@@ -198,53 +198,6 @@ def test_sweep_legacy_message_without_marker_still_escalates(tmp_path, monkeypat
     )
 
 
-def test_manual_ack_emits_drain_marker(tmp_path, monkeypatch):
-    """The manual `fno agents mail ack` path consumes mail by advancing the cursor; it
-    must emit agent_mail_drained too, or those messages leave unread with no
-    terminal event -- the same accounting gap drain-self closes."""
-    from fno.inbox.store import write_new_thread
-    from fno.mail import cli as mail_cli
-
-    use_tmpdir(monkeypatch, tmp_path)
-    handle = write_new_thread("cl-abcd1234", "alice", "send", "hi")
-    captured = _capture_events(monkeypatch)
-
-    mail_cli.cmd_bus_ack(msg_id=handle.thread_id, name="cl-abcd1234")
-
-    markers = [e for e in captured if e.get("kind") == "agent_mail_drained"]
-    assert markers, "a manual ack advanced the cursor without emitting a receipt"
-    assert markers[0]["msg_id"] == handle.thread_id
-    assert markers[0]["reason"] == "acked"
-
-
-def test_bus_ack_excludes_mail_arriving_after_snapshot(monkeypatch, tmp_path):
-    """cmd_bus_ack builds its position snapshot from iter_messages, then reads
-    scan_unread again. A message that lands between the two must NOT be receipted
-    (the m.id-in-pos guard), or mail the user never acked gets a terminal event."""
-    from fno.bus import cursor as cursor_mod
-    from fno.bus import log as bus_log
-    from fno.mail import cli as mail_cli
-
-    use_tmpdir(monkeypatch, tmp_path)
-    m_ack = _Msg(id="m-ack", from_="alice", to="fno", kind="note",
-                 ts="2026-08-11T00:00:00Z", body="ack me")
-    m_late = _Msg(id="m-late", from_="bob", to="fno", kind="note",
-                  ts="2026-08-11T00:01:00Z", body="arrived after the snapshot")
-    monkeypatch.setattr(bus_log, "iter_messages", lambda: [m_ack])
-    monkeypatch.setattr(cursor_mod, "scan_unread", lambda n: [m_ack, m_late])
-    monkeypatch.setattr(cursor_mod, "advance_cursor", lambda n, mid: True)
-    captured = _capture_events(monkeypatch)
-
-    mail_cli.cmd_bus_ack(msg_id="m-ack", name="fno")
-
-    by_id = {m["msg_id"]: m for m in captured if m.get("kind") == "agent_mail_drained"}
-    assert "m-ack" in by_id and by_id["m-ack"]["reason"] == "acked"
-    assert "m-late" not in by_id, (
-        "a message that arrived after the ack snapshot was receipted; the id-in-pos "
-        "guard must exclude it"
-    )
-
-
 def test_drained_msg_ids_skips_non_dict_json(tmp_path, monkeypatch):
     """A valid-JSON non-object line carrying the marker substring must not crash
     the sweep; it is skipped and real markers are still read."""

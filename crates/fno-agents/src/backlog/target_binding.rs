@@ -51,7 +51,7 @@ pub struct PrFact {
 }
 
 /// Leading target modifiers that are never follow-up scope.
-const MODIFIERS: [&str; 16] = [
+const MODIFIERS: [&str; 19] = [
     "s",
     "m",
     "l",
@@ -68,6 +68,9 @@ const MODIFIERS: [&str; 16] = [
     "beast",
     "batched",
     "--no-merge",
+    "steps",
+    "ordinary",
+    "regular",
 ];
 
 fn receipt(verdict: &'static str, reason: &'static str, source: Option<&str>) -> Receipt {
@@ -684,5 +687,28 @@ mod tests {
         assert_eq!(r.exit_code(), 1);
         r.verdict = "adopt";
         assert_eq!(r.exit_code(), 0);
+    }
+
+    #[test]
+    fn steps_mode_words_are_modifiers_not_scope() {
+        let rows = vec![row("x-1111", json!({}))];
+        // steps|ordinary|regular name the non-looping target mode, so they
+        // drop off the front like bg or clean, and stay scope mid-prose.
+        assert_eq!(
+            scope_of("steps x-1111 add tests", "x-1111", &rows),
+            Some("add tests".into())
+        );
+        assert_eq!(
+            scope_of("ordinary x-1111 tighten logs", "x-1111", &rows),
+            Some("tighten logs".into())
+        );
+        assert_eq!(
+            scope_of("REGULAR x-1111 trim dupes", "x-1111", &rows),
+            Some("trim dupes".into())
+        );
+        assert_eq!(
+            scope_of("x-1111 regular upkeep pass", "x-1111", &rows),
+            Some("regular upkeep pass".into())
+        );
     }
 }
