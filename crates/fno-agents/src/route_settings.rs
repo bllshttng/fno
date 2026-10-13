@@ -9,7 +9,6 @@
 
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Tools a worker on a non-Anthropic endpoint must not be offered. Artifact
@@ -336,7 +335,7 @@ pub fn write_settings_kind(payload: &Value) -> Result<Value, String> {
             .collect();
         compose_env(&route_env, &account_env, &spawn_env)
     } else {
-        match string_object("env") {
+        match string_object("env")? {
             Some(env) => env,
             None => {
                 return Err("route-settings: payload carries no env or overlay object".into());
