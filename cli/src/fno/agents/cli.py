@@ -3601,15 +3601,16 @@ def cmd_register(
     # of leaving the operator to guess from a blank cell.
     if delivery_policy is not None:
         from fno.harness_identity import session_identity_key
-        from fno.mail import hold as _hold
+        from fno.mail.hold import _hold_transport
 
         # Clock key is the collision-free identity key; the name-keyed clear removes a pre-migration clock.
         clock_key = session_identity_key(session_id)
-        if delivery_policy == "bus-only":
-            _hold.arm_permanent(clock_key)
-        else:
-            _hold.clear(clock_key)
-            _hold.clear(entry.name)
+        # Both stamps are the ABSENCE of a clock beside the flag: the native
+        # door's --clear drops any standing clock either way, and the policy
+        # flip also drops a pre-migration name-keyed one.
+        _hold_transport(["--clear", clock_key])
+        if delivery_policy != "bus-only":
+            _hold_transport(["--clear", entry.name])
 
     events.emit(
         "session_registered",

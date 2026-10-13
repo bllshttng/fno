@@ -98,7 +98,7 @@ fn state_root() -> PathBuf {
     }
 }
 
-fn hold_sidecar_path(handle: &str) -> PathBuf {
+pub(crate) fn hold_sidecar_path(handle: &str) -> PathBuf {
     state_root()
         .join("mail-hold")
         .join(format!("{handle}.json"))
@@ -111,7 +111,7 @@ fn hold_sidecar_path(handle: &str) -> PathBuf {
 /// handle, senders by any of the four; one matcher so every reader of a hold
 /// answers the same question instead of the gate resolving fewer addresses
 /// than the writers stamp.
-fn row_matches_token(entry: &crate::state::RegistryEntry, token: &str) -> bool {
+pub(crate) fn row_matches_token(entry: &crate::state::RegistryEntry, token: &str) -> bool {
     let wanted = identity_key(token);
     entry.harness_session_id.as_deref().map_or(false, |sid| {
         let key = identity_key(sid);
@@ -190,24 +190,25 @@ pub(crate) fn self_status(session_id: &str) -> Result<serde_json::Value, String>
 /// last; Python `read()` ignores the unknown key.
 fn write_clock(
     handle: &str,
-    until: chrono::DateTime<chrono::Utc>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
     window_s: i64,
     clock_kind: &str,
     ceiling: Option<chrono::DateTime<chrono::Utc>>,
     source: Option<&str>,
 ) -> std::io::Result<()> {
     let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ");
-    let ceiling_part = match ceiling {
-        Some(c) => format!("\"{}\"", stamp(c)),
+    let quoted = |t: Option<chrono::DateTime<chrono::Utc>>| match t {
+        Some(t) => format!("\"{}\"", stamp(t)),
         None => "null".to_string(),
     };
+    let until_part = quoted(until);
+    let ceiling_part = quoted(ceiling);
     let source_part = source
         .map(|s| format!(", \"source\": \"{s}\""))
         .unwrap_or_default();
     let payload = format!(
-        "{{\"until\": \"{until}\", \"window_s\": {window_s}, \
+        "{{\"until\": {until_part}, \"window_s\": {window_s}, \
          \"clock_kind\": \"{clock_kind}\", \"ceiling\": {ceiling_part}{source_part}}}\n",
-        until = stamp(until),
     );
     let dir = state_root().join("mail-hold");
     std::fs::create_dir_all(&dir)?;
@@ -221,12 +222,12 @@ fn write_clock(
 
 /// The sidecar clock as both writers leave it. A present-but-unparseable
 /// stamp reads as None, never an error - hold.py's `read()` contract.
-struct Clock {
-    until: Option<chrono::DateTime<chrono::Utc>>,
-    window_s: i64,
-    clock_kind: String,
-    ceiling: Option<chrono::DateTime<chrono::Utc>>,
-    source: Option<String>,
+pub(crate) struct Clock {
+    pub(crate) until: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) window_s: i64,
+    pub(crate) clock_kind: String,
+    pub(crate) ceiling: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) source: Option<String>,
 }
 
 impl Clock {
@@ -239,7 +240,7 @@ impl Clock {
 
 /// The clock file as a [`Clock`]; a missing or unparseable file is None,
 /// the same answer Python `read()` gives.
-fn read_clock(handle: &str) -> Option<Clock> {
+pub(crate) fn read_clock(handle: &str) -> Option<Clock> {
     let raw = std::fs::read_to_string(hold_sidecar_path(handle)).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let parse = |s: &serde_json::Value| -> Option<chrono::DateTime<chrono::Utc>> {
@@ -258,7 +259,7 @@ fn read_clock(handle: &str) -> Option<Clock> {
         .get("clock_kind")
         .and_then(|k| k.as_str())
         .unwrap_or("idle");
-    if clock_kind != "idle" && clock_kind != "wall" {
+    if clock_kind != "idle" && clock_kind != "wall" && clock_kind != "permanent" {
         return None;
     }
     Some(Clock {
@@ -306,7 +307,7 @@ pub(crate) fn extend_clock(handle: &str) -> Result<Option<String>, ()> {
     let new_until = std::cmp::min(now + chrono::Duration::seconds(window_s), ceiling);
     if write_clock(
         handle,
-        new_until,
+        Some(new_until),
         window_s,
         "idle",
         Some(ceiling),
@@ -369,7 +370,7 @@ fn clock_json(clock: &Clock) -> serde_json::Value {
 /// hold.py clock_description, ported: the operator-facing clock prose the
 /// status line and the receipts share. The ceiling's None spelling matches
 /// the Python interpolation ("ceiling legacy unbounded") byte for byte.
-fn clock_description(clock: &Clock) -> String {
+pub(crate) fn clock_description(clock: &Clock) -> String {
     let Some(until) = clock.until else {
         return "no expiry".to_string();
     };
@@ -383,13 +384,21 @@ fn clock_description(clock: &Clock) -> String {
     }
 }
 
-/// Spawn the Python release timer detached (stdio null, own process group):
-/// the third drain trigger that lifts the hold and delivers the digest with
-/// no further input. The timer re-reads the clock every poll, so a re-arm
-/// simply keeps it sleeping, and its designed exit is a vanished clock.
-fn spawn_release_timer(handle: &str) {
-    let mut cmd = Command::new(crate::scrape::fno_py());
-    cmd.args(["agents", "mail", "hold-release", "--handle", handle])
+/// Spawn the detached release timer (stdio null, own process group): the
+/// third drain trigger that lifts the hold and delivers the digest with no
+/// further input. The timer re-enters the running binary's `mail hold-release`
+/// and re-reads the clock every poll, so a re-arm simply keeps it sleeping,
+/// and its designed exit is a vanished clock. The re-entry binary resolves
+/// through `FNO_AGENTS_TIMER_EXE` when set; production leaves it unset and
+/// the tests point it at an argv-logging stub.
+pub(crate) fn spawn_release_timer(handle: &str) {
+    let seam = std::env::var_os("FNO_AGENTS_TIMER_EXE").map(std::path::PathBuf::from);
+    let Some(exe) = seam.or_else(|| std::env::current_exe().ok()) else {
+        eprintln!("mail-hold: release timer did not start: cannot resolve the running binary");
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.args(["mail", "hold-release", "--handle", handle])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -414,7 +423,7 @@ fn ensure_clock(handle: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     }
     write_clock(
         handle,
-        now + chrono::Duration::seconds(ANSWER_BACKSTOP_S),
+        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
         ANSWER_BACKSTOP_S,
         "wall",
         None,
@@ -503,7 +512,7 @@ fn arm_row(
     let prior_live_conversation = live_conversation;
     if write_clock(
         &handle,
-        now + chrono::Duration::seconds(ANSWER_BACKSTOP_S),
+        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
         ANSWER_BACKSTOP_S,
         "wall",
         None,
@@ -579,7 +588,7 @@ pub(crate) fn conversation_turn_end(session_id: &str) {
     };
     let _ = write_clock(
         &handle,
-        until,
+        Some(until),
         clock.window_s,
         &clock.clock_kind,
         clock.ceiling,
@@ -1228,13 +1237,24 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
         let minutes: i64 = arm_minutes.and_then(|m| m.parse().ok()).unwrap_or(5);
         let window_s = std::cmp::max(1, minutes * 60);
         let now = chrono::Utc::now();
+        // A permanent hold never lapses: `until: null`, no ceiling, and no
+        // release timer - only an explicit `hold --off` lifts it.
+        if kind == "permanent" {
+            return match write_clock(handle, None, window_s, "permanent", None, None) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("mail-hold: arm failed: {e}");
+                    2
+                }
+            };
+        }
         let until = now + chrono::Duration::seconds(window_s);
         let ceiling = if kind == "wall" {
             None
         } else {
             Some(now + chrono::Duration::seconds(window_s * 2))
         };
-        return match write_clock(handle, until, window_s, kind, ceiling, None) {
+        return match write_clock(handle, Some(until), window_s, kind, ceiling, None) {
             Ok(()) => {
                 // The third drain trigger (cmd_hold's detached release timer,
                 // ported): the hold lifts on the clock, not only at the next
@@ -1440,7 +1460,7 @@ pub fn run_mail_hold(args: &[String]) -> i32 {
                 if release {
                     let _ = write_clock(
                         &handle,
-                        chrono::Utc::now() - chrono::Duration::seconds(1),
+                        Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
                         1,
                         "wall",
                         None,
@@ -1486,7 +1506,7 @@ pub(crate) mod tests {
     /// Pin FNO_AGENTS_HOME (registry + journal), FNO_HOME (hold sidecars)
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
     /// crate-wide env lock (claim_verbs idiom). FNO_PY points at `true` so
-    /// the detached release-timer spawn is a no-op the test never waits on.
+    /// a parked-payload drain spawn is a no-op the test never waits on.
     /// Prior values are restored, so an ambient FNO_HOME survives the test.
     pub(crate) fn with_hold_env(f: impl FnOnce(&std::path::Path)) {
         let _guard = crate::claims::test_env_lock()
@@ -1671,22 +1691,22 @@ pub(crate) mod tests {
     #[test]
     fn release_lifts_the_hold_and_arms_the_standard_release_leg() {
         with_hold_env(|dir| {
-            let _g = env_guard(&["FNO_PY", "PARK_LOG"]);
+            let _g = env_guard(&["FNO_PY", "PARK_LOG", "FNO_AGENTS_TIMER_EXE"]);
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
                 Some(CONVERSATION_SOURCE),
             )
             .unwrap();
-            // The release leg is the standard detached timer; the stub FNO_PY
+            // The release leg is the standard detached timer; the seam stub
             // logs its argv, so the test polls the log for the spawn.
             let stub = write_stub_py(dir);
             let log = dir.join("release.log");
-            std::env::set_var("FNO_PY", stub.to_string_lossy().to_string());
+            std::env::set_var("FNO_AGENTS_TIMER_EXE", stub.to_string_lossy().to_string());
             std::env::set_var("PARK_LOG", log.to_string_lossy().to_string());
             assert_eq!(
                 run_mail_hold(&["--session".into(), SID.into(), "--release".into()]),
@@ -1810,7 +1830,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &SID.to_string(),
-                now + chrono::Duration::seconds(3600),
+                Some(now + chrono::Duration::seconds(3600)),
                 3600,
                 "wall",
                 None,
@@ -1923,7 +1943,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &SID.to_string(),
-                now + chrono::Duration::seconds(3600),
+                Some(now + chrono::Duration::seconds(3600)),
                 3600,
                 "wall",
                 None,
@@ -2088,7 +2108,7 @@ pub(crate) mod tests {
             // An unstamped row with a stray clock still delivers.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2106,7 +2126,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now - chrono::Duration::seconds(60),
+                Some(now - chrono::Duration::seconds(60)),
                 600,
                 "wall",
                 None,
@@ -2117,7 +2137,7 @@ pub(crate) mod tests {
             assert!(v.deliver, "a clock whose until is past delivers");
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2158,7 +2178,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2190,7 +2210,7 @@ pub(crate) mod tests {
             let now = chrono::Utc::now();
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2240,7 +2260,7 @@ pub(crate) mod tests {
             // Answering-phase conversation clock: no wall time, the answer end.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(ANSWER_BACKSTOP_S),
+                Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
                 ANSWER_BACKSTOP_S,
                 "wall",
                 None,
@@ -2255,7 +2275,7 @@ pub(crate) mod tests {
             // Conversation clock inside its grace: reads as the wall clock it is.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(GRACE_S - 10),
+                Some(now + chrono::Duration::seconds(GRACE_S - 10)),
                 GRACE_S,
                 "wall",
                 None,
@@ -2271,7 +2291,7 @@ pub(crate) mod tests {
             // Idle clock: "or later", because activity restarts it.
             write_clock(
                 &identity_key(SID),
-                now + chrono::Duration::seconds(300),
+                Some(now + chrono::Duration::seconds(300)),
                 300,
                 "idle",
                 Some(now + chrono::Duration::seconds(600)),
@@ -2296,7 +2316,7 @@ pub(crate) mod tests {
             // Live clock: --gate prints hold. stdin carries no body.
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2316,8 +2336,10 @@ pub(crate) mod tests {
         });
     }
 
-    /// The stub `fno-py` the runner drains through: appends its argv to
-    /// `$PARK_LOG` and exits 1 when `$PARK_FAIL` is set, else 0.
+    /// The argv-logging stub: appends its argv to `$PARK_LOG` and exits 1
+    /// when `$PARK_FAIL` is set, else 0. Backs the parked-payload drain
+    /// (as the `FNO_PY` runner) and the release-timer seam (as
+    /// `FNO_AGENTS_TIMER_EXE`).
     fn write_stub_py(dir: &std::path::Path) -> std::path::PathBuf {
         crate::write_exec_stub(
             dir,
@@ -2337,7 +2359,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2368,7 +2390,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2432,7 +2454,7 @@ pub(crate) mod tests {
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
-                chrono::Utc::now() + chrono::Duration::seconds(600),
+                Some(chrono::Utc::now() + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,
@@ -2572,7 +2594,7 @@ pub(crate) mod tests {
             // a: lapsed 90s past its until -> picked.
             write_clock(
                 &identity_key(sid_a),
-                now - chrono::Duration::seconds(90),
+                Some(now - chrono::Duration::seconds(90)),
                 600,
                 "wall",
                 None,
@@ -2583,7 +2605,7 @@ pub(crate) mod tests {
             // still be circling.
             write_clock(
                 &identity_key(sid_b),
-                now - chrono::Duration::seconds(30),
+                Some(now - chrono::Duration::seconds(30)),
                 600,
                 "wall",
                 None,
@@ -2593,7 +2615,7 @@ pub(crate) mod tests {
             // c: live clock -> its own timer is winning.
             write_clock(
                 &identity_key(sid_c),
-                now + chrono::Duration::seconds(600),
+                Some(now + chrono::Duration::seconds(600)),
                 600,
                 "wall",
                 None,

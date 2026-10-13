@@ -567,11 +567,11 @@ pub(crate) fn pump_wants(
 /// cold-start a browser.
 pub(crate) async fn open_pr(view: &mut View, url: String) {
     let notice = crate::link::for_notice(&url);
-    let outcome = tokio::task::spawn_blocking(move || crate::link::open_url(&url))
+    let outcome = tokio::task::spawn_blocking(move || crate::link::open_url_for_session(&url))
         .await
         .unwrap_or_else(|_| Err("opener task failed".to_string()));
     match outcome {
-        Ok(()) => view.set_notice(format!("opened {notice}")),
+        Ok(opened) => view.set_notice(opened.notice(&notice)),
         Err(e) => view.set_notice(format!("open failed: {e}")),
     }
 }

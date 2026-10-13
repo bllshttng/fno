@@ -54,6 +54,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_RUNTIME` | py+rs | unclear: cli/src/fno/doctor.py:564 |
 | `FNO_AGENTS_SELF_SHORT_ID` | rs | The driven agent's short id, stamped by the PTY worker; the write gate matches it against open drive-authority windows so an operator drive scopes to that one session. |
 | `FNO_AGENTS_STARTUP_RECONCILE_DELAY_MS` | rs | unclear: crates/fno-agents/src/daemon.rs:2082 |
+| `FNO_AGENTS_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENTS_WORKER` | py+rs | Marks the process as a footnote worker. |
 | `FNO_AGENTS_WORKER_BIN` | py+rs | unclear: cli/src/fno/agents/dispatch.py:888 |
 | `FNO_AGENT_HARNESS` | py | unclear: cli/src/fno/harness_identity.py:77 |

@@ -45,7 +45,11 @@ pub fn route(url: &str) -> Route {
     Route::Web
 }
 
-type LinkTx = UnboundedSender<(String, Result<(), String>)>;
+type LinkTx = UnboundedSender<(String, LinkOutcome)>;
+
+/// The link leg's (url, outcome) report. The outcome names what happened, so
+/// the status notice can too.
+pub(crate) type LinkOutcome = Result<crate::link::OpenOutcome, String>;
 
 /// The on-loop message route, carried out of [`start`] so the caller's match
 /// stays one-armed.
@@ -76,8 +80,10 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
             let url = url.to_string();
             tokio::task::spawn_blocking(move || {
                 let outcome = match r {
-                    Route::File(path, _line) => crate::link::open_fno_path(&path),
-                    Route::Web => crate::link::open_url(&url),
+                    Route::File(path, _line) => {
+                        crate::link::open_fno_path(&path).map(|()| crate::link::OpenOutcome::Opened)
+                    }
+                    Route::Web => crate::link::open_url_for_session(&url),
                     _ => unreachable!("message, handle and sender routes return early"),
                 };
                 let _ = link_tx.send((url, outcome));
