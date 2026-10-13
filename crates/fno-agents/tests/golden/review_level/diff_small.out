@@ -1,0 +1,1 @@
+{"level": "low", "level_source": "diff-sized", "band": "low", "effort": "high", "model": "haiku", "provider": "unknown", "chain": ["slot family catalog unreadable (<TMP>/codex/models_cache.json: No such file or directory (os error 2)); codex model values pass through verbatim", "tier(low)", "inventory band(>=low) -> claude-haiku"], "degraded_max": false}

@@ -1,0 +1,1 @@
+{"level": "max", "level_source": "explicit", "band": "max", "effort": "max", "model": "fable", "provider": "unknown", "chain": ["slot family catalog unreadable (<TMP>/codex/models_cache.json: No such file or directory (os error 2)); codex model values pass through verbatim", "tier(max)", "inventory band(>=max) -> claude-fable"], "degraded_max": false}

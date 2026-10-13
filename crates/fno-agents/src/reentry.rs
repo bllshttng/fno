@@ -850,32 +850,59 @@ pub fn resolve_reentry(
 /// The wake fork's spawn name: the session's LAST recorded registry name for
 /// this uuid, whatever the row's status or harness - a reaped, orphaned or
 /// non-claude row revives under the name the board and mail already know.
-/// A stopped or retired row whose drop removed it answers from the wake-name
-/// tombstone, then from the transcript's own naming records (the last
-/// non-wake customTitle or agentName). The `wake-<handle>` alias is only
-/// for a uuid that never named a row. The name is the worker-to-node join,
-/// so the rule must not gate it on status.
+/// The name projection of `revival_identity`.
 pub fn wake_spawn_name(registry: &Registry, registry_path: &Path, session_id: &str) -> String {
-    named_row(registry, session_id)
-        .or_else(|| crate::wake_name::lookup_beside(registry_path, session_id))
-        .or_else(|| {
-            crate::wake_name::lookup_transcript(
-                &crate::claude_ask::ClaudeHome::from_env(),
-                session_id,
-            )
-        })
-        .unwrap_or_else(|| format!("wake-{}", crate::identity::canonical_handle(session_id)))
+    revival_identity(registry, registry_path, session_id).name
 }
 
-/// The last registry row this uuid named, newest first. The single read the
-/// wake name answers from; the tombstone fallback lives on the caller.
-fn named_row(registry: &Registry, session_id: &str) -> Option<String> {
-    registry
-        .entries
-        .iter()
-        .rev()
-        .find(|e| e.harness_session_id.as_deref() == Some(session_id) && !e.name.is_empty())
-        .map(|e| e.name.clone())
+/// The identity a revival carries for `session_id`, in rung order: the
+/// newest registry row whose `harness_session_id` equals the uuid or whose
+/// `predecessor_session_ids` hold it (the LATEST name, so a rename is
+/// carried), then the tombstone, then the transcript's naming records (a
+/// name only), then the `wake-<handle>` alias. One guard: a drive-eligible
+/// answering row leaves `fno_id` out, so a stale live row and its fork
+/// never share one id. No rung gates on the row's status: the identity
+/// joins the board, mail and ledger.
+pub(crate) fn revival_identity(
+    registry: &Registry,
+    registry_path: &Path,
+    session_id: &str,
+) -> crate::wake_name::Carried {
+    if let Some(entry) = named_row(registry, session_id) {
+        let mut carried = crate::wake_name::Carried::from_row(entry);
+        if entry.status.is_drive_eligible() {
+            carried.fno_id = None;
+        }
+        return carried;
+    }
+    if let Some(carried) = crate::wake_name::lookup_beside(registry_path, session_id) {
+        return carried;
+    }
+    if let Some(name) =
+        crate::wake_name::lookup_transcript(&crate::claude_ask::ClaudeHome::from_env(), session_id)
+    {
+        return crate::wake_name::Carried::named(name);
+    }
+    crate::wake_name::Carried::named(format!(
+        "wake-{}",
+        crate::identity::canonical_handle(session_id)
+    ))
+}
+
+/// The last registry row this uuid named, newest first: the row whose
+/// `harness_session_id` equals the uuid, or whose `predecessor_session_ids`
+/// hold it (a fork's successor row carries the name a rename left). The
+/// single read the revival identity answers from; the tombstone fallback
+/// lives on the caller.
+fn named_row<'a>(
+    registry: &'a Registry,
+    session_id: &str,
+) -> Option<&'a crate::state::RegistryEntry> {
+    registry.entries.iter().rev().find(|e| {
+        !e.name.is_empty()
+            && (e.harness_session_id.as_deref() == Some(session_id)
+                || e.predecessor_session_ids.iter().any(|p| p == session_id))
+    })
 }
 
 /// The `holder <session-id>...` action: recognized when the first arg is the
@@ -1927,24 +1954,49 @@ mod tests {
         );
     }
 
-    /// The row is gone (stopped, then the retirement sweep dropped
-    /// it), but the stop stamped the wake-name tombstone, so the wake still
-    /// revives under the name the board and mail already know.
+    /// The row is gone, but the stop stamped the tombstone, so the wake
+    /// still revives under the name, fno_id and spawner the board and mail
+    /// know. A LIVE row's answer carries no fno_id: a fork of a live row
+    /// never shares its id.
     #[test]
     fn wake_after_stop_keeps_the_tombstoned_name() {
         let dir = tempfile::tempdir().unwrap();
         let reg_path = dir.path().join("registry.json");
+        let mut src = row("t-x8ad3-glm");
+        src.fno_id = Some("f-carry-1".into());
+        src.spawned_by_session = Some("lead-2222".into());
+        src.spawned_by_harness = Some("claude".into());
+        src.node = Some("x-9".into());
         crate::wake_name::record_at(
             &dir.path().join("wake_names.json"),
             "cccdddd-0000-0000-0000-000000000001",
-            "t-x8ad3-glm",
+            &crate::wake_name::Carried::from_row(&src),
             1,
         )
         .unwrap();
         let named = reg(vec![]);
+        let identity = revival_identity(&named, &reg_path, "cccdddd-0000-0000-0000-000000000001");
+        assert_eq!(identity.name, "t-x8ad3-glm");
+        assert_eq!(identity.fno_id.as_deref(), Some("f-carry-1"));
+        assert_eq!(identity.spawned_by_session.as_deref(), Some("lead-2222"));
+        assert_eq!(identity.node.as_deref(), Some("x-9"));
         assert_eq!(
             wake_spawn_name(&named, &reg_path, "cccdddd-0000-0000-0000-000000000001"),
             "t-x8ad3-glm"
+        );
+        // AC6-EDGE: a drive-eligible row answers its name but leaves fno_id
+        // out, so a fork of a live row never shares its id.
+        let mut live = row("t-live-row");
+        live.status = crate::AgentStatus::Ready;
+        live.harness_session_id = Some("ddddeeee-0000-0000-0000-000000000001".into());
+        live.fno_id = Some("f-live".into());
+        let live_reg = reg(vec![live]);
+        let identity =
+            revival_identity(&live_reg, &reg_path, "ddddeeee-0000-0000-0000-000000000001");
+        assert_eq!(identity.name, "t-live-row");
+        assert_eq!(
+            identity.fno_id, None,
+            "a drive-eligible row's fork mints its own id"
         );
     }
 

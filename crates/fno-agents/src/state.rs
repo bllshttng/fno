@@ -3167,6 +3167,9 @@ pub(crate) fn account_for_removed_rows(
         .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "unknown".to_string());
     for entry in &removed {
+        // The drop stamp a later wake reads: the identity leaves the
+        // registry beside the receipt, before the row is announced gone.
+        crate::wake_name::stamp_from_row(&home, entry);
         crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter);
     }
     // One grouped `registry_rows_lost` beside the per-row events: the

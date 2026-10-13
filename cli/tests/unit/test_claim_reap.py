@@ -3,10 +3,10 @@
 Two things had no test before this: nothing pruned a claim whose holder died
 without releasing (so a leaked lockfile stayed forever), and `fno agents claim list`
 rendered a store that was 99 percent stale as an empty store. Every test here
-proves a real defect would have been caught - especially the load-bearing
-case (test_AC1_HP_kill_without_release_is_reaped), which spawns a real
-subprocess and kills it. A test that only exercises a clean release proves
-nothing about the leak that was measured.
+proves a real defect would have been caught. The leak-measurement case (a
+subprocess killed without release) moved with the engine to the Rust parity
+suite; what stays here proves the Python-side readers, verdict plumbing and
+dispatch reservations.
 """
 from __future__ import annotations
 
@@ -20,36 +20,21 @@ import psutil
 import pytest
 from typer.testing import CliRunner
 
-from fno.claims.cli import cli
+from fno.claims.cli import _abandonment_probe, cli
 from fno.claims.core import (
+    _claim_verdict,
     acquire_claim,
     claim_status,
-    reap_dead_claims,
     release_claim,
+    sweep_verdict,
 )
-from fno.claims.io import claim_path, claims_dir, serialize_claim
+from fno.claims.io import claim_path, serialize_claim
 from fno.claims.types import Claim, now_ms
 from fno.claims.verdict import claim_verdicts
-from tests._table_seed import update_claim
 
 
 HOLDER_A = "target-session:sid-a"
 runner = CliRunner()
-
-
-@pytest.fixture(autouse=True)
-def _real_reap_for_verb_tests(monkeypatch):
-    """These tests drive the REAL reap against tmp roots, so the conftest's
-    hermetic reap stub must not reach them.
-
-    It never could while the CLI verbs captured core callables at import; the
-    CLI now resolves them at call time, which is what makes the stub visible
-    here. Restore the function from this file's own collection-time binding -
-    the same reference the conftest fixture already documents as unaffected.
-    """
-    import fno.claims.core as claims_core
-
-    monkeypatch.setattr(claims_core, "reap_dead_claims", reap_dead_claims)
 
 
 def _dead_pid() -> int:
@@ -81,14 +66,23 @@ def is_provably_dead(claim: Claim, now: int | None = None) -> bool:
     return _native_sweep_verdict(claim)[0]
 
 
-# ---------------------------------------------------------------------------
-# is_provably_dead: the native verdict door
-# ---------------------------------------------------------------------------
+def _probe_sweep(claim: Claim, root):
+    """Judge one claim the way the pre-forward `reap` sweep did.
 
-
-# ---------------------------------------------------------------------------
-# reap_dead_claims: the reaper (core.py)
-# ---------------------------------------------------------------------------
+    The verb now forwards to Rust, whose own roster arms answer fail-closed,
+    so the probe wiring is exercised directly: the same `sweep_verdict` call
+    the old CLI loop made, with a root-resolved native verdict row and a
+    fresh lazily-reading abandonment probe. Node settlement stays unwired -
+    these fixtures pin abandonment-probe arms, and a settlement probe would
+    consume a flaky roster fake's calls. Returns ((dead, bucket), probe);
+    the probe's `.reasons` dict carries one token per unanswered arm.
+    """
+    probe = _abandonment_probe()
+    dead, bucket = sweep_verdict(
+        claim, abandonment_probe=probe,
+        native_verdict=_claim_verdict(claim, root=root),
+    )
+    return (dead, bucket), probe
 
 
 class TestReapDeadClaims:
@@ -109,77 +103,6 @@ class TestReapDeadClaims:
         assert isinstance(released, Claim)
         assert claim_status(claim.key, root=tmp_path)["state"] == "free"
         assert graph_path.read_text() == before
-
-    def test_live_claim_kept_live(self, tmp_path):
-        acquire_claim("k", HOLDER_A, pid=os.getpid(), root=tmp_path)
-
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert summary["reaped"] == 0
-        assert summary["kept_live"] == 1
-
-    def test_reap_row_names_the_native_verdict_basis(self, tmp_path, monkeypatch):
-        import fno.claims.core as claims_core
-        from fno.claims import events as claim_events
-        from fno.events import validate
-
-        acquire_claim("node:x-absent", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        verdict = {
-            "state": "stale",
-            "basis": "session-absent",
-            "bucket": "",
-            "provably_dead": True,
-        }
-        monkeypatch.setattr(
-            claims_core, "claim_verdicts", lambda *a, **k: {"node:x-absent": verdict}
-        )
-        emitted: list[dict] = []
-        monkeypatch.setattr(claim_events, "_emit", emitted.append)
-
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert summary["reaped"] == 1
-        reaped = [e for e in emitted if e["type"] == "claim_reaped"]
-        assert len(reaped) == 1
-        assert reaped[0]["data"]["basis"] == "session-absent"
-        validate(reaped[0])
-
-    def test_second_apply_run_is_idempotent(self, tmp_path):
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-
-        first = reap_dead_claims(roots=[tmp_path], apply=True)
-        second = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert first["reaped"] == 1
-        assert second["reaped"] == 0
-        assert second["scanned"] == 0, ".expired/ must never be rescanned"
-
-    def test_AC8_swept_event_fires_on_a_zero_reap_run(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        # See the comment in test_dry_run_reports_would_reap_and_writes_nothing:
-        # resolve_repo_root()'s process-wide cache can be warmed against the
-        # pre-chdir cwd by an unrelated fixture's first-use import, order-
-        # dependent on what ran earlier in the session. Order-dependent here
-        # means this test passes as part of the suite but fails run alone.
-        # The journal is pinned as well as the root. The hermetic sandbox sets
-        # FNO_EVENTS_PATH for the whole pytest process and it is checked ahead
-        # of the root, so a test reading the cwd-derived journal back has to
-        # name that same file.
-        monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / ".fno" / "events.jsonl"))
-        reap_dead_claims(roots=[tmp_path], apply=True)  # empty root, nothing to reap
-
-        from fno.events.store_client import store_db_path
-
-        events_path = tmp_path / ".fno" / "events.jsonl"
-        assert store_db_path(events_path).exists(), "a silent sweep must still leave a trace"
-        from tests._event_rows import event_rows
-
-        swept = [e for e in event_rows(events_path) if e["type"] == "claim_reap_swept"]
-        assert len(swept) == 1
-        assert swept[0]["data"]["scanned"] == 0
-        assert swept[0]["data"]["reaped"] == 0
-        assert swept[0]["data"]["apply"] is True
-
 
 # ---------------------------------------------------------------------------
 # acquire_claim's idempotent re-acquire vs reap's recovery mutex: a
@@ -298,155 +221,17 @@ class TestTheSweepNeverReapsAnUnexpiredDispatchReservation:
 
 
 # ---------------------------------------------------------------------------
-# the abandonment probe: reap only on a positive finding (x-05be change 2)
+# the abandonment probe: reap only on a positive finding
 # ---------------------------------------------------------------------------
 
 
-class TestAbandonmentProbe:
-    def _suspect_node(self, tmp_path, key="node:x-gone"):
-        """A SUSPECT node claim on disk: dead pid, TTL still open."""
-        acquire_claim(
-            key=key, holder="target-session:s", ttl_ms=3_600_000,
-            pid=_dead_pid(), root=tmp_path,
-        )
-
-    def test_without_a_probe_nothing_changes(self, tmp_path):
-        """The parameter defaults to None so every existing caller is
-        byte-for-byte unaffected."""
-        self._suspect_node(tmp_path)
-        summary = reap_dead_claims(roots=[tmp_path], apply=False)
-        assert summary["would_reap"] == 0
-        assert summary["kept_suspect"] == 1
-        assert summary["kept_suspect_alive"] == 0
-        assert summary["kept_suspect_unprobed"] == 0
-
-    def test_a_proven_abandoned_node_claim_is_reaped(self, tmp_path):
-        self._suspect_node(tmp_path)
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=False, abandonment_probe=lambda _c, **_: True
-        )
-        assert summary["would_reap"] == 1
-        assert summary["kept_suspect_alive"] == 0
-
-    def test_a_live_worker_keeps_its_claim(self, tmp_path):
-        """The x-ba4b regression guard. Archiving this claim is two live
-        sessions in one worktree and a duplicate PR."""
-        self._suspect_node(tmp_path)
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=True, abandonment_probe=lambda _c, **_: False
-        )
-        assert summary["reaped"] == 0
-        assert summary["kept_suspect_alive"] == 1
-        assert claim_status("node:x-gone", root=tmp_path)["state"] == "suspect"
-
-    def test_a_probe_that_could_not_run_keeps_the_claim(self, tmp_path):
-        """unknown KEEPS. Reaping because a probe returned nothing is the exact
-        inversion of this fix."""
-        self._suspect_node(tmp_path)
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=True, abandonment_probe=lambda _c, **_: None
-        )
-        assert summary["reaped"] == 0
-        assert summary["kept_suspect_unprobed"] == 1
-        assert claim_status("node:x-gone", root=tmp_path)["state"] == "suspect"
-
-    def test_the_probe_is_never_asked_about_a_non_node_key(self, tmp_path):
-        """No other key family has a roster to consult. The reservation is kept
-        because its TTL is the boot window, not because the probe said so."""
-        def _boom(_claim, **_):
-            raise AssertionError("probe asked about a non-node key")
-
-        acquire_claim(
-            key="dispatch:x-one", holder="spawn-cli:1", ttl_ms=180_000,
-            pid=_dead_pid(), root=tmp_path,
-        )
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=False, abandonment_probe=_boom
-        )
-        assert summary["would_reap"] == 0
-        assert summary["kept_suspect"] == 1
-
-    def test_the_probe_is_never_asked_about_a_live_claim(self, tmp_path):
-        def _boom(_claim, **_):
-            raise AssertionError("probe asked about a live claim")
-
-        acquire_claim(
-            key="node:x-busy", holder="target-session:s", ttl_ms=3_600_000,
-            pid=os.getpid(), root=tmp_path,
-        )
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=False, abandonment_probe=_boom
-        )
-        assert summary["kept_live"] == 1
-
-
-class TestSharedPidExclusivity:
-    """The 2026-08-29 specimen: seven expired claims from distinct sessions,
-    one live daemon pid, every one prover-proven, so the corroborated hybrid
-    arm kept them all LIVE forever and the reaper reported 0 of 14. Provenance
-    was honest - the prover truthfully resolves every daemon-hosted session to
-    the daemon - so the missing predicate is EXCLUSIVITY: a pid that answers
-    for more than one distinct holder is not session evidence. The sweep
-    derives that property from the claim records it is already reading. No
-    harness name appears anywhere in it: a daemon-hosted session is a substrate
-    property, not any one harness's (the doctor_footprint lesson, PR 1295).
-    """
-
-    @staticmethod
-    def _expired_prover_on_disk(root, key, holder, pid=os.getpid()):
-        """An expired TTL claim on disk whose live pid is prover-proven.
-
-        ``acquired_at`` must postdate this process's create_time or is_live
-        reads the pid as reused and the claim dies for an unrelated reason.
-        acquire_claim cannot write this shape (its TTL is always future), so
-        the claim is serialized directly.
-        """
-        started = int(psutil.Process(os.getpid()).create_time() * 1000)
-        claim = Claim(
-            key=key, holder=holder, acquired_at=started + 1,
-            expires_at=now_ms() - 60_000, pid=pid,
-            host=socket.gethostname(), pid_provenance="session-prover",
-        )
-        path = claim_path(key, root=root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(serialize_claim(claim), encoding="utf-8")
-        return path
-
-    def test_two_expired_claims_sharing_one_live_pid_are_not_immortal(self, tmp_path):
-        """Distinct holders, one live pid: the pid alone cannot keep either
-        LIVE. Both fall to the suspect route where the secondary evidence
-        decides - here it proves abandonment, so both are reapable."""
-        self._expired_prover_on_disk(tmp_path, "node:x-one", "target-session:s1")
-        self._expired_prover_on_disk(tmp_path, "node:x-two", "target-session:s2")
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=False, abandonment_probe=lambda _c, **_: True
-        )
-        assert summary["would_reap"] == 2
-        assert summary["kept_live"] == 0
-
-    def test_same_holder_claims_sharing_a_pid_stay_live(self, tmp_path):
-        """Exclusivity counts DISTINCT holders. One session's own claims on
-        its one prover pid are the corroborated hybrid arm's legitimate case
-        and must not be demoted by counting claim files."""
-        self._expired_prover_on_disk(tmp_path, "node:x-a", "target-session:s1")
-        self._expired_prover_on_disk(tmp_path, "node:x-b", "target-session:s1")
-        summary = reap_dead_claims(roots=[tmp_path], apply=False)
-        assert summary["kept_live"] == 2
-        assert summary["kept_suspect"] == 0
-
-    def test_without_a_probe_the_shared_shape_keeps(self, tmp_path):
-        """No secondary evidence supplied: unknown keeps, the pre-existing
-        doctrine, now visible as suspect instead of a false live."""
-        self._expired_prover_on_disk(tmp_path, "node:x-one", "target-session:s1")
-        self._expired_prover_on_disk(tmp_path, "node:x-two", "target-session:s2")
-        summary = reap_dead_claims(roots=[tmp_path], apply=False)
-        assert summary["would_reap"] == 0
-        assert summary["kept_suspect"] == 2
-        assert summary["kept_live"] == 0
-
 class TestCliProbeWiring:
-    """The CLI is what injects the roster join, so the wiring needs its own
-    coverage: a probe that exists but is never passed is a decorative guard."""
+    """The roster join is injected by sweep_verdict's callers: the spawn
+    guard in fno.agents.cli passes abandonment_probe for every suspect
+    claim, and the pre-forward `reap` sweep was the other caller. The verb
+    itself now forwards to Rust, whose own roster arms answer fail-closed,
+    so these tests drive the Python wiring directly - a probe that exists
+    but is never passed is a decorative guard."""
 
     def _fake_roster(self, monkeypatch, rows, warnings=()):
         def _fake(*_a, **_kw):
@@ -457,14 +242,14 @@ class TestCliProbeWiring:
     def test_an_empty_scan_never_reaps(self, tmp_path, monkeypatch):
         """Zero rows scanned is not a finding, even with no read error: there is
         nothing to have found the worker in."""
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-empty", holder="target-session:s", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
         self._fake_roster(monkeypatch, rows=[])
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
-        assert "probe unanswered: row-absent-no-cwd 1" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "row-absent-no-cwd"
 
     def _transcript_says(self, monkeypatch, finished):
         monkeypatch.setattr(
@@ -475,7 +260,7 @@ class TestCliProbeWiring:
         """Abandonment is proven by FINDING the holder and seeing it stopped."""
         from fno.agents.watchdog import Row
 
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-abandoned", holder="target-session:sid-gone", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
@@ -484,8 +269,8 @@ class TestCliProbeWiring:
             rows=[Row(row_id="sid-gone", name="t-gone", state="done", node="x-abandoned", cwd="")],
         )
         self._transcript_says(monkeypatch, True)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 1" in r.output
+        (dead, bucket), _probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (True, "")
 
     def test_a_terminal_row_whose_transcript_is_alive_is_never_reaped(
         self, tmp_path, monkeypatch
@@ -496,7 +281,7 @@ class TestCliProbeWiring:
         next dispatcher - the `reaped_a_live_worker` kill criterion."""
         from fno.agents.watchdog import Row
 
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-lying", holder="target-session:sid-busy", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
@@ -505,13 +290,16 @@ class TestCliProbeWiring:
             rows=[Row(row_id="sid-busy", name="t-busy", state="done", node="x-lying", cwd="")],
         )
         self._transcript_says(monkeypatch, False)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_alive")
+        assert probe.reasons[claim.key] == "row-transcript-unfinished"
 
     def test_the_holder_found_and_working_keeps(self, tmp_path, monkeypatch):
+        """A roster row that resolves to the holder and is still working is
+        the worker, found: the claim keeps."""
         from fno.agents.watchdog import Row
 
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-busy2", holder="target-session:sid-busy", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
@@ -519,14 +307,16 @@ class TestCliProbeWiring:
             monkeypatch,
             rows=[Row(row_id="sid-busy", name="t-busy2", state="working", node="x-busy2", cwd="")],
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
-        assert "suspect (worker alive)" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_alive")
+        assert claim.key not in probe.reasons  # found, not merely unproven
 
     def test_an_unparseable_holder_is_never_reaped(self, tmp_path, monkeypatch):
+        """A holder shape this lane cannot parse names no session to look
+        up, so no roster row - however finished - may answer for it."""
         from fno.agents.watchdog import Row
 
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-odd", holder="some-foreign-holder-shape", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
@@ -534,8 +324,9 @@ class TestCliProbeWiring:
             monkeypatch,
             rows=[Row(row_id="a", name="t-a", state="done", node="x-odd", cwd="")],
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "holder-session-unparsed"
 
 
 class TestExternalDeathEvidence:
@@ -553,7 +344,7 @@ class TestExternalDeathEvidence:
         monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _fake)
 
     def _handover(self, tmp_path, *, pid=None, key="node:x-c272"):
-        acquire_claim(
+        return acquire_claim(
             key=key,
             holder="spawn-handover:bp-xc272-daemondrift",
             ttl_ms=900_000,  # inside the launch window: the old probe's blind spot
@@ -568,62 +359,66 @@ class TestExternalDeathEvidence:
         )
 
     def test_specimen_2_absent_pane_and_dead_pid_reaps(self, tmp_path, monkeypatch):
-        """x-c272: the lead killed the holder's pane and removed its registry
-        row; the spawn-handover claim survived both and the next dispatch
-        refused. Pane positively absent from the mux listing AND the recorded
-        spawner pid dead is the launch window OVER - a positive finding."""
+        """Specimen two: the lead killed the holder's pane and removed its
+        registry row; the spawn-handover claim survived both and the next
+        dispatch refused. Pane positively absent from the mux listing AND the
+        recorded spawner pid dead is the launch window OVER - a positive
+        finding."""
+        claim = self._handover(tmp_path)
         self._pane(monkeypatch, absent=True)
-        self._handover(tmp_path)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 1" in r.output
+        (dead, bucket), _probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (True, "")
 
     def test_handover_whose_pane_is_still_live_stays(self, tmp_path, monkeypatch):
         """The negative that keeps the fix honest: a pane still hosting the
         worker is the launch window OPEN, and the claim keeps."""
+        claim = self._handover(tmp_path)
         self._pane(monkeypatch, absent=False)
-        self._handover(tmp_path)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "handover-pane-not-absent"
 
     def test_handover_with_absent_pane_but_live_spawner_pid_stays(
         self, tmp_path, monkeypatch
     ):
         """Pane gone but the spawner process itself still runs: it may be
-        mid-relaunch onto a new pane, so neither absence alone may reap."""
+        mid-relaunch onto a new pane, so neither absence alone may reap. The
+        live pid is what makes the native verdict read bucket `live`, and
+        that bucket keeps before the probe is even asked."""
+        claim = self._handover(tmp_path, pid=os.getpid())
         self._pane(monkeypatch, absent=True)
-        self._handover(tmp_path, pid=os.getpid())
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "live")
+        assert claim.key not in probe.reasons  # the live bucket answered
 
     def test_handover_when_the_mux_cannot_answer_stays(self, tmp_path, monkeypatch):
         """An unverifiable pane listing (None) is not absence: unknown keeps."""
-        monkeypatch.setattr(
-            "fno.claims.cli._mux_pane_absent_for",
-            lambda worker, node_id="", runner=None: None,
-        )
-        self._handover(tmp_path)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        claim = self._handover(tmp_path)
+        self._pane(monkeypatch, absent=None)
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "handover-pane-not-absent"
 
     def test_handover_in_place_policy_stays_unknown(self, tmp_path, monkeypatch):
         """An in-place worker's pane has no worker/worktree identity, so a
         missing match must not prove that its live pane is gone."""
-        self._pane(monkeypatch, absent=True)
         monkeypatch.setattr(
             "fno.worktree_paths.resolve_worktree_policy",
             lambda *_a, **_kw: SimpleNamespace(policy="never"),
         )
-        self._handover(tmp_path)
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        claim = self._handover(tmp_path)
+        self._pane(monkeypatch, absent=True)
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "handover-pane-probe-blocked"
 
     def test_specimen_1_degraded_then_recovered_roster_reaps(
         self, tmp_path, monkeypatch
     ):
-        """x-3f84: the lead killed the holder's whole tree and verified five
-        pids gone; `claim reap` still reported `kept: 1 suspect (roster not
-        consulted)` because one degraded roster read answered None for the
-        whole pass. One retry on a degraded reading resolves it here."""
+        """Specimen one: the lead killed the holder's whole tree and verified
+        five pids gone; `claim reap` still reported the roster unconsulted
+        because one degraded read answered for the whole pass. One retry on a
+        degraded reading resolves it here."""
         from fno.agents.watchdog import Row
 
         calls = {"n": 0}
@@ -646,16 +441,16 @@ class TestExternalDeathEvidence:
         monkeypatch.setattr(
             "fno.claims.cli._transcript_says_finished", lambda *_a, **_kw: True
         )
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-3f84", holder="target-session:sid-3f84",
             ttl_ms=3_600_000, pid=_dead_pid(), root=tmp_path,
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 1" in r.output
+        (dead, bucket), _probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (True, "")
         assert calls["n"] == 2  # degraded once, retried once, settled
 
     def _claimed_no_row(self, tmp_path, *, metadata=None):
-        acquire_claim(
+        return acquire_claim(
             key="node:x-no-row", holder="target-session:sid-no-row",
             ttl_ms=3_600_000, pid=_dead_pid(), metadata=metadata, root=tmp_path,
         )
@@ -681,36 +476,38 @@ class TestExternalDeathEvidence:
         lives under. A finished tree is abandonment PROVEN, never inferred
         from the absent row."""
         self._roster_without_holder(monkeypatch)
-        self._claimed_no_row(tmp_path, metadata={"worktree": "/tmp/wt-x"})
+        claim = self._claimed_no_row(tmp_path, metadata={"worktree": "/tmp/wt-x"})
         monkeypatch.setattr(
             "fno.claims.cli._transcript_says_finished", lambda *_a, **_kw: True
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 1" in r.output
+        (dead, bucket), _probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (True, "")
 
     def test_dead_pid_without_worktree_metadata_stays(self, tmp_path, monkeypatch):
         """No cwd to find the tree with: the probe still answers None. The
         fallback is only as live as the worktree stamp init now writes."""
         self._roster_without_holder(monkeypatch)
-        self._claimed_no_row(tmp_path)
+        claim = self._claimed_no_row(tmp_path)
         monkeypatch.setattr(
             "fno.claims.cli._transcript_says_finished",
             lambda *_a, **_kw: (_ for _ in ()).throw(
                 AssertionError("no transcript lookup without a worktree")
             ),
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "row-absent-no-cwd"
 
     def test_dead_pid_with_live_transcript_stays(self, tmp_path, monkeypatch):
         """An unfinished transcript overrules the fallback: still working."""
         self._roster_without_holder(monkeypatch)
-        self._claimed_no_row(tmp_path, metadata={"worktree": "/tmp/wt-x"})
+        claim = self._claimed_no_row(tmp_path, metadata={"worktree": "/tmp/wt-x"})
         monkeypatch.setattr(
             "fno.claims.cli._transcript_says_finished", lambda *_a, **_kw: False
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "row-absent-transcript-unfinished"
 
 
 class TestMuxPaneAbsenceHelper:
@@ -848,33 +645,6 @@ class TestSweepReadsWalkedDir:
     to unknown-keeps labelled "roster not consulted" - a cause nobody
     measured."""
 
-    def test_AC1_HP_space_root_claim_gets_native_verdict(self, tmp_path, monkeypatch):
-        import fno.claims.core as claims_core
-
-        monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
-        # The space root rides env: the native acquire below resolves it in
-        # the binary's process, where a Python path-symbol patch is invisible.
-        monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
-        space = claims_dir().parent
-        # Session-prover pid not running, no session id: the shape the
-        # native classifier reads Stale on its own (dead pid proves death on
-        # this machine regardless of the TTL arm).
-        acquire_claim(
-            "reap:pr-1496", "reap:pr-1496", pid=_dead_pid(), root=None
-        )
-        asked: list = []
-        real_door = claims_core.claim_verdicts
-
-        def _recording_door(keys=None, *, prefix=None, root=None, claims_dir_path=None):
-            asked.append(claims_dir_path)
-            return real_door(keys, prefix=prefix, root=root, claims_dir_path=claims_dir_path)
-
-        monkeypatch.setattr(claims_core, "claim_verdicts", _recording_door)
-        summary = reap_dead_claims(roots=[None], apply=False)
-        assert asked == [space / "claims"], "the door must be asked about the walked dir"
-        assert summary["would_reap"] == 1
-        assert summary["kept_unclassified"] == 0
-
     def test_AC2_ERR_sweep_event_carries_the_new_buckets(self, monkeypatch):
         from fno.claims import events as claim_events
 
@@ -907,134 +677,6 @@ def _held(key, root):
 
 
 class TestReapOverTheClaimsTable:
-    def test_AC1_HP_kill_without_release_is_reaped(self, tmp_path):
-        """The load-bearing case. A real process, really killed, never released."""
-        import subprocess
-        import sys
-
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-        try:
-            acquire_claim("node:x-killed", HOLDER_A, pid=proc.pid, root=tmp_path)
-            proc.kill()
-            proc.wait(timeout=10)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=10)
-        assert _held("node:x-killed", tmp_path)
-
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert summary["reaped"] == 1
-        assert summary["reap_failed"] == []
-        assert not _held("node:x-killed", tmp_path)
-
-    def test_AC2_FR_both_roots_swept_in_one_run(self, tmp_path):
-        root_a, root_b = tmp_path / "a", tmp_path / "b"
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=root_a)
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=root_b)
-
-        summary = reap_dead_claims(roots=[root_a, root_b], apply=True)
-
-        assert summary["reaped"] == 2
-        assert len(summary["roots"]) == 2
-        assert not _held("k", root_a) and not _held("k", root_b)
-
-    def test_roots_deduped_by_resolve(self, tmp_path):
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        summary = reap_dead_claims(roots=[tmp_path, tmp_path], apply=True)
-        assert summary["reaped"] == 1
-        assert len(summary["roots"]) == 1
-
-    def test_AC3_FR_off_machine_claim_never_reaped(self, tmp_path):
-        acquire_claim("node:x-remote", HOLDER_A, root=tmp_path)
-        update_claim(
-            "node:x-remote", root=tmp_path, host="some-other-host",
-            machine_id="not-this-machine", acquired_at=now_ms() - 100_000,
-        )
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-        assert summary["reaped"] == 0
-        assert summary["kept_offhost"] == 1
-        assert _held("node:x-remote", tmp_path), "an off-host claim must never be archived"
-
-    def test_AC4_FR_ttl_protected_suspect_never_reaped(self, tmp_path):
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), ttl_ms=60_000, root=tmp_path)
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-        assert summary["reaped"] == 0
-        assert summary["kept_suspect"] == 1
-        assert _held("k", tmp_path)
-
-    def test_a_failed_retire_is_reported_and_the_sweep_continues(self, tmp_path, monkeypatch):
-        import fno.claims.core as claims_core
-
-        acquire_claim("bad", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        acquire_claim("good", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        real = claims_core._native_claim
-
-        def _fail_bad(operation, key, flags):
-            if operation == "force-release" and key == "bad":
-                raise OSError("simulated permission denied")
-            return real(operation, key, flags)
-
-        monkeypatch.setattr(claims_core, "_native_claim", _fail_bad)
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert summary["reaped"] == 1
-        assert len(summary["reap_failed"]) == 1
-        assert "bad" in summary["reap_failed"][0][0]
-        assert "simulated permission denied" in summary["reap_failed"][0][1]
-        monkeypatch.setattr(claims_core, "_native_claim", real)
-        assert _held("bad", tmp_path)
-        assert not _held("good", tmp_path)
-
-    def test_AC5_EDGE_reap_credited_even_if_key_recreated_right_after(self, tmp_path, monkeypatch):
-        import fno.claims.core as claims_core
-
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        real = claims_core._native_claim
-
-        def _retire_then_race(operation, key, flags):
-            result = real(operation, key, flags)
-            if operation == "force-release":
-                acquire_claim("k", "other-holder", pid=os.getpid(), root=tmp_path)
-            return result
-
-        monkeypatch.setattr(claims_core, "_native_claim", _retire_then_race)
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-
-        assert summary["reaped"] == 1
-        assert summary["reap_failed"] == []
-        status = claim_status("k", root=tmp_path)
-        assert status["state"] == "live"
-        assert status["holder"] == "other-holder"
-
-    def test_AC6_EDGE_corrupted_row_is_never_reaped(self, tmp_path):
-        acquire_claim("node:x-bad", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-        update_claim("node:x-bad", root=tmp_path, schema_version=999)
-        summary = reap_dead_claims(roots=[tmp_path], apply=True)
-        assert summary["reaped"] == 0
-        assert claim_status("node:x-bad", root=tmp_path)["state"] == "corrupted"
-
-    def test_dry_run_reports_would_reap_and_writes_nothing(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        events_path = tmp_path / ".fno" / "events.jsonl"
-        monkeypatch.setenv("FNO_EVENTS_PATH", str(events_path))
-        acquire_claim("k", HOLDER_A, pid=_dead_pid(), root=tmp_path)
-
-        summary = reap_dead_claims(roots=[tmp_path], apply=False)
-
-        assert summary["apply"] is False
-        assert summary["would_reap"] == 1
-        assert summary["reaped"] == 0
-        assert _held("k", tmp_path)
-        from fno.paths import journal_and_ephemeral_sibling
-
-        lines = []
-        for candidate in journal_and_ephemeral_sibling(events_path):
-            if candidate.exists():
-                lines.extend(json.loads(line) for line in candidate.read_text().splitlines())
-        assert [e for e in lines if e["type"] == "claim_reap_swept"] == []
-
     def test_AC7_counts_reconcile_with_the_table(self, tmp_path, monkeypatch):
         from fno.claims.core import list_claims_with_counts
 
@@ -1070,29 +712,6 @@ class TestReapCliOverTheTable:
         assert not _held("k", cwd_tmp)
 
 
-class TestSharedPidOverTheTable:
-    _expired = staticmethod(TestSharedPidExclusivity._expired_prover_on_disk)
-
-    def test_apply_drains_the_whole_shared_set_not_one_member(self, tmp_path):
-        self._expired(tmp_path, "node:x-one", "target-session:s1")
-        self._expired(tmp_path, "node:x-two", "target-session:s2")
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=True, abandonment_probe=lambda _c, **_: True
-        )
-        assert summary["reaped"] == 2
-        assert summary["kept_live"] == 0
-
-    def test_a_shared_pid_claim_whose_holder_is_working_is_kept(self, tmp_path):
-        self._expired(tmp_path, "node:x-one", "target-session:s1")
-        self._expired(tmp_path, "node:x-two", "target-session:s2")
-        summary = reap_dead_claims(
-            roots=[tmp_path], apply=True, abandonment_probe=lambda _c, **_: False
-        )
-        assert summary["reaped"] == 0
-        assert summary["kept_suspect_alive"] == 2
-        assert _held("node:x-one", tmp_path)
-
-
 class TestRosterWiringOverTheTable:
     _fake_roster = TestCliProbeWiring._fake_roster
 
@@ -1111,7 +730,7 @@ class TestRosterWiringOverTheTable:
         absence there is never read as abandonment."""
         from fno.agents.watchdog import Row
 
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-codex", holder="target-session:sid-codex", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
@@ -1122,9 +741,9 @@ class TestRosterWiringOverTheTable:
                 for i in range(40)
             ],
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
-        assert "probe unanswered: row-absent-no-cwd 1" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "row-absent-no-cwd"
 
     def test_a_still_degraded_roster_after_retry_keeps(self, tmp_path, monkeypatch):
         calls = {"n": 0}
@@ -1134,11 +753,11 @@ class TestRosterWiringOverTheTable:
             return [], ["claude not on PATH"]
 
         monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _always_degraded)
-        acquire_claim(
+        claim = acquire_claim(
             key="node:x-dead-roster", holder="target-session:sid-1",
             ttl_ms=3_600_000, pid=_dead_pid(), root=tmp_path,
         )
-        r = runner.invoke(cli, ["reap", "--root", str(tmp_path)])
-        assert "would reap 0" in r.output
-        assert "roster not consulted" in r.output
+        (dead, bucket), probe = _probe_sweep(claim, tmp_path)
+        assert (dead, bucket) == (False, "suspect_unprobed")
+        assert probe.reasons[claim.key] == "roster-read-degraded"
         assert calls["n"] == 2
