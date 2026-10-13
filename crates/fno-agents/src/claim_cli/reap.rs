@@ -848,7 +848,7 @@ mod tests {
             metadata: serde_json::Map::new(),
         };
         let path = locator(dir.path(), &rec.key);
-        std::fs::write(&path, serde_json::to_vec(&rec).unwrap()).unwrap();
+        crate::claim_store::seed_at_path(&path, &rec);
         let row = serde_json::json!({
             "key": rec.key,
             "state": "dead",
@@ -868,7 +868,10 @@ mod tests {
             &mut summary,
         )
         .unwrap();
-        assert!(path.exists(), "claim file must survive the downgrade");
+        assert!(
+            read_claim_file(&path).is_ok(),
+            "claim file must survive the downgrade"
+        );
         assert_eq!(summary.reaped, 0, "downgraded suspect is never reaped");
         assert_eq!(summary.kept_live, 0, "fresh live verdict must collapse");
         assert_eq!(summary.kept_suspect_unprobed, 1);
