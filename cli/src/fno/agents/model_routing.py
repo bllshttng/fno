@@ -1254,6 +1254,16 @@ def lane_alias_for(
     return lane.name if lane else None
 
 
+def lane_row_by_name(name: str) -> Optional["InventoryRow"]:
+    """The declared row whose name is exactly this, else None - the lane pin
+    spelling: ``--route zai-flash`` resolves the declared row, and the row's
+    own axes (route vendor, model, effort) answer the spawn. Names are the
+    inventory's dict keys, so one read settles it."""
+    from fno.route_resolve import resolve_inventory
+
+    return resolve_inventory().rows.get(name)
+
+
 def route_settings_path_for(
     route_env: Optional[Mapping[str, str]],
     account_env: Optional[Mapping[str, str]] = None,

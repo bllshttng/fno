@@ -1797,6 +1797,9 @@ def cmd_spawn(
     # applied. A bare --model (no route) is still reported via the `model`
     # local below, since claude bg_create applies it as `claude --model`.
     route_model: str | None = None
+    # The routing row a lane-name route resolved, so the lane-specific
+    # surfaces downstream (the print ask's launch list) read the row once.
+    lane_row: "InventoryRow | None" = None
     if route is not None:
         # Pane routing is a per-harness evidence claim, independent from both
         # pane autonomy and substrate preference. Missing capability stays
@@ -1833,14 +1836,37 @@ def cmd_spawn(
         )
 
         parsed = _parse_target(route)
+        lane_row = None
         if parsed is None:
-            print(
-                f"--route must be 'provider,model' with a non-empty model token; got {route!r}",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-        route_provider = parsed[0]
-        route_model = parsed[1]
+            # The lane pin spelling: a declared row's NAME resolves the whole
+            # coordinate - the dispatchers name one lane, never a flag
+            # vocabulary. The pair spelling parses first, so a row named like
+            # a pair cannot shadow it.
+            from fno.agents.model_routing import lane_row_by_name
+
+            lane_row = lane_row_by_name(route)
+            if lane_row is None:
+                print(
+                    f"--route takes 'provider,model' or a declared lane name; got {route!r}",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(code=2)
+        if lane_row is not None:
+            vendor = lane_row.route.split("/", 1)[0] if lane_row.route else ""
+            if not vendor:
+                print(
+                    f"--route {route!r} names a lane that declares no route; "
+                    "no worker launched, node stays dispatchable.",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(code=2)
+            route_provider = vendor
+            route_model = lane_row.model
+            if effort is None and lane_row.effort:
+                effort = lane_row.effort
+        else:
+            route_provider = parsed[0]
+            route_model = parsed[1]
         if monitor == "happy" and route_provider != "zai":
             print(
                 "--monitor happy currently supports only the zai provider",
@@ -1855,7 +1881,7 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         notes: list[str] = []
-        route_env = resolve_explicit_route(parsed[0], parsed[1], notice=notes.append)
+        route_env = resolve_explicit_route(route_provider, route_model, notice=notes.append)
         if not route_env:
             reason = "; ".join(notes) or "provider unknown, non-anthropic, or keyless"
             print(
@@ -2050,7 +2076,11 @@ def cmd_spawn(
         from fno.agents.model_routing import declared_lane, route_settings_path_for
         from fno.agents.spawn_overlay_client import spawn_overlay_call
 
-        lane = declared_lane(route_provider, model) if route_env else None
+        lane = (
+            lane_row
+            if lane_row is not None
+            else declared_lane(route_provider, route_model or model)
+        ) if route_env else None
         settings_path = route_settings_path_for(
             route_env, account_env, env=dict(os.environ), sandbox=None,
             alias=lane.name if lane else None,
@@ -2061,7 +2091,7 @@ def cmd_spawn(
             "name": name,
             "payload": message or "",
             "settings": settings_path or "",
-            "model": model or "",
+            "model": route_model or model or "",
             "effort": effort or "",
         }
         if lane is not None and lane.launch:

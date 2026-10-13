@@ -743,6 +743,64 @@ def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
     assert "no native line yet" in result.output
 
 
+def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
+    """The lane pin spelling: ``--route zai-flash`` resolves the declared row
+    and the row's own axes answer the spawn - vendor and model for the
+    settings file, effort seeded when the spawn named none of its own, and
+    the row's launch list riding the print ask. A pair-shaped value never
+    reaches the name arm: the pair parse runs first."""
+    from fno.agents import spawn_gate
+    from fno.agents.cli import agents_app
+
+    gate_calls: list[Any] = []
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    from fno import route_resolve
+    from fno.agents import model_routing as mr
+    from fno.route_resolve import Inventory, InventoryRow
+
+    row = InventoryRow(
+        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.3-flash[1m]", effort="xhigh",
+        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+    )
+    monkeypatch.setattr(
+        route_resolve,
+        "resolve_inventory",
+        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+    )
+    aliases: list[str | None] = []
+
+    def fake_settings(*a: Any, **k: Any) -> str:
+        aliases.append(k.get("alias"))
+        return "/s/lane-zai-flash.json"
+
+    monkeypatch.setattr(mr, "route_settings_path_for", fake_settings)
+    from fno.agents import spawn_overlay_client
+
+    asks: list[dict] = []
+    monkeypatch.setattr(
+        spawn_overlay_client,
+        "spawn_overlay_call",
+        lambda ask: asks.append(ask)
+        or {"tokens": ["claude", "--bg", "--name", "w", "/fno:target x-1abc"]},
+    )
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+         "--route", "zai-flash", "--print"],
+    )
+    assert result.exit_code == 0, result.output
+    [ask] = asks
+    assert ask["model"] == "glm-5.3-flash[1m]"
+    assert ask["effort"] == "xhigh", "the row's effort seeded the spawn"
+    assert ask["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
+    assert aliases == ["zai-flash"]
+    assert gate_calls == []
+
+
 def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
     """The lane is the one declared claude row matching the resolved
     (provider, model), carrying the row's own launch argv verbatim.
@@ -772,6 +830,10 @@ def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
     )
     monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row, twin))
     assert mr.declared_lane("zai", "glm-5.3-flash[1m]") is None
+    # The inverse lookup behind the lane pin spelling: the name IS the key.
+    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row))
+    assert mr.lane_row_by_name("zai-flash") is row
+    assert mr.lane_row_by_name("no-such-lane") is None
 
 
 def test_materialize_route_settings_is_0600_and_content_addressed(
