@@ -603,6 +603,11 @@ pub fn probe_pid(pid: i32) -> PidProbe {
 /// `sysconf(_SC_CLK_TCK)` — the same computation psutil performs. Sub-second
 /// skew vs psutil's float math is tolerable: the comparison is directional
 /// and real holders start well before they claim.
+///
+/// Genuinely-gone pids (invalid, vanished, zombie) read `Absent`; measurement
+/// failures (unreadable or malformed stat, missing boot time, bad tick rate)
+/// read `Refused`. A refusal is not proof of death: an unreadable live holder
+/// must never have its claim reaped.
 #[cfg(target_os = "linux")]
 pub fn probe_pid(pid: i32) -> PidProbe {
     if pid <= 0 {
@@ -611,11 +616,16 @@ pub fn probe_pid(pid: i32) -> PidProbe {
     let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return PidProbe::Refused,
-        Err(_) => return PidProbe::Absent,
+        // A vanished /proc entry is the NoSuchProcess analogue: the pid has no
+        // holder, provably dead. Any other read failure is a measurement
+        // problem, and a refusal is not proof of death - it reads Suspect.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return PidProbe::Absent,
+        Err(_) => return PidProbe::Refused,
     };
-    // comm (field 2) can contain spaces/parens; split on the LAST ')'.
+    // comm (field 2) can contain spaces/parens; split on the LAST ')'. A
+    // malformed stat is a refusal, never death.
     let Some(after) = stat.rsplit_once(')').map(|(_, tail)| tail) else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     // A zombie holds no fds and will never resume; a no-TTL claim naming
     // one must not read Live forever (a CI run-slot wedge).
@@ -623,14 +633,14 @@ pub fn probe_pid(pid: i32) -> PidProbe {
         return PidProbe::Absent;
     }
     let Some(Ok(starttime)) = after.split_whitespace().nth(19).map(|v| v.parse::<i64>()) else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     let Some(btime) = linux_boot_time_s() else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if tck <= 0 {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     }
     PidProbe::Created(btime * 1000 + starttime * 1000 / tck as i64)
 }
