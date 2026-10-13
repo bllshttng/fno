@@ -147,14 +147,17 @@ fn render_status(entries: &[&Value], project: Option<&str>, all: bool) -> i32 {
             buckets.extend(by);
         }
         None => {
-            let detected = entries.iter().filter_map(|e| text_at(e, "project")).next();
-            match detected {
+            // No --project/--all: the deleted wheel detected the caller's
+            // project from node cwd fields (graph/_intake.detect_project);
+            // the first row's project value is row order, not detection.
+            let owned: Vec<Value> = entries.iter().map(|e| (*e).clone()).collect();
+            match super::triage::detect_project(&owned) {
                 Some(p) => buckets.push((
-                    p.to_string(),
+                    p,
                     entries
                         .iter()
                         .copied()
-                        .filter(|e| text_at(e, "project") == Some(p))
+                        .filter(|e| text_at(e, "project") == Some(p.as_str()))
                         .collect(),
                 )),
                 None => buckets.push(("(all)".to_string(), entries.to_vec())),
@@ -689,12 +692,21 @@ pub fn run_collisions(tail: &[String]) -> i32 {
         .filter(|e| !truthy(e, "archived_at"))
         .collect();
     let evaluated = super::collision::has_file_surface(&plan);
+    // The wheel's detector inferred the self-exclusion when --self-id was
+    // omitted: a plan already intaked against one node would otherwise
+    // collide with that node's own plan at HIGH, the severity meant to stop
+    // an operator. An explicit flag (even empty) suppresses the inference.
+    let self_effective: Option<String> = match self_id {
+        Some(id) => Some(id),
+        None => infer_collisions_self_id(&plan, &entries),
+    };
+    let thresholds = collision_thresholds();
     let collisions = if evaluated {
         super::collision::find_collisions(
             &plan,
             &entries,
-            self_id.as_deref().unwrap_or(""),
-            &super::collision::Thresholds::default(),
+            self_effective.as_deref().unwrap_or(""),
+            &thresholds,
         )
     } else {
         Vec::new()
@@ -766,6 +778,71 @@ fn action_word(c: &super::collision::Collision) -> &'static str {
         super::collision::Action::Absorb => "absorb",
         super::collision::Action::Supersede => "supersede",
     }
+}
+
+/// The wheel detector's self-inference (graph/collision.py `_claims_default`
+/// + the registered-plan check): with one claimed id on the plan, the node is
+/// SELF only when this file is the plan it already registered, or it has
+/// registered none yet; a DIFFERENT plan drafted against the same node
+/// genuinely overlaps the node's own plan and must stay visible.
+fn infer_collisions_self_id(plan: &Path, entries: &[Value]) -> Option<String> {
+    let target = if plan.is_dir() {
+        plan.join("00-INDEX.md")
+    } else {
+        plan.to_path_buf()
+    };
+    let claims = super::session_cli::plan_claims(target.to_str()?)?;
+    if claims.len() != 1 {
+        return None;
+    }
+    let claimed = claims.into_iter().next()?;
+    let registered = entries
+        .iter()
+        .find(|e| text_at(e, "id").as_deref() == Some(claimed.as_str()))
+        .and_then(|e| text_at(e, "plan_path"))
+        .map(str::to_string);
+    match registered {
+        None => Some(claimed),
+        Some(reg) if reg.is_empty() => Some(claimed),
+        Some(reg) => {
+            let root = super::collision::find_repo_root();
+            let resolved = super::collision::resolve_plan_path(&reg, &root);
+            let same = match (
+                std::fs::canonicalize(&resolved),
+                std::fs::canonicalize(plan),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => resolved == plan,
+            };
+            Some(claimed).filter(|_| same)
+        }
+    }
+}
+
+/// Severity thresholds resolve from the config candidates (project beats
+/// user), each key sanitized to the model default when malformed or
+/// negative, the same fail-open contract the wheel's settings model held.
+fn collision_thresholds() -> super::collision::Thresholds {
+    let defaults = super::collision::Thresholds::default();
+    for cfg in settings::config_candidates() {
+        let Some(block) = cfg
+            .get("collision")
+            .and_then(|c| c.get("severity_thresholds"))
+        else {
+            continue;
+        };
+        let Ok(mut t) = serde_json::from_value::<super::collision::Thresholds>(block.clone())
+        else {
+            continue;
+        };
+        let nonneg = |v: f64, d: f64| if v.is_finite() && v >= 0.0 { v } else { d };
+        t.high_count = nonneg(t.high_count, defaults.high_count);
+        t.high_ratio = nonneg(t.high_ratio, defaults.high_ratio);
+        t.medium_count = nonneg(t.medium_count, defaults.medium_count);
+        t.medium_ratio = nonneg(t.medium_ratio, defaults.medium_ratio);
+        return t;
+    }
+    defaults
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,6 +1108,13 @@ pub fn run_unclaim(tail: &[String]) -> i32 {
         eprintln!("Error: graph node {node_id} not found");
         return 1;
     }
+    // A legacy short id (`ab-1234`) resolves through find_node's unique
+    // prefix tier; the claim key and the settle below must use the row's
+    // canonical id, never the abbreviation that found it.
+    let node_id = find_node(&rows, &node_id)
+        .and_then(|n| text_at(n, "id"))
+        .unwrap_or(&node_id)
+        .to_string();
     // The lockfile side is best-effort; the graph settle still runs.
     let lock_note = release_node_lockfile(&node_id);
     if let Err(err) = settle_released_node(&graph, &node_id) {
@@ -1486,6 +1570,17 @@ pub fn run_undefer(tail: &[String]) -> i32 {
         }
     }
     let ids_for_apply = ids.clone();
+    // Per-node plans anchor: the wheel scanned rulings in the TARGET node's
+    // project (plans_content_dir(Path(node.cwd)) if the row carries one),
+    // so a foreign plansDirectory override keeps holding; the invoking cwd
+    // would read the wrong project's plans.
+    let node_cwds: Vec<(String, Option<String>)> = ids
+        .iter()
+        .map(|id| {
+            let cwd = find_node(&rows, id).and_then(|n| text_at(n, "cwd").map(str::to_string));
+            (id.clone(), cwd)
+        })
+        .collect();
     let notes: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
     let unchanged: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
     let applied = graph_store::mutate_rows(
@@ -1544,7 +1639,14 @@ pub fn run_undefer(tail: &[String]) -> i32 {
         if !reason.is_empty() {
             eprintln!("undefer: cleared the deferral of {id} ({kind}): {reason}");
         }
-        for line in ruling_lines_for(id, "undefer") {
+        // The rulings scan anchors on the target node's project, the anchor
+        // the park was recorded under; a foreign plansDirectory override
+        // keeps holding.
+        let node_cwd = node_cwds
+            .iter()
+            .find(|(nid, _)| nid == id)
+            .and_then(|(_, cwd)| cwd.as_deref());
+        for line in ruling_lines_for(id, "undefer", node_cwd) {
             eprintln!("{line}");
         }
         println!("Undeferred {id}");
@@ -1554,16 +1656,32 @@ pub fn run_undefer(tail: &[String]) -> i32 {
 }
 
 /// The reversal-form ruling lines (`{prefix}: {id} is rejected by {by} in
-/// {plan}: {reason}`), over the decisions door's own scan.
-fn ruling_lines_for(node_id: &str, prefix: &str) -> Vec<String> {
-    let result = match super::decisions_cli::plans_dir_for_listing() {
-        Ok(dir) => super::decisions_cli::plan_rulings_in(&dir, node_id),
-        Err(detail) => {
-            return vec![format!(
-                "{prefix}: plan rulings for {node_id} not read ({detail})"
-            )]
+/// {plan}: {reason}`), over the decisions door's own scan. `anchor_cwd`
+/// pins the plans probe to the target node's project (the deleted verb's
+/// `plans_content_dir(Path(node.cwd))`); None anchors on the invoking cwd.
+fn ruling_lines_for(node_id: &str, prefix: &str, anchor_cwd: Option<&str>) -> Vec<String> {
+    let dir = match anchor_cwd {
+        Some(cwd) => {
+            let expanded = shellexpand_home(cwd);
+            match super::decisions_cli::plans_dir_for_listing_from(Path::new(&expanded)) {
+                Ok(dir) => dir,
+                Err(detail) => {
+                    return vec![format!(
+                        "{prefix}: plan rulings for {node_id} not read ({detail})"
+                    )]
+                }
+            }
         }
+        None => match super::decisions_cli::plans_dir_for_listing() {
+            Ok(dir) => dir,
+            Err(detail) => {
+                return vec![format!(
+                    "{prefix}: plan rulings for {node_id} not read ({detail})"
+                )]
+            }
+        },
     };
+    let result = super::decisions_cli::plan_rulings_in(&dir, node_id);
     if result.get("status").and_then(Value::as_str) == Some("unavailable") {
         let dir = result.get("dir").and_then(Value::as_str).unwrap_or("");
         let detail = result.get("detail").and_then(Value::as_str).unwrap_or("");
@@ -1633,17 +1751,15 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
         eprintln!("Error: the backlog graph could not be read");
         return 1;
     };
-    // The id contract is the write seam's: a full node id, resolved by exact
-    // graph lookup. The wheel's slug resolver retires with the runtime.
-    if !has_node_id_prefix(node_id) {
+    // References resolve format-agnostically: exact id, legacy short
+    // prefix, dash variant, or the row's immutable slug.
+    let resolved =
+        find_node(&rows, node_id).or_else(|| super::node_ref::resolve_tiers(&rows, node_id));
+    let Some(node) = resolved else {
         eprintln!("Error: node {node_id} not found");
         return 1;
-    }
-    if find_node(&rows, node_id).is_none() {
-        eprintln!("Error: node {node_id} not found");
-        return 1;
-    }
-    let canonical = node_id.clone();
+    };
+    let canonical = text_at(node, "id").unwrap_or(node_id).to_string();
     let replacer = find_node(&rows, &canonical)
         .and_then(|n| text_at(n, "superseded_by"))
         .unwrap_or("")
@@ -1695,7 +1811,7 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
     // Same streak-reset boundary undefer gives a human-recovered node.
     super::workflows::emit_event("node_undeferred", json!({"unit_id": canonical}));
     eprintln!("unsupersede: cleared the supersession of {canonical} by {replacer}: {cause}");
-    for line in ruling_lines_for(&canonical, "unsupersede") {
+    for line in ruling_lines_for(&canonical, "unsupersede", None) {
         eprintln!("{line}");
     }
     println!("Unsuperseded {node_id}");
@@ -1803,24 +1919,25 @@ fn relatedness_build(tail: &[String]) -> i32 {
             None => true,
         })
         .collect();
-    let mut mapping: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for e in &entries {
-        let Some(id) = text_at(e, "id") else { continue };
-        let related = super::relatedness::similar_nodes(e, &entries, top_k, None);
-        mapping.insert(
-            id.to_string(),
-            related
-                .iter()
-                .map(
-                    |(other, score, reason)| json!({"id": other, "score": score, "reason": reason}),
-                )
-                .collect(),
-        );
-    }
+    // The map is the recall surface (rollup scoring, epic bonus on): the
+    // filing-time dedup net would silently drop the epic-sibling edges the
+    // readers replay.
+    let mapping = super::relatedness::build_map(&entries, top_k);
     let path = relatedness_path();
     let write = serde_json::to_string_pretty(&mapping).unwrap_or_else(|_| "{}".into());
-    if let Err(e) = std::fs::write(&path, write) {
-        eprintln!("Error: could not write {path:?}: {e}");
+    // Temp + rename: a concurrent filing-time reader never sees a truncated
+    // sidecar (it degrades to the all-live fallback on a partial read).
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, &write) {
+        eprintln!("Error: could not write {tmp:?}: {e}");
+        return 1;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        eprintln!("Error: could not replace {path:?}: {e}");
         return 1;
     }
     if json_out {
@@ -2046,7 +2163,7 @@ pub fn run_remove(tail: &[String]) -> i32 {
     let mut force = false;
     let mut it = tail.iter();
     while let Some(arg) = it.next() {
-        let (flag, inline) = match arg.split_once('=') {
+        let (flag, _inline) = match arg.split_once('=') {
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg.as_str(), None),
         };

@@ -1150,9 +1150,15 @@ fn subject_node_id(entries: &[Value], subject: &str) -> Option<String> {
 /// unavailable status, never a silent empty scan.
 pub(crate) fn plans_dir_for_listing() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cwd unreadable ({e})"))?;
+    plans_dir_for_listing_from(&cwd)
+}
+
+/// The same probe anchored on a project root: run from the node's cwd so a
+/// per-project plansDirectory override holds (the undefer ruling scan).
+pub(crate) fn plans_dir_for_listing_from(anchor: &Path) -> Result<PathBuf, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
         .args(["do", "plan", "path", "--slug", "_plans_dir_probe"])
-        .current_dir(&cwd)
+        .current_dir(anchor)
         .output()
         .map_err(|e| format!("probe failed ({e})"))?;
     if !output.status.success() {
