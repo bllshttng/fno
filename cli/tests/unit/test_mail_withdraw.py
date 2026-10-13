@@ -273,11 +273,11 @@ def test_a_typed_row_is_not_reported_as_claimed(env):
     """
     _send(MY_HANDLE, PEER, "ship it", ts=_ts_ago(60), delivery="typed")
 
-    result = _run("agents", "mail", "sent")
+    result = _run("agents", "mail", "sent", "--json")
 
     assert result.exit_code == 0, result.output
     # The JSON lane is the one machines read, so it carries the same answer.
-    row = json.loads(result.output)[0]
+    row = json.loads(result.stdout)[0]
     assert row["delivery"] == "typed"
     assert row["claimed"] is False
     # And it must distinguish "not claimed" from "can never be claimed". A typed
