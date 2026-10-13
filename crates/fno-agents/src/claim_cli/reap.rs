@@ -841,7 +841,7 @@ mod tests {
             harness: None,
             session_id: None,
             pid_provenance: None,
-            machine_id: None,
+            machine_id: Some(crate::claims::machine_id()),
             metadata: serde_json::Map::new(),
         };
         let path = locator(dir.path(), &rec.key);
