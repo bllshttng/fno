@@ -204,6 +204,9 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail drain-self`: the drain-self leaf. The verb and its
+    /// tail pass through byte-verbatim.
+    MailDrainSelf(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -360,6 +363,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
         "hold" | "dnd" | "hold-release" | "sent" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "drain-self" => Some(Role::MailDrainSelf(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -675,6 +683,11 @@ fn main() {
             &["mail"],
             &rest,
         )),
+        Role::MailDrainSelf(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail drain-self",
+            &["mail"],
+            &rest,
+        )),
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -898,6 +911,15 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "mail", "send", "a", "b"]), false),
             Role::Forward
+        );
+        // The drain-self leaf rides the same byte-verbatim mount.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "drain-self", "--json"]), false),
+            Role::MailDrainSelf(os(&["drain-self", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "drain-self"]), false),
+            Role::MailDrainSelf(os(&["drain-self"]))
         );
     }
 
