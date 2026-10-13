@@ -3744,7 +3744,10 @@ mod tests {
             &json!({"verdict": "accepted", "cap_clause": "effective cap 24 of 24"}),
         )
         .unwrap();
-        assert_eq!(unreadable["lanes"], "lanes unreadable | effective cap 24 of 24");
+        assert_eq!(
+            unreadable["lanes"],
+            "lanes unreadable | effective cap 24 of 24"
+        );
         let unread_readings = sample_readings(board0(), org0(), unreadable, workers_none());
         let unread_data = build_data(&unread_readings, "x-bbbb");
         let unread_line = render_lines(
