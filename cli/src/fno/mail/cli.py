@@ -4526,9 +4526,6 @@ def cmd_drain_self_forward(
     _forward_mail(argv, label="fno agents mail drain-self")
 
 
-from fno.mail.hold import _emit_drain_marker  # noqa: E402
-
-
 @mail_app.command("rebuild-render", hidden=True)
 def cmd_rebuild_render(
     recipient: Optional[str] = typer.Argument(
