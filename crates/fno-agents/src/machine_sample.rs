@@ -587,7 +587,38 @@ pub fn footer_line(row: &(String, Value), now: DateTime<Utc>) -> String {
 }
 
 pub fn no_row_footer() -> String {
-    "no machine_sample row yet; the daemon's machine_watch arm writes one every 300s".into()
+    let cores = std::thread::available_parallelism()
+        .ok()
+        .map(|n| n.get() as f64);
+    #[cfg(target_os = "macos")]
+    let mem = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
+        .map(|bytes| bytes / 1024.0 / 1024.0 / 1024.0);
+    #[cfg(target_os = "linux")]
+    let mem = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|rest| rest.trim_start_matches(':').split_whitespace().next())
+                .and_then(|value| value.parse::<f64>().ok())
+        })
+        .map(|kb| kb / 1024.0 / 1024.0);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let mem: Option<f64> = None;
+    let budget = crate::machine_load::budget(cores, mem, None);
+    format!(
+        "no machine_sample row yet; the daemon's machine_watch arm writes one every 300s · budget max_live {} ({} leads + {} workers; {})",
+        budget.max_live, budget.leads, budget.workers, budget.basis
+    )
 }
 
 pub fn stamp_refusal(
@@ -890,5 +921,17 @@ mod tests {
             captured, 2,
             "a later pressure episode gets one new snapshot"
         );
+    }
+
+    #[test]
+    fn the_no_row_footer_carries_the_band_clause() {
+        let line = no_row_footer();
+        assert!(line.starts_with("no machine_sample row yet"));
+        let i = line.find("budget max_live ").unwrap();
+        let rest = &line[i + "budget max_live ".len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let max_live: u32 = digits.parse().unwrap();
+        assert!(max_live >= 1, "the band floor is 1, got {max_live}");
+        assert!(line.ends_with("band default)"));
     }
 }
