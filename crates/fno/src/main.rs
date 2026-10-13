@@ -363,7 +363,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
-        "hold" | "dnd" | "hold-release" | "sent" => Some(Role::MailHold(
+        "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -680,7 +680,7 @@ fn main() {
             &rest,
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail hold|dnd|hold-release|sent",
+            "fno agents mail hold|dnd|hold-release|sent|ack",
             &["mail"],
             &rest,
         )),
