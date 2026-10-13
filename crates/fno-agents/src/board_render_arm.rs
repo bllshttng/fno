@@ -16,8 +16,14 @@ use std::time::{Duration, Instant};
 use crate::paths::AgentsHome;
 
 /// The arm's beat. Worst case a board reader waits one interval plus one
-/// pass behind a landed write.
-pub const BOARD_RENDER_INTERVAL_S: u64 = 60;
+/// pass behind a landed write. 300 s, not the 60 s the arm shipped with:
+/// a render pass costs 7-18 s CPU (sampled 2026-10-13), and a fleet of
+/// fifteen live sessions moves the graph version every minute, so a 60 s
+/// beat rendered at full cadence and burned 0.12-0.30 cores of child CPU -
+/// the gate the daemon-burn audit set is 0.2. The rendered pages are the
+/// static board targets; the live board reads the store directly and
+/// never waits on this arm.
+pub const BOARD_RENDER_INTERVAL_S: u64 = 300;
 
 /// One render command's deadline. Kill on expiry: a wedged render command
 /// costs the arm its interval, never the caller's 600s bound.

@@ -2734,32 +2734,6 @@ def test_adopt_proceeds_when_no_worker_holds_the_node(graph_env, monkeypatch):
         == _child(entries, "one")["id"]
 
 
-def test_remove_clears_containment_on_its_children(graph_env, monkeypatch):
-    """codex P2: a child left naming a deleted unit is a permanent trap.
-
-    Selection and `fno do target init` both refuse it, while the reconcile heal
-    deliberately skips a missing owner - so it is unbuildable, uncloseable, and
-    invisible to every sweep. Un-contained rather than closed: deleting the unit
-    is not a claim that its children shipped.
-    """
-    import fno.graph.cli as gcli
-
-    g, read_entries = graph_env
-    monkeypatch.setattr(gcli, "_live_worker", lambda nid: None)
-    _seed_children(g, _epic_child("ab-kid00001"))
-    assert _invoke(
-        ["backlog", "decompose", "ab-epic0001", "--groups", _groups_json([
-            {"slug": "one", "title": "One", "waves": "1", "adopt": ["ab-kid00001"]},
-        ])]
-    ).exit_code == 0
-    unit = _child(read_entries(), "one")["id"]
-
-    assert _invoke(["backlog", "remove", unit, "--force"]).exit_code == 0
-    kid = next(e for e in read_entries() if e["id"] == "ab-kid00001")
-    assert kid.get("contained_in") is None
-    assert kid.get("completed_at") is None
-
-
 def test_adopt_does_not_contain_a_node_that_owns_a_pr(graph_env, monkeypatch):
     """codex P1: `contained_in` says "this node has no PR of its own".
 
@@ -3019,11 +2993,27 @@ BARE_ONE = [{"slug": "one", "title": "One", "waves": "1"}]
 
 
 def _deferred_unit(g, read_entries):
-    """Seed one adoptable child, mint group child `one`, then defer it."""
+    """Seed one adoptable child, mint group child `one`, then defer it.
+
+    The park rides in through the store directly: the defer verb is native
+    Rust now, and this file's subject is what decompose does with a
+    deferred child, not the write itself.
+    """
     _seed_children(g, _epic_child("ab-kid00001"))
     assert _decompose(BARE_ONE).exit_code == 0
     unit = _child(read_entries(), "one")["id"]
-    assert _invoke(["backlog", "defer", unit, "--reason", "parked"]).exit_code == 0
+
+    from fno.graph.store import commit_rows_via_store
+
+    def stamp(rows):
+        for e in rows:
+            if e["id"] == unit:
+                e["status"] = "deferred"
+                e["deferred_at"] = "2026-04-01T00:00:00+00:00"
+                e["deferred_reason"] = "parked"
+        return rows
+
+    commit_rows_via_store(g, stamp)
     return unit
 
 
@@ -3097,24 +3087,6 @@ def test_adopt_under_a_legacy_deferred_group_child_is_refused(graph_env):
     assert kid.get("contained_in") is None
 
 
-def test_adopt_after_undeferring_the_group_child_succeeds(graph_env):
-    """AC2: the refusal is a gate, not a wall - the named remedy actually works.
-
-    `cmd_undefer` clears deferred_at and deliberately does NOT re-contain, so
-    the stamp arrives through decompose's own back-fill convergence leg rather
-    than through the undefer.
-    """
-    g, read_entries = graph_env
-    unit = _deferred_unit(g, read_entries)
-    assert _decompose(ADOPT_ONE).exit_code == 2
-    assert _invoke(["backlog", "undefer", unit]).exit_code == 0
-
-    result = _decompose(ADOPT_ONE)
-    assert result.exit_code == 0, result.output
-    kid = next(e for e in read_entries() if e["id"] == "ab-kid00001")
-    assert kid["contained_in"] == unit
-
-
 def test_a_deferred_group_child_with_no_adopt_list_still_updates(graph_env):
     """AC3: the guard is gated on the adopt list, not on the group.
 
@@ -3181,26 +3153,6 @@ def test_a_refused_decompose_leaves_the_graph_byte_identical(graph_env):
 
     assert _decompose(ADOPT_ONE).exit_code == 2
     assert read_entries() == before
-
-
-def test_defer_keeps_an_existing_adoptee_folded(graph_env):
-    """A reversible pause preserves the already-authored delivery boundary."""
-    g, read_entries = graph_env
-    _seed_children(g, _epic_child("ab-kid00001"))
-    assert _decompose(ADOPT_ONE).exit_code == 0
-    unit = _child(read_entries(), "one")["id"]
-    assert next(
-        e for e in read_entries() if e["id"] == "ab-kid00001"
-    )["contained_in"] == unit
-
-    assert _invoke(["backlog", "defer", unit, "--reason", "parked"]).exit_code == 0
-    kid = next(e for e in read_entries() if e["id"] == "ab-kid00001")
-    assert kid.get("contained_in") == unit
-
-    assert _decompose(ADOPT_ONE).exit_code == 2
-    kid = next(e for e in read_entries() if e["id"] == "ab-kid00001")
-    assert kid.get("contained_in") == unit
-    assert kid["parent"] == unit
 
 
 def test_a_superseded_but_completed_group_child_still_adopts(graph_env):

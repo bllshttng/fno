@@ -111,12 +111,11 @@ _SPAWN_ALREADY_EXISTS = "already exists"
 # fires on a high-volume lifecycle moment.
 REASON_BIRTH = "birth"
 REASON_WORK_START = "work-start"
-REASON_RETRO = "retro"
 # C: the explicit conversational verb. NOT in _LIFECYCLE_REASONS: it is
 # operator-invoked (one per explicit call, no firehose), so it does not need the
 # relevance filter and may degrade to the stored triple like birth does.
 REASON_CONVERSATIONAL = "conversational"
-_LIFECYCLE_REASONS = frozenset({REASON_WORK_START, REASON_RETRO})
+_LIFECYCLE_REASONS = frozenset({REASON_WORK_START})
 
 
 class SpawnAlreadyRunning(RuntimeError):
@@ -268,7 +267,7 @@ def think_spawn_on_decompose_wave0(
 ) -> bool:
     """Is the wave-0 design fan-out armed for this repo?
 
-    Its own sub-flag, like ``on_work_start`` / ``on_retro``: ``enabled`` alone
+    Its own sub-flag, like ``on_work_start``: ``enabled`` alone
     never turns it on. ``FNO_THINK_SPAWN_WAVE0`` overrides for tests and for a
     one-off run, mirroring the ``FNO_THINK_SPAWN`` seam.
 
@@ -1171,23 +1170,6 @@ def on_node_work_start(
     """
     return _on_node_lifecycle(
         node, reason=REASON_WORK_START, subflag="on_work_start",
-        project_root=project_root, run_state=run_state,
-    )
-
-
-def on_node_retro(
-    node: dict,
-    *,
-    project_root: Optional[Path] = None,
-    run_state: Optional[RunState] = None,
-) -> Optional[ThinkSpawnResult]:
-    """A2: dispatch a ``retro`` context /think when ``fno backlog done`` closes a node.
-
-    Gated by ``config.think_spawn.on_retro`` (default OFF even when the layer is
-    enabled). Non-fatal: never blocks the node close it rides in on.
-    """
-    return _on_node_lifecycle(
-        node, reason=REASON_RETRO, subflag="on_retro",
         project_root=project_root, run_state=run_state,
     )
 

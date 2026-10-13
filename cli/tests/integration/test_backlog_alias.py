@@ -260,9 +260,10 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 
 _ADVERTISED_BACKLOG_VERBS = {
     # `update` moved with the update port, `add`/`idea` with the create
-    # port, and `view` with the projections port: the native binary
-    # advertises them, the python menu does not.
-    "get", "next", "done", "defer",
+    # port, `view` with the projections port, and `defer` with the
+    # lifecycle port: the native binary advertises them, the python menu
+    # does not.
+    "get", "next", "done",
     "triage", "note",
 }
 
@@ -289,20 +290,16 @@ def test_backlog_help_advertises_only_the_menu():
 
 @pytest.mark.parametrize(
     "verb",
-    ["decompose", "intake", "undefer", "supersede"],
+    ["decompose", "intake", "supersede"],
 )
 def test_hidden_backlog_verbs_stay_invocable(verb):
-    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0)."""
+    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0).
+
+    Undefer left the wheel registry with the lifecycle port; the native
+    binary answers its --help at the front door, outside this wheel-level
+    runner the way the menu test tracks the same drift."""
     r = _invoke("backlog", verb, "--help")
     assert r.exit_code == 0, f"hidden verb {verb!r} --help failed: {r.output!r}"
-
-
-def test_advertised_verbs_point_at_hidden_siblings():
-    """AC3-UI: paired-verb pointers keep the hidden sibling discoverable."""
-    d = _invoke("backlog", "defer", "--help")
-    assert d.exit_code == 0 and "undefer" in d.output, d.output
-    dn = _invoke("backlog", "done", "--help")
-    assert dn.exit_code == 0 and "reconcile" in dn.output, dn.output
 
 
 @pytest.mark.usefixtures("native_backlog_door")
