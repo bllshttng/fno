@@ -290,10 +290,14 @@ def test_backlog_help_advertises_only_the_menu():
 
 @pytest.mark.parametrize(
     "verb",
-    ["decompose", "intake", "undefer", "supersede"],
+    ["decompose", "intake", "supersede"],
 )
 def test_hidden_backlog_verbs_stay_invocable(verb):
-    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0)."""
+    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0).
+
+    Undefer left the wheel registry with the lifecycle port; the native
+    binary answers its --help at the front door, outside this wheel-level
+    runner the way the menu test tracks the same drift."""
     r = _invoke("backlog", verb, "--help")
     assert r.exit_code == 0, f"hidden verb {verb!r} --help failed: {r.output!r}"
 

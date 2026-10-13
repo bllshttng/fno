@@ -378,8 +378,9 @@ pub fn run_cost(tail: &[String]) -> i32 {
     0
 }
 
-/// The cost-row upsert (the deleted upsert_cost_session): one row per
-/// session, replaced in place; cost_usd re-derived and rounded to cents.
+/// The cost-row upsert (the wheel's upsert_cost_session): one row per
+/// session, replaced in place; cost_usd re-derived at the one stored
+/// precision.
 fn upsert_cost_session(node: &mut Value, session_id: &str, cost_usd: f64) {
     let obj = node.as_object_mut().expect("row is an object");
     let rows: Vec<Value> = obj
@@ -400,15 +401,21 @@ fn upsert_cost_session(node: &mut Value, session_id: &str, cost_usd: f64) {
     }
     kept.push(json!({
         "session_id": session_id,
-        "cost_usd": (cost_usd * 100.0).round() / 100.0,
-        "recorded_at": graph_store::now_isoformat(),
+        "cost_usd": round4(cost_usd),
+        "timestamp": graph_store::now_isoformat(),
     }));
     let total: f64 = kept
         .iter()
         .filter_map(|r| r.get("cost_usd").and_then(Value::as_f64))
         .sum();
     obj.insert("cost_sessions".into(), Value::Array(kept));
-    obj.insert("cost_usd".into(), json!((total * 100.0).round() / 100.0));
+    obj.insert("cost_usd".into(), json!(round4(total)));
+}
+
+/// The one stored precision (the wheel's _COST_NDIGITS): a per-caller
+/// precision made one node's total depend on which surface wrote it last.
+fn round4(x: f64) -> f64 {
+    (x * 10_000.0).round() / 10_000.0
 }
 
 // ---------------------------------------------------------------------------
