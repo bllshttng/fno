@@ -990,42 +990,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        crate::tick_ledger::emit_tick(
-            &journal,
-            "crown_ledger",
-            crate::tick_ledger::SCHED_DAEMON,
-            0,
-            Some("error"),
-            Some("ledger printed no path"),
-            300,
-        );
-        crate::tick_ledger::emit_tick(
-            &journal,
-            "king_settle",
-            crate::tick_ledger::SCHED_DAEMON,
-            0,
-            Some("error"),
-            Some("ledger printed no path"),
-            300,
-        );
-        crate::tick_ledger::emit_tick(
-            &journal,
-            "reign_eval",
-            crate::tick_ledger::SCHED_DAEMON,
-            0,
-            Some("error"),
-            Some("ledger printed no path"),
-            300,
-        );
-        crate::tick_ledger::emit_tick(
-            &journal,
-            "zz_probe",
-            crate::tick_ledger::SCHED_DAEMON,
-            0,
-            None,
-            None,
-            300,
-        );
+        for (arm, skip) in [
+            ("crown_ledger", Some("error")),
+            ("king_settle", Some("error")),
+            ("reign_eval", Some("error")),
+            ("zz_probe", None),
+        ] {
+            let sched = crate::tick_ledger::SCHED_DAEMON;
+            crate::tick_ledger::emit_tick(&journal, arm, sched, 0, skip, None, 300);
+        }
         let rows = crate::tick_ledger::read_arms(&[dir.path().join("events.jsonl")], now);
         for retired in ["crown_ledger", "king_settle", "reign_eval"] {
             assert!(
