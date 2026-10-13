@@ -186,13 +186,13 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
                     eprintln!("pretooluse-bash: spawn gate unavailable; launch allowed");
                     continue;
                 }
-                let receipt = &refusal.receipt;
+                let receipt = refusal.receipt.as_ref();
                 let reason = receipt
-                    .get("reason")
+                    .and_then(|r| r.get("reason"))
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
                 let remedy = receipt
-                    .get("remedy")
+                    .and_then(|r| r.get("remedy"))
                     .and_then(Value::as_str)
                     .unwrap_or("check fno agents gate-status");
                 return Some(format!(

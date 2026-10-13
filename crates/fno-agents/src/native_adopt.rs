@@ -9,7 +9,8 @@
 //! [`prepare_mint`], OUTSIDE the registry write lock; the write closure
 //! re-decides absence under the lock.
 
-use crate::state::{AgentStatus, Lineage, RegistryEntry};
+use crate::state::{Lineage, RegistryEntry};
+use crate::AgentStatus;
 
 /// Why this report mints: a launch record (or a lost spawned row) is fleet
 /// work; a session with neither is the user's own.
@@ -89,6 +90,7 @@ pub(crate) fn prepare_mint(
         origin: Some(origin.to_string()),
         status: AgentStatus::Live,
         short_id: short,
+        harness: Some(harness.to_string()),
         substrate: substrate.map(str::to_string),
         node,
         transcript_path: transcript_path.map(str::to_string),

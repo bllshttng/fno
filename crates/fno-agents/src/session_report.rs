@@ -324,7 +324,7 @@ pub(crate) fn handle_session_report(
             if native {
                 if let Some(record) = &launch_record {
                     let lineage = crate::state::Lineage::captured((
-                        record.launcher_session.clone(),
+                        Some(record.launcher_session.clone()),
                         record.launcher_harness.clone(),
                         record.launcher_cwd.clone(),
                     ));
@@ -400,6 +400,19 @@ pub(crate) fn handle_session_report(
                 json!({"stored": false, "dropped": "id_cap", "recorded": [primary, related]}),
             )
         }
+    }
+}
+
+/// The promoted-row read that decides the arm: a role stamp plus a scope on
+/// the row the report just identified, with the row's own harness so the
+/// rebind never leaves the manifest naming the arming path's harness.
+fn promoted_first_fill(entry: &RegistryEntry, out: &mut Option<(String, String, Option<String>)>) {
+    if entry.role_level.is_none() {
+        return;
+    }
+    if let Some(scope) = entry.role_scope.as_deref().filter(|s| !s.is_empty()) {
+        let harness = entry.harness.clone().filter(|h| !h.trim().is_empty());
+        *out = Some((scope.to_string(), entry.cwd.clone(), harness));
     }
 }
 
