@@ -144,8 +144,9 @@ fn bus_dir() -> Option<PathBuf> {
 }
 
 /// The `ack_refusal.refusal_line` order: landed, withdraw, typed, else the
-/// hosted wording (which also covers cross-session). An absent landed
-/// target renders Python's `{None!r}` literal.
+/// hosted wording (which also covers cross-session). `record_landed` always
+/// writes `meta.landed`, so the fallback only guards a hand-edited log; it
+/// renders `'None'`, not Python's bare-`None` repr.
 fn refusal_line(m: &Value, msg_id: &str) -> String {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
     let delivery = m.get("delivery").and_then(Value::as_str).unwrap_or("");
