@@ -182,6 +182,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
         col,
         kind: MouseKind::Press(MouseButton::Left),
         shift: false,
+        alt: false,
     };
     runtime.block_on(async {
         let (mut socket, _receiver) = tokio::io::duplex(4096);

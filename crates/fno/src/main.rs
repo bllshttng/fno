@@ -216,6 +216,9 @@ enum Role {
     /// The carried tail (msg id plus flags) passes through; the verb itself
     /// is re-spelled by the exec action.
     MailWithdraw(Vec<OsString>),
+    /// `fno agents mail unread`: the native cursor-bounded unread listing.
+    /// The verb and its tail pass through byte-verbatim.
+    MailUnread(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -387,6 +390,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "withdraw" => Some(Role::MailWithdraw(tail.to_vec())),
+        "unread" => Some(Role::MailUnread(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "view" => Some(Role::MailViewRenamed),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
@@ -711,6 +719,9 @@ fn main() {
             &["mail", "withdraw"],
             &rest,
         )),
+        Role::MailUnread(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -938,6 +949,13 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["mail", "sent", "--json"]), false),
             Role::MailHold(os(&["sent", "--json"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "unread", "--name", "worker"]),
+                false
+            ),
+            Role::MailUnread(os(&["unread", "--name", "worker"]))
         );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
