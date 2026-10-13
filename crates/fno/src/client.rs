@@ -1805,6 +1805,7 @@ mod messages_view;
 mod org_board;
 mod org_detail;
 mod org_graph;
+mod org_table;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -8976,12 +8977,8 @@ async fn dispatch_event(
             // decides, and the off case notices instead of opening.
             backlog_board::open_pref_gated(view);
         }
-        Event::CycleSidelineView => {
-            // The sideline's view cycle: agents <-> backlog. The backlog
-            // leg rides the experimental pref and opens the board (the
-            // board IS the view); the agents leg closes it.
-            backlog_board::cycle_sideline_view(view);
-        }
+        Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
+        Event::OpenOrgView => backlog_board::toggle_org_view(view),
         Event::OpenSettings => {
             execute_aux_action(view, AuxAction::OpenSettings, sock_w).await?;
         }
