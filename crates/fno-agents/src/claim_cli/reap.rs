@@ -823,7 +823,7 @@ mod tests {
     /// row judged the claim dead on a shared pid, and the keyed re-sweep
     /// reads the same pid live. The collapse back to suspect must win over
     /// the fresh live verdict, and the unprobed-suspect accounting must show
-    /// it. The `session:` holder reaches the roster degrade arm with no
+    /// it. The `target-session:` holder reaches the roster degrade arm with no
     /// subprocess, so the kept bucket is `suspect_unprobed`, never `live`.
     #[test]
     fn pid_shared_downgrade_collapses_fresh_live_verdict() {
@@ -832,7 +832,7 @@ mod tests {
         let rec = ClaimRecord {
             schema_version: SCHEMA_VERSION,
             key: "node:test-e".into(),
-            holder: "session:abc".into(),
+            holder: "target-session:abc".into(),
             // Same clock domain as the probe: a backward clock step between
             // process start and this line must not read this pid as reuse.
             acquired_at: crate::claims::process_create_time_ms(pid).unwrap_or_else(now_ms),
