@@ -978,4 +978,64 @@ mod tests {
             .join("migrations/role-vocabulary-v2.done")
             .exists());
     }
+
+    #[test]
+    fn a_tick_row_under_a_retired_arm_name_is_not_an_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = crate::loop_runtime::Journal::new_raw(
+            dir.path().join("events.jsonl"),
+            dir.path().join("global.jsonl"),
+        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        crate::tick_ledger::emit_tick(
+            &journal,
+            "crown_ledger",
+            crate::tick_ledger::SCHED_DAEMON,
+            0,
+            Some("error"),
+            Some("ledger printed no path"),
+            300,
+        );
+        crate::tick_ledger::emit_tick(
+            &journal,
+            "king_settle",
+            crate::tick_ledger::SCHED_DAEMON,
+            0,
+            Some("error"),
+            Some("ledger printed no path"),
+            300,
+        );
+        crate::tick_ledger::emit_tick(
+            &journal,
+            "reign_eval",
+            crate::tick_ledger::SCHED_DAEMON,
+            0,
+            Some("error"),
+            Some("ledger printed no path"),
+            300,
+        );
+        crate::tick_ledger::emit_tick(
+            &journal,
+            "zz_probe",
+            crate::tick_ledger::SCHED_DAEMON,
+            0,
+            None,
+            None,
+            300,
+        );
+        let rows = crate::tick_ledger::read_arms(&[dir.path().join("events.jsonl")], now);
+        for retired in ["crown_ledger", "king_settle", "reign_eval"] {
+            assert!(
+                !rows.iter().any(|row| row.arm == retired),
+                "{retired} must not surface as an arm"
+            );
+        }
+        assert!(
+            rows.iter().any(|row| row.arm == "zz_probe"),
+            "the control row must still fold as an unknown live arm"
+        );
+    }
 }
