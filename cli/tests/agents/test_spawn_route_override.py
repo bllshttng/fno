@@ -672,9 +672,12 @@ def test_mesh_env_wrapper_route_wins_over_account() -> None:
 
 
 def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None:
-    """AC11 (change 6): --print resolves the lane, writes the settings file and
-    prints the native line it would exec, then exits. Nothing is gated,
-    registered or launched."""
+    """--print resolves the lane, writes the settings file and prints the
+    native line it would exec, then exits. Nothing is gated, registered or
+    launched. The render itself is the spawn-overlay print kind's; the Rust
+    goldens pin the tokens, so this test pins the transport: the ask carries
+    the resolved lane values (and the row's own launch list when the row
+    declares one), and stdout is the shell-quoted join of the answer."""
     from fno.agents import spawn_gate
     from fno.agents.cli import agents_app
 
@@ -684,13 +687,31 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
     from fno.agents import model_routing as mr
+    from fno.route_resolve import Inventory, InventoryRow
 
+    row = InventoryRow(
+        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.2",
+        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+    )
+    monkeypatch.setattr(
+        mr, "declared_lane", lambda provider, model: row
+    )
     monkeypatch.setattr(
         mr,
         "route_settings_path_for",
         lambda *a, **k: "/state/route-settings/lane-zai-flash.json",
     )
-    monkeypatch.setattr(mr, "lane_alias_for", lambda provider, model: "zai-flash")
+    from fno.agents import spawn_overlay_client
+
+    asks: list[dict] = []
+    monkeypatch.setattr(
+        spawn_overlay_client,
+        "spawn_overlay_call",
+        lambda ask: asks.append(ask)
+        or {"tokens": ["claude", "--bg", "--settings", "/state/route-settings/lane-zai-flash.json",
+                       "--model", "glm-5.2", "--name", "w", "/fno:target x-1abc"]},
+    )
     result = runner.invoke(
         agents_app,
         ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
@@ -700,14 +721,18 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     line = result.output.strip()
     assert line.startswith("claude --bg --settings /state/route-settings/lane-zai-flash.json"), line
     assert "--model glm-5.2" in line
-    assert "--effort xhigh" in line
     assert "--name w" in line
     assert "'/fno:target x-1abc'" in line
+    [ask] = asks
+    assert ask["kind"] == "print" and ask["harness"] == "claude"
+    assert ask["settings"] == "/state/route-settings/lane-zai-flash.json"
+    assert ask["model"] == "glm-5.2" and ask["effort"] == "xhigh"
+    assert ask["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
     assert gate_calls == [], "--print must not touch the gate"
 
 
 def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
-    """Claude lanes first (change 6): another harness has no native line yet."""
+    """Another harness has no native line yet; the refusal predates the verb."""
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
@@ -719,9 +744,10 @@ def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
 
 
 def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
-    """The alias is the row NAME: exactly one declared claude row matching the
-    resolved (provider, model). Ambiguous or unmatched reads None - the digest
-    path still carries the settings, only the printed name degrades."""
+    """The lane is the one declared claude row matching the resolved
+    (provider, model), carrying the row's own launch argv verbatim.
+    Ambiguous or unmatched reads None - the digest path still carries the
+    settings, only the lane-specific surfaces degrade."""
     from fno import route_resolve
     from fno.agents import model_routing as mr
     from fno.route_resolve import Inventory, InventoryRow
@@ -732,8 +758,12 @@ def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
     row = InventoryRow(
         name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
         route="zai/glm-5.3-flash[1m]",
+        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
     )
     monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row))
+    lane = mr.declared_lane("zai", "glm-5.3-flash[1m]")
+    assert lane is not None and lane.name == "zai-flash"
+    assert lane.launch == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
     assert mr.lane_alias_for("zai", "glm-5.3-flash[1m]") == "zai-flash"
     assert mr.lane_alias_for("zai", "glm-5.3[1m]") is None
     twin = InventoryRow(
@@ -741,7 +771,7 @@ def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
         route="zai/glm-5.3-flash[1m]",
     )
     monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row, twin))
-    assert mr.lane_alias_for("zai", "glm-5.3-flash[1m]") is None
+    assert mr.declared_lane("zai", "glm-5.3-flash[1m]") is None
 
 
 def test_materialize_route_settings_is_0600_and_content_addressed(
