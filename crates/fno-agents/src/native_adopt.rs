@@ -133,7 +133,10 @@ pub(crate) fn prepare_mint(
 
 /// AC9's rule in one helper: every key a spawned birth carries is present on
 /// the native one, per event kind. The panic names the missing key, so the
-/// negative test (AC10) reads as evidence, not noise.
+/// negative test (AC10) reads as evidence, not noise. Test-only: the mint
+/// path carries the invariant by construction, and the publish build would
+/// read an unused runtime assert as dead code.
+#[cfg(test)]
 pub(crate) fn assert_birth_superset(native: &serde_json::Value, spawned: &serde_json::Value) {
     let (Some(n), Some(s)) = (native.as_object(), spawned.as_object()) else {
         panic!("birth payloads must be objects");

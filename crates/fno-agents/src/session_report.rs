@@ -70,7 +70,7 @@ fn params_object<'a>(p: &'a Map<String, Value>, key: &str) -> Option<&'a Value> 
 }
 
 /// Which row a report lands on, and what the match means for the id.
-enum Find {
+pub(crate) enum Find {
     /// `entry_holds_session` already answers true: the row records this id.
     Holds(usize),
     /// The claude short-id backfill match: a bg row awaiting its full uuid.
