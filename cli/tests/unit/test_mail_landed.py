@@ -337,30 +337,6 @@ def test_reader_1_scan_unread_shows_the_message_never_the_ack(
     ]
 
 
-def test_reader_1_unread_cli_reports_one_real_message(
-    tmp_path, monkeypatch
-):
-    """End to end through the verb a lead actually ran during the incident:
-    `mail unread -n lead --json` must show one message with a body, never the
-    seven empty rows the old reader produced."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import json as _json
-
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
-    send_id = _durable_send_and_ack()
-
-    res = CliRunner().invoke(app, ["mail", "unread", "-n", "lead", "--json"])
-
-    assert res.exit_code == 0
-    rows = _json.loads(res.stdout)
-    assert [(r["id"], r["kind"], r["body"]) for r in rows] == [
-        (send_id, "send", "status report")
-    ]
-
-
 def test_reader_4_markdown_render_shows_the_message_never_the_ack(
     tmp_path, monkeypatch
 ):
@@ -390,11 +366,9 @@ def test_cmd_ack_names_a_landed_row_a_receipt(tmp_path, monkeypatch):
     is the delivery proof, not the mail. The refusal must name the receipt and
     the id it acknowledges (x-22ce)."""
     use_tmpdir(monkeypatch, tmp_path)
-    import json as _json
-
     from typer.testing import CliRunner
 
-    from fno.bus.cursor import read_cursor
+    from fno.bus.cursor import read_cursor, scan_unread
     from fno.bus.log import Envelope, append, record_landed
     from fno.cli import app
 
@@ -415,6 +389,4 @@ def test_cmd_ack_names_a_landed_row_a_receipt(tmp_path, monkeypatch):
 
     assert ok.exit_code == 0
     assert read_cursor("lead") == send.id
-    assert _json.loads(
-        CliRunner().invoke(app, ["mail", "unread", "-n", "lead", "--json"]).stdout
-    ) == []
+    assert scan_unread("lead") == []

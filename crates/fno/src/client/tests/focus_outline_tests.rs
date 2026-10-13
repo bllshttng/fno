@@ -40,6 +40,7 @@ fn report(kind: MouseKind, row: u16, col: u16, shift: bool) -> crate::mouse::Mou
         row,
         col,
         shift,
+        alt: false,
     }
 }
 

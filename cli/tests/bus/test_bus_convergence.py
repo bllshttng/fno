@@ -21,6 +21,10 @@ from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
 
+# The AC5 read verb forwards to the native fno-agents reader; these tests pin
+# reader behavior and need the dev build (the pytest smoke shard deletes it).
+requires_rust = pytest.mark.dev_build
+
 
 @pytest.fixture
 def inbox_and_bus(tmp_path, monkeypatch):
@@ -154,6 +158,7 @@ def _bus_send(to, body):
     return env
 
 
+@requires_rust
 def test_ac5_ui_agents_inbox_shows_unread_to_me(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -168,6 +173,7 @@ def test_ac5_ui_agents_inbox_shows_unread_to_me(bus, runner):
     assert bodies == ["first", "second"]
 
 
+@requires_rust
 def test_ac5_ui_ack_advances_cursor(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -182,6 +188,7 @@ def test_ac5_ui_ack_advances_cursor(bus, runner):
     assert [m["body"] for m in payload] == ["beta"]
 
 
+@requires_rust
 def test_ac5_ui_inbox_empty_when_nothing_unread(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -201,6 +208,7 @@ def test_ack_unknown_id_fails_loudly(bus, runner):
     assert "unknown message id" in (res.stdout + (res.stderr or "")).lower()
 
 
+@requires_rust
 def test_ack_other_recipients_id_rejected(bus, runner):
     # Acking an id addressed to someone else would advance my cursor past my own
     # earlier unread (the cursor is a single global-log position). Reject it.
