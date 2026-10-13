@@ -61,7 +61,7 @@ fn binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_fno-agents")
 }
 
-/// The freeze capture's env block, applied over the inherited environment (the pins win; the blanks silence the other harness markers). The broadcast re-enters `current_exe()` for its `announce send` child, so no PATH or interpreter is needed; `FNO_AGENT_SELF` must stay unset so the self resolves through the harness markers.
+/// The freeze capture's env block, applied over the inherited environment (the pins win; the blanks silence the other harness markers). The broadcast re-enters `current_exe()` for its `announce send` child, so no PATH or interpreter is needed. The launcher stamp pair (`FNO_SESSION_HARNESS` + a live `FNO_SESSION_PID`) pins the harness half ahead of the host's process ancestry; `FNO_AGENT_SELF` must stay unset so the self still resolves through the harness markers.
 fn team_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
     cmd.envs(fno_agents::test_run::self_owner_env())
         .env("HOME", root)
@@ -78,6 +78,9 @@ fn team_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
         .env("GEMINI_SESSION_ID", "")
         .env("OPENCODE_SESSION_ID", "")
         .env("CLAUDE_SESSION_ID", "")
+        // The launcher stamp pair answers before the ancestry walk: FNO_SESSION_HARNESS names a known harness, FNO_SESSION_PID is the live test process the child can kill(pid,0), so the fixture identity holds on any host harness. FNO_AGENT_SELF stays unset, so the self still resolves through the harness markers.
+        .env("FNO_SESSION_HARNESS", "claude")
+        .env("FNO_SESSION_PID", std::process::id().to_string())
         .env("FNO_AGENTS_BIN", binary_path())
         .env_remove("FNO_AGENT_SELF")
 }

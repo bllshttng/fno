@@ -7,7 +7,9 @@
 //! `current_exe()` (the oracle PATH-looked-up `fno-agents` and refused when
 //! absent), the style word cap is the built-in mail cap (the Rust leg reads no
 //! `style.word_cap.mail` config), and an unresolvable self falls back to the
-//! operator sender through the same never-exit path the oracle used.
+//! operator sender through the same never-exit path the oracle used. The
+//! `--help` screen is a hand-rendered summary of the oracle's Typer help; no
+//! golden pins its bytes.
 
 use crate::backlog::style_check::{check, format_violations, has_exception, Violation};
 use crate::mail_inject::{cap_env_int, enforce_body_cap};
@@ -39,6 +41,12 @@ pub fn run_team(args: &[String]) -> i32 {
                 push_positional(&mut message, &mut passthrough, rest);
             }
             break;
+        }
+        // The oracle was a Typer command whose eager `--help` printed help and
+        // exited 0 before required-option validation, wherever it appeared.
+        if arg == "--help" || arg == "-h" {
+            print_help();
+            return 0;
         }
         if arg == "--scope" {
             match args.get(i + 1) {
@@ -201,6 +209,16 @@ fn push_positional(message: &mut Option<String>, passthrough: &mut Vec<String>, 
     }
 }
 
+/// The team arm of the mail help, in the `mail` front's terse `println!` idiom.
+fn print_help() {
+    println!("fno-agents mail team - announce one body to a fleet scope as ONE bus line");
+    println!("  {USAGE}");
+    println!("  --scope <all|leads|<role>|project:<p>>  fleet scope for the broadcast");
+    println!("  --from-name <name>                      envelope identity (see send)");
+    println!("  -J, --json                              send receipt as JSON");
+    println!("  writer flags relay to announce send: --subject=S --expires=45m|24h|7d --urgent");
+}
+
 /// `_team_sender_kind_and_from`: the kind is `agent` only for an owned self
 /// (a proven, non-ambiguous identity carrying both a session id and a
 /// harness); anything unproven stamps `operator`. An explicit `--from-name`
@@ -289,9 +307,10 @@ mod tests {
     }
 }
 
-/// `_emit_style_refusal`: one best-effort `style_refusal` row in the state
-/// root journal so the retry rate is a query over events.jsonl. Never blocks
-/// the refusal it measures.
+/// `_emit_style_refusal`: one best-effort `style_refusal` row in the project
+/// journal (the canonical events resolution, `FNO_EVENTS_PATH` pin included)
+/// so the retry rate is a query over events.jsonl. Never blocks the refusal
+/// it measures.
 fn emit_style_refusal(violations: &[Violation]) {
     let mut rule_ids: Vec<u32> = violations.iter().map(|v| v.rule).collect();
     rule_ids.sort_unstable();
@@ -320,8 +339,8 @@ fn emit_style_refusal(violations: &[Violation]) {
         "source": source,
         "data": data,
     });
-    let Some(root) = crate::agents_config::state_dir(std::path::Path::new(".")) else {
-        return;
-    };
-    let _ = crate::event_store::append_envelope(&root.join("events.jsonl"), &row.to_string(), None);
+    let cwd = std::path::Path::new(".");
+    let path =
+        crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
+    let _ = crate::event_store::append_envelope(&path, &row.to_string(), None);
 }
