@@ -1179,36 +1179,35 @@ def load_sandbox_write_policy(path: str) -> dict[str, object]:
     return block
 
 
+def _door_write(payload_obj: dict) -> str:
+    """One route-settings door round trip: the receipt's path or a loud
+    refusal. The one implementation lives in
+    ``crates/fno-agents/src/route_settings.rs``; the env rides stdin because
+    it carries ``ANTHROPIC_AUTH_TOKEN``, and a spawn that cannot write its
+    settings file must not launch and wedge on the primary model."""
+    import json
+
+    from fno.rust_binary import call_binary_json
+
+    err, receipt = call_binary_json(
+        "route-settings", [], input_text=json.dumps(payload_obj, sort_keys=True), timeout=30
+    )
+    if err or not isinstance(receipt, dict) or not receipt.get("path"):
+        detail = err or f"unusable receipt: {receipt!r}"
+        raise RuntimeError(f"route-settings writer refused: {detail}")
+    return str(receipt["path"])
+
+
 def _write_settings_env_file(
     env: Mapping[str, str],
     sandbox: "Optional[Mapping[str, object]]" = None,
     alias: Optional[str] = None,
 ) -> str:
-    """Write the composed settings payload through the Rust writer's door and
-    return the content-addressed path.
-
-    One implementation lives in ``crates/fno-agents/src/route_settings.rs``
-    (change 6 port): the payload shape, the foreign-endpoint deny, the
-    ``sha256[:16]`` content address, the ``0600`` atomic publish and the
-    stable ``lane-<row>.json`` alias. This leg is the transport only - the
-    env rides stdin because it carries ``ANTHROPIC_AUTH_TOKEN`` - and a door
-    failure refuses loud: a spawn that cannot write its settings file must
-    not launch and wedge on the primary model.
-    """
-    import json
-
-    from fno.rust_binary import call_binary_json
-
-    payload = json.dumps(
-        {"env": dict(env), "sandbox": dict(sandbox) if sandbox else None,
-         "alias": alias},
-        sort_keys=True,
+    """The pre-composed ``{"env"}`` door shape (byte parity with the revive
+    readers)."""
+    return _door_write(
+        {"env": dict(env), "sandbox": dict(sandbox) if sandbox else None, "alias": alias}
     )
-    err, receipt = call_binary_json("route-settings", [], input_text=payload, timeout=30)
-    if err or not isinstance(receipt, dict) or not receipt.get("path"):
-        detail = err or f"unusable receipt: {receipt!r}"
-        raise RuntimeError(f"route-settings writer refused: {detail}")
-    return str(receipt["path"])
 
 
 class RouteRestoreError(RuntimeError):
@@ -1223,10 +1222,8 @@ def declared_lane(
 ) -> Optional[dict]:
     """The one declared lane row, matched by name or by the resolved
     (provider, model), as a plain dict. The match rule lives in the
-    route-slot verb beside the inventory fold; ambiguous, unmatched or
-    unreadable answers read None - the spawn still launches, only the
-    lane-specific surfaces (the stable alias, the row's own launch argv)
-    degrade to the content-addressed file and the harness default."""
+    route-slot verb beside the inventory fold; an unmatched or unreadable
+    lane reads None and the spawn still launches."""
     from fno.route_slot_client import route_slot_call
 
     ask: dict = {"mode": "lane"}
@@ -1255,52 +1252,26 @@ def route_settings_path_for(
 ) -> Optional[str]:
     """The ``--settings`` path a spawn carrying these overlays launches with.
 
-    ONE place expressing the composed settings payload : the
-    auth/model scrub floor, the account overlay minus ``CLAUDE_CONFIG_DIR``,
-    and the route written last so it wins every credential variable as one
-    unit. An account composed with a route keeps the non-credential env its
-    record pins (custom headers, proxy vars) across the ``claude --bg`` daemon
-    fork - the old if/elif kept only the route's keys and dropped them.
-
-    ``CLAUDE_CONFIG_DIR`` never lives in the file: it selects which config the
-    worker reads, so it cannot ride a file read FROM that config; it travels on
-    the spawn env, which selects the per-account daemon. An account-only spawn
-    still writes the scrub floor even when its overlay reduces to the config
-    dir - the env scrub is dropped at the daemon fork, so the floor is the one
-    channel that survives it.
-
-    Content-addressed via the shared writer, so re-asking for an
-    already-materialized overlay returns the same path rather than writing a
-    second file - which is what lets a caller that only holds the resolved env
-    recover the path without threading it through.
-
     The compose (the scrub floor, the account overlay minus its config dir,
     the route winning the credential slot, the self-authed secret drop, the
     unrouted-model floor read from the spawn's own environment) lives in the
-    route-settings door. This leg is the transport; the ``env`` param is
-    superseded, since the door reads its own process env, which every
-    caller's spawn env is.
+    route-settings door; content-addressed, so re-asking for an
+    already-materialized overlay returns the same path. ``CLAUDE_CONFIG_DIR``
+    never lives in the file: it selects which config the worker reads, so it
+    travels on the spawn env - the door's child keeps it from the account
+    overlay. This leg is the transport; the ``env`` param is superseded, since
+    the door reads its own process env, which every caller's spawn env is.
     """
     if not (route_env or account_env or sandbox):
         return None
-    import json
-
-    from fno.rust_binary import call_binary_json
-
-    payload = json.dumps(
+    return _door_write(
         {
             "route_env": dict(route_env or {}),
             "account_env": dict(account_env or {}),
             "sandbox": dict(sandbox) if sandbox else None,
             "alias": alias,
-        },
-        sort_keys=True,
+        }
     )
-    err, receipt = call_binary_json("route-settings", [], input_text=payload, timeout=30)
-    if err or not isinstance(receipt, dict) or not receipt.get("path"):
-        detail = err or f"unusable receipt: {receipt!r}"
-        raise RuntimeError(f"route-settings writer refused: {detail}")
-    return str(receipt["path"])
 
 
 def read_route_settings(path: str) -> dict[str, str]:
