@@ -101,6 +101,14 @@ ALLOWLIST = {
     # named). Explicit operator lifecycle boundary, never a helper's own
     # initiative.
     "crates/fno-agents/src/backlog/update_cli.rs",
+    # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
+    # verb's native release ladder (the wheel leg retired with
+    # lifecycle.py). Holder-verified on the same contract as requeue.py:
+    # a stale lock releases, a live holder releases only when it matches
+    # the invoking session, and a live foreign holder survives with its
+    # name in the receipt. Single authority at the explicit operator
+    # `unclaim` boundary.
+    "crates/fno-agents/src/backlog/cutover.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

@@ -208,7 +208,7 @@ def test_veto_precedes_the_two_factor_allow_and_the_override_marker():
     override marker buys out review ceremony and an unreviewed head is not
     ceremony. A test that only checked the two-factor path would pass while
     the marker still shipped an unreviewed merge."""
-    src = HOOK_PATH.read_text()
+    src = (REPO_ROOT / "hooks" / "git_protection_impl.py").read_text()
     stacked = src.index("_stacked_base_refusal(merge_seg)")
     coverage = src.index("_coverage_refusal(merge_seg)")
     two_factor = src.index("_check_pr_merge_allowed(merge_seg)")

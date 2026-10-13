@@ -294,17 +294,53 @@ def test_send_then_unread_then_ack(runner, mailbox):
     )
     assert sent.exit_code == 0, sent.output
 
-    listing = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert listing.exit_code == 0, listing.output
-    msgs = json.loads(listing.stdout.strip().splitlines()[-1])
-    assert [m["body"] for m in msgs] == ["build is green"]
-    msg_id = msgs[0]["id"]
+    from fno.bus.cursor import scan_unread
+
+    msgs = scan_unread("web")
+    assert [m.body for m in msgs] == ["build is green"]
+    msg_id = msgs[0].id
 
     acked = runner.invoke(app, ["agents", "mail", "ack", msg_id, "--name", "web"])
     assert acked.exit_code == 0, acked.output
 
-    after = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert json.loads(after.stdout.strip().splitlines()[-1]) == []
+    assert scan_unread("web") == []
+
+
+def test_unread_forward_leaf_exits_127_without_the_binary(monkeypatch, capsys):
+    import typer
+
+    from fno.mail.cli import _forward_unread
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+    with pytest.raises(typer.Exit) as exc:
+        _forward_unread("worker", json_out=False)
+    assert exc.value.exit_code == 127
+    assert "fno-agents binary was not found" in capsys.readouterr().err
+
+
+def test_unread_forward_leaf_propagates_the_binary_exit_code(monkeypatch):
+    import types
+    from pathlib import Path
+
+    import typer
+
+    from fno.mail.cli import _forward_unread
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents"))
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        # The leaf pins FNO_BUS_DIR because the binary's own ladder skips the
+        # settings file; dropping the env can silently read a different bus.
+        assert kwargs["env"]["FNO_BUS_DIR"]
+        seen["argv"] = argv
+        return types.SimpleNamespace(returncode=3, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    with pytest.raises(typer.Exit) as exc:
+        _forward_unread("worker", json_out=True)
+    assert exc.value.exit_code == 3
+    assert seen["argv"] == ["/bin/fno-agents", "mail", "unread", "--name", "worker", "--json"]
 
 
 def _passing_mail_body(word_total: int) -> str:
@@ -360,12 +396,12 @@ def test_send_without_kind_reads_body_file(runner, mailbox):
     )
     assert sent.exit_code == 0, sent.output
 
-    listing = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert listing.exit_code == 0, listing.output
-    msgs = json.loads(listing.stdout.strip().splitlines()[-1])
+    from fno.bus.cursor import scan_unread
+
+    msgs = scan_unread("web")
     assert msgs, "the file-fed body never landed"
-    assert 'body with "quotes"' in msgs[0]["body"]
-    assert "and a newline" in msgs[0]["body"]
+    assert 'body with "quotes"' in msgs[0].body
+    assert "and a newline" in msgs[0].body
 
 
 def test_send_body_and_body_file_refused(runner, mailbox):

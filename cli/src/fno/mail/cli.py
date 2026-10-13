@@ -4187,30 +4187,36 @@ def cmd_unread(
     "My inbox" is a cursor-bounded scan of the one global bus log filtered to
     ``to == name``: only messages after the consumer's cursor are shown,
     regardless of which provider sent them. ``fno agents mail ack`` advances the
-    cursor. JSON when stdout is not a TTY or ``--json`` is passed.
+    cursor. JSON when stdout is not a TTY or ``--json`` is passed. This leaf
+    forwards to the native fno-agents reader and relays its streams.
     """
-    from fno.bus.cursor import scan_unread
+    _forward_unread(name, json_out)
 
-    msgs = scan_unread(name)
-    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    if json_out or not is_tty:
-        payload = [
-            {
-                "id": m.id, "thread": m.thread, "from": m.from_, "to": m.to,
-                "kind": m.kind, "ts": m.ts, "in_reply_to": m.in_reply_to,
-                "body": m.body,
-            }
-            for m in msgs
-        ]
-        print(json.dumps(payload, ensure_ascii=False))
-        return
-    if not msgs:
-        print(f"inbox empty for {name!r} (no unread bus messages)")
-        return
-    for m in msgs:
-        excerpt = m.body.replace("\n", " ")[:100]
-        print(f"{m.id}  {m.from_} -> {m.to}  [{m.kind}]  {excerpt}")
-    print('\nto answer one: fno agents mail reply --to <id> --body "..."')
+
+def _forward_unread(name: str, json_out: bool) -> None:
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno agents mail unread: the fno-agents binary was not found; reinstall fno "
+            "or run `fno doctor update --rust`, or set FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # The binary's own bus ladder skips the settings file, so pin FNO_BUS_DIR.
+    env = dict(os.environ, FNO_BUS_DIR=str(paths.bus_dir()))
+    # A terminal inherits stdio; a captured stdout (pipe, tests) is relayed.
+    tty = sys.stdout is not None and sys.stdout.isatty()
+    result = subprocess.run(
+        [str(binary), "mail", "unread", "--name", name, *(["--json"] if json_out else [])],
+        env=env, capture_output=not tty, text=True, check=False,
+    )
+    if not tty:
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @mail_app.command("sent")
