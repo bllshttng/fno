@@ -1165,21 +1165,25 @@ mod tests {
         // The allowlist gate outranks the branch: a refused URL reaches
         // neither the opener nor the terminal on either attach.
         for remote in [false, true] {
-            let mut acted = false;
+            let mut spawned = false;
+            let mut emitted = false;
             let out = open_url_for_session_with(
                 |_, _| {
-                    acted = true;
+                    spawned = true;
                     Ok(status(true))
                 },
                 |_| {
-                    acted = true;
+                    emitted = true;
                     Ok(())
                 },
                 remote,
                 "file:///etc/passwd",
             );
             assert!(out.is_err());
-            assert!(!acted, "a refused URL acts on no path (remote={remote})");
+            assert!(
+                !spawned && !emitted,
+                "a refused URL acts on no path (remote={remote})"
+            );
         }
     }
 
