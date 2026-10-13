@@ -188,9 +188,10 @@ fn run_emit_envelope(args: &[OsString]) -> i32 {
 }
 
 /// The mirror-dedup key for one envelope line: ts plus the data payload
-/// minus its `repo` key. The primary copy differs from the journal
-/// original in exactly that key (stamped at push when absent), so two
-/// copies of one attestation hash equal and two distinct rounds do not.
+/// minus its carrier keys, `repo` and the `attest_machine` stamp. The
+/// primary copy differs from the journal original in exactly those keys
+/// (both stamped at push when absent), so two copies of one attestation
+/// hash equal and two distinct rounds do not.
 fn attest_dedup_key(line: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(line).ok()?;
     if val.get("type").and_then(serde_json::Value::as_str) != Some("review_attestation") {
@@ -203,6 +204,7 @@ fn attest_dedup_key(line: &str) -> Option<String> {
     let mut data = val.get("data")?.clone();
     if let Some(obj) = data.as_object_mut() {
         obj.remove("repo");
+        obj.remove("attest_machine");
     }
     Some(format!(
         "{ts}\u{1f}{}",
@@ -1388,6 +1390,20 @@ fn fold_journal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_stamped_with_its_writer_dedups_against_its_unstamped_original() {
+        // The primary copy carries the machine stamp; the journal original
+        // predates it. The key drops both carrier keys, so the rows read
+        // counts one round, never two.
+        let original = "{\"ts\":\"t1\",\"type\":\"review_attestation\",\"data\":{\"reviewer\":\"code-review\",\"head_sha\":\"aaaaaaaaaa\",\"verdict\":\"pass\",\"repo\":\"github.com/o/r\"}}";
+        let mut val: serde_json::Value = serde_json::from_str(original).unwrap();
+        val["data"]["attest_machine"] = serde_json::json!("imac");
+        assert_eq!(
+            attest_dedup_key(original),
+            attest_dedup_key(&val.to_string())
+        );
+    }
 
     fn mk(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()

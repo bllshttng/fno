@@ -446,7 +446,7 @@ pub(super) fn local_latest_attestations(
             .map(|s| !s.is_empty())
             .unwrap_or(false);
         if is_retraction {
-            if let Some((existing_head, _, _, _, _, _)) = latest.get(&pair_key) {
+            if let Some((existing_head, _, _, _, _, _, _)) = latest.get(&pair_key) {
                 if existing_head != line_head {
                     continue;
                 }
