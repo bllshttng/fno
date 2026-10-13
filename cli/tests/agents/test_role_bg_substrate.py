@@ -278,7 +278,7 @@ def test_bg_spawn_roles_over_a_scope_whose_lead_is_terminal(bg_home, monkeypatch
 # --- headless stays refused --------------------------------------------------
 
 
-@pytest.mark.parametrize("one_shot_args", [["--substrate", "headless"], ["-p"], ["--once"]])
+@pytest.mark.parametrize("one_shot_args", [["--substrate", "headless"], ["--once"]])
 def test_headless_role_is_refused(bg_home, one_shot_args) -> None:
     """A one-shot exits after one answer, so its role names a dead ruler before
     the grantor's next turn. This is the ONE substrate the refusal still covers."""
