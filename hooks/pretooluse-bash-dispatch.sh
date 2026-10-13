@@ -17,6 +17,8 @@ bins=()
 [[ -n "${FNO_AGENTS_FRONT:-}" ]] && bins+=("$FNO_AGENTS_FRONT")
 IFS=: read -ra path_dirs <<<"$PATH"
 for dir in "${path_dirs[@]}"; do
+    # An empty PATH segment means the cwd, as command -v read it.
+    dir="${dir:-.}"
     [[ -x "$dir/fno-agents" ]] && { bins+=("$dir/fno-agents"); break; }
 done
 bins+=("$PWD"/crates/fno-agents/target/release/fno-agents \
