@@ -100,9 +100,15 @@ pub struct Pane {
     cols: u16,
     /// OSC 133 shell-integration scanner: splits PTY output at FinalTerm markers
     /// BEFORE they reach the Term (which drops unknown OSC anyway) so 4b can turn
-    /// a pane's scroll into typed command blocks. Stateful across feeds.
+    /// a pane's scroll into typed command blocks. Stateful across feeds. Also
+    /// captures notification OSCs (9 / 99 / 777) out of the same stream: the
+    /// pane grid drops them, and the server re-emits each as OSC 777 on the
+    /// attached clients (see [`Notice`]).
     scanner: Osc133Scanner,
     osc_title: OscTitleCapture,
+    /// Captured notifications not yet drained by the server's output pump
+    /// (`take_notices`). Bounded; overflow drops the newest.
+    notices: Vec<Notice>,
     /// Completed command blocks (oldest first), capped at `MAX_BLOCKS` and
     /// front-dropped; capture-at-completion stores each block's text so a
     /// finished block is width- and scroll-independent.
@@ -232,6 +238,7 @@ impl Pane {
             pending_cmd: None,
             selected_block: None,
             search: None,
+            notices: Vec::new(),
         }
     }
 
@@ -276,6 +283,15 @@ impl Pane {
                     self.processor.advance(&mut self.term, &b);
                 }
                 Seg::Marker(m) => self.on_marker(m),
+                Seg::Notice(n) => {
+                    // Bounded queue: the pump drains every feed, so the cap
+                    // only bites on an undrained replay; overflow drops the
+                    // newest (the oldest alert is the one a human has not
+                    // seen).
+                    if self.notices.len() < NOTICE_QUEUE_CAP {
+                        self.notices.push(n);
+                    }
+                }
             }
         }
     }
@@ -308,6 +324,21 @@ impl Pane {
 
     pub fn osc_title(&self) -> Option<&str> {
         self.osc_title.title.as_deref()
+    }
+
+    /// Drain the notifications captured since the last call, in stream order.
+    /// The server's output pump calls this right after `feed`, so the queue
+    /// is empty again before the next read.
+    pub fn take_notices(&mut self) -> Vec<Notice> {
+        std::mem::take(&mut self.notices)
+    }
+
+    /// Drop any queued notifications without delivering them. The keeper's
+    /// ring replay calls this after feeding adoption history: a notice that
+    /// scrolled by before the server (re)attached is stale, and replaying it
+    /// would fire a duplicate desktop alert on every re-adoption.
+    pub fn clear_notices(&mut self) {
+        self.notices.clear();
     }
 
     /// True when this pane is a pristine, idle mux shell - safe to reap
@@ -1724,13 +1755,93 @@ pub enum Osc133 {
 enum Seg {
     Pass(Vec<u8>),
     Marker(Osc133),
+    /// A pane-emitted desktop notification (OSC 9 / 99 / 777), captured and
+    /// stripped: the pane stream drops it and the notice rides to the mux
+    /// server, which re-emits it as OSC 777 on every attached client's tty.
+    Notice(Notice),
 }
 
-/// The FinalTerm prefix after `ESC ]`: the literal `133;`.
-const OSC133_PREFIX: &[u8] = b"133;";
-/// Payload cap: a real FinalTerm arg is a few bytes (`D;137`, `A;cl=m`). Anything
-/// longer is hostile/garbage - flush what we held and bail (bounded, no panic).
+/// A pane's desktop notification, extracted and sanitized at parse time: the
+/// body text only (the title is the mux pane name, applied server-side when
+/// the notice is re-emitted). Control bytes are already gone - the scanner's
+/// own terminators (BEL/ESC ST) cannot appear inside a captured payload, and
+/// the per-code extraction below drops the rest, so a re-emitted body can
+/// never carry an escape sequence to the outer terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub body: String,
+}
+
+impl Notice {
+    /// Lossy-UTF-8 the raw payload, extract the body per code, then drop
+    /// control bytes. `code` is the OSC selector the pane emitted (9, 99,
+    /// 777). Every code keeps printable text verbatim; an unparseable payload
+    /// yields an empty body (a notice that says nothing is not emitted).
+    fn from_raw(code: u16, raw: &[u8]) -> Notice {
+        let text = String::from_utf8_lossy(raw).into_owned();
+        let body = match code {
+            // iTerm2 OSC 99: `[metadata];payload` - metadata first when
+            // present (`99;i=1:d=0;Hello`), an empty one still carries its
+            // separator (`99;;Hello`), and a bare payload has no separator.
+            99 => {
+                let mut fields = text.splitn(2, ';');
+                match (fields.next(), fields.next()) {
+                    (Some(meta), Some(rest)) if meta.is_empty() => rest.to_string(),
+                    (Some(_meta), Some(rest)) => rest.split(';').next().unwrap_or("").to_string(),
+                    (Some(only), None) => only.to_string(),
+                    _ => String::new(),
+                }
+            }
+            // rxvt-style OSC 777: `notify;TITLE;BODY` when the app speaks the
+            // notify command; anything else treats the whole payload as body.
+            777 => {
+                let mut fields = text.split(';');
+                match (fields.next(), fields.next(), fields.next()) {
+                    // `777;notify;TITLE;BODY`: the body is the third field.
+                    (Some("notify"), Some(_title), Some(body)) => body.to_string(),
+                    // `777;notify;BODY` (title-only spelling): the second
+                    // field is the body.
+                    (Some("notify"), Some(body), None) => body.to_string(),
+                    // An unknown 777 command or a bare payload: the whole
+                    // payload is the body.
+                    _ => text.clone(),
+                }
+            }
+            // iTerm2/ConEmu OSC 9: the payload IS the body.
+            _ => text.clone(),
+        };
+        Notice {
+            body: body.chars().filter(|c| !c.is_control()).collect(),
+        }
+    }
+}
+
+/// The FinalTerm selector after `ESC ]`: the digits `133`.
+const OSC133_SELECTOR: &[u8] = b"133";
+/// Payload cap for a 133 marker: a real FinalTerm arg is a few bytes
+/// (`D;137`, `A;cl=m`). Anything longer is hostile/garbage - flush what we
+/// held and bail (bounded, no panic).
 const MAX_PAYLOAD: usize = 64;
+/// Payload cap for a notification body: a desktop toast is one glance; a
+/// longer body is handed back (passed through, never swallowed), matching the
+/// 133 hostile-length discipline.
+const NOTICE_MAX_PAYLOAD: usize = 1024;
+/// Digit cap for the `ESC ]` selector: any real OSC number fits; longer is
+/// garbage and hands back.
+const OSC_NUM_CAP: usize = 8;
+/// Queue cap for undrained notifications on one pane: the server's pump
+/// drains after every feed, so the cap only bites on an undrained replay.
+const NOTICE_QUEUE_CAP: usize = 8;
+
+/// Which recognized OSC a payload accumulator belongs to; the per-kind cap
+/// and the terminator handler read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OscKind {
+    /// `133;...`: FinalTerm shell-integration markers.
+    Osc133,
+    /// `9;` / `99;` / `777;`: desktop-notification codes (the selector).
+    Notice(u16),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ScanState {
@@ -1738,12 +1849,14 @@ enum ScanState {
     Ground,
     /// Saw `ESC`; awaiting `]` (or a divergence back to Ground).
     Esc,
-    /// Saw `ESC ]`; matched `n` bytes of `133;`.
-    Prefix(usize),
-    /// Matched `ESC ] 133;`; accumulating the arg until a terminator.
-    Payload(Vec<u8>),
-    /// In the payload, saw `ESC`; a following `\` closes the marker (ST).
-    PayloadEsc(Vec<u8>),
+    /// Saw `ESC ]`: collecting the numeric OSC selector until the `;`
+    /// dispatch. Bounded at `OSC_NUM_CAP` digits; any other byte hands the
+    /// held bytes back and returns to Ground.
+    OscNum(Vec<u8>),
+    /// Selector dispatched; accumulating the payload until BEL or ST.
+    Payload { kind: OscKind, buf: Vec<u8> },
+    /// In the payload, saw `ESC`; a following `\` closes (ST).
+    PayloadEsc { kind: OscKind, buf: Vec<u8> },
 }
 
 /// Per-pane OSC 133 scanner. State persists across `scan` calls so a marker split
@@ -1867,8 +1980,8 @@ impl Osc133Scanner {
                 }
                 ScanState::Esc => {
                     if b == 0x5d {
-                        // `ESC ]` - an OSC; start matching the 133 prefix.
-                        self.state = ScanState::Prefix(0);
+                        // `ESC ]` - an OSC; collect the numeric selector.
+                        self.state = ScanState::OscNum(Vec::new());
                     } else if b == 0x1b {
                         // `ESC ESC` - the first ESC is not ours; hand it back and
                         // stay in Esc for the new one.
@@ -1880,55 +1993,76 @@ impl Osc133Scanner {
                         plain.push(b);
                     }
                 }
-                ScanState::Prefix(n) => {
-                    if b == OSC133_PREFIX[n] {
-                        if n + 1 == OSC133_PREFIX.len() {
-                            self.state = ScanState::Payload(Vec::new());
+                ScanState::OscNum(mut num) => {
+                    if b.is_ascii_digit() {
+                        if num.len() >= OSC_NUM_CAP {
+                            // Garbage selector: hand everything back, nothing
+                            // swallowed.
+                            plain.push(0x1b);
+                            plain.push(0x5d);
+                            plain.append(&mut num);
+                            plain.push(b);
                         } else {
-                            self.state = ScanState::Prefix(n + 1);
+                            num.push(b);
+                            self.state = ScanState::OscNum(num);
+                        }
+                    } else if b == b';' {
+                        match selector_kind(&num) {
+                            Some(kind) => {
+                                self.state = ScanState::Payload {
+                                    kind,
+                                    buf: Vec::new(),
+                                }
+                            }
+                            None => {
+                                // Not a recognized OSC (e.g. a title
+                                // `ESC ] 0;`). Hand back what we held and let
+                                // the Term parse the rest of this OSC.
+                                plain.push(0x1b);
+                                plain.push(0x5d);
+                                plain.extend_from_slice(&num);
+                                plain.push(b);
+                            }
                         }
                     } else {
-                        // Not a 133 OSC (e.g. a title `ESC ] 0;`). Hand back what
-                        // we held and let the Term parse the rest of this OSC.
+                        // A non-digit before the `;` (e.g. `ESC ] 133X`): not
+                        // ours. Hand the held bytes back and reparse from
+                        // Ground; the byte itself is re-emitted verbatim.
                         plain.push(0x1b);
                         plain.push(0x5d);
-                        plain.extend_from_slice(&OSC133_PREFIX[..n]);
+                        plain.extend_from_slice(&num);
                         plain.push(b);
                     }
                 }
-                ScanState::Payload(mut buf) => {
+                ScanState::Payload { kind, mut buf } => {
                     if b == 0x07 {
                         // BEL terminator: emit + strip.
                         flush!();
-                        if let Some(m) = parse_osc133(&buf) {
-                            out.push(Seg::Marker(m));
-                        }
+                        emit_terminated(kind, &buf, &mut out);
                     } else if b == 0x1b {
-                        self.state = ScanState::PayloadEsc(buf);
-                    } else if buf.len() >= MAX_PAYLOAD {
+                        self.state = ScanState::PayloadEsc { kind, buf };
+                    } else if buf.len() >= kind.payload_cap() {
                         // Hostile length: hand everything back, nothing swallowed.
                         plain.push(0x1b);
                         plain.push(0x5d);
-                        plain.extend_from_slice(OSC133_PREFIX);
+                        plain.extend_from_slice(kind.selector());
                         plain.append(&mut buf);
                         plain.push(b);
                     } else {
                         buf.push(b);
-                        self.state = ScanState::Payload(buf);
+                        self.state = ScanState::Payload { kind, buf };
                     }
                 }
-                ScanState::PayloadEsc(mut buf) => {
+                ScanState::PayloadEsc { kind, mut buf } => {
                     if b == 0x5c {
                         // `ESC \` (ST) terminator: emit + strip.
                         flush!();
-                        if let Some(m) = parse_osc133(&buf) {
-                            out.push(Seg::Marker(m));
-                        }
+                        emit_terminated(kind, &buf, &mut out);
                     } else {
                         // ESC not closing the marker: garbage. Hand it all back.
                         plain.push(0x1b);
                         plain.push(0x5d);
-                        plain.extend_from_slice(OSC133_PREFIX);
+                        plain.extend_from_slice(kind.selector());
                         plain.append(&mut buf);
                         plain.push(0x1b);
                         plain.push(b);
@@ -1956,6 +2090,60 @@ fn parse_osc133(buf: &[u8]) -> Option<Osc133> {
             Some(Osc133::CmdDone { exit })
         }
         _ => None,
+    }
+}
+
+/// Map the collected selector digits to the OSC kind it selects, or `None`
+/// when the number is not one of the four we act on (everything else is
+/// handed back for the Term, byte-identical to the pre-notice scanner).
+fn selector_kind(num: &[u8]) -> Option<OscKind> {
+    match num {
+        b"133" => Some(OscKind::Osc133),
+        b"9" => Some(OscKind::Notice(9)),
+        b"99" => Some(OscKind::Notice(99)),
+        b"777" => Some(OscKind::Notice(777)),
+        _ => None,
+    }
+}
+
+impl OscKind {
+    /// The digits after `ESC ]` this kind was dispatched from, for hostile
+    /// handbacks: everything the pane emitted is handed back in full.
+    fn selector(self) -> &'static [u8] {
+        match self {
+            OscKind::Osc133 => OSC133_SELECTOR,
+            OscKind::Notice(9) => b"9",
+            OscKind::Notice(99) => b"99",
+            OscKind::Notice(_) => b"777",
+        }
+    }
+
+    /// The per-kind payload cap (`133` markers are a few bytes; notification
+    /// bodies may run to a line).
+    fn payload_cap(self) -> usize {
+        match self {
+            OscKind::Osc133 => MAX_PAYLOAD,
+            OscKind::Notice(_) => NOTICE_MAX_PAYLOAD,
+        }
+    }
+}
+
+/// One terminated payload (BEL or ST), emitted + stripped. A `133` payload
+/// parses into a marker; a notification payload parses into a sanitized
+/// [`Notice`]. An unparseable payload emits nothing (inert bytes gone).
+fn emit_terminated(kind: OscKind, buf: &[u8], out: &mut Vec<Seg>) {
+    match kind {
+        OscKind::Osc133 => {
+            if let Some(m) = parse_osc133(buf) {
+                out.push(Seg::Marker(m));
+            }
+        }
+        OscKind::Notice(code) => {
+            let notice = Notice::from_raw(code, buf);
+            if !notice.body.is_empty() {
+                out.push(Seg::Notice(notice));
+            }
+        }
     }
 }
 
@@ -2421,6 +2609,9 @@ mod tests {
                 match seg {
                     Seg::Pass(b) => pass.extend_from_slice(&b),
                     Seg::Marker(m) => markers.push(m),
+                    // Notices are captured for the pump, never handed back;
+                    // this helper reads only markers and passthrough.
+                    Seg::Notice(_) => {}
                 }
             }
         }
@@ -2471,6 +2662,39 @@ mod tests {
         let (markers, pass) = scan(b"\x1b]0;my title\x07hello");
         assert!(markers.is_empty());
         assert_eq!(pass, b"\x1b]0;my title\x07hello");
+    }
+
+    #[test]
+    fn notice_codes_capture_stripped_and_pass_text_through() {
+        // The three notification codes: each captured, stripped from the pane
+        // stream, and drained in stream order with the body extracted per
+        // code (9: whole payload; 99: first field; 777: notify's third).
+        let mut pane = Pane::new(24, 80);
+        pane.feed(
+            b"\x1b]9;claude needs you\x07rest\x1b]99;i=1;iterm body\x07\x1b]777;notify;Title;Body\x07",
+        );
+        let notices = pane.take_notices();
+        let bodies: Vec<&str> = notices.iter().map(|n| n.body.as_str()).collect();
+        assert_eq!(bodies, vec!["claude needs you", "iterm body", "Body"]);
+        assert_eq!(frame_text(&pane.frame()), "rest");
+
+        // An ESC inside the payload aborts the capture (the 133 garbage
+        // handback discipline): no notice, every byte handed back, and the
+        // Term's own OSC parse leaves `tail` as the visible text.
+        pane.feed(b"\x1b]9;bad\x1b]0;x\x07tail\x07");
+        assert!(pane.take_notices().is_empty());
+        assert!(frame_text(&pane.frame()).ends_with("tail"));
+
+        // take_notices drains; a replay source (keeper ring) clears instead.
+        pane.feed(b"\x1b]9;again\x07");
+        assert_eq!(pane.take_notices().len(), 1);
+        assert!(pane.take_notices().is_empty());
+
+        // A title OSC still passes through whole, no notice (regression on
+        // the pre-notice handback discipline).
+        pane.feed(b"\x1b]2;t\x07x");
+        assert!(pane.take_notices().is_empty());
+        assert!(frame_text(&pane.frame()).ends_with('x'));
     }
 
     #[test]

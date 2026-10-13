@@ -96,6 +96,10 @@ impl Core {
                 if !ring.is_empty() {
                     if let Some(entry) = self.panes.get_mut(&id) {
                         entry.vt.feed(&ring);
+                        // Replay is history, not news: a notification that
+                        // scrolled by before this server existed must not
+                        // fire a duplicate desktop alert on re-adoption.
+                        entry.vt.clear_notices();
                     }
                 }
                 self.shell_rc_dirs.insert(id, rc_dir);
@@ -231,6 +235,9 @@ impl Core {
                     if !adoption.ring.is_empty() {
                         if let Some(entry) = self.panes.get_mut(&id) {
                             entry.vt.feed(&adoption.ring);
+                            // Replay is history, not news (see the spawn-side
+                            // clear): stale notices never re-fire.
+                            entry.vt.clear_notices();
                         }
                     }
                     if !reconciled {

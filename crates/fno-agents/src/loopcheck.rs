@@ -305,6 +305,13 @@ fn best_effort_notify(title: &str, body: &str) {
     if std::env::var("FNO_LOOPCHECK_NO_NOTIFY").as_deref() == Ok("1") {
         return;
     }
+    // Under cargo test, an unpinned bin resolves to the real `fno` on PATH
+    // and its `inbox notify` toasts for real (the 2026-10-01 leak class).
+    // A test that pins `FNO_LOOPCHECK_FNO_BIN` to a stub keeps the argv
+    // assertions.
+    if cfg!(test) && std::env::var_os("FNO_LOOPCHECK_FNO_BIN").is_none() {
+        return;
+    }
     let fno_bin = loopcheck_fno_bin();
     crate::operator_notice::notify_operator_with(std::ffi::OsStr::new(&fno_bin), title, body, None);
 }

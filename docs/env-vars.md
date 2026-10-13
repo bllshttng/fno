@@ -148,7 +148,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MUX_OPENPTY_TIMEOUT_MS` | rs | unclear: crates/fno/src/pty.rs:1341 |
 | `FNO_MUX_PANE_GROUP_MAX` | rs | unclear: crates/fno/src/process_admission.rs:378 |
 | `FNO_MUX_SCROLLBACK_LINES` | rs | unclear: crates/fno/src/vt.rs:68 |
-| `FNO_MUX_SESSION` | rs | unclear: crates/fno/src/server_stats.rs:33 |
 | `FNO_MUX_SHELL_INTEGRATION` | rs | unclear: crates/fno/src/client.rs:577 |
 | `FNO_NODE` | py+rs | unclear: cli/src/fno/agents/harnesses/claude.py:725 |
 | `FNO_NODE_CLAIM_HOLDER` | rs | unclear: crates/fno-agents/src/backlog/session_cli.rs:370 |
