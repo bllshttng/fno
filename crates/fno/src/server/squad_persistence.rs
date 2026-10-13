@@ -111,9 +111,9 @@ impl Core {
     }
 
     /// Take the store's current generation for `(name, key)` as this server's
-    /// baseline. For writes that carry the operator's explicit word (a
-    /// dismissal, an origin edit): another writer outrunning the baseline
-    /// must not turn that word into a silent stale-conflict no-op.
+    /// baseline. For a write that carries the operator's explicit word (a
+    /// dismissal): another writer outrunning the baseline must not turn that
+    /// word into a silent stale-conflict no-op.
     pub(super) fn adopt_stored_generation(&mut self, name: &str, key: &str) {
         if let Some((id, generation)) = crate::squad_store::current_generation(name, key) {
             self.store_generations.insert(id, generation);

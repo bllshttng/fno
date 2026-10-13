@@ -100,9 +100,9 @@ impl Core {
 
     /// `ControlVerb::WorkspaceOrigin`: add or drop one folder on the open
     /// workspace `workspace`. Adding a folder the workspace holds, or dropping
-    /// one it lacks, changes nothing and still answers `Ok`. The edit persists
-    /// before the reply, on the stored generation: the operator's word must not
-    /// lose to a baseline some other writer outran.
+    /// one it lacks, changes nothing and still answers `Ok`. The edit reaches
+    /// the store before the reply. If the write fails, the live origins revert
+    /// and the reply is an error: an unstored edit would vanish at restart.
     pub(super) fn handle_workspace_origin(
         &mut self,
         workspace: &str,
@@ -130,21 +130,46 @@ impl Core {
             });
             return;
         }
+        let previous = self
+            .session
+            .squad(sid)
+            .map(|s| s.origins.clone())
+            .unwrap_or_default();
         let changed = self.session.squad_mut(sid).is_some_and(|sq| {
             if remove {
-                let before = sq.origins.len();
                 sq.origins.retain(|o| o != path);
-                sq.origins.len() != before
-            } else if sq.origins.iter().any(|o| o == path) {
-                false
-            } else {
+            } else if !sq.origins.iter().any(|o| o == path) {
                 sq.origins.push(path.to_string());
-                true
             }
+            sq.origins != previous
         });
         if changed {
-            self.adopt_stored_generation(workspace, "");
-            self.persist_squad(sid);
+            let origins = self
+                .session
+                .squad(sid)
+                .map(|s| s.origins.clone())
+                .unwrap_or_default();
+            // Only the origins reach the store. A full snapshot would carry
+            // this server's members and layout over a second server's newer ones.
+            let stored = match crate::squad_store::set_origins(workspace, &origins) {
+                Ok((true, batch)) => self.persist_result(Ok(batch)),
+                // Never stored: a full snapshot has nothing to overwrite.
+                Ok((false, _)) => {
+                    self.persist_squad(sid);
+                    true
+                }
+                Err(error) => self.persist_result(Err(error)),
+            };
+            if !stored {
+                if let Some(sq) = self.session.squad_mut(sid) {
+                    sq.origins = previous;
+                }
+                let _ = reply.send(ServerMsg::Err {
+                    code: err_code::STORE_WRITE_FAILED,
+                    msg: format!("origin edit on {workspace} was not stored; nothing changed"),
+                });
+                return;
+            }
             self.push_layout(true);
         }
         let _ = reply.send(ServerMsg::Ok);

@@ -7,7 +7,7 @@ A workspace owns the rows under its folder. The folder is the workspace's origin
 A worker with a pane sits in the workspace that holds the pane. A thread, a headless worker, or a daemon row has no pane. It joins a workspace by its cwd alone, through `Session::find_by_cwd` in `crates/fno/src/squad.rs`.
 
 - The row's cwd decides. It matches an origin that equals it or sits above it.
-- The longest matching origin wins. On a tie the first workspace wins.
+- The longest matching origin wins. On an equal length a named workspace beats an unnamed squad, because naming a workspace is a deliberate claim. Between equals the first one wins.
 - A row that matches nothing renders under `~ elsewhere`.
 
 A workspace with no origin matches nothing. Its thread workers all render under `~ elsewhere`, and the workspace shows empty.
@@ -25,7 +25,7 @@ fno mux workspace origin remove <name> <path>
 
 The path becomes absolute. `~` expands to HOME. `.`, `..` and a trailing slash fold away. No symlink resolves, because a row matches an origin by the cwd string its harness recorded.
 
-Every mux server that holds the name applies the edit and writes it to the store before it replies. A workspace can hold several origins. Add and remove are idempotent. Removing the last origin leaves the workspace with no folder.
+Every mux server that holds the name applies the edit and writes it to the store before it replies. The write changes only the stored origins, so a second server's newer members and layout survive. If the write fails, the edit reverts and the verb reports the error. A workspace can hold several origins. Add and remove are idempotent. Removing the last origin leaves the workspace with no folder.
 
 ## Seeing the state
 
