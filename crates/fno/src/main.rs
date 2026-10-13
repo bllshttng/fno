@@ -196,6 +196,10 @@ enum Role {
     /// tail runs `fno-agents mail-remote`; every other argv forwards
     /// byte-verbatim.
     RemoteMail(Vec<OsString>),
+    /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
+    /// do-not-disturb hold leaf. The verb and its tail pass through
+    /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
+    MailHold(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -337,6 +341,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "view" => Some(Role::MailViewRenamed),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
@@ -638,6 +647,11 @@ fn main() {
         Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail send|peek <name>@<host>",
             &["mail-remote"],
+            &rest,
+        )),
+        Role::MailHold(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail hold|dnd|hold-release",
+            &["mail"],
             &rest,
         )),
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
