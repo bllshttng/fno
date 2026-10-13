@@ -346,3 +346,68 @@ fn removing_a_workspace_frees_its_name_when_the_store_baseline_is_stale() {
         "the name is free again"
     );
 }
+
+/// The refusal for a taken name says what holds it. A stored row with no open
+/// workspace read as a bare "name taken" over a sideline that showed no such
+/// workspace.
+#[test]
+fn name_holder_says_whether_the_row_is_open_or_stored_and_where() {
+    let _s = StoreScratch::new("name-holder");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("bare".into()), leaf_tab(5, 1));
+    core.session
+        .add_squad(2, vec!["/a".into()], Some("rooted".into()), leaf_tab(6, 2));
+    crate::squad_store::upsert("kept", "", &[], &[]).unwrap();
+    assert_eq!(core.name_holder("bare").as_deref(), Some("open, no folder"));
+    assert_eq!(
+        core.name_holder("rooted").as_deref(),
+        Some("open, folder /a")
+    );
+    assert_eq!(
+        core.name_holder("kept").as_deref(),
+        Some("stored, no folder")
+    );
+    assert_eq!(core.name_holder("free"), None);
+}
+
+/// The origin verb edits the open workspace and its stored row together, is
+/// idempotent both ways, and refuses an unknown name or a relative path.
+#[test]
+fn workspace_origin_edits_the_open_workspace_and_its_stored_row() {
+    let _s = StoreScratch::new("workspace-origin");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("w".into()), leaf_tab(5, 1));
+    core.persist_squad(1);
+    let ask = |core: &mut Core, workspace: &str, path: &str, remove: bool| {
+        let (tx, mut rx) = oneshot::channel();
+        core.handle_workspace_origin(workspace, path, remove, tx);
+        rx.try_recv().expect("the handler replies once")
+    };
+    let stored = || {
+        crate::squad_store::load()
+            .squads
+            .iter()
+            .find(|s| s.name == "w")
+            .map(|s| s.origins.clone())
+    };
+
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert_eq!(core.session.squad(1).unwrap().origins, ["/a"]);
+    assert_eq!(stored(), Some(vec!["/a".to_string()]));
+
+    assert!(matches!(ask(&mut core, "w", "/a", true), ServerMsg::Ok));
+    assert!(core.session.squad(1).unwrap().origins.is_empty());
+    assert_eq!(stored(), Some(Vec::new()));
+
+    assert!(matches!(
+        ask(&mut core, "nope", "/a", false),
+        ServerMsg::Err { code, .. } if code == err_code::NOT_FOUND
+    ));
+    assert!(matches!(
+        ask(&mut core, "w", "relative", false),
+        ServerMsg::Err { code, .. } if code == err_code::BAD_REQUEST
+    ));
+}
