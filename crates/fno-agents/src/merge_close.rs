@@ -59,13 +59,17 @@ fn unreadable(stdout: &str) -> CloseOutcome {
     }
 }
 
-/// A local GitHub budget refusal in a failure row is the limiter's backoff,
-/// not the sweep's failure: the row reports a wait.
+/// A rate-limit refusal in a failure row is a backoff, not the sweep's
+/// failure: the row reports a wait. Covers the local request budget and
+/// GitHub's own refusal, since both clear by waiting.
 fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
     row.get("error")
         .and_then(serde_json::Value::as_str)
+        .map(str::to_ascii_lowercase)
         .is_some_and(|error| {
-            error.contains("outcome=budget_refused") || error.contains("gh budget:")
+            error.contains("outcome=budget_refused")
+                || error.contains("gh budget:")
+                || error.contains("rate limit")
         })
 }
 
