@@ -1679,7 +1679,6 @@ def _claude_create_path(
             file=sys.stderr,
         )
 
-    # Best-effort ambient capture; never raises.
     spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, carried or {})
     lineage_reason = _report_unlinked_parent(spawned_by_session)
 
@@ -6478,13 +6477,14 @@ def wake_and_deliver(
     except (RegistryVersionError, ValueError):
         return False, "registry-incomplete"
 
-    source = vars(entry) if entry is not None else fork_lineage.carried(session_uuid)
-    spawn_name = source.get("name") or f"wake-{canonical_handle(session_uuid)}"
+    carried = fork_lineage.carried(session_uuid)
+    spawn_name = carried.get("name") or f"wake-{canonical_handle(session_uuid)}"
     route_provider, route_env = fork_lineage.wake_route(entry, session_uuid)
     from fno.agents.spawn_gate import GateRefused, run_gate
     from fno.agents.launch_provenance import launch_account_for_session
 
-    parent = tuple(source.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
+    row = carried if entry is None else vars(entry)
+    parent = tuple(row.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
     gate = None
     revived_reservation = False
     if route_provider is not None:
