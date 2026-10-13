@@ -556,27 +556,22 @@ fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&s
     let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None);
 }
 
-/// The newest `fno_update_*` row in the machine journal, or None. Bounded
-/// read of the last 1 MiB: the journal is machine-global and unbounded, so
-/// --check must not read it whole on every TUI refresh. An update row older
-/// than 1 MiB of fleet traffic reads as None until the next update writes
-/// a fresh one.
+/// The newest `fno_update_*` row in the machine's event store, or None. The
+/// store answers the typed window; with no row (or no store yet) --check
+/// reads None, as it does behind an empty journal today.
 fn last_update_event() -> Option<Value> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    const WINDOW: u64 = 1024 * 1024;
-    let path = events_journal();
-    let mut file = std::fs::File::open(&path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(WINDOW);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    text.lines()
-        .rev()
-        .filter(|line| line.contains("fno_update_"))
-        .find_map(|line| serde_json::from_str::<Value>(line).ok())
+    let rows = crate::event_store::query_events(
+        &events_journal(),
+        &crate::event_store::EventQuery::of_types(&[
+            "fno_update_started",
+            "fno_update_built",
+            "fno_update_installed",
+            "fno_update_failed",
+        ]),
+    )
+    .ok()?;
+    let row = rows.last()?;
+    serde_json::from_str::<Value>(&row.line).ok()
 }
 
 /// One native resolution: path, eligibility evidence, allow/refuse, warning.
