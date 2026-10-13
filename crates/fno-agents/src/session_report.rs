@@ -1113,7 +1113,7 @@ mod tests {
             launch: crate::launch_record::Launch {
                 harness: "claude".into(),
                 name: Some("w1".into()),
-                node: Some("x-ab12".into()),
+                node: Some("x-aaaa".into()),
                 slot: None,
                 cwd: "/repo".into(),
             },
@@ -1138,7 +1138,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].origin.as_deref(), Some("spawn"));
         assert_eq!(rows[0].name, "w1");
-        assert_eq!(rows[0].node.as_deref(), Some("x-ab12"));
+        assert_eq!(rows[0].node.as_deref(), Some("x-aaaa"));
         assert_eq!(rows[0].spawned_by_session.as_deref(), Some("lead-7"));
         assert_eq!(rows[0].substrate.as_deref(), Some("thread"));
         assert_eq!(rows[0].status, AgentStatus::Live);
