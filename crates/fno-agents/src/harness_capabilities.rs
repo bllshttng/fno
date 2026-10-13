@@ -560,7 +560,10 @@ impl LaunchTemplate {
                     "a hole must be the whole token",
                 ));
             }
-            let hole = captures[0].get(1).unwrap_or_default().to_string();
+            let hole = captures[0]
+                .get(1)
+                .map(|matched| matched.as_str().to_string())
+                .unwrap_or_default();
             if !LAUNCH_HOLES.contains(&hole.as_str()) {
                 return Err(field_error(
                     harness,
