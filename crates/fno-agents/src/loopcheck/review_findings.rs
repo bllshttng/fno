@@ -221,6 +221,7 @@ fn merge_attestation_text(
         merged.push('\n');
         merged.push_str(&extra_global);
     }
+    let had_primary = primary_text.is_some();
     if let Some(primary_text) = primary_text {
         let extra_primary = missing_primary_attestations(&primary_text, &merged);
         if !extra_primary.is_empty() {
@@ -228,7 +229,7 @@ fn merge_attestation_text(
             merged.push_str(&extra_primary);
         }
     }
-    if primary_text.is_some() {
+    if had_primary {
         let mut rows: Vec<(String, usize, String)> = merged
             .lines()
             .enumerate()
