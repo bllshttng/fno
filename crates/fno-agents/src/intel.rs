@@ -363,6 +363,18 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     fno_dir.join("bus").join("messages.jsonl")
 }
 
+/// The bus DIRECTORY under `fno_dir`, the shape the mail-front leaves read:
+/// `bus_log_path`'s parent, or `<fno_dir>/bus` when the log path has none.
+/// Callers must pass the PYTHON state root (`agents_config::state_dir`),
+/// mirroring `fno.paths.bus_dir`'s final fallback - not the agents home,
+/// which `FNO_STATE_DIR` does not move.
+pub(crate) fn bus_dir_of(fno_dir: &Path) -> PathBuf {
+    bus_log_path(fno_dir)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| fno_dir.join("bus"))
+}
+
 pub(crate) fn ts_secs(ts: &str) -> Option<u64> {
     crate::state::rfc3339_like_to_secs(ts).or_else(|| {
         ts.get(..19)
