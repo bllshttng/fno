@@ -212,7 +212,7 @@ mod tests {
         stage_row(dir.path());
         let out = exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w1",
-            "payload": "/fno:target x-1abc",
+            "payload": "/fno:target x-aaaa",
             "launcher_session": "lead-1", "launcher_harness": "claude",
             "provider": "zai", "model": "tm-1", "node": "x-aaaa", "cwd": dir.path(),
         }))
@@ -233,7 +233,7 @@ mod tests {
         std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents-home"));
         let error = exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w1",
-            "payload": "/fno:target x-1abc",
+            "payload": "/fno:target x-aaaa",
         }))
         .unwrap_err();
         assert!(error.contains("launcher_session"), "{error}");

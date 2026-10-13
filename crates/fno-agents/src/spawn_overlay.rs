@@ -1329,7 +1329,7 @@ mod tests {
         let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
             "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "/fno:target x-1abc",
+            "name": "w", "payload": "/fno:target x-aaaa",
             "cwd": dir.path(),
             "model": "glm-5.3-flash[1m]", "effort": "xhigh",
             "route_env": {
@@ -1358,7 +1358,7 @@ mod tests {
                 "xhigh",
                 "--name",
                 "w",
-                "/fno:target x-1abc"
+                "/fno:target x-aaaa"
             ]
         );
         print_world_restore(guard, saved);
@@ -1372,7 +1372,7 @@ mod tests {
         let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
             "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "/fno:target x-1abc",
+            "name": "w", "payload": "/fno:target x-aaaa",
             "cwd": dir.path(),
             "route_env": {
                 "FNO_ROUTE_PROVIDER": "zai",
@@ -1386,7 +1386,7 @@ mod tests {
         assert_eq!(tokens[1], "--bg");
         assert_eq!(tokens[2], "--settings");
         assert!(std::path::Path::new(tokens[3].as_str().unwrap()).exists());
-        assert_eq!(&tokens[4..], ["--name", "w", "/fno:target x-1abc"]);
+        assert_eq!(&tokens[4..], ["--name", "w", "/fno:target x-aaaa"]);
         print_world_restore(guard, saved);
     }
 
@@ -1423,7 +1423,7 @@ mod tests {
         ));
         let out = resolve(json!({
             "kind": "print", "harness": "claude", "substrate": "thread",
-            "name": "w", "payload": "/fno:target x-1abc",
+            "name": "w", "payload": "/fno:target x-aaaa",
             "cwd": dir.path(),
             "model": "row-m",
             "route_env": {
@@ -1442,7 +1442,7 @@ mod tests {
                 "row-m",
                 "--name",
                 "w",
-                "/fno:target x-1abc"
+                "/fno:target x-aaaa"
             ])
         );
         print_world_restore(guard, saved);

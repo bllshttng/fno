@@ -210,18 +210,11 @@ it). Name is positional, message is the trailing positional, reply is on stdout:
 fno agents spawn --harness "$PROVIDER" --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
 ```
 
-- `--harness "$PROVIDER"` (short `-H`) selects the CLI binary (codex/gemini). It
-  is the canonical spelling of the axis; the old `--provider` still works but
-  is deprecated. NOTE: `-H` now carries the harness value, not headless.
-- `--once` (short `-o`) makes it a synchronous create -> exchange -> teardown
-  one-shot; it blocks until the model answers, then prints the review to stdout
-  and exits.
-- `"$(cat "$BRIEF")"` passes the brief as one already-expanded argument - the file
-  content is not re-parsed by the shell, so any characters inside are safe.
-- `-t 300` bounds the model run. Give the Bash call itself a generous timeout
-  (e.g. 360000 ms) so the tool does not cut the review off early.
-- `--name peer-$TARGET` is a throwaway handle (`--once` tears the agent down); derive it
-  from the target, e.g. `peer-pr657` or `peer-fix-ratios`.
+- `--harness "$PROVIDER"` (short `-H`) selects the CLI binary (codex/gemini). It is the canonical spelling of the axis. The old `--provider` spelling still works but is deprecated. NOTE: `-H` now carries the harness value, not headless.
+- `--once` (short `-o`) makes it a synchronous create -> exchange -> teardown one-shot. It blocks until the model answers, prints the review to stdout, and exits.
+- `"$(cat "$BRIEF")"` passes the brief as one already-expanded argument - the file content is not re-parsed by the shell, so any characters inside are safe.
+- `-t 300` bounds the model run. Give the Bash call itself a generous timeout (e.g. 360000 ms), so the review is not cut off early.
+- `--name peer-$TARGET` is a throwaway handle (`--once` tears the agent down). Derive it from the target, e.g. `peer-pr657` or `peer-fix-ratios`.
 
 ### 3b. GENERATE (routed claude -> GLM) - claude CLI as transport
 
