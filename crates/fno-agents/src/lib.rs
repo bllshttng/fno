@@ -432,6 +432,7 @@ pub mod route_gather;
 pub mod route_inventory;
 pub mod route_node_pin;
 pub mod route_recovery;
+pub mod route_settings;
 pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;

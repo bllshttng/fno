@@ -1079,6 +1079,7 @@ def resolve_explicit_route(
 def materialize_route_settings(
     route_env: Mapping[str, str],
     sandbox: "Optional[Mapping[str, object]]" = None,
+    alias: Optional[str] = None,
 ) -> str:
     """Write ``route_env`` as a claude ``--settings`` JSON and return its path.
 
@@ -1101,13 +1102,14 @@ def materialize_route_settings(
     ``sandbox`` composes a sandbox settings block into the SAME file: there is
     only one ``--settings`` flag, so a sibling file would silently drop this
     one. It is part of the content address, so a per-worker write policy
-    naturally yields its own file.
+    naturally yields its own file. ``alias`` also stamps the stable
+    ``lane-<row>.json`` name the lane's native line prints (change 6).
     """
     from fno.agents.account_env import SCRUB_AUTH_VARS
 
     env: dict[str, str] = {var: "" for var in SCRUB_AUTH_VARS}
     env.update(route_env)
-    return _write_settings_env_file(env, sandbox=sandbox)
+    return _write_settings_env_file(env, sandbox=sandbox, alias=alias)
 
 
 def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
@@ -1177,98 +1179,65 @@ def load_sandbox_write_policy(path: str) -> dict[str, object]:
     return block
 
 
-# Tools a worker on a non-Anthropic endpoint must not be offered. Artifact
-# publishes through Anthropic's own backend, so a routed worker could never use
-# it, and claude 2.1.265 gave its input_schema a pattern holding \p{Cc}. z.ai
-# refuses any tools pattern with a \p{...} escape and answers 400 [1210] with no
-# field name, which killed every fresh interactive routed worker on turn one.
-FOREIGN_ENDPOINT_DENY_TOOLS = ("Artifact",)
-
-ANTHROPIC_API_HOST = "api.anthropic.com"
-
-
-def _base_url_host(base_url: str) -> str:
-    """The lowercased host of ``base_url``, or "" when there is none.
-
-    A bare authority like ``api.anthropic.com/v1`` carries no scheme, and
-    urlsplit reads the whole thing as a path, so give it one first.
-    """
-    from urllib.parse import urlsplit
-
-    base = base_url.strip()
-    if not base:
-        return ""
-    if "//" not in base:
-        base = "//" + base
-    return (urlsplit(base).hostname or "").lower()
-
-
-def _foreign_endpoint_tool_denies(env: Mapping[str, str]) -> list[str]:
-    """Tool denies this route needs, empty for Anthropic's own endpoint.
-
-    The host is parsed and matched whole. A substring test would clear
-    ``api.anthropic.com.proxy.example`` and refuse ``API.ANTHROPIC.COM``.
-    """
-    host = _base_url_host(str(env.get("ANTHROPIC_BASE_URL") or ""))
-    if not host or host == ANTHROPIC_API_HOST:
-        return []
-    return list(FOREIGN_ENDPOINT_DENY_TOOLS)
-
-
 def _write_settings_env_file(
     env: Mapping[str, str],
     sandbox: "Optional[Mapping[str, object]]" = None,
+    alias: Optional[str] = None,
 ) -> str:
-    """Content-addressed ``0600`` write of ``{"env": env}`` (plus an optional
-    sibling ``sandbox`` block) under ``paths.state_dir() / "route-settings"``;
-    returns the path.
+    """Write the composed settings payload through the Rust writer's door and
+    return the content-addressed path.
 
-    Shared by :func:`materialize_route_settings` and
-    :func:`materialize_model_scrub_settings` so the atomic-write mechanics
-    (content addressing, tmp-then-``os.replace``) exist in one place. The
-    digest covers the WHOLE payload, so a sandbox-only difference still gets
-    its own file while identical calls keep collapsing to one.
+    One implementation lives in ``crates/fno-agents/src/route_settings.rs``
+    (change 6 port): the payload shape, the foreign-endpoint deny, the
+    ``sha256[:16]`` content address, the ``0600`` atomic publish and the
+    stable ``lane-<row>.json`` alias. This leg is the transport only - the
+    env rides stdin because it carries ``ANTHROPIC_AUTH_TOKEN`` - and a door
+    failure refuses loud: a spawn that cannot write its settings file must
+    not launch and wedge on the primary model.
     """
-    import hashlib
     import json
-    import os
 
-    from fno import paths
+    from fno.rust_binary import call_binary_json
 
-    payload_obj: dict[str, object] = {"env": dict(env)}
-    if sandbox:
-        payload_obj["sandbox"] = dict(sandbox)
-    deny = _foreign_endpoint_tool_denies(env)
-    if deny:
-        payload_obj["permissions"] = {"deny": deny}
-    payload = json.dumps(payload_obj, sort_keys=True)
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-    # Route through fno.paths (config-driven ~/.fno) rather than a bare
-    # Path.home() -- the check-no-hardcoded-paths gate forbids the literal, and
-    # the settings file should follow a config state_dir override like every
-    # other sidecar.
-    base = paths.state_dir() / "route-settings"
-    base.mkdir(parents=True, exist_ok=True)
-    path = base / f"{digest}.json"
-    if not path.exists():
-        # Publish atomically: two agents on the same route resolve to this same
-        # content-addressed path, and a bare O_CREAT makes the file visible before
-        # its write finishes -- a racing spawn could hand claude an empty/partial
-        # settings file. Write a pid-unique temp then os.replace (atomic on the
-        # same fs); content-addressing means racing writers write identical bytes,
-        # so a last-writer-wins rename is still correct.
-        tmp = base / f".{digest}.{os.getpid()}.tmp"
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, payload.encode("utf-8"))
-        finally:
-            os.close(fd)
-        os.replace(str(tmp), str(path))
-    return str(path)
+    payload = json.dumps(
+        {"env": dict(env), "sandbox": dict(sandbox) if sandbox else None,
+         "alias": alias},
+        sort_keys=True,
+    )
+    err, receipt = call_binary_json("route-settings", [], input_text=payload, timeout=30)
+    if err or not isinstance(receipt, dict) or not receipt.get("path"):
+        detail = err or f"unusable receipt: {receipt!r}"
+        raise RuntimeError(f"route-settings writer refused: {detail}")
+    return str(receipt["path"])
 
 
 class RouteRestoreError(RuntimeError):
     """A recorded route could not be read back, so a relaunch must refuse."""
+
+
+def lane_alias_for(
+    provider: Optional[str], model: Optional[str]
+) -> Optional[str]:
+    """The routing row's name when exactly one declared claude row matches the
+    resolved (provider, model), else None.
+
+    The stable ``lane-<row>.json`` alias needs the row's own name (change 6):
+    ``zai-flash``, not a digest. Ambiguous or unmatched lanes read no alias -
+    the spawn still carries the content-addressed file, only the printed name
+    degrades.
+    """
+    if not provider or not (model or "").strip():
+        return None
+    from fno.route_resolve import resolve_inventory
+
+    matches = [
+        row.name
+        for row in resolve_inventory().rows.values()
+        if row.harness == "claude"
+        and row.model == model
+        and (row.route.split("/", 1)[0] if row.route else "") == provider
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def route_settings_path_for(
@@ -1276,6 +1245,7 @@ def route_settings_path_for(
     account_env: Optional[Mapping[str, str]] = None,
     env: Optional[Mapping[str, str]] = None,
     sandbox: "Optional[Mapping[str, object]]" = None,
+    alias: Optional[str] = None,
 ) -> Optional[str]:
     """The ``--settings`` path a spawn carrying these overlays launches with.
 
@@ -1319,7 +1289,7 @@ def route_settings_path_for(
     # this file already writes never covered the model vars (round 3).
     for key in unrouted_model_keys(env):
         merged.setdefault(key, "")
-    return materialize_route_settings(merged, sandbox=sandbox)
+    return materialize_route_settings(merged, sandbox=sandbox, alias=alias)
 
 
 def read_route_settings(path: str) -> dict[str, str]:

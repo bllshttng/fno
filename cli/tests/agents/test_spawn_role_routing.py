@@ -5,7 +5,7 @@ Grant-at-spawn (``--promote level=N,scope=X``) is implemented only in the Python
 DEFAULT substrate and pane spawns already divert to Python via
 ``_is_pane_substrate_spawn`` - so a BARE ``spawn --promote`` already works. The
 defect lives only on the autonomous substrates (``--substrate bg`` and the
-headless spellings ``-p``/``--headless``/``--once``/``-o``), where
+headless spellings ``--substrate headless``/``--once``/``-o``), where
 ``_is_pane_substrate_spawn`` returns False and the spawn would otherwise reach
 the Rust client and die with ``unknown flag: --promote``. Those are exactly the
 substrates where succession matters most (an stepping_down lead grants on a worker).

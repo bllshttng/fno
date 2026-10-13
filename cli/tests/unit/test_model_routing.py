@@ -242,7 +242,9 @@ def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
 def test_materialized_settings_keep_floor_and_undeclared_tiers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
+    # The writer runs in the fno-agents door, which reads FNO_STATE_DIR env,
+    # not the Python paths seam.
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     route = mr.resolve_explicit_route(
         "zai",
         "glm-5.3-flash[1m]",

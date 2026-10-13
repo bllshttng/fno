@@ -1083,7 +1083,7 @@ def cmd_spawn(
         "-P",
         help=(
             "The model VENDOR (zai or a model_routing.providers name), paired "
-            "with --model. NOT the CLI binary (-H). -p is headless."
+            "with --model. NOT the CLI binary (-H)."
         ),
     ),
     recorded_provider: str | None = typer.Option(
@@ -1113,11 +1113,13 @@ def cmd_spawn(
             "headless (one-shot). Placement flags and a `--` fence imply pane."
         ),
     ),
-    headless: bool = typer.Option(
+    print_mode: bool = typer.Option(
         False,
-        "--headless",
-        "-p",
-        help="Shortcut for --substrate headless: a one-shot worker. Wins over --substrate.",
+        "--print",
+        help=(
+            "Resolve the lane, write its settings file and print the native "
+            "line it would exec, then exit. Launches nothing."
+        ),
     ),
     sandbox_write_policy: str | None = typer.Option(
         None,
@@ -1528,8 +1530,6 @@ def cmd_spawn(
         passthrough,
     )
     defaulted = False
-    if headless:
-        substrate = "headless"
     if not substrate and once:  # --once always means a one-shot
         substrate = "headless"
     if not substrate:
@@ -2023,6 +2023,45 @@ def cmd_spawn(
             f"bills {credential.bills})",
             file=sys.stderr,
         )
+
+    # --print (change 6): resolve the lane, write its settings file and print
+    # the native line it would exec, then exit. Every refusal above already
+    # ran, so what prints is the line the real spawn would carry; nothing is
+    # gated, registered or launched. Claude lanes first (change 7 templates
+    # and wave 5 extend the render to the other harnesses).
+    if print_mode:
+        if harness != "claude" or substrate != "thread":
+            print(
+                f"--print renders claude --bg lines (change 6); harness "
+                f"{harness!r} substrate {substrate!r} has no native line yet.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
+        if not (route_env or account_env):
+            print(
+                "--print needs a routed or pinned-account lane (the settings "
+                "file is the lane); a plain bg line is just claude --bg.",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
+        import shlex
+
+        from fno.agents.model_routing import lane_alias_for, route_settings_path_for
+
+        settings_path = route_settings_path_for(
+            route_env, account_env, env=dict(os.environ), sandbox=None,
+            alias=lane_alias_for(route_provider, model) if route_env else None,
+        )
+        tokens = ["claude", "--bg"]
+        if settings_path:
+            tokens += ["--settings", settings_path]
+        if model:
+            tokens += ["--model", model]
+        if effort:
+            tokens += ["--effort", effort]
+        tokens += ["--name", name, shlex.quote(message or "")]
+        print(" ".join(tokens))
+        raise typer.Exit(code=0)
 
     # Resolve node provenance once for every substrate. A node-bearing spawn is
     # itself a dispatcher route, so it must cross the same family-2 decision and

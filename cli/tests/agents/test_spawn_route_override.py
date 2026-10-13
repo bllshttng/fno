@@ -671,6 +671,79 @@ def test_mesh_env_wrapper_route_wins_over_account() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None:
+    """AC11 (change 6): --print resolves the lane, writes the settings file and
+    prints the native line it would exec, then exits. Nothing is gated,
+    registered or launched."""
+    from fno.agents import spawn_gate
+    from fno.agents.cli import agents_app
+
+    gate_calls: list[Any] = []
+    monkeypatch.setattr(
+        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
+    )
+    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
+    from fno.agents import model_routing as mr
+
+    monkeypatch.setattr(
+        mr,
+        "route_settings_path_for",
+        lambda *a, **k: "/state/route-settings/lane-zai-flash.json",
+    )
+    monkeypatch.setattr(mr, "lane_alias_for", lambda provider, model: "zai-flash")
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "w", "/fno:target x-1abc", "--harness", "claude",
+         "--route", "zai,glm-5.2", "--effort", "xhigh", "--print"],
+    )
+    assert result.exit_code == 0, result.output
+    line = result.output.strip()
+    assert line.startswith("claude --bg --settings /state/route-settings/lane-zai-flash.json"), line
+    assert "--model glm-5.2" in line
+    assert "--effort xhigh" in line
+    assert "--name w" in line
+    assert "'/fno:target x-1abc'" in line
+    assert gate_calls == [], "--print must not touch the gate"
+
+
+def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
+    """Claude lanes first (change 6): another harness has no native line yet."""
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "w", "hi", "--harness", "codex", "--print"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "no native line yet" in result.output
+
+
+def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
+    """The alias is the row NAME: exactly one declared claude row matching the
+    resolved (provider, model). Ambiguous or unmatched reads None - the digest
+    path still carries the settings, only the printed name degrades."""
+    from fno import route_resolve
+    from fno.agents import model_routing as mr
+    from fno.route_resolve import Inventory, InventoryRow
+
+    def inv_with(*rows: InventoryRow) -> Inventory:
+        return Inventory(rows={r.name: r for r in rows}, declared=True)
+
+    row = InventoryRow(
+        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.3-flash[1m]",
+    )
+    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row))
+    assert mr.lane_alias_for("zai", "glm-5.3-flash[1m]") == "zai-flash"
+    assert mr.lane_alias_for("zai", "glm-5.3[1m]") is None
+    twin = InventoryRow(
+        name="zai-flash-2", harness="claude", model="glm-5.3-flash[1m]",
+        route="zai/glm-5.3-flash[1m]",
+    )
+    monkeypatch.setattr(route_resolve, "resolve_inventory", lambda: inv_with(row, twin))
+    assert mr.lane_alias_for("zai", "glm-5.3-flash[1m]") is None
+
+
 def test_materialize_route_settings_is_0600_and_content_addressed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -947,7 +1020,7 @@ def test_route_allowed_on_headless(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--headless", "--route", "zai,glm-5.2"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "headless", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
     assert captured["route_env"]["ANTHROPIC_AUTH_TOKEN"] == "zk-live"
@@ -970,7 +1043,9 @@ def test_vendor_name_is_not_a_harness_value(monkeypatch: pytest.MonkeyPatch) -> 
     from fno.agents.cli import agents_app
 
     for flag in ("--harness", "-H", "--provider", "-p"):
-        result = runner.invoke(agents_app, ["spawn", "hi", flag, "zai", "--headless"])
+        result = runner.invoke(
+            agents_app, ["spawn", "hi", flag, "zai", "--substrate", "headless"]
+        )
         assert result.exit_code == 2, f"{flag}: {result.output}"
 
 
@@ -993,7 +1068,7 @@ def test_routed_once_reaches_the_headless_lane(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
     from fno.agents.cli import agents_app
 
-    for flag in ("--once", "-o", "--headless"):
+    for flag in ("--once", "-o"):
         captured.clear()
         result = runner.invoke(
             agents_app,
@@ -1014,7 +1089,8 @@ def test_bare_route_vendor_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w", "hi", "--harness", "claude", "--headless", "--route", "zai"]
+        agents_app,
+        ["spawn", "--name", "w", "hi", "--harness", "claude", "--substrate", "headless", "--route", "zai"],
     )
     assert result.exit_code == 2, result.output
     assert "provider,model" in result.output
@@ -1036,13 +1112,17 @@ def test_provider_is_the_older_spelling_of_harness(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch_spawn)
     from fno.agents.cli import agents_app
 
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hi", "--harness", "codex", "--headless"])
+    result = runner.invoke(
+        agents_app, ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "headless"]
+    )
     assert result.exit_code == 0, result.output
     assert captured["harness"] == "codex"
 
     # The canonical --harness spelling threads the same harness.
     captured.clear()
-    clean = runner.invoke(agents_app, ["spawn", "--name", "w2", "hi", "--harness", "codex", "--headless"])
+    clean = runner.invoke(
+        agents_app, ["spawn", "--name", "w2", "hi", "--harness", "codex", "--substrate", "headless"]
+    )
     assert clean.exit_code == 0, clean.output
     assert captured["harness"] == "codex"
 
@@ -1323,7 +1403,7 @@ def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyP
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "claude", "--headless",
+        ["spawn", "--name", "w", "hi", "--harness", "claude", "--substrate", "headless",
          "--dispatch-account", "codex-acct"],
     )
     assert result.exit_code == 2, result.output
@@ -1344,7 +1424,7 @@ def test_dispatch_account_refuses_an_unregistered_record(monkeypatch: pytest.Mon
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "codex", "--headless",
+        ["spawn", "--name", "w", "hi", "--harness", "codex", "--substrate", "headless",
          "--dispatch-account", "ghost"],
     )
     assert result.exit_code == 2, result.output
