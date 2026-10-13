@@ -120,7 +120,7 @@ def test_veto_precedes_the_override_marker():
     only checked the two-factor path would pass while the marker still shipped
     a merge that reaches nobody.
     """
-    src = HOOK_PATH.read_text()
+    src = (REPO_ROOT / "hooks" / "git_protection_impl.py").read_text()
     veto = src.index("_stacked_base_refusal(merge_seg)")
     two_factor = src.index("_check_pr_merge_allowed(merge_seg)")
     marker = src.index("_claim_marker(MERGE_GATE_MARKER)")

@@ -1024,14 +1024,18 @@ def attestation_chain(
                 # measured), so two rounds inside one second are real.
                 # What separates the mirror's copy from a distinct
                 # attestation is the payload: the copy differs from its
-                # original in exactly one key, `repo`, while two distinct
-                # rounds differ in verdict, findings, dispositions or
-                # head. One key for every row shape, no invocation-era
-                # fallback.
+                # original in exactly the carrier keys, `repo` and the
+                # `attest_machine` stamp, while two distinct rounds differ
+                # in verdict, findings, dispositions or head. One key for
+                # every row shape, no invocation-era fallback.
                 key = "{}|{}".format(
                     event.get("ts", ""),
                     json.dumps(
-                        {k: v for k, v in data.items() if k != "repo"},
+                        {
+                            k: v
+                            for k, v in data.items()
+                            if k not in ("repo", "attest_machine")
+                        },
                         sort_keys=True,
                     ),
                 )

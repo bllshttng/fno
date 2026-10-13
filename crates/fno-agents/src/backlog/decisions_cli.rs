@@ -1154,11 +1154,17 @@ fn subject_node_id(entries: &[Value], subject: &str) -> Option<String> {
 /// The plans dir the deleted verb scanned, resolved by the one owner of the
 /// chain (`fno do plan path`, cwd-anchored). A probe failure is the
 /// unavailable status, never a silent empty scan.
-fn plans_dir_for_listing() -> Result<PathBuf, String> {
+pub(crate) fn plans_dir_for_listing() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cwd unreadable ({e})"))?;
+    plans_dir_for_listing_from(&cwd)
+}
+
+/// The same probe anchored on a project root: run from the node's cwd so a
+/// per-project plansDirectory override holds (the undefer ruling scan).
+pub(crate) fn plans_dir_for_listing_from(anchor: &Path) -> Result<PathBuf, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
         .args(["do", "plan", "path", "--slug", "_plans_dir_probe"])
-        .current_dir(&cwd)
+        .current_dir(anchor)
         .output()
         .map_err(|e| format!("probe failed ({e})"))?;
     if !output.status.success() {
@@ -1254,7 +1260,7 @@ fn rulings_result(dir: &Path, status: &str, detail: Option<&str>) -> Value {
 /// The scan (`plan_rulings`): plans whose `consolidation.rejected` names
 /// the node. Status-carrying, never erroring; a missing dir is
 /// `unavailable` because a broken scan must not read as "no ruling exists".
-fn plan_rulings_in(dir: &Path, node_id: &str) -> Value {
+pub(crate) fn plan_rulings_in(dir: &Path, node_id: &str) -> Value {
     let want = node_id.trim();
     let mut result = match plan_dir_unavailable(dir) {
         Some(detail) => return rulings_result(dir, "unavailable", Some(detail)),

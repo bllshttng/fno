@@ -27,6 +27,7 @@ fn verdict(producer: CoverageProducer, name: &str, verdict: CoverageVerdict) -> 
         scope: None,
         refusal_reason: None,
         reviewer_context: None,
+        attest_machine: None,
         required: false,
         passed: false,
     }

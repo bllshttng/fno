@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from fno.graph.store import read_graph_strict
+from tests.conftest import run_native_create
 from tests.fixtures.graph_seed import seed_graph
 
 
@@ -270,22 +271,20 @@ def test_cost_update_still_appends_a_distinct_session(tmp_path):
 
 
 def test_graph_cost_command_replaces_an_existing_session_row(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
     import fno.graph._constants as gc
     import fno.graph.store as gs
-    from fno.graph.cli import cli
 
     graph_path = _graph(tmp_path)
     monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
     monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
     monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
 
-    runner = CliRunner()
+    # The cost write is native; drive the dev binary over the fixture store.
     for amount in ("4.00", "9.00"):
-        result = runner.invoke(
-            cli, ["cost", "ab-12345678", "--amount", amount, "--session-id", "S"]
+        result = run_native_create(
+            graph_path, "cost", "ab-12345678", "--amount", amount, "--session-id", "S"
         )
-        assert result.exit_code == 0, result.stdout
+        assert result.exit_code == 0, result.output + result.stderr
 
     node = _node(graph_path)
     assert len(node["cost_sessions"]) == 1
@@ -352,17 +351,15 @@ def test_upsert_scores_a_junk_cost_as_zero_rather_than_raising():
 
 
 def test_both_production_writers_agree_on_one_nodes_precision(tmp_path, monkeypatch):
-    """`fno graph cost` and the internal cost writer share one node.
+    """The native cost verb and the internal cost writer share one node.
 
     They used to round it to different places (2 and 4), so the stored total's
     last digits depended on which wrote last. Drives both real call sites
     rather than the helper, because the helper alone cannot disagree with
     itself - the defect lived in what the callers asked for.
     """
-    from typer.testing import CliRunner
     import fno.graph._constants as gc
     import fno.graph.store as gs
-    from fno.graph.cli import cli
     from fno.cost import _update_graph_node
 
     graph_path = _graph(tmp_path)
@@ -371,10 +368,10 @@ def test_both_production_writers_agree_on_one_nodes_precision(tmp_path, monkeypa
     monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
 
     _update_graph_node(graph_path, "ab-12345678", "S1", 1.005)
-    result = CliRunner().invoke(
-        cli, ["cost", "ab-12345678", "--amount", "2.004", "--session-id", "S2"]
+    result = run_native_create(
+        graph_path, "cost", "ab-12345678", "--amount", "2.004", "--session-id", "S2"
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == 0, result.output + result.stderr
 
     node = _node(graph_path)
     assert node["cost_usd"] == pytest.approx(1.005 + 2.004)

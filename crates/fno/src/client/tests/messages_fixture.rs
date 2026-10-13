@@ -448,6 +448,7 @@ async fn messages_reply_board_contracts() {
             row: tap_row,
             col: 60,
             shift: false,
+            alt: false,
         },
         &mut writer,
     )
@@ -464,6 +465,7 @@ async fn messages_reply_board_contracts() {
         row: 1,
         col: col as u16,
         shift: false,
+        alt: false,
     };
     let mut sink = tokio::io::sink();
     let x0 = col1_w + col2_w;

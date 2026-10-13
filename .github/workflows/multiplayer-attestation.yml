@@ -1,0 +1,59 @@
+name: multiplayer-attestation
+
+# The two-machine proof: an attestation committed on one simulated machine
+# covers a gate read on the other, over a throwaway sqld primary
+# (docs/guides/multiplayer-test.md; never the live store). The drill the
+# guide rehearses by hand is CI-judged here, because a fix for a
+# multiplayer bug without a multiplayer test is a claim, not a proof.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+on:
+  pull_request:
+    paths:
+      - crates/**
+      - .github/workflows/multiplayer-attestation.yml
+      - docs/guides/multiplayer-test.md
+  workflow_dispatch:
+
+jobs:
+  two-machine-attestation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      primary:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        env:
+          SQLD_NODE: primary
+        ports:
+          - 18080:8080
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-mpattest-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mpattest-
+
+      - name: Build both binaries
+        run: |
+          cargo build --locked -p fno-agents --bin fno-agents --manifest-path crates/fno-agents/Cargo.toml
+          cargo build --locked -p fno --bin fno --manifest-path crates/fno/Cargo.toml
+
+      - name: Two-machine attestation proof
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+        run: bash tests/ci/test_multiplayer_attestation.sh

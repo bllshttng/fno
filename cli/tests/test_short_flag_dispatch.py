@@ -38,7 +38,6 @@ PHASE2_HELP_SURFACES: dict[str, list[str]] = {
     # backlog-update moved with the update port: the native binary answers
     # --help now (pinned below, next to native-find).
     "backlog-next": ["backlog", "next", "--help"],
-    "backlog-ready": ["backlog", "ready", "--help"],
     "backlog-capture-add": ["backlog", "capture", "add", "--help"],
     "mail-send": ["mail", "send", "--help"],
     "config-accounts-add": ["config", "accounts", "add", "--help"],
