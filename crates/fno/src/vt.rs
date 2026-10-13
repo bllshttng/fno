@@ -2609,6 +2609,9 @@ mod tests {
                 match seg {
                     Seg::Pass(b) => pass.extend_from_slice(&b),
                     Seg::Marker(m) => markers.push(m),
+                    // Notices are captured for the pump, never handed back;
+                    // this helper reads only markers and passthrough.
+                    Seg::Notice(_) => {}
                 }
             }
         }
