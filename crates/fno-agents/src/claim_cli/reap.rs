@@ -828,12 +828,15 @@ mod tests {
     #[test]
     fn pid_shared_downgrade_collapses_fresh_live_verdict() {
         let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id() as i32;
         let rec = ClaimRecord {
             schema_version: SCHEMA_VERSION,
             key: "node:test-e".into(),
             holder: "session:abc".into(),
-            acquired_at: now_ms(),
-            pid: Some(std::process::id() as i32),
+            // Same clock domain as the probe: a backward clock step between
+            // process start and this line must not read this pid as reuse.
+            acquired_at: crate::claims::process_create_time_ms(pid).unwrap_or_else(now_ms),
+            pid: Some(pid),
             host: hostname(),
             pid_unavailable: false,
             expires_at: None,
