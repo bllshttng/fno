@@ -1,5 +1,6 @@
-//! Read-only machine detection for `fno config setup run --dry-run` (and
-//! the `--check` mode that follows it): which harnesses are installed,
+//! Read-only machine detection for both setup hosts - the agent host
+//! `fno config setup run --dry-run` and the human host `fno do wizard` (and
+//! the `--check` mode that follows both): which harnesses are installed,
 //! what the machine sample says, whether gh can ship, what config exists.
 //! Every probe is a file read or a bounded subprocess: a detection pass
 //! must finish on a loaded or half-broken machine, so each subprocess is
@@ -78,19 +79,26 @@ pub(crate) fn budget_clause() -> Option<String> {
         .map(|l| l.trim().to_string())
 }
 
-/// The one detection pass behind `--dry-run`: read-only, every probe
-/// bounded, a failing probe an `unreadable` row instead of a failed run.
-pub fn detect(root: &Path) -> Value {
-    json!({
+/// The one detection pass behind `--dry-run` (and the wizard): read-only,
+/// every probe bounded, a failing probe an `unreadable` row instead of a
+/// failed run. `scan` gates the repo walk: `None` leaves the section out
+/// entirely, so a fresh machine answers fast and carries no repo list;
+/// `Some(roots)` walks the named roots, an empty slice meaning the usual
+/// code roots under HOME.
+pub fn detect(root: &Path, scan: Option<&[PathBuf]>) -> Value {
+    let mut doc = json!({
         "harnesses": detect_harnesses(),
         "machine": detect_machine(),
         "gh": detect_gh(),
         "accounts": detect_accounts(),
         "tools": detect_tools(),
         "services": detect_services(),
-        "repos": detect_repos(root),
         "config": detect_config(root),
-    })
+    });
+    if let Some(roots) = scan {
+        doc["repos"] = detect_repos(root, roots);
+    }
+    doc
 }
 
 /// Every harness the auto-wire pass knows, and whether its binary is on
@@ -276,11 +284,13 @@ fn detect_services() -> Value {
     json!({ "services": rows, "daemon_state": daemon })
 }
 
-/// Git checkouts one and two levels under the usual code roots, capped so
-/// detection stays bounded on a full disk. A repo is `registered` when any
-/// flattened global config value names its path (work.workspaces entries
-/// carry it as a bare string or a list row's `path`).
-fn detect_repos(root: &Path) -> Value {
+/// Git checkouts one and two levels under each scan root, capped so
+/// detection stays bounded on a full disk. An empty `roots` slice means the
+/// usual code roots under HOME; explicit roots (`--scan-dirs`) are taken as
+/// given and need no HOME. A repo is `registered` when any flattened global
+/// config value names its path (work.workspaces entries carry it as a bare
+/// string or a list row's `path`).
+fn detect_repos(root: &Path, roots: &[PathBuf]) -> Value {
     const SCAN_ROOTS: [&str; 5] = ["code", "src", "dev", "projects", "work"];
     const DIR_READ_CAP: usize = 200;
     let global = crate::config_defaults::global_config_path();
@@ -291,42 +301,48 @@ fn detect_repos(root: &Path) -> Value {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
+    let bases: Vec<PathBuf> = if roots.is_empty() {
+        if home.as_os_str().is_empty() {
+            Vec::new()
+        } else {
+            SCAN_ROOTS.iter().map(|b| home.join(b)).collect()
+        }
+    } else {
+        roots.to_vec()
+    };
     let mut found: Vec<Value> = Vec::new();
     let mut reads = 0usize;
-    if !home.as_os_str().is_empty() {
-        'roots: for base_name in SCAN_ROOTS {
+    for base in &bases {
+        if reads >= DIR_READ_CAP {
+            break;
+        }
+        let Ok(l1) = std::fs::read_dir(base) else {
+            continue;
+        };
+        reads += 1;
+        for e1 in l1.flatten() {
             if reads >= DIR_READ_CAP {
-                break 'roots;
+                break;
             }
-            let base = home.join(base_name);
-            let Ok(l1) = std::fs::read_dir(&base) else {
+            let p1 = e1.path();
+            if !p1.is_dir() {
+                continue;
+            }
+            if p1.join(".git").exists() {
+                push_repo(&mut found, &p1, root, &registered);
+                continue;
+            }
+            let Ok(l2) = std::fs::read_dir(&p1) else {
                 continue;
             };
             reads += 1;
-            for e1 in l1.flatten() {
+            for e2 in l2.flatten() {
                 if reads >= DIR_READ_CAP {
-                    break 'roots;
+                    break;
                 }
-                let p1 = e1.path();
-                if !p1.is_dir() {
-                    continue;
-                }
-                if p1.join(".git").exists() {
-                    push_repo(&mut found, &p1, root, &registered);
-                    continue;
-                }
-                let Ok(l2) = std::fs::read_dir(&p1) else {
-                    continue;
-                };
-                reads += 1;
-                for e2 in l2.flatten() {
-                    if reads >= DIR_READ_CAP {
-                        break 'roots;
-                    }
-                    let p2 = e2.path();
-                    if p2.is_dir() && p2.join(".git").exists() {
-                        push_repo(&mut found, &p2, root, &registered);
-                    }
+                let p2 = e2.path();
+                if p2.is_dir() && p2.join(".git").exists() {
+                    push_repo(&mut found, &p2, root, &registered);
                 }
             }
         }

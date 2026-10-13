@@ -1,4 +1,4 @@
-//! `fno config setup run`: the one run-once setup over the one step table.
+//! `fno config setup run`: the agent host of setup, over the one step table.
 //!
 //! The single step list both surfaces ask: the terminal prompt path prints
 //! `Install X? It will do Y. [Y/n]` per action step, and the chat skill asks
@@ -6,6 +6,11 @@
 //! `--only`. The no-prompt path (`--yes`, a non-TTY stdin, or an agent env)
 //! takes every recommended default and never reads stdin, so an agent can
 //! never block on a prompt.
+//!
+//! `--dry-run` is the read-only preview of the same table: it prints one
+//! JSON object through `redact` and writes nothing, no marker included. A
+//! `--json` caller gets a refused object with `status: refused` on bad
+//! argv, never prose on stderr.
 //!
 //! Layers: `global` once per machine (harness wiring, gh login, the
 //! concurrency band), `project` once per repo, `contributor` only in a
@@ -45,6 +50,11 @@ pub enum Layer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Act,
+    /// Proposes, never runs bare: under `--yes` the step lands in the
+    /// report's `proposed` list with its exact command, and it executes
+    /// only when `--only` names its id. An installer tail that passes
+    /// `--yes` therefore never loads a service.
+    Approve,
     Report,
     Human,
 }
@@ -57,27 +67,179 @@ pub enum Scope {
     Both,
 }
 
-/// One run's outcome entries. The JSON report carries exactly these five
-/// fields, so an agent reads the same facts the human lines print.
-#[derive(Default)]
+/// One proposed write: what a step would set if accepted. `key` empty
+/// means a command proposal - the exact command rides in `reason`.
+#[derive(Debug)]
+pub struct Proposal {
+    pub id: &'static str,
+    pub key: &'static str,
+    pub value: String,
+    pub scope: &'static str,
+    pub reason: String,
+    pub source: &'static str,
+}
+
+impl Proposal {
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "id": self.id,
+            "key": self.key,
+            "value": self.value,
+            "scope": self.scope,
+            "reason": self.reason,
+            "source": self.source,
+        })
+    }
+}
+
+/// Every row code and its fix line - the `next_action` the report names.
+/// Append-only: a code lands here when its step lands, and [`row`] refuses
+/// to build a code this table does not carry.
+const CODES: &[(&str, &str)] = &[
+    ("gh_not_signed_in", "gh auth login"),
+    ("gh_scope_missing", "gh auth refresh -s repo -s workflow"),
+    (
+        "gh_unreadable",
+        "install the GitHub CLI, then rerun `fno config setup run`",
+    ),
+    (
+        "wiring_failed",
+        "read the wiring line above, fix it, rerun `fno config setup run`",
+    ),
+    ("wiring_manual", "finish the named integration by hand"),
+    (
+        "config_set_refused",
+        "run the `fno config set` line named in the message by hand",
+    ),
+];
+
+/// One problem a run or a dry-run hit: which list it sat on, a stable
+/// code, the human message, and the fix that resolves it.
+#[derive(Debug)]
+pub struct Row {
+    list: &'static str,
+    code: &'static str,
+    message: String,
+    fix: &'static str,
+}
+
+impl Row {
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "list": self.list,
+            "code": self.code,
+            "message": self.message,
+            "fix": self.fix,
+        })
+    }
+}
+
+/// Build a row, pulling its fix from [`CODES`]. A code missing from the
+/// table is a programming error, not a runtime state.
+fn row(list: &'static str, code: &'static str, message: String) -> Row {
+    let fix = CODES
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, f)| *f)
+        .expect("row code missing from CODES");
+    Row {
+        list,
+        code,
+        message,
+        fix,
+    }
+}
+
+/// One run's outcome entries. The JSON report carries exactly these
+/// thirteen fields, so an agent reads the same facts the human lines
+/// print; `proposed`, `verified`, `rows` and `next_action` carry the
+/// dry-run contract.
 pub struct Report {
     done: Vec<String>,
     skipped: Vec<String>,
     needs_human: Vec<String>,
     paths: Vec<String>,
     restart_needed: bool,
+    proposed: Vec<Proposal>,
+    verified: Vec<String>,
+    rows: Vec<Row>,
+    next_action: String,
+    schema: u8,
+    run_id: String,
+    host: &'static str,
+    status: &'static str,
+}
+
+impl Default for Report {
+    fn default() -> Self {
+        Report {
+            done: Vec::new(),
+            skipped: Vec::new(),
+            needs_human: Vec::new(),
+            paths: Vec::new(),
+            restart_needed: false,
+            proposed: Vec::new(),
+            verified: Vec::new(),
+            rows: Vec::new(),
+            next_action: String::new(),
+            schema: 1,
+            run_id: String::new(),
+            host: "agent",
+            status: "finished",
+        }
+    }
 }
 
 impl Report {
     fn to_json(&self) -> serde_json::Value {
         json!({
+            "schema": self.schema,
+            "run_id": self.run_id,
+            "host": self.host,
+            "status": self.status,
             "done": self.done,
             "skipped": self.skipped,
             "needs_human": self.needs_human,
             "paths": self.paths,
             "restart_needed": self.restart_needed,
+            "proposed": self.proposed.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
+            "verified": self.verified,
+            "rows": self.rows.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
+            "next_action": self.next_action,
         })
     }
+}
+
+/// A short unique id for one run or refusal: nanos plus the pid's low
+/// bits, hex. Not a security token - a correlate for logs and mails.
+fn run_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}{:04x}", std::process::id() & 0xffff)
+}
+
+/// The first red row's fix when one exists, else the fallback (the
+/// /fno:target line on a healthy machine).
+fn next_action(rows: &[Row], fallback: &str) -> String {
+    rows.iter()
+        .find(|r| r.list == "needs_human" && !r.fix.is_empty())
+        .map(|r| r.fix.to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// The one JSON object a `--json` caller reads on bad argv, in place of
+/// the prose refusal. Same envelope, `status: refused`.
+fn refused_json(message: &str) -> serde_json::Value {
+    json!({
+        "schema": 1,
+        "run_id": run_id(),
+        "host": "agent",
+        "status": "refused",
+        "message": message,
+        "next_action": message,
+    })
 }
 
 /// The step table. Order is the order both surfaces ask in.
@@ -182,9 +344,10 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     }
 }
 
-/// `--yes` / `--once` / `--scope` / `--only` / `--list` / `--json`, hand
-/// parsed: the verb is claimed before clap, so the flags are ours. An
-/// unknown flag or value refuses with the usage line and exit 2.
+/// `--yes` / `--once` / `--scope` / `--only` / `--list` / `--json` /
+/// `--dry-run` / `--scan-repos` / `--scan-dirs`, hand parsed: the verb is
+/// claimed before clap, so the flags are ours. An unknown flag or value
+/// refuses with the usage line and exit 2.
 pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
     let mut o = Opts::default();
     let mut i = 0;
@@ -195,6 +358,17 @@ pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
             "--once" => o.once = true,
             "--list" => o.list = true,
             "--json" | "-J" => o.json = true,
+            "--dry-run" | "-N" => o.dry_run = true,
+            "--scan-repos" => o.scan = true,
+            "--scan-dirs" => {
+                i += 1;
+                let v = tail
+                    .get(i)
+                    .and_then(|a| a.to_str())
+                    .ok_or("--scan-dirs needs a comma list of directories")?;
+                o.scan_dirs = v.split(',').map(|s| s.trim().to_string()).collect();
+                o.scan = true;
+            }
             "--scope" => {
                 i += 1;
                 let v = tail
@@ -295,10 +469,13 @@ pub struct Opts {
     only: Vec<String>,
     list: bool,
     json: bool,
+    dry_run: bool,
+    scan: bool,
+    scan_dirs: Vec<String>,
 }
 
 /// The argv tail `parse_opts` accepts, repeated for refusals.
-const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json]";
+const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--scan-repos] [--scan-dirs <dir,...>]";
 
 /// Every non-usage refusal exit: the same code the Python CLI uses for a
 /// bad flag or value.
@@ -394,7 +571,14 @@ fn fold_wire_line(line: &str, rep: &mut Report) {
         return;
     }
     if t.contains("FAILED") || t.contains("needs a manual finish") {
-        rep.needs_human.push(format!("harness-wiring: {t}"));
+        let message = format!("harness-wiring: {t}");
+        let code = if t.contains("FAILED") {
+            "wiring_failed"
+        } else {
+            "wiring_manual"
+        };
+        rep.rows.push(row("needs_human", code, message.clone()));
+        rep.needs_human.push(message);
     } else if t.contains(": installed") || t.contains(": already installed") {
         rep.done.push(format!("harness-wiring: {t}"));
         // A fresh install asks for a restart; an "already installed" line
@@ -424,102 +608,184 @@ fn step_gh_auth(rep: &mut Report) {
         }
         Ok(o) => {
             let detail = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            rep.needs_human.push(format!(
+            let message = format!(
                 "gh-auth: run `gh auth login` - login opens a browser; without it fno stays local-only (no PR, no review, no merge){}",
                 if detail.is_empty() { String::new() } else { format!(" ({detail})") }
-            ));
+            );
+            rep.rows
+                .push(row("needs_human", "gh_not_signed_in", message.clone()));
+            rep.needs_human.push(message);
         }
         Err(e) => {
-            rep.needs_human.push(format!(
+            let message = format!(
                 "gh-auth: run `gh auth login` - login opens a browser; gh itself is missing ({e})"
-            ));
+            );
+            rep.rows
+                .push(row("needs_human", "gh_unreadable", message.clone()));
+            rep.needs_human.push(message);
         }
     }
 }
 
-/// The concurrency band: probe `fno-agents status` for its
-/// `budget max_live N` clause and write the key only when it differs.
-fn step_concurrency_band(exe: &Path, rep: &mut Report) {
-    let bin = crate::digest_overlay::fno_agents_bin();
-    let out = std::process::Command::new(&bin)
-        .arg("status")
-        .stdin(std::process::Stdio::null())
-        .output();
-    let text = out
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-    let band = text.as_deref().and_then(|t| {
-        let i = t.find("budget max_live ")?;
-        let rest = &t[i + "budget max_live ".len()..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        digits.parse::<i64>().ok()
-    });
+/// The proposal half of the harness-wiring step: what the auto-wire verb
+/// would do, without running it. The run path runs the verb; `--dry-run`
+/// prints this row. Empty `key` marks a command proposal.
+fn propose_harness_wiring() -> Proposal {
+    Proposal {
+        id: "harness-wiring",
+        key: "",
+        value: String::new(),
+        scope: "global",
+        reason:
+            "fno config setup auto-wire installs the fno plugin into every agent CLI found on PATH"
+                .to_string(),
+        source: "default",
+    }
+}
+
+/// The skip line a no-sample machine reads: the daemon files the band
+/// question on its own schedule, so setup says so instead of guessing.
+const NO_BAND_SAMPLE: &str =
+    "concurrency-band: no machine sample yet; the daemon files the band question within five minutes";
+
+/// The proposal half of the concurrency-band step, pure of writes: the
+/// band number from the machine sample's clause via the one shared
+/// parser, or `None` with the skip reason pushed. The run path and
+/// `--dry-run` both call it, so the proposal cannot drift from the write.
+fn propose_concurrency_band(skips: &mut Vec<String>) -> Option<i64> {
+    let band = crate::setup_detect::budget_clause()
+        .and_then(|t| crate::setup_detect::parse_budget_clause(&t));
     match band {
-        None => rep.skipped.push(
-            "concurrency-band: no machine sample yet; the daemon files the band question within five minutes".into(),
-        ),
+        None => {
+            skips.push(NO_BAND_SAMPLE.to_string());
+            None
+        }
         Some(n) => {
             let value = toml::Value::Integer(n);
             if !crate::config_defaults::differs("agents.max_live", &value) {
-                rep.skipped
-                    .push(format!("concurrency-band: agents.max_live already {n}"));
-                return;
+                skips.push(format!("concurrency-band: agents.max_live already {n}"));
+                return None;
             }
-            match config_set(exe, "agents.max_live", &n.to_string(), false) {
-                Ok(path) => {
-                    rep.done.push(format!("concurrency-band: agents.max_live = {n}"));
-                    rep.paths.push(path.display().to_string());
-                    rep.restart_needed = true;
-                }
-                Err(e) => rep.needs_human.push(format!("concurrency-band: {e}")),
-            }
+            Some(n)
         }
     }
+}
+
+/// The concurrency band: the band number the machine sample printed,
+/// written only when it differs from the configured value.
+fn step_concurrency_band(exe: &Path, rep: &mut Report) {
+    let mut skips = Vec::new();
+    let Some(n) = propose_concurrency_band(&mut skips) else {
+        rep.skipped.extend(skips);
+        return;
+    };
+    match config_set(exe, "agents.max_live", &n.to_string(), false) {
+        Ok(path) => {
+            rep.done
+                .push(format!("concurrency-band: agents.max_live = {n}"));
+            rep.paths.push(path.display().to_string());
+            rep.restart_needed = true;
+        }
+        Err(e) => {
+            let message = format!("concurrency-band: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// The proposal half of the guardrails step: the recommended preset when
+/// the global file carries a different value, else `None` with the skip
+/// reason pushed. Shared by the run path and `--dry-run`.
+fn propose_guardrails(skips: &mut Vec<String>) -> Option<Proposal> {
+    let value = toml::Value::String("standard".into());
+    if !crate::config_defaults::differs("guards.preset", &value) {
+        skips.push("guardrails: guards.preset already standard".into());
+        return None;
+    }
+    Some(Proposal {
+        id: "guardrails",
+        key: "guards.preset",
+        value: "standard".to_string(),
+        scope: "global",
+        reason: "the standard guard preset turns on the refusal gates a fresh machine wants"
+            .to_string(),
+        source: "default",
+    })
 }
 
 /// The guardrail preset step: recommended `standard`, written only when the
 /// global file carries a different value.
 fn step_guardrails(exe: &Path, rep: &mut Report) {
-    let value = toml::Value::String("standard".into());
-    if !crate::config_defaults::differs("guards.preset", &value) {
-        rep.skipped
-            .push("guardrails: guards.preset already standard".into());
+    let mut skips = Vec::new();
+    let Some(p) = propose_guardrails(&mut skips) else {
+        rep.skipped.extend(skips);
         return;
-    }
-    match config_set(exe, "guards.preset", "standard", false) {
+    };
+    match config_set(exe, p.key, &p.value, false) {
         Ok(path) => {
-            rep.done.push("guardrails: guards.preset = standard".into());
+            rep.done
+                .push(format!("guardrails: {} = {}", p.key, p.value));
             rep.paths.push(path.display().to_string());
         }
-        Err(e) => rep.needs_human.push(format!("guardrails: {e}")),
+        Err(e) => {
+            let message = format!("guardrails: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
     }
 }
 
-/// The backlog prefix: the repo slug, written project-scoped only when no
-/// config file sets the key yet. A configured prefix is the project's own
-/// choice; setup never overwrites one with the slug.
-fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
+/// The proposal half of the backlog-prefix step: the repo slug when no
+/// config file sets the key yet, else `None` with the skip reason pushed.
+/// A configured prefix is the project's own choice; setup never overwrites
+/// one with the slug.
+fn propose_backlog_prefix(root: &Path, skips: &mut Vec<String>) -> Option<Proposal> {
     let global = crate::model_catalog::state_dir().join("config.toml");
     let project = root.join(".fno").join("config.toml");
     if crate::config_defaults::key_set(Some(&global), Some(&project), "backlog.id_prefix") {
-        rep.skipped.push(
+        skips.push(
             "backlog-prefix: backlog.id_prefix is configured; setup never overwrites it".into(),
         );
-        return;
+        return None;
     }
     let slug = slug_prefix(root);
     if slug.is_empty() {
-        rep.skipped
-            .push("backlog-prefix: no repo name to derive a prefix from".into());
-        return;
+        skips.push("backlog-prefix: no repo name to derive a prefix from".into());
+        return None;
     }
-    match config_set(exe, "backlog.id_prefix", &slug, true) {
+    Some(Proposal {
+        id: "backlog-prefix",
+        key: "backlog.id_prefix",
+        value: slug.clone(),
+        scope: "project",
+        reason: format!("names nodes after this repo's own slug ({slug})"),
+        source: "default",
+    })
+}
+
+/// The backlog prefix: the repo slug, written project-scoped only when no
+/// config file sets the key yet.
+fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
+    let mut skips = Vec::new();
+    let Some(p) = propose_backlog_prefix(root, &mut skips) else {
+        rep.skipped.extend(skips);
+        return;
+    };
+    match config_set(exe, p.key, &p.value, true) {
         Ok(path) => {
             rep.done
-                .push(format!("backlog-prefix: backlog.id_prefix = {slug}"));
+                .push(format!("backlog-prefix: {} = {}", p.key, p.value));
             rep.paths.push(path.display().to_string());
         }
-        Err(e) => rep.needs_human.push(format!("backlog-prefix: {e}")),
+        Err(e) => {
+            let message = format!("backlog-prefix: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
     }
 }
 
@@ -558,6 +824,118 @@ fn select_steps<'a>(opts: &'a Opts, root: &Path) -> Result<Vec<&'a Step>, String
     Ok(steps)
 }
 
+/// The dry-run envelope: the seven keys the plan pins, assembled pure of
+/// writes. `services` is lifted out before `detected` moves into the
+/// literal, because `json!` evaluates its fields in order and a moved
+/// binding cannot be read by a later field.
+fn dry_run_json(
+    detected: serde_json::Value,
+    proposed: &[Proposal],
+    rows: &[Row],
+    needs_human: &[String],
+    fallback: &str,
+) -> serde_json::Value {
+    let services = detected
+        .get("services")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let key_gap = proposed.iter().filter(|p| !p.key.is_empty()).count();
+    json!({
+        "detected": detected,
+        "proposed": proposed.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
+        "services": services,
+        "needs_human": needs_human,
+        "key_gap": key_gap,
+        "rows": rows.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
+        "next_action": next_action(rows, fallback),
+    })
+}
+
+/// `--dry-run`: the read-only preview of the same step table. Detection
+/// runs once; the gh rows fold off what detection already found, so a
+/// dry-run never re-probes. It prints one JSON object through `redact`
+/// whether or not `--json` passed, writes nothing, takes no marker, and
+/// has no in-repo gate, so a fresh HOME answers too.
+fn dry_run(opts: &Opts, steps: &[&Step], root: &Path) -> i32 {
+    let scan: Option<Vec<PathBuf>> = if !opts.scan {
+        None
+    } else {
+        Some(opts.scan_dirs.iter().map(PathBuf::from).collect())
+    };
+    let detected = crate::setup_detect::detect(root, scan.as_deref());
+    let mut proposed: Vec<Proposal> = Vec::new();
+    let mut skips: Vec<String> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
+    let mut needs_human: Vec<String> = Vec::new();
+    for step in steps {
+        match step.id {
+            "harness-wiring" => proposed.push(propose_harness_wiring()),
+            "concurrency-band" => {
+                if let Some(n) = propose_concurrency_band(&mut skips) {
+                    proposed.push(Proposal {
+                        id: "concurrency-band",
+                        key: "agents.max_live",
+                        value: n.to_string(),
+                        scope: "global",
+                        reason: "the machine sample's measured band, so live agents stay inside it"
+                            .to_string(),
+                        source: "sample",
+                    });
+                }
+            }
+            "guardrails" => {
+                if let Some(p) = propose_guardrails(&mut skips) {
+                    proposed.push(p);
+                }
+            }
+            "backlog-prefix" => {
+                if let Some(p) = propose_backlog_prefix(root, &mut skips) {
+                    proposed.push(p);
+                }
+            }
+            _ => {}
+        }
+    }
+    match detected
+        .get("gh")
+        .and_then(|g| g.get("status"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("unreadable") => {
+            let error = detected["gh"]["error"].as_str().unwrap_or_default();
+            let message = format!("gh-auth: gh itself is missing or unreadable ({error})");
+            rows.push(row("needs_human", "gh_unreadable", message.clone()));
+            needs_human.push(message);
+        }
+        Some("ok") => {
+            let missing: Vec<String> = detected["gh"]["missing"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !missing.is_empty() {
+                let message = format!(
+                    "gh-auth: missing scopes {} - run `gh auth refresh -s repo -s workflow`",
+                    missing.join(", ")
+                );
+                rows.push(row("needs_human", "gh_scope_missing", message.clone()));
+                needs_human.push(message);
+            }
+        }
+        _ => {}
+    }
+    let fallback = "fno config setup run --yes";
+    let body = dry_run_json(detected, &proposed, &rows, &needs_human, fallback);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&crate::setup_profile::redact(&body)).unwrap_or_default()
+    );
+    0
+}
+
 /// `--list`: the step table the chat skill asks from. `--list --json` is
 /// the machine shape; plain `--list` prints one row per step.
 fn print_list(opts: &Opts) {
@@ -574,6 +952,7 @@ fn print_list(opts: &Opts) {
                     },
                     "kind": match s.kind {
                         Kind::Act => "act",
+                        Kind::Approve => "approve",
                         Kind::Report => "report",
                         Kind::Human => "human",
                     },
@@ -607,6 +986,7 @@ fn layer_name(l: Layer) -> &'static str {
 fn kind_name(k: Kind) -> &'static str {
     match k {
         Kind::Act => "act",
+        Kind::Approve => "approve",
         Kind::Report => "report",
         Kind::Human => "human",
     }
@@ -659,12 +1039,30 @@ fn ask(question: &str) -> bool {
 /// written only when that layer left nothing needs-human, so `--once` never
 /// papers over a blocked step. Exit 0 unless the argv was wrong.
 pub fn run(tail: &[OsString]) -> i32 {
+    // parse_opts has not run yet, so --json is read straight off the tail:
+    // a --json caller gets every refusal as one JSON object on stdout,
+    // never prose on stderr.
+    let json_wanted = tail
+        .iter()
+        .filter_map(|a| a.to_str())
+        .any(|a| a == "--json" || a == "-J");
+    let refuse = |e: String| {
+        if json_wanted {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::setup_profile::redact(&refused_json(
+                    &format!("fno config setup run: {e}")
+                )))
+                .unwrap_or_default()
+            );
+        } else {
+            eprintln!("fno config setup run: {e}");
+        }
+        EXIT_USAGE
+    };
     let opts = match parse_opts(tail) {
         Ok(o) => o,
-        Err(e) => {
-            eprintln!("fno config setup run: {e}");
-            return EXIT_USAGE;
-        }
+        Err(e) => return refuse(e),
     };
     if opts.list {
         print_list(&opts);
@@ -674,15 +1072,19 @@ pub fn run(tail: &[OsString]) -> i32 {
     // Validate the argv (including --only) before --once can return early.
     let steps = match select_steps(&opts, &root) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("fno config setup run: {e}");
-            return EXIT_USAGE;
-        }
+        Err(e) => return refuse(e),
     };
+    // The read-only preview runs before any --once gate: a dry run reports
+    // even on an already-set-up machine, and writes nothing, marker included.
+    if opts.dry_run {
+        return dry_run(&opts, &steps, &root);
+    }
     if opts.once && all_markers_present(opts.scope, &root) {
         let msg = format!("setup: already done ({})", global_marker().display());
         if opts.json {
             let mut rep = Report::default();
+            rep.run_id = run_id();
+            rep.next_action = "/fno:target \"<your first feature>\"".to_string();
             rep.skipped.push(msg);
             println!("{}", rep.to_json());
         } else {
@@ -698,6 +1100,7 @@ pub fn run(tail: &[OsString]) -> i32 {
     let prompting = !opts.json && !no_prompt(opts.yes, std::io::stdin().is_terminal(), agent_env());
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
     let mut rep = Report::default();
+    rep.run_id = run_id();
     if !in_repo && opts.scope != Scope::Global {
         rep.skipped.push(
             "project layer: not a git repo; the project and contributor steps need one".into(),
@@ -709,6 +1112,21 @@ pub fn run(tail: &[OsString]) -> i32 {
     let mut declined = 0usize;
     for step in &steps {
         if !in_repo && step.layer != Layer::Global {
+            continue;
+        }
+        // An approve step never runs bare: --yes leaves it in the report's
+        // proposed list with its exact command, and it executes only when
+        // --only names its id. It does not block the marker - the step did
+        // not fail, it waits for a caller that asks for it.
+        if step.kind == Kind::Approve && !opts.only.iter().any(|id| id == step.id) {
+            rep.proposed.push(Proposal {
+                id: step.id,
+                key: "",
+                value: String::new(),
+                scope: layer_name(step.layer),
+                reason: step.effect.to_string(),
+                source: "default",
+            });
             continue;
         }
         let go = match step.kind {
@@ -804,6 +1222,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         }
     }
     if opts.json {
+        rep.next_action = next_action(&rep.rows, "/fno:target \"<your first feature>\"");
         println!("{}", rep.to_json());
         return 0;
     }
