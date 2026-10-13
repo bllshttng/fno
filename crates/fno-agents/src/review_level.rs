@@ -417,7 +417,7 @@ fn render(
 }
 
 #[derive(Debug)]
-struct ReviewLevelArgs {
+pub struct ReviewLevelArgs {
     level: Option<String>,
     provider: Option<String>,
     root: Option<String>,
