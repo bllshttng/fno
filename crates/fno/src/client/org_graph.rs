@@ -80,14 +80,21 @@ fn inside_label(label: &str) -> String {
     s
 }
 
+struct Wk {
+    key: String,
+    label: String,
+    state: Option<crate::lattice::LatticeState>,
+    w: usize,
+}
+
 struct Layer {
     key: String,
     label: String,
     blocked: bool,
-    state: Option<crate::lattice::LatticeState>,
     w: usize,
     span: usize,
     workers_span: usize,
+    workers: Vec<Wk>,
 }
 
 /// Layered placement. Spans compute bottom-up (a node's span covers its
@@ -107,7 +114,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
         let mut lead_span = lead_w;
         for node in &lead.nodes {
             let node_key = format!("node:{}", node.view.card.id);
-            let mut worker_layers: Vec<Layer> = Vec::new();
+            let mut worker_layers: Vec<Wk> = Vec::new();
             let mut workers_span = 0usize;
             let workers: Vec<&crate::org_model::OrgSession> =
                 node.current.iter().chain(&node.former).collect();
@@ -119,17 +126,14 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                     .or_else(|| session.view.session_id.clone())
                     .unwrap_or_else(|| "unobserved".to_string());
                 let w = box_w(&name);
-                worker_layers.push(Layer {
+                worker_layers.push(Wk {
                     key: format!("session:{}:{}", node.view.card.id, k),
                     label: name,
-                    blocked: false,
                     state: session
                         .agent
                         .as_ref()
                         .map(|a| super::agent_lattice_state(a)),
                     w,
-                    span: w,
-                    workers_span: w,
                 });
                 workers_span += w;
             }
@@ -148,10 +152,10 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                 key: node_key,
                 label: node.view.card.id.clone(),
                 blocked: !node.view.blocked_by.is_empty(),
-                state: None,
                 w: node_w,
                 span: node_span,
                 workers_span,
+                workers: worker_layers,
             });
             links.push(Link {
                 from: lead_key.clone(),
@@ -188,7 +192,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                 w: node.w,
             });
             let mut wcx = ncx + node.span.saturating_sub(node.workers_span) / 2;
-            for worker in &worker_layers {
+            for worker in &node.workers {
                 boxes.push(GBox {
                     key: worker.key.clone(),
                     kind: BoxKind::Worker,
