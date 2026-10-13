@@ -153,6 +153,7 @@ async fn full_screen_click_beyond_the_panel_never_sends_bytes() {
         row: 10,
         col: 100,
         shift: false,
+        alt: false,
     };
     agent_launcher::launcher_mouse(&mut v, rep, &mut buf)
         .await

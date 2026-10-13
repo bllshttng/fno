@@ -3499,19 +3499,13 @@ async fn keys_modal_esc_click_and_escape_both_close() {
 
 #[tokio::test]
 async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
-    use crate::mouse::MouseReport;
     let mut v = two_pane_view();
     // Short: the binding list overflows and scrolls. Wide: the modal grows to
     // its content, so the top-left corner stays off it.
     v.term = (8, 240);
     v.open_keys_modal();
     let mut buf: Vec<u8> = Vec::new();
-    let wheel = MouseReport {
-        row: 4,
-        col: 120,
-        kind: MouseKind::WheelDown,
-        shift: false,
-    };
+    let wheel = mrep(MouseKind::WheelDown, 4, 120);
     keys_modal_mouse(&mut v, &mut Scanner::default(), wheel, &mut buf)
         .await
         .unwrap();
@@ -3521,12 +3515,7 @@ async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
         "wheel scrolls"
     );
     // A left click off the popup (top-left corner) dismisses.
-    let click = MouseReport {
-        row: 0,
-        col: 0,
-        kind: MouseKind::Press(MouseButton::Left),
-        shift: false,
-    };
+    let click = mrep(MouseKind::Press(MouseButton::Left), 0, 0);
     keys_modal_mouse(&mut v, &mut Scanner::default(), click, &mut buf)
         .await
         .unwrap();
@@ -3538,7 +3527,6 @@ async fn hovering_the_footer_esc_close_keeps_the_selection() {
     // The footer's close target must never surface through `aux_hit` as a
     // row index: ESC_CLOSE_HIT clamps in `Popup::select` to the LAST entry,
     // so a hover sweep over the words would silently re-target Enter.
-    use crate::mouse::MouseReport;
     let mut v = two_pane_view();
     v.term = (30, 100);
     v.aux = Some(v.build_settings_modal());
@@ -3567,12 +3555,7 @@ async fn hovering_the_footer_esc_close_keeps_the_selection() {
             .unwrap();
         (r.origin.0 + li, r.origin.1 + off + len / 2)
     };
-    let hover = MouseReport {
-        row: fr as u16,
-        col: fc as u16,
-        kind: MouseKind::Move,
-        shift: false,
-    };
+    let hover = mrep(MouseKind::Move, fr as u16, fc as u16);
     let mut buf: Vec<u8> = Vec::new();
     aux_mouse(&mut v, hover, &mut buf).await.unwrap();
     assert!(
@@ -4553,12 +4536,7 @@ async fn a_right_press_on_a_tab_cell_re_anchors_an_open_menu() {
     let mut buf: Vec<u8> = Vec::new();
     super::row_menu_mouse(
         &mut v,
-        crate::mouse::MouseReport {
-            row: tr,
-            col: tc,
-            kind: MouseKind::Press(MouseButton::Right),
-            shift: false,
-        },
+        mrep(MouseKind::Press(MouseButton::Right), tr, tc),
         &mut buf,
     )
     .await
@@ -5084,14 +5062,9 @@ async fn x7683_right_press_on_a_pane_re_anchors_an_open_menu() {
     let mut buf: Vec<u8> = Vec::new();
     super::row_menu_mouse(
         &mut v,
-        crate::mouse::MouseReport {
-            row: 20,
-            // Screen col 35: content col 7, inside pane 10's rect
-            // (x 0..35, origin col 28), off the anchored menu block.
-            col: 35,
-            kind: MouseKind::Press(MouseButton::Right),
-            shift: false,
-        },
+        // Screen col 35: content col 7, inside pane 10's rect
+        // (x 0..35, origin col 28), off the anchored menu block.
+        mrep(MouseKind::Press(MouseButton::Right), 20, 35),
         &mut buf,
     )
     .await
@@ -5125,12 +5098,7 @@ async fn x7683_right_press_on_the_menu_body_over_a_sideline_row_is_swallowed() {
     let mut buf: Vec<u8> = Vec::new();
     super::row_menu_mouse(
         &mut v,
-        crate::mouse::MouseReport {
-            row: cell.0,
-            col: cell.1,
-            kind: MouseKind::Press(MouseButton::Right),
-            shift: false,
-        },
+        mrep(MouseKind::Press(MouseButton::Right), cell.0, cell.1),
         &mut buf,
     )
     .await
@@ -5654,12 +5622,7 @@ async fn x7683_right_press_on_the_menu_body_over_a_pane_is_swallowed() {
     let mut buf: Vec<u8> = Vec::new();
     super::row_menu_mouse(
         &mut v,
-        crate::mouse::MouseReport {
-            row: cell.0,
-            col: cell.1,
-            kind: MouseKind::Press(MouseButton::Right),
-            shift: false,
-        },
+        mrep(MouseKind::Press(MouseButton::Right), cell.0, cell.1),
         &mut buf,
     )
     .await
@@ -6594,13 +6557,20 @@ async fn click_close(v: &mut View, (row, col): (u16, u16)) {
     assert!(buf.is_empty(), "a close click sends nothing to a pane");
 }
 
-fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
+/// One unmodified MouseReport at `(row, col)`: shift/alt default off, the
+/// shape every modal/menu tap here starts from.
+fn mrep(kind: MouseKind, row: u16, col: u16) -> crate::mouse::MouseReport {
     crate::mouse::MouseReport {
         row,
         col,
-        kind: MouseKind::Press(MouseButton::Left),
+        kind,
         shift: false,
+        alt: false,
     }
+}
+
+fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
+    mrep(MouseKind::Press(MouseButton::Left), row, col)
 }
 
 /// The update modal's footer words are a target, not a label: a left

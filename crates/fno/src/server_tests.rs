@@ -1,7 +1,10 @@
 use super::*;
+// The drain-fold tests kept here use the routing module's step constant and
+// burst cap; server.rs itself no longer imports these two names.
 use crate::proto::{AgentRow, TemplateName};
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
+use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
 
 #[path = "server/server_thread_viewer_tests.rs"]
 mod thread_viewer_tests;
@@ -408,111 +411,6 @@ fn server_control_wait_tick_default_is_empty_and_live() {
     let t = WaitTick::default();
     assert!(!t.exited);
     assert!(t.text.is_empty());
-}
-
-fn mouse_mode() -> Modes {
-    Modes {
-        mouse_click: true,
-        sgr_mouse: true,
-        ..Modes::default()
-    }
-}
-
-#[test]
-fn mouse_rows() {
-    // AC3-HP: a click-mode app (?1000) gets wheel/press/release passthrough
-    // and consumes nothing mux-side...
-    for kind in [
-        MouseKind::WheelUp,
-        MouseKind::Press(MouseButton::Left),
-        MouseKind::Release(MouseButton::Left),
-    ] {
-        assert_eq!(route_mouse(mouse_mode(), kind), MouseAction::Passthrough);
-    }
-    // ...but a drag it never requested is ignored, not forwarded and not
-    // mux-interpreted (fighting the app's own handling).
-    assert_eq!(
-        route_mouse(mouse_mode(), MouseKind::Drag(MouseButton::Left)),
-        MouseAction::Ignore
-    );
-    // A drag-mode app (?1002) does get the drag.
-    let drag_mode = Modes {
-        mouse_drag: true,
-        sgr_mouse: true,
-        ..Modes::default()
-    };
-    assert_eq!(
-        route_mouse(drag_mode, MouseKind::Drag(MouseButton::Left)),
-        MouseAction::Passthrough
-    );
-
-    // US1/US2: a plain shell pane scrolls and selects mux-side.
-    let plain = Modes::default();
-    assert_eq!(
-        route_mouse(plain, MouseKind::WheelUp),
-        MouseAction::Scroll(MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        route_mouse(plain, MouseKind::WheelDown),
-        MouseAction::Scroll(-MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        route_mouse(plain, MouseKind::Press(MouseButton::Left)),
-        MouseAction::SelectStart
-    );
-    assert_eq!(
-        route_mouse(plain, MouseKind::Drag(MouseButton::Left)),
-        MouseAction::SelectUpdate
-    );
-    assert_eq!(
-        route_mouse(plain, MouseKind::Release(MouseButton::Left)),
-        MouseAction::SelectRelease
-    );
-    assert_eq!(
-        route_mouse(plain, MouseKind::Press(MouseButton::Right)),
-        MouseAction::Ignore
-    );
-
-    // A mouse-reporting app that never negotiated SGR is not sent garbage;
-    // the mux interprets instead (Domain: SGR-only passthrough).
-    let legacy = Modes {
-        mouse_click: true,
-        sgr_mouse: false,
-        ..Modes::default()
-    };
-    assert_eq!(
-        route_mouse(legacy, MouseKind::WheelUp),
-        MouseAction::Scroll(MOUSE_WHEEL_LINES)
-    );
-
-    // Left press at pane-local (row 4, col 9) -> SGR button 0, 1-based coords.
-    let press = sgr_mouse_bytes(&MouseEvent {
-        row: 4,
-        col: 9,
-        kind: MouseKind::Press(MouseButton::Left),
-    });
-    assert_eq!(press, b"\x1b[<0;10;5M");
-    // Release terminates with lowercase m.
-    let release = sgr_mouse_bytes(&MouseEvent {
-        row: 4,
-        col: 9,
-        kind: MouseKind::Release(MouseButton::Left),
-    });
-    assert_eq!(release, b"\x1b[<0;10;5m");
-    // Drag adds the motion bit (32).
-    let drag = sgr_mouse_bytes(&MouseEvent {
-        row: 0,
-        col: 0,
-        kind: MouseKind::Drag(MouseButton::Left),
-    });
-    assert_eq!(drag, b"\x1b[<32;1;1M");
-    // Wheel up is button 64.
-    let wheel = sgr_mouse_bytes(&MouseEvent {
-        row: 2,
-        col: 3,
-        kind: MouseKind::WheelUp,
-    });
-    assert_eq!(wheel, b"\x1b[<64;4;3M");
 }
 
 // -- Rerun idle guard (x-38c4) ---------------------------------------------
@@ -8187,27 +8085,6 @@ fn wheel_gate_per_pane() {
     );
 }
 
-// AC1-ERR: a wheel tick routed to a pane absent from the panes map is a
-// no-op through mouse() - the top-of-fn early return fires, so no PTY write
-// and no gate-state entry for the dead id.
-#[test]
-fn mouse_wheel_dead_pane_is_noop() {
-    let mut core = empty_core();
-    core.mouse(
-        1,
-        999,
-        MouseEvent {
-            row: 0,
-            col: 0,
-            kind: MouseKind::WheelDown,
-        },
-    );
-    assert!(
-        core.wheel_gate.is_empty(),
-        "no gate state is created for a dead pane"
-    );
-}
-
 // AC2-EDGE: reaping a pane drops its gate entry (touch_last_emit pattern).
 #[test]
 fn reap_pane_clears_wheel_gate() {
@@ -8283,6 +8160,7 @@ pub(super) fn empty_core() -> Core {
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
         fno_token_claims: HashMap::new(),
+        link_click_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: watch::channel(0).0,
@@ -8767,7 +8645,7 @@ fn focus_only_push_layout_preserves_pending_pane_frames() {
 /// closes the client's channel, which `push_layout` reads as "gone" and
 /// prunes the client, breaking every later `Command::FocusPane` (no
 /// client view to act on).
-fn seen_test_core() -> (Core, u64, u64, u64, mpsc::Receiver<ServerMsg>) {
+pub(super) fn seen_test_core() -> (Core, u64, u64, u64, mpsc::Receiver<ServerMsg>) {
     // attach() runs restore_squads() -> squad_store::load(), which defaults
     // to the real $HOME/.fno/squads.json; a dev box with a live store then
     // imports its squads and breaks squad/row-count asserts that pass on a
@@ -8817,38 +8695,6 @@ fn seen_test_core() -> (Core, u64, u64, u64, mpsc::Receiver<ServerMsg>) {
         Arc::new(Notify::new()),
     );
     (core, client_id, p1, p2, rx)
-}
-
-#[test]
-fn scroll_delta_classifies_only_interpreted_wheel_ticks() {
-    // The fold is only correct if it folds real scrolls and STOPS at anything
-    // else. A plain pane's wheel is an interpreted scroll (foldable, +/-
-    // MOUSE_WHEEL_LINES); a left press is a selection (not foldable) so it must
-    // break the run and preserve order.
-    let (core, _cid, p1, _p2, _rx) = seen_test_core();
-    let ev = |kind| MouseEvent {
-        row: 1,
-        col: 1,
-        kind,
-    };
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::WheelUp)),
-        Some(MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::WheelDown)),
-        Some(-MOUSE_WHEEL_LINES)
-    );
-    assert_eq!(
-        core.scroll_delta(p1, &ev(MouseKind::Press(MouseButton::Left))),
-        None,
-        "a select must stop the fold, not coalesce into it"
-    );
-    assert_eq!(
-        core.scroll_delta(999, &ev(MouseKind::WheelUp)),
-        None,
-        "an unknown pane never folds"
-    );
 }
 
 #[test]
