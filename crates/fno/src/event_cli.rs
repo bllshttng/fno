@@ -187,6 +187,29 @@ fn run_emit_envelope(args: &[OsString]) -> i32 {
     }
 }
 
+/// The mirror-dedup key for one envelope line: ts plus the data payload
+/// minus its `repo` key. The primary copy differs from the journal
+/// original in exactly that key (stamped at push when absent), so two
+/// copies of one attestation hash equal and two distinct rounds do not.
+fn attest_dedup_key(line: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(line).ok()?;
+    if val.get("type").and_then(serde_json::Value::as_str) != Some("review_attestation") {
+        return None;
+    }
+    let ts = val
+        .get("ts")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let mut data = val.get("data")?.clone();
+    if let Some(obj) = data.as_object_mut() {
+        obj.remove("repo");
+    }
+    Some(format!(
+        "{ts}\u{1f}{}",
+        blake3::hash(data.to_string().as_bytes()).to_hex()
+    ))
+}
+
 /// One read pass for thin clients: import, then print every committed
 /// envelope as a JSON array of lines. A missing store yields an empty array,
 /// never an error, so callers keep one code path.
@@ -292,6 +315,7 @@ fn run_rows(args: &[OsString]) -> i32 {
     if !no_import {
         let _ = crate::event_store::import_all(&journal);
     }
+    let wants_attestations = types.iter().any(|t| t == "review_attestation");
     let query = crate::event_store::EventQuery {
         types,
         include_rejected,
@@ -299,7 +323,31 @@ fn run_rows(args: &[OsString]) -> i32 {
     };
     match crate::event_store::query_events(&journal, &query) {
         Ok(rows) => {
-            let lines: Vec<&str> = rows.iter().map(|r| r.line.as_str()).collect();
+            // The merge gate's journal read consults the local journals
+            // plus the shared primary: reviewed on one machine, merged
+            // from another, the gate read only the local journals and
+            // refused with review_coverage_uncovered. The dedup key is
+            // the envelope ts plus the data payload minus its `repo`
+            // key, the same rule the Python coverage read applies to
+            // the global-log mirror, so a row this machine committed is
+            // answered by its journal original and never doubles.
+            let mut lines: Vec<String> = rows.iter().map(|r| r.line.clone()).collect();
+            if wants_attestations {
+                let mut seen: std::collections::HashSet<String> = rows
+                    .iter()
+                    .filter_map(|r| attest_dedup_key(&r.line))
+                    .collect();
+                for segment in crate::attest::pull_segment() {
+                    match attest_dedup_key(&segment) {
+                        Some(key) => {
+                            if seen.insert(key) {
+                                lines.push(segment);
+                            }
+                        }
+                        None => lines.push(segment),
+                    }
+                }
+            }
             println!(
                 "{}",
                 serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into())
