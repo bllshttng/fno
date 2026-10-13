@@ -128,7 +128,7 @@ pub fn example_inventory() -> (BTreeMap<String, toml::Value>, Vec<String>) {
 /// Parse one config file into dotted keys. `Ok(None)` when the file is
 /// absent; `Err` names the file, because a config that cannot be read must
 /// stop the inventory rather than silently answer "default".
-fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
+pub(crate) fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -243,7 +243,7 @@ pub fn lookup_key(key: &str) -> Option<String> {
 }
 
 /// The global config file, beside the state root's other durable files.
-fn global_config_path() -> PathBuf {
+pub(crate) fn global_config_path() -> PathBuf {
     crate::model_catalog::state_dir().join("config.toml")
 }
 
