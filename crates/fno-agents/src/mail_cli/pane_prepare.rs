@@ -325,7 +325,12 @@ fn prompt_refusal(
     if verdict.get("matched").and_then(Value::as_bool) != Some(true) {
         return None;
     }
-    let answerable = verdict.get("answerable").and_then(Value::as_bool) == Some(true);
+    // `answerable` carries the extracted answer payload (a non-empty object),
+    // never a bool; the Python oracle reads its truthiness.
+    let answerable = verdict
+        .get("answerable")
+        .and_then(Value::as_object)
+        .is_some_and(|options| !options.is_empty());
     let blocked = verdict.get("state").and_then(Value::as_str) == Some("blocked");
     if !answerable && !blocked {
         return None;
