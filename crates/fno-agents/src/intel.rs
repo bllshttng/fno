@@ -354,6 +354,15 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     fno_dir.join("bus").join("messages.jsonl")
 }
 
+/// The bus directory: the log path's parent, floored to `<home>/bus`; the
+/// mail leaves that read the bus directly share this one copy.
+pub(crate) fn bus_dir(home: &AgentsHome) -> PathBuf {
+    bus_log_path(&home.root())
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| home.root().join("bus"))
+}
+
 pub(crate) fn ts_secs(ts: &str) -> Option<u64> {
     crate::state::rfc3339_like_to_secs(ts).or_else(|| {
         ts.get(..19)

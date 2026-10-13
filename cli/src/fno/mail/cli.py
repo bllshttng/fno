@@ -4445,7 +4445,11 @@ def cmd_withdraw(
     read it; a tombstone then would only hide it from you.
     """
     _forward_mail(
-        ["withdraw", msg_id, *(["--from-name", from_name] if from_name else [])]
+        [
+            "withdraw",
+            msg_id,
+            *(["--from-name", from_name] if from_name is not None else []),
+        ]
     )
 
 

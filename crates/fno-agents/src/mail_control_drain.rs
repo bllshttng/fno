@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// The bus kinds that are bookkeeping about other messages, never inbox
 /// content (`bus.log.CONTROL_KINDS`).
-const WITHDRAW_KIND: &str = "withdraw";
+pub(crate) const WITHDRAW_KIND: &str = "withdraw";
 const LANDED_KIND: &str = "landed";
 /// Delivery states meaning the bytes already reached the recipient
 /// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand

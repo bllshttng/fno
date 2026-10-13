@@ -249,7 +249,7 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
         None => vec![handle.to_string()],
     };
 
-    let bus = bus_dir(&home);
+    let bus = crate::intel::bus_dir(&home);
     let msgs = read_bus(&bus);
     let mut merged: Vec<Value> = Vec::new();
     for form in &forms {
@@ -495,13 +495,6 @@ fn deliver_live(session_id: &str, framed: &str) -> (bool, Option<String>) {
             Some(truncate_160(format!("deliver-raised:OSError: {e}"))),
         ),
     }
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    crate::intel::bus_log_path(&home.root())
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| home.root().join("bus"))
 }
 
 fn read_bus(bus: &PathBuf) -> Vec<Value> {

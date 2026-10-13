@@ -8,22 +8,22 @@
 //! of warned to stderr, and cursor filenames use the raw address, not the
 //! Python `_safe_name` spelling.
 
-use crate::mail_control_drain::withdrawn_ids;
+use crate::mail_control_drain::{withdrawn_ids, WITHDRAW_KIND};
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-const WITHDRAW_KIND: &str = "withdraw";
 const HOSTED_DELIVERY: &str = "hosted";
 const TYPED_DELIVERY: &str = "typed";
 
-/// Python `stamp_from`: an explicit `--from-name` wins; otherwise the
-/// resolved self handle, floored to the bare fleet name. Unlike hold there
-/// is no identity refusal here: an unprovable self stamps as `fno`.
+/// Python `stamp_from`: an explicit `--from-name`, even the empty string,
+/// wins verbatim; otherwise the resolved self handle, floored to the bare
+/// fleet name. Unlike hold there is no identity refusal here: an
+/// unprovable self stamps as `fno`.
 fn stamp_from(explicit: Option<&str>) -> String {
-    if let Some(name) = explicit.filter(|n| !n.is_empty()) {
+    if let Some(name) = explicit {
         return name.to_string();
     }
     let home = AgentsHome::from_env();
@@ -34,13 +34,6 @@ fn stamp_from(explicit: Option<&str>) -> String {
         .map(crate::identity::canonical_handle)
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "fno".to_string())
-}
-
-fn bus_dir(home: &AgentsHome) -> PathBuf {
-    crate::intel::bus_log_path(&home.root())
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| home.root().join("bus"))
 }
 
 /// Bus messages, oldest first. Lines that are not envelopes (missing a
@@ -107,7 +100,7 @@ pub fn run(args: &[String]) -> i32 {
     };
 
     let handle = stamp_from(from_name.as_deref());
-    let bus = bus_dir(&AgentsHome::from_env());
+    let bus = crate::intel::bus_dir(&AgentsHome::from_env());
     let msgs = read_bus(&bus);
 
     let Some(target) = msgs
