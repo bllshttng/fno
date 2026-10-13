@@ -227,7 +227,7 @@ mod tests {
         std::fs::write(
             dir.join(".fno/config.toml"),
             format!(
-                "[[routing.models]]\nname = \"t-lane\"\nharness = \"claude\"\nmodel = \"tm-1\"\nroute = \"zai/tm-1\"\nlaunch = [\"sh\", \"-c\", \"{exit}\"]\n"
+                "[[routing.models]]\nname = \"t-lane\"\nharness = \"claude\"\nmodel = \"tm-1\"\nroute = \"zai/tm-1\"\nlaunch = [\"sh\", \"-c\", \"{exit}\", \"{{name}}\", \"{{payload}}\"]\n"
             ),
         )
         .unwrap();

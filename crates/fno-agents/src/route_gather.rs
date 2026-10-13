@@ -484,10 +484,6 @@ fn build_inventory_answer(
             "effort": s("effort"),
             "cost_per_mtok_in": merged.get("cost_per_mtok_in").cloned().unwrap_or(Value::Null),
             "operator_view": s("operator_view"),
-            // The row's own launch argv rides the fold out: the spawn doors
-            // resolve_template from it, so dropping it here would send every
-            // declared lane down the packaged default line.
-            "launch": merged.get("launch").cloned().unwrap_or(Value::Null),
         }));
     }
     let objective = cfg_routing(cwd)
@@ -762,11 +758,28 @@ fn lane(payload: &Value, cwd: &Path) -> Value {
             // the route string to learn who bills.
             let route = row.get("route").and_then(Value::as_str).unwrap_or("");
             answer["vendor"] = json!(route.splitn(2, '/').next().unwrap_or(""));
+            // The row's launch argv joins here, read from the raw routing
+            // table: the inventory answer is Python-parity locked (the
+            // goldens carry no launch), so the door reads it beside the fold.
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            if let Some(launch) = raw_row_launch(cwd, name) {
+                answer["launch"] = launch;
+            }
             answer["found"] = json!(true);
             answer
         }
         None => json!({"found": false}),
     }
+}
+
+/// The declared `launch` argv of the named `[[routing.models]]` row, read
+/// straight from the config. `None` when the row is absent or declares none.
+fn raw_row_launch(cwd: &Path, name: &str) -> Option<Value> {
+    let rows = crate::agents_config::config_value_deep(cwd, &["routing", "models"])?
+        .as_array()?
+        .iter()
+        .find(|row| row.get("name").map(toml_str_trim).as_deref() == Some(name))?;
+    rows.get("launch").cloned()
 }
 
 /// The one declared lane row for a resolved (provider, model) pair, for the
