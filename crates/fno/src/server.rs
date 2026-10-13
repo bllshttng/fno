@@ -10446,7 +10446,7 @@ impl Core {
                 // the false branch and its row survived the dismiss.
                 self.squad_members.remove(&id);
                 if let Some((name, key)) = self.squad_identity(id) {
-                    self.persist_remove(&name, &key);
+                    self.persist_dismiss(&name, &key);
                 }
                 let pids: Vec<u64> = self.session.squads[pos]
                     .tabs

@@ -731,6 +731,15 @@ fn generation_key(name: &str, key: &str) -> Option<String> {
     }
 }
 
+/// The store's current generation counter for the identity `(name, key)`,
+/// keyed the way a server's baseline map is. `None` when the identity has no
+/// counter (never written, or no identity at all).
+pub fn current_generation(name: &str, key: &str) -> Option<(String, u64)> {
+    let id = generation_key(name, key)?;
+    let generation = load().generations.get(&id).copied()?;
+    Some((id, generation))
+}
+
 /// Insert-or-replace the entry with this identity (`name` if named, else the
 /// durable `key`), preserving its `created_at` if it already exists (else
 /// stamping now). Write-through for `NewSquad`, recruit, member close, tombstone,
