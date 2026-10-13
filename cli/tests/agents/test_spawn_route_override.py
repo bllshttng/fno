@@ -773,7 +773,7 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
 
 def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
     """A fresh routed claude thread spawn execs the lane's own bg line through
-    the launch-lane door: the ask carries the RAW overlays and the record
+    the launch kind: the ask carries the RAW overlays and the record
     context (the compose happens in the door), the dispatcher path never
     runs, and the gate still releases."""
     from fno.agents import spawn_gate
@@ -814,7 +814,7 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     fake.write_text(
         "#!/bin/sh\n"
         f"cat > {ask_file}\n"
-        'echo \'{"kind":"created","name":"w","provider":"claude","short_id":"c-1"}\'\n',
+        'echo \'{"exit":0}\'\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)

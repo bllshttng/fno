@@ -301,46 +301,35 @@ pub fn write_composed(
     Ok(Some(receipt.path.to_string_lossy().into_owned()))
 }
 
-/// The door: one JSON payload on stdin, one JSON receipt on stdout. Two ask
-/// shapes: `{"env", ...}` is a pre-composed env (the revive readers), and
-/// `{"route_env", "account_env", ...}` names the RAW overlays for the door's
-/// own compose. The transport is the contract Python's forwarder holds, so a
-/// refusal is a loud non-zero, never a silent fallback to a Python write
-/// leg.
-pub fn run_route_settings(args: &[String]) -> i32 {
-    if !args.is_empty() {
-        eprintln!("route-settings: the door takes no argv; the payload rides stdin");
-        return 2;
-    }
-    let mut raw = String::new();
-    if std::io::stdin().read_to_string(&mut raw).is_err() {
-        eprintln!("route-settings: stdin is not readable text");
-        return 2;
-    }
-    let payload: Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("route-settings: payload is not valid JSON: {e}");
-            return 2;
-        }
-    };
-    let string_object = |field: &str| -> Option<Map<String, Value>> {
-        let obj = payload.get(field).and_then(Value::as_object)?;
+/// The write kind behind the spawn-overlay action (law d-fe66560a allows no
+/// new action): Python's forwarders send `{"kind": "write-settings", ...}`.
+/// Two ask shapes: `{"env", ...}` is a pre-composed env (the revive
+/// readers), and `{"route_env", "account_env", ...}` names the RAW overlays
+/// for the door's own compose. The transport is the contract Python's
+/// forwarder holds, so a refusal is a loud error, never a silent fallback to
+/// a Python write leg.
+pub fn write_settings_kind(payload: &Value) -> Result<Value, String> {
+    let string_object = |field: &str| -> Result<Option<Map<String, Value>>, String> {
+        let obj = match payload.get(field).and_then(Value::as_object) {
+            Some(obj) => obj,
+            None => return Ok(None),
+        };
         if obj.values().all(Value::is_string) {
-            Some(obj.clone())
+            Ok(Some(obj.clone()))
         } else {
-            eprintln!("route-settings: {field} carries a non-string value");
-            None
+            Err(format!(
+                "route-settings: {field} carries a non-string value"
+            ))
         }
     };
     let env = if payload.get("route_env").is_some() || payload.get("account_env").is_some() {
-        let (Some(route_env), Some(account_env)) =
-            (string_object("route_env"), string_object("account_env"))
-        else {
-            eprintln!(
+        let route_env = string_object("route_env")?;
+        let account_env = string_object("account_env")?;
+        let (Some(route_env), Some(account_env)) = (route_env, account_env) else {
+            return Err(
                 "route-settings: the overlay compose needs route_env and account_env objects"
+                    .into(),
             );
-            return 2;
         };
         let spawn_env: Map<String, Value> = std::env::vars()
             .map(|(k, v)| (k, Value::String(v)))
@@ -350,8 +339,7 @@ pub fn run_route_settings(args: &[String]) -> i32 {
         match string_object("env") {
             Some(env) => env,
             None => {
-                eprintln!("route-settings: payload carries no env or overlay object");
-                return 2;
+                return Err("route-settings: payload carries no env or overlay object".into());
             }
         }
     };
@@ -364,24 +352,13 @@ pub fn run_route_settings(args: &[String]) -> i32 {
             .map(str::to_string),
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match write(&ask, &cwd) {
-        Ok(receipt) => {
-            println!(
-                "{}",
-                json!({
-                    "path": receipt.path.to_string_lossy(),
-                    "alias_path": receipt
-                        .alias_path
-                        .map(|p| p.to_string_lossy().into_owned()),
-                })
-            );
-            0
-        }
-        Err(e) => {
-            eprintln!("route-settings: {e}");
-            2
-        }
-    }
+    let receipt = write(&ask, &cwd)?;
+    Ok(json!({
+        "path": receipt.path.to_string_lossy(),
+        "alias_path": receipt
+            .alias_path
+            .map(|p| p.to_string_lossy().into_owned()),
+    }))
 }
 
 #[cfg(test)]

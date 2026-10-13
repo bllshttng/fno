@@ -59,9 +59,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "lead-escalation-text",
     "lead-history",
     "term-ledger",
-    "launch-lane",
     "route-slot",
-    "route-settings",
     "list",
     "logs",
     "loop",
@@ -792,23 +790,10 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::retask::transport::run_payload();
     }
 
-    // `launch-lane`: the native lane exec; the spawn's preference path sends
-    // one stdin JSON ask, the verb writes the launch record, fills the lane
-    // template and execs, streaming the child's output.
-    if verb == "launch-lane" {
-        return fno_agents::launch_exec::run_launch_lane(&args[1..]);
-    }
-
     // `route-slot`: the delivery-slot resolver; Python's spawn seam, advance
     // and the readouts send one JSON payload, read {status, candidate, chain}.
     if verb == "route-slot" {
         return fno_agents::route_slot::run_route_slot(&args[1..]);
-    }
-
-    // `route-settings`: the --settings writer door; Python's forwarder sends
-    // one stdin JSON payload (it carries the auth token), reads {path, alias_path}.
-    if verb == "route-settings" {
-        return fno_agents::route_settings::run_route_settings(&args[1..]);
     }
 
     // `spawn-gate`: the ONE spawn gate; the Python transport sends one JSON

@@ -1142,8 +1142,8 @@ def load_sandbox_write_policy(path: str) -> dict[str, object]:
 
 
 def _door_write(payload_obj: dict) -> str:
-    """One route-settings door round trip: the receipt's path or a loud
-    refusal. The one implementation lives in
+    """One settings-writer round trip through the spawn-overlay write kind:
+    the receipt's path or a loud refusal. The one implementation lives in
     ``crates/fno-agents/src/route_settings.rs``; the env rides stdin because
     it carries ``ANTHROPIC_AUTH_TOKEN``, and a spawn that cannot write its
     settings file must not launch and wedge on the primary model."""
@@ -1151,8 +1151,9 @@ def _door_write(payload_obj: dict) -> str:
 
     from fno.rust_binary import call_binary_json
 
+    ask = dict(payload_obj, kind="write-settings")
     err, receipt = call_binary_json(
-        "route-settings", [], input_text=json.dumps(payload_obj, sort_keys=True), timeout=30
+        "spawn-overlay", [], input_text=json.dumps(ask, sort_keys=True), timeout=30
     )
     if err or not isinstance(receipt, dict) or not receipt.get("path"):
         detail = err or f"unusable receipt: {receipt!r}"

@@ -1,40 +1,22 @@
-//! The native lane exec: the door behind the preference path's exec swap.
-//! The ask names the lane's resolved values plus the launch context; the
-//! verb writes the launch record first (the dispatch reservation the gate
-//! counts - it carries the lane's provider), fills the lane template, then
-//! execs the native argv and streams its output. The row mints at the
-//! adopt: the session report claims the record and names the row from it,
-//! so this path mints nothing of its own.
+//! The native lane exec: the launch kind behind the spawn-overlay action
+//! (law d-fe66560a allows no new action). The ask names the lane's resolved
+//! values plus the launch context; the kind writes the launch record first
+//! (the dispatch reservation the gate counts - it carries the lane's
+//! provider), fills the lane template, then execs the native argv and
+//! streams its output. The row mints at the adopt: the session report
+//! claims the record and names the row from it, so this path mints nothing
+//! of its own.
 
 use serde_json::Value;
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn run_launch_lane(args: &[String]) -> i32 {
-    if !args.is_empty() {
-        eprintln!("launch-lane: takes no flags; one stdin JSON payload");
-        return 2;
-    }
-    let mut input = String::new();
-    if io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("launch-lane: cannot read payload");
-        return 2;
-    }
-    let payload: Value = match serde_json::from_str(&input) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("launch-lane: bad payload: {error}");
-            return 2;
-        }
-    };
-    match exec_lane(&payload) {
-        Ok(code) => code,
-        Err(message) => {
-            eprintln!("launch-lane: {message}");
-            2
-        }
-    }
+/// The `{"kind": "launch"}` arm: the child streams to the verb's own stdio
+/// and the answer carries its exit code, since the runner prints one JSON
+/// line after the stream.
+pub fn launch_kind(payload: &Value) -> Result<Value, String> {
+    let code = exec_lane(payload)?;
+    Ok(json!({ "exit": code }))
 }
 
 fn str_field(payload: &Value, key: &str) -> String {

@@ -173,6 +173,8 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("fallback") => resolve_fallback(&payload),
         Some("codex-route") => resolve_codex_route_kind(&payload),
         Some("print") => resolve_print(&payload),
+        Some("write-settings") => crate::route_settings::write_settings_kind(&payload),
+        Some("launch") => crate::launch_exec::launch_kind(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
         Some("role-identity") => crate::team_identity::resolve(&payload),
         Some("role-widen") => crate::team_widen::resolve(&payload),
@@ -180,7 +182,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|print|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|print|write-settings|launch|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
         )),
     }
 }

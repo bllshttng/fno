@@ -2648,7 +2648,7 @@ def cmd_spawn(
 
         try:
             # The native lane: a fresh routed claude thread spawn execs the
-            # lane's own bg line through the launch-lane door; the record is
+            # lane's own bg line through the launch kind; the record is
             # the dispatch reservation and the row mints at the adopt. Axes
             # the template cannot express keep the dispatcher path below.
             native_lane = (
@@ -2671,6 +2671,7 @@ def cmd_spawn(
                     import subprocess as _subprocess
 
                     ask: dict = {
+                        "kind": "launch",
                         "harness": harness, "name": name, "payload": message or "",
                         "route_env": route_env or {}, "account_env": account_env or {},
                         "sandbox": sandbox_settings,
@@ -2684,13 +2685,27 @@ def cmd_spawn(
                     if launcher_cwd and launcher_cwd.strip():
                         ask["launcher_cwd"] = launcher_cwd
                     proc = _subprocess.run(
-                        [str(resolve_binary()), "launch-lane"],
+                        [str(resolve_binary()), "spawn-overlay"],
                         input=json.dumps(ask), text=True, capture_output=True,
                     )
                     sys.stdout.write(proc.stdout or "")
                     sys.stderr.write(proc.stderr or "")
                     if proc.returncode != 0:
                         raise typer.Exit(code=proc.returncode)
+                    # The launch kind answers {"exit": N} after the child's
+                    # stream: the child's own code is the launch's outcome.
+                    answer = {}
+                    for line in reversed((proc.stdout or "").splitlines()):
+                        if line.startswith("{"):
+                            try:
+                                candidate = json.loads(line)
+                            except ValueError:
+                                continue
+                            if isinstance(candidate, dict) and "exit" in candidate:
+                                answer = candidate
+                            break
+                    if answer.get("exit") not in (0, None):
+                        raise typer.Exit(code=int(answer["exit"]))
                     spawn_succeeded = True
                     print(f"spawn: {name} launched on the native lane; the row lands at its SessionStart adopt", file=sys.stderr)
                     return
