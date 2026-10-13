@@ -820,7 +820,10 @@ def test_drain_self_without_the_binary_refuses_with_a_reinstall_hint(
     # so its no-binary refusal is the operator surface when the wheel's binary
     # is missing. That path is unreachable in the dev-build leg (the binary
     # exists there) and the marked tests above skip everywhere else, so this
-    # seam test is the one owner of the 127 contract.
+    # seam test is the one owner of the 127 contract. The transport consults
+    # the checkout's dev build before the resolver, so missing means both
+    # routes read None.
+    monkeypatch.setattr("fno.rust_binary.find_dev_binary", lambda: None)
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
     res = runner.invoke(app, ["agents", "mail", "drain-self"])
     assert res.exit_code == 127
@@ -847,6 +850,9 @@ def test_drain_self_forward_execs_the_binary_with_the_mail_group_argv(
         encoding="utf-8",
     )
     fake.chmod(0o755)
+    # The dev build outranks the resolver, so close that route before the
+    # fake stands in.
+    monkeypatch.setattr("fno.rust_binary.find_dev_binary", lambda: None)
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: str(fake))
     res = runner.invoke(app, ["agents", "mail", "drain-self"])
     streams = res.stdout + (res.stderr or "")
