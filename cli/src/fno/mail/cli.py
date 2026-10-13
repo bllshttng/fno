@@ -2961,6 +2961,11 @@ def cmd_send(
         if message is None:
             print("error: --raw needs a payload (the text to type)", file=sys.stderr)
             raise typer.Exit(code=2)
+        # argv-fence: exempt - the receiver is our own fno-agents mail parser,
+        # which has no end-of-options fence: a `--` element dies there as an
+        # unknown argument. A flag-shaped payload cannot deliver either: the
+        # raw lane refuses any payload that does not start with / or $, and an
+        # unknown leading-dash argument exits 2 before the raw lane runs.
         raw_argv = ["send", name, message, "--raw"]
         if check:
             raw_argv.append("--check")

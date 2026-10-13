@@ -375,7 +375,12 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # `--` is reserved for the passthrough lane (pane substrate only), so no
     # fence or equal-form exists; the prompt is template-rendered in
     # spawn_verifier, never user input, and message-last is the positional's
-    # legal spot in a click parser.
-    assert counts.get("exempt", 0) == 14, counts
+    # legal spot in a click parser. Fifteen: the mail raw shim forwards
+    # ["send", name, message, "--raw"] to the bundled fno-agents parser, which
+    # has no end-of-options fence, so a `--` element would die there as an
+    # unknown argument; a flag-shaped payload also cannot deliver, because the
+    # raw lane refuses any payload that does not start with / or $ and an
+    # unknown leading-dash argument exits 2 before the raw lane runs.
+    assert counts.get("exempt", 0) == 15, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts
