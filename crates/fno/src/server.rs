@@ -1632,7 +1632,7 @@ pub(crate) struct Core {
     /// The graph join from the off-loop graph reader (node prs, driving
     /// sessions, per-session node bindings); joined at layout time into
     /// `AgentRow.pr` (the peek header's `PR #N` label), `AgentRow.pr_session_short`
-    /// (the PR row's attach handle), and `AgentRow.bindings` (v110).
+    /// (the PR row's attach handle), and `AgentRow.bindings` (v111).
     backlog_join: backlog_view::BacklogJoin,
     /// Panes spawned claim-ELIGIBLE (`pane run --claim`, agent panes). A
     /// general pane never appears here and never consults a claim (Locked 5).

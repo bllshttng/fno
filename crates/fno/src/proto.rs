@@ -374,11 +374,11 @@ fn default_true() -> bool {
 /// v107 adds `BacklogCard.link` (serde default), the node's stored GitHub-or-Linear
 /// URL the node tap opens when no plan lives in the vault; floor stays 58.
 /// v109: `WorkspaceRestore.member_session` targets one exact native session.
-/// v110: `AgentRow.bindings`, the node bindings a row drives, strongest
-/// first; missing on a pre-v110 row, off the wire when empty; floor stays 58.
-/// v110 adds `ControlVerb::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
+/// v110: `ControlVerb::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
 /// desktop notifications ride to attached clients as OSC 777; floor stays 58.
-pub const PROTO_VERSION: u32 = 110;
+/// v111: `AgentRow.bindings`, the node bindings a row drives, strongest
+/// first; missing on a pre-v111 row, off the wire when empty; floor stays 58.
+pub const PROTO_VERSION: u32 = 111;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1002,7 +1002,7 @@ pub enum Reach {
     Locate,
 }
 
-/// (v110) One node binding on an [`AgentRow`]: the node the row's session
+/// (v111) One node binding on an [`AgentRow`]: the node the row's session
 /// drives, its pr when the board knows one, and how the binding was found.
 /// `inferred` is false only for an explicit bind and a live claim.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1340,8 +1340,8 @@ pub struct AgentRow {
     /// reach command - the server re-derives the real tier.
     #[serde(default)]
     pub reach: Reach,
-    /// (v110) The node bindings this row carries, strongest first. Empty
-    /// stays off the wire; a pre-v110 row decodes to an empty set.
+    /// (v111) The node bindings this row carries, strongest first. Empty
+    /// stays off the wire; a pre-v111 row decodes to an empty set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<SessionBinding>,
 }
@@ -4016,7 +4016,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 110);
+        assert_eq!(PROTO_VERSION, 111);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4068,10 +4068,10 @@ mod tests {
                 .contains("held_conversation"),
             "false stays absent from the wire"
         );
-        // v110: `AgentRow.bindings` rides the same way - a missing key on a
-        // pre-v110 row decodes to an empty set, and an empty set stays off
+        // v111: `AgentRow.bindings` rides the same way - a missing key on a
+        // pre-v111 row decodes to an empty set, and an empty set stays off
         // the wire so the sideline's `+N PRs` marker is the only trace.
-        let pre = r#"{"squad":null,"name":"pre-v110","pane_id":null,
+        let pre = r#"{"squad":null,"name":"pre-v111","pane_id":null,
                       "badge":null,"reason":null,"exited":false}"#;
         let old_row: AgentRow = serde_json::from_str(pre).unwrap();
         assert!(

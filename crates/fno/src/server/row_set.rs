@@ -246,7 +246,7 @@ fn pick_current(bindings: &[GraphBinding]) -> Option<&GraphBinding> {
     current
 }
 
-/// The wire form (v110) of one row's bindings: `inferred` is false only
+/// The wire form (v111) of one row's bindings: `inferred` is false only
 /// for an explicit bind and a claim - the two assignments a human made.
 fn wire_bindings(bindings: Vec<GraphBinding>) -> Vec<SessionBinding> {
     bindings
