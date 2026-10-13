@@ -1504,18 +1504,9 @@ fn decide_gate(
         }
         // The memory axis is hard: --force passes the soft limits only.
         check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
-        let (raw, why) = match footprint_cause_raw() {
-            Ok(raw) => (Some(raw), None),
-            Err(why) => (None, Some(why)),
-        };
-        let cpu = check_cpu_axis(raw.as_deref(), why.as_deref());
         eprintln!(
             "{}",
-            forced_line(
-                registry_path,
-                config_cwd,
-                cpu_passed(&cpu).into_iter().collect()
-            )
+            crate::spawn_gate_forced::report_probing(registry_path, config_cwd)
         );
         if substrate == "headless" {
             // fail_closed=false: this arm cannot fault, only warn.
@@ -1685,12 +1676,16 @@ fn decide_gate(
             if flags.force {
                 // The memory axis is hard: --force passes the soft limits only.
                 check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
-                let cpu = check_cpu_axis(prefetched.as_deref(), probe_err.as_deref());
-                let passed = forced_provider
-                    .into_iter()
-                    .chain(cpu_passed(&cpu))
-                    .collect();
-                eprintln!("{}", forced_line(registry_path, config_cwd, passed));
+                eprintln!(
+                    "{}",
+                    crate::spawn_gate_forced::report(
+                        registry_path,
+                        config_cwd,
+                        prefetched.as_deref(),
+                        probe_err.as_deref(),
+                        forced_provider,
+                    )
+                );
                 if substrate == "headless" {
                     // A forced spawn of the reserved name redeems too: force
                     // speaks for the machine being busy, never for keeping a
@@ -2219,33 +2214,6 @@ pub(crate) fn ram_readings_line(m: &MemoryReading, floor_gb: f64, max_swap_pct: 
         "{NOTE} ram readings: available {} (floor {floor_gb:.1}GB), swap {} (cap {max_swap_pct:.0}%), swap-in {swapin_word}",
         off_or(floor_gb <= 0.0, &m.avail, "GB"),
         off_or(max_swap_pct <= 0.0, &m.swap, "%"),
-    )
-}
-
-/// The CPU hold a forced spawn passed, when the fleet share was over.
-fn cpu_passed(cpu: &CpuAdmission) -> Option<String> {
-    (cpu.payload.verdict == "hold").then(|| format!("the fleet CPU hold ({})", cpu.payload.reason))
-}
-
-/// The one line a forced spawn prints: every soft limit it passed, and the
-/// cap the loop reads. The RAM floor is never among them.
-fn forced_line(registry_path: &Path, config_cwd: &Path, extra: Vec<String>) -> String {
-    let learned = crate::capacity::effective_for(config_cwd);
-    let mut warnings = Vec::new();
-    let (live, reservations) = slot_reading(registry_path, &mut warnings);
-    let slots = live.len() + reservations.len();
-    let mut passed = Vec::new();
-    if slots >= learned.cap {
-        passed.push(format!("the slot cap, {slots} live of {}", learned.cap));
-    }
-    passed.extend(extra);
-    let tail = match passed.is_empty() {
-        true => "no soft limit was in the way".to_string(),
-        false => format!("passed {}", passed.join(", ")),
-    };
-    format!(
-        "{NOTE} forced (--force): {tail}. {}. The RAM floor still applies.",
-        learned.clause()
     )
 }
 
@@ -4994,56 +4962,6 @@ Swapouts: 3444531.\n";
             serde_json::json!("blueprint_territory_cap"),
             "{receipt}"
         );
-    }
-
-    /// `--force` passes the soft limits and never the RAM floor: a floor no
-    /// machine can meet still refuses a forced spawn, with the RAM exit code.
-    #[test]
-    fn the_force_branch_still_refuses_on_ram() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
-        let dir = tempfile::tempdir().unwrap();
-        let fnodir = dir.path().join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 999\nmin_free_gb = 1000000\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-        std::env::set_var("FNO_HOME", dir.path());
-        let prior_claims = std::env::var_os("FNO_CLAIMS_ROOT");
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.path().join("claims-root"));
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        let reg = dir.path().join("registry.json");
-        std::fs::write(&reg, r#"{"schema_version":1,"entries":[]}"#).unwrap();
-        let got = run_gate(
-            dir.path(),
-            &reg,
-            GateInput {
-                name: "w-forced".into(),
-                substrate: "bg".into(),
-                flags: GateFlags {
-                    force: true,
-                    no_wait: true,
-                },
-                ..Default::default()
-            },
-        );
-        std::env::remove_var("FNO_HOME");
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        if let Some(v) = prior_claims {
-            std::env::set_var("FNO_CLAIMS_ROOT", v);
-        }
-        if let Some(v) = prior_spawn_gate {
-            std::env::set_var("FNO_SPAWN_GATE", v);
-        }
-        let refusal = got
-            .err()
-            .expect("a forced spawn must not pass the RAM floor");
-        assert_eq!(refusal.exit_code, EXIT_RAM_REFUSED, "{:?}", refusal.receipt);
     }
 
     /// A live blueprint registry row for the cap tests: pid is this
