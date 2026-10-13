@@ -314,9 +314,11 @@ fn stub_fno_bin(root: &Path, receipt: &Receipt) -> PathBuf {
         Some(payload) => {
             let response = root.join("receipt-response.json");
             fs::write(&response, payload).expect("write receipt response");
-            common::make_script(&bin, "fno", &format!("cat {}", response.display()))
+            common::make_script(&bin, "fno", &format!("cat {}", response.display()));
         }
-        None => common::make_script(&bin, "fno", "echo boom >&2\nexit 1"),
+        None => {
+            common::make_script(&bin, "fno", "echo boom >&2\nexit 1");
+        }
     }
     bin.join("fno")
 }
