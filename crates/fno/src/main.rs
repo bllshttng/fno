@@ -373,6 +373,10 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "seed-provenance" => Some(Role::MailSeedProvenance(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "team" => Some(Role::MailTeam(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
