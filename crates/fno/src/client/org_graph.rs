@@ -26,6 +26,7 @@ pub(crate) enum BoxKind {
 
 /// A parent-to-child connector: `│` under one child, a `┴`/`┬` distribution
 /// bar under several.
+#[derive(Clone)]
 pub(crate) struct Link {
     pub(crate) from: String,
     pub(crate) to: String,
@@ -33,6 +34,7 @@ pub(crate) struct Link {
 
 /// A blocked-by relation between two node boxes, drawn as a horizontal run
 /// in the warning color on the layer's label line.
+#[derive(Clone)]
 pub(crate) struct BlocksEdge {
     pub(crate) from: String,
     pub(crate) to: String,
@@ -85,6 +87,7 @@ struct Layer {
     state: Option<crate::lattice::LatticeState>,
     w: usize,
     span: usize,
+    workers_span: usize,
 }
 
 /// Layered placement. Spans compute bottom-up (a node's span covers its
@@ -126,6 +129,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                         .map(|a| super::agent_lattice_state(a)),
                     w,
                     span: w,
+                    workers_span: w,
                 });
                 workers_span += w;
             }
@@ -147,6 +151,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                 state: None,
                 w: node_w,
                 span: node_span,
+                workers_span,
             });
             links.push(Link {
                 from: lead_key.clone(),
@@ -182,12 +187,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
                 row: NODE_ROW,
                 w: node.w,
             });
-            let workers_span = node_layers
-                .iter()
-                .find(|n| n.key == node.key)
-                .map(|_| node_workers_span(tree, lead, &node.key))
-                .unwrap_or(0);
-            let mut wcx = ncx + (node.span.saturating_sub(workers_span)) / 2;
+            let mut wcx = ncx + node.span.saturating_sub(node.workers_span) / 2;
             for worker in &worker_layers {
                 boxes.push(GBox {
                     key: worker.key.clone(),
@@ -214,12 +214,7 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
     if !tree.unowned.is_empty() {
         let mut ucx = 0usize;
         for (i, agent) in tree.unowned.iter().enumerate() {
-            let name = agent
-                .agent
-                .as_ref()
-                .map(|a| a.name.clone())
-                .or_else(|| agent.view.session_id.clone())
-                .unwrap_or_else(|| "unobserved".to_string());
+            let name = agent.name.clone();
             let w = box_w(&name);
             boxes.push(GBox {
                 key: unowned_key(agent, i),
@@ -261,6 +256,8 @@ pub(crate) fn frame(
     if width == 0 || height == 0 {
         return buf;
     }
+    let dim = crate::ratatui_blit::rt_color(colors.dim);
+    let warn = crate::ratatui_blit::rt_color(colors.needs_you);
     for b in &graph.boxes {
         if b.row >= height {
             continue;
@@ -300,7 +297,7 @@ pub(crate) fn frame(
             .collect();
         let pc = parent.col + parent.w / 2;
         if siblings.len() <= 1 {
-            put(&mut buf, width, pc, row, "│", colors.dim);
+            put(&mut buf, width, pc, row, "│", dim);
             continue;
         }
         let first = siblings.iter().map(|b| b.col + b.w / 2).min().unwrap_or(0);
@@ -313,10 +310,10 @@ pub(crate) fn frame(
             } else {
                 "─"
             };
-            put(&mut buf, width, c, row, ch, colors.dim);
+            put(&mut buf, width, c, row, ch, dim);
         }
         if pc > first && pc < last {
-            put(&mut buf, width, pc, row, "┴", colors.dim);
+            put(&mut buf, width, pc, row, "┴", dim);
         }
         for s in &siblings {
             let cc = s.col + s.w / 2;
@@ -325,7 +322,7 @@ pub(crate) fn frame(
             } else {
                 "┬"
             };
-            put(&mut buf, width, cc, row, ch, colors.dim);
+            put(&mut buf, width, cc, row, ch, dim);
         }
     }
     // Blocked-by runs between node boxes on the label line, arrow into the
@@ -348,12 +345,12 @@ pub(crate) fn frame(
             continue;
         }
         for c in start..end - 1 {
-            put(&mut buf, width, c, row, "─", colors.needs_you);
+            put(&mut buf, width, c, row, "─", warn);
         }
-        put(&mut buf, width, end - 1, row, "▶", colors.needs_you);
+        put(&mut buf, width, end - 1, row, "▶", warn);
     }
     if graph.boxes.iter().any(|b| b.row == UNOWNED_ROW) && UNOWNED_ROW + 1 < height {
-        put_str(&mut buf, width, 0, UNOWNED_ROW - 1, "unowned", colors.dim);
+        put_str(&mut buf, width, 0, UNOWNED_ROW - 1, "unowned", dim);
     }
     buf
 }
