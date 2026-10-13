@@ -319,11 +319,7 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
         }
     }
 
-    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "agents");
-    let _ = emitter.emit(
-        "mail_hold_released",
-        &json!({"handle": handle, "held_count": held_count, "outcome": outcome, "held_for_s": held_for_s}),
-    );
+    emit_release_marker(handle, held_count, &outcome, held_for_s);
 
     json!({
         "handle": handle,
@@ -335,6 +331,36 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
         "miss_reason": miss_reason,
         "policy_cleared": policy_cleared,
     })
+}
+
+/// The release marker, in the hybrid row shape the deleted Python emitter
+/// wrote: flat kind-keyed fields beside the envelope keys, committed to the
+/// state-root store (`paths.state_dir() / "events.jsonl"`), never the
+/// agents-home journal. A failed commit warns to stderr and swallows, as
+/// Python's emitter did.
+fn emit_release_marker(handle: &str, held_count: usize, outcome: &str, held_for_s: i64) {
+    let data = json!({
+        "handle": handle,
+        "held_count": held_count,
+        "outcome": outcome,
+        "held_for_s": held_for_s,
+    });
+    let mut row = data.clone();
+    row["ts"] = json!(chrono::Utc::now().to_rfc3339());
+    row["kind"] = json!("mail_hold_released");
+    row["type"] = json!("mail_hold_released");
+    row["source"] = json!("agents");
+    row["data"] = data;
+    let journal = match crate::agents_config::state_dir(std::path::Path::new(".")) {
+        Some(root) => root.join("events.jsonl"),
+        None => {
+            eprintln!("warning: no state dir; mail_hold_released not committed");
+            return;
+        }
+    };
+    if let Err(error) = crate::event_store::append_envelope(&journal, &row.to_string(), None) {
+        eprintln!("warning: could not commit mail_hold_released: {error}");
+    }
 }
 
 /// The registry stamp, as a tri-state: true when the desired state holds
