@@ -1298,7 +1298,7 @@ pub(crate) fn check_lead_share(
         ));
     }
     eprintln!("{msg}");
-    learned.eprint_hint();
+    learned.eprint_slot_hint();
     Err(
         crate::spawn_gate::Refusal::code(crate::spawn_gate::EXIT_LEAD_SHARE)
             .ev("reason", serde_json::json!("lead_share"))

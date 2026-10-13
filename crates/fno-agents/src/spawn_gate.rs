@@ -1960,7 +1960,7 @@ fn decide_gate(
                                 "refusing (--no-wait).",
                             );
                             eprintln!("spawn-gate: {line}");
-                            learned.eprint_hint();
+                            learned.eprint_slot_hint();
                             let mut receipt = serde_json::json!({
                                 "status": "refused",
                                 "reason": "no_wait",
@@ -2006,7 +2006,7 @@ fn decide_gate(
                                 "waiting for a free slot (--no-wait to fail fast, --force to bypass)",
                             );
                             eprintln!("spawn queued: {line}");
-                            learned.eprint_hint();
+                            learned.eprint_slot_hint();
                             announced = true;
                             last_progress = Instant::now();
                         } else if last_progress.elapsed() >= QUEUE_PROGRESS_EVERY {
@@ -2067,7 +2067,11 @@ fn decide_gate(
                      inspect live workers with `fno agents top`, or retry with --no-wait/--force",
                     QUEUE_TIMEOUT.as_secs()
                 );
-                learned.eprint_hint();
+                if held_on_cpu {
+                    learned.eprint_hint();
+                } else {
+                    learned.eprint_slot_hint();
+                }
             }
             let mut receipt = serde_json::json!({
                 "status": "refused",

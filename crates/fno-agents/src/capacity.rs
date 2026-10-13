@@ -30,6 +30,7 @@ pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
 pub const DEFAULT_FLOOR: u32 = 1;
 /// What every soft-cap refusal names to hold the learned cap up. `fno config
 /// set` refuses this key, so the hint names the file the gate reads.
+pub const MAX_LIVE_REMEDY: &str = "raise agents.max_live in ~/.fno/config.toml";
 pub const FLOOR_REMEDY: &str = "set [agents.capacity] floor = N in ~/.fno/config.toml";
 
 /// `[agents.capacity]` thresholds, defaults mirroring the runaway arm's band.
@@ -180,6 +181,12 @@ impl Effective {
     /// The sentence fragment every refusal and receipt shares, so a display
     /// can never quote a cap the gate did not read.
     pub fn clause(&self) -> String {
+        if let Some(held) = self.held.as_ref().filter(|h| h.learned >= self.cap) {
+            return format!(
+                "effective cap {} of {} (at agents.capacity.floor {})",
+                self.cap, self.ceiling, held.floor
+            );
+        }
         if let Some(held) = &self.held {
             return format!(
                 "effective cap {} of {} (held at agents.capacity.floor {}, learned {})",
@@ -224,6 +231,23 @@ impl Effective {
         })
     }
 
+    /// The hint for a refusal on the slot axis: below the ceiling the floor
+    /// hint, at it the step that raises `agents.max_live`.
+    pub fn slot_hint(&self) -> String {
+        self.override_hint().unwrap_or_else(|| {
+            format!(
+                "spawn-gate: the cap is the user's agents.max_live, {}. To raise it: \
+                 {MAX_LIVE_REMEDY}. For one spawn the user ordered: --force, which also passes \
+                 the RAM floor.",
+                self.ceiling
+            )
+        })
+    }
+
+    pub fn eprint_slot_hint(&self) {
+        eprintln!("{}", self.slot_hint());
+    }
+
     /// Prints [`Self::override_hint`] on stderr when there is one.
     pub fn eprint_hint(&self) {
         if let Some(hint) = self.override_hint() {
@@ -238,6 +262,8 @@ impl Effective {
         receipt["ceiling"] = serde_json::json!(self.ceiling);
         if self.cap < self.ceiling {
             receipt["remedy"] = serde_json::json!(FLOOR_REMEDY);
+        } else if receipt["axis"] != "fleet_cpu_share" {
+            receipt["remedy"] = serde_json::json!(MAX_LIVE_REMEDY);
         }
     }
 }
@@ -311,7 +337,8 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
     match read_state(home) {
         Some(state) if state.effective >= 1 => {
             let learned = (state.effective as usize).min(ceiling);
-            let cap = learned.max(floor.min(ceiling));
+            let floor_cap = floor.min(ceiling);
+            let cap = learned.max(floor_cap);
             let known = cap < ceiling || state.reason.is_some();
             Effective {
                 cap,
@@ -319,7 +346,10 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
                 known,
                 reason: state.reason,
                 since: state.since,
-                held: (cap > learned).then_some(FloorHold { floor, learned }),
+                // A tick and a cut both write the floor into the state, so a
+                // cap sitting on a user floor is held even when learned equals it.
+                held: (floor > DEFAULT_FLOOR as usize && cap == floor_cap)
+                    .then_some(FloorHold { floor, learned }),
             }
         }
         _ => Effective {
@@ -962,6 +992,33 @@ mod tests {
         two.effective = 2;
         let bare = CapacityThresholds::default();
         assert_eq!(step(&two, &hot, &bare, now).unwrap().effective, 1);
+
+        // After the cut is persisted the state's learned cap equals the floor.
+        // The reader still names the floor, so a tick never hides it.
+        let home = tmp_home("floor-tick");
+        write_state(&home, &cut).unwrap();
+        let after = effective(&home, 24, 8);
+        assert_eq!(after.cap, 8);
+        assert_eq!(
+            after.clause(),
+            "effective cap 8 of 24 (at agents.capacity.floor 8)"
+        );
+        let _ = std::fs::remove_dir_all(home.root());
+
+        // At the ceiling a refusal still names a step: agents.max_live and --force.
+        let at_ceiling = Effective {
+            cap: 24,
+            ceiling: 24,
+            ..Default::default()
+        };
+        let hint = at_ceiling.slot_hint();
+        assert!(
+            hint.contains("agents.max_live") && hint.contains("--force"),
+            "{hint}"
+        );
+        let mut receipt = serde_json::json!({"axis": "max_live"});
+        at_ceiling.annotate(&mut receipt);
+        assert_eq!(receipt["remedy"], MAX_LIVE_REMEDY);
     }
 
     #[test]
