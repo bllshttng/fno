@@ -260,9 +260,10 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 
 _ADVERTISED_BACKLOG_VERBS = {
     # `update` moved with the update port, `add`/`idea` with the create
-    # port, and `view` with the projections port: the native binary
-    # advertises them, the python menu does not.
-    "get", "next", "done", "defer",
+    # port, `view` with the projections port, and `defer` with the
+    # lifecycle port: the native binary advertises them, the python menu
+    # does not.
+    "get", "next", "done",
     "triage", "note",
 }
 
