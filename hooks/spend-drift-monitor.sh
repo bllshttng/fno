@@ -8,14 +8,24 @@
 # failed on every tool call ("/bin/sh: node: command not found"), and the
 # spend cap and the drift check never ran.
 #
-# Caller dirs keep precedence; the usual node dirs supply the fallback.
+# Caller dirs keep precedence; the usual node dirs supply the fallback. The
+# version-manager dirs are the ones that hold a runnable node with no shell
+# setup: volta, asdf and mise shims, and the fnm default alias.
 PATH="${PATH:+$PATH:}/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH="$PATH:$HOME/.volta/bin:$HOME/.asdf/shims:$HOME/.local/share/mise/shims:$HOME/.local/share/fnm/aliases/default/bin"
 export PATH
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
 if command -v node >/dev/null 2>&1; then
   exec node "$here/spend-drift-monitor.js"
+fi
+
+# nvm keeps no shim: each version has its own dir, and only a sourced nvm.sh
+# puts one on PATH. Take the newest installed version.
+nvm_node="$(printf '%s\n' "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node | sort -V | tail -n 1)"
+if [ -x "$nvm_node" ]; then
+  exec "$nvm_node" "$here/spend-drift-monitor.js"
 fi
 
 # No node anywhere. Say so once per session, then stay quiet: the same line
