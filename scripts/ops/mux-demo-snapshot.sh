@@ -122,6 +122,15 @@ file p3 "Split the merchant onboarding wizard into three steps with save-and-res
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
+# The first backlog verb migrates the store and publishes its tombstone AS
+# the claims path: a marker file where the lock needs a directory. The
+# marker's backup imported at publish, so retiring the marker and
+# recreating the directory hands the path back to the legacy lock writer.
+claims="$FNO_CLAIMS_ROOT/.fno/claims"
+if [ -f "$claims" ]; then
+  rm -f "$claims"
+  mkdir -p "$claims"
+fi
 for i in 0 1 2; do
   "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
   "$FNO" backlog session add "${IDS[$i]}" --phase execute --harness "${HARNESSES[$i]}" --session-id "${SIDS[$i]}" >/dev/null
