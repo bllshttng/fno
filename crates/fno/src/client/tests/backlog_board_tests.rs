@@ -935,6 +935,7 @@ async fn tap_recorded_chip(v: &mut View) -> usize {
             row,
             col,
             shift: false,
+            alt: false,
         };
         crate::client::region_focus::mouse_pre_pass(v, &mut scanner, vec![rep], &mut sock)
             .await
@@ -965,6 +966,7 @@ async fn press_span(v: &mut View, row: usize, col: usize) {
             row: row as u16,
             col: col as u16,
             shift: false,
+            alt: false,
         }],
         &mut sock,
     )
