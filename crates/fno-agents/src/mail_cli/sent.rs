@@ -20,6 +20,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const TYPED_DELIVERY: &str = "typed";
 const HOSTED_DELIVERY: &str = "hosted";
 const CROSS_SESSION_DELIVERY: &str = "cross-session";
+/// Absent delivery metadata is the legacy durable shape.
+const DURABLE_DELIVERY: &str = "durable";
 const SEND_KIND: &str = "send";
 const LANDED_KIND: &str = "landed";
 /// Transcript-read budget for the unclaimed scan (`_LANDED_READ_BUDGET_S`).
@@ -247,11 +249,10 @@ fn sent_unclaimed(
         cursor_pos.insert(
             r,
             match read_cursor(bus, r) {
-                // Unreadable counts as everything-claimed: never re-nag a
-                // recipient whose cursor we merely cannot read.
-                Err(()) => all.len() as i64,
-                Ok(None) => -1,
-                Ok(Some(cid)) => pos.get(&cid).copied().unwrap_or(0) as i64,
+                // The oracle's reader swallows every failure to None, so an
+                // unreadable or unresolvable cursor claims nothing (-1).
+                None => -1,
+                Some(cid) => pos.get(&cid).copied().map_or(-1, |p| p as i64),
             },
         );
     }
@@ -496,27 +497,40 @@ fn record_landed(bus: &Path, m: &Value) {
     }
 }
 
-/// The per-recipient read cursor, or None when absent/blank. A corrupt file
-/// is ignored silently (the Python reader warns; fixtures are clean);
-/// a read error other than absence is the Err arm.
-fn read_cursor(bus: &Path, name: &str) -> Result<Option<String>, ()> {
+/// The per-recipient read cursor, or None when absent, blank, corrupt, or
+/// unreadable: the oracle's reader warns on stderr and swallows every
+/// failure to None, so an unresolvable cursor claims nothing.
+fn read_cursor(bus: &Path, name: &str) -> Option<String> {
     let path = bus.join("cursors").join(format!("{name}.json"));
+    let label = path.file_name().and_then(|n| n.to_str()).unwrap_or(name);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "bus cursor: ignoring corrupt cursor {label} ({}); rescanning retained segments",
+                e.kind()
+            );
+            return None;
+        }
     };
     let Ok(v) = serde_json::from_str::<Value>(&text) else {
-        return Ok(None);
+        eprintln!(
+            "bus cursor: ignoring corrupt cursor {label} (JSONDecodeError); rescanning retained segments"
+        );
+        return None;
     };
-    Ok(v.get("last_seen_id")
+    v.get("last_seen_id")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_string))
+        .map(str::to_string)
 }
 
 fn delivery_of(m: &Value) -> &str {
-    m.get("delivery").and_then(Value::as_str).unwrap_or("")
+    m.get("delivery")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DURABLE_DELIVERY)
 }
 
 /// True iff `ts` is strictly older than `ttl`. Unparseable -> false.
