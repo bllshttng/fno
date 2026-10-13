@@ -671,14 +671,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(ladder_home);
         std::fs::create_dir_all(ladder_home).unwrap();
         let mut fail_once = |_row: &crate::mail_bus::BusRow| false;
-        let row = bus_row(7, "laddered");
+        let row = || bus_row(7, "laddered");
         assert_eq!(
-            crate::mail_arm::pull_rows_with(
-                &remote,
-                vec![row.clone()],
-                ladder_home,
-                &mut fail_once
-            ),
+            crate::mail_arm::pull_rows_with(&remote, vec![row()], ladder_home, &mut fail_once),
             0,
             "the failed send books the ladder, nothing delivers"
         );
@@ -692,12 +687,7 @@ mod tests {
             panic!("a row inside its backoff window never injects")
         };
         assert_eq!(
-            crate::mail_arm::pull_rows_with(
-                &remote,
-                vec![row.clone()],
-                ladder_home,
-                &mut no_inject
-            ),
+            crate::mail_arm::pull_rows_with(&remote, vec![row()], ladder_home, &mut no_inject),
             0,
             "the second beat inside the window skips the send"
         );
@@ -712,12 +702,7 @@ mod tests {
         let due_line = format!("{{\"msg_id\":\"laddered\",\"attempts\":1,\"next_due\":{past}}}",);
         std::fs::write(crate::mail_remote::retry_path(ladder_home), due_line + "\n").unwrap();
         assert_eq!(
-            crate::mail_arm::pull_rows_with(
-                &remote,
-                vec![row.clone()],
-                ladder_home,
-                &mut deliver_all
-            ),
+            crate::mail_arm::pull_rows_with(&remote, vec![row()], ladder_home, &mut deliver_all),
             1,
             "a past-due row injects again"
         );
