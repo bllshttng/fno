@@ -4295,9 +4295,10 @@ def _forward_unread(name: str, json_out: bool) -> None:
     env = dict(os.environ, FNO_BUS_DIR=str(paths.bus_dir()))
     if sys.stdout is not None and sys.stdout.isatty():
         # A real terminal: inherit stdio so the native TTY branch renders its
-        # table against it.
+        # table against it. text=True captures nothing here; it only keeps
+        # result one type across both branches for the type checker.
         result = subprocess.run(
-            [str(binary), "mail", "unread", *argv], env=env, check=False
+            [str(binary), "mail", "unread", *argv], env=env, text=True, check=False
         )
     else:
         # Captured stdout (pipe, test runner): inherited stdio would bypass
