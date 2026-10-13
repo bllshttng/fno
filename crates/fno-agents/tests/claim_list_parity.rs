@@ -579,9 +579,12 @@ fn two_roots_one_key_live_in_second_root_wins() {
         leg.stdout
     );
     let root_label = format!("root={}", space_claims.display());
+    // The winner is unexpired but offhost by fixture (host=testhost), so it
+    // renders "suspect", the same basis as every planted lock in this file;
+    // "stale" would mean the expired global sighting won.
     assert!(
-        rows[0].starts_with("live"),
-        "the live sighting wins: {}",
+        rows[0].starts_with("suspect"),
+        "the unexpired sighting wins: {}",
         rows[0]
     );
     assert!(
