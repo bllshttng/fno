@@ -30,6 +30,9 @@ pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
 pub const DEFAULT_FLOOR: u32 = 1;
 /// What every soft-cap refusal names to hold the learned cap up. `fno config
 /// set` refuses this key, so the hint names the file the gate reads.
+/// What every soft refusal says about --force.
+const FORCE_TAIL: &str =
+    "For one spawn the user ordered: --force. It passes every soft limit and never the RAM floor.";
 pub const MAX_LIVE_REMEDY: &str = "raise agents.max_live in ~/.fno/config.toml";
 pub const FLOOR_REMEDY: &str = "set [agents.capacity] floor = N in ~/.fno/config.toml";
 
@@ -223,8 +226,7 @@ impl Effective {
             format!(
                 "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To stop it \
                  learning this low: {FLOOR_REMEDY} (the gate also reads the project \
-                 .fno/config.toml). For one spawn the user ordered: --force, which also passes \
-                 the RAM floor.",
+                 .fno/config.toml). {FORCE_TAIL}",
                 self.learned_cap(),
                 self.ceiling
             )
@@ -237,8 +239,7 @@ impl Effective {
         self.override_hint().unwrap_or_else(|| {
             format!(
                 "spawn-gate: the cap is the user's agents.max_live, {}. To raise it: \
-                 {MAX_LIVE_REMEDY}. For one spawn the user ordered: --force, which also passes \
-                 the RAM floor.",
+                 {MAX_LIVE_REMEDY}. {FORCE_TAIL}",
                 self.ceiling
             )
         })
@@ -274,7 +275,7 @@ impl Effective {
 pub fn native_remedy(remedy: &str, receipt: Option<&Value>) -> String {
     match receipt.is_some_and(|r| r.get("ceiling").is_some()) {
         true => format!(
-            "{remedy}. For one launch the user ordered: fno agents spawn NAME PAYLOAD --force"
+            "{remedy}. For one launch the user ordered: fno agents spawn NAME --force -- <native launch line>"
         ),
         false => remedy.to_string(),
     }
@@ -967,7 +968,7 @@ mod tests {
         plain.annotate(&mut receipt);
         let native = native_remedy(FLOOR_REMEDY, Some(&receipt));
         assert!(
-            native.ends_with("fno agents spawn NAME PAYLOAD --force"),
+            native.ends_with("fno agents spawn NAME --force -- <native launch line>"),
             "{native}"
         );
         assert_eq!(native_remedy(FLOOR_REMEDY, None), FLOOR_REMEDY);
