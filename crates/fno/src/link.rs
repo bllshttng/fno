@@ -5,9 +5,9 @@
 //! everything else is plain text, which is the common case (a printed PR URL
 //! from `gh`, a session link from a coding agent). [`find_urls`] covers the
 //! second. Detection is pure and unit-tested; the grid walk lives in
-//! [`crate::vt::Pane::link_at`] and [`open_url`] is the one impure function
-//! here, kept in this file so the scheme allowlist and the call that acts on it
-//! cannot drift apart.
+//! [`crate::vt::Pane::link_at`], and the impure openers live here
+//! ([`open_url`] for a local attach, [`open_url_for_session`] for either) so
+//! the scheme allowlist and the calls that act on it cannot drift apart.
 
 use std::path::{Path, PathBuf};
 
@@ -584,6 +584,105 @@ fn spawn_opener(opener: &str, url: &str) -> Result<std::process::ExitStatus, std
     crate::process_admission::std_status(&mut command)
 }
 
+// ── attach-aware open ───────────────────────────────────────────────────────
+//
+// The opener execs in the client's own process, and over an ssh attach that
+// process runs on the mux host: `open(1)` opened the browser on a screen the
+// user cannot see (reproduced on both paths 2026-10-12 - local `open` exit 0
+// with the tab on this Mac; the same exec under `ssh localhost` put the tab on
+// the host the same way). The remote arm therefore hands the URL to the
+// terminal the user IS looking at, as an OSC 52 clipboard set: the terminal
+// emulator on the user's device stores it, and the paste opens in THEIR
+// browser. OSC 8 was considered and rejected: a hyperlink only annotates
+// visible text, and the client paints the alternate screen, so the span would
+// either scribble on the TUI or be zero cells wide and unclickable. OSC 52 is
+// silent, and this codebase already ships it over attach (the copy fallback).
+
+/// Whether this process's stdout reaches a terminal on another machine: the
+/// attach came through ssh, so a child opener would act on the host. Same key
+/// set as the theme file picker, which refuses the osascript dialog for the
+/// identical reason.
+pub fn is_remote_session() -> bool {
+    is_remote_session_with(|k| std::env::var_os(k))
+}
+
+fn is_remote_session_with(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|k| env(k).is_some())
+}
+
+/// What a session-aware open did, for the status notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// The platform opener exec'd (local attach only).
+    Opened,
+    /// The URL was copied to the attached terminal's clipboard (OSC 52);
+    /// the paste opens it in the user's own browser.
+    CopiedToTerminal,
+}
+
+impl OpenOutcome {
+    /// The status-line sentence for this outcome. Both arms name what
+    /// actually happened: a click that says "opened" when the browser came up
+    /// on another machine reads as a broken button.
+    pub fn notice(self, url: &str) -> String {
+        match self {
+            OpenOutcome::Opened => format!("opened {}", for_notice(url)),
+            OpenOutcome::CopiedToTerminal => {
+                format!("copied {} - paste to open", for_notice(url))
+            }
+        }
+    }
+}
+
+/// The bytes handed to the attached terminal for `url`: an OSC 52 clipboard
+/// set, the same payload the copy fallback emits. Infallible because the only
+/// caller passes an [`is_openable`] URL, capped at [`MAX_URL_LEN`] (4096) -
+/// 13x under the ~55 KB where `osc52_payload` would truncate.
+pub fn terminal_offer_payload(url: &str) -> Vec<u8> {
+    crate::clipboard::osc52_payload(url).0
+}
+
+/// The terminal write behind the remote arm: raw bytes on stdout, flushed.
+/// OSC is consumed by the terminal emulator, never rendered over the TUI -
+/// the same channel the clipboard fallback writes through.
+fn emit_to_terminal(bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes)?;
+    out.flush()
+}
+
+/// Open `url` on the machine the user is on: [`open_url`] for a local
+/// attach, the OSC 52 handoff for an ssh attach. The allowlist gate runs
+/// before the branch, so a refused URL reaches neither the opener nor the
+/// terminal.
+pub fn open_url_for_session(url: &str) -> Result<OpenOutcome, String> {
+    open_url_for_session_with(spawn_opener, emit_to_terminal, is_remote_session(), url)
+}
+
+fn open_url_for_session_with<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    url: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if !is_openable(url) {
+        return Err(format!("refused to open {}", for_notice(url)));
+    }
+    if remote {
+        emit(&terminal_offer_payload(url)).map_err(|e| format!("terminal copy: {e}"))?;
+        return Ok(OpenOutcome::CopiedToTerminal);
+    }
+    run_opener(spawn, url)?;
+    Ok(OpenOutcome::Opened)
+}
+
 // ── open plan (LD3) ─────────────────────────────────────────────────────────
 //
 // An open-plan menu item reaches Obsidian without widening what pane output can
@@ -974,6 +1073,114 @@ mod tests {
         let long = format!("https://a.test/{}", "x".repeat(500));
         assert_eq!(for_notice(&long).chars().count(), 60);
         assert!(for_notice(&long).ends_with('…'));
+    }
+
+    #[test]
+    fn remote_session_gate_reads_only_the_ssh_keys() {
+        // Neither key: local attach, the opener is allowed.
+        assert!(!is_remote_session_with(|_| None));
+        // Either key alone names a remote attach.
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_CONNECTION").then(|| std::ffi::OsString::from("::1 50555 ::1 22"))
+        ));
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_TTY").then(|| std::ffi::OsString::from("/dev/ttys004"))
+        ));
+        // Any other env never trips the gate.
+        assert!(!is_remote_session_with(
+            |k| (k == "TERM_PROGRAM").then(|| std::ffi::OsString::from("Apple_Terminal"))
+        ));
+    }
+
+    #[test]
+    fn terminal_offer_is_the_clipboard_set_for_the_url() {
+        // The offer IS the copy fallback's payload, byte for byte: one
+        // builder, so the two cannot drift.
+        let url = "https://example.com/pr/700";
+        assert_eq!(
+            terminal_offer_payload(url),
+            crate::clipboard::osc52_payload(url).0
+        );
+        // Test decode: the body after `]52;c;` is base64 of the whole URL.
+        let payload = terminal_offer_payload(url);
+        let body = std::str::from_utf8(&payload).expect("osc52 payload is ascii-safe");
+        let b64 = body
+            .trim_start_matches("\x1b]52;c;")
+            .trim_end_matches('\x07');
+        assert_eq!(b64, "aHR0cHM6Ly9leGFtcGxlLmNvbS9wci83MDA=");
+    }
+
+    #[test]
+    fn session_open_routes_by_attach_not_by_url() {
+        // Local: the opener execs, nothing is written to the terminal.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            false,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::Opened));
+        assert!(spawned, "local open must exec the opener");
+        assert!(emitted.is_empty(), "local open must not touch the terminal");
+
+        // Remote: the URL is offered to the terminal, the opener never runs.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            true,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
+        assert!(!spawned, "a remote open must not exec the opener");
+        assert!(
+            emitted.starts_with(b"\x1b]52;c;"),
+            "remote open offers the URL over OSC 52"
+        );
+
+        // A failed terminal write is a visible failure, not silence.
+        let out = open_url_for_session_with(
+            |_, _| Ok(status(true)),
+            |_| Err(std::io::Error::other("blocked")),
+            true,
+            "https://example.com",
+        );
+        assert!(out.unwrap_err().contains("terminal copy"));
+
+        // The allowlist gate outranks the branch: a refused URL reaches
+        // neither the opener nor the terminal on either attach.
+        for remote in [false, true] {
+            let mut acted = false;
+            let out = open_url_for_session_with(
+                |_, _| {
+                    acted = true;
+                    Ok(status(true))
+                },
+                |_| {
+                    acted = true;
+                    Ok(())
+                },
+                remote,
+                "file:///etc/passwd",
+            );
+            assert!(out.is_err());
+            assert!(!acted, "a refused URL acts on no path (remote={remote})");
+        }
     }
 
     // ── open plan (LD3) ──
