@@ -473,12 +473,12 @@ fn graph_renders_a_layered_flowchart() {
     let b2 = view2.org_board.as_mut().unwrap();
     b2.mode = OrgMode::Graph;
     b2.filter = OrgSessions::Current;
-    let graph2 = b2.refresh_graph(120, 24);
+    let graph2 = b2.refresh_graph(280, 24);
     assert_eq!(graph2.boxes.len(), 40, "ten leads, ten nodes, twenty workers");
-    let buf2 = crate::client::org_graph::frame(&graph2, 120, 24, Some("lead:lead0"), &colors);
+    let buf2 = crate::client::org_graph::frame(&graph2, 280, 24, Some("lead:lead0"), &colors);
     let mut painted = 0u32;
     for y in 0..24u16 {
-        for x in 0..120u16 {
+        for x in 0..280u16 {
             let c = buf2[(x, y)].symbol().chars().next().unwrap_or(' ');
             if c == '\u{2514}' {
                 painted += 1;
