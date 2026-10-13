@@ -6,8 +6,9 @@
 
 use super::*;
 use crate::server::mouse_route::MOUSE_WHEEL_LINES;
-// Glob imports skip the parent module's private items; name them by path.
-use super::{empty_core, seen_test_core};
+// This module is `server::tests`'s SIBLING (both are declared in server.rs),
+// so the fixture helpers must be pub(super) and named through `tests`.
+use super::tests::{empty_core, seen_test_core};
 
 fn mouse_mode() -> Modes {
     Modes {

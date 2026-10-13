@@ -8646,7 +8646,7 @@ fn focus_only_push_layout_preserves_pending_pane_frames() {
 /// closes the client's channel, which `push_layout` reads as "gone" and
 /// prunes the client, breaking every later `Command::FocusPane` (no
 /// client view to act on).
-fn seen_test_core() -> (Core, u64, u64, u64, mpsc::Receiver<ServerMsg>) {
+pub(super) fn seen_test_core() -> (Core, u64, u64, u64, mpsc::Receiver<ServerMsg>) {
     // attach() runs restore_squads() -> squad_store::load(), which defaults
     // to the real $HOME/.fno/squads.json; a dev box with a live store then
     // imports its squads and breaks squad/row-count asserts that pass on a

@@ -63,6 +63,11 @@ impl Core {
         };
         match event.kind {
             crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
+                // A second press means the previous gesture's release never
+                // came (dragged off-pane, or dropped client-side on chrome):
+                // that pair is abandoned. Drop it so the new gesture's
+                // release can never consume a stale claim.
+                self.fno_token_claims.remove(&pane);
                 let claimed = token_at(self, event.row, event.col).is_some();
                 if claimed {
                     self.fno_token_claims
@@ -95,19 +100,22 @@ impl Core {
                 // A drag off a claimed press is an app-owned selection whose
                 // press the mux swallowed: replay the press ahead of this
                 // drag so the gesture starts whole, then hand the pair back.
-                if self
-                    .fno_token_claims
-                    .get(&pane)
-                    .is_some_and(|(_, _, c)| *c == client_id)
-                {
-                    self.fno_token_claims.remove(&pane);
-                    let press = crate::proto::MouseEvent {
-                        kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
-                        ..*event
-                    };
-                    let bytes = super::sgr_mouse_bytes(&press);
-                    if let Some(entry) = self.panes.get(&pane) {
-                        let _ = entry.pty.write_input(&bytes);
+                // The replay carries the CLAIMED press's cell, never this
+                // drag event's (a selection must begin where it began).
+                if let Some((row, col, c)) = self.fno_token_claims.remove(&pane) {
+                    if c == client_id {
+                        let press = crate::proto::MouseEvent {
+                            row,
+                            col,
+                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
+                            alt: event.alt,
+                        };
+                        let bytes = super::sgr_mouse_bytes(&press);
+                        if let Some(entry) = self.panes.get(&pane) {
+                            let _ = entry.pty.write_input(&bytes);
+                        }
+                    } else {
+                        self.fno_token_claims.insert(pane, (row, col, c));
                     }
                 }
                 false
@@ -147,6 +155,11 @@ impl Core {
         };
         match event.kind {
             crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
+                // A second press means the previous gesture's release never
+                // came (dragged off-pane, or dropped client-side on chrome):
+                // that pair is abandoned. Drop it so the new gesture's plain
+                // press - which forwarded - keeps its release too.
+                self.link_click_claims.remove(&pane);
                 let claimed = event.alt && link_at(self, event.row, event.col).is_some();
                 if claimed {
                     self.link_click_claims
@@ -178,20 +191,23 @@ impl Core {
                 // A drag off a claimed alt press is an app-owned selection
                 // whose press the mux swallowed: replay it (alt bit included)
                 // ahead of this drag so the gesture starts whole, then hand
-                // the pair back.
-                if self
-                    .link_click_claims
-                    .get(&pane)
-                    .is_some_and(|(_, _, c)| *c == client_id)
-                {
-                    self.link_click_claims.remove(&pane);
-                    let press = crate::proto::MouseEvent {
-                        kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
-                        ..*event
-                    };
-                    let bytes = super::sgr_mouse_bytes(&press);
-                    if let Some(entry) = self.panes.get(&pane) {
-                        let _ = entry.pty.write_input(&bytes);
+                // the pair back. The replay carries the CLAIMED press's
+                // cell, never this drag event's (a selection must begin
+                // where it began).
+                if let Some((row, col, c)) = self.link_click_claims.remove(&pane) {
+                    if c == client_id {
+                        let press = crate::proto::MouseEvent {
+                            row,
+                            col,
+                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
+                            alt: event.alt,
+                        };
+                        let bytes = super::sgr_mouse_bytes(&press);
+                        if let Some(entry) = self.panes.get(&pane) {
+                            let _ = entry.pty.write_input(&bytes);
+                        }
+                    } else {
+                        self.link_click_claims.insert(pane, (row, col, c));
                     }
                 }
                 false
