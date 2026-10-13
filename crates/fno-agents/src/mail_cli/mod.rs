@@ -1,10 +1,12 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
-//! release timer, the `team` broadcast, the outbound sent view, the ack
-//! leaf, and the drain-self leaf. Dispatch only; the verbs live in
-//! [hold], [team], [sent], [ack], and [drain_self].
+//! release timer, the session seed-provenance leaf, the `team` broadcast,
+//! the outbound sent view, the ack leaf, and the drain-self leaf. Dispatch
+//! only; the verbs live in [hold], [seed_provenance], [team], [sent],
+//! [ack], and [drain_self].
 pub mod ack;
 pub mod drain_self;
 pub mod hold;
+pub mod seed_provenance;
 pub mod sent;
 pub mod team;
 
@@ -17,6 +19,7 @@ pub fn run(rest: &[String]) -> i32 {
     match rest[0].as_str() {
         "hold" | "dnd" => hold::run_hold(&rest[1..]),
         "hold-release" => hold::run_hold_release(&rest[1..]),
+        "seed-provenance" => seed_provenance::run(&rest[1..]),
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
         "ack" => ack::run_ack(&rest[1..]),
