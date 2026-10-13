@@ -40,14 +40,7 @@ pub fn run_ack(args: &[String]) -> i32 {
         eprintln!("error: no fno state directory; bus log not found");
         return 2;
     };
-    let mut msgs: Vec<Value> = Vec::new();
-    if let Ok(text) = std::fs::read_to_string(bus.join("messages.jsonl")) {
-        for line in text.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
-                msgs.push(v);
-            }
-        }
-    }
+    let msgs = load_messages(&bus);
 
     // Refusals in cmd_bus_ack order, each against the id's FIRST row.
     let Some(target) = msgs
@@ -116,13 +109,20 @@ pub fn run_ack(args: &[String]) -> i32 {
         })
         .collect();
 
-    if advance_cursor(&bus, &msgs, name, msg_id) {
-        println!("cursor for '{name}' advanced to {msg_id}");
-        for m in &acked {
-            emit_drain_marker(m, name);
+    match advance_cursor(&bus, &msgs, name, msg_id) {
+        Ok(true) => {
+            println!("cursor for '{name}' advanced to {msg_id}");
+            for m in &acked {
+                emit_drain_marker(m, name);
+            }
         }
-    } else {
-        println!("cursor for '{name}' already at or past {msg_id}; unchanged");
+        Ok(false) => println!("cursor for '{name}' already at or past {msg_id}; unchanged"),
+        // The oracle raises out of cmd_bus_ack: traceback, exit 1, no
+        // advance line and no drain receipts. Mirrored as one stderr line.
+        Err(error) => {
+            eprintln!("error: could not write cursor for '{name}': {error}");
+            return 1;
+        }
     }
     0
 }
@@ -141,6 +141,43 @@ fn bus_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(root).join(".bus"));
     }
     crate::agents_config::state_dir(Path::new(".")).map(|dir| dir.join("bus"))
+}
+
+/// The retained bus rows, oldest first: `bus.log.iter_messages` over
+/// `_segment_paths_oldest_first`. Rotated `messages.jsonl.<N>` segments sort
+/// by descending N and the live log goes last; reading only the live file
+/// would refuse a target retained in a rotated segment and silently skip
+/// rotated rows when collecting the acked set. Malformed lines are skipped
+/// (the oracle warns; this reader stays silent).
+fn load_messages(bus: &Path) -> Vec<Value> {
+    let mut segments: Vec<(u64, PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(bus) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(suffix) = name.to_string_lossy().strip_prefix("messages.jsonl.") else {
+                continue;
+            };
+            if let Ok(n) = suffix.parse::<u64>() {
+                segments.push((n, entry.path()));
+            }
+        }
+    }
+    segments.sort_by(|a, b| b.0.cmp(&a.0));
+    let live = bus.join("messages.jsonl");
+    if live.exists() {
+        segments.push((u64::MAX, live));
+    }
+    let mut msgs: Vec<Value> = Vec::new();
+    for (_, path) in segments {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            for line in text.lines() {
+                if let Ok(v) = serde_json::from_str::<Value>(line) {
+                    msgs.push(v);
+                }
+            }
+        }
+    }
+    msgs
 }
 
 /// The `ack_refusal.refusal_line` order: landed, withdraw, typed, else the
@@ -177,8 +214,10 @@ fn refusal_line(m: &Value, msg_id: &str) -> String {
 /// `bus.cursor.advance_cursor`, verbatim: forward-only on FIRST-occurrence
 /// positions. An absent, corrupt or rotated-out cursor reseeds; a target the
 /// log no longer holds never moves it; so does a target at or before the
-/// cursor. True means the cursor moved and the acked receipts may fire.
-fn advance_cursor(bus: &Path, msgs: &[Value], name: &str, msg_id: &str) -> bool {
+/// cursor. `Ok(true)` means the cursor moved and the acked receipts may fire;
+/// the write error propagates, so a failed persistence never reads as an
+/// advance.
+fn advance_cursor(bus: &Path, msgs: &[Value], name: &str, msg_id: &str) -> std::io::Result<bool> {
     let first_pos = |id: &str| {
         msgs.iter()
             .position(|m| m.get("id").and_then(Value::as_str) == Some(id))
@@ -192,39 +231,43 @@ fn advance_cursor(bus: &Path, msgs: &[Value], name: &str, msg_id: &str) -> bool 
                 .map(str::to_string)
         });
     let Some(current) = current else {
-        write_cursor(bus, name, msg_id);
-        return true;
+        write_cursor(bus, name, msg_id)?;
+        return Ok(true);
     };
     if current == msg_id {
-        return false;
+        return Ok(false);
     }
     let Some(cur_pos) = first_pos(&current) else {
-        write_cursor(bus, name, msg_id);
-        return true;
+        write_cursor(bus, name, msg_id)?;
+        return Ok(true);
     };
     let Some(new_pos) = first_pos(msg_id) else {
-        return false;
+        return Ok(false);
     };
     if new_pos <= cur_pos {
-        return false;
+        return Ok(false);
     }
-    write_cursor(bus, name, msg_id);
-    true
+    write_cursor(bus, name, msg_id)?;
+    Ok(true)
 }
 
 /// The main-cursor write (the `advance_main_cursor` idiom, not
 /// `mail_control_drain::write_cursor`, which is the control lane):
-/// `{last_seen_id, ts}`, trailing newline, tmp-then-rename.
-fn write_cursor(bus: &Path, name: &str, msg_id: &str) {
+/// `{last_seen_id, ts}`, trailing newline, tmp-then-rename. The error
+/// propagates (`bus.cursor.write_cursor` unlinks the tmp and reraises): a
+/// cursor that did not persist must not read as an advance.
+fn write_cursor(bus: &Path, name: &str, msg_id: &str) -> std::io::Result<()> {
     let path = bus.join("cursors").join(format!("{name}.json"));
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
     let payload = json!({"last_seen_id": msg_id, "ts": crate::graph_store::now_isoformat()});
     let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, format!("{payload}\n")).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    std::fs::write(&tmp, format!("{payload}\n"))
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
 }
 
 /// Best-effort `agent_mail_drained` receipt, one per acked id, in the
@@ -271,15 +314,125 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
         emit_drain_marker(&json!({"id": "m-1", "from": "lead"}), "a1b2c3d4");
-        let journal = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
-        let rows: Vec<Value> = journal
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+        // The receipt commits to the store beside the journal path (the
+        // cutover stopped journal appends), so read it back through
+        // query_events, never the file's bytes.
+        let journal = dir.path().join("events.jsonl");
+        let rows = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["agent_mail_drained"]),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1, "one ack, one receipt row");
-        assert_eq!(rows[0]["kind"], "agent_mail_drained");
-        assert_eq!(rows[0]["data"]["reason"], "acked");
-        assert_eq!(rows[0]["data"]["msg_id"], "m-1");
-        assert_eq!(rows[0]["data"]["recipient"], "a1b2c3d4");
+        assert_eq!(rows[0].r#type, "agent_mail_drained");
+        let row: Value = serde_json::from_str(&rows[0].line).unwrap();
+        assert_eq!(row["data"]["reason"], "acked");
+        assert_eq!(row["data"]["msg_id"], "m-1");
+        assert_eq!(row["data"]["recipient"], "a1b2c3d4");
+    }
+
+    fn send_row(id: &str) -> String {
+        format!(
+            "{{\"id\":\"{id}\",\"thread\":\"t\",\"from\":\"lead\",\"to\":\"a1b2c3d4\",\
+             \"kind\":\"send\",\"body\":\"\",\"ts\":\"2026-10-12T09:00:00Z\"}}\n"
+        )
+    }
+
+    fn vec_args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The ack scans all retained segments, oldest first: a live ack drains
+    /// the rotated unread ahead of it (`.2` before `.1`, live last), and a
+    /// target retained only in a rotated segment is a known id. A
+    /// live-file-only reader refuses that target and under-reports the
+    /// acked set; an ascending sort under-reports it too.
+    #[test]
+    fn ack_spans_rotated_segments_oldest_first() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
+        let bus = dir.path().join("bus");
+        let _bus = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", bus.to_str().unwrap());
+        std::fs::create_dir_all(&bus).unwrap();
+        std::fs::write(bus.join("messages.jsonl.2"), send_row("m-rot-a")).unwrap();
+        std::fs::write(bus.join("messages.jsonl.1"), send_row("m-rot-b")).unwrap();
+        std::fs::write(bus.join("messages.jsonl"), send_row("m-live")).unwrap();
+
+        assert_eq!(run_ack(&vec_args(&["m-live", "--name", "a1b2c3d4"])), 0);
+        let journal = dir.path().join("events.jsonl");
+        let rows = crate::event_store::query_events(
+            &journal,
+            &crate::event_store::EventQuery::of_types(&["agent_mail_drained"]),
+        )
+        .unwrap();
+        let drained: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                let row: Value = serde_json::from_str(&r.line).unwrap();
+                row["data"]["msg_id"].as_str().unwrap().to_string()
+            })
+            .collect();
+        assert_eq!(
+            drained,
+            vec!["m-rot-a", "m-rot-b", "m-live"],
+            "acked set spans segments, oldest first"
+        );
+        let cursor = std::fs::read_to_string(bus.join("cursors").join("a1b2c3d4.json")).unwrap();
+        assert!(cursor.contains("m-live"), "cursor lands on the live id");
+    }
+
+    #[test]
+    fn rotated_retained_target_is_known() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
+        let bus = dir.path().join("bus");
+        let _bus = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", bus.to_str().unwrap());
+        std::fs::create_dir_all(&bus).unwrap();
+        std::fs::write(bus.join("messages.jsonl.1"), send_row("m-old")).unwrap();
+
+        assert_eq!(
+            run_ack(&vec_args(&["m-old", "--name", "a1b2c3d4"])),
+            0,
+            "a rotated retained target acks, not refuses"
+        );
+    }
+
+    /// A failed cursor write fails the ack: exit 1, no advance line, no
+    /// drain receipts. Persistence precedes receipts, as the oracle's
+    /// reraise out of `cmd_bus_ack`.
+    #[test]
+    fn cursor_write_failure_fails_before_receipts() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
+        let bus = dir.path().join("bus");
+        let _bus = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", bus.to_str().unwrap());
+        std::fs::create_dir_all(bus.join("cursors")).unwrap();
+        std::fs::write(bus.join("messages.jsonl"), send_row("m-1")).unwrap();
+        // A directory where the cursor file belongs: the tmp write
+        // succeeds, the rename over it fails.
+        std::fs::create_dir_all(bus.join("cursors").join("a1b2c3d4.json")).unwrap();
+
+        assert_eq!(
+            run_ack(&vec_args(&["m-1", "--name", "a1b2c3d4"])),
+            1,
+            "write failure exits 1"
+        );
+        assert!(
+            !dir.path().join("events.db").exists(),
+            "no drain receipts on a failed write"
+        );
+        assert!(
+            !bus.join("cursors").join("a1b2c3d4.json.tmp").exists(),
+            "the tmp file is cleaned up"
+        );
     }
 }
