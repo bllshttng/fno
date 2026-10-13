@@ -38,6 +38,11 @@ SANDBOX = {
 }
 
 
+class _Capture(Exception):
+    def __init__(self, argv):
+        self.argv = argv
+
+
 def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch):
     """A sandbox-only spawn still owes the auth floor: it is the one channel
     that survives the daemon fork, sandbox or not. No overlay and no policy
