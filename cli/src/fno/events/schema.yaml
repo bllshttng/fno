@@ -8388,6 +8388,11 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: spawn_defaults_applied
+    description: "Spawn compose: the defaults one spawn resolved, by axis and rung, with the config fingerprint."
+    sources: [agents]
+    data:
+      required: [name, fingerprint]
   - name: gate_written
     description: "A target gate wrote its event: the legacy gates writer's counterpart of phase_init."
     sources: [target, hook, legacy]
