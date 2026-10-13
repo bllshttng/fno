@@ -199,6 +199,15 @@ pub struct MachineSample {
     pub swap_used_gb: Option<f64>,
     pub swap_total_gb: Option<f64>,
     pub total_mem_gb: Option<f64>,
+    /// The spawn gate's memory readings, stamped by the watch tick so its
+    /// runaway leg evaluates the gate's rule: available RAM, swap allocation
+    /// percent, and the swap-in rate (sampled only at or over the cap).
+    pub mem_avail_gb: Option<f64>,
+    pub swap_used_pct: Option<f64>,
+    pub swapin_bps: Option<f64>,
+    /// Config echoes: `agents.min_free_gb` and `agents.max_swap_pct`.
+    pub mem_floor_gb: Option<f64>,
+    pub swap_cap_pct: Option<f64>,
     pub live_rows: Option<u64>,
     pub leads: Option<u64>,
     pub workers: Option<u64>,
@@ -278,6 +287,11 @@ pub fn read(
         swap_used_gb: None,
         swap_total_gb: None,
         total_mem_gb: None,
+        mem_avail_gb: None,
+        swap_used_pct: None,
+        swapin_bps: None,
+        mem_floor_gb: None,
+        swap_cap_pct: None,
         live_rows: None,
         leads: None,
         workers: None,

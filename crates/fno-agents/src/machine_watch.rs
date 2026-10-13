@@ -27,7 +27,6 @@ pub const HOT_ESCALATION_SECS: u64 = 1800;
 const BASELINE_WINDOW_TICKS: usize = 12;
 const BASELINE_MIN_TICKS: usize = 4;
 const PROCESS_RUNAWAY_FACTOR: f64 = 2.0;
-const SWAP_RUNAWAY_FRACTION: f64 = 0.5;
 /// Notice titles. The arm's runaway leg keys off the runaway one.
 pub const RUNAWAY_TITLE: &str = "Machine overloaded";
 pub const HOT_TITLE: &str = "Machine busy";
@@ -92,21 +91,26 @@ pub fn decide(
     load_band: f64,
     baseline: Option<u64>,
 ) -> (String, String) {
-    let swap_runaway = sample
-        .swap_used_gb
-        .zip(sample.swap_total_gb)
-        .is_some_and(|(used, total)| total > 0.0 && used / total > SWAP_RUNAWAY_FRACTION);
+    // Memory runaway is the spawn gate's rule, not a second one: macOS sizes
+    // the swap file to its contents, so an idle box can read a near-full swap
+    // ratio with most of its RAM free (2026-10-13: 128 GB, 91 percent free,
+    // swap 9.2 of 10.2 GB held the brake all day). ram_floor_term trips on
+    // available RAM under the min_free_gb floor, or on an over-cap allocation
+    // WHILE the machine swaps in at 1 MiB/s or more.
+    let mem_runaway = crate::spawn_gate::ram_floor_term(
+        sample.mem_avail_gb,
+        sample.mem_floor_gb.unwrap_or(0.0),
+        sample.swap_used_pct,
+        sample.swapin_bps,
+        sample.swap_cap_pct.unwrap_or(0.0),
+    );
     let process_runaway = sample
         .processes
         .zip(baseline.filter(|base| *base > 0))
         .is_some_and(|(processes, base)| processes as f64 > PROCESS_RUNAWAY_FACTOR * base as f64);
-    if swap_runaway || process_runaway {
-        let reason = if swap_runaway {
-            format!(
-                "Machine out of memory: {} of {} GB of swap in use (fine is under half)",
-                opt(sample.swap_used_gb),
-                opt(sample.swap_total_gb)
-            )
+    if mem_runaway.is_some() || process_runaway {
+        let reason = if let Some((_, term)) = mem_runaway {
+            format!("Machine out of memory: {term}")
         } else {
             format!(
                 "Machine overloaded: {} processes running, more than twice the usual {} over the last hour",
@@ -794,6 +798,18 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         sample.runaway_load_band_per_core = Some(thresholds.load_per_core);
         sample.runaway_load_hold_seconds = Some(thresholds.load_hold.as_secs());
         sample.hot_escalation_seconds = Some(thresholds.hot_escalation.as_secs());
+        // The watch evaluates the same memory rule the spawn gate refuses on:
+        // one reading, from the gate's own reader, so the brake and the gate
+        // cannot disagree. read_memory samples the swap-in rate (a 1 s window)
+        // only when swap sits at or above the cap.
+        let mem_floor_gb = crate::agents_config::min_free_gb(&cwd);
+        let swap_cap_pct = crate::agents_config::max_swap_pct(&cwd);
+        let mem = crate::spawn_gate::read_memory(mem_floor_gb, swap_cap_pct);
+        sample.mem_avail_gb = mem.avail;
+        sample.swap_used_pct = mem.swap;
+        sample.swapin_bps = mem.swapin_bps;
+        sample.mem_floor_gb = Some(mem_floor_gb);
+        sample.swap_cap_pct = Some(swap_cap_pct);
         match crate::session_cost::price(&home, &sample.procs) {
             Ok(value) => {
                 sample.sessions = value.get("sessions").cloned();
@@ -1298,13 +1314,52 @@ mod tests {
     }
 
     #[test]
-    fn the_runaway_arms_fire_on_swap_and_on_an_armed_process_baseline() {
-        let mut s = sample(None, None);
-        s.swap_used_gb = Some(50.0);
-        s.swap_total_gb = Some(95.0);
+    fn the_runaway_arms_fire_on_the_gate_memory_rule_and_an_armed_process_baseline() {
+        // The macOS idle shape that held the brake all day: 9.2 of 10.2 GB of
+        // swap is 90 percent allocated, but nothing pages in and RAM is free.
+        // The old ratio rule tripped here; the gate's rule must not.
+        let mut s = sample(Some(0.4), Some(1.0));
+        s.mem_avail_gb = Some(116.0);
+        s.mem_floor_gb = Some(4.0);
+        s.swap_used_pct = Some(90.2);
+        s.swap_cap_pct = Some(90.0);
         let (verdict, reason) = decide(&s, 0.9, 10.0, None);
-        assert_eq!(verdict, "runaway", "swap needs no history");
-        assert!(reason.contains("swap"), "reason names the signal: {reason}");
+        assert_eq!(
+            verdict, "calm",
+            "an over-cap allocation with no swap-in and free RAM above the floor holds nothing: {reason}"
+        );
+        // Available RAM under the floor trips with no history at all.
+        let mut s = sample(Some(0.4), Some(1.0));
+        s.mem_avail_gb = Some(1.0);
+        s.mem_floor_gb = Some(4.0);
+        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
+        assert_eq!(verdict, "runaway", "the floor needs no history");
+        assert!(
+            reason.contains(
+                "Machine out of memory: available RAM 1.0GB is below the min_free_gb floor 4.0GB"
+            ),
+            "the alert states the reading that fired: {reason}"
+        );
+        // An over-cap allocation trips only while the machine swaps in.
+        let mut s = sample(Some(0.4), Some(1.0));
+        s.swap_used_pct = Some(94.7);
+        s.swap_cap_pct = Some(90.0);
+        s.swapin_bps = Some(crate::spawn_gate::SWAPIN_REFUSE_BYTES_PER_S);
+        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
+        assert_eq!(
+            verdict, "runaway",
+            "an over-cap allocation that pages in trips"
+        );
+        assert!(
+            reason.contains("swap 94.7% used is at or above the max_swap_pct cap 90%"),
+            "the alert states the reading that fired: {reason}"
+        );
+        s.swapin_bps = Some(crate::spawn_gate::SWAPIN_REFUSE_BYTES_PER_S - 1.0);
+        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
+        assert_eq!(
+            verdict, "calm",
+            "an over-cap allocation with swap-in under the refusal line holds nothing: {reason}"
+        );
         let mut s = sample(None, None);
         s.processes = Some(2500);
         let (verdict, _) = decide(&s, 0.9, 10.0, None);
@@ -1327,8 +1382,8 @@ mod tests {
     fn a_runaway_ticks_page_immediately_and_the_brake_names_its_group() {
         let mut state = MachineWatchState::default();
         let mut s = sample(None, None);
-        s.swap_used_gb = Some(50.0);
-        s.swap_total_gb = Some(95.0);
+        s.mem_avail_gb = Some(1.0);
+        s.mem_floor_gb = Some(4.0);
         s.processes = Some(9000);
         s.top_names = Some(serde_json::json!([
             {"name": "git", "count": 8000, "ppid": 42}
