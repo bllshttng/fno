@@ -169,9 +169,7 @@ fn prefer_provider_family(
                 .and_then(Value::as_str);
             // Python's `if reach and reach[0] == harness`: a missing row
             // skips, it never matches an absent harness.
-            if reach.is_some_and(|h| Some(h) == harness)
-                && families.iter().any(|f| name.starts_with(f.as_str()))
-            {
+            if reach.is_some_and(|h| h == harness) && families.iter().any(|f| name.starts_with(f)) {
                 chain.push(json!(format!(
                     "provider family({route_provider}) static {cand_band} -> {name}"
                 )));
@@ -203,18 +201,27 @@ fn level_for_diff(changed_files: u64, diff_lines: u64) -> &'static str {
 /// One git read with a hard 15s deadline. Stdout goes to a temp file, not a
 /// pipe: a numstat larger than the pipe buffer would deadlock a
 /// read-after-exit drain (the Python leg's communicate() drained
-/// concurrently, so parity requires the file). Any failure - spawn, wait,
-/// nonzero exit, timeout, undecodable output, empty output - is None.
+/// concurrently, so parity requires the file). The capture path is created
+/// exclusively (create_new), never following a pre-planted or symlinked
+/// temp name. Any failure - spawn, wait, nonzero exit, timeout, undecodable
+/// output, empty output - is None.
 fn git_out(cwd: &Path, git_args: &[&str]) -> Option<String> {
-    use std::fs::File;
+    use std::fs::{File, OpenOptions};
     use std::io::Read as _;
     static NEXT_STDOUT: AtomicUsize = AtomicUsize::new(0);
+    // create_new refuses a symlink (or any existing file) at the final
+    // component, which a plain File::create would follow; on a collision
+    // the read degrades to None, like any other git failure.
     let stdout_path = std::env::temp_dir().join(format!(
         "fno-review-level-gitout-{}-{}",
         std::process::id(),
         NEXT_STDOUT.fetch_add(1, Ordering::Relaxed)
     ));
-    let out_file = File::create(&stdout_path).ok()?;
+    let out_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stdout_path)
+        .ok()?;
     let mut child = Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -270,11 +277,8 @@ fn git_out(cwd: &Path, git_args: &[&str]) -> Option<String> {
 fn diff_review_level(project_root: &Path) -> Option<&'static str> {
     let mut candidate_name: Option<&str> = None;
     for candidate in ["origin/main", "origin/master"] {
-        let probe = [
-            "rev-parse",
-            "--verify",
-            format!("{candidate}^{{commit}}").as_str(),
-        ];
+        let probe_ref = format!("{candidate}^{{commit}}");
+        let probe = ["rev-parse", "--verify", probe_ref.as_str()];
         if git_out(project_root, &probe).is_some() {
             candidate_name = Some(candidate);
             break;
