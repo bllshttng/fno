@@ -16,7 +16,7 @@ use std::process::Command;
 /// line after the stream.
 pub fn launch_kind(payload: &Value) -> Result<Value, String> {
     let code = exec_lane(payload)?;
-    Ok(json!({ "exit": code }))
+    Ok(serde_json::json!({ "exit": code }))
 }
 
 fn str_field(payload: &Value, key: &str) -> String {
