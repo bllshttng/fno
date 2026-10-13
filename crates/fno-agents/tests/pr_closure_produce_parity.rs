@@ -366,12 +366,15 @@ fn produce_verbs_match_the_python_oracle() {
 }
 
 // -------------------------------------------------------------------------
-// Bind stamping is silent on stderr. The differential loop cannot pin
-// silence: a single-stream golden never compares the stderr side at all.
+// Bind stamping needs ambient harness identity; the hermetic child has
+// none, so the stamp skips with a named stderr note. The differential
+// loop cannot pin that side (a single-stream golden never compares the
+// stderr side at all), so the exact note bytes are pinned here: any
+// other stderr line still fails.
 // -------------------------------------------------------------------------
 
 #[test]
-fn bind_stamp_prints_nothing_on_stderr() {
+fn bind_stamp_stderr_is_pinned() {
     let root = tempfile::tempdir().expect("fixture root");
     let home = root.path().join("agents-home");
     std::fs::create_dir_all(&home).unwrap();
@@ -406,10 +409,10 @@ fn bind_stamp_prints_nothing_on_stderr() {
         PathPlan::Ambient,
     );
     assert_eq!(got.exit, Some(0));
-    assert!(
-        got.streams[1].is_empty(),
-        "bind stamping must stay silent on stderr: {:?}",
-        got.streams[1]
+    assert_eq!(
+        got.streams[1],
+        "update: no ambient identity to stamp ship provenance for x-aaaa \
+         (missing harness); run the link inside a session. Skipped.\n"
     );
     assert!(
         got.streams[0].contains("\"outcome\":\"bound\""),
