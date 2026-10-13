@@ -21,6 +21,12 @@ from fno.cli import app
 from fno.paths_testing import use_tmpdir
 from tests.fixtures.graph_seed import seed_graph
 
+# The drain-self tests exec the bundled fno-agents binary through the real
+# forward leaf, and the smoke shards delete that build on purpose; the
+# dev-build suite (tests/test-dev-build-suites.sh) is the one pytest leg
+# that runs them with it present.
+requires_rust = pytest.mark.dev_build
+
 
 @pytest.fixture
 def runner():
@@ -484,6 +490,7 @@ def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox)
     assert [m.id for m in scan_unread("web")] == [durable.thread_id]
 
 
+@requires_rust
 def test_named_agent_heads_up_resolves_to_canonical_drain_handle(
     runner, mailbox, monkeypatch
 ):
@@ -708,6 +715,7 @@ def _seed_bus_message(*, to: str, from_: str, body: str):
     )
 
 
+@requires_rust
 def test_drain_self_reads_own_handle_and_acks(runner, mailbox, monkeypatch):
     # AC1-EDGE: the bare address drains exactly once and acks under that key.
     monkeypatch.setenv("CODEX_THREAD_ID", "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4")
@@ -724,6 +732,7 @@ def test_drain_self_reads_own_handle_and_acks(runner, mailbox, monkeypatch):
     assert json.loads(again.stdout.strip().splitlines()[-1]) == []
 
 
+@requires_rust
 def test_drain_self_human_render_surfaces_id_and_reply_hint(runner, mailbox, monkeypatch):
     # The receive-path render must show each message's id (what `reply --to`
     # correlates against) and the how-to, so a draining agent can answer.
@@ -744,6 +753,7 @@ def test_drain_self_human_render_surfaces_id_and_reply_hint(runner, mailbox, mon
 CODEX_SID = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
 
 
+@requires_rust
 def test_legacy_addressed_mail_is_not_drained(runner, mailbox, monkeypatch):
     """A retired `<harness>-<short8>` envelope is a dead letter `fno doctor`
     reports, never drained. Bare canonical and legacy_suffix addresses ARE
@@ -793,6 +803,7 @@ def test_send_to_legacy_form_refuses_and_names_the_bare_id(runner, mailbox, monk
     assert suggestions and suggestions[0] == "9a063cd3"
 
 
+@requires_rust
 def test_drain_self_no_harness_env_is_noop(runner, mailbox, monkeypatch):
     for var in ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID",
                 "GEMINI_SESSION_ID"):
@@ -800,6 +811,49 @@ def test_drain_self_no_harness_env_is_noop(runner, mailbox, monkeypatch):
     res = runner.invoke(app, ["agents", "mail", "drain-self"])
     assert res.exit_code == 0
     assert res.stdout.strip() == ""
+
+
+def test_drain_self_without_the_binary_refuses_with_a_reinstall_hint(
+    runner, mailbox, monkeypatch
+):
+    # The forward leaf is the only Python left for hold/hold-release/drain-self,
+    # so its no-binary refusal is the operator surface when the wheel's binary
+    # is missing. That path is unreachable in the dev-build leg (the binary
+    # exists there) and the marked tests above skip everywhere else, so this
+    # seam test is the one owner of the 127 contract.
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+    res = runner.invoke(app, ["agents", "mail", "drain-self"])
+    assert res.exit_code == 127
+    streams = res.stdout + (res.stderr or "")
+    assert "fno-agents binary was not found" in streams
+    assert "reinstall fno" in streams
+    assert "FNO_AGENTS_BIN" in streams
+
+
+def test_drain_self_forward_execs_the_binary_with_the_mail_group_argv(
+    runner, mailbox, tmp_path, monkeypatch
+):
+    # The leaf's transport shape: exec [binary, "mail", *argv] captured, echo
+    # both streams back through typer, propagate the child's exit code. A fake
+    # script stands in for the binary so argv order and returncode survive the
+    # round trip without one.
+    fake = tmp_path / "fno-agents"
+    fake.write_text(
+        '#!/bin/sh\n'
+        'printf \'argv: %s\\n\' "$@"\n'
+        'echo "drain-stdout-line"\n'
+        'echo "drain-stderr-line" >&2\n'
+        'exit 3\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: str(fake))
+    res = runner.invoke(app, ["agents", "mail", "drain-self"])
+    streams = res.stdout + (res.stderr or "")
+    assert "argv: mail drain-self" in streams
+    assert "drain-stdout-line" in streams
+    assert "drain-stderr-line" in streams
+    assert res.exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +894,7 @@ def _isolate_codex_discovery(monkeypatch, tmp_path, *, session_id):
     )
 
 
+@requires_rust
 def test_us7a_send_to_disk_discovered_codex_round_trips(runner, mailbox, monkeypatch, tmp_path):
     sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4"
     _isolate_codex_discovery(monkeypatch, tmp_path, session_id=sid)
@@ -865,6 +920,7 @@ def test_us7a_send_to_disk_discovered_codex_round_trips(runner, mailbox, monkeyp
     assert "ack from K" in payload[0]["body"]  # inside the <fno_mail> wrap
 
 
+@requires_rust
 def test_us8_codex_live_inject_hosted_short_circuits_durable(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1008,6 +1064,7 @@ def _stub_pane_rung(
     return calls
 
 
+@requires_rust
 def test_us7b_mux_pane_rung_delivers_live_when_socket_inject_misses(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1038,6 +1095,7 @@ def test_us7b_mux_pane_rung_delivers_live_when_socket_inject_misses(
     assert json.loads(drained.stdout.strip().splitlines()[-1]) == []
 
 
+@requires_rust
 def test_us7b_mux_pane_send_failure_falls_closed_to_durable(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1104,6 +1162,7 @@ def test_us7b_working_socket_inject_preempts_pane_rung(
     assert calls == []
 
 
+@requires_rust
 @pytest.mark.parametrize("status", ["exited", "orphaned", "idle", "permanent_dead"])
 def test_us7b_non_live_entry_never_pane_sends(
     runner, mailbox, monkeypatch, tmp_path, status
@@ -1134,6 +1193,7 @@ def test_us7b_non_live_entry_never_pane_sends(
     assert payload and "ping" in payload[0]["body"]
 
 
+@requires_rust
 def test_us7b_rostered_but_paneless_entry_falls_to_durable(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1220,6 +1280,7 @@ def _isolate_claude_roster(monkeypatch, tmp_path, *, session_id):
     )
 
 
+@requires_rust
 def test_us3_rostered_claude_inject_miss_falls_to_drainable_floor(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1244,6 +1305,7 @@ def test_us3_rostered_claude_inject_miss_falls_to_drainable_floor(
     assert "hi bg worker" in payload[0]["body"]
 
 
+@requires_rust
 def test_us3_rostered_claude_hosted_short_circuits_durable(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1265,6 +1327,7 @@ def test_us3_rostered_claude_hosted_short_circuits_durable(
     assert payload == []
 
 
+@requires_rust
 def test_ac3_hp_envelope_carries_real_from_and_the_model_rides_the_bus(
     runner, mailbox, monkeypatch, tmp_path
 ):
@@ -1319,6 +1382,7 @@ def test_ac3_hp_envelope_carries_real_from_and_the_model_rides_the_bus(
 # symlinked worktree where a live worker session has exported them.
 # ---------------------------------------------------------------------------
 
+@requires_rust
 def test_mailbox_fixture_neutralizes_ambient_bus_dir(runner, monkeypatch, tmp_path):
     from fno.paths import bus_dir
 
@@ -1393,6 +1457,7 @@ def test_resolved_explicit_name_cannot_be_shadowed_by_ambient_self_handle(monkey
     assert cli._self_recipient("55556666", resolved_session_id=other) is None
 
 
+@requires_rust
 @pytest.mark.parametrize("token", ["019fb417-1111-7222-8333-444455556666", "019fb417"])
 def test_full_and_legacy_ambient_self_queue_to_canonical_without_inject(
     runner, mailbox, monkeypatch, token
@@ -1410,6 +1475,7 @@ def test_full_and_legacy_ambient_self_queue_to_canonical_without_inject(
     assert payload and payload[0]["to"] == "019fb417"
 
 
+@requires_rust
 def test_unreadable_store_full_self_id_still_queues_to_canonical(
     runner, mailbox, monkeypatch
 ):
@@ -1438,6 +1504,7 @@ def test_unreadable_store_full_self_id_still_queues_to_canonical(
     assert payload and payload[0]["to"] == "019fb417"
 
 
+@requires_rust
 def test_live_discovered_ambient_self_queues_canonical_without_inject_or_mux(
     runner, mailbox, monkeypatch
 ):
