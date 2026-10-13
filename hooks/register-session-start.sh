@@ -36,6 +36,7 @@ export PATH
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${GEMINI_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLI_DIR="$(cd "$HOOK_DIR/.." && pwd)/cli"
 
 # The report RPC reaches a daemon socket that can stall; bounded with the
 # shared wall-clock helper rather than the harness's hook timeout. Sourcing
