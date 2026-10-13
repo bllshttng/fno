@@ -1,5 +1,6 @@
 //! parity-stage: characterization
-//! parity-oracle: fno.mail.cli.cmd_unread
+//! parity-oracle: fno.mail.cli.cmd_unread (the deleted Python unread body,
+//! goldens captured from the front verb before the forward swap)
 //!
 //! Characterization harness for the `mail unread` port. The goldens were
 //! captured in-process from the Python leaf (via `uv run python`, redirected
