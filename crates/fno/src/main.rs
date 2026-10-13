@@ -20,7 +20,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
@@ -257,7 +257,14 @@ fn exit_mux(code: i32) -> ! {
 /// child's exit code returned. A missing binary is a refusal, never a silent
 /// empty read.
 fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
-    let mut cmd = std::process::Command::new(fno::digest_overlay::fno_agents_bin());
+    fno_agents_exec_bin(label, action, rest, &fno::digest_overlay::fno_agents_bin())
+}
+
+/// [`fno_agents_exec`] against a caller-resolved binary: the status claim
+/// resolves through the Python auto semantics (a stale `$FNO_AGENTS_BIN`
+/// falls through) instead of the env-honoring paired lookup.
+fn fno_agents_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
+    let mut cmd = std::process::Command::new(bin);
     cmd.args(action);
     cmd.args(rest);
     match cmd.status() {
@@ -678,9 +685,24 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
-        Role::AgentsStatus(rest) => {
-            std::process::exit(fno_agents_exec("fno agents status", &["status"], &rest))
-        }
+        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
+            Some(bin) => std::process::exit(fno_agents_exec_bin(
+                "fno agents status",
+                &["status"],
+                &rest,
+                &bin,
+            )),
+            None => {
+                eprintln!(
+                    "fno agents status: requires the 'fno-agents' binary, which was not found \
+                     (a runnable $FNO_AGENTS_BIN, beside the front door, the dev target, PATH -- \
+                     the default lookup deliberately skips a stale or non-executable override). \
+                     Get it via `pip install fno` (bundled), `cargo install fno-agents`, or \
+                     `cargo build --release -p fno-agents` plus `export FNO_AGENTS_BIN=<path>`."
+                );
+                std::process::exit(127);
+            }
+        },
         Role::DoctorBuilds(rest) => std::process::exit(fno_agents_exec(
             "fno doctor builds",
             &["test-run", "builds"],
