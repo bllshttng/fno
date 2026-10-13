@@ -118,6 +118,11 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if refusals.is_empty() {
+        if let Some(reason) = gate_native_launch(&payload, &cwd) {
+            refusals.push(reason);
+        }
+    }
+    if refusals.is_empty() {
         record_launch(&payload, &cwd);
         super::emit_allow()
     } else {
@@ -125,6 +130,81 @@ pub fn run(_args: &[String]) -> i32 {
     }
 }
 
+/// Decision D1: a native launch line an agent types passes the same spawn
+/// gate a spawn passes, before its launch record is written. A person typing
+/// in a plain terminal runs no hook, so a human launch is never gated. The
+/// hook holds nothing across the launch: the verdict is taken and the keys
+/// released in the same call. A gate that cannot answer is not a refusal -
+/// the hook is foreground-bounded and fails open, never wedging the Bash
+/// call on a daemon that is down.
+fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
+    let Some(cmd) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return None;
+    };
+    if !crate::launch_record::may_launch(cmd) {
+        return None;
+    }
+    // `fno agents spawn` runs the gate itself; gating it here too would
+    // double-count the slot and double-queue the lane.
+    if cmd.contains("agents spawn") {
+        return None;
+    }
+    let launches = crate::launch_record::parse_command(cmd, &cwd.to_string_lossy());
+    if launches.is_empty() {
+        return None;
+    }
+    let home = crate::paths::AgentsHome::from_env();
+    let caller_session = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    for launch in launches {
+        let input = crate::spawn_gate::GateInput {
+            name: launch.name.clone().unwrap_or_default(),
+            substrate: crate::launch_record::native_substrate_word(&launch.harness).into(),
+            flags: crate::spawn_gate::GateFlags {
+                force: false,
+                no_wait: true,
+            },
+            route_provider: None,
+            node: launch.node.clone(),
+            account: None,
+            caller_session: caller_session.clone(),
+            succession_scope: None,
+            holder_pid: Some(std::process::id()),
+            seed: None,
+            session_phase: None,
+        };
+        let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        match crate::spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
+            Ok(mut guard) => guard.release(),
+            Err(refusal) => {
+                if refusal.exit_code == crate::spawn_gate::EXIT_GATE_UNAVAILABLE {
+                    eprintln!("pretooluse-bash: spawn gate unavailable; launch allowed");
+                    continue;
+                }
+                let receipt = refusal.receipt.as_ref();
+                let reason = receipt
+                    .and_then(|r| r.get("reason"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let remedy = receipt
+                    .and_then(|r| r.get("remedy"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("check fno agents gate-status");
+                return Some(format!(
+                    "spawn gate refused the native launch ({reason}): {remedy}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// The host word a natively launched session reports as. `claude --bg` is
 /// Not a guard. An allowed command that starts a harness session leaves a
 /// launch record, which the child claims at SessionStart: a `claude --bg`
 /// child cannot see its launcher any other way (see launch_record.rs).

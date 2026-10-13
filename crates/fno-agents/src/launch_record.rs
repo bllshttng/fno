@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 pub const WINDOW_MS: i64 = 10 * 60 * 1000;
 
 /// One observed launch. `cwd` is where the child starts; the `launcher_*`
-/// triple is the parent edge the claim writes.
+/// triple is the parent edge the claim writes. `slot` is the grid policy's
+/// intended placement, carried by a dispatcher that already knows where the
+/// worker should sit; a hook-written record observes none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Launch {
     pub harness: String,
@@ -29,6 +31,8 @@ pub struct Launch {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
     pub cwd: String,
 }
 
@@ -161,6 +165,7 @@ const PROMPT_HARNESSES: &[&str] = &[
 const VALUE_FLAGS: &[&str] = &[
     "-n",
     "--name",
+    "--title",
     "-m",
     "--model",
     "--settings",
@@ -198,6 +203,8 @@ const VALUE_FLAGS: &[&str] = &[
     "--disallowedTools",
     "--profile",
     "--dir",
+    "--attach",
+    "--remote",
 ];
 
 fn flag_value(args: &[String], names: &[&str]) -> Option<String> {
@@ -291,115 +298,208 @@ pub fn parse_command(cmd: &str, cwd: &str) -> Vec<Launch> {
     let mut out = Vec::new();
     let mut here = cwd.to_string();
     for seg in segments(cmd) {
-        let mut i = 0;
-        // Wrapper heads that run the next word as the command.
-        while i < seg.len() {
-            let w = seg[i].as_str();
-            if w.contains('=') && !w.starts_with('-') && !w.starts_with('=') {
-                i += 1;
-            } else if matches!(w, "env" | "nohup" | "exec" | "command" | "caffeinate") {
-                i += 1;
-            } else if matches!(w, "timeout" | "gtimeout") {
-                i += 2;
-            } else {
-                break;
-            }
-        }
-        let Some(head) = seg.get(i) else { continue };
-        let args = &seg[i + 1..];
-        if head == "cd" {
-            if let Some(dir) = args.first() {
-                here = join_cwd(&here, dir);
-            }
-            continue;
-        }
-        if has_any(args, &["--help", "-h", "--version", "-v", "-V"]) {
-            continue;
-        }
-        let bin = Path::new(head)
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let launch = match bin.as_str() {
-            "claude" => {
-                if !has_any(args, &["--bg", "--background"]) {
-                    continue;
-                }
-                let pos = positionals(args);
-                Some(Launch {
-                    harness: "claude".into(),
-                    name: flag_value(args, &["-n", "--name"]),
-                    node: seed_node(pos.last()),
-                    cwd: here.clone(),
-                })
-            }
-            "codex" => {
-                if args.first().map(String::as_str) != Some("exec")
-                    || args.get(1).map(String::as_str) == Some("resume")
-                {
-                    continue;
-                }
-                let pos = positionals(&args[1..]);
-                let cwd = flag_value(args, &["-C", "--cd"])
-                    .map(|d| join_cwd(&here, &d))
-                    .unwrap_or_else(|| here.clone());
-                Some(Launch {
-                    harness: "codex".into(),
-                    name: None,
-                    node: seed_node(pos.last()),
-                    cwd,
-                })
-            }
-            "fno" | "fno-agents" => {
-                let rest: &[String] = if bin == "fno" {
-                    if args.first().map(String::as_str) != Some("agents") {
-                        continue;
-                    }
-                    &args[1..]
-                } else {
-                    args
-                };
-                if rest.first().map(String::as_str) != Some("spawn") {
-                    continue;
-                }
-                let rest = &rest[1..];
-                let pos = positionals(rest);
-                let cwd = flag_value(rest, &["--cwd"])
-                    .map(|d| join_cwd(&here, &d))
-                    .unwrap_or_else(|| here.clone());
-                Some(Launch {
-                    harness: flag_value(rest, &["-H", "--harness"])
-                        .unwrap_or_else(|| "claude".into()),
-                    name: flag_value(rest, &["--name"]),
-                    node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
-                    cwd,
-                })
-            }
-            other if PROMPT_HARNESSES.contains(&other) => {
-                let (args, sub) = match args.first().map(String::as_str) {
-                    Some("run") | Some("exec") => (&args[1..], true),
-                    _ => (args, false),
-                };
-                let print = has_any(args, &["-p", "--print", "--prompt"]);
-                let pos = positionals(args);
-                if !sub && !print && pos.is_empty() {
-                    continue;
-                }
-                let seed = flag_value(args, &["-p", "--print", "--prompt"])
-                    .filter(|v| !v.starts_with('-'))
-                    .or_else(|| pos.last().cloned());
-                Some(Launch {
-                    harness: other.to_string(),
-                    name: flag_value(args, &["-n", "--name"]),
-                    node: seed_node(seed.as_ref()),
-                    cwd: here.clone(),
-                })
-            }
-            _ => None,
-        };
-        out.extend(launch);
+        segment_launches(&seg, &mut here, &mut out);
     }
     out
+}
+
+/// One codex subcommand word that is not a launch: a daemon, a login, a
+/// listing. `exec` and `resume` have their own arms above the table.
+const CODEX_SUBCOMMANDS: &[&str] = &[
+    "app-server",
+    "daemon",
+    "login",
+    "logout",
+    "mcp",
+    "apply",
+    "cloud",
+    "completion",
+    "debug",
+    "thread",
+    "usage",
+    "doctor",
+    "sandbox",
+    "features",
+];
+
+/// The launches one simple-command segment starts. `here` carries the cd
+/// across segments; a `fno mux pane run -- <argv>` head recurses into the
+/// argv after the fence, which is the command fno only places.
+fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
+    let mut i = 0;
+    // Wrapper heads that run the next word as the command.
+    while i < seg.len() {
+        let w = seg[i].as_str();
+        if w.contains('=') && !w.starts_with('-') && !w.starts_with('=') {
+            i += 1;
+        } else if matches!(w, "env" | "nohup" | "exec" | "command" | "caffeinate") {
+            i += 1;
+        } else if matches!(w, "timeout" | "gtimeout") {
+            i += 2;
+        } else {
+            break;
+        }
+    }
+    let Some(head) = seg.get(i) else { return };
+    let args = &seg[i + 1..];
+    if head == "cd" {
+        if let Some(dir) = args.first() {
+            *here = join_cwd(here, dir);
+        }
+        return;
+    }
+    if has_any(args, &["--help", "-h", "--version", "-v", "-V"]) {
+        return;
+    }
+    let bin = Path::new(head)
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // `fno mux pane run [--flags] -- <argv>`: fno places the pane, and the
+    // argv after the fence is the launch. Parse it as the command it is.
+    if matches!(bin.as_str(), "fno" | "fno-agents")
+        && args.first().map(String::as_str) == Some("mux")
+        && args.get(1).map(String::as_str) == Some("pane")
+        && args.get(2).map(String::as_str) == Some("run")
+    {
+        if let Some(j) = args.iter().position(|a| a == "--") {
+            let inner = &args[j + 1..];
+            if !inner.is_empty() {
+                // The fence's own cd moves the pane's parse, never the outer
+                // command's cwd: a `pane run -- cd /w && claude --bg x` line
+                // runs its cd inside the pane.
+                let mut inner_here = here.clone();
+                let inner_seg: Vec<String> = inner.to_vec();
+                segment_launches(&inner_seg, &mut inner_here, out);
+            }
+        }
+        return;
+    }
+    let launch = match bin.as_str() {
+        "claude" => {
+            if !has_any(args, &["--bg", "--background"]) {
+                return;
+            }
+            let pos = positionals(args);
+            Some(Launch {
+                harness: "claude".into(),
+                name: flag_value(args, &["-n", "--name"]),
+                node: seed_node(pos.last()),
+                slot: None,
+                cwd: here.clone(),
+            })
+        }
+        "codex" => {
+            // Global options can precede the subcommand (the resume builder
+            // emits `--dangerously-bypass-hook-trust --cd /w resume <id>`),
+            // so the subcommand is the first positional, past flags and
+            // flag values.
+            const CODEX_VALUE_FLAGS: &[&str] =
+                &["-C", "--cd", "-c", "--config", "-m", "--model", "--profile"];
+            let mut sub_pos = None;
+            let mut i = 0;
+            while i < args.len() {
+                let w = args[i].as_str();
+                if w.starts_with('-') && w != "-" {
+                    i += if CODEX_VALUE_FLAGS.contains(&w) { 2 } else { 1 };
+                } else {
+                    sub_pos = Some(i);
+                    break;
+                }
+            }
+            let sub = sub_pos.and_then(|p| args.get(p)).map(String::as_str);
+            let pos_all = positionals(args);
+            match sub {
+                // `codex exec [flags] <prompt>` - the one-shot; a resume is
+                // not a launch.
+                Some("exec") => {
+                    let after = sub_pos.map_or(1, |p| p + 1);
+                    if args.get(after).map(String::as_str) == Some("resume") {
+                        return;
+                    }
+                    let pos = positionals(&args[after..]);
+                    let cwd = flag_value(args, &["-C", "--cd"])
+                        .map(|d| join_cwd(here, &d))
+                        .unwrap_or_else(|| here.clone());
+                    Some(Launch {
+                        harness: "codex".into(),
+                        name: None,
+                        node: seed_node(pos.last()),
+                        slot: None,
+                        cwd,
+                    })
+                }
+                // `codex resume <id>` is a rejoin, not a launch.
+                Some("resume") => return,
+                Some(s) if CODEX_SUBCOMMANDS.contains(&s) => return,
+                // Interactive `codex [flags] "<prompt>"`, `--remote` included:
+                // the first non-flag word is the prompt.
+                _ => {
+                    if pos_all.is_empty() {
+                        return;
+                    }
+                    let cwd = flag_value(args, &["-C", "--cd"])
+                        .map(|d| join_cwd(here, &d))
+                        .unwrap_or_else(|| here.clone());
+                    Some(Launch {
+                        harness: "codex".into(),
+                        name: None,
+                        node: seed_node(pos_all.last()),
+                        slot: None,
+                        cwd,
+                    })
+                }
+            }
+        }
+        "fno" | "fno-agents" => {
+            let rest: &[String] = if bin == "fno" {
+                if args.first().map(String::as_str) != Some("agents") {
+                    return;
+                }
+                &args[1..]
+            } else {
+                args
+            };
+            if rest.first().map(String::as_str) != Some("spawn") {
+                return;
+            }
+            let rest = &rest[1..];
+            let pos = positionals(rest);
+            let cwd = flag_value(rest, &["--cwd"])
+                .map(|d| join_cwd(here, &d))
+                .unwrap_or_else(|| here.clone());
+            Some(Launch {
+                harness: flag_value(rest, &["-H", "--harness"]).unwrap_or_else(|| "claude".into()),
+                name: flag_value(rest, &["--name"]),
+                node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
+                slot: None,
+                cwd,
+            })
+        }
+        other if PROMPT_HARNESSES.contains(&other) => {
+            let (args, sub) = match args.first().map(String::as_str) {
+                Some("run") | Some("exec") => (&args[1..], true),
+                _ => (args, false),
+            };
+            let print = has_any(args, &["-p", "--print", "--prompt"]);
+            let pos = positionals(args);
+            if !sub && !print && pos.is_empty() {
+                return;
+            }
+            let seed = flag_value(args, &["-p", "--print", "--prompt"])
+                .filter(|v| !v.starts_with('-'))
+                .or_else(|| pos.last().cloned());
+            Some(Launch {
+                harness: other.to_string(),
+                name: flag_value(args, &["-n", "--name", "--title"]),
+                node: seed_node(seed.as_ref()),
+                slot: None,
+                cwd: here.clone(),
+            })
+        }
+        _ => None,
+    };
+    out.extend(launch);
 }
 
 /// The cheap first test the hook runs on every Bash call: no harness word,
@@ -430,7 +530,9 @@ fn canonical(cwd: &str) -> String {
         .unwrap_or_else(|_| cwd.trim_end_matches('/').to_string())
 }
 
-fn file_key(r: &Record) -> String {
+/// The record's file key, public so the adopt can name the record it claimed
+/// as the birth event's `spawn_id`.
+pub(crate) fn file_key(r: &Record) -> String {
     let mut h = Sha256::new();
     h.update(r.launcher_session.as_bytes());
     h.update(b"\0");
@@ -491,21 +593,64 @@ pub fn record_command(
     }
     prune(root, now_ms);
     let command: String = cmd.chars().take(300).collect();
-    for mut launch in launches.iter().cloned() {
-        launch.cwd = canonical(&launch.cwd);
-        let record = Record {
+    for launch in launches.iter().cloned() {
+        write_record_with(
+            root,
             launch,
-            launcher_session: session.to_string(),
-            launcher_harness: launcher_harness.map(str::to_string),
-            launcher_cwd: Some(cwd.to_string()),
-            launched_at_ms: now_ms,
-            command: command.clone(),
-            child_session: None,
-            claimed_at_ms: None,
-        };
-        write_atomic(&pending_dir(root).join(file_key(&record)), &record)?;
+            session,
+            launcher_harness,
+            Some(cwd),
+            Some(&command),
+            now_ms,
+        )?;
     }
     Ok(launches.len())
+}
+
+/// Write one pending record for a dispatcher that has no Bash hook (a daemon
+/// dispatch, an advance). Same shape, window and claim rules as a
+/// hook-written record; the `Launch` carries the intended `slot`.
+pub fn write_record(
+    root: &Path,
+    launch: Launch,
+    launcher_session: &str,
+    launcher_harness: Option<&str>,
+    launcher_cwd: &str,
+    now_ms: i64,
+) -> std::io::Result<()> {
+    prune(root, now_ms);
+    write_record_with(
+        root,
+        launch,
+        launcher_session,
+        launcher_harness,
+        Some(launcher_cwd),
+        None,
+        now_ms,
+    )
+}
+
+fn write_record_with(
+    root: &Path,
+    mut launch: Launch,
+    launcher_session: &str,
+    launcher_harness: Option<&str>,
+    launcher_cwd: Option<&str>,
+    command: Option<&str>,
+    now_ms: i64,
+) -> std::io::Result<()> {
+    launch.cwd = canonical(&launch.cwd);
+    let record = Record {
+        launch,
+        launcher_session: launcher_session.to_string(),
+        launcher_harness: launcher_harness.map(str::to_string),
+        launcher_cwd: launcher_cwd.map(str::to_string),
+        launched_at_ms: now_ms,
+        command: command.unwrap_or_default().to_string(),
+        child_session: None,
+        claimed_at_ms: None,
+    };
+    write_atomic(&pending_dir(root).join(file_key(&record)), &record)
 }
 
 // ---------------------------------------------------------------------------
@@ -720,6 +865,18 @@ pub fn claim_and_stamp(root: &Path, graph: &Path, child: &Child) -> Option<Recor
         }
     }
     Some(record)
+}
+
+/// The host word a natively launched session reports as. `claude --bg` is the
+/// thread lane (the daemon's own supervisor). Every other harness is
+/// keeper-hosted (fno keeper via spawn, the background form), which is the
+/// thread lane's own semantics: no pane until a portal opens one.
+pub fn native_substrate_word(harness: &str) -> &'static str {
+    if harness == "claude" {
+        "thread"
+    } else {
+        "pane"
+    }
 }
 
 #[cfg(test)]
