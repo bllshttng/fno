@@ -275,7 +275,7 @@ impl Effective {
 pub fn native_remedy(remedy: &str, receipt: Option<&Value>) -> String {
     match receipt.is_some_and(|r| r.get("ceiling").is_some()) {
         true => format!(
-            "{remedy}. For one launch the user ordered: fno agents spawn NAME --force -- <native launch line>"
+            "{remedy}. For one launch the user ordered: fno agents spawn NAME PAYLOAD --force"
         ),
         false => remedy.to_string(),
     }
@@ -968,7 +968,7 @@ mod tests {
         plain.annotate(&mut receipt);
         let native = native_remedy(FLOOR_REMEDY, Some(&receipt));
         assert!(
-            native.ends_with("fno agents spawn NAME --force -- <native launch line>"),
+            native.ends_with("fno agents spawn NAME PAYLOAD --force"),
             "{native}"
         );
         assert_eq!(native_remedy(FLOOR_REMEDY, None), FLOOR_REMEDY);
