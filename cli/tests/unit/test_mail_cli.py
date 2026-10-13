@@ -323,9 +323,12 @@ def test_unread_forward_leaf_propagates_the_binary_exit_code(monkeypatch):
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/bin/fno-agents"))
     seen = {}
 
-    def fake_run(argv, check=False):
+    def fake_run(argv, **kwargs):
+        # The leaf pins FNO_BUS_DIR because the binary's own ladder skips the
+        # settings file; dropping the env can silently read a different bus.
+        assert kwargs["env"]["FNO_BUS_DIR"]
         seen["argv"] = argv
-        return types.SimpleNamespace(returncode=3)
+        return types.SimpleNamespace(returncode=3, stdout="", stderr="")
 
     monkeypatch.setattr("subprocess.run", fake_run)
     with pytest.raises(typer.Exit) as exc:
