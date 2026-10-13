@@ -207,7 +207,7 @@ fn primary_attestation_text(repo_slug: &str) -> Option<String> {
 /// The pure merge over the three sources, re-sorted by envelope ts when the
 /// primary contributed rows: the pass scan takes the LAST line as a
 /// reviewer's latest verdict, so appending an older primary row after a
-/// newer local one would crown the older verdict. Stable on lines with no
+/// newer local one would promote the older verdict. Stable on lines with no
 /// readable ts (they sort first, preserving their relative order).
 fn merge_attestation_text(
     project_text: &str,
