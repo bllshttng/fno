@@ -199,6 +199,7 @@ pub struct MachineSample {
     pub swap_used_gb: Option<f64>,
     pub swap_total_gb: Option<f64>,
     pub total_mem_gb: Option<f64>,
+    pub memory_pressure_level: Option<u64>,
     pub live_rows: Option<u64>,
     pub leads: Option<u64>,
     pub workers: Option<u64>,
@@ -278,6 +279,7 @@ pub fn read(
         swap_used_gb: None,
         swap_total_gb: None,
         total_mem_gb: None,
+        memory_pressure_level: None,
         live_rows: None,
         leads: None,
         workers: None,
@@ -340,6 +342,14 @@ pub fn read(
         {
             if let Ok(bytes) = String::from_utf8_lossy(&out.stdout).trim().parse::<f64>() {
                 sample.total_mem_gb = Some(bytes / 1024.0 / 1024.0 / 1024.0);
+            }
+        }
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-n", "kern.memorystatus_vm_pressure_level"])
+            .output()
+        {
+            if let Ok(level) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                sample.memory_pressure_level = Some(level);
             }
         }
     }
