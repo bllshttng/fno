@@ -1235,7 +1235,6 @@ def test_lifecycle_wrapper_strictly_non_fatal(iso, monkeypatch):
 
     monkeypatch.setattr(st, "maybe_spawn_think", boom)
     assert st.on_node_work_start(_node()) is None
-    assert st.on_node_retro(_node()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1376,8 +1375,10 @@ def test_provenance_name_is_byte_identical_to_the_canonical_owner():
     assert st._worker_agent_name("x-1", "slug") == dispatch_agent_name(
         "th", "th", "x-1", slug="slug"
     )
-    assert st._worker_agent_name("x-1", "slug", st.REASON_RETRO, "sessaaaa") == dispatch_agent_name(
-        "th", "th", "x-1", qualifier=st.REASON_RETRO, slug="slug", discriminator="sessaaaa"
+    assert st._worker_agent_name(
+        "x-1", "slug", st.REASON_WORK_START, "sessaaaa"
+    ) == dispatch_agent_name(
+        "th", "th", "x-1", qualifier=st.REASON_WORK_START, slug="slug", discriminator="sessaaaa"
     )
 
 
