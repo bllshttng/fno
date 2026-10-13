@@ -1337,9 +1337,15 @@ def test_anthropic_route_settings_keep_artifact(tmp_path, monkeypatch):
         ("", False),
     ],
 )
-def test_deny_matches_the_whole_host(base_url, denied):
-    """The endpoint test parses the host. A substring test got both ends wrong."""
-    from fno.agents.model_routing import _foreign_endpoint_tool_denies
+def test_deny_matches_the_whole_host(base_url, denied, tmp_path, monkeypatch):
+    """The endpoint test parses the host. A substring test got both ends wrong.
 
-    got = _foreign_endpoint_tool_denies({"ANTHROPIC_BASE_URL": base_url})
-    assert bool(got) is denied
+    The deny decision lives in the Rust writer since the change-6 port; the
+    observable contract here is the FILE's permissions block through the door.
+    """
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.model_routing import materialize_route_settings
+
+    path = Path(materialize_route_settings({"ANTHROPIC_BASE_URL": base_url}))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert ("permissions" in payload) is denied
