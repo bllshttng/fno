@@ -26,6 +26,6 @@ marker="${TMPDIR:-/tmp}/fno-spend-drift-no-node-${sid:-unknown}"
 if [ -e "$marker" ]; then
   exit 0
 fi
-: > "$marker" 2>/dev/null
+{ : > "$marker"; } 2>/dev/null
 echo "fno spend-drift monitor is off: node is not on PATH. The spend cap and the model-drift check do not run in this session. Install Node.js 18 or later, or add its directory to PATH, then restart the session." >&2
 exit 1
