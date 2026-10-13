@@ -1803,12 +1803,10 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
                 )));
             };
             let had = text_at(&working[idx], "superseded_by").is_some();
-            {
-                let obj = working[idx].as_object_mut().expect("row is an object");
-                obj.insert("superseded_by".into(), Value::Null);
-                obj.insert("supersession".into(), Value::Null);
-                obj.remove("status");
-            }
+            // The door's own clear: the supersession pair plus the
+            // replacer's supersedes backref, one implementation.
+            let mut changes: Vec<super::patch::Change> = Vec::new();
+            super::patch::clear_supersession_facts(working, idx, &mut changes);
             // The patch-door derivation: a cleared node re-derives from its
             // plan rung (none reads idea), never from apply_defaults' ready.
             let rungs: BTreeMap<String, String> = working
