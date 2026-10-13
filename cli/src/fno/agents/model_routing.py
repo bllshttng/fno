@@ -1076,56 +1076,18 @@ def resolve_explicit_route(
     return _route_for_target(pname, model.strip(), block, env, notice, ctx=f"peer {pname!r}")
 
 
-def materialize_route_settings(
-    route_env: Mapping[str, str],
-    sandbox: "Optional[Mapping[str, object]]" = None,
-    alias: Optional[str] = None,
-) -> str:
-    """Write ``route_env`` as a claude ``--settings`` JSON and return its path.
-
-    A ``claude --bg`` session's serving process is forked by the claude daemon
-    with the DAEMON's env, so per-spawn ``ANTHROPIC_*`` route env is dropped
-    before the first model request and the session wedges on the primary model
-. A settings file is read by the session process itself, so it
-    survives that fork where an env overlay cannot. Content-addressed and
-    ``0600`` (it carries ``ANTHROPIC_AUTH_TOKEN``): identical routes reuse one
-    file rather than accumulating per spawn.
-
-    Every ``SCRUB_AUTH_VARS`` entry is written as an empty string FIRST, with
-    the route on top. Without that floor a routed worker keeps whatever auth the
-    invoking shell exported - and the env scrub that would have dropped it is
-    itself discarded at the daemon fork - so a session pointed at another
-    endpoint could still authenticate with an inherited ``ANTHROPIC_API_KEY``.
-    A composed ``--route`` + ``--account`` spawn writes ONLY this file (the
-    route wins the settings file by design), which is where that gap lived.
-
-    ``sandbox`` composes a sandbox settings block into the SAME file: there is
-    only one ``--settings`` flag, so a sibling file would silently drop this
-    one. It is part of the content address, so a per-worker write policy
-    naturally yields its own file. ``alias`` also stamps the stable
-    ``lane-<row>.json`` name the lane's native line prints (change 6).
-    """
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-
-    env: dict[str, str] = {var: "" for var in SCRUB_AUTH_VARS}
-    env.update(route_env)
-    return _write_settings_env_file(env, sandbox=sandbox, alias=alias)
-
-
 def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
     """Write a ``--settings`` JSON flooring only ``dropped`` to "" and return
     its path.
 
     ``bg_create``'s incoherent-model-env scrub mutates the spawn env, but a
     ``claude --bg`` session is forked by the claude daemon with the DAEMON's
-    own env - the same reason :func:`materialize_route_settings`
-    exists. Without a route or account overlay there is no other reason to
-    write a settings file, so the plain poisoned-inherited-env case (the
-    shape this module exists to fix) reached only the short-lived front-end
-    process, never the actual serving session. This is the same mechanism
-    scoped to just the offending model vars, not the whole auth floor -
-    a coherent ``ANTHROPIC_API_KEY``/``ANTHROPIC_AUTH_TOKEN`` must not be
-    wiped by a spawn that only had a poisoned model tier.
+    own env, so the plain poisoned-inherited-env case (the shape this module
+    exists to fix) reached only the short-lived front-end process, never the
+    actual serving session. This is the whole auth floor's mechanism scoped to
+    just the offending model vars: a coherent ``ANTHROPIC_API_KEY``/
+    ``ANTHROPIC_AUTH_TOKEN`` must not be wiped by a spawn that only had a
+    poisoned model tier.
     """
     return _write_settings_env_file({name: "" for name in dropped})
 
@@ -1284,7 +1246,7 @@ def read_route_settings(path: str) -> dict[str, str]:
     environment instead, where the original launch had those vars simply absent
     - a revived worker carrying ``ANTHROPIC_API_KEY=""`` and every unset tier
     var is not running the env it ran under. The floor is re-applied by
-    :func:`materialize_route_settings` when the relaunch writes its own settings
+    :func:`route_settings_path_for` when the relaunch writes its own settings
     file, so dropping it here loses nothing and keeps the replay faithful.
 
     Raises :class:`RouteRestoreError` when the file is gone, unreadable, or

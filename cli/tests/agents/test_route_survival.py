@@ -413,8 +413,8 @@ def test_ac4_a_routed_codex_pane_records_identity_but_never_a_route_file(
 def test_restore_never_replays_the_auth_scrub_floor(tmp_path, monkeypatch) -> None:
     """The scrub floor is a settings-file convention, not process env.
 
-    `materialize_route_settings` writes every SCRUB_AUTH_VARS entry as "" and
-    the route on top. claude reads an empty settings value as unset; a process
+    The settings writer puts every SCRUB_AUTH_VARS entry as "" with the route
+    on top. claude reads an empty settings value as unset; a process
     environment has no such rule, so replaying the floor would give the revived
     worker a present-but-blank credential the original launch never carried.
     """

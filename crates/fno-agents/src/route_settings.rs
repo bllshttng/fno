@@ -462,6 +462,25 @@ mod tests {
         let on_disk = std::fs::read_to_string(&other.path).unwrap();
         let payload: Value = serde_json::from_str(&on_disk).unwrap();
         assert_eq!(payload["sandbox"]["enabled"], json!(true));
+        // The foreign-endpoint deny rides the payload's permissions block, and
+        // an Anthropic endpoint keeps the tool. Publication is atomic: a tmp
+        // + replace leaves no sidecar behind for a racing reader to trip on.
+        assert_eq!(payload["permissions"], json!({"deny": ["Artifact"]}));
+        let kept = WriteAsk {
+            env: env_of(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]),
+            sandbox: None,
+            alias: None,
+        };
+        let plain = write(&kept, root.path()).unwrap();
+        let plain_payload: Value =
+            serde_json::from_str(&std::fs::read_to_string(&plain.path).unwrap()).unwrap();
+        assert!(plain_payload.get("permissions").is_none());
+        let leftovers = std::fs::read_dir(root.path().join("route-settings"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .count();
+        assert_eq!(leftovers, 0, "no .tmp sidecar is left behind");
         state_restore(saved);
         drop(guard);
     }

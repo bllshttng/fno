@@ -212,7 +212,7 @@ fno agents spawn --harness "$PROVIDER" --once -t 300 --name "peer-$TARGET" "$(ca
 
 - `--harness "$PROVIDER"` (short `-H`) selects the CLI binary (codex/gemini). It is the canonical spelling of the axis. The old `--provider` spelling still works but is deprecated. NOTE: `-H` now carries the harness value, not headless.
 - `--once` (short `-o`) makes it a synchronous create -> exchange -> teardown one-shot. It blocks until the model answers, prints the review to stdout, and exits.
-- `"$(cat "$BRIEF")"` passes the brief as one already-expanded argument - the file content is not re-parsed by the shell, so any characters inside are safe.
+- `"$(cat "$BRIEF")"` passes the brief as one already-expanded argument. The shell does not re-parse the file content, so any characters inside are safe.
 - `-t 300` bounds the model run. Give the Bash call itself a generous timeout (e.g. 360000 ms), so the review is not cut off early.
 - `--name peer-$TARGET` is a throwaway handle (`--once` tears the agent down). Derive it from the target, e.g. `peer-pr657` or `peer-fix-ratios`.
 
