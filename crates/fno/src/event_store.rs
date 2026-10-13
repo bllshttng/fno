@@ -1390,7 +1390,10 @@ pub fn append_envelope(
     let mut last_error = String::new();
     for attempt in 0..APPEND_ATTEMPTS {
         match commit_envelope(&store, line, &event_id, &row_hash, &ty, class, obj, ts_ms) {
-            Ok(receipt) => return Ok(receipt),
+            Ok(receipt) => {
+                crate::attest::maybe_push(&ty, line, receipt.suppressed);
+                return Ok(receipt);
+            }
             Err(error) => {
                 let settled = !lock_busy(&error) || attempt + 1 == APPEND_ATTEMPTS;
                 last_error = error;

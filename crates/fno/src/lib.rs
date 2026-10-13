@@ -13,6 +13,7 @@ pub mod agents_history;
 pub mod agents_view;
 pub mod argv_witness;
 pub mod attention_api;
+pub mod attest;
 pub mod backlog_list;
 pub mod backlog_model;
 pub mod backlog_snapshot;

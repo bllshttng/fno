@@ -137,6 +137,7 @@ pub use range_tiling::{compute_range_tiling, RangeTiling};
 mod review_count;
 mod review_state;
 use attestation_journal::missing_global_attestations;
+use attestation_journal::missing_primary_attestations;
 pub use attestation_journal::unattested_reviewers_scan_text;
 mod args;
 mod block_reason;

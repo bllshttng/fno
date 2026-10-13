@@ -18,6 +18,10 @@ Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and
 
 The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
 
+Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier verbs are `fno-agents attest push` and `fno-agents attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
+
+The primary is the coverage authority, so write access to it is review authority. Any writer on the primary can add a `review_attestation` row the gate reads as a review, so the set of machines with `store.remote_url` is the set of machines that can vouch a pass. The push stamps the writing machine id into the row (`data.attest_machine`), and the coverage listing shows it. That makes the row auditable, not true. Treat a primary row like the journal it mirrors: trust is the operator's machine list, and a foreign writer is a trust decision, not a bug. A gate read never writes schema: a pull that finds no table reads no rows instead of creating one.
+
 ## The shared backlog
 
 `store.share_backlog = true` in the global config moves the backlog tables to the primary too. It needs `store.remote_url`. It is off by default. With it off, no backlog write opens a socket.
@@ -49,7 +53,7 @@ A later fno version that adds a backlog column does not change the primary. Writ
 
 These facts travel with the store. The backlog rows in `SHARED_TABLES` move: nodes, notes, decisions, sessions and pull requests. The dispatch claims move. Mail to `<name>@<host>` moves.
 
-These facts stay on each machine. The agent registry, the roles, the questions, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. The plan file stays. A node's `plan_path` is a path on the machine that wrote it, and fno does not copy the file.
+These facts stay on each machine. The agent registry, the roles, the questions, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. The plan file stays. A node's `plan_path` is a path on the machine that wrote it, and fno does not copy the file. Review attestations are the one event-store exception. They reach the primary through their own carrier, so machine B's merge gate sees machine A's review.
 
 To build a node on this machine, follow these steps in order:
 
