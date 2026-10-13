@@ -5,7 +5,8 @@
 
 use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl, JOURNEY_KEYS};
 use fno_agents::harness_reader::{
-    isolated_provider_config, probe_substrate, retry_marker, wait_for_ci_cell, LineVerdict,
+    isolated_provider_config, probe_route_args, probe_substrate, retry_marker, wait_for_ci_cell,
+    LineVerdict,
 };
 use std::time::Duration;
 
@@ -268,6 +269,28 @@ fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
     assert_eq!(probe_substrate(&contract, "footnote"), Some("headless"));
     // A harness with an interactive create form keeps the spawn default.
     assert_eq!(probe_substrate(&contract, "claude"), None);
+    // The provider flag is a claude route. Any other harness takes the
+    // provider as the model id's prefix, never doubled.
+    let args = |h, p, m| probe_route_args(h, p, m).join(" ");
+    assert_eq!(
+        args("claude", Some("zai"), Some("glm-x")),
+        "--provider zai --model glm-x"
+    );
+    assert_eq!(
+        args("footnote", Some("zai"), Some("glm-x")),
+        "--model zai/glm-x"
+    );
+    assert_eq!(
+        args("footnote", Some("zai"), Some("zai/glm-x")),
+        "--model zai/glm-x"
+    );
+    assert_eq!(args("footnote", None, Some("glm-x")), "--model glm-x");
+    assert_eq!(args("footnote", Some("zai"), None), "");
+    // A harness with no provider/model spelling takes the model as given.
+    assert_eq!(
+        args("codex", Some("openai"), Some("gpt-x")),
+        "--model gpt-x"
+    );
 }
 
 #[test]

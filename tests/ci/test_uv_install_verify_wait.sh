@@ -142,12 +142,12 @@ have crates/fno/src/bootstrap.rs 'install_verified_within(uv, VERIFY_ATTEMPTS, V
 # reads the shared constant's definition - one literal, no sibling can shadow
 # it - and both call sites are counted so a bare timeout= literal cannot
 # quietly return.
-have hooks/git-protection.py '_VETO_PROBE_TIMEOUT = 24' "shared veto timeout definition"
-_v=$(grep -c 'timeout=_VETO_PROBE_TIMEOUT' "$REPO/hooks/git-protection.py")
+have hooks/git_protection_impl.py '_VETO_PROBE_TIMEOUT = 24' "shared veto timeout definition"
+_v=$(grep -c 'timeout=_VETO_PROBE_TIMEOUT' "$REPO/hooks/git_protection_impl.py")
 [ "$_v" -eq 2 ] || fail "expected both veto call sites on _VETO_PROBE_TIMEOUT, found $_v"
-_hook_veto=$(grep -oE '_VETO_PROBE_TIMEOUT = [0-9]+' "$REPO/hooks/git-protection.py" | head -n 1)
+_hook_veto=$(grep -oE '_VETO_PROBE_TIMEOUT = [0-9]+' "$REPO/hooks/git_protection_impl.py" | head -n 1)
 _doc_ceiling=$(grep -oE 'shells `fno` against [0-9]+s' "$REPO/docs/architecture/cli-lazy-imports.md" | head -n 1)
-[ -n "$_hook_veto" ] || fail "git-protection.py lost its shared veto timeout"
+[ -n "$_hook_veto" ] || fail "git_protection_impl.py lost its shared veto timeout"
 [ -n "$_doc_ceiling" ] || fail "cli-lazy-imports.md lost its per-invocation sizing line"
 _h=${_hook_veto//[^0-9]/}; _c=${_doc_ceiling//[^0-9]/}
 [ "$_h" -ge "$_c" ] || fail "the veto timeout (${_h}s) sits under the doc's ${_c}s ceiling"

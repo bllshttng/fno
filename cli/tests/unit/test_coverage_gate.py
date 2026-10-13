@@ -88,6 +88,39 @@ def test_attestation_chain_reads_a_row_that_rotated_out(monkeypatch, tmp_path: P
     assert [e["head_sha"] for e in chain] == ["abc1234"]
 
 
+def test_attestation_chain_dedups_a_stamped_mirror_copy(monkeypatch, tmp_path: Path):
+    """The push stamps the writing machine into the primary copy only, so
+    the journal original and its mirror differ in the carrier keys alone.
+    The mirror dedup drops both, or the reviewing machine counts a round
+    twice."""
+    import json
+
+    from fno.pr import _coverage_gate, _reviews
+
+    project = tmp_path / "project.jsonl"
+    mirror = tmp_path / "global.jsonl"
+    payload = {
+        "reviewer": "code-review",
+        "branch": "feature/x",
+        "head_sha": "abc1234",
+        "verdict": "pass",
+    }
+    project.write_text(
+        json.dumps({"ts": "t1", "type": "review_attestation", "data": payload}) + "\n",
+        encoding="utf-8",
+    )
+    stamped = dict(payload, repo="owner/repo", attest_machine="imac")
+    mirror.write_text(
+        json.dumps({"ts": "t1", "type": "review_attestation", "data": stamped}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        _reviews, "_coverage_logs", lambda cwd, project_events: (project, mirror, "owner/repo")
+    )
+    chain = _coverage_gate.attestation_chain(None, "feature/x", "abc1234")
+    assert [e["head_sha"] for e in chain] == ["abc1234"]
+
+
 def test_journal_lines_without_a_store_is_the_live_file(tmp_path: Path):
     from fno.pr._reviews import journal_lines
 

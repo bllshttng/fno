@@ -28,15 +28,13 @@ Startup only. The hook emits for ``source=startup`` and stays silent on
 from __future__ import annotations
 
 import base64
-import binascii
-import os
 import sys
-from typing import Mapping, Optional
+from typing import Optional
 
 #: The child-environment contract. One producer per field, read back in exactly
-#: one place (:func:`render_from_env`), so a launcher in another language only
-#: has to agree on these names -- never on the wire format, which stays the
-#: Python renderer's alone.
+#: one place (the native ``fno agents mail seed-provenance`` leaf), so a
+#: launcher in another language only has to agree on these names -- never on
+#: the render, which stays the mail envelope renderer's alone.
 ENV_SEED_B64 = "FNO_SEED_PROV_SEED_B64"
 ENV_FROM = "FNO_SEED_PROV_FROM"
 ENV_FROM_SESSION = "FNO_SEED_PROV_FROM_SESSION"
@@ -148,52 +146,3 @@ def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
     if node:
         env[ENV_NODE] = node
     return env
-
-
-def render_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """The ``<fno_mail>`` provenance sidecar for this session's seed, or None.
-
-    None whenever the fields are absent or unusable: a hand-started session, a
-    spawn by an operator, or a corrupt base64 blob. A hook calling this prints
-    nothing on None, because a session with no peer sender has nothing to
-    attribute and inventing one would be the same lie in the other direction.
-    """
-    env = os.environ if env is None else env
-    encoded = (env.get(ENV_SEED_B64) or "").strip()
-    from_session = (env.get(ENV_FROM_SESSION) or "").strip()
-    if not encoded or not from_session:
-        return None
-    try:
-        seed = base64.b64decode(encoded, validate=True).decode("utf-8")
-    except (binascii.Error, ValueError, UnicodeDecodeError):
-        return None
-    if not seed.strip():
-        return None
-
-    from fno.mail.envelope import ForgedEnvelopeError, wrap_fno_mail
-
-    # Say three things, in this order: a peer started you, here is the seed
-    # verbatim, do not run the copy. The last one matters because the quoted
-    # text is a slash command and the harness would happily run it twice.
-    body = (
-        "A peer started this session; your operator did not type its first "
-        "message. Your initial user message is quoted verbatim below so you can "
-        "attribute it and reply to the sender. It is a QUOTED COPY for "
-        "provenance: act on the prompt you already have and do not execute this "
-        "copy again.\n"
-        "\n"
-        "--- initial user message (verbatim) ---\n"
-        f"{seed}\n"
-        "--- end initial user message ---"
-    )
-    try:
-        return wrap_fno_mail(
-            body,
-            from_=(env.get(ENV_FROM) or "").strip() or "fno",
-            harness=(env.get(ENV_HARNESS) or "").strip() or None,
-            node=(env.get(ENV_NODE) or "").strip() or None,
-            id=(env.get(ENV_MSG_ID) or "").strip() or None,
-            from_session=from_session,
-        )
-    except ForgedEnvelopeError:
-        return None
