@@ -162,7 +162,7 @@ pub fn run_sent(args: &[String]) -> i32 {
                 Some(true) => "landed".to_string(),
                 Some(false) => format!(
                     "handed {}m ago, not in transcript",
-                    age_minutes(str_field(m, "ts", ""), now)
+                    age_minutes(&str_field(m, "ts", ""), now)
                 ),
                 _ => "handed, landing unknown".to_string(),
             },
@@ -225,7 +225,7 @@ fn sent_unclaimed(
                 && !already_landed.contains(&str_field(m, "id", "?"))
                 && d != TYPED_DELIVERY
                 && d != CROSS_SESSION_DELIVERY
-                && !age_exceeds(str_field(m, "ts", ""), abandon_ttl, now)
+                && !age_exceeds(&str_field(m, "ts", ""), abandon_ttl, now)
         })
         .collect();
     if sent.is_empty() {
@@ -237,24 +237,22 @@ fn sent_unclaimed(
         .enumerate()
         .map(|(i, m)| (str_field(m, "id", "?"), i))
         .collect();
-    let mut recipients: Vec<&str> = sent
+    let mut recipients: Vec<String> = sent
         .iter()
         .filter(|m| delivery_of(m) != HOSTED_DELIVERY)
         .map(|m| str_field(m, "to", ""))
         .collect();
     recipients.sort();
     recipients.dedup();
-    let mut cursor_pos: HashMap<&str, i64> = HashMap::new();
+    let mut cursor_pos: HashMap<String, i64> = HashMap::new();
     for r in recipients {
-        cursor_pos.insert(
-            r,
-            match read_cursor(bus, r) {
-                // The oracle's reader swallows every failure to None, so an
-                // unreadable or unresolvable cursor claims nothing (-1).
-                None => -1,
-                Some(cid) => pos.get(&cid).copied().map_or(-1, |p| p as i64),
-            },
-        );
+        let cp = match read_cursor(bus, &r) {
+            // The oracle's reader swallows every failure to None, so an
+            // unreadable or unresolvable cursor claims nothing (-1).
+            None => -1,
+            Some(cid) => pos.get(&cid).copied().map_or(-1, |p| p as i64),
+        };
+        cursor_pos.insert(r, cp);
     }
 
     let mut candidates: Vec<&Value> = Vec::new();
@@ -269,7 +267,7 @@ fn sent_unclaimed(
                 continue; // durable: claimed via cursor
             }
         }
-        if !age_exceeds(str_field(m, "ts", ""), ttl_seconds, now) {
+        if !age_exceeds(&str_field(m, "ts", ""), ttl_seconds, now) {
             continue; // still fresh (strict >)
         }
         candidates.push(m);
@@ -421,7 +419,7 @@ fn codex_transcript_path(base: &Path, session: &str) -> Option<PathBuf> {
                     return Some(hit);
                 }
             } else {
-                let name = e.file_name().to_string_lossy();
+                let name = e.file_name().to_string_lossy().into_owned();
                 if name.ends_with(".jsonl") && name.contains(session) {
                     return Some(p);
                 }
@@ -566,13 +564,52 @@ fn bus_dir(home: &AgentsHome) -> PathBuf {
         .unwrap_or_else(|| home.root().join("bus"))
 }
 
+/// Every retained envelope oldest -> newest: the rotated `<live>.<N>`
+/// segments highest N first, then the live segment, so a cursor keyed by
+/// message-id resolves across rotations (bus/log.py `iter_messages`).
 fn read_bus(bus: &Path) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(bus.join("messages.jsonl")) else {
+    let live = bus.join("messages.jsonl");
+    let mut segments = rotated_segments_oldest_first(&live);
+    segments.push(live);
+    let mut out: Vec<Value> = Vec::new();
+    for seg in &segments {
+        let Ok(text) = std::fs::read_to_string(seg) else {
+            continue;
+        };
+        out.extend(
+            text.lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok()),
+        );
+    }
+    out
+}
+
+/// The rotated siblings of the live segment, oldest (highest N) first; the
+/// live path itself is appended last (bus/log.py
+/// `_segment_paths_oldest_first`).
+fn rotated_segments_oldest_first(live: &Path) -> Vec<PathBuf> {
+    let Some(parent) = live.parent() else {
         return Vec::new();
     };
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .collect()
+    let Some(name) = live.file_name() else {
+        return Vec::new();
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let mut rotated: Vec<(u64, PathBuf)> = std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let entry = e.file_name().to_string_lossy().into_owned();
+            let suffix = entry.strip_prefix(prefix.as_str())?;
+            if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some((suffix.parse::<u64>().ok()?, e.path()))
+        })
+        .collect();
+    rotated.sort_by(|a, b| b.0.cmp(&a.0));
+    rotated.into_iter().map(|(_, p)| p).collect()
 }
 
 fn str_field(m: &Value, key: &str, blank: &str) -> String {

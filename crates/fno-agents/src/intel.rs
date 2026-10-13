@@ -337,10 +337,11 @@ fn session_join(fno_dir: &Path) -> HashMap<String, (Vec<String>, Option<String>,
     join
 }
 
-/// The bus log path, mirroring the env order every bus reader shares
-/// (FNO_BUS_DIR, then FNO_INBOX_ROOT, else `<fno>/bus/messages.jsonl`). The
-/// config.paths.bus_dir template override is the gap org_board.rs already
-/// documents.
+/// The bus log path, mirroring `fno.paths.bus_dir`'s order every bus reader
+/// shares: FNO_BUS_DIR, then FNO_INBOX_ROOT, then the `config.paths.bus_dir`
+/// override (tilde-expanded; `{vault}`/`{project}` templates are not), else
+/// `<fno>/bus/messages.jsonl`. org_board.rs keeps its own env-only copy and
+/// documents the template gap there.
 pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
         return PathBuf::from(dir).join("messages.jsonl");
@@ -350,6 +351,14 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
         .filter(|v| !v.is_empty())
     {
         return PathBuf::from(root).join(".bus").join("messages.jsonl");
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(dir) = crate::agents_config::config_lookup(&cwd, &["paths", "bus_dir"])
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|s| !s.trim().is_empty())
+        {
+            return crate::cargo_build_dirs::expand_home(PathBuf::from(dir)).join("messages.jsonl");
+        }
     }
     fno_dir.join("bus").join("messages.jsonl")
 }
