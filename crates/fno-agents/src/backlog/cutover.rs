@@ -1095,7 +1095,7 @@ pub fn run_unclaim(tail: &[String]) -> i32 {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
         return 1;
     }
-    let node_id = task_id.clone();
+    let node_id = task_id.to_string();
     if let Some(code) = refuse_non_graph_backend("unclaim") {
         return code;
     }
