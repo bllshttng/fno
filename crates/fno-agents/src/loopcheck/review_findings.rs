@@ -242,7 +242,7 @@ fn merge_attestation_text(
                     })
                     .unwrap_or_default();
                 (ts, idx, line.to_string())
-            )
+            })
             .collect();
         rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         merged = rows
