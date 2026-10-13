@@ -863,7 +863,7 @@ pub fn wake_spawn_name(registry: &Registry, registry_path: &Path, session_id: &s
 /// answering row leaves `fno_id` out, so a stale live row and its fork
 /// never share one id. No rung gates on the row's status: the identity
 /// joins the board, mail and ledger.
-pub fn revival_identity(
+pub(crate) fn revival_identity(
     registry: &Registry,
     registry_path: &Path,
     session_id: &str,
