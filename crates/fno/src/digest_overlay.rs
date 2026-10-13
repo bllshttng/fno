@@ -1373,7 +1373,7 @@ fn path_lookup(name: &str) -> Option<PathBuf> {
 /// through the sibling (the wheel script sits beside the front door and
 /// resolves its own package). None means every leg missed; the caller
 /// writes the refusal.
-pub(crate) fn fno_agents_bin_auto() -> Option<PathBuf> {
+pub fn fno_agents_bin_auto() -> Option<PathBuf> {
     if let Some(found) = runnable_env_path("FNO_AGENTS_BIN") {
         return Some(found);
     }
