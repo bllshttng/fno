@@ -25,12 +25,13 @@ from typer.testing import CliRunner
 from fno.mail.cli import mail_app
 
 REPO = Path(__file__).resolve().parents[3]
-MUX_CLI = REPO / "crates" / "fno" / "src" / "mux_cli.rs"
+# The bridge lives in its own module since the pane-prepare port; read it there.
+BRIDGE_SRC = REPO / "crates" / "fno" / "src" / "mux_cli" / "pane_prepare.rs"
 
 
 def _bridge_argv() -> list[str]:
     """The literal argv `prepare_pane_bytes` passes to the child."""
-    src = MUX_CLI.read_text(encoding="utf-8")
+    src = BRIDGE_SRC.read_text(encoding="utf-8")
     block = re.search(
         r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S
     )
@@ -87,7 +88,7 @@ def test_the_rust_bridge_passes_style_exception_to_the_child():
     """The conditional bridge flag: present in `prepare_pane_bytes`, accepted
     by the child. It rides `.arg(...)` beside the literal `.args([...])`, so it
     needs its own source assertion rather than `_bridge_argv`."""
-    src = MUX_CLI.read_text(encoding="utf-8")
+    src = BRIDGE_SRC.read_text(encoding="utf-8")
     body = re.search(r"fn prepare_pane_bytes.*?\n\}", src, re.S)
     assert body, "prepare_pane_bytes no longer exists"
     assert 'arg("--style-exception")' in body.group(0), (
