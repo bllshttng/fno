@@ -126,6 +126,38 @@ def test_target_init_shells_through_with_env(monkeypatch, tmp_path):
     assert "cmd" not in captured
 
 
+def test_target_init_steps_flag_forwards_turn_mode(monkeypatch, tmp_path):
+    """AC (--steps): the flag forwards TARGET_TURN_MODE=steps; absent without it."""
+    captured = {}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _stub_run(cmd, check=False, env=None, **kwargs):
+        if list(cmd)[:1] == ["bash"]:
+            captured["env"] = dict(env or {})
+        return _Result()
+
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setenv("FNO_REPO_ROOT", str(_fake_plugin_root(tmp_path)))
+    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
+    plan = tmp_path / "p" / "x.md"
+    plan.parent.mkdir()
+    plan.write_text("# Plan\n", encoding="utf-8")
+    argv = ["do", "target", "init", "--input", "fix-login", "--plan-path", str(plan)]
+
+    result = runner.invoke(app, argv + ["--steps"])
+    assert result.exit_code == 0, result.output
+    assert captured["env"].get("TARGET_TURN_MODE") == "steps"
+
+    captured.clear()
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 0, result.output
+    assert "TARGET_TURN_MODE" not in captured["env"]
+
+
 def _fake_plugin_root(tmp_path):
     fake_root = tmp_path / "plugin"
     (fake_root / "hooks" / "helpers").mkdir(parents=True)

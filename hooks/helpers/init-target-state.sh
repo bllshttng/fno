@@ -1229,9 +1229,10 @@ if [[ ! -f "$STATE_FILE" ]]; then
   if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
     _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
   fi
-  # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
-  # unless set, so absence is the looping default the stop gate already serves;
-  # ordinary|regular are input synonyms for steps, never stamped values.
+  # Turn mode (`--steps` on target start|init forwards TARGET_TURN_MODE=steps):
+  # a non-looping target run. Omitted unless set, so absence is the looping
+  # default the stop gate already serves; ordinary|regular are input synonyms
+  # for steps, never stamped values.
   _turn_mode_line=""
   [[ "${TARGET_TURN_MODE:-}" == "steps" ]] && _turn_mode_line="turn_mode: steps"$'\n' || true
   # Work-evidence baseline for the do-provenance stamp; `null` fails it closed.
