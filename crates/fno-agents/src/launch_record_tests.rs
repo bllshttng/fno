@@ -49,6 +49,9 @@ fn reads_and_help_are_not_launches() {
         "echo pi",
         // AC6: a resume is a rejoin, not a launch; the subcommand table too.
         "codex resume 0197abcd-1234-7abc-9def-0123456789ab --remote unix://run.sock",
+        // The resume builder emits global options before the subcommand; the
+        // subcommand is still the first positional, past flags and values.
+        "codex --dangerously-bypass-hook-trust --cd /w resume 0197abcd-1234-7abc-9def-0123456789ab",
         "codex app-server daemon start",
         "codex thread list",
         "codex login",

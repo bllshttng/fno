@@ -390,16 +390,34 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
             })
         }
         "codex" => {
-            let sub = args.first().map(String::as_str);
+            // Global options can precede the subcommand (the resume builder
+            // emits `--dangerously-bypass-hook-trust --cd /w resume <id>`),
+            // so the subcommand is the first positional, past flags and
+            // flag values.
+            const CODEX_VALUE_FLAGS: &[&str] =
+                &["-C", "--cd", "-c", "--config", "-m", "--model", "--profile"];
+            let mut sub_pos = None;
+            let mut i = 0;
+            while i < args.len() {
+                let w = args[i].as_str();
+                if w.starts_with('-') && w != "-" {
+                    i += if CODEX_VALUE_FLAGS.contains(&w) { 2 } else { 1 };
+                } else {
+                    sub_pos = Some(i);
+                    break;
+                }
+            }
+            let sub = sub_pos.and_then(|p| args.get(p)).map(String::as_str);
             let pos_all = positionals(args);
             match sub {
                 // `codex exec [flags] <prompt>` - the one-shot; a resume is
                 // not a launch.
                 Some("exec") => {
-                    if args.get(1).map(String::as_str) == Some("resume") {
+                    let after = sub_pos.map_or(1, |p| p + 1);
+                    if args.get(after).map(String::as_str) == Some("resume") {
                         return;
                     }
-                    let pos = positionals(&args[1..]);
+                    let pos = positionals(&args[after..]);
                     let cwd = flag_value(args, &["-C", "--cd"])
                         .map(|d| join_cwd(here, &d))
                         .unwrap_or_else(|| here.clone());
