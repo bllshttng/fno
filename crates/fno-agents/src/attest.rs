@@ -101,6 +101,21 @@ fn repo_slug(cwd: &Path) -> String {
     repo_identity_from_git_remote(cwd).unwrap_or_default()
 }
 
+/// The client's one-line dispatch for `fno-agents attest <action>`, here so
+/// client.rs stays at its file budget. The cwd resolves here too: the slug
+/// comes from the caller's checkout, and the client grows by three lines.
+pub fn dispatch(rest: &[String]) -> i32 {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    match rest.first().map(String::as_str) {
+        Some("push") => run_push(&cwd),
+        Some("pull") => run_pull(&rest[1..], &cwd),
+        _ => {
+            eprintln!("usage: fno-agents attest push|pull [--repo <slug>]  (push reads one envelope line on stdin)");
+            2
+        }
+    }
+}
+
 /// The in-process mirror the commit path calls (both crates name this
 /// symbol; the generated copy in the native CLI crate shells out to this
 /// binary instead). Fire-and-forget: the local row is already committed,
