@@ -1155,9 +1155,10 @@ fn one_or_ambiguous<'a>(hits: Vec<&'a Value>, token: &str) -> Result<&'a Value, 
     Ok(distinct[0])
 }
 
-/// Resolve a name, full session id, transport short id, canonical handle, or
-/// legacy prefix to one row. A full id is explicit and resolves first; every
-/// shorter address category is unioned before uniqueness is decided.
+/// Resolve a name, alias, full session id, transport short id, canonical
+/// handle, or legacy prefix to one row. A full id is explicit and resolves
+/// first; every shorter address category is unioned before uniqueness is
+/// decided.
 pub(crate) fn find_agent_entry<'a>(
     rows: &'a [Value],
     token: &str,
@@ -1178,6 +1179,14 @@ pub(crate) fn find_agent_entry<'a>(
         .iter()
         .filter(|e| e.get("name").and_then(Value::as_str) == Some(token))
         .collect();
+    // A row's prior labels (`aliases`, Python AgentEntry mirror) stay in the
+    // shared address namespace: rename_agent appends the old name and a raw
+    // send by it must still resolve.
+    short_namespace.extend(rows.iter().filter(|e| {
+        e.get("aliases")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|s| s == token))
+    }));
     short_namespace.extend(rows
         .iter()
         .filter(|e| matches!(e.get("short_id").and_then(Value::as_str), Some(s) if !s.is_empty() && s == token))
