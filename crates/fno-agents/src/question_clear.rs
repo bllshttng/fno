@@ -140,6 +140,9 @@ mod tests {
             .as_object_mut()
             .expect("provenance is an object")
             .insert("authority_source".into(), json!("role"));
+        // The gate now resolves role as an agent authority, so the teamed
+        // check applies: a role answer is a live lead's lane.
+        agent_req.caller.as_mut().unwrap().teamed = true;
         seed_question(
             &agent_req,
             &ask("q-open2", "which lane?", None, Some("x-1")),
