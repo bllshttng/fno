@@ -19,21 +19,29 @@ use crate::process_admission::{std_command, std_spawn};
 /// names the command and its stderr; the caller turns that into an
 /// `unreadable` detection row.
 pub(crate) fn bounded_output(argv: &[&str]) -> Result<String, String> {
-    const CAP: Duration = Duration::from_secs(3);
+    bounded_for(argv, Duration::from_secs(3))
+}
+
+/// [`bounded_output`] at a caller-chosen deadline: the service steps reuse
+/// the same spawn-poll-kill body for slower installs (an installer may
+/// copy plists or compile), and the verify block for the doctor reads.
+/// The timeout message carries the cap, so a hung installer never reads
+/// like a hung probe.
+pub(crate) fn bounded_for(argv: &[&str], cap: Duration) -> Result<String, String> {
     let mut cmd = std_command(argv[0]);
     cmd.args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = std_spawn(&mut cmd).map_err(|e| format!("{}: {e}", argv[0]))?;
-    let deadline = Instant::now() + CAP;
+    let deadline = Instant::now() + cap;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{}: timed out after 3s", argv[0]));
+                return Err(format!("{}: timed out after {}s", argv[0], cap.as_secs()));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => return Err(format!("{}: {e}", argv[0])),
@@ -232,7 +240,10 @@ fn detect_tools() -> Value {
     json!({ "macmon": crate::setup_autowire::on_path("macmon") })
 }
 
-const SERVICE_LABELS: [&str; 2] = ["sh.fno.pr-watcher", "sh.fno.groom"];
+const SERVICE_LABELS: [&str; 2] = [
+    crate::setup_services::PR_WATCHER_LABEL,
+    crate::setup_services::GROOM_LABEL,
+];
 
 /// The launchd services and the daemon, one pass: plists are file reads,
 /// `launchctl list` is one bounded call for every label (the label is the

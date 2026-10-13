@@ -111,6 +111,26 @@ const CODES: &[(&str, &str)] = &[
         "config_set_refused",
         "run the `fno config set` line named in the message by hand",
     ),
+    (
+        "service_platform",
+        "run the named command on a macOS machine",
+    ),
+    (
+        "service_install",
+        "read the error above, fix it, rerun `fno config setup run`",
+    ),
+    (
+        "service_dependency",
+        "load the named service first, then rerun `fno config setup run`",
+    ),
+    (
+        "verify_red",
+        "read the named check above, fix it, rerun `fno config setup run`",
+    ),
+    (
+        "no_source",
+        "answer the wizard prompt or put the keys in a profile, then rerun `fno config setup run`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -278,6 +298,55 @@ pub const STEPS: &[Step] = &[
         kind: Kind::Act,
         question: "Keep the standard guardrail preset?",
         effect: "writes guards.preset = standard only when the file carries a different value",
+    },
+    Step {
+        id: "pr-watcher",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Install and load the pr-watcher launchd agent?",
+        effect: "runs `fno-agents pr-watch install --ensure` and writes pr_watch.enabled = true",
+    },
+    Step {
+        id: "auto-heal",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Turn on the auto-heal loop?",
+        effect: "writes auto_heal.enabled = true; needs the pr-watcher agent loaded",
+    },
+    Step {
+        id: "groom-agent",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Install the daily groom launchd agent?",
+        effect: "runs `fno backlog groom --install-agent`",
+    },
+    Step {
+        id: "projects",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Add this repo to the main workspace list?",
+        effect: "appends {name, path} rows for this repo to the workspace list",
+    },
+    Step {
+        id: "review-merge",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Set the review posture and auto-merge grant?",
+        effect: "writes review.posture, auto_merge.enabled and auto_merge.grant from the wizard answer or a profile, never a default",
+    },
+    Step {
+        id: "machine-tools",
+        layer: Layer::Global,
+        kind: Kind::Report,
+        question: "Check the optional machine tools?",
+        effect: "names `brew install macmon` when the resource meter's sampler is absent",
+    },
+    Step {
+        id: "permission-rules",
+        layer: Layer::Global,
+        kind: Kind::Report,
+        question: "Show the narrow allow rules to add by hand?",
+        effect: "prints the Bash(fno:*) permissions.allow example; never edits a harness settings file",
     },
     Step {
         id: "worktree-policy",
@@ -804,6 +873,289 @@ fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
     }
 }
 
+/// The shared fold for a service step's config key: `config_set` is the
+/// only writer, so both the Ok and Err shapes are one call each.
+fn service_key_set(exe: &Path, step: &str, key: &str, value: &str, rep: &mut Report) {
+    match config_set(exe, &[(key, value)], false) {
+        Ok(path) => {
+            rep.done.push(format!("{step}: {key} = {value}"));
+            rep.paths.push(path.display().to_string());
+        }
+        Err(e) => {
+            let message = format!("{step}: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// The non-macOS shape for a launchd step: a needs_human row carrying the
+/// command, so the person runs it where launchd exists.
+fn service_platform(step: &str, command: &str, rep: &mut Report) {
+    let message = format!("{step}: launchd services are macOS-only; run `{command}` there");
+    rep.rows
+        .push(row("needs_human", "service_platform", message.clone()));
+    rep.needs_human.push(message);
+}
+
+/// The pr-watcher: install and load the launchd agent, then write its
+/// enable key. An already-loaded agent restarts nothing but still writes
+/// the key, so `--only pr-watcher` leaves `pr_watch.enabled = true` on
+/// disk whether or not the install ran this time.
+fn step_pr_watcher(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
+    const COMMAND: &str = "fno-agents pr-watch install --ensure";
+    if !crate::setup_services::macos() {
+        service_platform("pr-watcher", COMMAND, rep);
+        return;
+    }
+    if crate::setup_services::is_loaded(crate::setup_services::PR_WATCHER_LABEL) {
+        rep.skipped
+            .push("pr-watcher: agent already loaded, restarting nothing".into());
+        service_key_set(exe, "pr-watcher", "pr_watch.enabled", "true", rep);
+        return;
+    }
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let Some(bin) = bin.to_str() else {
+        let message = "pr-watcher: the fno-agents binary path is not valid UTF-8".to_string();
+        rep.rows
+            .push(row("needs_human", "service_install", message.clone()));
+        rep.needs_human.push(message);
+        return;
+    };
+    match crate::setup_detect::bounded_for(
+        &[bin, "pr-watch", "install", "--ensure"],
+        crate::setup_services::INSTALL_CAP,
+    ) {
+        Ok(_) => {
+            rep.done
+                .push("pr-watcher: agent installed and loaded".into());
+            loaded.push(crate::setup_services::PR_WATCHER_LABEL.into());
+            service_key_set(exe, "pr-watcher", "pr_watch.enabled", "true", rep);
+        }
+        Err(e) => {
+            let message = format!("pr-watcher: {e}");
+            rep.rows
+                .push(row("needs_human", "service_install", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// Auto-heal rides the pr-watcher's loop: the loaded agent is the
+/// dependency, the key is the consent. With no agent the key stays
+/// unwritten - enabling heal where nothing watches would describe a state
+/// nothing maintains.
+fn step_auto_heal(exe: &Path, rep: &mut Report) {
+    if !crate::setup_services::macos() {
+        service_platform(
+            "auto-heal",
+            "fno-agents pr-watch install --ensure, then rerun with --only auto-heal",
+            rep,
+        );
+        return;
+    }
+    if !crate::setup_services::is_loaded(crate::setup_services::PR_WATCHER_LABEL) {
+        let message = "auto-heal: the pr-watcher agent is not loaded, install it first".to_string();
+        rep.rows
+            .push(row("needs_human", "service_dependency", message.clone()));
+        rep.needs_human.push(message);
+        return;
+    }
+    service_key_set(exe, "auto-heal", "auto_heal.enabled", "true", rep);
+}
+
+/// The groom agent: one launchd install, no config key behind it. A
+/// loaded agent skips for the same reason the pr-watcher's does.
+fn step_groom_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
+    if !crate::setup_services::macos() {
+        service_platform("groom-agent", "fno backlog groom --install-agent", rep);
+        return;
+    }
+    if crate::setup_services::is_loaded(crate::setup_services::GROOM_LABEL) {
+        rep.skipped
+            .push("groom-agent: agent already loaded, restarting nothing".into());
+        return;
+    }
+    let exe_str = exe.to_string_lossy().into_owned();
+    match crate::setup_detect::bounded_for(
+        &[exe_str.as_str(), "backlog", "groom", "--install-agent"],
+        crate::setup_services::INSTALL_CAP,
+    ) {
+        Ok(_) => {
+            rep.done
+                .push("groom-agent: agent installed and loaded".into());
+            loaded.push(crate::setup_services::GROOM_LABEL.into());
+        }
+        Err(e) => {
+            let message = format!("groom-agent: {e}");
+            rep.rows
+                .push(row("needs_human", "service_install", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// A TOML value as JSON for the workspace rows: scalars pass through, a
+/// datetime reads as its string, arrays and tables recurse. Rows carry
+/// only plain shapes, so this is the whole conversion.
+fn toml_as_json(value: &toml::Value) -> serde_json::Value {
+    match value {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => json!(i),
+        toml::Value::Float(f) => json!(f),
+        toml::Value::Boolean(b) => json!(b),
+        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
+        toml::Value::Array(a) => serde_json::Value::Array(a.iter().map(toml_as_json).collect()),
+        toml::Value::Table(t) => serde_json::Value::Object(
+            t.iter()
+                .map(|(k, v)| (k.clone(), toml_as_json(v)))
+                .collect(),
+        ),
+    }
+}
+
+/// The workspace list: this repo appended as one {name, path} row through
+/// the validated writer, existing rows carried verbatim. A path already
+/// listed skips - the list is the person's registry, setup only grows it.
+fn step_projects(exe: &Path, root: &Path, rep: &mut Report) {
+    const PROJECTS_KEY: &str = "work.workspaces.main.projects";
+    let global = crate::config_defaults::global_config_path();
+    let mut rows: Vec<serde_json::Value> = match crate::config_defaults::read_flat(&global) {
+        Err(e) => {
+            let message = format!("projects: cannot read {}: {e}", global.display());
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+        Ok(None) => Vec::new(),
+        Ok(Some(map)) => map
+            .get(PROJECTS_KEY)
+            .and_then(toml::Value::as_array)
+            .map(|a| a.iter().map(toml_as_json).collect())
+            .unwrap_or_default(),
+    };
+    let display = root.display().to_string();
+    if rows
+        .iter()
+        .any(|r| r.get("path").and_then(serde_json::Value::as_str) == Some(display.as_str()))
+    {
+        rep.skipped
+            .push("projects: this repo is already on the workspace list".into());
+        return;
+    }
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| display.clone());
+    rows.push(json!({ "name": name, "path": display }));
+    let value = serde_json::to_string(&rows).unwrap_or_default();
+    match config_set(exe, &[(PROJECTS_KEY, value.as_str())], false) {
+        Ok(path) => {
+            rep.done
+                .push(format!("projects: added this repo to {PROJECTS_KEY}"));
+            rep.paths.push(path.display().to_string());
+        }
+        Err(e) => {
+            let message = format!("projects: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// The review posture: no wizard answer and no profile exists on the run
+/// host yet, so the keys wait for a source. Naming a default here would
+/// grant auto-merge silently - the one write this step must never make.
+fn step_review_merge(rep: &mut Report) {
+    let message =
+        "review-merge: no source for the posture yet (wizard answer or profile)".to_string();
+    rep.rows
+        .push(row("needs_human", "no_source", message.clone()));
+    rep.needs_human.push(message);
+}
+
+/// The optional sampler the resource meter reads. Absent is a normal
+/// state, so this only ever reports.
+fn step_machine_tools(rep: &mut Report) {
+    if crate::setup_autowire::on_path("macmon") {
+        rep.skipped.push("machine-tools: macmon is on PATH".into());
+    } else {
+        rep.skipped
+            .push("machine-tools: `brew install macmon` feeds the resource meter".into());
+    }
+}
+
+/// The narrow harness allow rules, printed never written: a settings file
+/// belongs to its harness and its person.
+fn step_permission_rules(rep: &mut Report) {
+    rep.skipped.push(
+        "permission-rules: add \"Bash(fno:*)\" to permissions.allow in your harness settings by hand"
+            .into(),
+    );
+}
+
+/// The end-of-run verify: the writing steps claimed work, these bounded
+/// reads say whether the machine holds it. Green names the check in
+/// `verified`; red turns the check into a needs_human row, and the marker
+/// gate upstream withholds on any needs_human, so a red verify never
+/// stamps the run done. Exit stays 0 - the report is the verdict.
+fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
+    fn fold(rep: &mut Report, name: &str, ok: bool) {
+        if ok {
+            rep.verified.push(name.to_string());
+        } else {
+            let message = format!("verify: {name} failed");
+            rep.rows
+                .push(row("needs_human", "verify_red", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+    const VERIFY_CAP: std::time::Duration = std::time::Duration::from_secs(10);
+    if let Some(exe) = exe.to_str() {
+        fold(
+            rep,
+            "fno doctor --blockers",
+            crate::setup_detect::bounded_for(&[exe, "doctor", "--blockers"], VERIFY_CAP).is_ok(),
+        );
+        fold(
+            rep,
+            "fno config doctor",
+            crate::setup_detect::bounded_for(&[exe, "config", "doctor"], VERIFY_CAP).is_ok(),
+        );
+    } else {
+        fold(rep, "fno doctor --blockers", false);
+        fold(rep, "fno config doctor", false);
+    }
+    let serving = crate::digest_overlay::fno_agents_bin()
+        .to_str()
+        .and_then(|bin| {
+            crate::setup_detect::bounded_for(&[bin, "status", "--json"], VERIFY_CAP).ok()
+        })
+        .and_then(|out| serde_json::from_str::<serde_json::Value>(out.trim()).ok())
+        .and_then(|v| {
+            v.get("daemon")
+                .and_then(|d| d.get("state"))
+                .and_then(serde_json::Value::as_str)
+                .map(|s| s == "serving")
+        })
+        .unwrap_or(false);
+    fold(rep, "fno-agents daemon serving", serving);
+    if loaded.is_empty() {
+        return;
+    }
+    let labels = crate::setup_services::loaded_labels();
+    for label in loaded {
+        let ok = labels
+            .as_ref()
+            .map(|ls| ls.iter().any(|l| l == label))
+            .unwrap_or(false);
+        fold(rep, &format!("launchd {label}"), ok);
+    }
+}
+
 /// The steps this run executes: the scope's layers, plus the contributor
 /// rows when the repo root is a footnote source checkout (the root, not
 /// the cwd: setup launched from a subdirectory still sees the crates),
@@ -1125,6 +1477,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         println!("fno config setup run - Enter accepts each recommended default.");
     }
     let mut declined = 0usize;
+    let mut loaded: Vec<String> = Vec::new();
     for step in &steps {
         if !in_repo && step.layer != Layer::Global {
             continue;
@@ -1180,6 +1533,13 @@ pub fn run(tail: &[OsString]) -> i32 {
                 .skipped
                 .push("accounts: review with `fno config accounts`; login needs a browser".into()),
             (Layer::Global, "guardrails") => step_guardrails(&exe, &mut rep),
+            (Layer::Global, "pr-watcher") => step_pr_watcher(&exe, &mut rep, &mut loaded),
+            (Layer::Global, "auto-heal") => step_auto_heal(&exe, &mut rep),
+            (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
+            (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
+            (Layer::Global, "review-merge") => step_review_merge(&mut rep),
+            (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
+            (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Project, "worktree-policy") => rep
                 .skipped
                 .push("worktree-policy: left unset (harness-native default)".into()),
@@ -1220,6 +1580,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             _ => rep.skipped.push(format!("{}: no runner", step.id)),
         }
     }
+    run_verify(&exe, &loaded, &mut rep);
 
     let global_ran = steps.iter().any(|s| s.layer == Layer::Global);
     let project_ran = steps.iter().any(|s| s.layer != Layer::Global && in_repo);

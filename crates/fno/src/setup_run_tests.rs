@@ -90,6 +90,24 @@ fn step_selection_offers_both_layers_and_filters() {
     }
     assert!(STEPS.iter().any(|s| s.layer == Layer::Global));
     assert!(STEPS.iter().any(|s| s.layer == Layer::Project));
+    // The service and report rows: the approve gate owns the first five's
+    // proposals, the last two only ever report.
+    for id in [
+        "pr-watcher",
+        "auto-heal",
+        "groom-agent",
+        "projects",
+        "review-merge",
+    ] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Approve && s.layer == Layer::Global));
+    }
+    for id in ["machine-tools", "permission-rules"] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Report && s.layer == Layer::Global));
+    }
     // --only selects known ids and refuses unknown ones.
     let mut opts = Opts::default();
     opts.only = vec!["gh-auth".into(), "backlog-prefix".into()];

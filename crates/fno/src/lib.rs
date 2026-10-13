@@ -98,6 +98,7 @@ mod setup_autowire_tests;
 pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;
+pub mod setup_services;
 pub mod sideline_color;
 pub mod spawn_journal;
 pub mod splash;
