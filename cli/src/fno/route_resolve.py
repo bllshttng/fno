@@ -26,19 +26,6 @@ from typing import Any, Mapping, Optional
 _BAND_FLOOR = {"low": 50, "medium": 70, "high": 90, "max": 95}
 _BAND_RANK = {"low": 0, "medium": 1, "high": 2, "max": 3}
 
-# Static fallback order per tier (no snapshot -> no percentiles to compare):
-# requested band first, then higher bands (they clear the minimum), then lower
-# bands as a last-resort degrade before the provider default. `max` never
-# degrades UP (nothing sits above it) and degrades down only inside the same
-# provider; a max answered by the high band is recorded as degraded, never
-# presented as a max (review_level._degraded_max reads the chain for it).
-_STATIC_FALLTHROUGH = {
-    "max": ["max", "high", "medium", "low"],
-    "high": ["high", "medium", "low"],
-    "medium": ["medium", "high", "low"],
-    "low": ["low", "medium", "high"],
-}
-
 # Strong end of the band vocabulary; the round-up ruling resolves absent or
 # uncertain difficulty here, never to the cheap end. `max` ranks above `high`
 # so the band vocabulary here is the SAME one `_BAND_FLOOR` admits: a declared
@@ -303,22 +290,6 @@ def slot_states(verb: str, capacity: Optional[Mapping[str, object]] = None) -> d
         for e in states.get("lane_states") or []
     ]
     return out
-
-
-def resolve_tier(
-    tier: Optional[str],
-    *,
-    provider: Optional[str] = None,
-) -> tuple[Optional[str], list[str]]:
-    """Resolve a tier to a concrete declared model, scoped to one harness when
-    asked. The band math lives on ``fno-agents route-slot``; never raises."""
-    from fno.route_slot_client import RouteSlotUnavailable, route_slot_call
-
-    try:
-        return _answer(route_slot_call(
-            {"mode": "tier", "tier": tier, "provider": provider}), "model")
-    except RouteSlotUnavailable:
-        return None, ["tier=route-slot-unavailable"]
 
 
 def resolve_dispatch_model(

@@ -139,8 +139,10 @@ def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
 
 
 def test_self_review_floor_sizes_the_level_from_the_diff(repo, monkeypatch):
-    # The floor names the sized invocation, not a hardcoded medium: pre-diff it
-    # keeps the <level> placeholder; a real diff shape picks the tier.
+    # The floor names the sized invocation, not a hardcoded medium: a dead
+    # sizing read keeps the <level> placeholder; a live door answer picks the
+    # tier. The stub patches the review-level door wrapper; the tier table and
+    # the merge-base discovery live in fno-agents now.
     import fno.review_capability as rc
 
     monkeypatch.setattr(
@@ -151,49 +153,12 @@ def test_self_review_floor_sizes_the_level_from_the_diff(repo, monkeypatch):
         ),
     )
     root = repo("")
-    monkeypatch.setattr(rc, "_git_out", lambda cwd, *a: None)
+    monkeypatch.setattr(rc, "diff_review_level", lambda root: None)
     line = _done_when_line({}, root)
     assert "/fno:review <level>" in line
-    # 20 files, 2000 added lines: over the medium file cap, inside high's.
-    # Expected is built through the same sizing function, so this asserts the
-    # wiring (diff shape -> sized invocation) without spelling a level here.
-    # The stub patches review_capability's git helper: sizing moved there so
-    # the orienter and the refusal-site renderer share one path.
-    rows = "".join(f"100\t0\tfile{i:02d}.py\n" for i in range(20))
-    monkeypatch.setattr(
-        rc,
-        "_git_out",
-        lambda cwd, *a: "abc123" if a[0] == "merge-base" else rows,
-    )
+    monkeypatch.setattr(rc, "diff_review_level", lambda root: "high")
     line = _done_when_line({}, root)
-    assert f"/fno:review {rc.level_for_diff(20, 2000)}" in line
-
-
-def test_self_review_floor_sizes_the_level_from_master_fallback(repo, monkeypatch):    # A master-default repo: the origin/main probe comes back empty, so the
-    # sized invocation must come through the origin/master merge-base. The
-    # sibling test feeds every merge-base probe a SHA and never gets there.
-    import fno.review_capability as rc
-
-    monkeypatch.setattr(
-        rc,
-        "detect_session",
-        lambda: rc.SessionCapability(
-            harness="claude", substrate="interactive", attended=True
-        ),
-    )
-    root = repo("")
-    rows = "".join(f"100\t0\tfile{i:02d}.py\n" for i in range(20))
-
-    def git_out(cwd, *a):
-        if a[0] == "rev-parse":
-            return "sha" if a[-1] == "origin/master^{commit}" else None
-        if a[0] != "merge-base":
-            return rows
-        return "abc123" if a[-1] == "origin/master" else None
-
-    monkeypatch.setattr(rc, "_git_out", git_out)
-    line = _done_when_line({}, root)
-    assert f"/fno:review {rc.level_for_diff(20, 2000)}" in line
+    assert "/fno:review high" in line
 
 
 def test_stock_install_announces_a_satisfiable_lane_floor_on_gemini(

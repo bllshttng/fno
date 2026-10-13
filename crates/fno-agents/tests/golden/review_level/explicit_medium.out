@@ -1,0 +1,1 @@
+{"level": "medium", "level_source": "explicit", "band": "medium", "effort": "high", "model": "sonnet", "provider": "unknown", "chain": ["slot family catalog unreadable (<TMP>/codex/models_cache.json: No such file or directory (os error 2)); codex model values pass through verbatim", "tier(medium)", "inventory band(>=medium) -> claude-sonnet"], "degraded_max": false}

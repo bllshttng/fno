@@ -4,7 +4,7 @@ use super::*;
 
 /// The sized self-review invocation for this worker, via `fno do target
 /// review-invocation`. The single construction site stays Python
-/// (`self_review_invocation` + `level_for_diff`); Rust is a dumb pipe for its
+/// (`self_review_invocation` + `diff_review_level`); Rust is a dumb pipe for its
 /// stdout, so the invocation a held worker is told to run cannot drift from
 /// the builder the parity and single-source gates police. `--harness` is
 /// passed from the SAME `resolve_harness` the gate uses, so the render names
