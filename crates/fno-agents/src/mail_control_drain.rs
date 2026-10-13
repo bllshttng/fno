@@ -148,7 +148,7 @@ fn write_cursor(bus_dir: &Path, form: &str, msg_id: &str) {
     }
 }
 
-fn is_control(body: &str) -> bool {
+pub(crate) fn is_control(body: &str) -> bool {
     body.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
