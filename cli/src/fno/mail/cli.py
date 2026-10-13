@@ -4623,7 +4623,7 @@ def cmd_drain_self_forward(
     argv = ["drain-self"]
     if json_out:
         argv.append("--json")
-    _forward_mail(argv, label="fno mail drain-self")
+    _forward_mail(argv, label="fno agents mail drain-self")
 
 
 from fno.mail.hold import _emit_drain_marker  # noqa: E402
