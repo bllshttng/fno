@@ -382,8 +382,8 @@ fn graph_renders_a_layered_flowchart() {
         .find(|b| b.key == "lead:finch")
         .expect("the lead box exists");
     assert_eq!(
-        buf[(finch.col as u16, finch.row as u16)].fg(),
-        crate::ratatui_blit::rt_color(colors.needs_you),
+        buf[(finch.col as u16, finch.row as u16)].style().fg,
+        Some(crate::ratatui_blit::rt_color(colors.needs_you)),
         "the selected box's border reads needs-you"
     );
     assert_eq!(
