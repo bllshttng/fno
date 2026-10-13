@@ -359,7 +359,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
-        "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+        "hold" | "dnd" | "hold-release" | "sent" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -671,7 +671,7 @@ fn main() {
             &rest,
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail hold|dnd|hold-release",
+            "fno agents mail hold|dnd|hold-release|sent",
             &["mail"],
             &rest,
         )),
@@ -881,6 +881,16 @@ mod tests {
             decide_role(&os(&["mail", "view"]), false),
             Role::MailViewRenamed
         ));
+        // The sent view claims its verb on both mounts, routed through the
+        // native hold leaf's exec path.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "sent", "--unclaimed"]), false),
+            Role::MailHold(os(&["sent", "--unclaimed"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "sent", "--json"]), false),
+            Role::MailHold(os(&["sent", "--json"]))
+        );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
             Role::Forward
