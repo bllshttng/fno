@@ -167,19 +167,25 @@ enum Row {
 }
 
 fn row_value(root: &Path, row: &Row) -> Value {
+    let git_cwd = root.join("codework-git");
     let (name, harness, sid, cwd) = match row {
-        Row::A1 => ("worker-1", "claude", Some(OTHER_SID), "/tmp/worker"),
-        Row::NoSession => ("nosid-row", "claude", None, "/tmp"),
-        Row::Codex => ("codework-1", "codex", Some(CODEX_SID), "/tmp/plain-dir"),
-        Row::Dnd => ("dnd-row-1", "claude", Some(DND_SID), "/tmp"),
-        Row::Mux => ("muxed-1", "claude", Some(MUX_SID), "/tmp"),
-        Row::SelfRow => ("self-row-1", "claude", Some(SID), "/tmp"),
-        Row::Git => (
-            "codework-git",
-            "codex",
-            Some(GIT_SID),
-            root.join("codework-git"),
+        Row::A1 => (
+            "worker-1",
+            "claude",
+            Some(OTHER_SID),
+            Path::new("/tmp/worker"),
         ),
+        Row::NoSession => ("nosid-row", "claude", None, Path::new("/tmp")),
+        Row::Codex => (
+            "codework-1",
+            "codex",
+            Some(CODEX_SID),
+            Path::new("/tmp/plain-dir"),
+        ),
+        Row::Dnd => ("dnd-row-1", "claude", Some(DND_SID), Path::new("/tmp")),
+        Row::Mux => ("muxed-1", "claude", Some(MUX_SID), Path::new("/tmp")),
+        Row::SelfRow => ("self-row-1", "claude", Some(SID), Path::new("/tmp")),
+        Row::Git => ("codework-git", "codex", Some(GIT_SID), git_cwd.as_path()),
     };
     let cwd = cwd.to_string_lossy().into_owned();
     let mut base = json!({
