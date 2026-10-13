@@ -204,6 +204,10 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail withdraw <msg-id>`: the withdrawal tombstone leaf.
+    /// The carried tail (msg id plus flags) passes through; the verb itself
+    /// is re-spelled by the exec action.
+    MailWithdraw(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -364,6 +368,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .chain(tail.to_vec())
                 .collect(),
         )),
+        "withdraw" => Some(Role::MailWithdraw(tail.to_vec())),
         "view" => Some(Role::MailViewRenamed),
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongVerb(verb.to_string())),
         _ => None,
@@ -673,6 +678,11 @@ fn main() {
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail hold|dnd|hold-release",
             &["mail"],
+            &rest,
+        )),
+        Role::MailWithdraw(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail withdraw",
+            &["mail", "withdraw"],
             &rest,
         )),
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
