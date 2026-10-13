@@ -55,7 +55,6 @@ const DROP_PREFIXES: &[&str] = &[
     "  settings written to:",
     "  obsidian enabled:",
     "  sentinel:",
-    "fno agents: warning: events.emit(",
 ];
 
 fn drop_setup(text: &str) -> String {
@@ -195,16 +194,24 @@ fn seed_transcript(root: &Path, ids: &[&str]) {
     fs::write(proj.join(format!("{SID}.jsonl")), text).expect("transcript seeded");
 }
 
-/// The drain receipts land in the rust leg's own JSONL journal
-/// (agents-home/events.jsonl), not the sqlite store the python capture read.
+/// The store cutover made the sqlite store the write boundary on both
+/// legs, so the raw JSONL journal is never written. Read the drain
+/// receipts back through the store the emitter committed to, resolved
+/// from the same journal path (it lands at agents-home/events.db).
 fn marker_lines(root: &Path) -> Vec<String> {
-    let path = root.join("agents-home").join("events.jsonl");
-    fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.contains("agent_mail_drained"))
-        .map(str::to_string)
-        .collect()
+    let journal = root.join("agents-home").join("events.jsonl");
+    let _ = fno_agents::event_store::import_all(&journal);
+    fno_agents::event_store::query_events(
+        &journal,
+        &fno_agents::event_store::EventQuery {
+            types: vec!["agent_mail_drained".to_string()],
+            ..Default::default()
+        },
+    )
+    .expect("drain-self marker store read")
+    .into_iter()
+    .map(|row| row.line)
+    .collect()
 }
 
 fn seed_unread(root: &Path) {
