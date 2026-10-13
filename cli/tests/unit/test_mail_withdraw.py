@@ -1,4 +1,4 @@
-"""fno agents mail sent / fno agents mail withdraw (x-0548).
+"""fno agents mail withdraw.
 
 A sender could see that mail was stranded and could do nothing about it: the
 count in `mail status` and the every-prompt nudge named a number and no ids, and
@@ -16,7 +16,6 @@ assertion that two paths agree pins the tag, not the destination.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -65,156 +64,6 @@ def _send(
 
 def _run(*args):
     return CliRunner().invoke(app, list(args))
-
-
-# ---------------------------------------------------------------------------
-# fno agents mail sent
-# ---------------------------------------------------------------------------
-
-
-def test_sent_lists_the_ids_the_nag_only_counted(env):
-    """The whole point: the nag says "1 unclaimed" and this says WHICH."""
-    mid = _send(MY_HANDLE, PEER, "hello", ts=_ts_ago(3600))
-
-    res = _run("mail", "sent", "--unclaimed", "--json")
-
-    assert res.exit_code == 0
-    rows = json.loads(res.stdout)
-    assert [r["id"] for r in rows] == [mid]
-    assert rows[0]["to"] == PEER
-    assert rows[0]["claimed"] is False
-
-
-def test_sent_unclaimed_applies_the_same_ttl_as_the_nag(env):
-    """A message younger than the TTL is not what the nag is counting, so it
-    must not appear under --unclaimed either. Two differently-scoped answers to
-    one question is how a sender stops trusting the report."""
-    _send(MY_HANDLE, PEER, "fresh", ts=_ts_ago(5))
-
-    res = _run("mail", "sent", "--unclaimed", "--json")
-
-    assert res.exit_code == 0
-    assert json.loads(res.stdout) == []
-
-
-def test_sent_without_filter_marks_claimed_mail(env):
-    from fno.bus.cursor import advance_cursor
-
-    claimed = _send(MY_HANDLE, PEER, "read me", ts=_ts_ago(3600))
-    advance_cursor(PEER, claimed)
-    stranded = _send(MY_HANDLE, "cccc1111", "not read", ts=_ts_ago(3600))
-
-    rows = json.loads(_run("mail", "sent", "--json").stdout)
-
-    by_id = {r["id"]: r for r in rows}
-    assert by_id[claimed]["claimed"] is True
-    assert by_id[stranded]["claimed"] is False
-
-
-def test_sent_separates_hosted_audit_from_durable_unclaimed(env):
-    hosted = _send(
-        MY_HANDLE, PEER, "already delivered", ts=_ts_ago(3600),
-        delivery="hosted",
-    )
-    durable = _send(MY_HANDLE, PEER, "still pending", ts=_ts_ago(3600))
-
-    rows = json.loads(_run("mail", "sent", "--json").stdout)
-    assert {
-        row["id"]: (row["delivery"], row["claimed"])
-        for row in rows
-    } == {
-        # A hosted row has no cursor, so `claimed` is `null` rather than the
-        # unconditional `true` this test used to pin (the bug this node
-        # exists to fix): `is_deliverable` used to exclude hosted rows from
-        # the unclaimed scan entirely, so "not unclaimed" always read as
-        # claimed. See `landed` for what actually proves delivery now.
-        hosted: ("hosted", None),
-        durable: ("durable", False),
-    }
-
-    # Hosted rows now enter the outstanding scan too (they used to be
-    # excluded by `is_deliverable`, which is why `claimed` could only ever
-    # read `true` on one). This row carries no transcript coordinates, so
-    # the landed check cannot prove it either way: unknown is not lost, and
-    # only the durable message, whose consume cursor is its evidence, stays
-    # outstanding.
-    unclaimed = json.loads(
-        _run("mail", "sent", "--unclaimed", "--json").stdout
-    )
-    assert [row["id"] for row in unclaimed] == [durable]
-
-
-def test_sent_labels_an_unprovable_hosted_row_landing_unknown(env, monkeypatch):
-    # "transcript unreadable" named a false cause: with no recipient session
-    # on the row the check never read any transcript at all. Unknown is its
-    # own state, so the label says so instead of blaming the transcript.
-    from fno.mail.cli import cmd_sent
-
-    class _Tty:
-        def __init__(self):
-            self.parts = []
-
-        def write(self, s):
-            self.parts.append(s)
-            return len(s)
-
-        def flush(self):
-            pass
-
-        def isatty(self):
-            return True
-
-    _send(MY_HANDLE, PEER, "already delivered", ts=_ts_ago(3600), delivery="hosted")
-    fake = _Tty()
-    monkeypatch.setattr("fno.mail.cli.sys.stdout", fake)
-    cmd_sent(unclaimed_only=False, from_name=None, json_out=False)
-    out = "".join(fake.parts)
-    assert "handed, landing unknown" in out
-
-
-def test_sent_does_not_call_a_just_sent_message_claimed(env):
-    """Bus timestamps are whole seconds and the age test is strict `>`, so a
-    message sent in the current second has age 0.0. A zero TTL would classify it
-    as picked up -- reporting the opposite of the truth this verb exists to
-    tell, on exactly the message a sender is most likely to be looking at."""
-    mid = _send(MY_HANDLE, PEER, "just now")
-
-    rows = json.loads(_run("mail", "sent", "--json").stdout)
-
-    assert {r["id"]: r["claimed"] for r in rows} == {mid: False}
-
-
-def test_sent_scopes_to_the_handle_the_send_path_stamps(env):
-    """`stamp_from` is what writes `from`, and it floors to "fno" with no
-    ambient identity while the precedence-only resolver would pick an inherited
-    marker's session. Scoping by the wrong one lists mail this session did not
-    send and hides mail it did."""
-    from fno.agents.self_stamp import stamp_from
-
-    for m in MARKERS:
-        monkeypatch_env_clear(m)
-    mid = _send(stamp_from(None), PEER, "from a bare shell", ts=_ts_ago(3600))
-
-    rows = json.loads(_run("mail", "sent", "--json").stdout)
-
-    assert [r["id"] for r in rows] == [mid]
-
-
-def monkeypatch_env_clear(name: str) -> None:
-    import os
-
-    os.environ.pop(name, None)
-
-
-def test_sent_shows_only_my_own_outbound(env):
-    """Scoped to this session's handle, so it never lists mail this session
-    could not withdraw anyway."""
-    mine = _send(MY_HANDLE, PEER, "mine", ts=_ts_ago(3600))
-    _send(PEER, "cccc1111", "someone else's", ts=_ts_ago(3600))
-
-    rows = json.loads(_run("mail", "sent", "--json").stdout)
-
-    assert [r["id"] for r in rows] == [mine]
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +291,6 @@ def test_withdraw_accepts_the_label_the_send_path_stamped(env):
     res = _run("mail", "withdraw", mid, "--from-name", "release-bot")
 
     assert res.exit_code == 0
-    rows = json.loads(_run("mail", "sent", "--from-name", "release-bot", "--json").stdout)
-    assert rows == []
 
 
 def test_withdraw_receipt_does_not_promise_an_outcome_it_cannot_verify(env):
@@ -479,32 +326,6 @@ def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
     assert [m.id for m in scan_unread("cccc1111")] == [mid]
 
 
-def test_a_typed_row_is_not_reported_as_claimed(env):
-    """`typed` is the one state that must never imply the recipient consumed it.
-
-    A typed row is excluded from the unclaimed scan the way a hosted row is, so
-    it fell through to "claimed" and told the sender the recipient had read it.
-    Bytes written into a PTY can be discarded by the prompt they land on, which
-    is the whole reason this transport's receipt says `typed`, never
-    `delivered`.
-    """
-    _send(MY_HANDLE, PEER, "ship it", ts=_ts_ago(60), delivery="typed")
-
-    result = _run("agents", "mail", "sent")
-
-    assert result.exit_code == 0, result.output
-    # The JSON lane is the one machines read, so it carries the same answer.
-    row = json.loads(result.output)[0]
-    assert row["delivery"] == "typed"
-    assert row["claimed"] is False
-    # And it must distinguish "not claimed" from "can never be claimed". A typed
-    # row is excluded from the unclaimed scan, withdraw refuses it, and the
-    # recipient cannot drain it, so `claimed: false` alone made it identical to
-    # an UNCLAIMED durable row that can still clear. This renderer and
-    # `--unclaimed-only` disagreed about the same row.
-    assert row["claimable"] is False
-
-
 def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
     """There is nothing to retract once the bytes are at a prompt.
 
@@ -520,17 +341,3 @@ def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
     assert "cannot be recalled" in (result.stderr or result.output)
 
 
-def test_acking_a_tombstone_names_it_a_tombstone(env):
-    """The kind filter routes a tombstone into the ack refusal branch, where
-    "already delivered (hosted)" would be false about a row that retracted mail
-    and was never delivered."""
-    from fno.bus.log import WITHDRAW_KIND, iter_messages
-
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-    assert _run("mail", "withdraw", mid).exit_code == 0
-    tombstone = next(m for m in iter_messages() if m.kind == WITHDRAW_KIND)
-
-    res = _run("mail", "ack", tombstone.id, "--name", PEER)
-
-    assert res.exit_code == 2
-    assert "tombstone" in res.stderr

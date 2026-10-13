@@ -68,6 +68,10 @@ A daemon mint reads the parent edge from the spawn REQUEST, never from the daemo
 When the spawning process carries NO identity marker at all, `_capture_parent_edge` takes the harness from the process-tree walk and leaves the session id null. The walk is the prover, and a harness ancestor cannot be a stranger the way an inherited marker can. The fallback is gated on an empty marker set, not on a missing harness. A marker that IS present and resolved to nothing is a contradiction, and a contradiction attributes nothing. The `agent_spawned` event carries the `lineage_reason` in every case.
 
 
+## What a revival keeps
+
+A registry-row drop does not end a session's identity. The registry write's removal accounting stamps the dropped row's name, `fno_id`, `spawned_by_*` triple and `node` into `wake_names.json` beside the registry. The stop seams stamp the same record while the row is merely stopped. A revival asks the one reader: the `wake_name` field of `fno-agents spawn-axes`. It answers from the newest registry row for the uuid, then the tombstone, then the transcript's naming records, then the `wake-<handle>` alias. The minted row keeps that answer. Its name, stable id and spawner stay the session's own, so the board, mail and ledger joins survive the drop. A drive-eligible row answers its name but leaves `fno_id` out, so a fork of a live row never shares its id.
+
 ## Reading it back: the resolver
 
 `cli/src/fno/provenance/resolver.py` turns a stored pointer into a transcript path:

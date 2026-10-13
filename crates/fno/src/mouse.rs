@@ -24,7 +24,7 @@ const PREFIX: &[u8] = b"\x1b[<";
 /// A parsed SGR mouse report in OUTER-terminal coordinates (0-based), plus the
 /// Shift modifier. Shift is the native-selection escape hatch (AC3-EDGE): the
 /// client drops shifted events rather than intercept them. `alt` is the SGR
-/// alt/meta bit (8), forwarded to the server (v111): an alt click is the mux's
+/// alt/meta bit (8), forwarded to the server (v112): an alt click is the mux's
 /// link-open gesture on a mouse-reporting pane. Cmd has no SGR bit, so no
 /// terminal can report it - alt is the gesture that is actually visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,7 +221,7 @@ mod tests {
         let (r, _) = one(b"\x1b[<4;2;2M");
         assert!(r[0].shift, "shift bit decoded");
         assert!(!r[0].alt);
-        // cb = 0 (left) | 8 (alt) = 8: the v111 link-open gesture.
+        // cb = 0 (left) | 8 (alt) = 8: the v112 link-open gesture.
         let (r, _) = one(b"\x1b[<8;2;2M");
         assert!(r[0].alt, "alt bit decoded");
         assert!(!r[0].shift);

@@ -215,9 +215,7 @@ pub(super) async fn mark_claude_stopped(
             state::record_stop(e, "stop-verb", Some("claude".into()));
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
-            let sid = e.harness_session_id.clone().unwrap_or_default();
-            let n = e.name.clone();
-            crate::wake_name::record(&wake_home, &sid, &n);
+            crate::wake_name::stamp_from_row(&wake_home, e);
         }
     })
     .await

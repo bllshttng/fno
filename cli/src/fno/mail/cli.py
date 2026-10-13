@@ -1315,27 +1315,6 @@ def cmd_status(
     typer.echo(f"sent unclaimed: {snapshot['sent_unclaimed']}")
 
 
-@mail_app.command("seed-provenance", hidden=True)
-def cmd_seed_provenance() -> None:
-    """Render this session's spawn-seed provenance envelope on stdout.
-
-    Reads the ``FNO_SEED_PROV_*`` fields the launcher exported and renders them
-    through the sole ``<fno_mail>`` renderer. Called by
-    ``hooks/spawn-seed-provenance-session-start.sh``, which owns the
-    ``source=startup`` gate and the hook JSON.
-
-    Exit 1 with no output when there is nothing to attribute: a hand-started
-    session, an operator spawn, or an unusable sidecar. The hook stays silent on
-    that, because a session with no peer sender has nothing to attribute.
-    """
-    from fno.mail.seed_provenance import render_from_env
-
-    rendered = render_from_env()
-    if rendered is None:
-        raise typer.Exit(code=1)
-    print(rendered)
-
-
 @mail_app.command("pane-prepare", hidden=True)
 def cmd_pane_prepare(
     session: Optional[str] = typer.Option(
@@ -4176,75 +4155,21 @@ def cmd_send(
             raise typer.Exit(code=NOT_LANDED_EXIT)
 
 
-def _team_sender_kind_and_from(from_name: Optional[str]) -> tuple[str, str]:
-    """Resolve the announce envelope identity.
-
-    A session whose harness identity this process can PROVE it owns stamps its
-    own handle as ``agent`` (Rust then demands a role of that row); everything
-    else (a bare shell, cron, an explicit alias) stamps ``operator``.
-    """
-    from fno.agents.self_stamp import stamp_from
-    from fno.harness_identity import resolve_owned_identity
-
-    try:
-        ident = resolve_owned_identity()
-    except Exception:  # noqa: BLE001 - identity is best-effort, never a crash
-        ident = None
-    owned = bool(ident is not None and ident.session_id and ident.harness)
-    return ("agent" if owned else "operator"), stamp_from(from_name)
-
-
 @mail_app.command("team", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def cmd_team(
-    ctx: typer.Context,
-    scope: str = typer.Option(..., "--scope", help="Fleet scope: all | leads | <role scope> | project:<p>."),
-    message: str | None = typer.Argument(None, help="One announcement body."),
-    from_name: str | None = typer.Option(None, "--from-name", help="Envelope identity (see send)."),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Send receipt as JSON."),
-) -> None:
+def team_forward(ctx: typer.Context) -> None:
     """Announce one body to a fleet scope as ONE bus line.
 
-    The bus line IS the announcement: every session reads it through its own
-    cursor at its next hook boundary, so a send costs one write at any fleet
-    size. Delivery proofs are a separate read (`fno-agents announce status
-    <id>`). The body is linted here (the single style implementation); the
-    Rust writer owns authority, the audience snapshot, and the locked append.
-
-    Announcement flags belong to the Rust writer and are relayed verbatim:
+    The body lives in the Rust mail front now; Python owns transport only,
+    the same split as the hold forward. The body checks (forged envelope,
+    brevity cap, style) and the announce writer run on the native leg.
+    Announcement flags belong to the Rust writer and relay verbatim:
     `--subject=S` (supersede key; the = spelling keeps click from parking
     the value in the positional body), `--expires=45m|24h|7d` (standing
     window, default 24h, max 7d), `--urgent`. Any unrecognized flag is
     passed through the same way and refused there, so this shim adds no
     Python flag surface.
     """
-    import shutil
-
-    if not message:
-        print("usage: fno agents mail team --scope <all|leads|<role>|project:<p>> <message>", file=sys.stderr)
-        raise typer.Exit(code=2)
-    _vet_body(message)
-
-    sender_kind, sender = _team_sender_kind_and_from(from_name)
-
-    binary = shutil.which("fno-agents")
-    if binary is None:
-        print("error: mail team needs the fno-agents binary on PATH (the announce writer)", file=sys.stderr)
-        raise typer.Exit(code=1)
-
-    args = [
-        binary, "announce", "send",
-        "--scope", scope,
-        "--from", sender,
-        "--sender-kind", sender_kind,
-        *ctx.args,
-    ]
-    if json_out:
-        args.append("--json")
-    proc = subprocess.run(args, input=message, capture_output=True, text=True)
-    sys.stdout.write(proc.stdout)
-    sys.stderr.write(proc.stderr)
-    if proc.returncode != 0:
-        raise typer.Exit(code=proc.returncode if proc.returncode > 0 else 1)
+    _forward_mail(["team", *ctx.args], label="fno mail team")
 
 
 @mail_app.command("unread")
@@ -4318,107 +4243,16 @@ def cmd_sent(
     ``landed`` proves the text reached the recipient's own transcript, never
     that the agent read or acted on it -- that fourth state isn't observable.
     """
-    from fno.agents.self_stamp import stamp_from
-    from fno.bus.log import (
-        HOSTED_DELIVERY,
-        TYPED_DELIVERY,
-        dedupe_by_id,
-        iter_messages,
-        withdrawn_ids,
-    )
-    from fno.config import load_settings
-    from fno.mail.landed import _sent_unclaimed, age_minutes, landed_states
-
-    # `stamp_from`, not the precedence-only resolver: this must be the SAME
-    # handle the send path stamped into `from`, or the outbox lists mail this
-    # session did not send and hides mail it did. A session that inherited a
-    # foreign marker stamps "fno" and resolves to its spawner by precedence, so
-    # the two answers genuinely differ. Passing `--from-name` through is what
-    # makes the labelled send path listable at all: `stamp_from` returns an
-    # explicit label verbatim, so mail sent under one is invisible here without
-    # it -- an entire supported send path with no way to see its own strands.
-    handle = stamp_from(from_name)
-
-    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    # One id, one row, the receipt's state: a staged body row and its receipt
-    # share an id, and the outbox lists the send once, in its final state.
-    all_msgs = dedupe_by_id(iter_messages(), last=True)
+    # The body lives in the Rust mail front now; Python forwards, the same
+    # split as the hold verbs.
+    argv = ["sent"]
     if unclaimed_only:
-        msgs = _sent_unclaimed(handle, load_settings().inbox.unclaimed_ttl)
-        unclaimed_ids = {m.id for m in msgs}
-    else:
-        retracted = withdrawn_ids(all_msgs)
-        # TTL of -1, not 0: `_age_exceeds` is strict `>` and bus timestamps are
-        # whole seconds, so a message sent this second has age 0.0 and a TTL of 0
-        # would classify it CLAIMED - reporting a just-sent, unread message as
-        # picked up, which is the opposite of the truth this verb exists to tell.
-        unclaimed_ids = {m.id for m in _sent_unclaimed(handle, -1)}
-        msgs = [
-            m for m in all_msgs
-            if m.kind == "send" and m.from_ == handle and m.id not in retracted
-        ]
-
-    # `claimed`: durable cursor read past this row. A hosted row has none, so
-    # it reports `null` (see `landed`), never the unconditional `true` before.
-    claimed_flag: dict[str, Optional[bool]] = {
-        m.id: (None if m.delivery == HOSTED_DELIVERY
-               else False if m.delivery == TYPED_DELIVERY
-               else m.id not in unclaimed_ids)
-        for m in msgs
-    }
-    landed_flag = landed_states(all_msgs, msgs)
-
-    if json_out or not is_tty:
-        print(
-            json.dumps(
-                [
-                    {
-                        "id": m.id, "to": m.to, "to_kind": m.to_kind,
-                        "kind": m.kind, "ts": m.ts,
-                        "delivery": m.delivery or "durable",
-                        "claimed": claimed_flag[m.id],
-                        # A typed row is neither claimed nor claimABLE: it is
-                        # excluded from the unclaimed scan, withdraw refuses it,
-                        # and the recipient cannot drain it. Reporting only
-                        # `claimed: false` made it identical to an UNCLAIMED
-                        # durable row that can still clear, so this renderer and
-                        # `--unclaimed-only` disagreed about the same row.
-                        "claimable": m.delivery != TYPED_DELIVERY,
-                        "landed": landed_flag.get(m.id),
-                    }
-                    for m in msgs
-                ],
-                ensure_ascii=False,
-            )
-        )
-        return
-    if not msgs:
-        scope = "unclaimed " if unclaimed_only else ""
-        print(f"no {scope}mail sent from {handle}")
-        return
-    for m in msgs:
-        if m.delivery == HOSTED_DELIVERY:
-            verdict = landed_flag.get(m.id)
-            if verdict is True:
-                state = "landed"
-            elif verdict is False:
-                state = f"handed {age_minutes(m.ts) or 0}m ago, not in transcript"
-            else:
-                state = "handed, landing unknown"
-        # `typed`: a PTY prompt can discard bytes, so never claim it was consumed.
-        elif m.delivery == TYPED_DELIVERY:
-            state = "typed (unconfirmed)"
-        else:
-            state = "claimed" if claimed_flag[m.id] else "UNCLAIMED"
-        lane = m.to_kind or "?"
-        delivery = m.delivery or "durable"
-        print(f"{m.id}  -> {m.to}  [{lane}/{delivery}]  {m.ts}  {state}")
-    print(
-        "\nunclaimed means the recipient never read it. Wake it first - "
-        "fno agents peek <recipient> to check, fno agents resume <recipient> "
-        "to wake (the wake lane delivers); withdraw one only when stale: "
-        "fno agents mail withdraw <id>"
-    )
+        argv.append("--unclaimed")
+    if from_name is not None:
+        argv += ["--from-name", from_name]
+    if json_out:
+        argv.append("--json")
+    _forward_mail(argv, label="fno mail sent")
 
 
 @mail_app.command("withdraw")
@@ -4550,54 +4384,7 @@ def cmd_bus_ack(
     Spelled out because the old one-liner read as if ``<name>`` came first and
     cost a reader two failed invocations before they resorted to ``--help``.
     """
-    from fno.bus.cursor import advance_cursor, scan_unread
-    from fno.bus.log import is_deliverable, iter_messages
-
-    # The ack target must be a retained message addressed to `name`. Two failure
-    # modes this guards (both would silently corrupt the read position because
-    # the cursor is a single global-log position and scan_unread returns to==name
-    # AFTER it):
-    #   - an id not in the log -> scan_unread can't find it -> re-surfaces ALL mail;
-    #   - an id addressed to ANOTHER recipient but positioned after my unread ->
-    #     advances me past my own earlier unread, hiding it.
-    all_msgs = list(iter_messages())
-    target = next((m for m in all_msgs if m.id == msg_id), None)
-    if target is None:
-        print(
-            f"unknown message id {msg_id!r}: not found in the retained bus log; "
-            f"cursor not advanced (run `fno agents mail unread --name {name}` to see ids)",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    if target.to != name:
-        print(
-            f"message {msg_id!r} is addressed to {target.to!r}, not {name!r}; "
-            f"cursor not advanced (ack only your own messages)",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    if not is_deliverable(target):
-        # Each refusal names what the row is; the lines live in mail.ack_refusal.
-        from fno.mail.ack_refusal import refusal_line
-
-        print(refusal_line(target), file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    # The advance consumes every message addressed to `name` up through msg_id.
-    # Emit a receipt for each so a manual ack does not leave them unread with no
-    # terminal event -- the same accounting gap drain-self closes. Captured
-    # before the advance (after it, scan_unread no longer returns them).
-    pos = {m.id: i for i, m in enumerate(all_msgs)}
-    acked = [m for m in scan_unread(name) if m.id in pos and pos[m.id] <= pos[msg_id]]
-
-    if advance_cursor(name, msg_id):
-        print(f"cursor for {name!r} advanced to {msg_id}")
-        for m in acked:
-            _emit_drain_marker(m.id, name, name, m.from_, "acked")
-    else:
-        # Forward-only: the id is at or before the current cursor (re-ack / older
-        # message). Idempotent no-op, not an error - the cursor never rewinds.
-        print(f"cursor for {name!r} already at or past {msg_id}; unchanged")
+    _forward_mail(["ack", msg_id, "--name", name], label="fno mail ack")
 
 
 def _manifest_fields(*names: str) -> dict[str, Optional[str]]:
@@ -4651,21 +4438,21 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _forward_mail_hold(argv: list[str]) -> None:
-    """Forward one hold-front verb to the bundled fno-agents binary.
+def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
+    """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold verbs' bodies live in the Rust mail front now; Python owns
-    transport only, the same split as the claims forward.
+    The hold, team, sent and ack verbs' bodies live in the Rust mail front
+    now; Python owns transport only, the same split as the claims forward.
     """
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
-    from fno.rust_binary import resolve_binary
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    binary = resolve_binary()
+    binary = find_dev_binary() or resolve_binary()
     if binary is None:
         typer.echo(
-            "fno mail hold: the fno-agents binary was not found. "
+            f"{label}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
@@ -4723,7 +4510,7 @@ def cmd_hold(
         argv.append("--off")
     if status:
         argv.append("--status")
-    _forward_mail_hold(argv)
+    _forward_mail(argv)
 
 
 def cmd_hold_release(
@@ -4742,11 +4529,54 @@ def cmd_hold_release(
     someone else took the hold off, and a second release would be a no-op that
     still emitted a release event.
     """
-    _forward_mail_hold(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
+    _forward_mail(["hold-release", "--handle", handle, "--poll-s", str(poll_s)])
 
 
 mail_app.command("hold")(cmd_hold)
 mail_app.command("hold-release", hidden=True)(cmd_hold_release)
+
+
+def cmd_seed_provenance_front() -> None:
+    """Forward the hidden seed-provenance verb to the bundled fno-agents binary.
+
+    The render body lives in the Rust mail front now; Python owns transport
+    only, the same split as the hold forward. The launcher
+    (hooks/spawn-seed-provenance-session-start.sh) exports the FNO_SEED_PROV_*
+    sidecar, which owns the source=startup gate and the hook JSON.
+
+    Exit 1 with no output when there is nothing to attribute: a hand-started
+    session, an operator spawn, or an unusable sidecar. The hook stays silent
+    on that, because a session with no peer sender has nothing to attribute.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail seed-provenance: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    result = subprocess.run(
+        [str(binary), "mail", "seed-provenance"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+mail_app.command("seed-provenance", hidden=True)(cmd_seed_provenance_front)
 
 
 @mail_app.command("drain-self", hidden=True)

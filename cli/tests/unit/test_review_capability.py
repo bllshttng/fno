@@ -300,12 +300,12 @@ def test_self_review_invocation_asks_for_comments_but_never_fixes():
 
 def test_render_self_review_invocation_sizes_from_the_diff_never_the_default(monkeypatch):
     """The renderer is the surface refusal sites embed: its level must come
-    from diff_review_level (the level_for_diff sizing path), never the
+    from diff_review_level (the review-level door's sizing), never the
     builder's medium default, and a dead sizing read keeps the placeholder
     instead of fabricating a level."""
     import fno.review_capability as rc
 
-    sized = rc.level_for_diff(30, 3000)
+    sized = "xhigh"
     monkeypatch.setattr(rc, "diff_review_level", lambda root: sized)
     rendered = rc.render_self_review_invocation("claude", project_root=None)
     assert rendered == f"/fno:review {sized} --comment"
@@ -344,36 +344,12 @@ def test_render_self_review_invocation_names_the_final_pr_head_and_base():
     )
 
 
-def test_level_for_diff_sizes_from_both_dimensions():
-    """Either dimension alone pushes the tier up: a tier holds only when both
-    the file count and the line count sit inside its caps."""
-    import fno.review_capability as rc
-
-    assert rc.level_for_diff(1, 40) == "low"
-    assert rc.level_for_diff(3, 150) == "low"
-    assert rc.level_for_diff(4, 40) == "medium"
-    assert rc.level_for_diff(1, 151) == "medium"
-    assert rc.level_for_diff(10, 600) == "medium"
-    assert rc.level_for_diff(11, 10) == "high"
-    assert rc.level_for_diff(1, 601) == "high"
-    assert rc.level_for_diff(25, 2500) == "high"
-    assert rc.level_for_diff(26, 5) == "xhigh"
-    assert rc.level_for_diff(1, 2501) == "xhigh"
-    assert rc.level_for_diff(60, 8000) == "xhigh"
-    assert rc.level_for_diff(61, 3) == "max"
-    assert rc.level_for_diff(1, 8001) == "max"
-    for files, lines in ((0, 0), (500, 1000000)):
-        assert rc.level_for_diff(files, lines) in rc.ALLOWED_REVIEW_LEVELS
-
-
 def test_ultra_is_structurally_unreachable():
     import fno.review_capability as rc
 
     assert "ultra" not in rc.ALLOWED_REVIEW_LEVELS
     with pytest.raises(ValueError):
         rc.self_review_invocation("claude", level="ultra")
-    for files, lines in ((0, 0), (1000, 10**9)):
-        assert rc.level_for_diff(files, lines) != "ultra"
 
 
 def test_self_review_invocation_takes_the_level():
@@ -428,13 +404,13 @@ def test_an_unknown_harness_with_a_skill_reviewer_stays_unverifiable(isolated: P
 def test_review_invocation_verb_prints_the_render(monkeypatch, tmp_path):
     """'fno do target review-invocation' is the bridge the refusal sites call:
     stdout is exactly one line, the render for the requested harness, sized by
-    the diff at the caller's root. Expected strings are built through the same
-    functions the verb uses, so no concrete level is spelled here."""
+    the diff at the caller's root. The sizing door is stubbed here, so the
+    expected strings spell the stubbed level."""
     import fno.review_capability as rc
     from typer.testing import CliRunner
 
     monkeypatch.chdir(tmp_path)
-    sized = rc.level_for_diff(30, 3000)
+    sized = "xhigh"
     monkeypatch.setattr(rc, "diff_review_level", lambda root: sized)
 
     from fno.target_cli import target_app

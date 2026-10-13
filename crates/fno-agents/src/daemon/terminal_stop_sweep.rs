@@ -122,9 +122,7 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
                                 state::record_stop(entry, "terminal-sweep", Some(stopped_reason));
                                 // best-effort: a failed stamp costs a later
                                 // wake its name, never the stop.
-                                let sid = entry.harness_session_id.clone().unwrap_or_default();
-                                let n = entry.name.clone();
-                                crate::wake_name::record(&sweep_home, &sid, &n);
+                                crate::wake_name::stamp_from_row(&sweep_home, entry);
                             }
                         })
                         .await;

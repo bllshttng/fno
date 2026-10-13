@@ -1,6 +1,6 @@
 //! Mouse-routing tests: what `route_mouse` decides per pane mode, the SGR
 //! encoding of forwarded events, the scroll-fold classification, and the
-//! v111 alt-click link open on a mouse-reporting pane. Lives beside
+//! v112 alt-click link open on a mouse-reporting pane. Lives beside
 //! `server::mouse_route` + `open_link` (file-budget): the tests travel with
 //! the code they answer.
 
@@ -149,7 +149,7 @@ fn mouse_wheel_dead_pane_is_noop() {
     );
 }
 
-// v111: in a mouse-reporting pane the SelectRelease open path is unreachable
+// v112: in a mouse-reporting pane the SelectRelease open path is unreachable
 // (route_mouse passes every press/release through), so an alt click over a
 // link is the mux's open gesture there. Plain clicks on the same cell keep
 // forwarding to the app untouched; reaping drops a pending pair.

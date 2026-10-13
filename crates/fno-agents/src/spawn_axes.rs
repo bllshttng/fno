@@ -614,7 +614,7 @@ pub fn reentry_mechanism_decide(ask: &Value) -> Value {
     }
 }
 
-/// The `wake_name` field's answer: the name a wake fork spawns under, read
+/// The `wake_name` field's answer: the identity a wake fork carries, read
 /// from the registry beside the reentry plan (same field-on-a-verb shape).
 /// An unreadable registry degrades to an empty one, so the full rung chain
 /// (row, tombstone, transcript, alias) still answers: a wake must never
@@ -627,8 +627,20 @@ pub fn wake_name_decide(ask: &Value) -> Value {
     let home = crate::paths::AgentsHome::from_env();
     let registry_path = home.registry_json();
     let registry = crate::state::load_registry(&registry_path).unwrap_or_default();
-    let name = crate::reentry::wake_spawn_name(&registry, &registry_path, session_id);
-    serde_json::json!({ "name": name })
+    let carried = crate::reentry::revival_identity(&registry, &registry_path, session_id);
+    let mut answer = serde_json::json!({ "name": carried.name });
+    for (key, value) in [
+        ("fno_id", &carried.fno_id),
+        ("spawned_by_session", &carried.spawned_by_session),
+        ("spawned_by_harness", &carried.spawned_by_harness),
+        ("spawned_by_cwd", &carried.spawned_by_cwd),
+        ("node", &carried.node),
+    ] {
+        if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
+            answer[key] = serde_json::json!(v);
+        }
+    }
+    answer
 }
 
 /// The verb entry: JSON payload on stdin, decision JSON on stdout (the
@@ -742,7 +754,7 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{}", reentry_mechanism_decide(ask));
         return 0;
     }
-    // A `wake_name` field asks which name a wake fork spawns under: the
+    // A `wake_name` field asks which identity a wake fork carries: the
     // session's last recorded registry name, else the wake- alias (same
     // field-on-a-verb shape).
     if let Some(ask) = parsed.get("wake_name") {

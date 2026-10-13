@@ -130,7 +130,7 @@ impl Core {
     }
 
     /// The claim half of an alt-click link open on a mouse-reporting pane
-    /// (v111). The SelectRelease open path only runs in panes that never
+    /// (v112). The SelectRelease open path only runs in panes that never
     /// negotiated mouse reporting, so in a Claude Code / codex TUI pane - both
     /// ask for the mouse - no link was ever openable from the mux. The alt
     /// modifier is the gesture: SGR reports alt (bit 8) from Ghostty, iTerm2
