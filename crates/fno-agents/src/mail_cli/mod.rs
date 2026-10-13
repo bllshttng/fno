@@ -1,7 +1,8 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
-//! release timer, the pane-send renderer, the `team` broadcast, and the
-//! outbound sent view.
-//! Dispatch only; the verbs live in [hold], [pane_prepare], [team], and [sent].
+//! release timer, the pane-send renderer, the `team` broadcast, the outbound
+//! sent view, and the ack leaf.
+//! Dispatch only; the verbs live in [hold], [pane_prepare], [team], [sent], and [ack].
+pub mod ack;
 pub mod hold;
 pub mod pane_prepare;
 pub mod sent;
@@ -19,9 +20,10 @@ pub fn run(rest: &[String]) -> i32 {
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
         "pane-prepare" => pane_prepare::run(&rest[1..]),
+        "ack" => ack::run_ack(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | pane-prepare | team | sent)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | pane-prepare | team | sent | ack)"
             );
             2
         }
@@ -37,4 +39,5 @@ fn print_help() {
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
     println!("  pane-prepare --session-id S --pane N [--harness H] [--style-exception R]");
+    println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
 }
