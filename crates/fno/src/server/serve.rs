@@ -1,3 +1,4 @@
+use super::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
 use super::*;
 
 pub(super) async fn serve(
