@@ -68,7 +68,7 @@ echo "PASS: the primary holds A's attestation"
 echo "diag: B direct pull: $(env HOME="$HOME_B" "$FNO_AGENTS_BIN" attest pull 2>&1 || true)"
 echo "diag: B slug: $(git config --get remote.origin.url 2>&1 || true)"
 echo "diag: B config: $(cat "$HOME_B/.fno/config.toml")"
-rows_b=$(env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
+rows_b=$(FNO_ATTEST_DEBUG=1 env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
     --events "$journal_b" --type review_attestation 2>"$HOME_B/rows.err") \
     || fail "machine B rows read failed: $(cat "$HOME_B/rows.err")"
 # The rows verb prints a JSON array, so envelope quotes arrive escaped;

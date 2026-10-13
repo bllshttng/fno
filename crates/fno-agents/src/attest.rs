@@ -186,6 +186,7 @@ pub fn run_push(cwd: &Path) -> i32 {
 /// envelope lines on stdout. Exit 3 on an unreachable primary, the same
 /// code a shared claim verb answers with.
 pub fn run_pull(args: &[String], cwd: &Path) -> i32 {
+    let debug = std::env::var_os("FNO_ATTEST_DEBUG").is_some();
     let mut slug = repo_slug(cwd);
     let mut it = args.iter();
     while let Some(tok) = it.next() {
@@ -200,9 +201,21 @@ pub fn run_pull(args: &[String], cwd: &Path) -> i32 {
         return 2;
     }
     match configured() {
-        Ok(None) => 0,
+        Ok(None) => {
+            if debug {
+                eprintln!("attest pull: store.remote_url unset");
+            }
+            0
+        }
         Ok(Some(remote)) => match pull_lines(&slug, &remote) {
             Ok(lines) => {
+                if debug {
+                    eprintln!(
+                        "attest pull: slug={slug} rows={} url={}",
+                        lines.len(),
+                        remote.url()
+                    );
+                }
                 for line in lines {
                     println!("{line}");
                 }
