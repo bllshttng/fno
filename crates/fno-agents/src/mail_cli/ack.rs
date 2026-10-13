@@ -254,3 +254,31 @@ fn emit_drain_marker(m: &Value, name: &str) {
         eprintln!("warning: could not commit agent_mail_drained: {error}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The manual-ack drain receipt: an acked id leaves one
+    /// `agent_mail_drained` row in the state-root events journal with the
+    /// acked reason, or sweep/drain accounting loses the terminal event.
+    #[test]
+    fn acked_id_commits_drain_marker() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
+        emit_drain_marker(&json!({"id": "m-1", "from": "lead"}), "a1b2c3d4");
+        let journal = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        let rows: Vec<Value> = journal
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "one ack, one receipt row");
+        assert_eq!(rows[0]["kind"], "agent_mail_drained");
+        assert_eq!(rows[0]["data"]["reason"], "acked");
+        assert_eq!(rows[0]["data"]["msg_id"], "m-1");
+        assert_eq!(rows[0]["data"]["recipient"], "a1b2c3d4");
+    }
+}
