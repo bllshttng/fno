@@ -918,7 +918,7 @@ fn bus_live_path() -> PathBuf {
 
 /// The live log the bus-append door writes: the same resolution the
 /// Python appender used, so `FNO_BUS_DIR` keeps ruling the path.
-fn bus_append_live_path() -> PathBuf {
+pub(crate) fn bus_append_live_path() -> PathBuf {
     let home = crate::paths::AgentsHome::from_env();
     let dot_fno = home.root().parent().unwrap_or_else(|| home.root());
     crate::intel::bus_log_path(dot_fno)

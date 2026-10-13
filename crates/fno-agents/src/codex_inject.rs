@@ -858,7 +858,7 @@ fn review_start_audit_payload_len(fields: &serde_json::Map<String, serde_json::V
         .unwrap_or(usize::MAX)
 }
 
-fn review_invocation_id() -> String {
+pub(crate) fn review_invocation_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -866,7 +866,7 @@ fn review_invocation_id() -> String {
     format!("ri-{nanos:x}-{}", std::process::id())
 }
 
-fn review_invocation_sidecar(session_id: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn review_invocation_sidecar(session_id: &str) -> Option<std::path::PathBuf> {
     if session_id.is_empty()
         || std::path::Path::new(session_id).file_name()?.to_str()? != session_id
     {
@@ -892,7 +892,7 @@ fn review_invocation_sidecar(session_id: &str) -> Option<std::path::PathBuf> {
 /// Read AND consume a pending id, mirroring the Python adopt: without the
 /// unlink a stale sidecar is re-adopted forever and distinct reviews collapse
 /// into one invocation id.
-fn read_pending_review_invocation(session_id: &str) -> Option<String> {
+pub(crate) fn read_pending_review_invocation(session_id: &str) -> Option<String> {
     let path = review_invocation_sidecar(session_id)?;
     let raw = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
@@ -904,28 +904,28 @@ fn read_pending_review_invocation(session_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn write_pending_review_invocation(session_id: &str, invocation_id: &str) {
+pub(crate) fn write_pending_review_invocation(session_id: &str, invocation_id: &str) -> bool {
     let Some(path) = review_invocation_sidecar(session_id) else {
-        return;
+        return false;
     };
     let Some(parent) = path.parent() else {
-        return;
+        return false;
     };
     if std::fs::create_dir_all(parent).is_err() {
-        return;
+        return false;
     }
     let Ok(mut file) = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
     else {
-        return;
+        return false;
     };
     let value = serde_json::json!({
         "invocation_id": invocation_id,
         "target_session_id": session_id,
     });
-    let _ = std::io::Write::write_all(&mut file, value.to_string().as_bytes());
+    std::io::Write::write_all(&mut file, value.to_string().as_bytes()).is_ok()
 }
 
 fn review_invocation_event_fields(

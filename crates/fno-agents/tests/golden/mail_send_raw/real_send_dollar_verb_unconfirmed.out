@@ -1,0 +1,1 @@
+unconfirmed (not confirmed: either the confirm budget expired on a payload that landed, or the transport refused and nothing was sent - check the recipient before assuming either; never re-queue)
