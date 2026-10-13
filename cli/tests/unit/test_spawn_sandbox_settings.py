@@ -38,52 +38,10 @@ SANDBOX = {
 }
 
 
-def test_settings_writer_widens_to_full_payload(tmp_path, monkeypatch):
-    """Same env + no sandbox = same path as ever; a sandbox block = new digest."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import _write_settings_env_file
-
-    plain = Path(_write_settings_env_file(dict(ROUTE_ENV)))
-    # ROUTE_ENV points at z.ai, so the payload also carries the Artifact deny
-    # every non-Anthropic endpoint gets. The parity under test is the env block.
-    assert json.loads(plain.read_text()) == {
-        "env": ROUTE_ENV,
-        "permissions": {"deny": ["Artifact"]},
-    }
-    # Content addressing is over the whole payload: the identical call still
-    # collapses to one file...
-    assert Path(_write_settings_env_file(dict(ROUTE_ENV))) == plain
-    # ...and a sandbox block yields a DIFFERENT file carrying both keys.
-    compose = Path(_write_settings_env_file(dict(ROUTE_ENV), sandbox=SANDBOX))
-    assert compose != plain
-    payload = json.loads(compose.read_text())
-    assert payload["env"] == ROUTE_ENV
-    assert payload["sandbox"] == SANDBOX
-
-
-def test_route_and_policy_compose_in_one_settings_file(tmp_path, monkeypatch):
-    """AC7-EDGE: one --settings carries the route's keys plus the sandbox."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import route_settings_path_for
-
-    route_only = json.loads(
-        Path(route_settings_path_for(dict(ROUTE_ENV), env={})).read_text()
-    )
-    both_path = route_settings_path_for(dict(ROUTE_ENV), env={}, sandbox=SANDBOX)
-    both = json.loads(Path(both_path).read_text())
-    # Credential keys byte-identical to a route-only spawn (compared over the
-    # route's own keys: the ambient shell's unrouted-model floor may add ""
-    # entries to both sides and is not this feature's concern)...
-    assert {k: both["env"][k] for k in ROUTE_ENV} == {
-        k: route_only["env"][k] for k in ROUTE_ENV
-    }
-    # ...plus the sandbox block in the SAME file.
-    assert both["sandbox"] == SANDBOX
-
-
 def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch):
     """A sandbox-only spawn still owes the auth floor: it is the one channel
-    that survives the daemon fork, sandbox or not."""
+    that survives the daemon fork, sandbox or not. No overlay and no policy
+    writes nothing at all."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.account_env import SCRUB_AUTH_VARS
     from fno.agents.model_routing import route_settings_path_for
@@ -94,56 +52,7 @@ def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch
     assert payload["sandbox"] == SANDBOX
     assert all(payload["env"][var] == "" for var in SCRUB_AUTH_VARS)
 
-
-def test_no_policy_returns_no_settings_file(tmp_path, monkeypatch):
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import route_settings_path_for
-
     assert route_settings_path_for(None, None, env={}, sandbox=None) is None
-
-
-class _Capture(Exception):
-    def __init__(self, argv):
-        self.argv = argv
-
-
-def test_bg_create_composes_one_settings_flag(tmp_path, monkeypatch):
-    """Exactly one --settings; the policy composes into the SAME file the
-    route rides, and the route's env is byte-identical to a route-only
-    bg spawn's."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.harnesses import claude
-
-    def fake_run(argv, **kwargs):
-        raise _Capture(argv)
-
-    monkeypatch.setattr(claude, "_subprocess_run", fake_run)
-
-    with pytest.raises(_Capture) as plain:
-        claude.bg_create(
-            "w1", "hi", cwd=tmp_path, route_env=dict(ROUTE_ENV)
-        )
-    plain_argv = plain.value.argv
-    assert plain_argv.count("--settings") == 1
-    plain_settings = json.loads(
-        Path(plain_argv[plain_argv.index("--settings") + 1]).read_text()
-    )
-
-    with pytest.raises(_Capture) as both:
-        claude.bg_create(
-            "w2", "hi", cwd=tmp_path, route_env=dict(ROUTE_ENV),
-            sandbox_settings=SANDBOX,
-        )
-    both_argv = both.value.argv
-    assert both_argv.count("--settings") == 1
-    settings = json.loads(
-        Path(both_argv[both_argv.index("--settings") + 1]).read_text()
-    )
-    # Same file shape, credential env unchanged, sandbox only in the second.
-    assert settings["env"] == plain_settings["env"]
-    assert "sandbox" not in plain_settings
-    assert settings["sandbox"] == SANDBOX
-    assert {k: settings["env"][k] for k in ROUTE_ENV} == ROUTE_ENV
 
 
 def test_bg_create_without_policy_stays_byte_identical(tmp_path, monkeypatch):

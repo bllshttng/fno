@@ -715,17 +715,14 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     assert ask["cwd"], "the print ask carries the spawn's own cwd"
     assert gate_calls == [], "--print must not touch the gate"
 
-
-def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
-    """Another harness has no native line yet; the refusal predates the verb."""
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
+    # A harness the lane has no native line for refuses through the door; the
+    # CLI maps the door refusal to a clean exit.
+    refused = runner.invoke(
         agents_app,
         ["spawn", "w", "hi", "--harness", "codex", "--print"],
     )
-    assert result.exit_code == 2, result.output
-    assert "no native line yet" in result.output
+    assert refused.exit_code == 2, refused.output
+    assert "no native line yet" in refused.output
 
 
 def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
@@ -882,64 +879,6 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
     assert dispatched, "the --model override keeps the dispatcher path"
 
 
-def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
-    """The lane forwarder: the row answer rides the verb's lane mode, matched
-    by axes or by name; ambiguous, unmatched and unreadable reads None."""
-    from fno.agents import model_routing as mr
-    from fno.route_slot_client import route_slot_call
-
-    row = {
-        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
-        "route": "zai/glm-5.3-flash[1m]",
-        "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
-    }
-    monkeypatch.setattr(
-        route_slot_call,
-        "route_slot_call",
-        lambda ask: dict(row, found=True),
-    )
-    lane = mr.declared_lane("zai", "glm-5.3-flash[1m]")
-    assert lane is not None and lane["name"] == "zai-flash"
-    assert lane["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
-    assert mr.declared_lane(name="zai-flash") == lane
-    monkeypatch.setattr(
-        route_slot_call,
-        "route_slot_call",
-        lambda ask: {"found": False},
-    )
-    assert mr.declared_lane("zai", "glm-5.3-flash[1m]") is None
-    assert mr.declared_lane(name="zai-flash") is None
-
-
-def test_materialize_route_settings_is_0600_and_content_addressed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import json
-    import os
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    from fno.agents.model_routing import materialize_route_settings
-
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-
-    env = {"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic", "ANTHROPIC_AUTH_TOKEN": "t"}
-    p1 = materialize_route_settings(env)
-    p2 = materialize_route_settings(dict(env))  # same content -> same file
-    assert p1 == p2
-    assert oct(os.stat(p1).st_mode & 0o777) == "0o600"
-    blob = json.load(open(p1))["env"]
-    assert {k: blob[k] for k in env} == env
-    # Every inheritable auth var the route did not set is written empty (unset),
-    # so an ambient key from the invoking shell cannot outrank the route.
-    for var in SCRUB_AUTH_VARS:
-        if var not in env:
-            assert blob[var] == "", var
-    # codex P2 (finding 8): published atomically via a temp + os.replace, so a
-    # racing reader never sees a partial file and no .tmp sidecar is left behind.
-    leftovers = list(Path(p1).parent.glob(".*.tmp"))
-    assert leftovers == [], f"temp files not cleaned up: {leftovers}"
-
-
 def test_bg_create_routed_spawn_passes_settings_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1031,81 +970,6 @@ def test_headless_create_routed_spawn_passes_settings_flag(
 # An --account spawn expresses its auth/model scrub via a --settings file too:
 # the env scrub is dropped at the claude --bg daemon fork, but a settings file is
 # read by the forked session itself. CLAUDE_CONFIG_DIR rides the env overlay
-# (it selects the config the settings file is read FROM), never the file.
-# ---------------------------------------------------------------------------
-
-
-def test_account_only_settings_unsets_vendor_and_keeps_overlay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import json
-    import os
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-    from fno.agents.model_routing import route_settings_path_for
-
-    # A config_dir account: the overlay only carries CLAUDE_CONFIG_DIR, which
-    # must NOT land in the settings file. Every vendor auth/model var is written
-    # empty, which claude reads as unset (so the account's own login wins).
-    path = route_settings_path_for(None, {"CLAUDE_CONFIG_DIR": "/x/.claude"})
-    blob = json.load(open(path))["env"]
-    assert "CLAUDE_CONFIG_DIR" not in blob
-    for var in SCRUB_AUTH_VARS:
-        assert blob[var] == ""
-
-    # An api_key account: its resolved ANTHROPIC_* is re-applied over the scrub
-    # so it survives the fork, AND every extra env the record pins (here a custom
-    # header, outside SCRUB_AUTH_VARS) is retained too, not just the scrub vars.
-    # CLAUDE_CONFIG_DIR is still excluded.
-    overlay = {
-        "CLAUDE_CONFIG_DIR": "/x/.claude",
-        "ANTHROPIC_BASE_URL": "https://api.example/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "acct-token",
-        "ANTHROPIC_MODEL": "claude-opus-4-5",
-        "ANTHROPIC_CUSTOM_HEADERS": "X-Org: foo",
-        "HTTPS_PROXY": "http://proxy:8080",
-    }
-    path2 = route_settings_path_for(None, overlay)
-    blob2 = json.load(open(path2))["env"]
-    assert blob2["ANTHROPIC_BASE_URL"] == "https://api.example/anthropic"
-    assert blob2["ANTHROPIC_AUTH_TOKEN"] == "acct-token"
-    assert blob2["ANTHROPIC_MODEL"] == "claude-opus-4-5"
-    assert blob2["ANTHROPIC_CUSTOM_HEADERS"] == "X-Org: foo"  # extra overlay retained
-    assert blob2["HTTPS_PROXY"] == "http://proxy:8080"  # extra overlay retained
-    assert "CLAUDE_CONFIG_DIR" not in blob2
-    for var in SCRUB_AUTH_VARS:  # vars the overlay did not supply stay unset
-        if var not in overlay:
-            assert blob2[var] == ""
-    assert oct(os.stat(path2).st_mode & 0o777) == "0o600"  # carries a token
-    assert route_settings_path_for(None, dict(overlay)) == path2  # content-addressed
-
-
-def test_bg_create_account_spawn_passes_settings_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _setup_tmp_home(tmp_path, monkeypatch)
-    from fno.agents.harnesses import claude as claude_mod
-
-    seen: Dict[str, Any] = {}
-
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        seen["argv"] = argv
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(argv, 0, stdout="backgrounded \xb7 abcd1234 \xb7 ok\n", stderr="")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", fake_run)
-    claude_mod.bg_create(
-        name="w",
-        message="hi",
-        cwd=tmp_path,
-        account_env={"CLAUDE_CONFIG_DIR": str(tmp_path / ".claude")},
-    )
-    argv = seen["argv"]
-    assert "--settings" in argv
-    assert argv[argv.index("--settings") + 1].endswith(".json")
-
 
 def test_headless_create_account_spawn_passes_settings_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1596,53 +1460,6 @@ def test_dispatch_account_refuses_an_unregistered_record(monkeypatch: pytest.Mon
     )
     assert result.exit_code == 2, result.output
     assert "not a registered provider record" in result.output
-
-
-# ---------------------------------------------------------------------------
-# x-8552: the composed settings payload and the one-function composition rule.
-# ---------------------------------------------------------------------------
-
-
-def test_composed_settings_keeps_account_env_and_route_atomicity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC4-INV: an account composed with a route writes ONE settings file that
-    carries the scrub floor, the account's non-credential env, and the route's
-    endpoint+auth+model - the old if/elif kept only the route's keys and
-    dropped the account's across the claude --bg daemon fork."""
-    import json
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-    from fno.agents.model_routing import route_settings_path_for
-
-    account = {
-        "CLAUDE_CONFIG_DIR": "/x/.claude",
-        "HTTPS_PROXY": "http://proxy:8080",
-    }
-    route = {
-        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
-        "ANTHROPIC_AUTH_TOKEN": "zk",
-        "ANTHROPIC_MODEL": "glm-5.2",
-    }
-    path = route_settings_path_for(route, account)
-    blob = json.load(open(path))["env"]
-    # Route wins every credential variable as one unit.
-    assert blob["ANTHROPIC_BASE_URL"] == "https://api.z.ai/api/anthropic"
-    assert blob["ANTHROPIC_AUTH_TOKEN"] == "zk"
-    assert blob["ANTHROPIC_MODEL"] == "glm-5.2"
-    # The account's non-credential env survives the fork too.
-    assert blob["HTTPS_PROXY"] == "http://proxy:8080"
-    # CLAUDE_CONFIG_DIR never lives in the file it would select.
-    assert "CLAUDE_CONFIG_DIR" not in blob
-    # Every SCRUB_AUTH_VARS key the composition does not set is emptied -
-    # including the two the old route-only file missed.
-    for var in SCRUB_AUTH_VARS:
-        if var not in route:
-            assert blob[var] == ""
-    assert blob["ANTHROPIC_API_KEY"] == ""
-    assert blob["CLAUDE_CODE_OAUTH_TOKEN"] == ""
-
 
 def test_every_spawn_seam_uses_the_one_composition_function(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

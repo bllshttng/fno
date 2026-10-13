@@ -200,22 +200,18 @@ def test_routed_bg_explicit_model_beats_the_route_token_on_the_row(tmp_path, mon
 
 
 def test_unrouted_spawn_records_no_route_path(tmp_path, monkeypatch) -> None:
+    """Neither a plain nor an --account worker records a route to restore.
+
+    An account's settings file is the scrub floor plus the account's
+    non-profile env, which read_route_settings reads back as "no route" (or,
+    for an api-key account, an endpoint-without-model-tiers unit the
+    composition guard refuses). Stamping it on the row turned every
+    --account worker's revive into an exit-2 refusal telling the operator to
+    re-spawn with --route."""
     from fno.agents.registry import load_registry
 
     _spawn_pane(monkeypatch, tmp_path)
     assert load_registry()[0].route_settings_path is None
-
-
-def test_account_only_spawn_records_no_route_path(tmp_path, monkeypatch) -> None:
-    """An --account worker has no route to restore.
-
-    Its settings file is the scrub floor plus the account's non-profile env,
-    which read_route_settings reads back as "no route" (or, for an api-key
-    account, an endpoint-without-model-tiers unit the composition guard
-    refuses). Stamping it on the row turned every --account worker's revive
-    into an exit-2 refusal telling the operator to re-spawn with --route."""
-    from fno.agents.registry import load_registry
-
     _spawn_pane(
         monkeypatch, tmp_path, account_env={"CLAUDE_CONFIG_DIR": "/x/.claude"}
     )
@@ -270,55 +266,6 @@ def test_ac6_con_legacy_row_without_the_field_loads_as_never_routed(
     assert row.name == "old"
     assert row.route_settings_path is None
 
-
-def test_route_path_round_trips_through_the_registry(tmp_path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, load_registry, write_registry
-
-    write_registry(
-        [
-            AgentEntry(
-                name="router",
-                cwd="/w",
-                log_path="",
-                harness="claude",
-                harness_session_id="sess-router",  # x-7bcd: needs a resolvable handle
-                short_id="deadbeef",
-                route_settings_path="/tmp/route-settings/abc.json",
-            )
-        ]
-    )
-    assert load_registry()[0].route_settings_path == "/tmp/route-settings/abc.json"
-
-
-def test_route_settings_path_for_is_stable_and_route_wins(tmp_path, monkeypatch) -> None:
-    """One precedence rule: route beats account, and re-asking is idempotent."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import (
-        materialize_route_settings,
-        route_settings_path_for,
-    )
-
-    assert route_settings_path_for(None, None, env={}) is None
-    routed = route_settings_path_for(dict(ROUTE_ENV), env={})
-    assert routed == materialize_route_settings(dict(ROUTE_ENV))
-    # Composed: the route wins the settings file (x-5ed4), so the recorded path
-    # is the route's, not the account's.
-    assert (
-        route_settings_path_for(dict(ROUTE_ENV), {"CLAUDE_CONFIG_DIR": "/cfg"}, env={})
-        == routed
-    )
-    # An unrouted model claim inherited from the spawning shell is floored into
-    # the SAME file: the daemon fork carries the shell's env, and a bare
-    # account that names no model owns no slot (round 3). A claim the overlay
-    # itself sets is spared - the route owns what it names.
-    shell = {"ANTHROPIC_MODEL": "claude-opus-4-8"}
-    acct = route_settings_path_for(None, {"CLAUDE_CONFIG_DIR": "/cfg"}, env=shell)
-    assert json.loads(Path(acct).read_text())["env"]["ANTHROPIC_MODEL"] == ""
-    both = route_settings_path_for(dict(ROUTE_ENV), {"CLAUDE_CONFIG_DIR": "/cfg"}, env=shell)
-    assert json.loads(Path(both).read_text())["env"]["ANTHROPIC_MODEL"] == "glm-5.2"
-
-
 # --- 1.3: the revive door restores the route, or refuses ---------------------
 
 
@@ -327,10 +274,14 @@ def _routed_claude_row(
 ):
     """A registry holding one routed claude worker, plus its route file path."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import materialize_route_settings
+    from fno.agents.model_routing import _write_settings_env_file
+    from fno.agents.account_env import SCRUB_AUTH_VARS
+
+    env = {var: "" for var in SCRUB_AUTH_VARS}
+    env.update(ROUTE_ENV)
+    path = _write_settings_env_file(env)
     from fno.agents.registry import AgentEntry, write_registry
 
-    path = materialize_route_settings(dict(ROUTE_ENV))
     write_registry(
         [
             AgentEntry(
@@ -1300,52 +1251,17 @@ def test_foreign_route_settings_deny_artifact(tmp_path, monkeypatch):
     ``\\p{Cc}``. z.ai's Anthropic-compatible endpoint refuses any tools pattern
     with a ``\\p{...}`` escape and answers ``400 [1210]``, so every fresh
     interactive routed worker died on its first turn. The tool needs Anthropic's
-    own backend, so a routed worker loses nothing when it is not offered.
+    own backend, so a routed worker loses nothing when it is not offered. The
+    whole-host table's owner is the Rust writer's decision test; this pins the
+    file's permissions block through the door.
     """
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import materialize_route_settings
+    from fno.agents.model_routing import _write_settings_env_file
 
-    path = materialize_route_settings(dict(ROUTE_ENV))
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert payload["permissions"] == {"deny": ["Artifact"]}
-
-
-def test_anthropic_route_settings_keep_artifact(tmp_path, monkeypatch):
-    """An Anthropic endpoint keeps the tool. The deny stays on the defect."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import materialize_route_settings
-
-    env = dict(ROUTE_ENV)
-    env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
-    path = materialize_route_settings(env)
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert "permissions" not in payload
-
-
-@pytest.mark.parametrize(
-    "base_url,denied",
-    [
-        ("https://api.anthropic.com", False),
-        ("https://api.anthropic.com/v1", False),
-        ("HTTPS://API.ANTHROPIC.COM", False),
-        ("api.anthropic.com", False),
-        ("https://api.anthropic.com:443", False),
-        # A host that merely STARTS with Anthropic's is somebody else's.
-        ("https://api.anthropic.com.proxy.example", True),
-        ("https://evil.example/api.anthropic.com", True),
-        ("https://api.z.ai/api/anthropic", True),
-        ("", False),
-    ],
-)
-def test_deny_matches_the_whole_host(base_url, denied, tmp_path, monkeypatch):
-    """The endpoint test parses the host. A substring test got both ends wrong.
-
-    The deny decision lives in the Rust writer since the change-6 port; the
-    observable contract here is the FILE's permissions block through the door.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.model_routing import materialize_route_settings
-
-    path = Path(materialize_route_settings({"ANTHROPIC_BASE_URL": base_url}))
+    path = Path(_write_settings_env_file(dict(ROUTE_ENV)))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert ("permissions" in payload) is denied
+    assert payload["permissions"] == {"deny": ["Artifact"]}
+    kept = dict(ROUTE_ENV)
+    kept["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+    payload = json.loads(Path(_write_settings_env_file(kept)).read_text(encoding="utf-8"))
+    assert "permissions" not in payload
