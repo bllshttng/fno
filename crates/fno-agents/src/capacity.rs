@@ -28,6 +28,9 @@ pub const DEFAULT_RAISE_LOAD_PER_CORE: f64 = 2.0;
 pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
 /// The learned cap never drops below this unless the user sets a higher floor.
 pub const DEFAULT_FLOOR: u32 = 1;
+/// What every soft-cap refusal names to hold the learned cap up. `fno config
+/// set` refuses this key, so the hint names the file the gate reads.
+pub const FLOOR_REMEDY: &str = "set [agents.capacity] floor = N in ~/.fno/config.toml";
 
 /// `[agents.capacity]` thresholds, defaults mirroring the runaway arm's band.
 #[derive(Debug, Clone, Copy)]
@@ -164,8 +167,6 @@ pub struct Effective {
     pub since: Option<i64>,
     /// Set when the user's floor holds the cap above what the loop learned.
     pub held: Option<FloorHold>,
-    /// The operator grant inside its window, or for a while after its end.
-    pub grant: Option<crate::capacity_grant::GrantView>,
 }
 
 /// The floor as configured and the learned cap it overrode.
@@ -179,20 +180,6 @@ impl Effective {
     /// The sentence fragment every refusal and receipt shares, so a display
     /// can never quote a cap the gate did not read.
     pub fn clause(&self) -> String {
-        if let Some(grant) = &self.grant {
-            let (cap, ceiling) = (self.cap, self.ceiling);
-            return match grant.active {
-                true => format!(
-                    "effective cap {cap} of {ceiling} (operator grant until {}, learned {})",
-                    render_clock(grant.expires_epoch),
-                    grant.learned
-                ),
-                false => format!(
-                    "effective cap {cap} of {ceiling} (operator grant ended {})",
-                    render_clock(grant.expires_epoch)
-                ),
-            };
-        }
         if let Some(held) = &self.held {
             return format!(
                 "effective cap {} of {} (held at agents.capacity.floor {}, learned {})",
@@ -217,24 +204,9 @@ impl Effective {
         }
     }
 
-    /// True only while an operator grant is lifting the cap.
-    pub fn granted(&self) -> bool {
-        self.grant.as_ref().is_some_and(|g| g.active)
-    }
-
-    /// The cap the loop learned, with the floor and any grant stripped off.
+    /// The cap the loop learned, with the floor stripped off.
     fn learned_cap(&self) -> usize {
-        let held = self.held.as_ref().map(|h| h.learned);
-        let granted = self.grant.as_ref().map(|g| g.learned);
-        held.or(granted).unwrap_or(self.cap)
-    }
-
-    /// The command that lifts the cap to the ceiling for a window.
-    pub fn grant_command(&self) -> String {
-        format!(
-            "fno agents spawn-gate grant --cap {} --for 2h",
-            self.ceiling
-        )
+        self.held.as_ref().map_or(self.cap, |h| h.learned)
     }
 
     /// The line every soft-cap refusal prints so the reader knows the number
@@ -242,13 +214,11 @@ impl Effective {
     pub fn override_hint(&self) -> Option<String> {
         (self.cap < self.ceiling).then(|| {
             format!(
-                "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. The user \
-                 lifts it for a window from their own terminal: {}. To stop it learning this \
-                 low: [agents.capacity] floor in config.toml. For this one spawn: --force, \
-                 which also passes the RAM floor.",
+                "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To stop it \
+                 learning this low: {FLOOR_REMEDY} (the gate also reads the project \
+                 .fno/config.toml). For this one spawn: --force, which also passes the RAM floor.",
                 self.learned_cap(),
-                self.ceiling,
-                self.grant_command()
+                self.ceiling
             )
         })
     }
@@ -260,27 +230,13 @@ impl Effective {
         }
     }
 
-    /// The note a fleet CPU-share hold prints when an active grant admits it.
-    pub fn grant_hold_note(&self) -> String {
-        let until = self
-            .grant
-            .as_ref()
-            .map_or_else(String::new, |g| render_clock(g.expires_epoch));
-        format!(
-            "fleet CPU share is over the ceiling; admitted under the operator grant until {until}"
-        )
-    }
-
     /// Adds the keys a slot refusal receipt carries beside its `max_live`:
     /// the learned cap, the ceiling and, below the ceiling, the remedy.
     pub fn annotate(&self, receipt: &mut Value) {
         receipt["learned_cap"] = serde_json::json!(self.learned_cap());
         receipt["ceiling"] = serde_json::json!(self.ceiling);
         if self.cap < self.ceiling {
-            receipt["remedy"] = serde_json::json!(format!(
-                "{} (the user's terminal only)",
-                self.grant_command()
-            ));
+            receipt["remedy"] = serde_json::json!(FLOOR_REMEDY);
         }
     }
 }
@@ -312,24 +268,18 @@ pub fn effective_for(cwd: &std::path::Path) -> Effective {
 /// has one (a hostname moves under a roaming laptop; the platform id does
 /// not), hostname as the fallback.
 pub fn state_path(home: &AgentsHome) -> PathBuf {
-    home.root()
-        .join("capacity")
-        .join(format!("{}.json", machine_key()))
-}
-
-/// The per-machine file key shared by the state file and the grant file.
-pub(crate) fn machine_key() -> String {
     let key = crate::claims::machine_id();
     let key = if key.is_empty() {
         crate::claims::hostname()
     } else {
         key
     };
-    if key.is_empty() {
+    let key = if key.is_empty() {
         "unknown-host".to_string()
     } else {
         key
-    }
+    };
+    home.root().join("capacity").join(format!("{key}.json"))
 }
 
 /// The persisted state, `None` when missing or unreadable. A reader never
@@ -345,7 +295,7 @@ pub fn read_state(home: &AgentsHome) -> Option<CapacityState> {
 /// floor set between two ticks binds at once.
 pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
     let ceiling = ceiling.max(1);
-    let eff = match read_state(home) {
+    match read_state(home) {
         Some(state) if state.effective >= 1 => {
             let learned = (state.effective as usize).min(ceiling);
             let cap = learned.max(floor.min(ceiling));
@@ -357,7 +307,6 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
                 reason: state.reason,
                 since: state.since,
                 held: (cap > learned).then_some(FloorHold { floor, learned }),
-                grant: None,
             }
         }
         _ => Effective {
@@ -365,13 +314,11 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
             ceiling,
             ..Default::default()
         },
-    };
-    let now = Utc::now().timestamp();
-    crate::capacity_grant::apply(eff, crate::capacity_grant::read(home), now)
+    }
 }
 
 /// Local wall clock for a `since` stamp, "21:40" style.
-pub(crate) fn render_clock(epoch: i64) -> String {
+fn render_clock(epoch: i64) -> String {
     Local
         .timestamp_opt(epoch, 0)
         .single()
@@ -404,7 +351,6 @@ pub fn feed(
     state.accounts = fold_accounts(cwd, home, ledger_rows(cwd, home), now_epoch);
     state.updated_epoch = now_epoch;
     write_state(home, &state)?;
-    crate::capacity_grant::sweep(home, now_epoch);
     Ok(state)
 }
 

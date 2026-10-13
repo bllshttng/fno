@@ -190,8 +190,8 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
         .release();
 
     // Below the ceiling a refusal names the learned cap, the ceiling and the
-    // command that lifts it, and an active grant releases the same spawn on
-    // its next pass.
+    // floor command, and a floor raised in config releases the same spawn on
+    // its next gate call.
     let home = crate::paths::AgentsHome::from_env();
     let now = chrono::Utc::now().timestamp();
     let learned_one = crate::capacity::CapacityState {
@@ -215,22 +215,17 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
     let line = verdict_line(&refusal);
     assert!(line.contains("learned_cap=1, ceiling=2"), "{line}");
     assert!(
-        line.ends_with(
-            "remedy: fno agents spawn-gate grant --cap 2 --for 2h (the user's terminal only)"
-        ),
+        line.ends_with("remedy: set [agents.capacity] floor = N in ~/.fno/config.toml"),
         "{line}"
     );
-    let grant = crate::capacity_grant::Grant {
-        cap: 2,
-        granted_epoch: now,
-        expires_epoch: now + 3600,
-        decision_id: "d-test".into(),
-        learned_at_grant: 1,
-    };
-    crate::capacity_grant::write(&home, &grant).unwrap();
+    std::fs::write(
+        fixture.dir.join(".fno").join("config.toml"),
+        "[agents]\nmax_live = 2\nmin_free_gb = 0\nmax_swap_pct = 0\n[agents.capacity]\nfloor = 2\n",
+    )
+    .unwrap();
     fixture
         .spawn("plain-2", Some("session-lead"), None)
-        .expect("a grant lifts the learned cap on the next pass")
+        .expect("a floor of 2 releases the spawn on the next gate call")
         .release();
 }
 

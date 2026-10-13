@@ -1531,7 +1531,7 @@ fn decide_gate(
     loop {
         // Each pass reads afresh: a refusal names only what IT read, never a
         // slot count from an earlier pass. The cap is read per pass too, so a
-        // floor or grant written while a spawn is queued releases it.
+        // floor raised while a spawn is queued releases it.
         let learned = crate::capacity::effective_for(config_cwd);
         let cap = learned.cap;
         last_succession_error = None;
@@ -1699,17 +1699,7 @@ fn decide_gate(
             let admission = &cpu.payload;
             axes_read.insert("cpu".into(), serde_json::json!(admission.verdict));
             let figures = receipt_fields(admission);
-            // An active operator grant lifts the CPU-share hold; a blind
-            // instrument is not load, so refuse and undecidable stay.
-            let verdict = match (admission.verdict.as_str(), learned.granted()) {
-                ("hold", true) => {
-                    eprintln!("{NOTE} {}", learned.grant_hold_note());
-                    held_on_cpu = false;
-                    "admit"
-                }
-                (other, _) => other,
-            };
-            match verdict {
+            match admission.verdict.as_str() {
                 "refuse" | "undecidable" => {
                     // A blind read breaks both consecutive-sample runs.
                     under_streak = 0;
@@ -2213,7 +2203,7 @@ fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
     match ram_floor_term(m.avail, floor_gb, m.swap, m.swapin_bps, max_swap_pct) {
         Some((reason, term)) => {
             eprintln!(
-                "spawn-gate: {term}; refusing to spawn. The memory axis is hard: a cap grant does \
+                "spawn-gate: {term}; refusing to spawn. The memory axis is hard: the cap floor does \
                  not lift it. For this one spawn: --force."
             );
             Err(Refusal::with_receipt(

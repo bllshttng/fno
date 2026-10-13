@@ -562,17 +562,7 @@ pub fn run_decide_door(args: &[String]) -> i32 {
 /// in the Python order. Exit contract: 0 recorded, 1 failed write or a
 /// supersession target the index cannot recover, 2 a bad flag value, 3
 /// refused.
-pub(crate) fn decide_door_write(door: DecideDoor, id: DecideIdentity) -> i32 {
-    decide_door_record(door, id, &mut None)
-}
-
-/// [`decide_door_write`] that also hands back the minted decision id on exit 0,
-/// for a caller that stores the id beside its own state.
-pub(crate) fn decide_door_record(
-    mut door: DecideDoor,
-    id: DecideIdentity,
-    recorded: &mut Option<String>,
-) -> i32 {
+pub(crate) fn decide_door_write(mut door: DecideDoor, id: DecideIdentity) -> i32 {
     // Positional subject and decision are required to record.
     let (subject, decision) = match (&door.subject, &door.decision) {
         (Some(s), Some(d)) if !s.trim().is_empty() && !d.trim().is_empty() => {
@@ -947,7 +937,6 @@ Do NOT re-run decide; that records it twice."
             );
         }
     }
-    *recorded = Some(decision_id.clone());
     println!("{decision_id}");
     0
 }
