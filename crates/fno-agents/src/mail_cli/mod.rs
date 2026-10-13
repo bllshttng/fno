@@ -1,7 +1,8 @@
-//! The `mail` front verbs on the Rust leg: the do-not-disturb hold leaf and
-//! its release timer, plus the withdraw leaf. Dispatch only; the verbs live
-//! in [hold] and [withdraw].
+//! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
+//! release timer, the outbound sent view, and the withdraw leaf. Dispatch
+//! only; the verbs live in [hold], [sent], and [withdraw].
 pub mod hold;
+pub mod sent;
 pub mod withdraw;
 
 pub fn run(rest: &[String]) -> i32 {
@@ -14,9 +15,10 @@ pub fn run(rest: &[String]) -> i32 {
         "hold" | "dnd" => hold::run_hold(&rest[1..]),
         "hold-release" => hold::run_hold_release(&rest[1..]),
         "withdraw" => withdraw::run(&rest[1..]),
+        "sent" => sent::run_sent(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | withdraw)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | withdraw | sent)"
             );
             2
         }
@@ -28,4 +30,5 @@ fn print_help() {
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  withdraw MSG_ID [--from-name NAME]");
+    println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
 }
