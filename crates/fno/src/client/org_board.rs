@@ -520,7 +520,7 @@ impl OrgBoard {
     /// own state, Table narrows to worker sessions, Graph keeps the rows
     /// a dot stands for. Tab reads the key here so the cursor keeps its
     /// row across a mode switch when the new mode paints it.
-    fn mode_rows(&self, width: usize, height: usize) -> Vec<Row> {
+    pub(crate) fn mode_rows(&self, width: usize, height: usize) -> Vec<Row> {
         let rows = self.rows();
         match self.mode {
             OrgMode::Tree => rows,
