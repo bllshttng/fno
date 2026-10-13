@@ -494,6 +494,7 @@ pub fn run_demand(tail: &[String]) -> i32 {
     0
 }
 
+#[derive(serde::Serialize)]
 struct DemandRow {
     score: i64,
     node: String,
@@ -709,8 +710,8 @@ pub fn run_collisions(tail: &[String]) -> i32 {
                     "shared_files": c.shared_files,
                     "candidate_only_files": c.candidate_only_files,
                     "other_only_files": c.other_only_files,
-                    "severity": c.severity,
-                    "recommended_action": c.recommended_action,
+                    "severity": severity_word(c),
+                    "recommended_action": action_word(c),
                     "rationale": c.rationale,
                 })
             })
@@ -739,7 +740,7 @@ pub fn run_collisions(tail: &[String]) -> i32 {
     for c in &collisions {
         println!(
             "[{}] {} ({})",
-            severity_word(c),
+            severity_word(c).to_uppercase(),
             c.with_node_id,
             c.with_node_title
         );
@@ -753,9 +754,9 @@ pub fn run_collisions(tail: &[String]) -> i32 {
 
 fn severity_word(c: &super::collision::Collision) -> &'static str {
     match c.severity {
-        super::collision::Severity::High => "HIGH",
-        super::collision::Severity::Medium => "MEDIUM",
-        super::collision::Severity::Low => "LOW",
+        super::collision::Severity::High => "high",
+        super::collision::Severity::Medium => "medium",
+        super::collision::Severity::Low => "low",
     }
 }
 
@@ -1171,17 +1172,14 @@ fn settle_released_node(graph: &Path, node_id: &str) -> Result<(), String> {
         None,
         None,
         |working| {
-            if let Some(idx) = working
-                .iter()
-                .position(|e| text_at(e, "id") == Some(node_id))
-            {
-                let cleared = working[idx].clone();
-                let _ = cleared;
+            if working.iter().any(|e| text_at(e, "id") == Some(node_id)) {
                 graph_store::recompute_statuses_with_plan_rungs(working, None);
             }
             Ok(true)
         },
     )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1652,7 +1650,7 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
         .to_string();
     let cause = find_node(&rows, &canonical)
         .and_then(|n| n.get("supersession"))
-        .filter(Value::is_object)
+        .filter(|v| v.is_object())
         .and_then(|s| s.get("cause").and_then(Value::as_str))
         .unwrap_or("")
         .to_string();
