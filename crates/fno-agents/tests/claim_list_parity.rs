@@ -495,8 +495,8 @@ fn the_list_leaf_matches_the_python_leg_on_every_frozen_case() {
         |_| Vec::new(),
     );
 
-    // 11. A pty: holder names no session to age: the unreadable bucket,
-    // deterministically with no HOME pin at all.
+    // 11. The silence scan with no HOME pin: the planted pty: holder is
+    // offhost-suspect by fixture, so no row is live and none is scanned.
     case(
         "silence_unreadable",
         &["--json", "--silent-after", "1h"],
