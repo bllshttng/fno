@@ -32,6 +32,10 @@ schema_version = 1
 # Prefix for dispatched worktree branches: <prefix>/<slug>-<node>.
 prefix = "fno"
 
+[build]
+# Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.
+agent_freeze = false
+
 [paths]
 # Override path to ledger.json.
 # ledger_json = <unset>   # optional; no default

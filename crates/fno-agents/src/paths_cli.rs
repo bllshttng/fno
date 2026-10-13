@@ -15,7 +15,7 @@ use std::process::Command;
 use crate::finalize::resolve_handoffs_dir;
 use crate::identity::canonical_handle;
 use crate::lead_checkin::sanitize_scope_key;
-use crate::plans_path::{expanduser, project_name, resolve_template, vault_root};
+use crate::plans_path::{expanduser, expandvars, project_name, resolve_template, vault_root};
 
 /// The parity fixture: the checked-in stub this emitter must reproduce.
 /// Test-only: the include path leaves the crate, which packaging forbids.
@@ -525,14 +525,37 @@ pub fn global_events_json(cwd: &Path) -> PathBuf {
     let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
     let override_dir = cfg_str(cwd, &["paths", "ledger_json"])
         .filter(|_| !sealed)
-        .and_then(|raw| resolve_override(&raw).ok())
-        .map(PathBuf::from)
+        .and_then(|raw| resolve_override_path(&raw).ok())
         .filter(|p| p.is_absolute())
         .and_then(|p| p.parent().map(Path::to_path_buf));
     override_dir
         .or_else(|| state_dir_resolved(cwd).ok().filter(|d| d.is_absolute()))
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
         .join("events.jsonl")
+}
+
+/// Python `paths.ledger_json()`: the cross-project ledger, one row per
+/// terminal session across every repo, so it must never fork into a
+/// per-repo stray. The `FNO_STATE_DIR` seal wins, then an absolute or `~`
+/// `paths.ledger_json` override (a relative one anchors under the default
+/// state root), then an absolute `state_dir`. A relative `state_dir` falls
+/// back to the default state root rather than landing the ledger inside a
+/// checkout, as in Python.
+pub fn ledger_json(cwd: &Path) -> PathBuf {
+    let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
+    if let Some(raw) = cfg_str(cwd, &["paths", "ledger_json"]).filter(|_| !sealed) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            if p.is_absolute() {
+                return p;
+            }
+            return crate::decision_index::default_state_path("").join(p);
+        }
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join("ledger.json"))
+        .unwrap_or_else(|| crate::decision_index::default_state_path("").join("ledger.json"))
 }
 
 /// One `paths.<key>` override value, the shape Python's emitter shares for
@@ -550,6 +573,15 @@ fn resolve_override(raw: &str) -> Result<String, String> {
     } else {
         Ok(stripped.to_string())
     }
+}
+
+/// One `paths.<key>` override resolved to a filesystem path. `resolve_override`
+/// emits the shell-oriented forms (`$HOME/...`, template results), so expand
+/// env vars and a leading `~` before the absolute/relative decision, in
+/// Python's expandvars-then-expanduser order.
+fn resolve_override_path(raw: &str) -> Result<PathBuf, String> {
+    let resolved = resolve_override(raw)?;
+    Ok(expanduser(&expandvars(&resolved)))
 }
 
 /// One `paths.<key>` override against its `$STATE_DIR/<sub>` default, the

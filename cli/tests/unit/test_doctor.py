@@ -1888,6 +1888,26 @@ def test_disk_free_blocker_fires_under_the_floor_and_names_the_reclaim(monkeypat
     assert doctor._blockers({"disk_free": {"verdict": "unreadable"}}) == []
 
 
+def test_old_git_echo_falls_back_and_doctor_names_the_git(monkeypatch):
+    """git under 2.31 echoes --path-format=absolute back as a line and exits 0.
+    The common-dir reader refuses that text, reads plain, and joins it to cwd;
+    doctor blocks on the version so the cause is named."""
+    from fno.paths import git_common_dir
+
+    def old_git(argv, **kwargs):
+        out = "--path-format=absolute\n.git\n" if "--path-format=absolute" in argv else ".git\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    assert git_common_dir("/work/repo", runner=old_git) == Path("/work/repo/.git")
+
+    monkeypatch.setattr(doctor, "_bounded_command", lambda argv: (0, "git version 2.26.2\n", ""))
+    report = doctor._git_version_report()
+    assert report == {"version": "2.26", "verdict": "old"}
+    assert any("git 2.26 is under 2.31" in b for b in doctor._blockers({"git_version": report}))
+    monkeypatch.setattr(doctor, "_bounded_command", lambda argv: (0, "git version 2.50.1 (Apple Git-155)\n", ""))
+    assert doctor._git_version_report()["verdict"] == "ok"
+
+
 def test_plugin_cache_stage_check_needs_a_cargo_binary(tmp_path, monkeypatch):
     """No cargo fno-agents on the machine -> unknown naming the gap, never a
     false fresh (CI runners carry no ~/.cargo/bin)."""

@@ -7383,10 +7383,10 @@ async fn attach_and_run(
     let (yard_tx, mut yard_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, Option<Vec<crate::yard_overlay::YardItem>>)>();
 
-    // The org fold leg: single-flight + the TTL are the whole
-    // concurrency contract; no generation to supersede.
+    // The org fold leg: one channel, three halves, each half single-flight
+    // on its own stamp; no generation to supersede.
     let (org_fold_tx, mut org_fold_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Option<crate::org_overlay::Org>>();
+        tokio::sync::mpsc::unbounded_channel::<crate::org_overlay::FoldPart>();
 
     // the Connections modal's read fold runs off the UI loop and reports
     // back here, tagged with the generation it was kicked under, so a slow `fno`
@@ -7533,11 +7533,8 @@ async fn attach_and_run(
                 let _ = tx.send((gen, result));
             });
         }
-        if view.org.take_want() {
-            let tx = org_fold_tx.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(crate::org_overlay::fold_now().await);
-            });
+        if let Some(want) = view.org.take_want(&view.layout.agents) {
+            crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.
@@ -7782,8 +7779,8 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41) Script-layout replies: control-connection only,
-                    // never sent to an attached client - ignore, don't desync.
+                    // (v41+) control-connection-only replies: ignore, don't
+                    // desync. The attach handshake carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
@@ -7793,10 +7790,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
                     | ServerMsg::TabClosed { .. }
-                    // (v60/v71/v75/v78) one-shot control-verb replies.
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
+                Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
                     // exec first, OSC 52 to the outer terminal as fallback

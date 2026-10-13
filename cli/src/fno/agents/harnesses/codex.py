@@ -255,17 +255,10 @@ def git_writable_config_args(cwd: Path) -> list[str]:
 
 def _git_common_dir(cwd: Path) -> str:
     """Absolute git COMMON dir for ``cwd``; ``""`` outside a repo or on failure."""
-    import subprocess
+    from fno.paths import git_common_dir
 
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse",
-             "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return out.stdout.strip() if out.returncode == 0 else ""
+    common = git_common_dir(cwd, timeout=10)
+    return str(common) if common else ""
 
 
 def _resolve_plan_dir(cwd: Path) -> str:

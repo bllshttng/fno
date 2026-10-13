@@ -180,18 +180,17 @@ fn is_fno_source(dir: &str) -> bool {
 /// `NonGit` (today's packaged-candidate behavior); only a PROVEN linked
 /// worktree enters the ancestry gate.
 fn worktree_kind(dir: &str) -> WorktreeKind {
-    let common = match git_ok(
-        dir,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    ) {
-        Some(c) => c,
-        None => return WorktreeKind::NonGit,
+    let common = crate::git_paths::common_dir_with(Path::new(dir), |args| {
+        git_ok(dir, &[&["rev-parse"][..], args].concat())
+    });
+    let own = git_ok(dir, &["rev-parse", "--absolute-git-dir"]);
+    let (Some(common), Some(own)) = (common, own) else {
+        return WorktreeKind::NonGit;
     };
-    let own = match git_ok(dir, &["rev-parse", "--path-format=absolute", "--git-dir"]) {
-        Some(d) => d,
-        None => return WorktreeKind::NonGit,
-    };
-    if common == own {
+    // Canonicalize both: the plain fallback joins a relative `.git` to `dir`,
+    // so a symlinked `dir` must not read as a linked worktree.
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if real(&common) == real(Path::new(&own)) {
         WorktreeKind::MainCheckout
     } else {
         WorktreeKind::LinkedWorktree

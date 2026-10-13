@@ -9,10 +9,11 @@
 //! outbox to the primary in one request, under its own lock file, after the
 //! graph lock is gone: one transaction of conditional statements, where each
 //! update and delete matches every old column and each insert must not
-//! collide. A row a peer changed first refuses the whole batch, and the
-//! replica takes the primary's rows back for every row the batch touched.
-//! So the primary decides, and no machine overwrites a peer's change it never
-//! saw.
+//! collide. The statements run parent table first, so a parent row exists
+//! before the update that names it. A row a peer changed first refuses the
+//! whole batch, and the replica takes the primary's rows back for every row
+//! the batch touched. So the primary decides, and no machine overwrites a
+//! peer's change it never saw.
 //!
 //! Read: reads stay local. One daemon arm per machine runs [`flush`] and then
 //! [`sync`], which applies the primary's change log to the replica.
@@ -391,9 +392,11 @@ fn row_key(table: &str, row: &[SqlValue]) -> String {
 /// it and as it is now. Triggers can record a nested change (a touch
 /// trigger's update) before the change that caused it, so the fold chains
 /// records by value, each one's new row being the next one's old row,
-/// instead of trusting the record order. Deletes go first, then updates,
-/// then inserts, so a key freed by one row is free before another row takes
-/// it. Inserts go parent table first and deletes child table first.
+/// instead of trusting the record order. Deletes go first, child table
+/// first. Then the writes go parent table first, and inside one table the
+/// updates go before the inserts, so a key freed by one row is free before
+/// another row takes it and a parent row exists before the update that
+/// names it.
 fn net(changes: Vec<Change>) -> Vec<Change> {
     let mut by_old: std::collections::HashMap<String, Vec<usize>> = Default::default();
     let mut news = std::collections::HashSet::new();
@@ -446,9 +449,9 @@ fn net(changes: Vec<Change>) -> Vec<Change> {
         });
     }
     out.sort_by_key(|c| match c.op {
-        Op::Delete => (0, SHARED_TABLES.len() - rank(&c.table)),
-        Op::Update => (1, 0),
-        Op::Insert => (2, rank(&c.table)),
+        Op::Delete => (0, SHARED_TABLES.len() - rank(&c.table), 0),
+        Op::Update => (1, rank(&c.table), 0),
+        Op::Insert => (1, rank(&c.table), 1),
     });
     out
 }
@@ -557,6 +560,10 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
             String::new()
         } else {
             match step.and_then(|s| owner.get(s).copied().flatten()) {
+                Some(i) if orphaned(&error) && changes[i].op != Op::Delete => format!(
+                    " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
+                    changes[i].table
+                ),
                 Some(i) => format!(
                     " The {} row {CHANGED}. This machine took the primary's rows back; retry the write.",
                     changes[i].table
@@ -570,6 +577,14 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
 
 fn unseeded(error: &str) -> bool {
     error.contains("no such table: backlog_seed")
+}
+
+/// An insert or update named a parent row the primary lacks. No peer changed
+/// anything, so the changed-row hint would send the caller to retry a write
+/// that cannot succeed. A delete refused the same way means a peer added a
+/// child row first, which is a real conflict.
+fn orphaned(error: &str) -> bool {
+    error.contains("FOREIGN KEY constraint failed")
 }
 
 /// The batch id is already on the primary: an earlier flush landed it and
@@ -1224,6 +1239,7 @@ mod tests {
     /// The fixtures write rows the way any writer does, through the open
     /// seam; the store module owns the table, so its name rides a constant.
     const NODES: &str = "nodes";
+    const AGENT_SESSIONS: &str = "agent_sessions";
 
     struct Machine {
         _dir: tempfile::TempDir,
@@ -1440,5 +1456,62 @@ mod tests {
         assert!(flush(&a.graph).unwrap_err().contains("is unreachable"));
         assert!(outbox(&a) > 0);
         route_to_primary(None);
+    }
+
+    #[test]
+    fn an_update_that_names_a_new_parent_lands_with_its_parent() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-1", "child");
+        flush(&a.graph).unwrap();
+
+        // The local entity trigger makes the agent_sessions parent; the
+        // primary has no such trigger, so the parent must ride the batch.
+        crate::backlog::open(&a.graph)
+            .unwrap()
+            .execute(
+                &format!("UPDATE {NODES} SET session_id = 's-new' WHERE id = 'x-1'"),
+                [],
+            )
+            .unwrap();
+        flush(&a.graph).unwrap();
+        let (on_node, on_parent): (Option<String>, i64) = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT (SELECT session_id FROM nodes WHERE id = 'x-1'),
+                        (SELECT COUNT(*) FROM agent_sessions WHERE id = 's-new')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((on_node.as_deref(), on_parent), (Some("s-new"), 1));
+
+        // A parent the primary lost while this machine still holds it: the
+        // refusal names the missing parent, not a peer's change.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys=OFF;
+                 DELETE FROM {AGENT_SESSIONS} WHERE id = 's-new';
+                 PRAGMA foreign_keys=ON;"
+            ))
+            .unwrap();
+        retitle(&a, "x-1", "again");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(
+            refusal.contains("FOREIGN KEY") && refusal.contains("parent row"),
+            "{refusal}"
+        );
+        assert!(
+            !refusal.contains(CHANGED) && !refusal.contains("retry the write"),
+            "{refusal}"
+        );
     }
 }

@@ -17,6 +17,7 @@ mux layout apply	leaf	visible	-	-
 mux layout get	leaf	visible	-	-
 mux layout graft	leaf	visible	-	-
 mux ls	leaf	visible	-	--json,-J
+mux notify	leaf	hidden	-	--json,-J
 mux pane	group	visible	-	-
 mux pane break	leaf	visible	-	-
 mux pane claim	leaf	visible	-	-

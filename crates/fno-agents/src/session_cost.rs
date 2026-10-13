@@ -8,7 +8,7 @@ use crate::census::ProcRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionRoot {
@@ -86,12 +86,18 @@ fn stage_for(
     root: &SessionRoot,
     phases: &[PhaseRow],
     test_pids: &HashSet<u32>,
+    queued_pids: &HashSet<u32>,
     owned: &[&ProcRow],
 ) -> (Option<String>, Option<String>) {
     let is_test = root.pids.iter().any(|pid| test_pids.contains(pid))
         || owned.iter().any(|row| test_pids.contains(&row.pid));
     if is_test {
         return (Some("test".into()), root.node.clone());
+    }
+    let is_queued = root.pids.iter().any(|pid| queued_pids.contains(pid))
+        || owned.iter().any(|row| queued_pids.contains(&row.pid));
+    if is_queued {
+        return (Some("test-queued".into()), root.node.clone());
     }
     phases
         .iter()
@@ -106,6 +112,7 @@ pub fn attribute(
     roots: &[SessionRoot],
     phases: &[PhaseRow],
     test_pids: &HashSet<u32>,
+    queued_pids: &HashSet<u32>,
 ) -> Attribution {
     let parents = parent_map(table);
     let root_map: HashMap<u32, usize> = roots
@@ -133,7 +140,7 @@ pub fn attribute(
             }));
             continue;
         }
-        let (stage, node) = stage_for(root, phases, test_pids, &owned[index]);
+        let (stage, node) = stage_for(root, phases, test_pids, queued_pids, &owned[index]);
         let session_pids: Vec<u32> = owned[index].iter().map(|row| row.pid).collect();
         let (footprint, footprint_unread) = footprint_mb(&session_pids);
         let mut row = json!({
@@ -382,28 +389,100 @@ fn phase_rows(home: &crate::paths::AgentsHome) -> Result<Vec<PhaseRow>, String> 
     Ok(phases)
 }
 
+/// Pids holding a live test run: the recorded pid of every run-door claim
+/// (`test:suite`, `test:cargo-run:<i>`), with the bash-era `test-run:` holder
+/// parse kept for a claim that recorded none. `test:priority` is a lane
+/// marker, not a run, and never counts.
 fn test_pids() -> HashSet<u32> {
+    let doors: HashSet<String> = test_run_door_keys().into_iter().collect();
     crate::claims::list(Some("test:"), None, false)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|claim| {
-            claim
+        .filter(|claim| doors.contains(&claim.key))
+        .filter_map(|claim| match claim.pid {
+            Some(pid) => u32::try_from(pid).ok(),
+            None => claim
                 .holder
                 .strip_prefix("test-run:")?
                 .split(':')
                 .next()?
                 .parse()
-                .ok()
+                .ok(),
         })
         .collect()
+}
+
+fn test_run_door_keys() -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::test_run::test_door_keys(&cwd)
+}
+
+/// Pids waiting at a test door: the waiter tickets of the priority, queue
+/// and full lanes of the suite door and the first cargo run slot. A cap of
+/// zero seats leaves no run slot to wait on, so only the suite door reads.
+fn queued_test_pids() -> HashSet<u32> {
+    let mut doors = vec![crate::test_run::SUITE_CLAIM_KEY.to_string()];
+    doors.extend(
+        test_run_door_keys()
+            .into_iter()
+            .filter(|key| key.starts_with("test:cargo-run:"))
+            .take(1),
+    );
+    let mut out = HashSet::new();
+    for key in doors {
+        let Ok(claim_path) = crate::claims::claim_path(&key, None) else {
+            continue;
+        };
+        for lane in ["priority", "queue", "full"] {
+            for pid in crate::claim_queue::waiter_pids(&crate::claim_queue::lane_dir_for(
+                &claim_path,
+                lane,
+            )) {
+                out.insert(pid);
+            }
+        }
+    }
+    out
+}
+
+/// Test-run pids no session root owns: a hand-typed cargo test in a bare
+/// shell, or a ticket stamped on another machine.
+fn unattributed(pids: &HashSet<u32>, owned: &HashSet<u32>) -> usize {
+    pids.iter().filter(|pid| !owned.contains(pid)).count()
 }
 
 pub fn price(home: &crate::paths::AgentsHome, table: &[ProcRow]) -> Result<Value, String> {
     let roots = session_roots(home, table);
     let phases = phase_rows(home)?;
     let test_pids = test_pids();
-    let out = attribute(table, &roots, &phases, &test_pids);
+    let queued = queued_test_pids();
+    let out = attribute(table, &roots, &phases, &test_pids, &queued);
     Ok(json!({ "sessions": out.sessions, "unresolved": out.unresolved, "top_rss": out.top_rss }))
+}
+
+/// The test feed the spawn-gate probe serves: which managed sessions run or
+/// queue tests right now, and the run pids no session owns.
+pub fn test_stages(home: &crate::paths::AgentsHome) -> Result<Value, String> {
+    let (table, _) = crate::census::process_table();
+    let roots = session_roots(home, &table);
+    let running = test_pids();
+    let queued = queued_test_pids();
+    let out = attribute(&table, &roots, &[], &running, &queued);
+    let owned = owned_pids(&table, &roots);
+    let sessions: Vec<Value> = out
+        .sessions
+        .into_iter()
+        .filter(|row| matches!(row["stage"].as_str(), Some("test") | Some("test-queued")))
+        .collect();
+    Ok(json!({
+        "sessions": sessions,
+        "running": running.len(),
+        "queued": queued.len(),
+        "unattributed": {
+            "running": unattributed(&running, &owned),
+            "queued": unattributed(&queued, &owned),
+        },
+    }))
 }
 
 #[cfg(test)]
@@ -438,22 +517,31 @@ mod tests {
             node: Some("x-a".into()),
             pids: vec![100],
         }];
-        let out = attribute(
-            &table,
-            &roots,
-            &[PhaseRow {
-                session_id: "a".into(),
-                node: Some("x-a".into()),
-                stage: Some("blueprint".into()),
-            }],
-            &HashSet::new(),
-        );
+        let phases = &[PhaseRow {
+            session_id: "a".into(),
+            node: Some("x-a".into()),
+            stage: Some("blueprint".into()),
+        }];
+        let no_pids: HashSet<u32> = HashSet::new();
+        let out = attribute(&table, &roots, phases, &no_pids, &no_pids);
         assert_eq!(out.sessions.len(), 1);
         assert_eq!(out.sessions[0]["stage"], "blueprint");
         assert_eq!(out.sessions[0]["name"], "worker-a");
         assert_eq!(out.sessions[0]["top_command"], "rustc");
         assert_eq!(out.sessions[0]["buckets"]["cargo"]["procs"], 2);
         assert_eq!(out.top_rss[0]["name"], "fseventsd");
+
+        // AC1-HP: a live cargo-run claim whose recorded pid (201) descends
+        // from the session root marks that session `test` over the phase row.
+        let running: HashSet<u32> = [201u32].into_iter().collect();
+        let out = attribute(&table, &roots, phases, &running, &no_pids);
+        assert_eq!(out.sessions[0]["stage"], "test");
+
+        // AC1-QUEUE: a queued ticket pid owned by the root marks the session
+        // `test-queued` while the running set stays empty.
+        let queued: HashSet<u32> = [100u32].into_iter().collect();
+        let out = attribute(&table, &roots, phases, &no_pids, &queued);
+        assert_eq!(out.sessions[0]["stage"], "test-queued");
     }
 
     #[test]

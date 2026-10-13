@@ -44,6 +44,16 @@ The attribution gap gets its own line and is never folded into a count. The gap 
 
 A refusal prints the advisor's own words with no lane number beside them. A dark sensor is not headroom, and only the advisor knows which sensor went dark.
 
+## Team and provider lines
+
+The block's team line answers a second question: not how much machine the fleet holds, but who is holding it. Fleet-wide it reads `team  21/23 live · 9 working · 2 testing · 1 queued · 3 pr · 1 reserved · 4 observed`. Below it, one line per Lead shows the same counts for that Lead's sessions. The unowned line follows. One line per provider lane shows occupancy and working against the lane cap.
+
+Each count has one authority. Managed membership comes from the spawn-gate probe's registry slot rows. A row the gate does not count as a live slot renders as `observed`, never as live. Working is the census split the block already drew: under five minutes since a row's last activity. Testing and queued come from the probe's test feed. The feed reads the run doors' recorded pids and the queue tickets' waiter pids. It joins them to rows by session id first, then by name. PR counts read the node each session works, merged from the node's PR merge status. Per-Lead membership is the org tree's own join. When two Leads claim the same row, the first Lead in tree order keeps it. A Lead's holder row counts under its own role.
+
+The block folds three sources, each on its own budget. The lanes fold keeps its 10 second budget. The spawn-gate probe measures 0.6 seconds, so its budget is 5 and its TTL is 15. The org tree runs on the org board's own cadence: one child a minute while the block is expanded. Each half lands on the panel alone, so a slow `fno doctor lanes` never holds the probe's team answer.
+
+An unread half says `unknown` and names its reason. A half past its TTL keeps its last numbers and names their age. A reservation is counted once, fleet-wide, under no Lead. The Lead lines never sum past the fleet slot count.
+
 ## Two measured budgets, and why neither was chosen by reasoning
 
 The panel's fold budget is 10 seconds and its cache TTL is 15. Both are pinned to one measurement: `fno doctor lanes --json` took 8.07 seconds on a machine at 1-minute load 107. The verb's own `macmon` sample is bounded at 5.0 seconds, so a read over five seconds is its designed worst case rather than a fault.

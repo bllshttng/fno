@@ -42,6 +42,7 @@ pub mod feed_overlay;
 pub(crate) mod first_check;
 pub mod footnote_transcript;
 pub mod frame_html;
+pub mod git_paths;
 pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
@@ -55,6 +56,9 @@ pub mod mouse;
 pub mod mux_cli;
 pub mod mux_rows;
 pub mod needs_overlay;
+pub mod notify;
+#[path = "mux_cli/notify_verb.rs"]
+pub mod notify_verb;
 pub mod org_model;
 pub mod org_overlay;
 pub mod org_root;
@@ -100,6 +104,7 @@ pub mod squad_store;
 pub mod state_layout;
 pub mod store_client;
 pub mod store_conn;
+pub mod team_census;
 pub mod templates;
 #[cfg(test)]
 mod test_keeper_cleanup;

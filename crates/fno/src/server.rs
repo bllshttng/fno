@@ -77,6 +77,7 @@ mod grid_reconcile;
 mod human_input;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
+mod notice;
 mod open_link;
 mod pane_close;
 mod pane_identity;
@@ -569,6 +570,13 @@ pub(crate) enum CoreMsg {
     },
     /// (v78) A stats request; the Core owns the counter.
     ServerStats {
+        reply: oneshot::Sender<ServerMsg>,
+    },
+    /// (v110) One `fno notify` delivery: the Core owns `clients`, so the
+    /// broadcast runs on the loop and the receipt counts what was queued.
+    Notify {
+        title: String,
+        body: String,
         reply: oneshot::Sender<ServerMsg>,
     },
     Attach {
@@ -1207,6 +1215,7 @@ use pane_meta::{pane_label, tab_label};
 
 mod osc_reply;
 mod pane_meta;
+mod pane_output;
 
 /// Is an executable `delta` on `path`? Takes the PATH value rather than reading
 /// the environment so a test can probe a scratch dir without mutating
@@ -11345,6 +11354,13 @@ impl Core {
                 ));
                 Flow::Continue
             }
+            CoreMsg::Notify { title, body, reply } => {
+                let clients = self.broadcast_desktop_notice(&title, &body);
+                let _ = reply.send(ServerMsg::NoticeSent {
+                    clients: clients as u32,
+                });
+                Flow::Continue
+            }
             CoreMsg::Kill => {
                 // Notify clients, then let the shared shutdown choke point
                 // capture before killing non-keeper children. Keeper-held
@@ -12127,78 +12143,7 @@ async fn run_wait(
     let _ = reply.send(ServerMsg::WaitDone { outcome });
 }
 
-fn drain_pty_output(
-    core: &mut Core,
-    out_rx: &mut mpsc::Receiver<(u64, PaneChunk)>,
-    first: Option<(u64, PaneChunk)>,
-    e2e_first_out: &mut HashSet<u64>,
-) -> bool {
-    let mut drained = false;
-    let mut touched = HashSet::new();
-    {
-        let mut feed = |pid: u64, chunk: PaneChunk| {
-            drained = true;
-            match chunk {
-                PaneChunk::Output(bytes) => {
-                    if e2e_first_out.insert(pid) {
-                        e2e_log(format_args!(
-                            "core loop: first output from pane {pid} ({} bytes)",
-                            bytes.len()
-                        ));
-                    }
-                    if let Some(entry) = core.panes.get_mut(&pid) {
-                        let t0 = Instant::now();
-                        entry.vt.feed(&bytes);
-                        entry.last_output = t0;
-                        entry
-                            .stats
-                            .bytes_in
-                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                        entry.stats.grid_updates.fetch_add(1, Ordering::Relaxed);
-                        entry
-                            .stats
-                            .cpu_ns
-                            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                        touched.insert(pid);
-                    } else {
-                        core.buffer_in_flight_output(pid, &bytes);
-                    }
-                    // A pane nobody focuses has no terminal to answer its
-                    // palette probes; the mux does, from the pane's own
-                    // ground. Focused panes ride the client loopback.
-                    core.answer_color_queries(pid, &bytes);
-                }
-                PaneChunk::Resized(rows, cols) => {
-                    // The keeper's resize round trip landed: apply the VT
-                    // dimension change here, at its exact point in this
-                    // pane's own ordered channel, never eagerly when the
-                    // resize was issued (server.rs's push_layout). Any
-                    // trailing pre-resize output is necessarily ahead of
-                    // this marker in the same channel, so it is always fed
-                    // before the resize lands.
-                    if let Some(entry) = core.panes.get_mut(&pid) {
-                        entry.vt.resize(rows, cols);
-                        touched.insert(pid);
-                    }
-                }
-            }
-        };
-        if let Some((pid, chunk)) = first {
-            feed(pid, chunk);
-        }
-        while let Ok((pid, chunk)) = out_rx.try_recv() {
-            feed(pid, chunk);
-        }
-    }
-    for pid in touched {
-        core.broadcast_pane(pid);
-        core.note_pane_output(pid);
-    }
-    if drained {
-        core.sync_focused_modes();
-    }
-    drained
-}
+use pane_output::drain_pty_output;
 
 /// Resolve a client cwd to its canonical squad key, OFF the core loop: the
 /// git run blocks (bounded 2s) and the loop must never wait on it. Cache
@@ -12653,6 +12598,15 @@ async fn handle_control(
         }
         ControlVerb::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
         ControlVerb::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
+        ControlVerb::Notify { title, body } => {
+            core_tx
+                .send(CoreMsg::Notify {
+                    title,
+                    body,
+                    reply: reply_tx,
+                })
+                .await
+        }
         ControlVerb::RetireSession {
             harness,
             session_id,

@@ -24,6 +24,7 @@ unchanged - the code stays an honest channel count, in both directions.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
@@ -36,6 +37,29 @@ _NO_TOOL_MSG = (
     "fno inbox notify: no OS notification tool available (need osascript on "
     "macOS or notify-send on Linux); notification not sent."
 )
+
+_REAL_SUBPROCESS_RUN = subprocess.run
+
+
+def _mux_clients(title: str, message: str) -> int | None:
+    """Attached clients that took the notice via ``fno mux notify``, else None."""
+    if _suppressed() or os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    try:
+        proc = subprocess.run(
+            [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message],
+            capture_output=True, text=True, timeout=5, check=False,
+            env={**os.environ, "FNO_PY_HANDOFF": "1"},
+        )
+        return int(json.loads(proc.stdout).get("clients", 0)) if proc.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _refuse_real_os_alert() -> None:
+    """Raise when a REAL OS alert would fire under pytest; fakes exempt."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and subprocess.run is _REAL_SUBPROCESS_RUN:
+        raise RuntimeError("real OS alert refused under pytest: fake subprocess.run or set FNO_TEST_HERMETIC=1")
 
 
 def _suppressed() -> bool:
@@ -76,6 +100,7 @@ def _dispatch_local(title: str, message: str) -> bool:
         esc_title = title.replace("\\", "\\\\").replace('"', '\\"')
         if _suppressed():
             return True
+        _refuse_real_os_alert()
         try:
             subprocess.run(
                 [
@@ -97,6 +122,7 @@ def _dispatch_local(title: str, message: str) -> bool:
         # but still bound it with a timeout and swallow failures for parity.
         if _suppressed():
             return True
+        _refuse_real_os_alert()
         try:
             # argv-fence: exempt (a notification body, not a spawn seed: a
             # leading-dash body drops one toast, it never idles a worker).
@@ -164,8 +190,11 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
-    local = _dispatch_local(title, message)
     row = _emit_operator_notice(title, message, pointer)
+    if _mux_clients(title, message):  # client-first; the journal leg already ran
+        return 0, ""
+
+    local = _dispatch_local(title, message)
     if local:
         return 0, ""
     # No local tool: the sink lane is the only possible channel, so the only
