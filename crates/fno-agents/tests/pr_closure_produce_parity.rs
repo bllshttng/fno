@@ -158,6 +158,7 @@ fn run_child(
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
     cmd.args(argv)
         .current_dir(case_dir)
+        .envs(fno_agents::test_run::self_owner_env())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
