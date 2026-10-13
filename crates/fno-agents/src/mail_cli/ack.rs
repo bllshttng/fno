@@ -154,7 +154,8 @@ fn load_messages(bus: &Path) -> Vec<Value> {
     if let Ok(entries) = std::fs::read_dir(bus) {
         for entry in entries.flatten() {
             let name = entry.file_name();
-            let Some(suffix) = name.to_string_lossy().strip_prefix("messages.jsonl.") else {
+            let name = name.to_string_lossy();
+            let Some(suffix) = name.strip_prefix("messages.jsonl.") else {
                 continue;
             };
             if let Ok(n) = suffix.parse::<u64>() {
