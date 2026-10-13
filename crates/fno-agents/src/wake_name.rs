@@ -281,7 +281,7 @@ mod tests {
         // An empty uuid or name is refused at the write, so the alias
         // fallback answers instead of a blank record.
         record_at(&file, "", &Carried::named("t"), 3).unwrap();
-        record_at(&file, uuid, &Carried::named("  ".into()), 3).unwrap();
+        record_at(&file, uuid, &Carried::named("  "), 3).unwrap();
         // A pre-carry record (name only, as every drop stamped before the
         // carry) reads back with the name and nothing invented beside it.
         let legacy = json!({ "session_id": "bbbbcccc-0000-0000-0000-000000000001", "name": "t-legacy", "at": 1 });
