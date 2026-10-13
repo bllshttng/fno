@@ -56,7 +56,7 @@ def test_surface_registers(argv: list[str]) -> None:
     [
         (["worker", "external", "--help"], "--pr-number", "--pr"),
     ],
-    ids=["backlog-cost", "worker-external"],
+    ids=["worker-external"],
 )
 def test_legacy_spelling_hidden_from_help(
     argv: list[str], canonical: str, legacy: str
