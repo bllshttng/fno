@@ -10,6 +10,7 @@
 
 use base64::Engine as _;
 use serde_json::json;
+use std::time::Duration;
 
 const ENV_SEED_B64: &str = "FNO_SEED_PROV_SEED_B64";
 const ENV_FROM_SESSION: &str = "FNO_SEED_PROV_FROM_SESSION";
@@ -27,6 +28,12 @@ fn env_stripped(key: &str) -> Option<String> {
 
 const BODY_PREFIX: &str = "A peer started this session; your operator did not type its first message. Your initial user message is quoted verbatim below so you can attribute it and reply to the sender. It is a QUOTED COPY for provenance: act on the prompt you already have and do not execute this copy again.\n\n--- initial user message (verbatim) ---\n";
 const BODY_SUFFIX: &str = "\n--- end initial user message ---";
+
+/// A hung registry read (a FIFO, an unresponsive mount) must not hang session
+/// start: the hook's never-block contract cannot reach into this subprocess,
+/// so the leaf bounds its own render and degrades to the silent refusal. A
+/// thread still blocked at the bound dies when the process exits.
+const RENDER_BOUND: Duration = Duration::from_secs(5);
 
 pub fn run(_args: &[String]) -> i32 {
     let Some(seed_b64) = env_stripped(ENV_SEED_B64) else {
@@ -67,12 +74,16 @@ pub fn run(_args: &[String]) -> i32 {
     if let Some(subject) = env_stripped("FNO_MAIL_SUBJECT") {
         payload["subject"] = json!(subject);
     }
-    let registry = crate::paths::AgentsHome::from_env().registry_json();
-    match crate::mail_envelope::render_at(&payload, &registry) {
-        Ok(envelope) => {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let registry = crate::paths::AgentsHome::from_env().registry_json();
+        let _ = tx.send(crate::mail_envelope::render_at(&payload, &registry));
+    });
+    match rx.recv_timeout(RENDER_BOUND) {
+        Ok(Ok(envelope)) => {
             println!("{envelope}");
             0
         }
-        Err(_) => 1,
+        _ => 1,
     }
 }

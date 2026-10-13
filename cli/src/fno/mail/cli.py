@@ -4639,9 +4639,9 @@ def _forward_mail_hold(argv: list[str]) -> None:
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
-    from fno.rust_binary import resolve_binary
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    binary = resolve_binary()
+    binary = find_dev_binary() or resolve_binary()
     if binary is None:
         typer.echo(
             "fno mail hold: the fno-agents binary was not found. "
@@ -4743,9 +4743,9 @@ def cmd_seed_provenance_front() -> None:
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
-    from fno.rust_binary import resolve_binary
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    binary = resolve_binary()
+    binary = find_dev_binary() or resolve_binary()
     if binary is None:
         typer.echo(
             "fno mail seed-provenance: the fno-agents binary was not found. "

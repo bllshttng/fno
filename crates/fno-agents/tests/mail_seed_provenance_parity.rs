@@ -113,7 +113,8 @@ fn seed_provenance_matches_the_python_capture() {
             .env("HOME", root.path())
             .env("FNO_STATE_DIR", root.path().join("state"))
             .env("FNO_HOME", root.path())
-            .env("FNO_AGENTS_HOME", &agents_home);
+            .env("FNO_AGENTS_HOME", &agents_home)
+            .envs(fno_agents::test_run::self_owner_env());
         for key in AMBIENT {
             cmd.env_remove(key);
         }
