@@ -16,25 +16,15 @@ new
 intake
 decompose
 note
-remove
 supersede
-unsupersede
 # board and queue state
 reprioritize
-defer
-undefer
-# retract: defer + deferred_kind=retracted stamped in one act
-retract
 # stamps contained_in + parent under the lock
 contain
 queue
 unqueue
 pick
-unclaim
 requeue
-# storage + sweep machinery
-# graph-row mutation (stamps deferred_kind under the lock)
-backfill-deferred-kind
 # graph-state read: under an external backend the local graph is not
 # the store, so the read must refuse with the rest
 stuck-epics
@@ -46,7 +36,6 @@ lane-fill
 # write task rows ()
 # footnote-owned DATA with a graph-resident write path (refused until the
 # write moves to the sidecar seam)
-cost
 capture promote
 batch join
 batch prepare
@@ -59,26 +48,17 @@ task update
 [footnote]
 # seam reads / renders
 get
-status
-# reads the store's mutation counter; writes nothing
-version
 next
-ready
 worked
 queued
 provenance
-project-root
 undispatched
 # replays the post-publish views after a native (mux) store write;
 # renders only, never a graph write
 discover
-# demand reads encounters and writes nothing
-demand
 # completion works on any backend by design (task 4.1)
 done
 # footnote-owned sidecar files, no graph write
-relatedness build
-relatedness get
 epic status
 # capture-pile file machinery (no graph writes; promote is tracker-owned)
 capture add
@@ -96,9 +76,6 @@ batch metrics
 # the triage route forwards at the native door; every action reads or
 # applies through the classified engine
 triage
-# read-only operators' surface over the graph store
-# graph-store integrity check (read-only)
-collisions check
 
 [no-grain]
 # Tracker-owned verbs whose refusal a caller must read as "no grain here",

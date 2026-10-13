@@ -471,8 +471,6 @@ max_per_run = 5
 idle_threshold_s = 0
 # A2: dispatch a context /think when /target claims a node to work it (default OFF).
 on_work_start = false
-# RETIRED with the Python backlog runtime: the Rust close path never dispatches a think spawn on close. The offer layer keeps on_work_start via `fno do target`.
-on_retro = false
 # Per-install per-day ceiling on /think spawns (firehose guard; 0 = off).
 daily_cap = 20
 # Dispatch a /think for each WAVE-0 child at `fno backlog decompose` (default OFF; inherits max_per_run and daily_cap). Worth it only when the epic is large enough that inline-filling every child blows one session's context budget.

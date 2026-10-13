@@ -84,11 +84,6 @@ cli/tests/integration/test_graph_concurrency.py::<module>::mark.skipif  # on mai
 cli/tests/integration/test_graph_hygiene.py::test_hook_allows_edit_to_unrelated_file::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_graph_hygiene.py::test_hook_allows_test_fixture_paths::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_graph_hygiene.py::test_hook_blocks_edit_to_graph::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_graph_status.py::test_dash_a_is_shorthand_for_all_in_next::mark.skip  # on main before this ratchet
-cli/tests/integration/test_graph_status.py::test_dash_a_is_shorthand_for_all_in_ready::mark.skip  # on main before this ratchet
-cli/tests/integration/test_graph_status.py::test_linked_idea_stub_excluded_from_next_by_default::mark.skip  # on main before this ratchet
-cli/tests/integration/test_graph_status.py::test_node_with_plan_path_derives_to_ready::mark.skip  # on main before this ratchet
-cli/tests/integration/test_graph_status.py::test_update_on_archived_node_names_the_remedy::mark.skip  # on main before this ratchet
 cli/tests/integration/test_install_frontdoor_journey.py::_run_fno::pytest.skip  # the journey requires the Rust front door to route backlog commands
 cli/tests/integration/test_install_frontdoor_journey.py::_run_native_backlog::pytest.skip  # the journey requires the compiled Rust backlog door
 cli/tests/integration/test_install_frontdoor_journey.py::clean_machine::pytest.skip  # the isolated native journey requires a development build
@@ -183,9 +178,6 @@ cli/tests/unit/test_worktree_reap_equivalence.py::_gate_env::pytest.skip  # on m
 cli/tests/graph/test_batched_member_selection.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/integration/test_backlog_alias.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/integration/test_collision.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/integration/test_defer.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/integration/test_graph_status.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/integration/test_parent_filter.py::_set_parent::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_receipt_readback.py::test_update_receipt_names_the_resolved_id::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_reopen.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_requeue.py::test_update_null_locked_by_refuses_wedge::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
@@ -197,8 +189,6 @@ cli/tests/unit/test_graph_provenance.py::test_origin_ac2_edge_update_never_rewri
 cli/tests/unit/test_strand.py::test_canonical_done_force_reparents_to_nearest_live_ancestor::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/conftest.py::run_native_create::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/integration/test_graph_concurrency.py::_run_backlog::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/integration/test_graph_status.py::test_backlog_idea_listed_in_help::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/integration/test_parent_filter.py::_add::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/test_mail_send_check.py::test_a_held_peer_lane_restores_after_the_wall_hold_expires::pytest.skip  # native hold gate: without the fno-agents build the bus-only check fails closed to DND, which inverts both legs
 cli/tests/test_mail_send_check.py::test_a_live_self_hold_does_not_block_the_own_raw_lane::pytest.skip  # native hold gate: without the fno-agents build the bus-only check fails closed to DND and the C15 own-send pass cannot be asserted
 cli/tests/unit/test_mail_hold_parity.py::test_the_gate_receipt_reads_one_clock_across_both_addresses::pytest.skip  # native hold gate: the receipt wording is the Rust gate's; no dev build means no gate to answer

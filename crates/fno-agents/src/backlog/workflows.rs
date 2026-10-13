@@ -547,8 +547,7 @@ fn project_plans(graph: &Path, node_ids: &[String]) {
 
 /// The shared post-close tail: plan stamp and projection. The A2 retro
 /// think-spawn trigger retired with the Python backlog runtime it rode; the
-/// config leaf `think_spawn.on_retro` is registered in
-/// scripts/ci/retired-config-leaves.txt.
+/// config leaf is registered in scripts/ci/retired-config-leaves.txt.
 fn canonical_post_close(
     graph: &Path,
     task_id: &str,

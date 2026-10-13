@@ -1077,7 +1077,7 @@ def test_on_node_born_is_strictly_non_fatal(iso, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A2 lifecycle triggers (x-122a): work-start + retro-at-done
+# A2 lifecycle triggers (x-122a): work-start
 # ---------------------------------------------------------------------------
 
 
@@ -1086,10 +1086,10 @@ def test_config_subflags_default_off_and_coerce():
     from fno.config import ThinkSpawnBlock
 
     b = ThinkSpawnBlock()
-    assert b.on_work_start is False and b.on_retro is False and b.daily_cap == 20
+    assert b.on_work_start is False and b.daily_cap == 20
     # Affirmative strings enable; garbage fails safe to off; bad cap -> 20; 0 honored.
-    on = ThinkSpawnBlock(on_work_start="yes", on_retro=1, daily_cap="nonsense")
-    assert on.on_work_start is True and on.on_retro is True and on.daily_cap == 20
+    on = ThinkSpawnBlock(on_work_start="yes", daily_cap="nonsense")
+    assert on.on_work_start is True and on.daily_cap == 20
     assert ThinkSpawnBlock(on_work_start="maybe").on_work_start is False
     assert ThinkSpawnBlock(daily_cap=0).daily_cap == 0
 
@@ -1122,30 +1122,15 @@ def test_lifecycle_idempotent_second_suppressed(iso, monkeypatch, patch_spawn):
     assert len(spawn_calls) == 1
 
 
-def test_work_start_and_retro_both_dispatch_reason_scoped(iso, monkeypatch, patch_spawn):
-    """Concurrency invariant: dedup is per-(node, reason) - the lifecycle triggers
-    fire independently of each other, one spawn each, two distinct tokens."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    node, env = _node(), dict(__import__("os").environ)
-    r_ws = st.maybe_spawn_think(node, reason=st.REASON_WORK_START, env=env,
-                                events_path=iso, project_root=iso.parent.parent)
-    r_retro = st.maybe_spawn_think(node, reason=st.REASON_RETRO, env=env,
-                                   events_path=iso, project_root=iso.parent.parent)
-    assert r_ws.decision == "spawned" and r_retro.decision == "spawned"
-    assert len(spawn_calls) == 2
-
-
 def test_lifecycle_relevance_filter_skips_unresolved(iso, monkeypatch, patch_spawn):
     """A2 relevance filter: a lifecycle trigger needs a RESOLVED pointer, so a
-    high-volume work-start/retro moment never dispatches a context-free /think."""
+    high-volume work-start moment never dispatches a context-free /think."""
     monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
     _resolved(monkeypatch, ok=False, reason="harness-not-supported")
     spawn_calls, _ = patch_spawn
     env = dict(__import__("os").environ)
-    # retro (lifecycle) with an unresolved pointer -> skip, no spawn.
-    r_life = st.maybe_spawn_think(_node(), reason=st.REASON_RETRO, env=env,
+    # work-start (lifecycle) with an unresolved pointer -> skip, no spawn.
+    r_life = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=env,
                                   events_path=iso, project_root=iso.parent.parent)
     assert r_life.decision == "skipped" and r_life.reason == "unresolved-pointer"
     assert len(spawn_calls) == 0
@@ -1158,7 +1143,7 @@ def test_daily_cap_skips_when_reached(iso, monkeypatch, patch_spawn):
     spawn_calls, _ = patch_spawn
     monkeypatch.setattr(st, "_daily_cap", lambda root: 3)
     monkeypatch.setattr(st, "_daily_count", lambda: 3)
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_RETRO, env=dict(__import__("os").environ),
+    res = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
                                events_path=iso, project_root=iso.parent.parent)
     assert res.decision == "skipped" and res.reason == "daily-cap"
     assert len(spawn_calls) == 0
@@ -1171,7 +1156,7 @@ def test_daily_cap_zero_disables_ceiling(iso, monkeypatch, patch_spawn):
     spawn_calls, _ = patch_spawn
     monkeypatch.setattr(st, "_daily_cap", lambda root: 0)
     monkeypatch.setattr(st, "_daily_count", lambda: 999)
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_RETRO, env=dict(__import__("os").environ),
+    res = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
                                events_path=iso, project_root=iso.parent.parent)
     assert res.decision == "spawned" and len(spawn_calls) == 1
 
@@ -1181,7 +1166,7 @@ def test_spawn_bumps_daily_count(iso, monkeypatch, patch_spawn):
     monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
     _resolved(monkeypatch, ok=True)
     assert st._daily_count() == 0
-    st.maybe_spawn_think(_node(), reason=st.REASON_RETRO, env=dict(__import__("os").environ),
+    st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
                          events_path=iso, project_root=iso.parent.parent)
     assert st._daily_count() == 1
 
@@ -1202,19 +1187,6 @@ def test_on_node_work_start_subflag_gate(iso, monkeypatch, patch_spawn):
     assert len(spawn_calls) == 1
 
 
-def test_on_node_retro_subflag_gate(iso, monkeypatch, patch_spawn):
-    """The retro wrapper fires only when on_retro is armed."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: False)
-    assert st.on_node_retro(_node(), project_root=iso.parent.parent) is None
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: name == "on_retro")
-    res = st.on_node_retro(_node(), project_root=iso.parent.parent)
-    assert res is not None and res.decision == "spawned"
-    assert len(spawn_calls) == 1
-
-
 def test_worker_agent_name_reason_scoped():
     """codex P2: birth name is byte-for-byte; lifecycle names are distinct per reason.
 
@@ -1227,10 +1199,9 @@ def test_worker_agent_name_reason_scoped():
     assert st._worker_agent_name("x-1", "slug") == "th-th-1-slug"  # default birth
     assert st._worker_agent_name("x-1", "slug", st.REASON_BIRTH) == "th-th-1-slug"
     assert st._worker_agent_name("x-1", "slug", st.REASON_WORK_START) == "th-th-1-work-start-slug"
-    assert st._worker_agent_name("x-1", "slug", st.REASON_RETRO) == "th-th-1-retro-slug"
     names = {st._worker_agent_name("x-1", "slug", r)
-             for r in (st.REASON_BIRTH, st.REASON_WORK_START, st.REASON_RETRO)}
-    assert len(names) == 3  # no collision across a node's lifecycle
+             for r in (st.REASON_BIRTH, st.REASON_WORK_START)}
+    assert len(names) == 2  # no collision across a node's lifecycle
 
 
 def test_worker_agent_name_capped_at_64_keeps_node_id():
@@ -1490,7 +1461,7 @@ def test_AC8_HP_wave0_fanout_is_off_by_default(tmp_path, monkeypatch):
 
 
 def test_wave0_needs_its_own_flag_not_just_enabled(tmp_path, monkeypatch):
-    """Same shape as on_work_start / on_retro: `enabled` alone never arms it.
+    """Same shape as on_work_start: `enabled` alone never arms it.
 
     Read off the settings block rather than through `think_spawn_enabled`:
     conftest pins FNO_THINK_SPAWN=0 process-wide so no test can spawn a real

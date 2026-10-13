@@ -4115,7 +4115,6 @@ def _echo_freed(freed: list, owner_id: str) -> None:
 # In graph/strand.py: the terminal-parent strand family (moved with the
 # close guards, release twins, and self-heal that share its liveness predicate).
 from fno.graph.strand import (  # noqa: E402
-    _release_contained_children,
     _stranded_next_receipts,
 )
 
@@ -4469,15 +4468,6 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
     if sc.plan_path and not skip_stamp:
         _stamp_and_graduate_plan(sc.plan_path, url=evidence_pr_url, session_id=None)
 
-    # Retro-at-done lifecycle trigger (): same non-fatal posture as the
-    # graph path; the seam row carries what the resolver needs.
-    try:
-        from fno.provenance.spawn_think import on_node_retro
-
-        on_node_retro(row)
-    except Exception:  # noqa: BLE001 - additive; never wedge the close
-        pass
-
 
 @cli.command(
     "done",
@@ -4688,17 +4678,6 @@ def _canonical_post_close(
     # --skip-stamp suppresses ALL plan writes, projection included.
     if not skip_stamp:
         _project_plans_from_graph([task_id, *cascade_closed])
-
-    # A2 (): retro-at-done lifecycle trigger. Dispatch a `retro` context
-    # /think while the closed node's session context is still resolvable. Gated
-    # by config.think_spawn.on_retro (default OFF) and strictly non-fatal: a
-    # dispatch failure never unwinds the close it rode in on.
-    try:
-        from fno.provenance.spawn_think import on_node_retro
-
-        on_node_retro(node)
-    except Exception:  # noqa: BLE001 - additive; never wedge `done`
-        pass
 
 
 # -- reconcile (close merged-PR drift) --
