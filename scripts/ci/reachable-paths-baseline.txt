@@ -120,6 +120,7 @@ A	failed to read {log_path}: {exc}	py=cli/src/fno/agents/read.py;rs=crates/fno-a
 A	falling back to registry-only view	py=cli/src/fno/agents/harnesses/claude.py|cli/src/fno/claims/roster.py;rs=crates/fno-agents/src/backlog/worked.rs|crates/fno-agents/src/claude_roster.rs	# CLASSIFY protocol|msg-twin|data
 A	flight:backlog-reconcile	py=cli/src/fno/backlog/single_flight.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	flight:backlog-reconcile:node:{node}	py=cli/src/fno/backlog/single_flight.py;rs=crates/fno-agents/src/backlog/reconcile_cli.rs	# CLASSIFY protocol|msg-twin|data
+A	fno agents mail drain-self	py=cli/src/fno/mail/cli.py;rs=crates/fno/src/main.rs	# msg-twin: the drain-self missing-binary hint label on both transports names the canonical verb form
 A	fno agents resume: registry read failed: {exc}	py=cli/src/fno/agents/resume_cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	fno agents trace: agent name is required unless --all is set	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	fno backlog undispatched --json	py=cli/src/fno/backlog/undispatched.py;rs=crates/fno-agents/src/backlog/next.rs|crates/fno-agents/src/backlog/undispatched.rs|crates/fno-agents/src/org_board.rs	# CLASSIFY protocol|msg-twin|data
