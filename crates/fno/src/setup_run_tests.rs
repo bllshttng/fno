@@ -255,10 +255,6 @@ fn markers_name_owned_dirs_and_stamp_iso() {
 
 #[test]
 fn the_recommendation_shapers_hold() {
-    // The repo name shapes into a <=7-char lowercase prefix.
-    assert_eq!(slug_prefix(Path::new("/tmp/My-Repo_X")), "myrepox");
-    assert_eq!(slug_prefix(Path::new("/home/x/footnote")), "footnot");
-    assert_eq!(slug_prefix(Path::new("/")), "");
     // The band-clause parser is the one both hosts share: the integer
     // after `budget max_live`, nothing else.
     assert_eq!(

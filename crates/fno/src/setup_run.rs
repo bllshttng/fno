@@ -304,8 +304,8 @@ pub const STEPS: &[Step] = &[
         id: "backlog-prefix",
         layer: Layer::Project,
         kind: Kind::Act,
-        question: "Use the repo slug as the backlog node-ID prefix?",
-        effect: "writes backlog.id_prefix from the repo name when it is unset",
+        question: "Mint backlog node IDs as fn-<4 hex> for this repo?",
+        effect: "writes backlog.id_prefix = fn and backlog.id_hex_width = 4 together when no prefix is configured",
     },
     Step {
         id: "cargo-toolchain",
@@ -412,22 +412,6 @@ fn agent_env() -> bool {
         .any(|k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false))
 }
 
-/// The repo directory name as a node-ID prefix: lowercase alphanumerics
-/// only, capped at 7 chars. `config set` stays the validator; this only
-/// shapes the recommendation.
-pub fn slug_prefix(root: &Path) -> String {
-    let raw = root
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_lowercase();
-    cleaned.chars().take(7).collect()
-}
-
 /// UTC now as `YYYY-MM-DDTHH:MM:SSZ`, no external time dep: days-from-civil
 /// inverted (Hinnant), exact for any date a marker will carry.
 pub fn utc_now() -> String {
@@ -527,17 +511,20 @@ fn in_source_checkout(cwd: &Path) -> bool {
     cwd.join("crates/fno/Cargo.toml").is_file()
 }
 
-/// Write one key through `fno config set` (the validated writer: coercion,
-/// schema, reserved families), global scope by default, `--local` for the
-/// project layer. Returns the config file written, so the report's paths
-/// stay absolute.
-fn config_set(exe: &Path, key: &str, value: &str, local: bool) -> Result<PathBuf, String> {
+/// Write one or more `key=value` pairs through `fno config set` (the
+/// validated writer: coercion, schema, reserved families) as ONE call, so
+/// a multi-key pair lands atomically: any refused value leaves the file
+/// unchanged. Global scope by default, `--local` for the project layer.
+/// Returns the config file written, so the report's paths stay absolute.
+fn config_set(exe: &Path, pairs: &[(&str, &str)], local: bool) -> Result<PathBuf, String> {
     let mut argv: Vec<OsString> = vec![exe.to_path_buf().into(), "config".into(), "set".into()];
-    argv.push(key.into());
-    argv.push(value.into());
+    for (key, value) in pairs {
+        argv.push(format!("{key}={value}").into());
+    }
     if local {
         argv.push("--local".into());
     }
+    let keys = pairs.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(" ");
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -545,13 +532,13 @@ fn config_set(exe: &Path, key: &str, value: &str, local: bool) -> Result<PathBuf
         .stderr(std::process::Stdio::piped());
     let out = cmd
         .spawn()
-        .map_err(|e| format!("fno config set {key}: {e}"))?
+        .map_err(|e| format!("fno config set {keys}: {e}"))?
         .wait_with_output()
-        .map_err(|e| format!("fno config set {key}: {e}"))?;
+        .map_err(|e| format!("fno config set {keys}: {e}"))?;
     if !out.status.success() {
         let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(format!(
-            "`fno config set {key}` exited {}: {detail}",
+            "`fno config set {keys}` exited {}: {detail}",
             out.status.code().unwrap_or(-1)
         ));
     }
@@ -679,7 +666,7 @@ fn step_concurrency_band(exe: &Path, rep: &mut Report) {
         rep.skipped.extend(skips);
         return;
     };
-    match config_set(exe, "agents.max_live", &n.to_string(), false) {
+    match config_set(exe, &[("agents.max_live", &n.to_string())], false) {
         Ok(path) => {
             rep.done
                 .push(format!("concurrency-band: agents.max_live = {n}"));
@@ -723,7 +710,7 @@ fn step_guardrails(exe: &Path, rep: &mut Report) {
         rep.skipped.extend(skips);
         return;
     };
-    match config_set(exe, p.key, &p.value, false) {
+    match config_set(exe, &[(p.key, &p.value)], false) {
         Ok(path) => {
             rep.done
                 .push(format!("guardrails: {} = {}", p.key, p.value));
@@ -738,10 +725,10 @@ fn step_guardrails(exe: &Path, rep: &mut Report) {
     }
 }
 
-/// The proposal half of the backlog-prefix step: the repo slug when no
-/// config file sets the key yet, else `None` with the skip reason pushed.
-/// A configured prefix is the project's own choice; setup never overwrites
-/// one with the slug.
+/// The proposal half of the backlog-prefix step: the fixed scheme (the
+/// ruling: prefix `fn`, 4 hex digits, every repo) when no config file sets
+/// the key yet, else `None` with the skip reason pushed. A configured
+/// prefix is the project's own choice; setup never overwrites one.
 fn propose_backlog_prefix(root: &Path, skips: &mut Vec<String>) -> Option<Proposal> {
     let global = crate::model_catalog::state_dir().join("config.toml");
     let project = root.join(".fno").join("config.toml");
@@ -751,41 +738,69 @@ fn propose_backlog_prefix(root: &Path, skips: &mut Vec<String>) -> Option<Propos
         );
         return None;
     }
-    let slug = slug_prefix(root);
-    if slug.is_empty() {
-        skips.push("backlog-prefix: no repo name to derive a prefix from".into());
-        return None;
-    }
     Some(Proposal {
         id: "backlog-prefix",
         key: "backlog.id_prefix",
-        value: slug.clone(),
+        value: "fn".into(),
         scope: "project",
-        reason: format!("names nodes after this repo's own slug ({slug})"),
+        reason: "the fixed scheme: nodes mint as fn-<4 hex>; the width rides the same write".into(),
         source: "default",
     })
 }
 
-/// The backlog prefix: the repo slug, written project-scoped only when no
-/// config file sets the key yet.
+/// Whether a config file carries any `backlog.` key, i.e. a `[backlog]`
+/// table. An unreadable file counts as having one, the `key_set` rule:
+/// setup never writes a config it cannot read.
+fn backlog_table_exists(path: &Path) -> bool {
+    match crate::config_defaults::read_flat(path) {
+        Ok(Some(map)) => map.keys().any(|k| k.starts_with("backlog.")),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
+/// The backlog-prefix step: the pair written so it is never half set, one
+/// `config set` call per layer, each carrying both keys as `key=value`
+/// tokens. Project-scoped always; the global file too when it has no
+/// `[backlog]` table, so a session in a fresh worktree (its project file
+/// is untracked and absent there) still mints the scheme. A configured
+/// prefix in either file is the project's own choice; setup never
+/// overwrites it.
 fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
     let mut skips = Vec::new();
     let Some(p) = propose_backlog_prefix(root, &mut skips) else {
         rep.skipped.extend(skips);
         return;
     };
-    match config_set(exe, p.key, &p.value, true) {
-        Ok(path) => {
-            rep.done
-                .push(format!("backlog-prefix: {} = {}", p.key, p.value));
-            rep.paths.push(path.display().to_string());
+    let pairs = [
+        ("backlog.id_prefix", p.value.as_str()),
+        ("backlog.id_hex_width", "4"),
+    ];
+    let global = crate::model_catalog::state_dir().join("config.toml");
+    let mut targets: Vec<(bool, &str)> = vec![(true, "project")];
+    if !backlog_table_exists(&global) {
+        targets.push((false, "global"));
+    }
+    let mut paths = Vec::new();
+    let mut errors = Vec::new();
+    for (local, label) in targets {
+        match config_set(exe, &pairs, local) {
+            Ok(path) => paths.push(path),
+            Err(e) => errors.push(format!("{label}: {e}")),
         }
-        Err(e) => {
-            let message = format!("backlog-prefix: {e}");
-            rep.rows
-                .push(row("needs_human", "config_set_refused", message.clone()));
-            rep.needs_human.push(message);
-        }
+    }
+    if !paths.is_empty() {
+        rep.done.push(format!(
+            "backlog-prefix: backlog.id_prefix = {}, backlog.id_hex_width = 4",
+            p.value
+        ));
+        rep.paths.extend(paths);
+    }
+    for e in errors {
+        let message = format!("backlog-prefix: {e}");
+        rep.rows
+            .push(row("needs_human", "config_set_refused", message.clone()));
+        rep.needs_human.push(message);
     }
 }
 
