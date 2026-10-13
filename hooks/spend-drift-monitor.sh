@@ -22,10 +22,15 @@ fi
 # after every tool call teaches nothing. The first exit is non-zero so the
 # harness shows the line; it never blocks the tool call.
 sid="$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
-marker="${TMPDIR:-/tmp}/fno-spend-drift-no-node-${sid:-unknown}"
+# A payload with no session id has no session to key on. It keys on the day
+# instead, so one such session cannot silence the notice for every later one.
+latch_dir="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/latches}"
+marker="${latch_dir}/.spend-drift-no-node-${sid:-day-$(date +%Y%m%d)}"
 if [ -e "$marker" ]; then
   exit 0
 fi
+mkdir -p "$latch_dir" 2>/dev/null || true
+find "$latch_dir" -maxdepth 1 -type f -name '.spend-drift-no-node-*' -mtime +2 -delete 2>/dev/null || true
 { : > "$marker"; } 2>/dev/null
 echo "fno spend-drift monitor is off: node is not on PATH. The spend cap and the model-drift check do not run in this session. Install Node.js 18 or later, or add its directory to PATH, then restart the session." >&2
 exit 1
