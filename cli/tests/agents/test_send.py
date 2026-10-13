@@ -3391,33 +3391,17 @@ def _team_invoke(monkeypatch, args: list[str]):
 
 
 def _team_fake_writer(
-    monkeypatch, returncode: int = 0, stdout: str = "", stderr: str = "", style_receipt=None
+    monkeypatch, returncode: int = 0, stdout: str = "", stderr: str = ""
 ):
-    """Capture the announce send subprocess; returns the list of invocations."""
+    """Capture the ``fno-agents mail team`` subprocess; returns the calls."""
     import shutil
     import subprocess
 
-    # CI has no fno-agents binary installed; the shim's on-PATH check must
-    # see one or every team test dies before the writer is invoked.
+    # CI has no fno-agents binary installed; the forward's on-PATH check
+    # must see one or every team test dies before the leaf is invoked.
     monkeypatch.setattr(
         shutil, "which", lambda name: f"/tmp/{name}" if name == "fno-agents" else None
     )
-
-    # The style gate rides the same binary. The writer-focused tests pass a
-    # clean stub here (they exercise the shim, not the gate); the gate's own
-    # refusal test passes the REAL door, whose fail-closed posture refuses
-    # when the environment answers with nothing usable.
-    from fno import rust_binary
-
-    if style_receipt is None:
-
-        def style_receipt(text, surface, word_cap=None):
-            return (
-                None,
-                {"exception": None, "word_count": 0, "violations": [], "report": ""},
-            )
-
-    monkeypatch.setattr(rust_binary, "style_receipt", style_receipt)
 
     calls: list[dict[str, object]] = []
 
@@ -3449,68 +3433,6 @@ def _team_fake_writer(
     return calls
 
 
-def test_team_shim_invokes_the_one_writer_once(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-HP: dispatch_send is never called; one announce send runs with the
-    body on stdin and its stdout/exit relayed."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import dispatch as dispatch_mod
-
-    def explode(**_kwargs):
-        raise AssertionError("dispatch_send must never run on the announce path")
-
-    monkeypatch.setattr(dispatch_mod, "dispatch_send", explode)
-    calls = _team_fake_writer(
-        monkeypatch,
-        stdout='{"id":"msg-test","scope":"all","audience":3}\n',
-    )
-
-    result = _team_invoke(
-        monkeypatch, ["team", "--scope", "all", "one bus line", "--json"]
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len(calls) == 1, calls
-    argv = calls[0]["args"]
-    assert argv[1:3] == ["announce", "send"]
-    assert "--scope" in argv and "all" in argv
-    assert "--sender-kind" in argv
-    assert calls[0]["input"] == "one bus line"
-    assert "msg-test" in result.output
-
-
-def test_team_sender_kind_is_agent_only_for_an_owned_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-HP: a resolvable owned harness identity stamps agent; a bare shell
-    (no markers) stamps operator."""
-    use_tmpdir(monkeypatch, tmp_path)
-    import fno.harness_identity as hi_mod
-
-    from fno.harness_identity import OwnedHarnessIdentity
-
-    calls = _team_fake_writer(monkeypatch)
-
-    def owned(env=None, **_kw):
-        return OwnedHarnessIdentity(
-            session_id="abcd1234-1111-2222-3333-444455556666", harness="claude"
-        )
-
-    monkeypatch.setattr(hi_mod, "resolve_owned_identity", owned)
-    _team_invoke(monkeypatch, ["team", "--scope", "all", "from a session"])
-    owned_argv = calls[-1]["args"]
-    assert owned_argv[owned_argv.index("--sender-kind") + 1] == "agent"
-
-    def empty(env=None, **_kw):
-        return OwnedHarnessIdentity(session_id=None, harness=None)
-
-    monkeypatch.setattr(hi_mod, "resolve_owned_identity", empty)
-    _team_invoke(monkeypatch, ["team", "--scope", "all", "from a shell"])
-    shell_argv = calls[-1]["args"]
-    assert shell_argv[shell_argv.index("--sender-kind") + 1] == "operator"
-
-
 def test_team_passthrough_flags_reach_the_writer(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3531,40 +3453,6 @@ def test_team_passthrough_flags_reach_the_writer(
     assert argv[argv.index("--subject") + 1] == "maintenance"
     assert argv[argv.index("--expires") + 1] == "45m"
     assert "--urgent" in argv
-
-
-def test_team_style_refusal_fires_before_the_writer(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-ERR: a body failing the style lint exits non-zero and the Rust
-    writer is never invoked."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno import rust_binary
-
-    calls = _team_fake_writer(monkeypatch, style_receipt=rust_binary.style_receipt)
-    bad_body = "Stop work; report where you are."
-
-    result = _team_invoke(
-        monkeypatch, ["team", "--scope", "all", bad_body]
-    )
-
-    assert result.exit_code != 0, result.output
-    assert calls == [], "the writer must not run past a refused body"
-
-
-def test_team_body_cap_refused_before_the_writer(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """AC2-ERR: an over-cap body exits non-zero before any subprocess."""
-    use_tmpdir(monkeypatch, tmp_path)
-    calls = _team_fake_writer(monkeypatch)
-
-    result = _team_invoke(
-        monkeypatch, ["team", "--scope", "all", "x" * (1024 * 1024 + 1)]
-    )
-
-    assert result.exit_code != 0, result.output
-    assert calls == []
 
 
 def test_team_writer_failure_relays_the_exit_and_stderr(

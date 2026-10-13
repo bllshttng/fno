@@ -200,6 +200,10 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail team`: the fleet broadcast. The verb and its tail
+    /// pass through byte-verbatim to the native leaf, which vets the body
+    /// and relays through `announce send`.
+    MailTeam(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -342,6 +346,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
         "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "team" => Some(Role::MailTeam(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -654,6 +663,9 @@ fn main() {
             &["mail"],
             &rest,
         )),
+        Role::MailTeam(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -855,6 +867,18 @@ mod tests {
             decide_role(&os(&["mail", "view"]), false),
             Role::MailViewRenamed
         ));
+        // The team broadcast claims its verb on both mounts, tail included.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "team", "--scope", "all", "hi"]),
+                false
+            ),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "team", "--scope", "all", "hi"]), false),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
             Role::Forward
