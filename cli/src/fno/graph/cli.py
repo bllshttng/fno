@@ -42,7 +42,6 @@ from fno.graph.node_builder import (  # noqa: F401 - re-export for lazy importer
     _session_provenance,
 )
 from fno.graph.node_builder import register as _register_node_builder
-from fno.graph.api import cmd_version as _cmd_version
 # The roster renderer lives in its own module: this file is shrink-only and
 # the provenance change touches it. The alias keeps the historical name
 # importable.
@@ -2357,81 +2356,6 @@ def cmd_undispatched(
     typer.echo(json.dumps(receipt, indent=2))
 
 
-@cli.command(
-    "ready", hidden=True,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    epilog=("Native date filters: --created-before/--created-after/--touched-before/"
-            "--touched-after <Nd|YYYY-MM-DD>, --sort created|touched. Touched falls back to created."),
-)
-def cmd_ready(
-    ctx: typer.Context,
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name"),
-    all_: bool = typer.Option(False, "--all", "-A", help="Show all projects"),
-    roadmap_id: Optional[str] = typer.Option(None, "--roadmap-id"),
-    parent: Optional[str] = typer.Option(
-        None,
-        "--parent",
-        help="Restrict to transitive children of this epic node (ab-ID).",
-    ),
-    include_ideas: bool = typer.Option(
-        False,
-        "--ideas",
-        "-I",
-        "--include-ideas",
-        help="Also list idea-stage rows (plan-less nodes) alongside ready ones.",
-    ),
-    include_deferred: bool = typer.Option(
-        False,
-        "--include-deferred",
-        help="Also list deferred rows for explicit re-engagement.",
-    ),
-    mission: Optional[str] = typer.Option(
-        None,
-        "--mission",
-        help="Restrict to nodes whose mission_id matches (same contract as `next`).",
-    ),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Emit JSON (default; flag accepted for parity)."
-    ),
-) -> None:
-    from fno.graph._intake import repo_root
-    from fno.graph.store import ClaimsUnavailableError, StoreUnavailable, ready as store_ready
-    from fno.tracker import active_backend_name
-
-    # External backends share the Rust filters and ranking with `next`.
-    entries = None
-    if active_backend_name() != "graph":
-        try:
-            entries = _joined_open_candidates()
-        except _ExternalSelectionError as exc:
-            typer.echo(f"Error: {exc}; selection refused", err=True)
-            raise typer.Exit(code=1)
-
-    try:
-        result = store_ready(
-            project=project,
-            all=all_,
-            roadmap_id=roadmap_id,
-            parent=parent,
-            mission=mission,
-            include_ideas=include_ideas,
-            include_deferred=include_deferred,
-            repo_root=repo_root(),
-            entries=entries,
-            filter_args=list(ctx.args or []),
-        )
-    except StoreUnavailable as exc:
-        typer.echo(f"Error: store keeper unavailable; ready selection refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    except ValueError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    except ClaimsUnavailableError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(json.dumps(result["rows"], indent=2))
-
-
 # -- lane-fill --
 
 
@@ -2621,30 +2545,6 @@ def cmd_get(
 
 
 # -- project-root (work-map resolution; null-for-unmapped) --
-
-
-@cli.command("project-root", hidden=True)
-def cmd_project_root(
-    project: str = typer.Argument(
-        ..., help="Project name to resolve against config.work.workspaces."
-    ),
-) -> None:
-    """Print a project's work-map root, or exit 1 (empty stdout) if unmapped.
-
-    The G2 session-project invariant needs to tell "mapped to a root" apart from
-    "unmapped" so it can REFUSE an unmapped foreign wave by name rather than
-    guess a cwd (AC2-ERR). ``backlog get --field _resolved_cwd`` can't answer
-    this: it applies a ``root or cwd`` fallback, so an unmapped project with a
-    recorded cwd still prints a (guessed) path. This verb exposes the raw
-    ``project_root_from_settings`` lookup - the same pure work-map resolver G1
-    uses - with no cwd fallback, so empty/exit-1 means exactly "unmapped".
-    """
-    from fno.graph._intake import project_root_from_settings
-
-    root = project_root_from_settings(project)
-    if not root:
-        raise typer.Exit(code=1)
-    typer.echo(root)
 
 
 # -- provenance --
@@ -3509,67 +3409,6 @@ cli.add_typer(task_app, name="task", hidden=True)
 
 
 # -- remove --
-
-
-@cli.command(
-    "remove",
-    hidden=True,
-    epilog="Reverses `add` / `idea` / `new` / `intake`. Softer options: `archive` "
-    "(keeps the node readable), `supersede` (records what replaced it), `defer` "
-    "(parks it).",
-)
-def cmd_remove(
-    task_id: str = typer.Argument(..., help="Feature ID (ab-XXXXXXXX)"),
-    force: bool = typer.Option(False, "--force", "-F", help="Skip cascade warning"),
-) -> None:
-    """Delete a node from the graph permanently. This verb exists and works.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno.graph.store import commit_rows_via_store
-    from fno.graph._intake import _find_node, _find_dependents
-
-    _require_node_id(task_id)
-
-    entries = wire_rows(path=_graph_path())
-    dependents = _find_dependents(entries, task_id)
-    if dependents and not force:
-        typer.echo(f"Removing {task_id} will orphan blocked_by in: {', '.join(dependents)}")
-        typer.echo("Use --force to confirm.")
-        raise typer.Exit(code=1)
-
-    _freed_box: list[list] = [[]]
-
-    def mutator(entries):
-        node = _find_node(entries, task_id)
-        if not node:
-            typer.echo(f"Error: feature {task_id} not found", err=True)
-            raise typer.Exit(code=1)
-        for e in entries:
-            if task_id in e.get("blocked_by", []):
-                e["blocked_by"].remove(task_id)
-            # related is symmetric, and no other verb can repair a peer that
-            # names a node the graph no longer has: set_related only touches
-            # peers in the declaring node's own delta.
-            if task_id in (e.get("related") or []):
-                e["related"].remove(task_id)
-            # remove is a HARD delete, unlike archive (which keeps the node
-            # readable and therefore guards it instead). A dependent's origin
-            # would be left pointing at nothing, and the stated invariant is
-            # that source_node_id is null or resolves - never a dangling string.
-            if e.get("source_node_id") == task_id:
-                e["source_node_id"] = None
-        # Same invariant for containment (), and here a dangling pointer
-        # is a permanent trap rather than mere untidiness: the reconcile heal
-        # deliberately skips a MISSING owner, so nothing would ever free them.
-        _freed_box[0] = _release_contained_children(entries, task_id)
-        return [e for e in entries if e.get("id") != task_id]
-
-    commit_rows_via_store(_graph_path(), mutator)
-    _echo_freed(_freed_box[0], task_id)
-    typer.echo(f"Removed {task_id}" + (f" (orphaned deps in {dependents})" if dependents else ""))
-
-
-    # Rationale (10 lines): docs/architecture/graph-cli-rationale.md#cmd-remove-6902
 
 
 def _expand_valid_ids(task_ids: list[str]) -> list[str]:

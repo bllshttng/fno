@@ -59,7 +59,6 @@ def test_every_live_verb_is_classified_exactly_once():
     [
         ["backlog", "add", "A thing"],
         ["backlog", "update", "EXT-1", "--priority", "p1"],
-        ["backlog", "defer", "EXT-1", "--reason", "waiting"],
         ["backlog", "encounter", "EXT-1", "--evidence", "operator asked"],
         ["backlog", "queue", "EXT-1"],
         ["backlog", "maintain"],

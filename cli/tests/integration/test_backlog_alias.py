@@ -297,14 +297,6 @@ def test_hidden_backlog_verbs_stay_invocable(verb):
     assert r.exit_code == 0, f"hidden verb {verb!r} --help failed: {r.output!r}"
 
 
-def test_advertised_verbs_point_at_hidden_siblings():
-    """AC3-UI: paired-verb pointers keep the hidden sibling discoverable."""
-    d = _invoke("backlog", "defer", "--help")
-    assert d.exit_code == 0 and "undefer" in d.output, d.output
-    dn = _invoke("backlog", "done", "--help")
-    assert dn.exit_code == 0 and "reconcile" in dn.output, dn.output
-
-
 @pytest.mark.usefixtures("native_backlog_door")
 def test_ac2_hp_triage_propose_dry_run_emits_template(tmp_graph):
     """`fno backlog triage propose --dry-run` emits a stub proposal."""

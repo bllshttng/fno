@@ -14,7 +14,6 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use super::node_ref::{find_node, has_node_id_prefix};
@@ -1371,7 +1370,7 @@ fn defer_batch(ids_raw: &[String], reason: &str, kind: Option<&str>, verb: &str)
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_str)
-                    .any(|b| b == id)
+                    .any(|b| b == id.as_str())
             })
             .filter_map(|e| text_at(e, "id"))
             .map(String::from)
@@ -1705,7 +1704,7 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
     // Heal the plan doc off its terminal superseded rung, then recompute so
     // the derived status follows the corrected plan.
     project_plans_for(&[canonical.clone()]);
-    settle_released_node(&graph, &canonical).ok();
+    let _ = settle_released_node(&graph, &canonical);
     0
 }
 
@@ -1903,4 +1902,351 @@ fn relatedness_get(tail: &[String]) -> i32 {
         println!("{id}\t{score}\t{reason}");
     }
     0
+}
+
+// ---------------------------------------------------------------------------
+// ready - the selection read (the keeper's own ready op, in-process)
+// ---------------------------------------------------------------------------
+
+const READY_HELP: &str = "Usage: fno backlog ready [--project NAME] [--all] [--roadmap-id ID] [--parent ID] [--ideas] [--include-deferred] [--mission ID] [--json]
+
+List dispatch-ready rows (the same filters and ranking `next` runs, without
+the claim). Ideas ride only with --ideas; deferred only with
+--include-deferred.
+
+Options:
+  --project, -p NAME      Filter by project
+  --all, -A               Every project
+  --roadmap-id ID         Restrict to one roadmap
+  --parent ID             Transitive children of this epic
+  --ideas, -I             Also list idea-stage rows
+  --include-deferred      Also list deferred rows
+  --mission ID            Restrict to nodes whose mission_id matches
+  -J, --json              JSON rows (default; the flag is accepted for parity)
+  -h, --help              Print help
+";
+
+pub fn run_ready(tail: &[String]) -> i32 {
+    let mut project: Option<String> = None;
+    let mut all = false;
+    let mut roadmap_id: Option<String> = None;
+    let mut parent: Option<String> = None;
+    let mut mission: Option<String> = None;
+    let mut include_ideas = false;
+    let mut include_deferred = false;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "-h" | "--help" => {
+                print!("{READY_HELP}");
+                return 0;
+            }
+            "--project" | "-p" => {
+                project = Some(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+            }
+            "--all" | "-A" => all = true,
+            "--roadmap-id" => {
+                roadmap_id = Some(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+            }
+            "--parent" => {
+                parent = Some(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+            }
+            "--mission" => {
+                mission = Some(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+            }
+            "--ideas" | "-I" | "--include-ideas" => include_ideas = true,
+            "--include-deferred" => include_deferred = true,
+            "--json" | "-J" => {}
+            other if other.starts_with('-') && other.len() > 1 => {
+                eprintln!("No such option: {other}");
+                return 2;
+            }
+            _ => {
+                eprintln!("Got unexpected extra argument ({arg})");
+                return 2;
+            }
+        }
+    }
+    // External backends share the Rust filters and ranking with `next`; the
+    // joined-candidate read keeps the wheel until its own arm lands.
+    if super::workflows::active_backend_name() != "graph" {
+        return super::cli::forward_to_python("ready", tail);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let repo_root = super::create_cli::repo_root(&cwd);
+    let config_dir = crate::claude_roster::config_dir();
+    let staleness_days = crate::backlog_ready::configured_staleness_days(&config_dir);
+    let fno_dir = settings::graph_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| cwd.clone());
+    let held = crate::needs::held_map(&fno_dir, &cwd);
+    let claimed: std::collections::BTreeSet<String> =
+        match crate::claims::list_strict(Some("node:"), None, false) {
+            Ok(records) => records
+                .iter()
+                .filter_map(|rec| rec.key.strip_prefix("node:").map(str::to_string))
+                .collect(),
+            Err(e) => {
+                eprintln!("Error: live claim state is unavailable; ready selection refused: {e}");
+                return 1;
+            }
+        };
+    let opts = crate::backlog_ready::ReadyOpts {
+        project,
+        all,
+        roadmap_id,
+        parent,
+        mission,
+        include_ideas,
+        include_deferred,
+        repo_root: Some(repo_root),
+        claimed,
+        staleness_days,
+        now_ms: crate::claims::now_ms(),
+        held,
+    };
+    let graph = settings::graph_path();
+    let Ok(rows) = graph_store::read_rows(&graph) else {
+        eprintln!("Error: the backlog graph could not be read");
+        return 1;
+    };
+    match crate::backlog_ready::select(&rows, &opts) {
+        Ok(reply) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&reply.rows).unwrap_or_else(|_| "[]".into())
+            );
+            0
+        }
+        Err(crate::backlog_ready::NoSuchParent(parent)) => {
+            eprintln!("Error: no such node '{parent}'");
+            1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// remove - the hard delete
+// ---------------------------------------------------------------------------
+
+const REMOVE_HELP: &str = "Usage: fno backlog remove TASK_ID [--force]
+
+Delete a node from the graph permanently. This verb exists and works.
+
+Options:
+  -F, --force  Skip cascade warning
+  -h, --help   Print help
+";
+
+pub fn run_remove(tail: &[String]) -> i32 {
+    let mut task_id: Option<String> = None;
+    let mut force = false;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "-h" | "--help" => {
+                print!("{REMOVE_HELP}");
+                return 0;
+            }
+            "--force" | "-F" => force = true,
+            other if other.starts_with('-') && other.len() > 1 => {
+                eprintln!("No such option: {other}");
+                return 2;
+            }
+            _ if task_id.is_none() => task_id = Some(arg.clone()),
+            _ => {
+                eprintln!("Got unexpected extra argument ({arg})");
+                return 2;
+            }
+        }
+    }
+    let Some(task_id) = task_id else {
+        eprintln!("Missing argument 'TASK_ID'.");
+        return 2;
+    };
+    if !has_node_id_prefix(&task_id) {
+        eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
+        return 1;
+    }
+    if let Some(code) = refuse_non_graph_backend("remove") {
+        return code;
+    }
+    let graph = settings::graph_path();
+    let Ok(rows) = graph_store::read_rows(&graph) else {
+        eprintln!("Error: the backlog graph could not be read");
+        return 1;
+    };
+    let dependents: Vec<String> = rows
+        .iter()
+        .filter(|e| {
+            e.get("blocked_by")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|b| b == task_id)
+        })
+        .filter_map(|e| text_at(e, "id"))
+        .map(String::from)
+        .collect();
+    if !dependents.is_empty() && !force {
+        eprintln!(
+            "Removing {task_id} will orphan blocked_by in: {}",
+            dependents.join(", ")
+        );
+        eprintln!("Use --force to confirm.");
+        return 1;
+    }
+    let target = task_id.clone();
+    let freed: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    let applied = graph_store::mutate_rows(
+        &graph,
+        std::time::Duration::from_secs(5),
+        None,
+        None,
+        |working| {
+            if find_node(working, &target).is_none() {
+                return Err(graph_store::StoreError::Invalid(format!(
+                    "feature {target} not found"
+                )));
+            }
+            for e in working.iter_mut() {
+                if let Some(blocked) = e.get_mut("blocked_by").and_then(Value::as_array_mut) {
+                    blocked.retain(|b| b.as_str() != Some(target.as_str()));
+                }
+                // related is symmetric; a peer naming a node the graph no
+                // longer has cannot repair itself.
+                if let Some(related) = e.get_mut("related").and_then(Value::as_array_mut) {
+                    related.retain(|r| r.as_str() != Some(target.as_str()));
+                }
+                let obj = match e.as_object_mut() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                // A dependent's origin must resolve, never dangle.
+                if obj.get("source_node_id").and_then(Value::as_str) == Some(target.as_str()) {
+                    obj.insert("source_node_id".into(), Value::Null);
+                }
+                // Containment: a freed child is reported, never orphaned
+                // silently.
+                if obj.get("contained_in").and_then(Value::as_str) == Some(target.as_str()) {
+                    obj.insert("contained_in".into(), Value::Null);
+                    if let Some(id) = obj.get("id").and_then(Value::as_str) {
+                        freed.borrow_mut().push(id.to_string());
+                    }
+                }
+            }
+            working.retain(|e| text_at(e, "id") != Some(target.as_str()));
+            Ok(true)
+        },
+    );
+    if let Err(err) = applied {
+        eprintln!("Error: {err}");
+        return 1;
+    }
+    for id in &freed.into_inner() {
+        eprintln!("freed contained child {id} (owner removed)");
+    }
+    if dependents.is_empty() {
+        println!("Removed {task_id}");
+    } else {
+        println!(
+            "Removed {task_id} (orphaned deps in {})",
+            dependents.join(", ")
+        );
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// project-root - the raw work-map lookup
+// ---------------------------------------------------------------------------
+
+const PROJECT_ROOT_HELP: &str = "Usage: fno backlog project-root PROJECT
+
+Print a project's work-map root, or exit 1 (empty stdout) if unmapped.
+The pure lookup, no cwd fallback: empty means exactly \"unmapped\".
+";
+
+pub fn run_project_root(tail: &[String]) -> i32 {
+    let args: Vec<&String> = tail
+        .iter()
+        .filter(|a| *a != "--help" && *a != "-h")
+        .collect();
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{PROJECT_ROOT_HELP}");
+        return 0;
+    }
+    let Some(project) = args.first() else {
+        eprintln!("Missing argument 'PROJECT'.");
+        return 2;
+    };
+    match project_root_from_settings(project) {
+        Some(root) => {
+            println!("{root}");
+            0
+        }
+        None => 1,
+    }
+}
+
+/// The inverse work-map lookup (`_intake.project_root_from_settings`): the
+/// same candidate walk as the forward direction, first `name` match wins,
+/// abspath with the home expanded. Pure map lookup: no stat, no git.
+fn project_root_from_settings(project: &str) -> Option<String> {
+    if project.is_empty() {
+        return None;
+    }
+    for doc in settings::config_candidates() {
+        let Some(workspaces) = doc
+            .get("work")
+            .and_then(|w| w.get("workspaces"))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (_, ws) in workspaces {
+            let Some(projects) = ws.get("projects").and_then(Value::as_array) else {
+                continue;
+            };
+            for p in projects {
+                let name = p.get("name").and_then(Value::as_str).unwrap_or("");
+                if name != project {
+                    continue;
+                }
+                if let Some(path) = p.get("path").and_then(Value::as_str) {
+                    let expanded = shellexpand_home(path);
+                    return Some(absolutize(&expanded));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn shellexpand_home(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix('~') {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}{}", home.to_string_lossy(), rest);
+        }
+    }
+    path.to_string()
+}
+
+fn absolutize(path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    cwd.join(p).display().to_string()
 }
