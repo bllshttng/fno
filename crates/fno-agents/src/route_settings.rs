@@ -273,7 +273,8 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
 
 /// Compose from the RAW overlays and write, the one helper behind both
 /// doors (the native exec and the print kind). `Ok(None)` when the ask
-/// names no overlay: a plain lane launch carries no settings file.
+/// names neither overlay nor sandbox: a plain lane launch carries no
+/// settings file, but a write policy alone still owes the scrub floor.
 pub fn write_composed(
     route_env: &Map<String, Value>,
     account_env: &Map<String, Value>,
@@ -281,7 +282,7 @@ pub fn write_composed(
     alias: Option<&str>,
     cwd: &Path,
 ) -> Result<Option<String>, String> {
-    if route_env.is_empty() && account_env.is_empty() {
+    if route_env.is_empty() && account_env.is_empty() && sandbox.is_none() {
         return Ok(None);
     }
     let spawn_env: Map<String, Value> = std::env::vars()
