@@ -277,7 +277,9 @@ mod primary_merge_tests {
             attest("2026-10-13T09:00:01Z", "code-review", "bbb")
         );
         let merged = merge_attestation_text(&project, "", Some(primary), "github.com/o/r");
-        let rows: Vec<&str> = merged.lines().collect();
+        // The merge joins sources with blank separators; every consumer
+        // skips them, so the assertion counts envelope lines only.
+        let rows: Vec<&str> = merged.lines().filter(|l| !l.trim().is_empty()).collect();
         assert_eq!(rows.len(), 2, "the local copy dedups, the peer row lands");
         assert!(
             rows[1].contains("\"bbb\""),
