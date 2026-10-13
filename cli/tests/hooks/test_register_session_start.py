@@ -147,6 +147,7 @@ def test_shared_session_start_does_not_duplicate_claude_registration(
         # writes its stranded cache into the real checkout .fno.
         "FNO_TEST_HERMETIC": "1",
         "FNO_PLATFORM": "claude",
+        "CLAUDE_PROJECT_DIR": str(tmp_path),
         "CLAUDE_PLUGIN_ROOT": str(ROOT),
         "CLAUDE_SESSION_ID": "claude-direct-hook-owns-reporting",
         "UV_CAPTURE": str(capture),
