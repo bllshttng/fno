@@ -503,38 +503,6 @@ fn drive_audit(task_id: &str) {
     }
 }
 
-/// The A2 retro-at-done trigger, gated by config.think_spawn.on_retro
-/// (default OFF). When on, the Python lifecycle implementation dispatches
-/// the think spawn; a dispatch failure never unwinds the close.
-fn retro_trigger(node: &Value) {
-    let on = settings::config_candidates().iter().any(|doc| {
-        doc.get("think_spawn")
-            .and_then(|t| t.get("on_retro"))
-            .map(|v| !v.is_null() && v.as_bool() != Some(false))
-            .unwrap_or(false)
-    });
-    if !on {
-        return;
-    }
-    let payload = serde_json::to_string(node).unwrap_or_default();
-    let _ = std::process::Command::new(crate::scrape::fno_py())
-        .args([
-            "-c",
-            "import json,sys;from fno.provenance.spawn_think import on_node_retro;on_node_retro(json.load(sys.stdin))",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .and_then(|mut c| {
-            use std::io::Write;
-            if let Some(mut stdin) = c.stdin.take() {
-                let _ = stdin.write_all(payload.as_bytes());
-            }
-            c.wait()
-        });
-}
-
 /// Holder-agnostic release of the `node:<id>` claim a closure just made
 /// moot: the closer is usually not the worker holding it, the terminal rung
 /// is the authority, and the reaper is the backstop. Best-effort and loud.
@@ -577,7 +545,10 @@ fn project_plans(graph: &Path, node_ids: &[String]) {
         crate::plan_doc::project::project_graph_nodes(&entries, node_ids, None, None, None, None);
 }
 
-/// The shared post-close tail: plan stamp, projection, retro trigger.
+/// The shared post-close tail: plan stamp and projection. The A2 retro
+/// think-spawn trigger retired with the Python backlog runtime it rode; the
+/// config leaf `think_spawn.on_retro` is registered in
+/// scripts/ci/retired-config-leaves.txt.
 fn canonical_post_close(
     graph: &Path,
     task_id: &str,
@@ -597,20 +568,6 @@ fn canonical_post_close(
         ids.extend(cascade_closed.iter().cloned());
         project_plans(graph, &ids);
     }
-    retro_trigger(&retro_node_stub(task_id, plan_path));
-}
-
-// The retro trigger takes the closed node's row; after the commit the row's
-// completed_at is what the python caller passed. Rebuilt from the stored
-// fields the spawn actually reads.
-fn retro_node_stub(task_id: &str, plan_path: Option<&str>) -> Value {
-    let mut n = json!({"id": task_id});
-    if let Some(p) = plan_path {
-        n.as_object_mut()
-            .unwrap()
-            .insert("plan_path".into(), Value::String(p.into()));
-    }
-    n
 }
 
 // ---------------------------------------------------------------------------
@@ -1300,13 +1257,12 @@ fn cascade_reopen_parents(
 }
 
 /// The reopen status per row: the ladder's idea-vs-ready answer. A row with
-/// no plan is the NONE rung; a plan's rung comes from the sanctioned Python
-/// classifier, shelled once per distinct plan before the lock.
+/// no plan is the NONE rung; a plan's rung comes from the native rung
+/// classifier (`backlog_ready::plan_rung`, the `ladder.plan_rung` port).
 fn reopen_statuses(rows: &[Value], node_id: &str) -> std::collections::HashMap<String, String> {
     let mut rungs = std::collections::HashMap::new();
     let mut cur: Option<String> = Some(node_id.to_string());
     let mut seen: Vec<String> = Vec::new();
-    let mut cache: std::collections::HashMap<String, String> = Default::default();
     while let Some(id) = cur.clone() {
         if id.is_empty() || seen.contains(&id) {
             break;
@@ -1315,50 +1271,17 @@ fn reopen_statuses(rows: &[Value], node_id: &str) -> std::collections::HashMap<S
         let Some(row) = rows.iter().find(|e| text_at(e, "id") == Some(id.as_str())) else {
             break;
         };
-        let status = match text_at(row, "plan_path") {
-            None => "idea".to_string(),
-            Some(plan) => {
-                let answer = cache
-                    .entry(plan.to_string())
-                    .or_insert_with(|| plan_rung_status(plan, text_at(row, "cwd")));
-                answer.clone()
-            }
+        // The shelled leg degraded every unanswerable shape (unreadable
+        // plan, failed round-trip) to `idea`; the native classifier's
+        // distinct verdicts collapse to the same two words here.
+        let status = match crate::backlog_ready::plan_rung(row) {
+            "none" | "idea" | "unreadable" => "idea".to_string(),
+            _ => "ready".to_string(),
         };
         rungs.insert(id, status);
         cur = text_at(row, "parent").map(String::from);
     }
     rungs
-}
-
-/// One `fno do plan rung` round-trip: exit 0 = dispatchable (a non-idea
-/// rung), anything else degrades to `idea` the way the ladder's NONE rung
-/// does for an unreadable plan.
-fn plan_rung_status(plan_path: &str, cwd: Option<&str>) -> String {
-    let mut path = std::path::PathBuf::from(plan_path.split('#').next().unwrap_or(plan_path));
-    if !path.is_absolute() {
-        if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
-            path = Path::new(cwd).join(path);
-        }
-    }
-    let Ok(out) = std::process::Command::new(crate::scrape::fno_py())
-        .args(["do", "plan", "rung"])
-        .arg(&path)
-        .output()
-    else {
-        return "idea".into();
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        if let Some(rung) = line.strip_prefix("rung=") {
-            let rung = rung.trim().to_lowercase();
-            return if matches!(rung.as_str(), "idea" | "none") {
-                "idea".into()
-            } else {
-                "ready".into()
-            };
-        }
-    }
-    "idea".into()
 }
 
 fn archived_entry(node_id: &str) -> Option<Value> {

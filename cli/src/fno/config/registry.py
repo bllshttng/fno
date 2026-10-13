@@ -379,7 +379,7 @@ FIELD_META: dict[str, Meta] = {
         "advanced", "A2: dispatch a context /think when /target claims a node to work it (default OFF)."
     ),
     "think_spawn.on_retro": Meta(
-        "advanced", "A2: dispatch a context /think when `fno backlog done` closes a node (default OFF)."
+        "advanced", "RETIRED with the Python backlog runtime: the Rust close path never dispatches a think spawn on close. The offer layer keeps on_work_start via `fno do target`."
     ),
     "think_spawn.daily_cap": Meta(
         "advanced", "Per-install per-day ceiling on /think spawns (firehose guard; 0 = off)."
