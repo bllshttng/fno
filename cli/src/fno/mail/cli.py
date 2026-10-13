@@ -4248,7 +4248,7 @@ def cmd_team(
 
 
 @mail_app.command("unread")
-def unread(
+def cmd_unread(
     name: str = typer.Option(
         "fno", "--name", "-n",
         help="Whose inbox to read (registry name or project).",
@@ -4262,54 +4262,33 @@ def unread(
     "My inbox" is a cursor-bounded scan of the one global bus log filtered to
     ``to == name``: only messages after the consumer's cursor are shown,
     regardless of which provider sent them. ``fno agents mail ack`` advances the
-    cursor. JSON when stdout is not a TTY or ``--json`` is passed. The reader
-    is the native fno-agents binary; this leaf forwards argv plus the bus dir
-    it already resolved, and relays the binary's streams so capture contexts
-    (pipes, test runners) see the same output a terminal does.
+    cursor. JSON when stdout is not a TTY or ``--json`` is passed. This leaf
+    forwards to the native fno-agents reader and relays its streams.
     """
     _forward_unread(name, json_out)
 
 
 def _forward_unread(name: str, json_out: bool) -> None:
-    import subprocess
-
     from fno._subprocess_util import propagate_returncode
     from fno.rust_binary import resolve_binary
 
-    argv = ["--name", name]
-    if json_out:
-        argv.append("--json")
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            "fno agents mail unread: the fno-agents binary was not found. "
-            "It ships in the `pip install fno` wheel and with the plugin; "
-            "reinstall fno or run `fno doctor update --rust`, or set "
-            "FNO_AGENTS_BIN to its path.",
+            "fno agents mail unread: the fno-agents binary was not found; reinstall fno "
+            "or run `fno doctor update --rust`, or set FNO_AGENTS_BIN to its path.",
             err=True,
         )
         raise typer.Exit(code=127)
-    # The binary's own bus ladder skips the settings file, so pin FNO_BUS_DIR
-    # to the path this leaf resolved (env, settings, or state default); the
-    # read cursors live under the same dir on both sides.
+    # The binary's own bus ladder skips the settings file, so pin FNO_BUS_DIR.
     env = dict(os.environ, FNO_BUS_DIR=str(paths.bus_dir()))
-    if sys.stdout is not None and sys.stdout.isatty():
-        # A real terminal: inherit stdio so the native TTY branch renders its
-        # table against it. text=True captures nothing here; it only keeps
-        # result one type across both branches for the type checker.
-        result = subprocess.run(
-            [str(binary), "mail", "unread", *argv], env=env, text=True, check=False
-        )
-    else:
-        # Captured stdout (pipe, test runner): inherited stdio would bypass
-        # the caller's buffer entirely, so relay through the Python streams.
-        result = subprocess.run(
-            [str(binary), "mail", "unread", *argv],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    # A terminal inherits stdio; a captured stdout (pipe, tests) is relayed.
+    tty = sys.stdout is not None and sys.stdout.isatty()
+    result = subprocess.run(
+        [str(binary), "mail", "unread", "--name", name, *(["--json"] if json_out else [])],
+        env=env, capture_output=not tty, text=True, check=False,
+    )
+    if not tty:
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
     raise typer.Exit(code=propagate_returncode(result.returncode))
