@@ -768,7 +768,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings or keys"
+                "bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
             ),
             "{e}"
         );
