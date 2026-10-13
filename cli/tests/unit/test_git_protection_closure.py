@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,13 +23,19 @@ REPO = Path(__file__).resolve().parents[3]
 GATE = REPO / "scripts" / "ci" / "check-pr-node-closure.sh"
 HOOK = REPO / "hooks" / "git-protection.py"
 
-# Refs the fake binary reports node ids for; anything else answers [].
+# Refs the fake binary reports node ids for; anything else answers []. The
+# _gate entries mirror node_branch.rs node_ids() verbatim: the scanner yields
+# grammar candidates (cache-dead is one), and the gate's family filter is what
+# stops it being demanded.
 FAKE_TABLE = {
     "feature/x-49ec": ["x-49ec"],
     "feature/x-1111": ["x-1111"],
     "feature/x-eeeb": ["x-eeeb"],
     "feature/xd863": ["xd863"],
     "chore/tidy-docs": [],
+    "feature/x-49ec-cache-dead": ["x-49ec", "cache-dead"],
+    "feature/x-49ec-tidy-docs": ["x-49ec"],
+    "feature/x-dead-code": ["x-dead"],
 }
 
 
@@ -41,12 +48,27 @@ def _load_hook():
 
 def _gate(body: str, head_ref: str) -> int:
     """The real CI gate's exit code for this (body, ref) pair."""
-    return subprocess.run(
-        ["bash", str(GATE)],
-        env={"PATH": "/usr/bin:/bin", "PR_BODY": body, "PR_HEAD_REF": head_ref},
-        capture_output=True,
-        text=True,
-    ).returncode
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = Path(tmp) / ".fake-fno-agents"
+        fake.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            f"TABLE = {json.dumps(FAKE_TABLE)}\n"
+            "req = json.load(sys.stdin)\n"
+            'print(json.dumps({"ids": TABLE.get(req.get("head_ref", ""), [])}))\n'
+        )
+        fake.chmod(0o755)
+        return subprocess.run(
+            ["bash", str(GATE)],
+            env={
+                "PATH": "/usr/bin:/bin",
+                "FNO_AGENTS_BIN": str(fake),
+                "PR_BODY": body,
+                "PR_HEAD_REF": head_ref,
+            },
+            capture_output=True,
+            text=True,
+        ).returncode
 
 
 def _hook_decision(command, branch, env=None, monkeypatch=None):
