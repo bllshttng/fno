@@ -1617,6 +1617,20 @@ pub fn run_undefer(tail: &[String]) -> i32 {
                     notes.borrow_mut().push(format!("{id}\t{kind}\t{reason}"));
                 }
             }
+            // The patch-door derivation: a cleared node re-derives from its
+            // plan rung (none reads idea), never from apply_defaults' ready.
+            let rungs: BTreeMap<String, String> = working
+                .iter()
+                .filter_map(|e| {
+                    graph_store::entry_id(e).map(|i| {
+                        (
+                            i.to_string(),
+                            crate::backlog_ready::plan_rung(e).to_string(),
+                        )
+                    })
+                })
+                .collect();
+            graph_store::recompute_statuses_with_plan_rungs(working, Some(&rungs));
             Ok(true)
         },
     );
@@ -1795,7 +1809,20 @@ pub fn run_unsupersede(tail: &[String]) -> i32 {
                 obj.insert("supersession".into(), Value::Null);
                 obj.remove("status");
             }
-            graph_store::recompute_statuses_with_plan_rungs(working, None);
+            // The patch-door derivation: a cleared node re-derives from its
+            // plan rung (none reads idea), never from apply_defaults' ready.
+            let rungs: BTreeMap<String, String> = working
+                .iter()
+                .filter_map(|e| {
+                    graph_store::entry_id(e).map(|i| {
+                        (
+                            i.to_string(),
+                            crate::backlog_ready::plan_rung(e).to_string(),
+                        )
+                    })
+                })
+                .collect();
+            graph_store::recompute_statuses_with_plan_rungs(working, Some(&rungs));
             *changed.borrow_mut() = had;
             Ok(true)
         },
