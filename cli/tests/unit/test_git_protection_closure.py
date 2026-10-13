@@ -196,7 +196,7 @@ def test_hook_docstrings_do_not_claim_creation_is_ungated():
     # the test read as protection. An absence has two explanations, the real
     # outcome and "the instrument never ran", and this one could not tell them
     # apart: it passes identically against an empty file.
-    text = HOOK.read_text(encoding="utf-8")
+    text = (REPO / "hooks" / "git_protection_impl.py").read_text(encoding="utf-8")
     assert text, "hook source read as empty, so any absence check here is vacuous"
     # The docstring must state the gate that actually exists.
     assert "_closure_trailer_refusal" in text
