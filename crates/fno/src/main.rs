@@ -215,6 +215,9 @@ enum Role {
     /// pass through byte-verbatim to the native leaf, which vets the body
     /// and relays through `announce send`.
     MailTeam(Vec<OsString>),
+    /// `fno agents mail unread`: the native cursor-bounded unread listing.
+    /// The verb and its tail pass through byte-verbatim.
+    MailUnread(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -382,6 +385,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .collect(),
         )),
         "team" => Some(Role::MailTeam(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "unread" => Some(Role::MailUnread(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -710,6 +718,9 @@ fn main() {
         Role::MailTeam(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
         }
+        Role::MailUnread(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -937,6 +948,13 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["mail", "sent", "--json"]), false),
             Role::MailHold(os(&["sent", "--json"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "unread", "--name", "worker"]),
+                false
+            ),
+            Role::MailUnread(os(&["unread", "--name", "worker"]))
         );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),

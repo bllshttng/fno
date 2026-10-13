@@ -378,7 +378,10 @@ fn default_true() -> bool {
 /// desktop notifications ride to attached clients as OSC 777; floor stays 58.
 /// v111: `AgentRow.bindings`, the node bindings a row drives, strongest
 /// first; missing on a pre-v111 row, off the wire when empty; floor stays 58.
-pub const PROTO_VERSION: u32 = 111;
+/// v112: `MouseEvent.alt` (serde default) - the client forwards the SGR alt bit
+/// so the server can claim a modifier-click pair on a mouse-reporting pane and
+/// open the link under it; floor stays 58.
+pub const PROTO_VERSION: u32 = 112;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -445,11 +448,17 @@ pub enum BlockDir {
 /// One mouse event forwarded from a client (v7, brief US1/US2/US3). Coordinates
 /// are 0-based and pane-rect-local; the server either SGR-encodes this onto the
 /// pane's PTY (the app has mouse reporting on) or interprets it mux-side.
+/// (v112) `alt` carries the SGR alt/meta modifier bit (8), the one modifier
+/// every mouse-reporting terminal reports and cmd never is (SGR has no cmd
+/// bit): an alt click on a mouse-owning pane is the mux's link-open gesture
+/// there. `#[serde(default)]` keeps a pre-v112 peer decoding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MouseEvent {
     pub row: u16,
     pub col: u16,
     pub kind: MouseKind,
+    #[serde(default)]
+    pub alt: bool,
 }
 
 /// The mouse gesture. Wheel carries its own intent (there is no separate scroll
@@ -3581,6 +3590,7 @@ mod tests {
                     row: 4,
                     col: 9,
                     kind: MouseKind::Press(MouseButton::Left),
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3589,6 +3599,7 @@ mod tests {
                     row: 0,
                     col: 0,
                     kind: MouseKind::WheelUp,
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3597,6 +3608,7 @@ mod tests {
                     row: 1,
                     col: 6,
                     kind: MouseKind::Move,
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3605,6 +3617,7 @@ mod tests {
                     row: 2,
                     col: 2,
                     kind: MouseKind::Drag(MouseButton::Left),
+                    alt: true,
                 },
             },
             ClientMsg::BlockJump {
@@ -4016,7 +4029,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 111);
+        assert_eq!(PROTO_VERSION, 112);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

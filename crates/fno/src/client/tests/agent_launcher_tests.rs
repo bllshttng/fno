@@ -702,6 +702,7 @@ fn click_rows() {
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x,
         shift: false,
+        alt: false,
     };
     let sock: Vec<u8> = Vec::new();
     let mut sock = sock;
@@ -774,6 +775,7 @@ fn click_rows() {
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x + 2,
         shift: false,
+        alt: false,
     };
     let sock: Vec<u8> = Vec::new();
     let mut sock = sock;
@@ -831,12 +833,14 @@ fn motion_over_the_project_chip_shows_the_cwd_line_and_a_press_outside_closes_th
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x,
         shift: false,
+        alt: false,
     };
     let away = crate::mouse::MouseReport {
         kind: crate::proto::MouseKind::Move,
         row: sl.origin.0,
         col: sl.origin.1,
         shift: false,
+        alt: false,
     };
     rt.block_on(async {
         super::agent_launcher::launcher_mouse(&mut v, over_chip, &mut sock)
@@ -870,6 +874,7 @@ fn motion_over_the_project_chip_shows_the_cwd_line_and_a_press_outside_closes_th
         row: sl.origin.0,
         col: sl.origin.1,
         shift: false,
+        alt: false,
     };
     rt.block_on(async {
         super::agent_launcher::launcher_mouse(&mut v, press_out, &mut sock)
