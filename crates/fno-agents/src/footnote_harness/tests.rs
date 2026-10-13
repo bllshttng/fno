@@ -16,6 +16,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_AUTH_TOKEN", "oauth"),
         ]),
+        None,
     )
     .unwrap_err();
     assert!(err.contains("Claude Code lane"), "{err}");
@@ -26,12 +27,40 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
             ("ANTHROPIC_AUTH_TOKEN", "k"),
             ("FNO_ROUTE_PROVIDER", "zai"),
         ]),
+        None,
     )
     .unwrap();
     assert_eq!(
         (ep.wire.as_str(), ep.provider_id.as_deref(), ep.bearer),
         ("anthropic", Some("zai"), true)
     );
+    assert_eq!(ep.route, "env");
+    // A model id names its provider as a prefix. A prefix with no provider
+    // record is part of the id. An env endpoint keeps the id whole unless its
+    // own stamp is the prefix. No endpoint at all names the legal form.
+    assert_eq!(
+        endpoint::split_model(cwd, &env(&[]), "zai/glm-x"),
+        (Some("zai".to_string()), "glm-x")
+    );
+    for whole in ["glm-test", "no-such-provider/model-x", "zai/"] {
+        assert_eq!(endpoint::split_model(cwd, &env(&[]), whole), (None, whole));
+    }
+    let proxy = env(&[("ANTHROPIC_BASE_URL", "https://proxy.example")]);
+    assert_eq!(
+        endpoint::split_model(cwd, &proxy, "zai/glm-x"),
+        (None, "zai/glm-x")
+    );
+    let stamped = env(&[
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("FNO_ROUTE_PROVIDER", "zai"),
+    ]);
+    assert_eq!(
+        endpoint::split_model(cwd, &stamped, "zai/glm-x"),
+        (None, "glm-x")
+    );
+    let err = endpoint::resolve_endpoint(cwd, &env(&[]), None).unwrap_err();
+    assert!(err.contains("-m <provider>/<model>"), "{err}");
+    assert!(!err.contains("-P"), "{err}");
 
     let tmp = tempfile::tempdir().unwrap();
     // The guard holds the crate's env lock for the rest of the test, so the
@@ -42,6 +71,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
         ("FNO_FOOTNOTE_BIN", "/nonexistent/footnote"),
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("ZAI_API_KEY", "zk"),
     ];
     let saved: Vec<_> = vars
         .iter()
@@ -50,6 +80,13 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     for (k, v) in vars {
         std::env::set_var(k, v);
     }
+    // A resumed row names its provider, and that record outranks whatever
+    // endpoint the asking session exports.
+    let ep = endpoint::resolve_endpoint(tmp.path(), &proxy, Some("zai")).unwrap();
+    assert_eq!(
+        (ep.route.as_str(), ep.provider_id.as_deref()),
+        ("config", Some("zai"))
+    );
     let o = dispatch_once(
         &home,
         "fx-missing",
@@ -70,13 +107,15 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
         &format!("#!/bin/sh\ncat > '{}'\nexit 2\n", seen.display()),
     );
     std::env::set_var("FNO_FOOTNOTE_BIN", &bin);
+    // With no env endpoint, the model id's prefix picks the provider record.
+    std::env::remove_var("ANTHROPIC_BASE_URL");
     let refused = dispatch_once(
         &home,
         "fx-plan",
         "hi",
         "tester",
         tmp.path(),
-        Some("glm-test"),
+        Some("zai/glm-test"),
         None,
         &serde_json::json!({"node": "x-1", "permission_mode": "plan"}),
     );
@@ -100,6 +139,9 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     assert_eq!(spec["v"], 2);
     assert_eq!(spec["node"], "x-1");
     assert_eq!(spec["permission_mode"], "plan");
+    assert_eq!(spec["model"], "glm-test");
+    assert_eq!(spec["endpoint"]["provider_id"], "zai");
+    assert_eq!(spec["endpoint"]["route"], "config");
     let reg = load_registry(&home.registry_json()).unwrap();
     assert!(reg.find("fx-missing").is_none());
     assert!(reg.find("fx-plan").is_none());

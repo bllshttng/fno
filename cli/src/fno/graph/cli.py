@@ -42,7 +42,6 @@ from fno.graph.node_builder import (  # noqa: F401 - re-export for lazy importer
     _session_provenance,
 )
 from fno.graph.node_builder import register as _register_node_builder
-from fno.graph.api import cmd_version as _cmd_version
 # The roster renderer lives in its own module: this file is shrink-only and
 # the provenance change touches it. The alias keeps the historical name
 # importable.
@@ -74,7 +73,6 @@ from fno.graph.worked import cmd_worked as _cmd_worked  # noqa: E402
 from fno.graph.triage_forward import register_triage_forward  # noqa: E402
 register_triage_forward(cli)
 cli.command("worked", hidden=True)(_cmd_worked)
-cli.command("version", hidden=True)(_cmd_version)
 
 
 # Nested capture sub-app: `fno backlog capture <verb>`. The capture tier below
@@ -247,84 +245,6 @@ def _resolve_entries_or_exit(id: str):
             err=True,
         )
         raise typer.Exit(code=GRAPH_UNREADABLE_EXIT)
-
-
-# -- relatedness sidecar (`fno backlog relatedness build|get`) --
-# A node-to-node relatedness map read by 's offer path and /triage.
-# Sidecar, not a graph mutation, so `build` writes unconditionally.
-
-_relatedness_cli = typer.Typer(
-    name="relatedness",
-    help="Node-to-node relatedness map (sidecar next to graph.json).",
-    no_args_is_help=True,
-)
-
-
-def _relatedness_path() -> Path:
-    from fno.paths import relatedness_json
-
-    return relatedness_json()
-
-
-@_relatedness_cli.command("build")
-def cmd_relatedness_build(
-    project: Optional[str] = typer.Option(
-        None, "--project", "-p", help="Restrict the corpus to this project."
-    ),
-    judge: bool = typer.Option(
-        False, "--judge", help="Haiku pairwise refinement (v2, opt-in); v1 is deterministic-only."
-    ),
-    top_k: int = typer.Option(5, "--top-k", "-K", help="Edges persisted per node."),
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit the built map as JSON."),
-) -> None:
-    """Build the relatedness sidecar from graph signals (read-only on the graph)."""
-    from fno.graph import relatedness as _r
-
-    entries = _display_entries("relatedness.build")
-    if project is not None:
-        entries = [e for e in entries if e.get("project") == project]
-    mapping = _r.build_map(entries, k=top_k)
-    if judge:
-        # Degrade, never abort: v1 has no judge layer, so note and write the
-        # deterministic map (AC6 posture - LLM absence never blocks the write).
-        typer.echo(
-            "note: --judge (haiku refinement) not implemented in v1; wrote deterministic map.",
-            err=True,
-        )
-    path = _relatedness_path()
-    _r.write_map(path, mapping)
-    if json_output:
-        typer.echo(json.dumps(mapping, indent=2))
-    else:
-        edges = sum(len(v) for v in mapping.values())
-        typer.echo(f"relatedness: {len(mapping)} nodes, {edges} edges -> {path}")
-
-
-@_relatedness_cli.command("get")
-def cmd_relatedness_get(
-    node_id: str = typer.Argument(..., help="Node id to fetch related nodes for."),
-    top_k: int = typer.Option(5, "--top-k", "-K", help="Max related nodes to return."),
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit a JSON array."),
-) -> None:
-    """Print the top related nodes for one node (the  consumer API).
-
-    No map -> exit non-zero, empty stdout (the caller's fallback signal).
-    Present map, no edges -> exit 0, empty list. The two are distinct (AC3).
-    """
-    from fno.graph import relatedness as _r
-
-    try:
-        edges = _r.get_related(_relatedness_path(), node_id, k=top_k)
-    except _r.NoMapError:
-        raise typer.Exit(code=1)
-    if json_output:
-        typer.echo(json.dumps(edges, indent=2))
-    else:
-        for r in edges:
-            typer.echo(f"{r['id']}\t{r['score']}\t{r['reason']}")
-
-
-cli.add_typer(_relatedness_cli, name="relatedness", hidden=True)
 
 
 # -- epic status (`fno backlog epic status <id>`) --
@@ -1955,49 +1875,8 @@ def cmd_intake(
 # -- update --
 
 
-@cli.command("demand", hidden=True)
-def cmd_demand(
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit the rows as JSON."),
-) -> None:
-    """Show where agent encounters and operator priority DISAGREE.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno.graph.demand import demand_rows, format_rows
-    from fno.tracker import active_backend_name
-
-    # An encounter is footnote-minted metadata that lives only in the graph, and
-    # `encounter` is already refused under an external backend. So refuse here
-    # too, naming the backend, rather than reading a store that is not the
-    # source of truth and reporting an empty signal as if it were measured.
-    backend = active_backend_name()
-    if backend != "graph":
-        typer.echo(
-            f"fno backlog demand: encounters live in the graph; under the "
-            f"{backend} tracker backend there are none to read.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    rows = demand_rows(wire_rows(path=_graph_path()))
-    if json_output:
-        typer.echo(json.dumps(rows, separators=(",", ":")))
-    else:
-        typer.echo(format_rows(rows))
-
-
-# -- unclaim / release / requeue: the queue-return subject lives in
-# fno.backlog.requeue; registration stays here on the backlog app. --
-
-
-@cli.command("unclaim", hidden=True)
-def cmd_unclaim(
-    task_id: str = typer.Argument(
-        ..., help="Node id to free (reverts claimed -> ready, releases the lockfile)"
-    ),
-) -> None:
-    from fno.backlog.requeue import _unclaim_node
-
-    _unclaim_node(task_id)
+# -- release / requeue: the queue-return subject lives in fno.backlog.requeue;
+# registration stays here on the backlog app. --
 
 
 @cli.command("requeue", hidden=True)
@@ -2431,81 +2310,6 @@ def cmd_undispatched(
     typer.echo(json.dumps(receipt, indent=2))
 
 
-@cli.command(
-    "ready", hidden=True,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    epilog=("Native date filters: --created-before/--created-after/--touched-before/"
-            "--touched-after <Nd|YYYY-MM-DD>, --sort created|touched. Touched falls back to created."),
-)
-def cmd_ready(
-    ctx: typer.Context,
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name"),
-    all_: bool = typer.Option(False, "--all", "-A", help="Show all projects"),
-    roadmap_id: Optional[str] = typer.Option(None, "--roadmap-id"),
-    parent: Optional[str] = typer.Option(
-        None,
-        "--parent",
-        help="Restrict to transitive children of this epic node (ab-ID).",
-    ),
-    include_ideas: bool = typer.Option(
-        False,
-        "--ideas",
-        "-I",
-        "--include-ideas",
-        help="Also list idea-stage rows (plan-less nodes) alongside ready ones.",
-    ),
-    include_deferred: bool = typer.Option(
-        False,
-        "--include-deferred",
-        help="Also list deferred rows for explicit re-engagement.",
-    ),
-    mission: Optional[str] = typer.Option(
-        None,
-        "--mission",
-        help="Restrict to nodes whose mission_id matches (same contract as `next`).",
-    ),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Emit JSON (default; flag accepted for parity)."
-    ),
-) -> None:
-    from fno.graph._intake import repo_root
-    from fno.graph.store import ClaimsUnavailableError, StoreUnavailable, ready as store_ready
-    from fno.tracker import active_backend_name
-
-    # External backends share the Rust filters and ranking with `next`.
-    entries = None
-    if active_backend_name() != "graph":
-        try:
-            entries = _joined_open_candidates()
-        except _ExternalSelectionError as exc:
-            typer.echo(f"Error: {exc}; selection refused", err=True)
-            raise typer.Exit(code=1)
-
-    try:
-        result = store_ready(
-            project=project,
-            all=all_,
-            roadmap_id=roadmap_id,
-            parent=parent,
-            mission=mission,
-            include_ideas=include_ideas,
-            include_deferred=include_deferred,
-            repo_root=repo_root(),
-            entries=entries,
-            filter_args=list(ctx.args or []),
-        )
-    except StoreUnavailable as exc:
-        typer.echo(f"Error: store keeper unavailable; ready selection refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    except ValueError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    except ClaimsUnavailableError as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    typer.echo(json.dumps(result["rows"], indent=2))
-
-
 # -- lane-fill --
 
 
@@ -2695,30 +2499,6 @@ def cmd_get(
 
 
 # -- project-root (work-map resolution; null-for-unmapped) --
-
-
-@cli.command("project-root", hidden=True)
-def cmd_project_root(
-    project: str = typer.Argument(
-        ..., help="Project name to resolve against config.work.workspaces."
-    ),
-) -> None:
-    """Print a project's work-map root, or exit 1 (empty stdout) if unmapped.
-
-    The G2 session-project invariant needs to tell "mapped to a root" apart from
-    "unmapped" so it can REFUSE an unmapped foreign wave by name rather than
-    guess a cwd (AC2-ERR). ``backlog get --field _resolved_cwd`` can't answer
-    this: it applies a ``root or cwd`` fallback, so an unmapped project with a
-    recorded cwd still prints a (guessed) path. This verb exposes the raw
-    ``project_root_from_settings`` lookup - the same pure work-map resolver G1
-    uses - with no cwd fallback, so empty/exit-1 means exactly "unmapped".
-    """
-    from fno.graph._intake import project_root_from_settings
-
-    root = project_root_from_settings(project)
-    if not root:
-        raise typer.Exit(code=1)
-    typer.echo(root)
 
 
 # -- provenance --
@@ -3575,104 +3355,6 @@ cli.add_typer(task_app, name="task", hidden=True)
 # -- status --
 
 
-@cli.command("status", hidden=True)
-def cmd_status(
-    project: Optional[str] = typer.Option(None, help="Filter by project"),
-    all_: bool = typer.Option(False, "--all", "-A", help="Show all projects"),
-    roadmap_id: Optional[str] = typer.Option(None, "--roadmap-id"),
-) -> None:
-    from fno.graph._intake import detect_project
-
-    entries = _display_entries("status.summary")
-
-    if not entries:
-        typer.echo("No graph entries found. Run /megawalk vision.md to generate a roadmap.")
-        return
-
-    if roadmap_id:
-        entries = [e for e in entries if e.get("roadmap_id") == roadmap_id]
-
-    projects: dict[str, list]
-    if project:
-        projects = {project: [e for e in entries if e.get("project") == project]}
-    elif all_:
-        projects = {}
-        for e in entries:
-            proj = e.get("project") or "(no project)"
-            projects.setdefault(proj, []).append(e)
-    else:
-        proj = detect_project(entries)
-        if proj:
-            projects = {proj: [e for e in entries if e.get("project") == proj]}
-        else:
-            projects = {"(all)": entries}
-
-    global_done = 0
-    global_total = 0
-    global_cost = 0.0
-
-    for proj_name, proj_entries in sorted(projects.items()):
-        features = [e for e in proj_entries if e.get("type") == "feature"]
-        done = sum(1 for e in features if e.get("status") == "done")
-        claimed = sum(1 for e in features if e.get("status") == "in_progress")
-        ready = sum(1 for e in features if e.get("status") == "ready")
-        ideas = sum(1 for e in features if e.get("status") == "idea")
-        blocked = sum(1 for e in features if e.get("status") == "blocked")
-        deferred = sum(1 for e in features if e.get("status") == "deferred")
-        total = len(features)
-        cost = sum(e.get("cost_usd", 0) or 0 for e in features)
-
-        global_done += done
-        global_total += total
-        global_cost += cost
-
-        if all_:
-            ideas_suffix = f", ideas: {ideas}" if ideas else ""
-            deferred_suffix = f", deferred: {deferred}" if deferred else ""
-            typer.echo(
-                f"\n=== {proj_name} ({done}/{total} done{ideas_suffix}{deferred_suffix}, ${cost:.2f}) ==="
-            )
-        else:
-            typer.echo(f"Project: {proj_name}")
-            roadmaps = [e for e in proj_entries if e.get("type") == "roadmap"]
-            if roadmaps:
-                typer.echo(
-                    f"Roadmap: {roadmaps[0].get('roadmap_id', '?')} ({roadmaps[0].get('title', '?')})"
-                )
-            ideas_suffix = (
-                f" | ideas: {ideas} (use 'fno backlog ready --ideas' to list)" if ideas else ""
-            )
-            # Active-most → inactive-most ordering: done | claimed | ready
-            # | ideas | blocked | deferred. Deferred is the only state that
-            # requires an explicit `--include-deferred` to re-surface, so it
-            # belongs at the tail.
-            deferred_suffix = (
-                f" | deferred: {deferred} (use 'fno backlog ready --include-deferred' to list)"
-                if deferred
-                else ""
-            )
-            typer.echo(
-                f"Progress: {done}/{total} done | {claimed} claimed | {ready} ready"
-                f"{ideas_suffix} | {blocked} blocked{deferred_suffix}"
-            )
-            typer.echo(f"Cost: ${cost:.2f}")
-            typer.echo("")
-
-        typer.echo(f"{'ID':<14} {'Title':<30} {'Status':<10} {'Priority':<10} {'Cost':>8}  {'PR'}")
-        typer.echo("-" * 85)
-        for e in features:
-            eid = e.get("id", "?")
-            title = (e.get("title", "?"))[:28]
-            st = e.get("status", "?")
-            pri = e.get("priority", "?")
-            c = f"${e.get('cost_usd', 0) or 0:.2f}"
-            pr = f"#{e.get('pr_number')}" if e.get("pr_number") else "-"
-            typer.echo(f"{eid:<14} {title:<30} {st:<10} {pri:<10} {c:>8}  {pr}")
-
-    if all_ and len(projects) > 1:
-        typer.echo(f"\nTotal: {global_done}/{global_total} done, ${global_cost:.2f}")
-
-
 # -- briefs --
 
 # -- validate --
@@ -3680,121 +3362,7 @@ def cmd_status(
 # -- cost --
 
 
-@cli.command("cost", hidden=True)
-def cmd_cost(
-    task_id: str = typer.Argument(..., help="Feature ID (ab-XXXXXXXX)"),
-    session: Optional[str] = typer.Option(
-        None,
-        "--session-id",
-        help=(
-            "Run id owning this cost. Recording twice for one id REPLACES the "
-            "row (a session's cost is a level, not an increment), so pass the "
-            "unique fno run id - a shared harness/thread id would let a second "
-            "attempt overwrite the first."
-        ),
-    ),
-    session_legacy: Optional[str] = typer.Option(
-        None, "--session", hidden=True, help="[DEPRECATED] alias for --session-id."
-    ),
-    amount: str = typer.Option(..., "--amount", help="Cost in USD"),
-) -> None:
-    import click
-
-    from fno._flag_aliases import merge_deprecated_alias
-    from fno.graph.store import commit_rows_via_store
-
-    session = merge_deprecated_alias(
-        session, session_legacy, canonical_flag="--session-id", legacy_flag="--session"
-    )
-    # --session-id is required; the merge returns None only when NEITHER
-    # spelling was passed (the hidden alias forces a None default here).
-    if session is None:
-        raise click.UsageError("Missing option '--session-id'.")
-
-    _require_node_id(task_id)
-
-    try:
-        amount_f = float(amount)
-    except ValueError:
-        typer.echo(f"Error: amount must be a number, got '{amount}'", err=True)
-        raise typer.Exit(code=1)
-
-    def mutator(entries):
-        from fno.cost import upsert_cost_session
-
-        for e in entries:
-            if e.get("id") == task_id:
-                upsert_cost_session(e, session, amount_f)
-                return entries
-        typer.echo(f"Error: feature {task_id} not found", err=True)
-        raise typer.Exit(code=1)
-
-    commit_rows_via_store(_graph_path(), mutator)
-    typer.echo(f"Recorded ${amount_f:.2f} for {task_id} (session {session})")
-
-
 # -- remove --
-
-
-@cli.command(
-    "remove",
-    hidden=True,
-    epilog="Reverses `add` / `idea` / `new` / `intake`. Softer options: `archive` "
-    "(keeps the node readable), `supersede` (records what replaced it), `defer` "
-    "(parks it).",
-)
-def cmd_remove(
-    task_id: str = typer.Argument(..., help="Feature ID (ab-XXXXXXXX)"),
-    force: bool = typer.Option(False, "--force", "-F", help="Skip cascade warning"),
-) -> None:
-    """Delete a node from the graph permanently. This verb exists and works.
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno.graph.store import commit_rows_via_store
-    from fno.graph._intake import _find_node, _find_dependents
-
-    _require_node_id(task_id)
-
-    entries = wire_rows(path=_graph_path())
-    dependents = _find_dependents(entries, task_id)
-    if dependents and not force:
-        typer.echo(f"Removing {task_id} will orphan blocked_by in: {', '.join(dependents)}")
-        typer.echo("Use --force to confirm.")
-        raise typer.Exit(code=1)
-
-    _freed_box: list[list] = [[]]
-
-    def mutator(entries):
-        node = _find_node(entries, task_id)
-        if not node:
-            typer.echo(f"Error: feature {task_id} not found", err=True)
-            raise typer.Exit(code=1)
-        for e in entries:
-            if task_id in e.get("blocked_by", []):
-                e["blocked_by"].remove(task_id)
-            # related is symmetric, and no other verb can repair a peer that
-            # names a node the graph no longer has: set_related only touches
-            # peers in the declaring node's own delta.
-            if task_id in (e.get("related") or []):
-                e["related"].remove(task_id)
-            # remove is a HARD delete, unlike archive (which keeps the node
-            # readable and therefore guards it instead). A dependent's origin
-            # would be left pointing at nothing, and the stated invariant is
-            # that source_node_id is null or resolves - never a dangling string.
-            if e.get("source_node_id") == task_id:
-                e["source_node_id"] = None
-        # Same invariant for containment (), and here a dangling pointer
-        # is a permanent trap rather than mere untidiness: the reconcile heal
-        # deliberately skips a MISSING owner, so nothing would ever free them.
-        _freed_box[0] = _release_contained_children(entries, task_id)
-        return [e for e in entries if e.get("id") != task_id]
-
-    commit_rows_via_store(_graph_path(), mutator)
-    _echo_freed(_freed_box[0], task_id)
-    typer.echo(f"Removed {task_id}" + (f" (orphaned deps in {dependents})" if dependents else ""))
-
-
-    # Rationale (10 lines): docs/architecture/graph-cli-rationale.md#cmd-remove-6902
 
 
 def _expand_valid_ids(task_ids: list[str]) -> list[str]:
@@ -4326,122 +3894,6 @@ def cmd_contain(
     raise typer.Exit(code=2)
 
 
-# -- backfill-deferred-kind --
-
-
-def _load_deferred_kind_map(map_file) -> dict[str, str]:
-    """Parse + validate the operator TSV: ``kind<TAB>exact reason`` per row.
-
-    ``#`` comments and blank lines are ignored. An unknown kind or a
-    malformed row is a hard error BEFORE any graph read: a typo'd map must
-    never half-apply. Duplicate reasons with conflicting kinds are refused;
-    a duplicate with the same kind is idempotent-tolerated.
-    """
-    from fno.graph._constants import DEFERRED_KINDS
-
-    mapping: dict[str, str] = {}
-    for lineno, raw in enumerate(map_file.read_text(encoding="utf-8").splitlines(), 1):
-        line = raw.rstrip("\n")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "\t" not in line:
-            raise ValueError(f"{map_file}:{lineno}: expected 'kind<TAB>reason', got no tab")
-        kind, reason = line.split("\t", 1)
-        kind, reason = kind.strip(), reason.strip()
-        if kind not in DEFERRED_KINDS:
-            raise ValueError(
-                f"{map_file}:{lineno}: unknown kind '{kind}' "
-                f"(valid: {', '.join(DEFERRED_KINDS)})"
-            )
-        if not reason:
-            raise ValueError(f"{map_file}:{lineno}: empty reason")
-        if mapping.get(reason, kind) != kind:
-            raise ValueError(f"{map_file}:{lineno}: reason maps to two kinds ({reason[:60]!r})")
-        mapping[reason] = kind
-    return mapping
-
-
-@cli.command("backfill-deferred-kind", hidden=True)
-def cmd_backfill_deferred_kind(
-    map_file: Optional[Path] = typer.Option(
-        None,
-        "--map",
-        help="TSV file: kind<TAB>exact deferred_reason per row. Merged over the code table.",
-    ),
-    apply: bool = typer.Option(
-        False,
-        "--apply",
-        help="Write the classification. Default is a dry-run report.",
-    ),
-    json_output: bool = typer.Option(False, "--json", "-J", help="Emit JSON report"),
-) -> None:
-    """Classify deferred rows by EXACT reason match. Never closes or undefers.
-
-    Mechanical: a node is stamped only when its ``deferred_reason`` equals a
-    known exact string (code table + --map). Anything else stays
-    unclassified - an honest unknown beats a wrong label, because a wrong
-    kind silently changes whether an epic can close. Existing kinds are never
-    overwritten; non-deferred nodes are never touched.
-    """
-    from fno.graph._constants import classify_deferred_reason
-    from fno.graph.store import commit_rows_via_store
-
-    extra_map: dict[str, str] = {}
-    if map_file is not None:
-        try:
-            extra_map = _load_deferred_kind_map(map_file)
-        except ValueError as exc:
-            typer.echo(f"Error: {exc}", err=True)
-            raise typer.Exit(code=1)
-
-    def classify(node) -> str | None:
-        return classify_deferred_reason(node.get("deferred_reason"), extra_map)
-
-    if not apply:
-        entries = wire_rows(path=_graph_path())
-        would: dict[str, int] = {}
-        unclassified = 0
-        for e in entries:
-            if e.get("status") != "deferred" or e.get("deferred_kind"):
-                continue
-            kind = classify(e)
-            if kind:
-                would[kind] = would.get(kind, 0) + 1
-            else:
-                unclassified += 1
-        if json_output:
-            typer.echo(json.dumps({"dry_run": True, "would_stamp": would, "unclassified": unclassified}))
-        else:
-            for kind in sorted(would):
-                typer.echo(f"  {kind}: {would[kind]}")
-            typer.echo(f"  unclassified (stays unknown): {unclassified}")
-            typer.echo("  dry run; pass --apply to write")
-        return
-
-    counts: dict[str, int] = {}
-
-    def mutator(entries):
-        for e in entries:
-            if e.get("status") != "deferred" or e.get("deferred_kind"):
-                continue
-            kind = classify(e)
-            if kind:
-                e["deferred_kind"] = kind
-                counts[kind] = counts.get(kind, 0) + 1
-        return entries
-
-    commit_rows_via_store(_graph_path(), mutator)
-    if json_output:
-        typer.echo(json.dumps({"applied": True, "stamped": counts}))
-    else:
-        for kind in sorted(counts):
-            typer.echo(f"  stamped {kind}: {counts[kind]}")
-        typer.echo(
-            f"  total stamped: {sum(counts.values())} "
-            f"(existing kinds preserved; unclassified left unclassified)"
-        )
-
-
 # -- stuck-epics --
 
 
@@ -4617,7 +4069,6 @@ def _echo_freed(freed: list, owner_id: str) -> None:
 # In graph/strand.py: the terminal-parent strand family (moved with the
 # close guards, release twins, and self-heal that share its liveness predicate).
 from fno.graph.strand import (  # noqa: E402
-    _release_contained_children,
     _stranded_next_receipts,
 )
 
@@ -4971,15 +4422,6 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
     if sc.plan_path and not skip_stamp:
         _stamp_and_graduate_plan(sc.plan_path, url=evidence_pr_url, session_id=None)
 
-    # Retro-at-done lifecycle trigger (): same non-fatal posture as the
-    # graph path; the seam row carries what the resolver needs.
-    try:
-        from fno.provenance.spawn_think import on_node_retro
-
-        on_node_retro(row)
-    except Exception:  # noqa: BLE001 - additive; never wedge the close
-        pass
-
 
 @cli.command(
     "done",
@@ -5190,17 +4632,6 @@ def _canonical_post_close(
     # --skip-stamp suppresses ALL plan writes, projection included.
     if not skip_stamp:
         _project_plans_from_graph([task_id, *cascade_closed])
-
-    # A2 (): retro-at-done lifecycle trigger. Dispatch a `retro` context
-    # /think while the closed node's session context is still resolvable. Gated
-    # by config.think_spawn.on_retro (default OFF) and strictly non-fatal: a
-    # dispatch failure never unwinds the close it rode in on.
-    try:
-        from fno.provenance.spawn_think import on_node_retro
-
-        on_node_retro(node)
-    except Exception:  # noqa: BLE001 - additive; never wedge `done`
-        pass
 
 
 # -- reconcile (close merged-PR drift) --
@@ -5743,82 +5174,6 @@ def cmd_discover(
 # collisions sub-app: file-overlap detection between plans
 # ---------------------------------------------------------------------------
 
-collisions_app = typer.Typer(
-    name="collisions",
-    help="Plan collision queries (file-overlap detection)",
-    no_args_is_help=True,
-)
-
-
-@collisions_app.command("check")
-def cmd_collisions_check(
-    plan_path: Path = typer.Argument(..., help="Plan file or folder to check"),
-    self_id: Optional[str] = typer.Option(
-        None,
-        "--self-id",
-        help="Skip this node ID when comparing (excludes self-collision)",
-    ),
-    json_output: bool = typer.Option(
-        False, "--json", "-J", help="Emit structured JSON instead of human text"
-    ),
-) -> None:
-    """Check a plan against all pending nodes for file collisions.
-
-    Severity thresholds resolve from project then user ``settings.yaml`` and
-    fall back to v1 defaults. Recommended actions are inferred deterministically
-    from set relationships and plan ages.
-    """
-    from dataclasses import asdict
-
-    from fno.graph.collision import find_collisions, has_file_surface
-
-    # A plan-vs-graph collision check is local-store machinery: guarded read,
-    # refused (named) under an external selection.
-    entries = _display_entries("collisions.check")
-    evaluated = has_file_surface(plan_path)
-    collisions = find_collisions(plan_path, entries, self_id=self_id) if evaluated else []
-
-    if json_output:
-        # Drop the private _other_created_at field from JSON output.
-        payload = []
-        for c in collisions:
-            d = asdict(c)
-            d.pop("_other_created_at", None)
-            payload.append(d)
-        typer.echo(
-            json.dumps(
-                {
-                    "status": "ok" if evaluated else "unevaluated",
-                    "collisions": payload,
-                },
-                indent=2,
-            )
-        )
-        return
-
-    if not evaluated:
-        typer.echo(
-            f"UNEVALUATED: {plan_path} states no file surface, so nothing was "
-            "compared. Add a '## Files to Modify' or '## File Ownership Map' table.",
-            err=True,
-        )
-        return
-
-    if not collisions:
-        typer.echo(f"No collisions found for {plan_path}")
-        return
-
-    for c in collisions:
-        typer.echo(f"[{c.severity.upper()}] {c.with_node_id} ({c.with_node_title})")
-        typer.echo(f"  shared: {', '.join(c.shared_files)}")
-        typer.echo(f"  recommended: {c.recommended_action}")
-        typer.echo(f"  rationale: {c.rationale}")
-        typer.echo("")
-
-
-cli.add_typer(collisions_app, name="collisions", hidden=True)
-
-
 # ---------------------------------------------------------------------------
 # supersede: record a proposed replacement until its merged PR proves coverage
 # ---------------------------------------------------------------------------
@@ -5965,30 +5320,16 @@ def iter_backlog_registry():
         (None, cli),
         ("capture", _capture_cli),
         ("batch", _batch_cli),
-        ("relatedness", _relatedness_cli),
         ("epic", _epic_cli),
         ("task", task_app),
-        ("collisions", collisions_app),
     ]
 
 
 from fno.graph import note_cli  # noqa: E402,F401
 
-# Node-lifecycle reversal verbs live in graph/lifecycle.py (file-budget
-# ratchet): the module never imports graph.cli, so the shared helpers are
-# injected here at registration, the same shape as the decide leaves above.
-# Each helper rides a lambda so the call resolves the module global at CALL
-# time: tests monkeypatch these names on this module, and a reference
-# captured at import would read the unpatched original.
-from fno.graph.lifecycle import register_lifecycle_commands  # noqa: E402
-
-register_lifecycle_commands(
-    cli,
-    lambda *a, **k: _expand_valid_ids(*a, **k),
-    lambda *a, **k: _require_nodes(*a, **k),
-    lambda: _graph_path(),
-    lambda *a, **k: _project_plans_from_graph(*a, **k),
-)
+# The node-lifecycle reversal verbs (defer, undefer, retract, unsupersede)
+# answer natively from the grouped dispatcher; the Python registration
+# retired with their bodies.
 
 # The root loader runs this before Click builds the tree.
 _fno_pre_dispatch = classify_backlog_verbs

@@ -378,9 +378,6 @@ FIELD_META: dict[str, Meta] = {
     "think_spawn.on_work_start": Meta(
         "advanced", "A2: dispatch a context /think when /target claims a node to work it (default OFF)."
     ),
-    "think_spawn.on_retro": Meta(
-        "advanced", "A2: dispatch a context /think when `fno backlog done` closes a node (default OFF)."
-    ),
     "think_spawn.daily_cap": Meta(
         "advanced", "Per-install per-day ceiling on /think spawns (firehose guard; 0 = off)."
     ),

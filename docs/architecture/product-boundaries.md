@@ -10,7 +10,7 @@ This is the one inventory of what each product surface needs from the others. `c
 | Agent runtime (overlays, lifecycle views, digest) | `fno-agents` | `fno` |
 | Agent daemon | `fno-agents-daemon` | `fno-agents` |
 | Graph keeper | `fno-agents-worker` | `fno` |
-| Python porcelain (delivery verbs, backlog writes) | `python3 (fno cli)` | `python3` |
+| Python porcelain (delivery verbs, config, the do namespace) | `python3 (fno cli)` | `python3` |
 
 The mux is the plain workspace. A plain shell, splits, detach and reattach, and `fno mux doctor` need none of the optional components. Missing optional components stay advisory for a plain workspace. They never make doctor exit non-zero. An explicitly requested backend operation reports its typed failure, the required component, and the repair.
 

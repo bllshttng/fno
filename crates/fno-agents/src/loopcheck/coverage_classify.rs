@@ -175,6 +175,7 @@ pub fn classify_coverage_tiled(
                 scope: None,
                 refusal_reason: None,
                 reviewer_context: None,
+                attest_machine: None,
                 // A configured login's verdict was OWED until proven otherwise:
                 // the resolved required set (mark_owed_verdicts) is what may
                 // downgrade an optional login, never this scan.
@@ -202,6 +203,7 @@ pub fn classify_coverage_tiled(
                     scope: None,
                     refusal_reason: None,
                     reviewer_context: None,
+                    attest_machine: None,
                     // Not in any configured list, so a fortiori not owed.
                     required: false,
                     // A recorded GitHub review read with an approving state.
@@ -263,6 +265,7 @@ pub fn classify_coverage_tiled(
                     scope: None,
                     refusal_reason: None,
                     reviewer_context: None,
+                    attest_machine: None,
                     // Not in any configured list, so a fortiori not owed.
                     required: false,
                     // An APPROVED review object is a pass by definition.
@@ -424,6 +427,7 @@ pub fn classify_coverage_tiled(
                         is_pass: false,
                         is_retraction: false,
                         reviewer_context: None,
+                        attest_machine: None,
                     });
                 }
             }
@@ -461,6 +465,7 @@ pub fn classify_coverage_tiled(
                     }),
                     refusal_reason: None,
                     reviewer_context: lp.reviewer_context.clone(),
+                    attest_machine: lp.attest_machine.clone(),
                     // Local-attestation lane: always owed.
                     required: true,
                     // A cap-arm rescue: the attestation said fail, and only the

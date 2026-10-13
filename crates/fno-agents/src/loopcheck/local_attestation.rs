@@ -30,6 +30,10 @@ pub(super) struct LocalPass {
     /// predate the field. Read only by the posture verdict (rung 4); the
     /// coverage count never reads it.
     pub(super) reviewer_context: Option<String>,
+    /// The writing machine id the primary push stamped (`data.attest_machine`).
+    /// None on journal-only rows: the field exists to name WHICH machine's
+    /// review a primary row carries, so the coverage listing can show it.
+    pub(super) attest_machine: Option<String>,
 }
 
 /// The branch-scoped `review_attestation` chain, oldest first: branch match
@@ -325,6 +329,7 @@ pub(super) fn local_refused_verdicts(events_text: &str, head_sha: &str) -> Vec<R
             scope: None,
             refusal_reason,
             reviewer_context: None,
+            attest_machine: None,
             // A refusal row records an attempt that RAN and declined: real
             // work with a real remedy, always owed its own name.
             required: true,
@@ -350,7 +355,15 @@ pub(super) fn local_latest_attestations(
     // every non-matching line here is what made a rebase destroy a review.
     let mut latest: std::collections::HashMap<
         (String, Option<String>),
-        (String, String, bool, String, bool, Option<String>),
+        (
+            String,
+            String,
+            bool,
+            String,
+            bool,
+            Option<String>,
+            Option<String>,
+        ),
     > = std::collections::HashMap::new();
     let mut raised_findings: std::collections::HashSet<(String, Option<String>)> =
         std::collections::HashSet::new();
@@ -433,7 +446,7 @@ pub(super) fn local_latest_attestations(
             .map(|s| !s.is_empty())
             .unwrap_or(false);
         if is_retraction {
-            if let Some((existing_head, _, _, _, _, _)) = latest.get(&pair_key) {
+            if let Some((existing_head, _, _, _, _, _, _)) = latest.get(&pair_key) {
                 if existing_head != line_head {
                     continue;
                 }
@@ -453,6 +466,13 @@ pub(super) fn local_latest_attestations(
             .pointer("/data/reviewer_context")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // The writing machine id, stamped when the row was pushed to the
+        // primary. Journal lines predate it; absence reads as journal-only.
+        let attest_machine = val
+            .pointer("/data/attest_machine")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
         //: a fail that RAISED keyed findings marks its own pair as
         // answer-capable. Per-pair, never chain-global: a bystander's
         // findings-free fail must not ride another reviewer's dispositions
@@ -474,6 +494,7 @@ pub(super) fn local_latest_attestations(
                 reviewed_base,
                 is_retraction,
                 reviewer_context,
+                attest_machine,
             ),
         );
     }
@@ -482,7 +503,15 @@ pub(super) fn local_latest_attestations(
         .map(
             |(
                 (reviewer, attester),
-                (head, branch, is_pass, reviewed_base, is_retraction, reviewer_context),
+                (
+                    head,
+                    branch,
+                    is_pass,
+                    reviewed_base,
+                    is_retraction,
+                    reviewer_context,
+                    attest_machine,
+                ),
             )| {
                 LocalPass {
                     reviewer,
@@ -493,6 +522,7 @@ pub(super) fn local_latest_attestations(
                     is_pass,
                     is_retraction,
                     reviewer_context,
+                    attest_machine,
                 }
             },
         )
@@ -564,6 +594,7 @@ pub(super) fn local_attestation_verdict(
         reviewed_sha: lp.head.clone(),
         freshness: Some(fresh),
         reviewer_context: lp.reviewer_context.clone(),
+        attest_machine: lp.attest_machine.clone(),
         // In-scope guarantees one of exactly two shapes: a line admitted
         // while scope lasts (branch match, or the exact head sha - both of
         // which keep the carry reachable on later head moves), or a legacy

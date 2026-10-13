@@ -8,9 +8,7 @@ the same door, so the undefer/unsupersede contracts live here too.
 Filter: ``fno doctor test cli/tests/unit/test_backlog_update_status.py``
 """
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
 
-import json
 from pathlib import Path
 
 import pytest
@@ -18,6 +16,7 @@ from typer.testing import CliRunner
 
 from fno.graph.cli import cli
 from fno.graph.store import commit_rows_via_store, read_graph_strict
+from tests.conftest import run_native_create
 
 pytestmark = pytest.mark.usefixtures("native_backlog_door")
 
@@ -87,11 +86,11 @@ def test_undefer_a_still_superseded_node_refuses_naming_the_door(tmp_graph):
         _node("x-aaaa", supersedes=["x-3873"], status="ready"),
     )
 
-    r = _invoke("undefer", "x-3873")
+    r = run_native_create(tmp_graph, "undefer", "x-3873")
 
-    assert r.exit_code == 2, r.output
-    assert "fno backlog update x-3873 --status idea" in r.output
-    assert "Undeferred" not in r.output
+    assert r.exit_code == 2, r.output + r.stderr
+    assert "fno backlog update x-3873 --status idea" in (r.output + r.stderr)
+    assert "Undeferred" not in (r.output + r.stderr)
     node = _entry(tmp_graph, "x-3873")
     assert node["deferred_at"] == "2026-01-01T00:00:00+00:00"
     assert node["status"] == "superseded"
@@ -109,10 +108,10 @@ def test_undefer_a_plain_deferred_node_clears_and_prints_the_ack(tmp_graph):
         ),
     )
 
-    r = _invoke("undefer", "x-0001")
+    r = run_native_create(tmp_graph, "undefer", "x-0001")
 
-    assert r.exit_code == 0, r.output
-    assert "Undeferred x-0001" in r.output
+    assert r.exit_code == 0, r.output + r.stderr
+    assert "Undeferred x-0001" in (r.output + r.stderr)
     node = _entry(tmp_graph, "x-0001")
     assert not node.get("deferred_at")
     assert node["status"] == "idea"
@@ -122,11 +121,11 @@ def test_undefer_a_node_that_was_not_deferred_is_an_unchanged_no_op(tmp_graph):
     """AC5-EDGE: exit 0, the unchanged receipt, no Undeferred line."""
     _seed(tmp_graph, _node("x-0001"))
 
-    r = _invoke("undefer", "x-0001")
+    r = run_native_create(tmp_graph, "undefer", "x-0001")
 
-    assert r.exit_code == 0, r.output
-    assert "unchanged" in r.output
-    assert "Undeferred" not in r.output
+    assert r.exit_code == 0, r.output + r.stderr
+    assert "unchanged" in (r.output + r.stderr)
+    assert "Undeferred" not in (r.output + r.stderr)
 
 
 def test_unsupersede_lands_on_the_surviving_park(tmp_graph):
@@ -144,11 +143,11 @@ def test_unsupersede_lands_on_the_surviving_park(tmp_graph):
         _node("x-0004", supersedes=["x-0005"], status="ready"),
     )
 
-    r = _invoke("unsupersede", "x-0005")
+    r = run_native_create(tmp_graph, "unsupersede", "x-0005")
 
-    assert r.exit_code == 0, r.output
-    assert "Unsuperseded x-0005" in r.output
-    assert "x-0004" in r.output
+    assert r.exit_code == 0, r.output + r.stderr
+    assert "Unsuperseded x-0005" in (r.output + r.stderr)
+    assert "x-0004" in (r.output + r.stderr)
     node = _entry(tmp_graph, "x-0005")
     assert node["superseded_by"] is None
     assert node["deferred_at"] == "2026-01-01T00:00:00+00:00"
@@ -161,20 +160,20 @@ def test_defer_and_retract_land_the_same_rows_through_the_door(tmp_graph):
     defer with the kind forced; both routes share the door's validator set."""
     _seed(tmp_graph, _node("x-0003", status="ready", locked_by="sess-1", locked_at="2026-01-01T00:00:00+00:00"))
 
-    r = _invoke("defer", "x-0003", "--reason", "waiting on x")
-    assert r.exit_code == 0, r.output
+    r = run_native_create(tmp_graph, "defer", "x-0003", "--reason", "waiting on x")
+    assert r.exit_code == 0, r.output + r.stderr
     node = _entry(tmp_graph, "x-0003")
     assert node["locked_by"] is None
     assert node["locked_at"] is None
     assert node["deferred_reason"] == "waiting on x"
     assert node["status"] == "deferred"
 
-    r = _invoke("defer", "x-0003", "--reason", "again")
-    assert r.exit_code == 0, r.output
+    r = run_native_create(tmp_graph, "defer", "x-0003", "--reason", "again")
+    assert r.exit_code == 0, r.output + r.stderr
     assert _entry(tmp_graph, "x-0003")["deferred_reason"] == "again"
 
-    r = _invoke("retract", "x-0003", "filed on a false premise")
-    assert r.exit_code == 0, r.output
+    r = run_native_create(tmp_graph, "retract", "x-0003", "filed on a false premise")
+    assert r.exit_code == 0, r.output + r.stderr
     node = _entry(tmp_graph, "x-0003")
     assert node["deferred_kind"] == "retracted"
     assert node["status"] == "deferred"
@@ -185,12 +184,12 @@ def test_defer_stamps_the_exact_match_kind_without_a_flag(tmp_graph):
     self-classifies as expired; prose stays unknown and clears a stale kind."""
     _seed(tmp_graph, _node("x-0001", status="ready"))
 
-    r = _invoke("defer", "x-0001", "--reason", "stale >30d, drained by maintain")
-    assert r.exit_code == 0, r.output
+    r = run_native_create(tmp_graph, "defer", "x-0001", "--reason", "stale >30d, drained by maintain")
+    assert r.exit_code == 0, r.output + r.stderr
     assert _entry(tmp_graph, "x-0001")["deferred_kind"] == "expired"
 
-    r = _invoke("defer", "x-0001", "--reason", "just prose")
-    assert r.exit_code == 0, r.output
+    r = run_native_create(tmp_graph, "defer", "x-0001", "--reason", "just prose")
+    assert r.exit_code == 0, r.output + r.stderr
     node = _entry(tmp_graph, "x-0001")
     assert "deferred_kind" not in node or node["deferred_kind"] is None
 
