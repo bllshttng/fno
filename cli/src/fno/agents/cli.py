@@ -2024,15 +2024,16 @@ def cmd_spawn(
             file=sys.stderr,
         )
 
-    # --print (change 6): resolve the lane, write its settings file and print
-    # the native line it would exec, then exit. Every refusal above already
-    # ran, so what prints is the line the real spawn would carry; nothing is
-    # gated, registered or launched. Claude lanes first (change 7 templates
-    # and wave 5 extend the render to the other harnesses).
+    # --print: resolve the lane, write its settings file and print the native
+    # line it would exec, then exit. Every refusal above already ran, so what
+    # prints is the line the real spawn would carry; nothing is gated,
+    # registered or launched. The render is the spawn-overlay print kind's -
+    # the same fill the exec path runs - so the printed line cannot drift
+    # from the executed one. Claude lanes first; wave 5 templates the rest.
     if print_mode:
         if harness != "claude" or substrate != "thread":
             print(
-                f"--print renders claude --bg lines (change 6); harness "
+                f"--print renders claude --bg lines; harness "
                 f"{harness!r} substrate {substrate!r} has no native line yet.",
                 file=sys.stderr,
             )
@@ -2046,21 +2047,30 @@ def cmd_spawn(
             raise typer.Exit(code=2)
         import shlex
 
-        from fno.agents.model_routing import lane_alias_for, route_settings_path_for
+        from fno.agents.model_routing import declared_lane, route_settings_path_for
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
+        lane = declared_lane(route_provider, model) if route_env else None
         settings_path = route_settings_path_for(
             route_env, account_env, env=dict(os.environ), sandbox=None,
-            alias=lane_alias_for(route_provider, model) if route_env else None,
+            alias=lane.name if lane else None,
         )
-        tokens = ["claude", "--bg"]
-        if settings_path:
-            tokens += ["--settings", settings_path]
-        if model:
-            tokens += ["--model", model]
-        if effort:
-            tokens += ["--effort", effort]
-        tokens += ["--name", name, shlex.quote(message or "")]
-        print(" ".join(tokens))
+        ask: dict = {
+            "kind": "print",
+            "harness": harness,
+            "name": name,
+            "payload": message or "",
+            "settings": settings_path or "",
+            "model": model or "",
+            "effort": effort or "",
+        }
+        if lane is not None and lane.launch:
+            ask["launch"] = list(lane.launch)
+        answer = spawn_overlay_call(ask)
+        tokens = answer.get("tokens")
+        if not isinstance(tokens, list):
+            raise RuntimeError("spawn-overlay print answered no token list")
+        print(" ".join(shlex.quote(token) for token in tokens))
         raise typer.Exit(code=0)
 
     # Resolve node provenance once for every substrate. A node-bearing spawn is

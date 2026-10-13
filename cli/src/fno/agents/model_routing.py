@@ -1215,29 +1215,43 @@ class RouteRestoreError(RuntimeError):
     """A recorded route could not be read back, so a relaunch must refuse."""
 
 
-def lane_alias_for(
+def declared_lane(
     provider: Optional[str], model: Optional[str]
-) -> Optional[str]:
-    """The routing row's name when exactly one declared claude row matches the
-    resolved (provider, model), else None.
+) -> Optional["InventoryRow"]:
+    """The one declared claude row matching the resolved (provider, model),
+    else None.
 
-    The stable ``lane-<row>.json`` alias needs the row's own name (change 6):
-    ``zai-flash``, not a digest. Ambiguous or unmatched lanes read no alias -
-    the spawn still carries the content-addressed file, only the printed name
-    degrades.
+    Ambiguous or unmatched lanes read None - the spawn still launches, only
+    the lane-specific surfaces (the stable alias, the row's own launch argv)
+    degrade to the content-addressed file and the harness default.
     """
     if not provider or not (model or "").strip():
         return None
-    from fno.route_resolve import resolve_inventory
+    from fno.route_resolve import InventoryRow, resolve_inventory
 
     matches = [
-        row.name
+        row
         for row in resolve_inventory().rows.values()
         if row.harness == "claude"
         and row.model == model
         and (row.route.split("/", 1)[0] if row.route else "") == provider
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+def lane_alias_for(
+    provider: Optional[str], model: Optional[str]
+) -> Optional[str]:
+    """The routing row's name when exactly one declared claude row matches the
+    resolved (provider, model), else None.
+
+    The stable ``lane-<row>.json`` alias needs the row's own name:
+    ``zai-flash``, not a digest. Ambiguous or unmatched lanes read no alias -
+    the spawn still carries the content-addressed file, only the printed name
+    degrades.
+    """
+    lane = declared_lane(provider, model)
+    return lane.name if lane else None
 
 
 def route_settings_path_for(
