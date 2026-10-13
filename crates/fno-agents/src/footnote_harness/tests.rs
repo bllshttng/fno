@@ -16,6 +16,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_AUTH_TOKEN", "oauth"),
         ]),
+        None,
     )
     .unwrap_err();
     assert!(err.contains("Claude Code lane"), "{err}");
@@ -26,12 +27,26 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
             ("ANTHROPIC_AUTH_TOKEN", "k"),
             ("FNO_ROUTE_PROVIDER", "zai"),
         ]),
+        None,
     )
     .unwrap();
     assert_eq!(
         (ep.wire.as_str(), ep.provider_id.as_deref(), ep.bearer),
         ("anthropic", Some("zai"), true)
     );
+    assert_eq!(ep.route, "env");
+    // A model id names its provider as a prefix. A prefix with no provider
+    // record is part of the id, and no endpoint at all names the legal form.
+    assert_eq!(
+        endpoint::split_model(cwd, "zai/glm-x"),
+        (Some("zai".to_string()), "glm-x")
+    );
+    for whole in ["glm-test", "no-such-provider/model-x", "zai/"] {
+        assert_eq!(endpoint::split_model(cwd, whole), (None, whole));
+    }
+    let err = endpoint::resolve_endpoint(cwd, &env(&[]), None).unwrap_err();
+    assert!(err.contains("-m <provider>/<model>"), "{err}");
+    assert!(!err.contains("-P"), "{err}");
 
     let tmp = tempfile::tempdir().unwrap();
     // The guard holds the crate's env lock for the rest of the test, so the
@@ -42,6 +57,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
         ("FNO_FOOTNOTE_BIN", "/nonexistent/footnote"),
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("ZAI_API_KEY", "zk"),
     ];
     let saved: Vec<_> = vars
         .iter()
@@ -76,7 +92,7 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
         "hi",
         "tester",
         tmp.path(),
-        Some("glm-test"),
+        Some("zai/glm-test"),
         None,
         &serde_json::json!({"node": "x-1", "permission_mode": "plan"}),
     );
@@ -100,6 +116,10 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     assert_eq!(spec["v"], 2);
     assert_eq!(spec["node"], "x-1");
     assert_eq!(spec["permission_mode"], "plan");
+    // The named provider outranks the env route the spawner carried.
+    assert_eq!(spec["model"], "glm-test");
+    assert_eq!(spec["endpoint"]["provider_id"], "zai");
+    assert_eq!(spec["endpoint"]["route"], "config");
     let reg = load_registry(&home.registry_json()).unwrap();
     assert!(reg.find("fx-missing").is_none());
     assert!(reg.find("fx-plan").is_none());

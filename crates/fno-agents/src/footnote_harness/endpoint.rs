@@ -37,16 +37,35 @@ pub fn provider_record(cwd: &Path, provider: &str) -> Option<toml::Table> {
     record
 }
 
-/// Resolve the endpoint: the spawn front's route env first, then the
-/// `config.model_routing.providers.<FNO_ROUTE_PROVIDER>` record. Never a
-/// Claude.ai login: an Anthropic host with no API key refuses.
+/// `-m <provider>/<model>`: the provider a footnote model id names, and the
+/// model without it. A prefix that names no provider record is part of the id.
+pub fn split_model<'a>(cwd: &Path, model: &'a str) -> (Option<String>, &'a str) {
+    match model.split_once('/') {
+        Some((p, rest)) if !rest.is_empty() && provider_record(cwd, p).is_some() => {
+            (Some(p.to_string()), rest)
+        }
+        _ => (None, model),
+    }
+}
+
+/// Resolve the endpoint: the provider the model id named first, then the
+/// spawn front's route env, then the
+/// `config.model_routing.providers.<FNO_ROUTE_PROVIDER>` record. A named
+/// provider outranks the env, so a spawn from a routed session never sends
+/// its model to that session's endpoint. Never a Claude.ai login: an
+/// Anthropic host with no API key refuses.
 pub fn resolve_endpoint(
     cwd: &Path,
     env: &dyn Fn(&str) -> Option<String>,
+    provider: Option<&str>,
 ) -> Result<EndpointSpec, String> {
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
-    let route_provider = get(crate::codex_route::ROUTE_PROVIDER_ENV);
-    let ep = if let Some(base_url) = get("ANTHROPIC_BASE_URL") {
+    let named = provider.filter(|p| !p.is_empty()).map(str::to_string);
+    let route_provider = named
+        .clone()
+        .or_else(|| get(crate::codex_route::ROUTE_PROVIDER_ENV));
+    let env_url = get("ANTHROPIC_BASE_URL").filter(|_| named.is_none());
+    let ep = if let Some(base_url) = env_url {
         let (key, bearer) = match (get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_API_KEY")) {
             (Some(t), _) => (t, true),
             (None, Some(k)) => (k, false),
@@ -99,7 +118,7 @@ pub fn resolve_endpoint(
         }
     } else {
         return Err(
-            "no model endpoint: spawn with -P <provider> or set ANTHROPIC_BASE_URL and a key"
+            "no model endpoint: pass -m <provider>/<model> (a config.model_routing.providers name, e.g. zai/glm-5.3-flash), or set ANTHROPIC_BASE_URL and a key"
                 .into(),
         );
     };
