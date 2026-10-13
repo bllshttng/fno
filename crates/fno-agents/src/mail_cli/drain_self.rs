@@ -290,7 +290,7 @@ fn scan_held_job_mail(sid: &str, bus: &Path, msgs: &[Value]) -> (Option<String>,
     (Some(key), got)
 }
 
-fn form_of(form_by_id: &HashMap<String, String>, m: &Value, handle: &str) -> &str {
+fn form_of<'a>(form_by_id: &'a HashMap<String, String>, m: &Value, handle: &'a str) -> &'a str {
     form_by_id
         .get(&str_field(m, "id", "?"))
         .map(String::as_str)
