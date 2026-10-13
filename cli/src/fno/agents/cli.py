@@ -1999,8 +1999,7 @@ def cmd_spawn(
             file=sys.stderr,
         )
 
-    # --print: the verb refuses, composes and renders; this leg is the ask
-    # and the display, and the render is the exec path's own fill.
+    # --print: the verb refuses, composes and renders; this leg is the ask and display.
     if print_mode:
         import shlex
         from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
@@ -2643,8 +2642,7 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
-            # The native lane: a routed claude thread spawn execs the lane's
-            # own bg line; other axes fall through to the dispatcher below.
+            # The native lane: a routed claude thread spawn execs the lane's own bg line; other axes fall through.
             native_lane = (
                 harness == "claude"
                 and substrate == "thread"
@@ -2674,8 +2672,10 @@ def cmd_spawn(
                         "node": (prov_env or {}).get("FNO_NODE") or "",
                         "launcher_session": launcher_session,
                     }
-                    if launcher_harness: ask["launcher_harness"] = launcher_harness
-                    if launcher_cwd and launcher_cwd.strip(): ask["launcher_cwd"] = launcher_cwd
+                    if launcher_harness:
+                        ask["launcher_harness"] = launcher_harness
+                    if launcher_cwd and launcher_cwd.strip():
+                        ask["launcher_cwd"] = launcher_cwd
                     proc = _subprocess.run(
                         [str(resolve_binary()), "spawn-overlay"],
                         input=json.dumps(ask), text=True, capture_output=True,
