@@ -285,12 +285,28 @@ fn run_rows(args: &[OsString]) -> i32 {
             }
         };
     }
+    // The merge gate's journal read consults the local journals plus the
+    // shared primary: reviewed on one machine, merged from another, the
+    // gate read only the local journals and refused with
+    // review_coverage_uncovered. The pull rides EVERY answer path, the
+    // never-written-journal early exits included: a fresh peer machine is
+    // exactly the case whose journals hold nothing and whose merge still
+    // needs the reviewer's rows.
+    let wants_attestations = types.iter().any(|t| t == "review_attestation");
+    let segment = if wants_attestations {
+        crate::attest::pull_segment()
+    } else {
+        Vec::new()
+    };
     // A journal that was never written must not gain a store as a side
     // effect of being read: absence is a fact callers distinguish. A
     // non-regular journal (a directory standing in for the index) is a
     // failed read, so the caller's own error path names it.
     if !journal.exists() && !crate::event_store::store_path(&journal).exists() {
-        println!("[]");
+        println!(
+            "{}",
+            serde_json::to_string(&segment).unwrap_or_else(|_| "[]".into())
+        );
         return 0;
     }
     if journal.exists() && !journal.is_file() {
@@ -301,7 +317,12 @@ fn run_rows(args: &[OsString]) -> i32 {
         // No store: the raw journal is the whole history. Lines go back
         // unfiltered and unvalidated, exactly the pre-store read.
         let raw = std::fs::read_to_string(&journal).unwrap_or_default();
-        let lines: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty()).collect();
+        let mut lines: Vec<String> = raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        lines.extend(segment);
         println!(
             "{}",
             serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into())
@@ -309,13 +330,15 @@ fn run_rows(args: &[OsString]) -> i32 {
         return 0;
     }
     if no_import && !crate::event_store::store_path(&journal).exists() {
-        println!("[]");
+        println!(
+            "{}",
+            serde_json::to_string(&segment).unwrap_or_else(|_| "[]".into())
+        );
         return 0;
     }
     if !no_import {
         let _ = crate::event_store::import_all(&journal);
     }
-    let wants_attestations = types.iter().any(|t| t == "review_attestation");
     let query = crate::event_store::EventQuery {
         types,
         include_rejected,
@@ -323,29 +346,24 @@ fn run_rows(args: &[OsString]) -> i32 {
     };
     match crate::event_store::query_events(&journal, &query) {
         Ok(rows) => {
-            // The merge gate's journal read consults the local journals
-            // plus the shared primary: reviewed on one machine, merged
-            // from another, the gate read only the local journals and
-            // refused with review_coverage_uncovered. The dedup key is
-            // the envelope ts plus the data payload minus its `repo`
-            // key, the same rule the Python coverage read applies to
-            // the global-log mirror, so a row this machine committed is
-            // answered by its journal original and never doubles.
+            // The dedup key is the envelope ts plus the data payload
+            // minus its `repo` key, the same rule the Python coverage
+            // read applies to the global-log mirror, so a row this
+            // machine committed is answered by its journal original and
+            // never doubles.
             let mut lines: Vec<String> = rows.iter().map(|r| r.line.clone()).collect();
-            if wants_attestations {
-                let mut seen: std::collections::HashSet<String> = rows
-                    .iter()
-                    .filter_map(|r| attest_dedup_key(&r.line))
-                    .collect();
-                for segment in crate::attest::pull_segment() {
-                    match attest_dedup_key(&segment) {
-                        Some(key) => {
-                            if seen.insert(key) {
-                                lines.push(segment);
-                            }
+            let mut seen: std::collections::HashSet<String> = rows
+                .iter()
+                .filter_map(|r| attest_dedup_key(&r.line))
+                .collect();
+            for extra in segment {
+                match attest_dedup_key(&extra) {
+                    Some(key) => {
+                        if seen.insert(key) {
+                            lines.push(extra);
                         }
-                        None => lines.push(segment),
                     }
+                    None => lines.push(extra),
                 }
             }
             println!(

@@ -89,33 +89,21 @@ pub(super) fn missing_global_attestations(
 
 /// The shared primary's attestation lines that this machine's journals do
 /// not already hold. The pull is repo-scoped at the source, so no repo
-/// filter here; the identity rule is the same one the global mirror uses,
-/// because the primary copy differs from its local original in exactly one
-/// key (`repo`, stamped at push). A row this machine committed arrives with
-/// the journal row it mirrors and is dropped here.
+/// filter here. The dedup key is the full payload minus `repo` (ts +
+/// stamped content), the rule the merge gate's rows read and the Python
+/// coverage read both apply: rounds at one head share reviewer and session,
+/// so an identity-tuple key would silently drop the later round and hide a
+/// blocking finding or resurrect a disposed one.
 pub(super) fn missing_primary_attestations(primary_text: &str, local_text: &str) -> String {
-    let mut seen: std::collections::HashSet<(String, String, String, String)> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in local_text.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
-            continue;
-        }
-        if let Some(k) = attestation_identity(&val) {
+        if let Some(k) = primary_dedup_key(line) {
             seen.insert(k);
         }
     }
     let mut out = String::new();
     for line in primary_text.lines() {
-        let Ok(val) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
-            continue;
-        }
-        if let Some(k) = attestation_identity(&val) {
+        if let Some(k) = primary_dedup_key(line) {
             if seen.insert(k) {
                 out.push_str(line);
                 out.push('\n');
@@ -123,6 +111,28 @@ pub(super) fn missing_primary_attestations(primary_text: &str, local_text: &str)
         }
     }
     out
+}
+
+/// The full-payload mirror key for one `review_attestation` line: envelope
+/// ts plus the data payload minus its `repo` key. The primary copy differs
+/// from the journal original in exactly that key (stamped at push when
+/// absent), so two copies of one attestation hash equal and two distinct
+/// rounds do not. Same rule as the native rows read's `attest_dedup_key`
+/// and the Python coverage read's mirror dedup.
+fn primary_dedup_key(line: &str) -> Option<String> {
+    let val: Value = serde_json::from_str(line).ok()?;
+    if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
+        return None;
+    }
+    let ts = val.get("ts").and_then(Value::as_str).unwrap_or("");
+    let mut data = val.get("data")?.clone();
+    if let Some(obj) = data.as_object_mut() {
+        obj.remove("repo");
+    }
+    Some(format!(
+        "{ts}\u{1f}{}",
+        blake3::hash(data.to_string().as_bytes()).to_hex()
+    ))
 }
 
 /// The text-taking body of [`unattested_reviewers_scan`], split so the

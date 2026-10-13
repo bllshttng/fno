@@ -204,9 +204,11 @@ fn primary_attestation_text(repo_slug: &str) -> Option<String> {
         .ok()
 }
 
-/// The pure merge over the three sources, oldest-local-first with the
-/// primary appended: the consumers sort by ts, so source order only breaks
-/// ties.
+/// The pure merge over the three sources, re-sorted by envelope ts when the
+/// primary contributed rows: the pass scan takes the LAST line as a
+/// reviewer's latest verdict, so appending an older primary row after a
+/// newer local one would crown the older verdict. Stable on lines with no
+/// readable ts (they sort first, preserving their relative order).
 fn merge_attestation_text(
     project_text: &str,
     global_text: &str,
@@ -225,6 +227,28 @@ fn merge_attestation_text(
             merged.push('\n');
             merged.push_str(&extra_primary);
         }
+    }
+    if primary_text.is_some() {
+        let mut rows: Vec<(String, String)> = merged
+            .lines()
+            .map(|line| {
+                let ts = serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|val| {
+                        val.get("ts")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                (ts, line.to_string())
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        merged = rows
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
     }
     merged
 }
