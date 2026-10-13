@@ -229,8 +229,8 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
     )
     fired: dict = {}
     monkeypatch.setattr(
-        "fno.mail.cli._raw_send",
-        lambda name, message, **kw: fired.update(name=name, message=message, **kw),
+        "fno.mail.cli._forward_mail_send_raw",
+        lambda argv: fired.update(argv=argv),
     )
 
     result = CliRunner().invoke(
@@ -238,8 +238,9 @@ def test_to_self_is_not_refused_as_an_ambiguous_codex_handle(tmp_path, monkeypat
     )
 
     assert result.exit_code == 0, (result.output, result.stderr)
-    assert fired.get("name") == canonical_handle(V7_A), fired
-    assert fired.get("self_ok") is True, "the raw lane needs its own self permission"
+    assert fired["argv"][1] == canonical_handle(V7_A), fired
+    assert "--raw" in fired["argv"], fired
+    assert "--self-ok" in fired["argv"], "the raw lane needs its own self permission"
 
 
 @pytest.mark.parametrize(

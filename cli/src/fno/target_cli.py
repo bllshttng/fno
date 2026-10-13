@@ -19,9 +19,7 @@ init script owns the owner_cwd worktree binding and all state.
 """
 from __future__ import annotations
 
-import contextlib
 import faulthandler
-import io
 import json
 import os
 import re
@@ -1179,31 +1177,42 @@ def _resolve_self_review_identity() -> tuple[str, str]:
 def _send_self_review_payload(
     *, payload: str, harness: str, session_id: str
 ) -> dict[str, Any]:
-    """Use the existing raw self-send router and normalize its receipt."""
-    from fno.mail.cli import _raw_send
+    """Type the self-review payload through the Rust raw-send leaf."""
+    from fno.rust_binary import resolve_binary
 
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-    exit_code = 0
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        try:
-            # The FULL session id, never canonical_handle's head-8: a codex id
-            # is UUIDv7, so its first eight are a 65.536-second timestamp
-            # bucket that every same-minute sibling shares, and resolution
-            # fails closed on the shared short exactly when a fleet is busy.
-            _raw_send(
-                session_id,
-                payload,
-                self_ok=True,
-                review_request=True,
-            )
-        except typer.Exit as exc:
-            exit_code = int(exc.exit_code or 0)
-
-    if exit_code != 0:
-        reason = (stderr.getvalue() or stdout.getvalue()).strip()
+    binary = resolve_binary()
+    if binary is None:
+        return {
+            "outcome": "refused",
+            "transport": harness,
+            "reason": (
+                "the fno-agents binary was not found; reinstall fno or run "
+                "`fno doctor update --rust`, or set FNO_AGENTS_BIN to its path"
+            ),
+        }
+    # The FULL session id, never canonical_handle's head-8: a codex id
+    # is UUIDv7, so its first eight are a 65.536-second timestamp
+    # bucket that every same-minute sibling shares, and resolution
+    # fails closed on the shared short exactly when a fleet is busy.
+    result = subprocess.run(
+        [
+            str(binary),
+            "mail",
+            "send",
+            session_id,
+            payload,
+            "--raw",
+            "--self-ok",
+            "--review-request",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip()
         return {"outcome": "refused", "transport": harness, "reason": reason}
-    receipt = stdout.getvalue().strip()
+    receipt = result.stdout.strip()
     if receipt.startswith("queued"):
         transport = "mux-pane"
         outcome = "queued"

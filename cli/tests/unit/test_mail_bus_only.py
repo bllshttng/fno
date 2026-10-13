@@ -206,52 +206,6 @@ def test_worker_without_policy_still_injects_live(runner, mailbox, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The raw lane: never queues durable - a held body parks with a receipt.
-# ---------------------------------------------------------------------------
-
-
-def test_raw_send_to_bus_only_is_refused_loud(runner, mailbox, monkeypatch):
-    """A hand-stamped bus-only hold has no deadline, so the gate never parks
-    for it: the receipt could not name a run-when, and the raw lane's
-    documented answer is the non-zero refusal. The dev binary is pinned when
-    it exists so the layer under the assertions does not drift with the
-    installed binary's age; the fallback refuses the same way."""
-    from fno import rust_binary
-
-    binary = rust_binary.find_dev_binary()
-    if binary is not None:
-        monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
-    _boom_transport(monkeypatch)
-
-    res = runner.invoke(
-        app, ["mail", "send", BUS_SID, "/code-review", "--raw", "--from-name", "peer"]
-    )
-
-    assert res.exit_code == 2, res.output
-    assert "bus-only" in res.output
-    assert "DND" in res.output
-    assert "queued (durable)" not in res.output
-
-
-def test_raw_check_answers_not_injectable_for_bus_only(runner, mailbox, monkeypatch):
-    _seed_registry({"name": "leader", "sid": BUS_SID,
-                    "delivery_policy": "bus-only"})
-    _boom_transport(monkeypatch)
-
-    res = runner.invoke(
-        app,
-        ["mail", "send", BUS_SID, "/code-review", "--raw", "--check",
-         "--from-name", "peer"],
-    )
-
-    assert res.exit_code == 1, res.output
-    assert "not-injectable" in res.output
-    assert "bus-only" in res.output
-
-
-# ---------------------------------------------------------------------------
 # The naming trap, asserted the same way mail_inject.rs:1111 pins NOT_INJECTABLE.
 # ---------------------------------------------------------------------------
 
