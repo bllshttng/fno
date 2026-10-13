@@ -320,13 +320,19 @@ fn claim_meta_repo(rec: &ClaimRecord) -> Option<PathBuf> {
 /// and every failure path, matching Python's `except: return True` (a dead
 /// handover holder is kept, not probed).
 fn handover_pane_probe_blocked(rec: &ClaimRecord) -> bool {
-    let repo = claim_meta_repo(rec)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let repo = claim_meta_repo(rec).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
     let repo_arg = repo.to_string_lossy().into_owned();
     let Some((code, stdout)) = run_with_timeout(
         &bin,
-        &["agents", "workspace", "worktree", "policy", "--repo", &repo_arg],
+        &[
+            "agents",
+            "workspace",
+            "worktree",
+            "policy",
+            "--repo",
+            &repo_arg,
+        ],
         10,
     ) else {
         return true;
@@ -848,8 +854,16 @@ mod tests {
         });
         let mut ctx = ProbeCtx::default();
         let mut summary = ReapSummary::new(Vec::new(), true);
-        reap_one(&rec, &row, dir.path(), true, now_ms(), &mut ctx, &mut summary)
-            .unwrap();
+        reap_one(
+            &rec,
+            &row,
+            dir.path(),
+            true,
+            now_ms(),
+            &mut ctx,
+            &mut summary,
+        )
+        .unwrap();
         assert!(path.exists(), "claim file must survive the downgrade");
         assert_eq!(summary.reaped, 0, "downgraded suspect is never reaped");
         assert_eq!(summary.kept_live, 0, "fresh live verdict must collapse");
