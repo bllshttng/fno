@@ -97,7 +97,7 @@ That sidesteps any model-invocation refusal. The prompt-line injection IS the us
 
 Worker self-review runs through the inline fno review skill. Do not mail a lead to fire a review command or inject a review verb into another session.
 
-`<level>` is sized from the diff by `level_for_diff` in `cli/src/fno/review_capability.py` (never `ultra`: billed separately, and the builder rejects it). No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
+`<level>` is sized from the diff by `diff_review_level`, one round-trip to the fno-agents `review-level` door that owns the tier table. Never `ultra`: billed separately, and the builder rejects it. No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
 
 No lane above carries `--fix`. A fix pass writes, which moves HEAD. An attestation is head-pinned, so the round that wrote it also voids it. This matches the review contract further down. `--fix` stays legal for a caller who asks for it directly, and only the machinery advice drops it.
 

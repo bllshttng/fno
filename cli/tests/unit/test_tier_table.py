@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import fno.adapters.providers.benchmarks as bm
-from fno.route_resolve import _BAND_FLOOR, _STATIC_FALLTHROUGH
+from fno.route_resolve import _BAND_FLOOR
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -52,7 +52,6 @@ def test_the_max_band_exists_and_sits_above_high():
     assert "max" in bm.STATIC_TIERS and bm.STATIC_TIERS["max"]
     assert "max" in _BAND_FLOOR
     assert _BAND_FLOOR["max"] > _BAND_FLOOR["high"]
-    assert _STATIC_FALLTHROUGH["max"][0] == "max"
 
 
 def test_max_and_high_share_the_codex_model_and_differ_by_design():

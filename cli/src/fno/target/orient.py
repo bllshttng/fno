@@ -18,6 +18,7 @@ This is the introspection family (``fno whoami`` / ``fno whoami status``), reusi
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,10 +35,27 @@ class OrientLine:
 # --- git helpers (self-contained so orient never imports target_cli; that
 #     module imports orient for the `status` command + init print) -----------
 
-# The one git-out helper lives in review_capability (moved there with the
-# diff-sizing path); importing it keeps this module's callers (and the tests
-# that patch `orient._git_out`) on the same name while deleting the copy.
-from fno.review_capability import _git_out  # noqa: E402  (re-export seam)
+# The one git-out helper lives HERE again: review_capability kept it only as a
+# re-export seam for these callers, and the diff-sizing path it served moved to
+# the fno-agents `review-level` door (ported 2026-10). Self-contained like the
+# rest of this block: orient never imports target_cli.
+
+
+def _git_out(cwd: Path, *args: str) -> Optional[str]:
+    """Full stdout of a git call (stripped, may be multi-line), or None.
+
+    Never raises: each status line resolves independently and a degraded
+    ``git`` prints ``unknown``, never a stack trace.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.strip()
 
 
 def _is_linked_worktree(cwd: Path) -> bool:

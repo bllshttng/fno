@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
-import time
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from fno.config import settings_from_files
 from fno.config import writer
-from fno.claims import Claim, acquire_claim, claim_status
+from fno.claims import acquire_claim, claim_status
 from fno.claims import optout_lease
-from fno.claims.core import reap_dead_claims
-from fno.claims.io import claim_path, global_claims_root
+from fno.claims.io import global_claims_root
+from fno.claims.optout_lease import restore_reaped_optouts
 
 
 def test_unbacked_self_review_opt_out_reverts_to_default(
@@ -157,24 +159,14 @@ def test_unreadable_claim_instrument_revokes_and_names_instrument(
     assert "unreadable" in caplog.text
 
 
-def test_reaper_restores_the_recorded_prior_value(tmp_path, monkeypatch):
+def test_restore_removes_the_recorded_prior_value(tmp_path):
     config = tmp_path / "config.toml"
     config.write_text(
         "[review]\nself_review_required = false\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
-    key = "config-optout:review.self_review_required"
-    root = global_claims_root()
-    claim = Claim(
-        schema_version=2,
-        key=key,
-        holder="session-a",
-        acquired_at=int(time.time() * 1000) - 120_000,
-        expires_at=int(time.time() * 1000) - 60_000,
-        pid=None,
-        pid_unavailable=True,
-        host="test-host",
+    claim = SimpleNamespace(
+        key="config-optout:review.self_review_required",
         metadata={
             "config_key": "review.self_review_required",
             "config_path": str(config),
@@ -183,20 +175,8 @@ def test_reaper_restores_the_recorded_prior_value(tmp_path, monkeypatch):
             "prior_value": None,
         },
     )
-    path = claim_path(key, root=root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(claim.model_dump(exclude_none=True)),
-        encoding="utf-8",
-    )
 
-    optout_sink: list = []
-    summary = reap_dead_claims(roots=[root], apply=True, optout_sink=optout_sink)
-
-    assert summary["reaped"] == 1
-    from fno.claims.optout_lease import restore_reaped_optouts
-
-    assert restore_reaped_optouts(optout_sink) == []
+    assert restore_reaped_optouts([claim]) == []
     assert "self_review_required = false" not in config.read_text(encoding="utf-8")
     assert "self_review_required = true" not in config.read_text(encoding="utf-8")
 
@@ -285,14 +265,9 @@ def test_scope_change_takeover_restores_the_new_file_not_the_old(
 
     update_claim(key, root=global_claims_root(), expires_at=1)
 
-    optout_sink: list = []
-    summary = reap_dead_claims(
-        roots=[global_claims_root()], apply=True, optout_sink=optout_sink
-    )
-    from fno.claims.optout_lease import restore_reaped_optouts
+    reaped = SimpleNamespace(key=key, metadata=taken_over["metadata"])
 
-    assert summary["reaped"] == 1
-    assert restore_reaped_optouts(optout_sink) == []
+    assert restore_reaped_optouts([reaped]) == []
     project_text = (project_dir / ".fno" / "config.toml").read_text(encoding="utf-8")
     global_text = (global_dir / "config.toml").read_text(encoding="utf-8")
     assert "self_review_required" not in project_text
@@ -311,3 +286,26 @@ def test_rust_optout_keys_are_registered_in_python_membership():
 
     assert rust_keys
     assert rust_keys <= set(MERGE_GATING_OPTOUTS)
+
+def test_optout_restore_module_fails_loud_on_stderr():
+    # The Rust reap leaf folds this module's stderr into its reap_failed
+    # list; exit 1 plus that prefix is the seam's only error channel.
+    claim = {
+        "key": "config-optout:review.self_review_required",
+        "metadata": {"config_key": "not.a.registered.optout", "config_path": ""},
+    }
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "fno.claims._optout_restore",
+            "--claim",
+            json.dumps(claim),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 1
+    assert proc.stderr.startswith("opt-out restore failed:")
