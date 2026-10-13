@@ -1553,9 +1553,27 @@ fn codex_thread_parent_edge_from(
     thread.map(|session| (session, "codex".to_string()))
 }
 
+/// The acquire stamp, clamped past this process's own OS create time. The
+/// liveness probe reads pid reuse as `create_ms > acquired_at`, and a clock
+/// stepped backward between process start and acquire would otherwise pin a
+/// live claim below its own create time forever. `None` (no create-time
+/// probe) passes the wall clock through unchanged.
+fn stepped_clock_safe_acquired_at(wall_ms: i64, created_ms: Option<i64>) -> i64 {
+    match created_ms {
+        Some(created) => wall_ms.max(created + 1),
+        None => wall_ms,
+    }
+}
+
 pub(crate) fn make_claim(key: &str, holder: &str, opts: &AcquireOpts) -> ClaimRecord {
-    let acquired = now_ms();
     let pid_unavailable = opts.pid_unavailable;
+    // Resolved before the stamp: the clamp needs this process's create time.
+    let pid: Option<i32> = if pid_unavailable {
+        None
+    } else {
+        Some(opts.pid.unwrap_or_else(std::process::id) as i32)
+    };
+    let acquired = stepped_clock_safe_acquired_at(now_ms(), pid.and_then(process_create_time_ms));
     // Resolved ONCE and used for the `harness` field, the `session_id` field,
     // and the provenance stamp below, so a record can never disagree with
     // itself about which harness (or session) wrote it. A caller-vouched
@@ -1574,11 +1592,7 @@ pub(crate) fn make_claim(key: &str, holder: &str, opts: &AcquireOpts) -> ClaimRe
         key: key.into(),
         holder: holder.into(),
         acquired_at: acquired,
-        pid: if pid_unavailable {
-            None
-        } else {
-            Some(opts.pid.unwrap_or_else(std::process::id) as i32)
-        },
+        pid,
         host: opts.host.clone().unwrap_or_else(hostname),
         pid_unavailable,
         // Omitted, not backfilled with the hostname, when no stable id exists:
@@ -3367,6 +3381,16 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn acquire_stamp_clamps_past_own_create_time() {
+        // A backward clock step between process start and acquire pins a
+        // plain wall stamp below the boot-anchored create time, so the
+        // liveness probe reads the live holder as pid reuse forever.
+        assert_eq!(stepped_clock_safe_acquired_at(1_000, Some(5_000)), 5_001);
+        assert_eq!(stepped_clock_safe_acquired_at(9_000, Some(5_000)), 9_000);
+        assert_eq!(stepped_clock_safe_acquired_at(1_000, None), 1_000);
     }
 
     #[test]
