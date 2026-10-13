@@ -76,7 +76,7 @@ fn build_git(case_dir: &Path, spec: &Value) {
 }
 
 fn build_fixture(root: &Path, case: &Value, index: usize) -> PathBuf {
-    let case_dir = root.join(format!("case-{index:02d}"));
+    let case_dir = root.join(format!("case-{index:02}"));
     std::fs::create_dir_all(&case_dir).unwrap();
     // state_dir is a TOP-LEVEL key: under a [table] header the config
     // loader reads it as a table field and warns it is unmodeled.
