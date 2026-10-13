@@ -396,6 +396,7 @@ fn inventory(cwd: &Path) -> Value {
             "effort",
             "cost_per_mtok_in",
             "operator_view",
+            "launch",
         ] {
             let value = match row.get(key) {
                 Some(v) => v.clone(),

@@ -1721,6 +1721,46 @@ fn overlay_stage(stage: &mut Stage, seam: &mut Seam) {
     }
 }
 
+/// Fill a lane's launch template with the spawn's values - the one renderer
+/// behind `spawn --print` and the exec path. A hole token takes its value;
+/// an optional hole whose value is empty drops itself and the flag before
+/// it, so a lane with no route, model or effort still renders a legal argv.
+/// The payload positional is the one hole that may begin with a dash, so the
+/// fill fences it with `--` exactly when the value needs it: claude's parser
+/// would otherwise read a leading-flag seed as its own flag.
+pub fn fill_launch(
+    template: &crate::harness_capabilities::LaunchTemplate,
+    values: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in &template.argv {
+        let Some(hole) = token
+            .strip_prefix('{')
+            .and_then(|rest| rest.strip_suffix('}'))
+        else {
+            out.push(token.clone());
+            continue;
+        };
+        let value = values.get(hole).map(String::as_str).unwrap_or("");
+        if value.is_empty() {
+            if !template.optional.iter().any(|name| name == hole) {
+                return Err(format!(
+                    "no value for hole {{{hole}}}; supply it or declare it optional"
+                ));
+            }
+            if out.last().is_some_and(|flag| flag.starts_with('-')) {
+                out.pop();
+            }
+            continue;
+        }
+        if hole == "payload" && value.starts_with('-') {
+            out.push("--".to_string());
+        }
+        out.push(value.to_string());
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

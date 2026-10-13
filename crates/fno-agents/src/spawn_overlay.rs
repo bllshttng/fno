@@ -1,5 +1,5 @@
 //! `spawn-overlay`: the spawn-defaults resolver Python delegates to, ported
-//! from Python. Three payload kinds, one verb, direct dispatch (no
+//! from Python. Payload kinds, one verb, direct dispatch (no
 //! daemon RPC), the route-slot transport shape: one JSON payload in on stdin,
 //! one JSON answer out on stdout.
 //!
@@ -15,6 +15,11 @@
 //!   event bus stays the emitter.
 //! - kind `fallback`: the failover-chain validation (`validate_fallback` in
 //!   Python). Returns canonical links or the exact refusal the Python raised.
+//! - kind `print`: the lane's native launch line. The payload names the
+//!   lane's resolved values (and optionally a routing row's own `launch`
+//!   argv); the answer carries the filled tokens [`crate::spawn_compose::
+//!   fill_launch`] produced, so `spawn --print` and the exec path share one
+//!   renderer.
 //! - kind `team-settle`: whether a teamed spawn is granted, transfers, or
 //!   refuses (`team_settle::resolve`), a port of Python's
 //!   `settle_spawn_team` with a new human-succession branch and ladder-aware
@@ -167,6 +172,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("pane-group") => resolve_pane_group(&payload),
         Some("fallback") => resolve_fallback(&payload),
         Some("codex-route") => resolve_codex_route_kind(&payload),
+        Some("print") => resolve_print(&payload),
         Some("role-settle") => crate::team_settle::resolve(&payload),
         Some("role-identity") => crate::team_identity::resolve(&payload),
         Some("role-widen") => crate::team_widen::resolve(&payload),
@@ -174,7 +180,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|model-vendor|lane-vendor|link-meta|pane-group|fallback|codex-route|print|team-settle|team-identity|team-widen|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team"
         )),
     }
 }
@@ -289,6 +295,71 @@ fn effective_field(
         return Some((v, "agents.defaults".to_string()));
     }
     None
+}
+
+/// The native launch line behind `spawn --print` and the exec path - one
+/// fill, two readers. The payload names the lane's resolved values and may
+/// override the argv with the routing row's own `launch` list; the answer is
+/// the filled token list. The template resolves row override first, then the
+/// harness's packaged default, and refuses a harness with neither - absence
+/// is the declared not-yet-templated state. A row override inherits the
+/// harness default's optional set, filtered to the holes the override still
+/// carries, so overriding the argv cannot strand an optional hole.
+fn resolve_print(payload: &Value) -> Result<Value, String> {
+    let harness = payload.get("harness").and_then(Value::as_str).unwrap_or("");
+    if harness.is_empty() {
+        return Err("spawn-overlay print: payload needs harness".into());
+    }
+    let default_launch = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|error| error.to_string())?
+        .capabilities(harness)
+        .map_err(|error| error.to_string())?
+        .launch
+        .clone();
+    let (argv, mut optional) = match (
+        payload.get("launch"),
+        payload.get("launch_optional"),
+        default_launch,
+    ) {
+        (Some(row_launch), row_optional, default) => {
+            let argv: Vec<String> = serde_json::from_value(row_launch.clone())
+                .map_err(|error| format!("spawn-overlay print: bad row launch: {error}"))?;
+            let optional = match row_optional {
+                Some(extra) => serde_json::from_value(extra.clone()).map_err(|error| {
+                    format!("spawn-overlay print: bad launch_optional: {error}")
+                })?,
+                None => match default {
+                    Some(template) => template
+                        .optional
+                        .into_iter()
+                        .filter(|hole| argv.iter().any(|token| token == &format!("{{{hole}}}")))
+                        .collect(),
+                    None => Vec::new(),
+                },
+            };
+            (argv, optional)
+        }
+        (None, _, Some(default)) => (default.argv.clone(), default.optional.clone()),
+        (None, _, None) => {
+            return Err(format!(
+                "harness {harness} declares no native launch template"
+            ))
+        }
+    };
+    if payload.get("launch_optional").is_some() && payload.get("launch").is_none() {
+        return Err("spawn-overlay print: launch_optional needs the row's launch list".into());
+    }
+    let template = crate::harness_capabilities::LaunchTemplate { argv, optional };
+    template
+        .validate(harness)
+        .map_err(|error| error.to_string())?;
+    let mut values = std::collections::BTreeMap::new();
+    for hole in crate::harness_capabilities::LAUNCH_HOLES {
+        let value = payload.get(hole).and_then(Value::as_str).unwrap_or("");
+        values.insert(hole.to_string(), value.to_string());
+    }
+    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
+    Ok(json!({ "tokens": tokens }))
 }
 
 fn resolve_overlay(payload: &Value) -> Result<Value, String> {
@@ -1185,5 +1256,144 @@ mod tests {
             Ok(out) => assert_eq!(out["reason"], json!("no agents home declared")),
             Err(err) => assert!(err.contains("team-rescope"), "{err}"),
         }
+    }
+
+    /// The packaged claude template renders the ruled native line: the
+    /// settings path, model and effort land between `--bg` and `--name`, and
+    /// the payload rides as the final positional. This golden IS the wave's
+    /// ruled print shape; the Python side asserts only the transport.
+    #[test]
+    fn print_fills_the_packaged_claude_line() {
+        let out = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/fno:target x-1abc",
+            "settings": "/s/route-settings/lane-zai-flash.json",
+            "model": "glm-5.3-flash[1m]", "effort": "xhigh",
+        }))
+        .unwrap();
+        assert_eq!(
+            out["tokens"],
+            json!([
+                "claude",
+                "--bg",
+                "--settings",
+                "/s/route-settings/lane-zai-flash.json",
+                "--model",
+                "glm-5.3-flash[1m]",
+                "--effort",
+                "xhigh",
+                "--name",
+                "w",
+                "/fno:target x-1abc"
+            ])
+        );
+    }
+
+    /// Empty optional values drop their flag-and-hole pairs: a lane with no
+    /// route, model or effort still renders a legal argv, and a required
+    /// hole with no value refuses by name.
+    #[test]
+    fn print_drops_empty_optional_pairs() {
+        let out = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/fno:target x-1abc",
+        }))
+        .unwrap();
+        assert_eq!(
+            out["tokens"],
+            json!(["claude", "--bg", "--name", "w", "/fno:target x-1abc"])
+        );
+        let error = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "payload": "/x", "effort": "high",
+        }))
+        .unwrap_err();
+        assert!(error.contains("name"), "{error}");
+    }
+
+    /// A payload that begins with a dash is fenced with `--` so the harness
+    /// parses it as the prompt positional; a plain payload rides bare, which
+    /// keeps the printed line byte-equal to the ruled one.
+    #[test]
+    fn print_fences_a_leading_dash_payload() {
+        let out = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "--model opus",
+        }))
+        .unwrap();
+        let tokens = out["tokens"].as_array().unwrap();
+        assert_eq!(tokens.last().unwrap(), "--model opus");
+        assert_eq!(tokens[tokens.len() - 2], "--");
+    }
+
+    /// A routing row's own `launch` list overrides the argv. It keeps the
+    /// packaged optional set for the holes it still carries and validates
+    /// under the same rules; an optional hole with no flag before it refuses.
+    #[test]
+    fn print_honors_a_row_launch_override() {
+        let out = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/fno:target x-1abc",
+            "model": "glm-5.3-flash[1m]",
+            "launch": ["claude", "--bg", "--model", "{model}", "--name", "{name}", "{payload}"],
+        }))
+        .unwrap();
+        assert_eq!(
+            out["tokens"],
+            json!([
+                "claude",
+                "--bg",
+                "--model",
+                "glm-5.3-flash[1m]",
+                "--name",
+                "w",
+                "/fno:target x-1abc"
+            ])
+        );
+        let error = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/x",
+            "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
+            "launch_optional": ["settings"],
+        }))
+        .unwrap_err();
+        assert!(error.contains("must follow its own flag"), "{error}");
+    }
+
+    /// The contract gates: a hole outside the closed vocabulary, a broken
+    /// whole-token rule, a harness with no template, and `launch_optional`
+    /// without `launch` all refuse by name.
+    #[test]
+    fn print_refuses_malformed_templates() {
+        let error = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/x",
+            "launch": ["claude", "--bg", "--x", "{bogus}", "{name}", "{payload}"],
+        }))
+        .unwrap_err();
+        assert!(error.contains("bogus"), "{error}");
+
+        let error = resolve(json!({
+            "kind": "print", "harness": "claude",
+            "name": "w", "payload": "/x",
+            "launch": ["claude --bg --model={model} --name {name} {payload}"],
+        }))
+        .unwrap_err();
+        assert!(error.contains("whole token"), "{error}");
+
+        let error =
+            resolve(json!({"kind": "print", "harness": "codex", "name": "w", "payload": "/x"}))
+                .unwrap_err();
+        assert!(
+            error.contains("declares no native launch template"),
+            "{error}"
+        );
+
+        let error = resolve(json!({
+            "kind": "print", "harness": "claude", "name": "w", "payload": "/x",
+            "launch_optional": ["effort"],
+        }))
+        .unwrap_err();
+        assert!(error.contains("launch_optional needs"), "{error}");
     }
 }
