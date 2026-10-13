@@ -118,6 +118,14 @@ file p3 "Support Apple Pay on the checkout page"
 file p2 "Unify the three checkout config surfaces into one documented schema with a migration guide and a deprecation window"
 file p3 "Split the merchant onboarding wizard into three steps with save-and-resume and a progress indicator"
 
+# Real teams: every node carries a scope, and the two seeded leads hold
+# those scopes, so Tree and Graph draw a two-team hierarchy instead of a
+# wall of unowned workers.
+for i in "${!IDS[@]}"; do
+  if [ $((i % 2)) -eq 0 ]; then s=payments; else s=search; fi
+  "$FNO" backlog update "${IDS[$i]}" --set scope="$s" >/dev/null
+done
+
 # The three panes work the first three nodes: a claim moves each node to In
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
@@ -279,8 +287,8 @@ agents = [
     row("scribe", "claude", "sonnet", ids[4], "done"),
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
-    thread("rowan", "claude", "idle", attach="demo-lead-1"),
-    thread("wren", "codex", "idle", attach="demo-lead-2"),
+    thread("rowan", "claude", "idle", attach="demo-lead-1") | {"role_level": 1, "role_scope": "payments"},
+    thread("wren", "codex", "idle", attach="demo-lead-2") | {"role_level": 1, "role_scope": "search"},
     thread("planner", "codex", "idle", attach="demo-attach-1"),
     thread("indexer", "claude", "unmeasured"),
     thread("migrator", "opencode", "exited"),

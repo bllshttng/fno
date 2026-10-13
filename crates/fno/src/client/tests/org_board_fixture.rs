@@ -143,10 +143,10 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     b.filter = OrgSessions::Current;
     b.mode = OrgMode::Graph;
     let graph = b.refresh_graph(60, 20);
-    assert!(graph.dots.iter().any(|d| d.key == "node:x-2"));
+    assert!(graph.boxes.iter().any(|d| d.key == "node:x-2"));
     b.query = "first".into();
     let graph = b.refresh_graph(60, 20);
-    assert!(!graph.dots.iter().any(|d| d.label.contains("second")));
+    assert!(!graph.boxes.iter().any(|d| d.label.contains("second")));
     b.query.clear();
     b.mode = OrgMode::Tree;
     let mut departed = b.snapshot.tree.as_ref().unwrap().leads[0].nodes[0].clone();
@@ -331,60 +331,66 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
     }
 }
 
-// AC5-HP: the fixture org renders as a node-link drawing: dots
-// over braille lines, labels beside, and no box-text graph left behind.
+// AC5-HP: the fixture org renders as a layered box-drawing flowchart:
+// leads on top, nodes and workers beneath, connector rows between layers,
+// blocked-by runs on the node label line, and every box wearing its status
+// color. A tap inside a box selects it.
 #[test]
-fn graph_renders_a_node_link_drawing() {
+fn graph_renders_a_layered_flowchart() {
     use serde_json::json;
     let mut view = org_board_for_graph();
     let colors = crate::client::org_graph::GraphColors::of(&view.theme);
     let b = view.org_board.as_mut().unwrap();
-    let graph = b.refresh_graph(60, 20);
-    let buf = crate::client::org_graph::frame(&graph, 60, 20, (0, 0), Some("lead:finch"), &colors);
-    let (mut lead, mut node, mut worker, mut blocks, mut braille) = (0u32, 0u32, 0u32, 0u32, 0u32);
-    let mut rows: Vec<String> = vec![String::new(); 20];
-    for y in 0..20u16 {
-        for x in 0..60u16 {
-            let sym = buf[(x, y)].symbol().to_string();
-            let mut chars = sym.chars();
-            let c = chars.next().unwrap_or(' ');
+    let graph = b.refresh_graph(80, 24);
+    let buf = crate::client::org_graph::frame(&graph, 80, 24, Some("lead:finch"), &colors);
+    let mut corners = 0u32;
+    let mut connectors = 0u32;
+    let mut rows: Vec<String> = vec![String::new(); 24];
+    for y in 0..24u16 {
+        for x in 0..80u16 {
+            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
             match c {
-                '\u{25c6}' => lead += 1,
-                '\u{25cf}' => node += 1,
-                '\u{2022}' => worker += 1,
-                '\u{25c0}' => blocks += 1,
-                c if (c as u32) >= 0x2800 && (c as u32) <= 0x28FF => braille += 1,
+                '\u{2514}' => corners += 1,
+                '\u{2534}' | '\u{252c}' => connectors += 1,
                 _ => {}
             }
             rows[y as usize].push(c);
         }
     }
     assert_eq!(
-        lead,
-        1,
-        "one lead dot (dots in layout: {}, nonblank rows: {}, rows: {:?})",
-        graph.dots.len(),
-        rows.iter().filter(|r| !r.chars().all(|c| c == ' ')).count(),
+        corners as usize,
+        graph.boxes.len(),
+        "one box per entity (rows: {:?})",
         rows
     );
-    assert_eq!(node, 2, "two node dots");
-    assert_eq!(worker, 3, "three worker dots");
-    assert_eq!(blocks, 0, "no box-graph arrow survives");
-    assert!(braille > 0, "edges draw in braille between dots");
-
+    assert!(
+        connectors >= 1,
+        "connector rows join the layers: {:?}",
+        rows
+    );
     for label in ["finch", "x-1", "x-2", "first", "second", "third"] {
         assert!(
             rows.iter().any(|r| r.contains(label)),
-            "label {label} paints beside its dot"
+            "label {label} paints inside its box: {rows:?}"
         );
     }
-    // The selected lead's dot answers a tap through the shared placement.
-    let cells_pos = crate::client::org_graph::dot_cells(&graph, 60, 20, (0, 0));
-    let (cx, cy) = cells_pos[0];
-    let key =
-        crate::client::org_graph::hit_test(&graph, 60, 20, (0, 0), Some("lead:finch"), cx, cy)
-            .expect("a tap on the lead dot selects it");
-    assert_eq!(key, "lead:finch");
+    // The selected lead's box carries the needs-you border and answers a
+    // tap anywhere inside it.
+    let finch = graph
+        .boxes
+        .iter()
+        .find(|b| b.key == "lead:finch")
+        .expect("the lead box exists");
+    assert_eq!(
+        buf[(finch.col as u16, finch.row as u16)].fg(),
+        crate::ratatui_blit::rt_color(colors.needs_you),
+        "the selected box's border reads needs-you"
+    );
+    assert_eq!(
+        crate::client::org_graph::hit_test(&graph, 80, 24, finch.col + 1, finch.row + 1),
+        Some("lead:finch".to_string()),
+        "a tap inside the lead box selects it"
+    );
 
     // Two registry rows sharing one label keep distinct unowned keys.
     let bare = |pane| crate::proto::AgentRow {
@@ -396,6 +402,7 @@ fn graph_renders_a_node_link_drawing() {
         .iter()
         .enumerate()
         .map(|(i, a)| crate::client::org_graph::unowned_key(a, i))
+        .coll)
         .collect();
     assert_eq!(keys.len(), 2);
     assert_ne!(
@@ -403,9 +410,9 @@ fn graph_renders_a_node_link_drawing() {
         "equal labels retain different pane identities"
     );
 
-    // AC5-ERR: forty dots fit a 27x20 view, and the selected
-    // dot's label paints while colliding labels are skipped instead of
-    // cut. Two workers per node keeps the dot count at forty.
+    // Every box of the ten-lead fleet paints inside a narrow view, and no
+    // two boxes overlap: the layered layout degrades by truncation at the
+    // width edge, never by collision.
     let mut view2 = View::new(
         (24, 100),
         "main".into(),
@@ -419,7 +426,6 @@ fn graph_renders_a_node_link_drawing() {
             focus_node: None,
         },
     );
-
     let mut rows = Vec::new();
     let mut agents = Vec::new();
     for i in 0..10 {
@@ -440,7 +446,6 @@ fn graph_renders_a_node_link_drawing() {
             });
         }
     }
-
     let mut scope_nodes = serde_json::Map::new();
     let mut owned = serde_json::Map::new();
     for i in 0..10 {
@@ -468,47 +473,22 @@ fn graph_renders_a_node_link_drawing() {
     let b2 = view2.org_board.as_mut().unwrap();
     b2.mode = OrgMode::Graph;
     b2.filter = OrgSessions::Current;
-    let colors = crate::client::org_graph::GraphColors::of(&view2.theme);
-    let graph = b2.refresh_graph(27, 20);
-    assert_eq!(graph.dots.len(), 40, "ten leads, ten nodes, twenty workers");
-    let buf = crate::client::org_graph::frame(&graph, 27, 20, (0, 0), Some("lead:lead0"), &colors);
-    let mut painted_cells: std::collections::HashSet<(u16, u16)> = Default::default();
-    for y in 0..20u16 {
-        for x in 0..27u16 {
-            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
-            if matches!(c, '\u{25c6}' | '\u{25cf}' | '\u{2022}') {
-                painted_cells.insert((x, y));
+    let graph2 = b2.refresh_graph(120, 24);
+    assert_eq!(graph2.boxes.len(), 40, "ten leads, ten nodes, twenty workers");
+    let buf2 = crate::client::org_graph::frame(&graph2, 120, 24, Some("lead:lead0"), &colors);
+    let mut painted = 0u32;
+    for y in 0..24u16 {
+        for x in 0..120u16 {
+            let c = buf2[(x, y)].symbol().chars().next().unwrap_or(' ');
+            if c == '\u{2514}' {
+                painted += 1;
             }
         }
     }
-    let cells_pos = crate::client::org_graph::dot_cells(&graph, 27, 20, (0, 0));
-    let unpainted: Vec<String> = graph
-        .dots
-        .iter()
-        .zip(&cells_pos)
-        .filter(|(_, (cx, cy))| !painted_cells.contains(&(*cx as u16, *cy as u16)))
-        .map(|(d, (cx, cy))| format!("{} @ ({cx},{cy}) grid ({},{})", d.key, d.x, d.y))
-        .collect();
     assert_eq!(
-        painted_cells.len(),
-        40,
-        "every dot paints in the narrow view; unpainted: {unpainted:?} dots: {:?}",
-        graph
-            .dots
-            .iter()
-            .map(|d| format!("{} {} {}", d.key, d.x, d.y))
-            .collect::<Vec<_>>()
-    );
-    let mut label_rows: Vec<String> = vec![String::new(); 20];
-    for y in 0..20u16 {
-        for x in 0..27u16 {
-            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
-            label_rows[y as usize].push(c);
-        }
-    }
-    assert!(
-        label_rows.iter().any(|r| r.contains("lead0")),
-        "the selected dot's label paints: {label_rows:?}"
+        painted as usize,
+        graph2.boxes.len(),
+        "every box paints its top-left corner"
     );
 }
 

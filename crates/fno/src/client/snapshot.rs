@@ -589,6 +589,7 @@ shoot from a host where the lanes verb answers"
             // shot names. A root with no leads, nodes or unowned workers
             // paints the degenerate footer only.
             super::backlog_board::toggle_org_view(&mut view);
+            view.board_full = true;
             let inputs = runtime.block_on(crate::org_model::gather(
                 &crate::backlog_view::graph_path(),
                 view.layout.agents.clone(),

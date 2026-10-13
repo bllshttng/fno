@@ -65,7 +65,6 @@ pub(crate) struct OrgBoard {
     input: Option<String>,
     keys_help: bool,
     esc: Vec<u8>,
-    pan: (usize, usize),
     body_gen: u64,
     graph: std::cell::RefCell<Option<GraphMemo>>,
 }
@@ -90,7 +89,6 @@ impl OrgBoard {
             input: None,
             keys_help: false,
             esc: Vec::new(),
-            pan: (0, 0),
             body_gen: 0,
             graph: std::cell::RefCell::new(None),
         }
@@ -436,7 +434,7 @@ impl OrgBoard {
             let graph = self.refresh_graph(width, height.saturating_sub(2));
             let rows = self.mode_rows(width, height.saturating_sub(2));
             if let Some(r) = rows.get(self.cursor) {
-                if let Some(d) = graph.dots.iter().find(|d| d.key == r.key) {
+                if let Some(d) = graph.boxes.iter().find(|d| d.key == r.key) {
                     header.push(seg(format!(" · \u{25b6} {}", d.label), BRole::Meta));
                 }
             }
@@ -533,7 +531,7 @@ impl OrgBoard {
             }
             OrgMode::Graph => {
                 let graph = self.refresh_graph(width, height.saturating_sub(2));
-                let dot_keys: HashSet<&str> = graph.dots.iter().map(|d| d.key.as_str()).collect();
+                let dot_keys: HashSet<&str> = graph.boxes.iter().map(|d| d.key.as_str()).collect();
                 rows.into_iter()
                     .filter(|r| dot_keys.contains(r.key.as_str()))
                     .collect()
@@ -804,7 +802,7 @@ fn paint_graph_body(
         return;
     }
     let colors = super::org_graph::GraphColors::of(&view.theme);
-    let buf = super::org_graph::frame(&graph, width, body_h, b.pan, key.as_deref(), &colors);
+    let buf = super::org_graph::frame(&graph, width, body_h, key.as_deref(), &colors);
     crate::ratatui_blit::blit_area(&buf, 1, 0, cells, cols);
 }
 
@@ -926,18 +924,6 @@ pub(crate) async fn keys(
             ModalKey::Byte(b'?') => {
                 b.keys_help = !b.keys_help;
             }
-            ModalKey::Up if b.mode == OrgMode::Graph => {
-                b.pan.1 = b.pan.1.saturating_sub(1);
-            }
-            ModalKey::Down if b.mode == OrgMode::Graph => {
-                b.pan.1 = b.pan.1.saturating_add(1);
-            }
-            ModalKey::Left if b.mode == OrgMode::Graph => {
-                b.pan.0 = b.pan.0.saturating_sub(4);
-            }
-            ModalKey::Right if b.mode == OrgMode::Graph => {
-                b.pan.0 = b.pan.0.saturating_add(4);
-            }
             ModalKey::Up | ModalKey::Byte(b'k') => {
                 b.cursor = b.cursor.saturating_sub(1);
             }
@@ -1041,9 +1027,7 @@ pub(crate) async fn mouse(
                 .map(|r| r.key.clone());
             let x = rep.col as usize;
             let y = (rep.row as usize).saturating_sub(1);
-            let Some(key) =
-                super::org_graph::hit_test(&graph, width, body_h, b.pan, sel.as_deref(), x, y)
-            else {
+            let Some(key) = super::org_graph::hit_test(&graph, width, body_h, x, y) else {
                 return Ok(());
             };
             let Some(index) = rows.iter().position(|r| r.key == key) else {
