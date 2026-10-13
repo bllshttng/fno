@@ -125,7 +125,10 @@ pub(super) fn missing_primary_attestations(primary_text: &str, local_text: &str)
     out
 }
 
-
+/// The text-taking body of [`unattested_reviewers_scan`], split so the
+/// producer can feed the merged project-plus-global attestation text without
+/// a temp file.
+pub fn unattested_reviewers_scan_text(
     content: &str,
     reviewers: &[String],
     freshness: &dyn Fn(&str) -> Freshness,
