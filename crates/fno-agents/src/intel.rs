@@ -357,7 +357,7 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
             .and_then(|v| v.as_str().map(str::to_string))
             .filter(|s| !s.trim().is_empty())
         {
-            return crate::cargo_build_dirs::expand_home(PathBuf::from(dir)).join("messages.jsonl");
+            return crate::cargo_build_dirs::expand_home(Path::new(&dir)).join("messages.jsonl");
         }
     }
     fno_dir.join("bus").join("messages.jsonl")
