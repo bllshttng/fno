@@ -514,10 +514,12 @@ pub fn run(args: &[String]) -> i32 {
         // composer. The posture answers "enter" for an undeclared harness,
         // so this stays the ordinary attribution refusal rather than a
         // capability-table raise - mail by pane-send stays reachable.
-        let unsupported = HarnessContract::packaged()
-            .ok()
-            .and_then(|contract| contract.capabilities(&resolved).ok())
-            .is_some_and(|caps| caps.submit_keys == ["unsupported"]);
+        let unsupported = HarnessContract::packaged().ok().is_some_and(|contract| {
+            contract
+                .capabilities(&resolved)
+                .ok()
+                .is_some_and(|caps| caps.submit_keys == ["unsupported"])
+        });
         if unsupported {
             return fail(
                 3,
