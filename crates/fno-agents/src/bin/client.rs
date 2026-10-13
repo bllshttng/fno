@@ -1175,6 +1175,22 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::distress::run_distress_scan(&args[1..]);
     }
 
+    // `attest`: the review-attestation carrier between this machine's event
+    // journal and the shared primary (see attest.rs doc). Direct dispatch,
+    // no daemon RPC; exits 0 when the store is unshared.
+    if verb == "attest" {
+        let rest = &args[1..];
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        match rest.first().map(String::as_str) {
+            Some("push") => return fno_agents::attest::run_push(&cwd),
+            Some("pull") => return fno_agents::attest::run_pull(&rest[1..], &cwd),
+            _ => {
+                eprintln!("usage: fno-agents attest push|pull [--repo <slug>]  (push reads one envelope line on stdin)");
+                return 2;
+            }
+        }
+    }
+
     // `needs`: read-only needs-me-queue fold over events.jsonl +
     // ledger.json across ALL sessions, emitting review_wedged / budget_stop
     // items. Never touches the daemon; exits 0 on empty. The mux client shells

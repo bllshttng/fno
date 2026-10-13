@@ -87,10 +87,45 @@ pub(super) fn missing_global_attestations(
     out
 }
 
-/// The text-taking body of [`unattested_reviewers_scan`], split so the
-/// producer can feed the merged project-plus-global attestation text without
-/// a temp file.
-pub fn unattested_reviewers_scan_text(
+/// The shared primary's attestation lines that this machine's journals do
+/// not already hold. The pull is repo-scoped at the source, so no repo
+/// filter here; the identity rule is the same one the global mirror uses,
+/// because the primary copy differs from its local original in exactly one
+/// key (`repo`, stamped at push). A row this machine committed arrives with
+/// the journal row it mirrors and is dropped here.
+pub(super) fn missing_primary_attestations(primary_text: &str, local_text: &str) -> String {
+    let mut seen: std::collections::HashSet<(String, String, String, String)> =
+        std::collections::HashSet::new();
+    for line in local_text.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
+            continue;
+        }
+        if let Some(k) = attestation_identity(&val) {
+            seen.insert(k);
+        }
+    }
+    let mut out = String::new();
+    for line in primary_text.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
+            continue;
+        }
+        if let Some(k) = attestation_identity(&val) {
+            if seen.insert(k) {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+
     content: &str,
     reviewers: &[String],
     freshness: &dyn Fn(&str) -> Freshness,

@@ -166,12 +166,16 @@ pub(super) fn demote_unmeasured_coverage(coverage: &mut Coverage, resolver: &Fre
 }
 
 /// The local attestation axis: every project-log rotation PLUS the global
-/// journal's slug-scoped attestations. A review fork emits into its own
-/// checkout's project log and mirrors to the global journal, and when the
-/// fork's checkout dies the mirror alone survives (measured on PR 2137:
-/// three attestations for one head, zero copies in any surviving project
-/// log). Mirrors of rows the project log still holds are deduped, so a round
-/// is never counted twice. An unreadable journal degrades to project-only.
+/// journal's slug-scoped attestations PLUS the shared primary's rows for
+/// this repo. A review fork emits into its own checkout's project log and
+/// mirrors to the global journal, and when the fork's checkout dies the
+/// mirror alone survives (measured on PR 2137: three attestations for one
+/// head, zero copies in any surviving project log). Mirrors of rows the
+/// project log still holds are deduped, so a round is never counted twice.
+/// The primary carries the rows a PEER machine committed: reviewed on one
+/// machine, merged from another, the merge read only the local journals and
+/// paid a second review round. An unreadable journal degrades to
+/// project-only; a pull failure degrades to machine-local coverage.
 pub(super) fn review_journal_text(
     events_path: &Path,
     global_events_path: &Path,
@@ -179,10 +183,86 @@ pub(super) fn review_journal_text(
 ) -> String {
     let project_text = crate::event_store::review_text(events_path);
     let global_text = crate::event_store::review_text(global_events_path);
-    let extra_global = missing_global_attestations(&global_text, &project_text, repo_slug);
-    if extra_global.is_empty() {
-        project_text
-    } else {
-        format!("{project_text}\n{extra_global}")
+    merge_attestation_text(
+        &project_text,
+        &global_text,
+        primary_attestation_text(repo_slug),
+        repo_slug,
+    )
+}
+
+/// The remote half of [`review_journal_text`], isolated so the pure merge
+/// stays unit-testable: `configured()` answers None on an unshared store
+/// and under test, and a failed pull degrades to no primary rows.
+fn primary_attestation_text(repo_slug: &str) -> Option<String> {
+    if repo_slug.is_empty() {
+        return None;
+    }
+    let remote = crate::store_remote::configured().ok()??;
+    crate::attest::pull_lines(repo_slug, &remote)
+        .map(|lines| lines.join("\n"))
+        .ok()
+}
+
+/// The pure merge over the three sources, oldest-local-first with the
+/// primary appended: the consumers sort by ts, so source order only breaks
+/// ties.
+fn merge_attestation_text(
+    project_text: &str,
+    global_text: &str,
+    primary_text: Option<String>,
+    repo_slug: &str,
+) -> String {
+    let extra_global = missing_global_attestations(global_text, project_text, repo_slug);
+    let mut merged = project_text.to_string();
+    if !extra_global.is_empty() {
+        merged.push('\n');
+        merged.push_str(&extra_global);
+    }
+    if let Some(primary_text) = primary_text {
+        let extra_primary = missing_primary_attestations(&primary_text, &merged);
+        if !extra_primary.is_empty() {
+            merged.push('\n');
+            merged.push_str(&extra_primary);
+        }
+    }
+    merged
+}
+
+#[cfg(test)]
+mod primary_merge_tests {
+    use super::*;
+
+    fn attest(ts: &str, reviewer: &str, head: &str) -> String {
+        serde_json::json!({
+            "type": "review_attestation",
+            "ts": ts,
+            "data": {"reviewer": reviewer, "head_sha": head, "verdict": "pass"},
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_primary_row_absent_locally_lands_and_a_local_copy_dedups() {
+        let project = format!("{}\n", attest("2026-10-13T09:00:00Z", "peer", "aaa"));
+        let primary = format!(
+            "{}\n{}\n",
+            attest("2026-10-13T09:00:00Z", "peer", "aaa"),
+            attest("2026-10-13T09:00:01Z", "code-review", "bbb")
+        );
+        let merged = merge_attestation_text(&project, "", Some(primary), "github.com/o/r");
+        let rows: Vec<&str> = merged.lines().collect();
+        assert_eq!(rows.len(), 2, "the local copy dedups, the peer row lands");
+        assert!(
+            rows[1].contains("\"bbb\""),
+            "the primary-only row is second"
+        );
+    }
+
+    #[test]
+    fn no_primary_source_is_the_pre_carrier_merge() {
+        let project = format!("{}\n", attest("2026-10-13T09:00:00Z", "peer", "aaa"));
+        let merged = merge_attestation_text(&project, "", None, "github.com/o/r");
+        assert_eq!(merged.lines().count(), 1);
     }
 }
