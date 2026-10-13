@@ -46,9 +46,11 @@ def _mux_clients(title: str, message: str) -> int | None:
     if _suppressed() or os.environ.get("PYTEST_CURRENT_TEST"):
         return None
     try:
-        cmd = [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=False,
-                              env={**os.environ, "FNO_PY_HANDOFF": "1"})
+        proc = subprocess.run(
+            [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message],
+            capture_output=True, text=True, timeout=5, check=False,
+            env={**os.environ, "FNO_PY_HANDOFF": "1"},
+        )
         return int(json.loads(proc.stdout).get("clients", 0)) if proc.returncode == 0 else None
     except Exception:
         return None
@@ -188,9 +190,8 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
-    # The journal leg first: status sinks depend on it, mux delivery included.
     row = _emit_operator_notice(title, message, pointer)
-    if _mux_clients(title, message):  # client-first; zero falls through
+    if _mux_clients(title, message):  # client-first; the journal leg already ran
         return 0, ""
 
     local = _dispatch_local(title, message)
