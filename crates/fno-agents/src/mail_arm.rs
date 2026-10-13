@@ -131,21 +131,134 @@ fn home_root() -> PathBuf {
 }
 
 /// Deliver pending rows in seq order. A row leaves the pending pool only
-/// through a successful local send (exit 0): a refusal or a send that
-/// failed waits for the next beat, and the TTL bounds it. The seen ledger
-/// records msg_ids after a zero exit, so a redelivered row never injects
-/// twice (at-least-once, edge 5).
+/// through a successful local send (exit 0) or a style-refused body (below):
+/// a transient failure waits for the next beat, and the TTL bounds it. The
+/// seen ledger records msg_ids after a zero exit, so a redelivered row
+/// never injects twice (at-least-once, edge 5).
 pub(crate) fn pull_rows(remote: &Remote, rows: Vec<BusRow>, home: &std::path::Path) -> usize {
+    pull_rows_with(remote, rows, home, &mut |row| inject_row(remote, home, row))
+}
+
+/// The row loop behind `pull_rows`, with the injection leg as a parameter so
+/// the retry contract is testable without spawning a real send.
+pub(crate) fn pull_rows_with(
+    remote: &Remote,
+    rows: Vec<BusRow>,
+    home: &std::path::Path,
+    inject: &mut dyn FnMut(&BusRow) -> bool,
+) -> usize {
     let mut delivered = 0;
     for row in rows {
         if seen(remote, home, &row) {
             continue;
         }
-        if inject_row(remote, home, &row) {
+        if inject(&row) {
             delivered += 1;
         }
     }
     delivered
+}
+
+/// The send's stderr as one log-sized line: whitespace collapsed, then cut
+/// on a char boundary, so a refusal's reason reaches the daemon log without
+/// a multi-line splatter.
+fn brief(text: &[u8], cap: usize) -> String {
+    let joined = String::from_utf8_lossy(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cut: String = joined.chars().take(cap).collect();
+    if cut.len() < joined.len() {
+        format!("{cut}...")
+    } else {
+        cut
+    }
+}
+
+/// The style door's receipt naming violations: the deterministic refusal.
+/// Mirrors the mail gate's own clean rule: a non-empty `exception` makes an
+/// excepted body clean whatever the violations carry, and a clean or
+/// unparseable receipt reads transient, so the row stays pending for the
+/// next beat.
+pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
+    serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout))
+        .ok()
+        .is_some_and(|receipt| {
+            let excepted = receipt
+                .get("exception")
+                .is_some_and(|exception| !exception.is_null());
+            if excepted {
+                return false;
+            }
+            receipt
+                .get("violations")
+                .and_then(|violations| violations.as_array())
+                .is_some_and(|violations| !violations.is_empty())
+        })
+}
+
+/// The argv the front door forwards to its sibling `style-check`, with the
+/// receiver's configured mail word cap so the consult answers the same
+/// question the send's gate asked (the built-in default 80 applies when no
+/// cap is configured).
+pub(crate) fn style_door_argv(word_cap: Option<i64>) -> Vec<String> {
+    let mut argv = vec![
+        "doctor".to_string(),
+        "lint".to_string(),
+        "style".to_string(),
+        "--surface".to_string(),
+        "mail".to_string(),
+        "--stdin".to_string(),
+        "--json".to_string(),
+    ];
+    if let Some(cap) = word_cap {
+        argv.push("--word-cap".to_string());
+        argv.push(cap.to_string());
+    }
+    argv
+}
+
+/// The receiver's configured mail word cap, read the way the daemon reads
+/// every config key: project config at the working directory falling back
+/// to the global file. `None` keeps the checker's built-in default.
+fn mail_word_cap() -> Option<i64> {
+    crate::agents_config::config_lookup(
+        &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        &["style", "word_cap", "mail"],
+    )
+    .and_then(|value| value.as_integer())
+}
+
+/// Ask the receiver's own style door about the body, the same door the
+/// local send consults by way of the front door's
+/// `doctor lint style` forwarding (the daemon binary itself has no
+/// `style-check` dispatch). Runs only on an exit-1 refusal, where the exit
+/// alone is ambiguous: the style gate refuses for good, but so does a
+/// budget window, a down door, or an internal error. The body rides a
+/// writer thread, so a payload wider than the pipe buffer cannot deadlock
+/// the read.
+fn style_door_refuses(payload: &str) -> bool {
+    let mut cmd = std::process::Command::new(crate::mail_remote::fno_binary());
+    cmd.args(style_door_argv(mail_word_cap()));
+    let Ok(mut child) = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let payload = payload.to_string();
+    let mut pipe = child.stdin.take();
+    std::thread::spawn(move || {
+        if let Some(stdin) = pipe.as_mut() {
+            let _ = stdin.write_all(payload.as_bytes());
+        }
+    });
+    match child.wait_with_output() {
+        Ok(output) => door_confirms_refusal(&output.stdout),
+        Err(_) => false,
+    }
 }
 
 /// True when the row was already delivered by an earlier beat.
@@ -175,9 +288,11 @@ fn record_seen(home: &std::path::Path, msg_id: &str) -> Result<(), String> {
 
 /// The delivery leg: the receiver's own local send answers. Its registry
 /// resolves the name (an unknown name refuses, exit 13, and the row stays
-/// pending for the TTL), and its holds apply untouched (edge 8). Returns
-/// true when the row is done (delivered or refused), false to leave it
-/// pending for the next beat.
+/// pending for the TTL), and its holds apply untouched (edge 8). An exit 1
+/// whose style door names the body's violations marks the row refused, so
+/// the sender's `mail status` shows the loss instead of a pending row that
+/// every retry refuses again. Returns true when the row is done (delivered
+/// or refused), false to leave it pending for the next beat.
 fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // Edge 6: a raw row is a command typed into a pane. Anyone on the
     // tailnet can write a bus row, and the sender-written from_id proves
@@ -201,7 +316,27 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             // itself does not replay: this process ran it once).
             false
         }
-        Ok(_) => false,
+        Ok(output) => {
+            let code = output.status.code();
+            // The receiver's own style gate refusing the body replays the
+            // same refusal on every retry, so marking refused is what makes
+            // the loss visible to the sender's `mail status`. The door
+            // consult keeps a transient exit 1 (a budget window, a down
+            // door, an internal error) riding pending to a beat that can
+            // still deliver.
+            if code == Some(1) && style_door_refuses(&row.payload) {
+                eprintln!(
+                    "mail-arm: local send for {} refused (exit {code:?}): {}",
+                    row.msg_id,
+                    brief(&output.stderr, 300)
+                );
+                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+                }
+                return true;
+            }
+            false
+        }
         Err(e) => {
             eprintln!("mail-arm: local send for {}: {e}", row.msg_id);
             false

@@ -466,25 +466,35 @@ pub fn resolve_key(cwd: &str) -> String {
     canonical_root("git", cwd, GIT_TIMEOUT).unwrap_or_else(|| cwd.to_string())
 }
 
-/// One bounded `git rev-parse --path-format=absolute --git-common-dir` run.
-/// `None` on any failure: not a repo, git missing, non-zero exit, non-UTF-8
-/// output, or the timeout expiring (the child is killed). The parent of the
-/// common `.git` dir is the canonical root for the main checkout AND every
-/// linked worktree; a bare repo's common-dir is the repo dir itself.
+/// The canonical root from the shared common-dir reader, whose reads all share
+/// ONE `timeout` deadline. `None` on any failure: not a repo, git missing,
+/// non-zero exit, non-UTF-8 output, or the timeout expiring (the child is
+/// killed). The parent of the common `.git` dir is the canonical root for the
+/// main checkout AND every linked worktree; a bare repo's common-dir is the
+/// repo dir itself.
 fn canonical_root(git: &str, cwd: &str, timeout: Duration) -> Option<String> {
     if !std::path::Path::new(cwd).is_dir() {
         return None; // Command::current_dir on a missing dir errors anyway
     }
+    let deadline = Instant::now() + timeout;
+    let common = crate::git_paths::common_dir_with(std::path::Path::new(cwd), |args| {
+        rev_parse_bounded(git, cwd, args, deadline)
+    })?;
+    Some(root_from_common_dir(&common.to_string_lossy()))
+}
+
+/// One `git rev-parse <args>` run, killed at `deadline`; stdout on exit 0.
+fn rev_parse_bounded(git: &str, cwd: &str, args: &[&str], deadline: Instant) -> Option<String> {
     let mut command = crate::process_admission::std_command(git);
     command
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .arg("rev-parse")
+        .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     let mut child = crate::process_admission::std_spawn(&mut command).ok()?;
 
-    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -508,11 +518,7 @@ fn canonical_root(git: &str, cwd: &str, timeout: Duration) -> Option<String> {
     // child can never have blocked on write and reading after exit is safe.
     let mut out = String::new();
     child.stdout.take()?.read_to_string(&mut out).ok()?;
-    let common = out.trim();
-    if common.is_empty() {
-        return None;
-    }
-    Some(root_from_common_dir(common))
+    Some(out)
 }
 
 /// `<root>/.git` -> `<root>`; a bare repo's common-dir (no `.git` suffix) is

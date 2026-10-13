@@ -81,6 +81,8 @@ The sender reads as `<user>@<host>/<session name>` in the row's `from_id`. The s
 
 A row waits up to 7 days for its host (`MAIL_TTL_SECS`). The expire leg flips past-due rows to `expired`. A pull that finds the name unknown leaves the row pending until then. `INSERT OR IGNORE` on the unique `msg_id` makes a retry after an ambiguous timeout a no-op. The receiver's seen ledger (`mail_seen.jsonl` in the agents state root) keeps a redelivered row from injecting twice. Delivery is at-least-once at the bus and once at the receiver.
 
+A final refusal does not wait. A pull that sees exit 1 asks the receiver's own style door about the body. The door naming violations is the style refusal, and a retry replays it. The pull marks such a row `refused`, and the sender's `mail status` shows it. Every other refusal keeps waiting for the TTL. These are an unknown name (exit 13), a failed durable write (exit 12), a cap or forged-envelope refusal, and a send killed by a signal.
+
 The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. When the store answers again, the flush leg drains it. No `store.remote_url` at all means the ssh fallback. The remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the verb, so pass `--from-name`.
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use common::{assert_golden, capture_mode, slug, Golden};
+use common::{assert_golden, capture_mode, python_executable, slug, Golden};
 use regex::Regex;
 
 mod common;
@@ -32,33 +32,6 @@ mod common;
 /// Repo `cli/src` so Python can import the real `fno` package.
 fn pythonpath() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src")
-}
-
-fn python_executable() -> PathBuf {
-    // Worktree venv, then the canonical checkout's venv (a fresh worktree has
-    // no .venv of its own; its .git is a gitdir FILE pointing at the canonical
-    // repo, so the walk follows it), then a bare python3.
-    let venv = pythonpath().join("../.venv/bin/python");
-    if venv.is_file() {
-        return venv;
-    }
-    if let Ok(out) = Command::new("git")
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-    {
-        if out.status.success() {
-            let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let canonical_venv = PathBuf::from(&dir)
-                .parent()
-                .map(|p| p.join("cli/.venv/bin/python"));
-            if let Some(p) = canonical_venv {
-                if p.is_file() {
-                    return p;
-                }
-            }
-        }
-    }
-    PathBuf::from("python3")
 }
 
 /// RFC3339 stamps and relative ages are the only moving parts: both legs

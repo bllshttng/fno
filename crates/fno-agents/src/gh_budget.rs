@@ -105,7 +105,7 @@ pub fn cap_from_env() -> u32 {
         .unwrap_or(DEFAULT_POINTS_PER_MIN)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -253,6 +253,19 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
         .sum()
 }
 
+/// The fleet-wide hold deadline: this ledger's own, raised by the claims
+/// store's shared `gh-budget:fleet` row when another host recorded the
+/// refusal. Store trouble reads as no shared hold - fail-open, the same
+/// posture as an unreadable ledger; the local ledger still catches this
+/// machine's own refusals.
+fn shared_hold_until(now: i64) -> i64 {
+    crate::claim_store::budget_hold_read(None, now)
+        .ok()
+        .flatten()
+        .map(|(until, _, _)| until)
+        .unwrap_or(0)
+}
+
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.lock", path.display()))
 }
@@ -378,7 +391,17 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         };
     }
 
-    if now < ledger.backoff_until_ms {
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold.
+    let shared_until = if path == ledger_path().as_path() {
+        shared_hold_until(now)
+    } else {
+        0
+    };
+    let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
+
+    if now < backoff_until_ms {
         // One request per 30s as a half-open probe, so recovery gets noticed
         // instead of waited out; the rest are refused with cause `backoff`.
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
@@ -395,7 +418,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 refusal: None,
             };
         }
-        let retry_after_s = ((ledger.backoff_until_ms - now) / 1000).max(1);
+        let retry_after_s = ((backoff_until_ms - now) / 1000).max(1);
         let mut verdict = Verdict {
             admitted: false,
             cause: Some("backoff"),
@@ -439,6 +462,31 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     }
 }
 
+/// The one-door admission for Rust-side callers: `Some(refusal line)` when
+/// the fleet budget refuses this argv, None when it admits (including every
+/// ledger-trouble fail-open). Daemon reads carry no worker identity, so the
+/// Python proxy door exempts them by design; the consult happens here, at
+/// the transport every Rust gh read already passes.
+pub fn admit_fleet(argv: &[String]) -> Option<String> {
+    let verdict = admit(&ledger_path(), argv, now_ms(), cap_from_env());
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// Whether the in-process consult is armed. A unit-test build runs dozens of
+/// gh-named stubs in one process, and their aggregate stamps would exhaust
+/// (or inherit a hold from) the operator's machine-wide ledger - the stubs
+/// are not GitHub traffic. The consult disarms there; budget behavior is
+/// tested at admit()/record_refusal() with injected paths and clocks, and a
+/// test that wants the transport consult live opts in with
+/// FNO_GH_BUDGET_TEST_ARMED.
+pub(crate) fn admission_armed() -> bool {
+    !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
+}
+
 /// A GitHub refusal reached one caller. One fleet-wide backoff opens in the
 /// ledger, escalating while refusals stay within 900s of each other. A no-op
 /// while a backoff is already live, so two writers reporting one refusal
@@ -450,11 +498,18 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
         return Ok(());
     }
     // 0 is the "never" sentinel, not the epoch: a first refusal must not
-    // escalate off an unset field.
-    let escalated =
-        ledger.last_refusal_ms > 0 && now - ledger.last_refusal_ms <= ESCALATION_WINDOW_MS;
+    // escalate off an unset field. The shared row's history counts even
+    // after its deadline expires, so refusals alternating hosts inside the
+    // window keep escalating instead of restarting at the base cooldown.
+    let (shared_step, shared_last) = if path == ledger_path().as_path() {
+        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    let last_refusal = ledger.last_refusal_ms.max(shared_last);
+    let escalated = last_refusal > 0 && now - last_refusal <= ESCALATION_WINDOW_MS;
     ledger.backoff_step = if escalated {
-        ledger.backoff_step + 1
+        ledger.backoff_step.max(shared_step) + 1
     } else {
         0
     };
@@ -462,16 +517,40 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
     ledger.last_refusal_ms = now;
-    write_ledger(path, &ledger, now)
+    write_ledger(path, &ledger, now)?;
+    // The hold is fleet-wide: GitHub limits the user, not the machine, so
+    // the backoff rides the claims store's shared row for the other hosts.
+    // Rides only the REAL ledger (tests stage temp paths); store trouble is
+    // a printed note, never a failure of the local record.
+    if path == ledger_path().as_path() {
+        if let Err(e) = crate::claim_store::budget_hold_write(
+            None,
+            &crate::claims::machine_id(),
+            ledger.backoff_until_ms,
+            ledger.backoff_step,
+            ledger.last_refusal_ms,
+        ) {
+            eprintln!("gh-budget: fleet hold not shared: {e}");
+        }
+    }
+    Ok(())
 }
 
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
+    // The shared hold rides only the REAL ledger (see admit): tests stage
+    // temp paths and must not read the dev machine's fleet hold.
+    let shared_until = if path == ledger_path().as_path() {
+        shared_hold_until(now)
+    } else {
+        0
+    };
+    let until = ledger.backoff_until_ms.max(shared_until);
     Snapshot {
         points_60s: window_points(&ledger, now),
         cap: cap_from_env(),
-        backoff_remaining_s: ((ledger.backoff_until_ms - now).max(0)) / 1000,
+        backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
     }
 }
