@@ -2204,7 +2204,7 @@ fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
         Some((reason, term)) => {
             eprintln!(
                 "spawn-gate: {term}; refusing to spawn. The memory axis is hard: the cap floor does \
-                 not lift it. For this one spawn: --force."
+                 not lift it. For one spawn the user ordered: --force."
             );
             Err(Refusal::with_receipt(
                 EXIT_RAM_REFUSED,

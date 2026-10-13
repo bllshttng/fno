@@ -47,7 +47,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 
 The gate reads the cap and the floor on every queue pass. A floor raised while a spawn waits releases that spawn on its next pass.
 
-Every refusal on a soft axis prints a hint line. The line names the learned cap, the user's `agents.max_live`, the config key and file for the floor, and `--force` for one spawn. The slot receipt keeps `max_live`, `axis`, `held_on` and `reason`. It adds `learned_cap`, `ceiling` and a `remedy` that names the floor key and file. The memory refusal says the opposite: the floor does not lift it. The probe answer carries `cap_clause` and `floor`. The lead check-in capacity line ends with ` | <cap_clause>`.
+Every refusal on a soft axis prints a hint line. The line names the learned cap, the user's `agents.max_live`, the config key and file for the floor, and `--force` for one spawn the user ordered. A native launch line has no `--force`, so its refusal names `fno agents spawn NAME PAYLOAD --force` instead. The slot receipt keeps `max_live`, `axis`, `held_on` and `reason`. It adds `learned_cap`, `ceiling` and a `remedy` that names the floor key and file. The memory refusal says the opposite: the floor does not lift it. The probe answer carries `cap_clause` and `floor`. The lead check-in capacity line ends with ` | <cap_clause>`.
 
 ## Reading a refusal
 

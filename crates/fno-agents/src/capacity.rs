@@ -216,7 +216,8 @@ impl Effective {
             format!(
                 "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To stop it \
                  learning this low: {FLOOR_REMEDY} (the gate also reads the project \
-                 .fno/config.toml). For this one spawn: --force, which also passes the RAM floor.",
+                 .fno/config.toml). For one spawn the user ordered: --force, which also passes \
+                 the RAM floor.",
                 self.learned_cap(),
                 self.ceiling
             )
@@ -238,6 +239,18 @@ impl Effective {
         if self.cap < self.ceiling {
             receipt["remedy"] = serde_json::json!(FLOOR_REMEDY);
         }
+    }
+}
+
+/// The remedy a refused native launch line shows. A native line has no
+/// `--force`, so a slot refusal (its receipt carries `ceiling`) also names the
+/// spawn form that does.
+pub fn native_remedy(remedy: &str, receipt: Option<&Value>) -> String {
+    match receipt.is_some_and(|r| r.get("ceiling").is_some()) {
+        true => format!(
+            "{remedy}. For one launch the user ordered: fno agents spawn NAME PAYLOAD --force"
+        ),
+        false => remedy.to_string(),
     }
 }
 
@@ -919,6 +932,15 @@ mod tests {
         let plain = effective(&home, 24, 1);
         assert_eq!(plain.cap, 5);
         assert!(plain.held.is_none());
+        // A native line has no --force, so its slot refusal names the spawn form.
+        let mut receipt = serde_json::json!({"reason": "cap"});
+        plain.annotate(&mut receipt);
+        let native = native_remedy(FLOOR_REMEDY, Some(&receipt));
+        assert!(
+            native.ends_with("fno agents spawn NAME PAYLOAD --force"),
+            "{native}"
+        );
+        assert_eq!(native_remedy(FLOOR_REMEDY, None), FLOOR_REMEDY);
         let _ = std::fs::remove_dir_all(home.root());
 
         // A cut stops at the floor and never fires once the cap sits on it.
