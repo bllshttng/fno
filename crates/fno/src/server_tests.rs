@@ -490,6 +490,7 @@ fn mouse_rows() {
         row: 4,
         col: 9,
         kind: MouseKind::Press(MouseButton::Left),
+        alt: false,
     });
     assert_eq!(press, b"\x1b[<0;10;5M");
     // Release terminates with lowercase m.
@@ -497,6 +498,7 @@ fn mouse_rows() {
         row: 4,
         col: 9,
         kind: MouseKind::Release(MouseButton::Left),
+        alt: false,
     });
     assert_eq!(release, b"\x1b[<0;10;5m");
     // Drag adds the motion bit (32).
@@ -504,15 +506,25 @@ fn mouse_rows() {
         row: 0,
         col: 0,
         kind: MouseKind::Drag(MouseButton::Left),
+        alt: false,
     });
     assert_eq!(drag, b"\x1b[<32;1;1M");
-    // Wheel up is button 64.
+    // Wheel up is button 64; an alt modifier adds bit 8 to every forwarded
+    // code, so an unclaimed alt click reaches the app byte-identical.
     let wheel = sgr_mouse_bytes(&MouseEvent {
         row: 2,
         col: 3,
         kind: MouseKind::WheelUp,
+        alt: false,
     });
     assert_eq!(wheel, b"\x1b[<64;4;3M");
+    let alt_press = sgr_mouse_bytes(&MouseEvent {
+        row: 2,
+        col: 3,
+        kind: MouseKind::Press(MouseButton::Left),
+        alt: true,
+    });
+    assert_eq!(alt_press, b"\x1b[<8;4;3M");
 }
 
 // -- Rerun idle guard (x-38c4) ---------------------------------------------
@@ -8200,6 +8212,7 @@ fn mouse_wheel_dead_pane_is_noop() {
             row: 0,
             col: 0,
             kind: MouseKind::WheelDown,
+            alt: false,
         },
     );
     assert!(
@@ -8224,6 +8237,91 @@ fn reap_pane_clears_wheel_gate() {
     assert!(
         !core.wheel_gate.contains_key(&42),
         "the closed pane's gate entry is removed"
+    );
+}
+
+// v111: in a mouse-reporting pane the SelectRelease open path is unreachable
+// (route_mouse passes every press/release through), so an alt click over a
+// link is the mux's open gesture there. Plain clicks on the same cell keep
+// forwarding to the app untouched; reaping drops a pending pair.
+#[test]
+fn alt_click_over_link_in_mouse_pane_opens_and_plain_click_forwards() {
+    let (mut core, cid, p1, _p2, mut rx) = seen_test_core();
+    {
+        let e = core.panes.get_mut(&p1).unwrap();
+        // The URL lands at row 0, col 0; the mode sets are what Claude Code
+        // and the codex TUI both emit.
+        e.vt.feed(b"https://github.com/x/y/pull/1\r\n");
+        e.vt.feed(b"\x1b[?1000h\x1b[?1006h");
+    }
+    let click = |alt| MouseEvent {
+        row: 0,
+        col: 0,
+        kind: MouseKind::Press(MouseButton::Left),
+        alt,
+    };
+    let release = |alt| MouseEvent {
+        row: 0,
+        col: 0,
+        kind: MouseKind::Release(MouseButton::Left),
+        alt,
+    };
+
+    // A plain click pair forwards to the app and opens nothing.
+    core.mouse(cid, p1, click(false));
+    assert!(
+        core.link_click_claims.is_empty(),
+        "an unmodified press never claims"
+    );
+    core.mouse(cid, p1, release(false));
+    let plain_urls: Vec<String> = {
+        let mut urls = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let ServerMsg::OpenLink { url } = m {
+                urls.push(url);
+            }
+        }
+        urls
+    };
+    assert!(
+        plain_urls.is_empty(),
+        "a plain click on a mouse-reporting pane never opens: {plain_urls:?}"
+    );
+
+    // An alt click pair claims on press and opens on release.
+    core.mouse(cid, p1, click(true));
+    assert_eq!(
+        core.link_click_claims.get(&p1),
+        Some(&(0, 0, cid)),
+        "an alt press over a link cell claims the pair"
+    );
+    core.mouse(cid, p1, release(true));
+    assert!(
+        core.link_click_claims.is_empty(),
+        "the release consumes the claim"
+    );
+    let alt_urls: Vec<String> = {
+        let mut urls = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let ServerMsg::OpenLink { url } = m {
+                urls.push(url);
+            }
+        }
+        urls
+    };
+    assert_eq!(
+        alt_urls,
+        vec!["https://github.com/x/y/pull/1".to_string()],
+        "the release answered OpenLink with the clicked link"
+    );
+
+    // Reaping the pane drops a pending pair (the release can never come).
+    core.mouse(cid, p1, click(true));
+    assert_eq!(core.link_click_claims.len(), 1);
+    core.reap_pane(p1);
+    assert!(
+        core.link_click_claims.is_empty(),
+        "a dead pane's claim is purged"
     );
 }
 
@@ -8284,6 +8382,7 @@ pub(super) fn empty_core() -> Core {
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
         fno_token_claims: HashMap::new(),
+        link_click_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: watch::channel(0).0,
@@ -8831,6 +8930,7 @@ fn scroll_delta_classifies_only_interpreted_wheel_ticks() {
         row: 1,
         col: 1,
         kind,
+        alt: false,
     };
     assert_eq!(
         core.scroll_delta(p1, &ev(MouseKind::WheelUp)),

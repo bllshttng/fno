@@ -3511,6 +3511,7 @@ async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
         col: 120,
         kind: MouseKind::WheelDown,
         shift: false,
+        alt: false,
     };
     keys_modal_mouse(&mut v, &mut Scanner::default(), wheel, &mut buf)
         .await
@@ -3526,6 +3527,7 @@ async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
         col: 0,
         kind: MouseKind::Press(MouseButton::Left),
         shift: false,
+        alt: false,
     };
     keys_modal_mouse(&mut v, &mut Scanner::default(), click, &mut buf)
         .await
@@ -3572,6 +3574,7 @@ async fn hovering_the_footer_esc_close_keeps_the_selection() {
         col: fc as u16,
         kind: MouseKind::Move,
         shift: false,
+        alt: false,
     };
     let mut buf: Vec<u8> = Vec::new();
     aux_mouse(&mut v, hover, &mut buf).await.unwrap();
@@ -4558,6 +4561,7 @@ async fn a_right_press_on_a_tab_cell_re_anchors_an_open_menu() {
             col: tc,
             kind: MouseKind::Press(MouseButton::Right),
             shift: false,
+            alt: false,
         },
         &mut buf,
     )
@@ -5091,6 +5095,7 @@ async fn x7683_right_press_on_a_pane_re_anchors_an_open_menu() {
             col: 35,
             kind: MouseKind::Press(MouseButton::Right),
             shift: false,
+            alt: false,
         },
         &mut buf,
     )
@@ -5130,6 +5135,7 @@ async fn x7683_right_press_on_the_menu_body_over_a_sideline_row_is_swallowed() {
             col: cell.1,
             kind: MouseKind::Press(MouseButton::Right),
             shift: false,
+            alt: false,
         },
         &mut buf,
     )
@@ -5659,6 +5665,7 @@ async fn x7683_right_press_on_the_menu_body_over_a_pane_is_swallowed() {
             col: cell.1,
             kind: MouseKind::Press(MouseButton::Right),
             shift: false,
+            alt: false,
         },
         &mut buf,
     )
@@ -6600,6 +6607,7 @@ fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
         col,
         kind: MouseKind::Press(MouseButton::Left),
         shift: false,
+        alt: false,
     }
 }
 

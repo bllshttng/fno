@@ -424,8 +424,10 @@ fn bounded_scroll_target(before: i32, after: i32, cap: i32) -> i32 {
 
 /// SGR-encode one mouse event for an app that negotiated mouse reporting
 /// (`ESC [ < b; x; y {M|m}`, brief Locked 12 / Domain: SGR 1006 only). `b` is
-/// the button code plus the drag-motion bit; coordinates are 1-based. Press and
-/// motion terminate with `M`, release with `m`.
+/// the button code plus the drag-motion bit and the event's alt modifier (8),
+/// so an unclaimed alt click reaches the app byte-identical to what the host
+/// sent; coordinates are 1-based. Press and motion terminate with `M`, release
+/// with `m`.
 fn sgr_mouse_bytes(event: &MouseEvent) -> Vec<u8> {
     let (button, released) = match event.kind {
         MouseKind::Press(b) => (button_code(b), false),
@@ -438,6 +440,7 @@ fn sgr_mouse_bytes(event: &MouseEvent) -> Vec<u8> {
         MouseKind::WheelUp => (64, false),
         MouseKind::WheelDown => (65, false),
     };
+    let button = if event.alt { button + 8 } else { button };
     let x = event.col as u32 + 1;
     let y = event.row as u32 + 1;
     let terminator = if released { 'm' } else { 'M' };
@@ -1656,6 +1659,9 @@ pub(crate) struct Core {
     /// [`Core::claim_fno_token_click`]. Purged with the pane, `wheel_gate`'s
     /// pattern.
     fno_token_claims: HashMap<u64, (u16, u16, u64)>,
+    /// Per-pane claimed alt-click link pair `(row, col, client)`; see
+    /// [`Core::claim_link_click`]. Purged with the pane, same pattern.
+    link_click_claims: HashMap<u64, (u16, u16, u64)>,
     /// Failed `human_touch` emits (AC4-ERR): counted, never raised to the
     /// steering path; read by the scoreboard stats answer (v78).
     touch_emit_failures: Arc<AtomicU64>,
@@ -8623,8 +8629,9 @@ impl Core {
     /// Route a client's pane-rect mouse event (brief Locked 2, US1/US2/US3).
     /// An app that negotiated SGR mouse reporting owns its mouse: the event is
     /// SGR-encoded onto its PTY and the mux consumes nothing (AC3-HP) - except
-    /// a click pair on an fno token cell, which the mux claims and answers
-    /// itself (see [`Core::claim_fno_token_click`]). Otherwise the mux
+    /// a click pair on an fno token cell (see [`Core::claim_fno_token_click`])
+    /// and an alt-click pair over a link (see [`Core::claim_link_click`]),
+    /// which the mux claims and answers itself. Otherwise the mux
     /// interprets it - wheel scrolls the pane's history (US1), a left drag
     /// paints a server-side selection all viewers see (US2), and release
     /// auto-copies (Warp behavior). Selection is per-pane, independent of
@@ -8639,8 +8646,13 @@ impl Core {
                 // beyond the budget before the PTY; everything else forwards
                 // byte-identical. The gate runs before the pane borrow; the
                 // top-of-fn return proved the pane live. An fno-token click
-                // pair is claimed first (the helper below owns the why).
+                // pair is claimed first (the helper below owns the why), then
+                // an alt-click pair over a link (the v111 link-open gesture on
+                // a pane the app owns).
                 if self.claim_fno_token_click(client_id, pane, &event) {
+                    return;
+                }
+                if self.claim_link_click(client_id, pane, &event) {
                     return;
                 }
                 let forward = match event.kind {

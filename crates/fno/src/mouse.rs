@@ -23,13 +23,17 @@ const PREFIX: &[u8] = b"\x1b[<";
 
 /// A parsed SGR mouse report in OUTER-terminal coordinates (0-based), plus the
 /// Shift modifier. Shift is the native-selection escape hatch (AC3-EDGE): the
-/// client drops shifted events rather than intercept them.
+/// client drops shifted events rather than intercept them. `alt` is the SGR
+/// alt/meta bit (8), forwarded to the server (v111): an alt click is the mux's
+/// link-open gesture on a mouse-reporting pane. Cmd has no SGR bit, so no
+/// terminal can report it - alt is the gesture that is actually visible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseReport {
     pub row: u16,
     pub col: u16,
     pub kind: MouseKind,
     pub shift: bool,
+    pub alt: bool,
 }
 
 /// Pull complete SGR mouse reports out of a stdin chunk, returning them plus the
@@ -112,6 +116,7 @@ fn parse_sgr(s: &[u8]) -> Sgr {
     };
     let (cb, cx, cy) = (nums[0], nums[1], nums[2]);
     let shift = cb & 4 != 0;
+    let alt = cb & 8 != 0;
     let kind = if cb & 64 != 0 {
         // Wheel: low bit picks direction (0 up, 1 down).
         if cb & 1 == 0 {
@@ -147,6 +152,7 @@ fn parse_sgr(s: &[u8]) -> Sgr {
             col,
             kind,
             shift,
+            alt,
         },
         3 + end + 1,
     )
@@ -173,7 +179,8 @@ mod tests {
                 row: 4,
                 col: 9,
                 kind: MouseKind::Press(MouseButton::Left),
-                shift: false
+                shift: false,
+                alt: false
             }
         );
         assert_eq!(
@@ -200,7 +207,8 @@ mod tests {
                 row: 4,
                 col: 9,
                 kind: MouseKind::Move,
-                shift: false
+                shift: false,
+                alt: false
             }
         );
         // A shifted move still decodes (cb = 35 | 4 = 39) - the client drops it.
@@ -212,6 +220,15 @@ mod tests {
         // cb = 0 (left) | 4 (shift) = 4.
         let (r, _) = one(b"\x1b[<4;2;2M");
         assert!(r[0].shift, "shift bit decoded");
+        assert!(!r[0].alt);
+        // cb = 0 (left) | 8 (alt) = 8: the v111 link-open gesture.
+        let (r, _) = one(b"\x1b[<8;2;2M");
+        assert!(r[0].alt, "alt bit decoded");
+        assert!(!r[0].shift);
+        assert_eq!(r[0].kind, MouseKind::Press(MouseButton::Left));
+        // Alt rides on wheel and drag codes too (cb = 64|8 = 72).
+        assert!(one(b"\x1b[<72;1;1M").0[0].alt);
+        assert_eq!(one(b"\x1b[<72;1;1M").0[0].kind, MouseKind::WheelUp);
     }
 
     #[test]
