@@ -67,7 +67,9 @@ echo "PASS: the primary holds A's attestation"
 rows_b=$(env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
     --events "$journal_b" --type review_attestation 2>"$HOME_B/rows.err") \
     || fail "machine B rows read failed: $(cat "$HOME_B/rows.err")"
-echo "$rows_b" | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
+# The rows verb prints a JSON array, so envelope quotes arrive escaped;
+# strip the backslashes before matching the raw substring.
+echo "$rows_b" | tr -d '\\' | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
     || fail "machine B's gate read stayed machine-local; rows answered: $rows_b"
 echo "PASS: machine B's gate read sees A's review"
 
@@ -76,7 +78,7 @@ echo "PASS: machine B's gate read sees A's review"
 rows_a=$(env HOME="$HOME_A" "$FNO_BIN" doctor event rows \
     --events "$journal_a" --type review_attestation 2>"$HOME_A/rows.err") \
     || fail "machine A rows read failed: $(cat "$HOME_A/rows.err")"
-count=$(echo "$rows_a" | grep -oF "\"head_sha\":\"$head_sha\"" | grep -c .)
+count=$( { echo "$rows_a" | tr -d '\\' | grep -oF "\"head_sha\":\"$head_sha\"" || true; } | grep -c .)
 if [ "$count" -ne 1 ]; then
     fail "A's read shows $count copies (expected 1); rows: $rows_a"
 fi
