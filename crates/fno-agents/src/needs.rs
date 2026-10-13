@@ -877,9 +877,9 @@ fn mark_settled(
 }
 
 /// The `--clear-settled` door: close every still-open question whose node or
-/// blocks entry reads done/superseded/merged, right now, through the same
-/// close rows the daemon sweep writes (`reason: node-closed`, or `moot` for
-/// a user-only why_user), so the attention arm's vault-page write picks them
+/// blocks entry reads done/superseded, right now, through the same close
+/// rows the daemon sweep writes (`reason: node-closed`, or `moot` for a
+/// user-only why_user), so the attention arm's vault-page write picks them
 /// up on its next beat. The bell's Clear all calls this; a graph it cannot
 /// read closes nothing.
 fn run_clear_settled(home: &AgentsHome, cwd: &Path) -> i32 {
@@ -1255,16 +1255,17 @@ impl HeldFold {
 
 /// The open question ids whose node reads a terminal rung: a
 /// question's node is the `node` field plus every `blocks` entry, and a rung
-/// is `done`, `superseded`, or a recorded `merged` (a merged PR moots the
-/// question before reconcile flips the node done). Every open question
-/// folds, user-only why_user included: a resolved subject closes the
-/// question as moot. Pure over journal contents; the caller supplies the
-/// graph statuses and does the writing.
+/// is `done` or `superseded`. Every open question folds, user-only
+/// why_user included: a resolved subject closes the question as moot. A
+/// merged PR moots through the node it closed (reconcile), never through a
+/// merge_status stamp, which a multi-ship node or a reopened node can
+/// carry while work remains. Pure over journal contents; the caller
+/// supplies the graph statuses and does the writing.
 pub(crate) fn node_closed_question_ids(
     raw: &str,
     statuses: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
-    const CLOSED_RUNGS: [&str; 3] = ["done", "superseded", "merged"];
+    const CLOSED_RUNGS: [&str; 2] = ["done", "superseded"];
     let (asked, closed) = open_question_rows(raw);
     let mut ids: Vec<String> = asked
         .into_iter()
@@ -2734,22 +2735,6 @@ mod tests {
             vec!["q-plain".to_string()]
         );
         assert!(user_only_question_ids(&raw).is_empty());
-    }
-
-    #[test]
-    fn a_recorded_merged_rung_closes_the_question_fold() {
-        // The fold reads the statuses map the reader produced, so a
-        // `merged` entry (statuses_of's stand-in for an open status with a
-        // recorded merged merge_status) closes like done.
-        let statuses: std::collections::BTreeMap<String, String> =
-            [("x-pr".to_string(), "merged".to_string())]
-                .into_iter()
-                .collect();
-        let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-pr", "merge?", &["x-pr"]);
-        assert_eq!(
-            node_closed_question_ids(&raw, &statuses),
-            vec!["q-pr".to_string()]
-        );
     }
 
     #[test]

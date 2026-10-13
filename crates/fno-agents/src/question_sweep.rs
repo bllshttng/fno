@@ -58,12 +58,7 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, St
     if let Ok(rows) = crate::graph_store::read_rows_where(
         &store.graph,
         &crate::backlog::RowQuery {
-            fields: Some(
-                ["id", "status", "merge_status"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-            ),
+            fields: Some(["id", "status"].into_iter().map(str::to_string).collect()),
             with_blockers: true,
             ..Default::default()
         },
@@ -75,26 +70,11 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, St
                 row.get("id").and_then(serde_json::Value::as_str),
                 row.get("status").and_then(serde_json::Value::as_str),
             ) {
-                out.push((id.to_string(), effective_rung(status, row)));
+                out.push((id.to_string(), status.to_string()));
             }
         }
     }
     out
-}
-
-/// The closed-rung fold's view of one node: its status, with a recorded
-/// `merged` merge_status standing in for an open status, so a question
-/// about a merged PR reads closed before reconcile flips the node done.
-/// The only consumers are the node-closed folds.
-fn effective_rung(status: &str, row: &serde_json::Value) -> String {
-    if row.get("merge_status").and_then(serde_json::Value::as_str) == Some("merged")
-        && status != "done"
-        && status != "superseded"
-    {
-        "merged".to_string()
-    } else {
-        status.to_string()
-    }
 }
 
 /// Append the shared derived-close row for each question id and return its
@@ -433,27 +413,6 @@ mod tests {
         assert!(
             questions.contains("q-mach") && questions.contains(r#""reason":"node-closed""#),
             "{questions}"
-        );
-    }
-
-    #[test]
-    fn effective_rung_reads_a_recorded_merged_as_closed() {
-        // An open status with a recorded merge_status reads closed for the
-        // question fold; done/superseded need no help; a recorded
-        // non-merged value never closes anything.
-        let row = |merge: serde_json::Value| serde_json::json!({ "merge_status": merge });
-        assert_eq!(
-            effective_rung("in_progress", &row(json!("merged"))),
-            "merged"
-        );
-        assert_eq!(effective_rung("done", &row(json!("merged"))), "done");
-        assert_eq!(
-            effective_rung("in_progress", &row(json!(null))),
-            "in_progress"
-        );
-        assert_eq!(
-            effective_rung("in_progress", &row(json!("conflicting"))),
-            "in_progress"
         );
     }
 

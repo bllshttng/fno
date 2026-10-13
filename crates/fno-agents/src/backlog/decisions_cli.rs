@@ -24,8 +24,14 @@ const STATE_ERROR: &str =
     "state must be live, retired, expired, superseded, retracted, unscoped, or all";
 
 /// Authorities a review-list row may carry; anything else counts invalid.
-const READ_AUTHORITY_SOURCES: &[&str] =
-    &["operator", "team", "agent", "beastmode", "chat_attested"];
+const READ_AUTHORITY_SOURCES: &[&str] = &[
+    "operator",
+    "role",
+    "team",
+    "agent",
+    "beastmode",
+    "chat_attested",
+];
 
 /// The invalid-authority spelling cap: worst offenders first, the rest
 /// summarized, so a machine-wide index cannot turn one summary line into
