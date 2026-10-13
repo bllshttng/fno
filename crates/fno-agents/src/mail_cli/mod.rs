@@ -1,7 +1,9 @@
-//! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
-//! release timer, the `team` broadcast, and the outbound sent view.
-//! Dispatch only; the verbs live in [hold], [team], and [sent].
+//! The `mail` front verbs on the Rust leg: the do-not-disturb hold leaf, its
+//! release timer, the `team` broadcast, the outbound sent view, and the raw
+//! prompt-line send. Dispatch only; the verbs live in [hold], [team], [sent],
+//! and [send_raw].
 pub mod hold;
+pub mod send_raw;
 pub mod sent;
 pub mod team;
 
@@ -16,9 +18,10 @@ pub fn run(rest: &[String]) -> i32 {
         "hold-release" => hold::run_hold_release(&rest[1..]),
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
+        "send" => send_raw::run(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent | send)"
             );
             2
         }
@@ -33,4 +36,5 @@ fn print_help() {
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
+    println!("  send [--check] [--self-ok] [--review-request] [--style-exception <r>] [--origin <o>] <name> <payload>   raw prompt-line lane");
 }
