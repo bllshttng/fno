@@ -341,6 +341,7 @@ fn review_level_golden_parity() {
 #[test]
 fn review_level_door_help_exits_zero() {
     let output = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
         .args(["review-level", "--help"])
         .output()
         .expect("fno-agents binary spawns");
@@ -362,6 +363,7 @@ fn review_level_door_help_exits_zero() {
 #[test]
 fn review_level_door_usage_error_exits_two() {
     let output = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
         .args(["review-level", "--bogus-flag"])
         .output()
         .expect("fno-agents binary spawns");
