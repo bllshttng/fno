@@ -270,7 +270,10 @@ mod primary_merge_tests {
 
     #[test]
     fn a_primary_row_absent_locally_lands_and_a_local_copy_dedups() {
+        // No primary source is the pre-carrier merge: the project text alone.
         let project = format!("{}\n", attest("2026-10-13T09:00:00Z", "peer", "aaa"));
+        let merged = merge_attestation_text(&project, "", None, "github.com/o/r");
+        assert_eq!(merged.lines().count(), 1);
         let primary = format!(
             "{}\n{}\n",
             attest("2026-10-13T09:00:00Z", "peer", "aaa"),
@@ -285,12 +288,5 @@ mod primary_merge_tests {
             rows[1].contains("\"bbb\""),
             "the primary-only row is second"
         );
-    }
-
-    #[test]
-    fn no_primary_source_is_the_pre_carrier_merge() {
-        let project = format!("{}\n", attest("2026-10-13T09:00:00Z", "peer", "aaa"));
-        let merged = merge_attestation_text(&project, "", None, "github.com/o/r");
-        assert_eq!(merged.lines().count(), 1);
     }
 }

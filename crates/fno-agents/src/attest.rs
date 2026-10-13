@@ -263,41 +263,41 @@ mod tests {
     }
 
     #[test]
-    fn the_push_stamps_the_writing_machine_id() {
+    fn the_push_stamps_the_writing_machine_and_keeps_the_original_writer() {
         let primary = test_primary::start();
+        // A row already carrying a machine keeps its writer: a peer re-pushing
+        // a pulled line never claims it.
+        let mut foreign: Value =
+            serde_json::from_str(&line("2026-10-13T09:00:00Z", "peer", "bbb")).unwrap();
+        foreign["data"]["attest_machine"] = json!("foreign-machine");
+        push_line(&foreign.to_string(), "github.com/o/r", &primary.remote).unwrap();
         push_line(
-            &line("2026-10-13T09:00:00Z", "code-review", "abc123"),
+            &line("2026-10-13T09:00:01Z", "code-review", "ccc"),
             "github.com/o/r",
             &primary.remote,
         )
         .unwrap();
         let rows = pull_lines("github.com/o/r", &primary.remote).unwrap();
-        let val: Value = serde_json::from_str(&rows[0]).unwrap();
-        // The stamp equals THIS machine's id, whatever the host answers: an
-        // unreadable host id is unknown, not a wrong stamp.
+        let first: Value = serde_json::from_str(&rows[0]).unwrap();
+        assert_eq!(
+            first
+                .pointer("/data/attest_machine")
+                .and_then(Value::as_str),
+            Some("foreign-machine")
+        );
+        // This machine's own row carries its id, whatever the host answers:
+        // an unreadable host id is unknown, not a wrong stamp.
+        let second: Value = serde_json::from_str(&rows[1]).unwrap();
         let machine = crate::claims::machine_id();
         assert_eq!(
-            val.pointer("/data/attest_machine").and_then(Value::as_str),
+            second
+                .pointer("/data/attest_machine")
+                .and_then(Value::as_str),
             if machine.is_empty() {
                 None
             } else {
                 Some(machine.as_str())
             },
-        );
-    }
-
-    #[test]
-    fn a_row_already_carrying_a_machine_keeps_its_writer() {
-        let primary = test_primary::start();
-        let mut val: Value =
-            serde_json::from_str(&line("2026-10-13T09:00:00Z", "peer", "bbb")).unwrap();
-        val["data"]["attest_machine"] = json!("foreign-machine");
-        push_line(&val.to_string(), "github.com/o/r", &primary.remote).unwrap();
-        let rows = pull_lines("github.com/o/r", &primary.remote).unwrap();
-        let val: Value = serde_json::from_str(&rows[0]).unwrap();
-        assert_eq!(
-            val.pointer("/data/attest_machine").and_then(Value::as_str),
-            Some("foreign-machine")
         );
     }
 
@@ -324,11 +324,18 @@ mod tests {
     }
 
     #[test]
-    fn push_then_pull_roundtrips_and_stamps_the_repo() {
+    fn push_then_pull_roundtrips_once_scoped_and_refuses_non_attestations() {
         let primary = test_primary::start();
+        let wrong = json!({"type": "review_coverage", "ts": "t", "data": {}}).to_string();
+        assert!(push_line(&wrong, "github.com/o/r", &primary.remote).is_err());
+        let once = line("2026-10-13T09:00:00Z", "code-review", "abc123");
+        push_line(&once, "github.com/o/r", &primary.remote).unwrap();
+        // The same committed line hashes the same: the retry is a no-op.
+        push_line(&once, "github.com/o/r", &primary.remote).unwrap();
+        // Another repo's row stays scoped out of this repo's pull.
         push_line(
-            &line("2026-10-13T09:00:00Z", "code-review", "abc123"),
-            "github.com/o/r",
+            &line("2026-10-13T09:00:01Z", "peer", "bbb"),
+            "github.com/o/other",
             &primary.remote,
         )
         .unwrap();
@@ -343,45 +350,5 @@ mod tests {
             val.pointer("/data/head_sha").and_then(Value::as_str),
             Some("abc123")
         );
-    }
-
-    #[test]
-    fn the_same_line_pushes_once() {
-        let primary = test_primary::start();
-        let once = line("2026-10-13T09:00:00Z", "peer", "def456");
-        push_line(&once, "github.com/o/r", &primary.remote).unwrap();
-        push_line(&once, "github.com/o/r", &primary.remote).unwrap();
-        assert_eq!(
-            pull_lines("github.com/o/r", &primary.remote).unwrap().len(),
-            1
-        );
-    }
-
-    #[test]
-    fn pull_scopes_by_repo() {
-        let primary = test_primary::start();
-        push_line(
-            &line("2026-10-13T09:00:00Z", "peer", "aaa"),
-            "github.com/o/r",
-            &primary.remote,
-        )
-        .unwrap();
-        push_line(
-            &line("2026-10-13T09:00:01Z", "peer", "bbb"),
-            "github.com/o/other",
-            &primary.remote,
-        )
-        .unwrap();
-        assert_eq!(
-            pull_lines("github.com/o/r", &primary.remote).unwrap().len(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_non_attestation_line_refuses() {
-        let primary = test_primary::start();
-        let wrong = json!({"type": "review_coverage", "ts": "t", "data": {}}).to_string();
-        assert!(push_line(&wrong, "github.com/o/r", &primary.remote).is_err());
     }
 }

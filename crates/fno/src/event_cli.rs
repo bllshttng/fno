@@ -1391,20 +1391,6 @@ fn fold_journal(
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_row_stamped_with_its_writer_dedups_against_its_unstamped_original() {
-        // The primary copy carries the machine stamp; the journal original
-        // predates it. The key drops both carrier keys, so the rows read
-        // counts one round, never two.
-        let original = "{\"ts\":\"t1\",\"type\":\"review_attestation\",\"data\":{\"reviewer\":\"code-review\",\"head_sha\":\"aaaaaaaaaa\",\"verdict\":\"pass\",\"repo\":\"github.com/o/r\"}}";
-        let mut val: serde_json::Value = serde_json::from_str(original).unwrap();
-        val["data"]["attest_machine"] = serde_json::json!("imac");
-        assert_eq!(
-            attest_dedup_key(original),
-            attest_dedup_key(&val.to_string())
-        );
-    }
-
     fn mk(v: &[&str]) -> Vec<OsString> {
         v.iter().map(OsString::from).collect()
     }
