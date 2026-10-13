@@ -2685,7 +2685,7 @@ class ThinkSpawnBlock(BaseModel):
     node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
-    verb, an armed lifecycle trigger (``on_work_start``/``on_retro``), or a
+    verb, an armed lifecycle trigger (``on_work_start``), or a
     consented decompose fan-out.
 
     Default ``False`` (Locked Decision 2): shipping this changes nothing until
@@ -2713,13 +2713,12 @@ class ThinkSpawnBlock(BaseModel):
     max_per_run: int = 5
     idle_threshold_s: int = 0
     # --- A2 lifecycle triggers ---
-    # Two non-birth dispatch moments, each behind its OWN sub-flag, default OFF
-    # even when ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
-    # /target claims a node to work it; ``on_retro`` fires when ``fno backlog
-    # done`` closes a node. ``daily_cap`` is the per-install per-day firehose
-    # ceiling the broad A2 triggers require (Locked Decision 3); 0 disables it.
+    # Non-birth dispatch moment behind its OWN sub-flag, default OFF even when
+    # ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
+    # /target claims a node to work it. ``daily_cap`` is the per-install
+    # per-day firehose ceiling the broad A2 triggers require (Locked
+    # Decision 3); 0 disables it.
     on_work_start: bool = False
-    on_retro: bool = False
     daily_cap: int = 20
     # a third trigger of the same shape - fire at `fno backlog
     # decompose` for the epic's WAVE-0 children (those with no intra-epic
@@ -2741,7 +2740,7 @@ class ThinkSpawnBlock(BaseModel):
     attended: str = "offer"
 
     @field_validator(
-        "enabled", "on_work_start", "on_retro", "on_decompose_wave0", mode="before"
+        "enabled", "on_work_start", "on_decompose_wave0", mode="before"
     )
     @classmethod
     def _coerce_enabled(cls, v: object) -> bool:

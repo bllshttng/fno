@@ -45,23 +45,6 @@ def _read(g: Path) -> list[dict]:
 # -- ready: slug leads -------------------------------------------------------
 
 
-def test_ready_rows_lead_with_slug(tmp_graph):
-    _seed(tmp_graph, [
-        {"id": "ab-994222ee", "title": "Dashless spawn", "slug": "dashless-spawn",
-         "status": "ready", "domain": "code", "project": "fno", "plan_path": "p.md"},
-    ])
-    result = runner.invoke(app, ["backlog", "ready", "--all"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.stdout)
-    assert data[0]["slug"] == "dashless-spawn"
-
-
-# -- backfill-slugs ----------------------------------------------------------
-
-
-# -- update --details --------------------------------------------------------
-
-
 def test_roadmap_only_public_no_leaks(tmp_graph):
     _seed(tmp_graph, [
         {"id": "ab-11111111", "title": "Public feature", "slug": "pub", "status": "ready",
