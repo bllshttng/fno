@@ -738,7 +738,14 @@ mod probe {
         }
         out.insert(
             "rows".into(),
-            json!(make_rows(Some(&lanes), slots, cap, yours, ram_row, cpu_rows)),
+            json!(make_rows(
+                Some(&lanes),
+                slots,
+                cap,
+                yours,
+                ram_row,
+                cpu_rows
+            )),
         );
         Value::Object(out)
     }
