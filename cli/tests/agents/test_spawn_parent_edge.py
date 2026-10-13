@@ -832,9 +832,10 @@ def test_the_launch_edge_stamp_is_wired_into_the_spawn(workdir_claude, monkeypat
 def test_resume_spawn_without_markers_inherits_the_source_rows_parent_edge(
     workdir_claude, captured_emits, monkeypatch
 ):
-    """A relaunch (`spawn --resume`) runs where no ambient identity
-    exists keeps the SOURCE row's parent edge, so its original spawner's
-    orphan check still sees it instead of printing `parent edge NOT recorded`."""
+    """A relaunch (`spawn --resume`) keeps the SOURCE row's identity: the
+    original spawner keeps the row in its orphan check even when a different
+    session ran the relaunch, and the source fno_id rides along, so the
+    ledger join never breaks."""
     from fno.agents.registry import AgentEntry, update_registry
 
     source_uuid = "11111111-2222-3333-4444-555555555555"
@@ -849,12 +850,19 @@ def test_resume_spawn_without_markers_inherits_the_source_rows_parent_edge(
                 harness_session_id=source_uuid,
                 short_id="11111111",
                 model="claude-sonnet-5-5",
+                status="exited",
+                fno_id="f-source-1111",
                 spawned_by_session="original-spawner-1",
                 spawned_by_harness="claude",
                 spawned_by_cwd="/original/spawner/dir",
             )
         ]
     )
+
+    # A DIFFERENT session runs the relaunch: its ambient marker names a
+    # stranger as parent, and the carried edge must beat it.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "22222222-abba-4aba-8aba-333333333333")
+    monkeypatch.setenv("PWD", "/relaunch/runner/dir")
 
     from fno.agents.cli import agents_app
     from typer.testing import CliRunner
@@ -875,3 +883,6 @@ def test_resume_spawn_without_markers_inherits_the_source_rows_parent_edge(
     )
     assert entry.spawned_by_harness == "claude"
     assert entry.spawned_by_cwd == "/original/spawner/dir"
+    assert entry.fno_id == "f-source-1111", (
+        f"expected the source row's fno_id, got {entry.fno_id!r}"
+    )

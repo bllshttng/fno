@@ -152,8 +152,8 @@ pub(crate) fn stamp_removed_session_tombstone(
         entry.host_mode.as_deref().unwrap_or_default(),
     )
     .err()?;
-    // The wake-name tombstone rides the same stamp: a removed row can be
-    // woken later, and its name must survive the drop.
-    crate::wake_name::record(home, session_id, &entry.name);
+    // The wake-identity tombstone rides the same stamp: a removed row can
+    // be woken later, and its identity must survive the drop.
+    crate::wake_name::stamp_from_row(home, entry);
     None
 }
