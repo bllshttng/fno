@@ -775,11 +775,12 @@ fn lane(payload: &Value, cwd: &Path) -> Value {
 /// The declared `launch` argv of the named `[[routing.models]]` row, read
 /// straight from the config. `None` when the row is absent or declares none.
 fn raw_row_launch(cwd: &Path, name: &str) -> Option<Value> {
-    let rows = crate::agents_config::config_value_deep(cwd, &["routing", "models"])?
-        .as_array()?
+    let table = crate::agents_config::config_value_deep(cwd, &["routing", "models"])?;
+    let rows = table.as_array()?;
+    let row = rows
         .iter()
         .find(|row| toml_str_trim(row.get("name")) == name)?;
-    rows.get("launch").map(|v| json!(v))
+    row.get("launch").map(|v| json!(v))
 }
 
 /// The one declared lane row for a resolved (provider, model) pair, for the
