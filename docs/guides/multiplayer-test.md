@@ -57,7 +57,7 @@ On machine B, read the gate's attestation source and find A's row (B's journals 
 fno doctor event rows --events "$HOME_B/.fno/spaces/proof/events.jsonl" --type review_attestation
 ```
 
-Expected: B's read lists A's head. A review on one machine now covers a merge on the other; a merge from a peer no longer pays a second review round. The CI-judged version of this drill is `tests/ci/test_multiplayer_attestation.sh` (workflow `multiplayer-attestation`).
+Expected: B's read lists A's head. A review on one machine now covers a merge on the other. A merge from a peer no longer pays a second review round. The CI-judged version of this drill is `tests/ci/test_multiplayer_attestation.sh` (workflow `multiplayer-attestation`).
 
 ## 4. Pull the network on one machine
 
