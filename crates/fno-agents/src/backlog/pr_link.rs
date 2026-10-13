@@ -188,11 +188,11 @@ pub fn is_repo_slug(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
-/// The ship lifecycle row stamped when a node is FIRST PR-linked
-/// (`_stamp_ship_on_pr_link`). The row records whoever ran the link, no
-/// terminal closes it, and a re-stamp of the same (phase, harness, session)
-/// collapses - a link event, never occupancy. Best-effort: an unresolvable
-/// identity or a graph failure skips with a named stderr reason.
+/// The ship lifecycle row stamped when a node is FIRST PR-linked. The row
+/// records whoever ran the link, no terminal closes it, and a re-stamp of
+/// the same (phase, harness, session) collapses - a link event, never
+/// occupancy. Best-effort: an unresolvable identity or a graph failure
+/// skips with a named stderr reason.
 pub fn stamp_ship_on_link(graph: &Path, node_id: &str) {
     let get = |name: &str| std::env::var(name).ok();
     let ident = crate::spawn_context::resolve_self_identity(

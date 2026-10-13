@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from fno.cli import app
 from fno.graph.ladder import DispatchHoldState
 from fno.pr import _hold
-from fno.pr.closure import ClosureQueryError, PrClosureContext
+from fno.rust_binary import VerbUnavailable
 
 # Bound at import, before the conftest hermeticity default replaces the
 # module attribute with a no-hold noop; the fixture below restores it for
@@ -20,6 +20,51 @@ _REAL_HOLD_FOR_PR = _hold.hold_for_pr
 @pytest.fixture(autouse=True)
 def _real_hold_reader(monkeypatch):
     monkeypatch.setattr(_hold, "hold_for_pr", _REAL_HOLD_FOR_PR)
+
+
+def _trailer_ids(line):
+    """The shared-corpus parse grammar, one line at a time (test-local copy)."""
+    from fno.graph._constants import is_wellformed_node_id
+
+    stripped = line.strip()
+    for kw in ("fixes", "backlog-closure"):
+        if stripped.lower().startswith(kw):
+            rest = stripped[len(kw):]
+            if rest.startswith(":"):
+                rest = rest[1:]
+            if rest and not rest[0].isspace():
+                return None  # glued word, not the keyword
+            toks = [t for t in rest.replace(",", " ").split() if t]
+            if not toks or not all(is_wellformed_node_id(t) for t in toks):
+                return None  # one bad token: the line is prose
+            return list(dict.fromkeys(toks))
+    return None
+
+
+def _ctx_verb(pr_body, calls=None):
+    """A verb_call fake answering the hold path's two reads: context + parse."""
+
+    def _fake(verb, payload, unavailable=None, **k):
+        if calls is not None:
+            calls.append(verb)
+        if verb == "pr-closure-context":
+            return {
+                "number": payload.get("pr"),
+                "url": "https://github.com/o/r/pull/42",
+                "body": pr_body,
+            }
+        if verb == "pr-closure-parse":
+            best = None
+            for line in (payload.get("body") or "").splitlines():
+                ids = _trailer_ids(line)
+                if ids is not None:
+                    best = ids
+            return {"ids": best or []}
+        raise AssertionError(f"unexpected verb in hold tests: {verb}")
+
+    return _fake
+
+
 
 
 @pytest.fixture(autouse=True)
@@ -71,13 +116,7 @@ def _graph(tmp_path, monkeypatch, *, plan_body: str, pr_body: str = "", entries=
     # cwd=str(tmp_path), so pinning the resolver to tmp_path is what makes
     # that match land in a test sandbox.
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: tmp_path)
-    monkeypatch.setattr(
-        "fno.pr.closure.fetch_pr_closure_context",
-        lambda pr_number, **k: PrClosureContext(
-            number=pr_number, body=pr_body, url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb(pr_body))
     return graph
 
 
@@ -114,7 +153,7 @@ def test_hold_for_pr_fails_closed_when_bound_plan_is_unreadable(tmp_path, monkey
 def test_hold_for_pr_catches_a_held_node_named_only_on_the_trailer(tmp_path, monkeypatch):
     """Round-10 review fix: a node with no pr_number/pr_url ref of its own -
     named only on the PR's Backlog-Closure trailer - must still be
-    hold-checked before merge, since bind_closure_claims closes it post-merge
+    hold-checked before merge, since the merge-time bind closes it post-merge
     with no hold check of its own."""
     unheld_plan = tmp_path / "unheld.md"
     unheld_plan.write_text("---\nstatus: ready\n---\n")
@@ -182,10 +221,10 @@ def test_hold_for_pr_fails_closed_on_a_closure_query_error_even_when_unstamped(
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: tmp_path)
 
-    def _boom(pr_number, **k):
-        raise ClosureQueryError("gh pr view timed out")
+    def _boom(verb, payload, unavailable=None, **k):
+        raise VerbUnavailable("gh pr view timed out")
 
-    monkeypatch.setattr("fno.pr.closure.fetch_pr_closure_context", _boom)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
     reason = _hold.merge_hold_reason(42, str(tmp_path))
     assert reason is not None and "dispatch-hold-invalid:" in reason
     assert "hold lookup unavailable" in reason
@@ -220,10 +259,10 @@ def test_hold_for_pr_returns_none_with_no_gh_call_when_repo_has_zero_backlog_nod
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: our_root)
 
-    def _unreachable(pr_number, **k):
-        raise AssertionError("fetch_pr_closure_context must not be called")
+    def _unreachable(verb, payload, **k):
+        raise AssertionError("verb_call must not be called")
 
-    monkeypatch.setattr("fno.pr.closure.fetch_pr_closure_context", _unreachable)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _unreachable)
     assert _hold.hold_for_pr(42, str(our_root)) is None
 
 
@@ -249,18 +288,11 @@ def test_hold_for_pr_still_checks_when_this_repos_project_has_a_ref_less_node(
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: tmp_path)
 
-    calls: list[int] = []
+    verbs: list[str] = []
 
-    def _spy(pr_number, **k):
-        calls.append(pr_number)
-        return PrClosureContext(
-            number=pr_number, body="", url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        )
-
-    monkeypatch.setattr("fno.pr.closure.fetch_pr_closure_context", _spy)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb("", verbs))
     assert _hold.hold_for_pr(42, str(tmp_path)) is None
-    assert calls == [42]
+    assert verbs.count("pr-closure-context") == 1
 
 
 def test_hold_for_pr_still_checks_when_the_matching_node_has_a_null_project(
@@ -284,18 +316,11 @@ def test_hold_for_pr_still_checks_when_the_matching_node_has_a_null_project(
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: tmp_path)
 
-    calls: list[int] = []
+    verbs: list[str] = []
 
-    def _spy(pr_number, **k):
-        calls.append(pr_number)
-        return PrClosureContext(
-            number=pr_number, body="", url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        )
-
-    monkeypatch.setattr("fno.pr.closure.fetch_pr_closure_context", _spy)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb("", verbs))
     assert _hold.hold_for_pr(42, str(tmp_path)) is None
-    assert calls == [42]
+    assert verbs.count("pr-closure-context") == 1
 
 
 def test_hold_for_pr_resolves_root_from_the_passed_cwd_not_the_process_cwd(
@@ -333,13 +358,7 @@ def test_hold_for_pr_resolves_root_from_the_passed_cwd_not_the_process_cwd(
         },
     ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-    monkeypatch.setattr(
-        "fno.pr.closure.fetch_pr_closure_context",
-        lambda pr_number, **k: PrClosureContext(
-            number=pr_number, body="", url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb(""))
     monkeypatch.chdir(process_repo)
 
     verdict = _hold.hold_for_pr(42, str(target_repo))
@@ -384,13 +403,7 @@ def test_hold_for_pr_falls_back_to_show_toplevel_when_canonical_worktree_is_none
     ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
     monkeypatch.setattr("fno.paths.resolve_canonical_worktree", lambda *a, **k: None)
-    monkeypatch.setattr(
-        "fno.pr.closure.fetch_pr_closure_context",
-        lambda pr_number, **k: PrClosureContext(
-            number=pr_number, body="", url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb(""))
 
     verdict = _hold.hold_for_pr(42, str(sub_dir))
     assert verdict is not None
@@ -435,13 +448,7 @@ def test_hold_for_pr_still_checks_a_node_whose_stored_cwd_has_drifted(
         "fno.graph._intake.project_root_from_settings",
         lambda project: str(tmp_path) if project == "footnote" else None,
     )
-    monkeypatch.setattr(
-        "fno.pr.closure.fetch_pr_closure_context",
-        lambda pr_number, **k: PrClosureContext(
-            number=pr_number, body="", url="https://github.com/o/r/pull/42",
-            state="MERGED", merged_at="2026-01-01T00:00:00Z",
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _ctx_verb(""))
 
     verdict = _hold.hold_for_pr(42, str(tmp_path))
     assert verdict is not None

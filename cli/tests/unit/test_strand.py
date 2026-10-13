@@ -327,38 +327,6 @@ def test_rich_done_auto_reparents_with_a_receipt(tmp_graph):
     assert "re-parented 2 stranded child(ren)" in r.output
 
 
-# ---------------------------------------------------------------------------
-# Change 2/3: reconcile heals and previews
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def stranded_board(tmp_path, monkeypatch):
-    """A done parent stranding one live child, written straight to disk."""
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-
-    graph_path = tmp_path / "graph.json"
-    entries = [
-        _node("x-donep", completed_at=DONE, status="done"),
-        _node("x-kid", parent="x-donep"),
-    ]
-    seed_graph(graph_path, json.dumps({"entries": entries}) + "\n")
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph_path)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gc, "GRAPH_ARCHIVE_JSON", tmp_path / "graph-archive.json")
-    monkeypatch.setattr(gc, "LEDGER_JSON", tmp_path / "ledger.json")
-    monkeypatch.setattr(gs, "GRAPH_JSON", graph_path)
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph_path)
-    monkeypatch.setattr("fno.paths.retro_pending_dir", lambda: tmp_path / "retro")
-
-    # No PRs on the board: stub the drift scan so the leg can never reach gh
-    # (what merged is not this test's subject).
-    import fno.graph._reconcile as rec
-
-    monkeypatch.setattr(rec, "scan_merge_drift", lambda entries, node_id=None, listings=None: [])
-    return graph_path
-
 
 def test_stranded_next_receipts_caps_and_names_the_total():
     receipts = [(f"x-{i:04x}", "dead-ancestor") for i in range(12)]

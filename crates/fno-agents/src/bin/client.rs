@@ -1147,11 +1147,11 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "pr-create") {
         return fno_agents::pr_create::run_pr_create_verb(&args[1..]);
     }
-    // `pr-closure-parse` / `pr-closure-render`: the one parser/renderer for
-    // the PR-body closure line; the Python readers forward here (JSON payload
-    // in, JSON answer out, binary-direct like `pr-body-check`).
-    if matches!(verb, "pr-closure-parse" | "pr-closure-render") {
-        return fno_agents::org_board::pr_closure::run(&args);
+    // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
+    // the produce verbs ported from Python (branch-ids, ensure, trailer,
+    // bind-created, context); binary-direct like `pr-body-check`.
+    if verb.starts_with("pr-closure") {
+        return fno_agents::org_board::pr_closure::run_verb(&args);
     }
     if matches!(verb, "pr-rebase") {
         return fno_agents::pr_rebase::run_rebase(&args[1..]);

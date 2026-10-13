@@ -548,12 +548,15 @@ def ship_batch(
         # exactly; deriving from the branch adds nothing and got it wrong.
         # A batch minted before the '.' rename still carries
         # feature/batch-<domain>-<hex>, which parses as a node id the graph does
-        # not hold, and one unknown id makes bind_closure_claims refuse the
+        # not hold, and one unknown id makes the bind refuse the
         # WHOLE binding - so neither real member bound. Passing "" is correct
         # for both branch generations, including batches already open.
-        from fno.pr.closure import ensure_closure_trailer
+        from fno.rust_binary import verb_call
 
-        body = ensure_closure_trailer(body, "", extra_ids=list(members))
+        body = verb_call(
+            "pr-closure-ensure",
+            {"body": body, "head_ref": "", "extra_ids": list(members)},
+        )["body"]
         cr = run(
             ["gh", "pr", "create", "--title", pr_title, "--body", body,
              "--base", base, "--head", branch],
@@ -692,7 +695,7 @@ def prepare_batch(
         # The suffix hangs off a '.' rather than a '-' because `<word>-<hex>`
         # IS the node-id grammar: every `batch-code-a1b2c3` branch parsed as
         # node-bearing, so check-pr-node-closure demanded a `code-a1b2c3` the
-        # graph does not carry, and bind_closure_claims - which refuses the
+        # graph does not carry, and the bind-created step - which refuses the
         # WHOLE binding on one unknown id - then voided the real member claims
         # beside it. A '.' cannot appear in a node id, so the ref reads as the
         # non-node branch it is and the members stay the only claim.

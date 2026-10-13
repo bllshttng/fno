@@ -329,8 +329,8 @@ pub(crate) fn read_pr_gates(
 }
 
 /// A PR URL reduced to its comparable form: whitespace trimmed, query and
-/// fragment dropped, trailing slash dropped, lowercased (mirrors
-/// _reconcile._normalized_pr_url). An empty result means "no comparable URL".
+/// fragment dropped, trailing slash dropped, lowercased. An empty result
+/// means "no comparable URL".
 fn normalized_pr_url(url: &str) -> String {
     url.trim()
         .split(|c| c == '?' || c == '#')
@@ -467,7 +467,7 @@ pub(crate) fn pr_binding_keys(
 /// One open PR's binding verdict: `bound` (the node points back at this PR),
 /// `missing` (a unique node resolves but does not point back), `untracked`
 /// (no key names a real node), or `ambiguous` (several nodes, or one node
-/// named by several open PRs). Mirrors _reconcile.classify_open_pr_bindings.
+/// named by several open PRs).
 pub(crate) struct PrVerdict {
     pub number: i64,
     pub verdict: &'static str,

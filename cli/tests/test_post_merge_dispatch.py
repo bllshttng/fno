@@ -14,7 +14,6 @@ import pytest
 from fno.graph._reconcile import (
     PrMergeState,
     query_pr_merge_state,
-    scan_merge_drift,
 )
 from fno.post_merge_route import (
     ColdRitualResult,
@@ -592,23 +591,6 @@ def test_query_parses_merge_sha():
         files_reader=lambda number, *, repo=None, cwd=None: ([], ""),
     )
     assert state.merge_sha == "cafef00d"
-
-
-def test_scan_threads_merge_sha_onto_record():
-    entries = [
-        {"id": "x-0001", "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}
-    ]
-
-    def query(number, repo=None, cwd=None):
-        return PrMergeState(
-            number=number, state="MERGED", url="https://github.com/o/r/pull/7",
-            merged_at="t", merge_sha="beefcafe",
-        )
-
-    records = scan_merge_drift(entries, query=query, list_merged=lambda **kw: [])
-    closeable = [r for r in records if r.closeable]
-    assert len(closeable) == 1
-    assert closeable[0].merge_sha == "beefcafe"
 
 
 # --- daemon adapter: _default_dispatch_ritual shells the verb ----------
