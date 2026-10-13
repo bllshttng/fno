@@ -284,7 +284,7 @@ pub fn restart_wedged_sccache(server_pid: u32) {
     });
 }
 
-fn expand_home(path: &Path) -> PathBuf {
+pub(crate) fn expand_home(path: &Path) -> PathBuf {
     if let Ok(rest) = path.strip_prefix("~") {
         if let Some(home) = home() {
             return home.join(rest);
