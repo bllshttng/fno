@@ -18,26 +18,21 @@ const FOREIGN_ENDPOINT_DENY_TOOLS: &[&str] = &["Artifact"];
 
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
 
-/// The lowercased host of `base_url`, or "" when there is none. A bare
-/// authority like `api.anthropic.com/v1` carries no scheme, so give it one
-/// before urlsplit-style parsing (model_routing.py:_base_url_host).
+/// The lowercased host of `base_url`, or "" when there is none. The authority
+/// follows the first `//` (a scheme prefix or none) and runs to the first
+/// `/`, `?` or `#` (model_routing.py:_base_url_host).
 fn base_url_host(base_url: &str) -> String {
     let base = base_url.trim();
     if base.is_empty() {
         return String::new();
     }
-    let with_scheme = if base.contains("//") {
-        base.to_string()
-    } else {
-        format!("//{base}")
-    };
-    // authority is everything after "//" up to the first "/", "?", or "#".
-    let authority = with_scheme
-        .strip_prefix("//")
-        .unwrap_or(&with_scheme)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
+    let authority = match base.find("//") {
+        Some(index) => &base[index + 2..],
+        None => base,
+    }
+    .split(['/', '?', '#'])
+    .next()
+    .unwrap_or("");
     // Drop userinfo; keep the host, lowercased.
     let host = authority.rsplit('@').next().unwrap_or("");
     let host = host.split(':').next().unwrap_or("");

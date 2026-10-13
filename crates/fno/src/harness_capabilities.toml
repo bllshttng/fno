@@ -155,8 +155,8 @@ passthrough = ["*"]
 # model or effort still renders a legal argv. A `[[routing.models]]` row may
 # override the argv with its own `launch` list, validated by the same rules.
 [harness.claude.launch]
-argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--name", "{name}", "{payload}"]
-optional = ["settings", "model", "effort"]
+argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
+optional = ["settings", "model", "effort", "permission_mode"]
 
 [harness.claude.permission_response.allow_once]
 supported = true

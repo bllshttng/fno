@@ -148,7 +148,15 @@ pub const CONVERSION_STRATEGIES: [&str; 4] = [
 /// The closed hole vocabulary a launch template's argv may fill. `name` and
 /// `payload` always carry a spawn value; the rest drop with their flag when
 /// the lane has no value, so each must follow its own flag token.
-pub const LAUNCH_HOLES: [&str; 6] = ["name", "payload", "cwd", "settings", "model", "effort"];
+pub const LAUNCH_HOLES: [&str; 7] = [
+    "name",
+    "payload",
+    "cwd",
+    "settings",
+    "model",
+    "effort",
+    "permission_mode",
+];
 /// The holes every spawn supplies by construction; a template missing one
 /// cannot launch a named worker with a prompt.
 const LAUNCH_REQUIRED_HOLES: [&str; 2] = ["name", "payload"];
@@ -2304,27 +2312,30 @@ mod tests {
             .as_ref()
             .expect("claude declares its native bg line");
         assert_eq!(launch.argv.first().map(String::as_str), Some("claude"));
-        assert_eq!(launch.optional, ["settings", "model", "effort"]);
+        assert_eq!(
+            launch.optional,
+            ["settings", "model", "effort", "permission_mode"]
+        );
 
         for (needle, replacement, detail) in [
             (
-                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
                 "argv = [\"claude\", \"--bg\", \"--x\", \"{bogus}\", \"{name}\", \"{payload}\"]",
                 "bogus",
             ),
             (
-                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
                 "argv = [\"claude\", \"{settings}\", \"{name}\", \"{payload}\"]",
                 "must follow its own flag",
             ),
             (
-                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
                 "argv = [\"claude --bg --model={model} {name} {payload}\"]",
                 "whole token",
             ),
             (
-                "optional = [\"settings\", \"model\", \"effort\"]",
-                "optional = [\"settings\", \"model\", \"effort\", \"bogus\"]",
+                "optional = [\"settings\", \"model\", \"effort\", \"permission_mode\"]",
+                "optional = [\"settings\", \"model\", \"effort\", \"permission_mode\", \"bogus\"]",
                 "names no hole",
             ),
         ] {

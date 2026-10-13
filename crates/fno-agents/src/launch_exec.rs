@@ -159,6 +159,11 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     if let Some(dir) = config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
     }
+    // The one call every site that can birth a claude supervisor makes before
+    // the client execs (claude_ask.rs holds the precedent): claude auto-starts
+    // one from the ambient env, and the guard holds every FNO_* key out of
+    // that birth so one session's state never fossilizes into the supervisor.
+    crate::claude_supervisor::guard_birth(config_dir.iter().map(|dir| ("CLAUDE_CONFIG_DIR", *dir)));
     let status = command
         .status()
         .map_err(|error| format!("exec {}: {error}", tokens[0]))?;

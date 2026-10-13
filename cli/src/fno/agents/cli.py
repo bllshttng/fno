@@ -2003,7 +2003,6 @@ def cmd_spawn(
     # and the display, and the render is the exec path's own fill.
     if print_mode:
         import shlex
-
         from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
         try:
@@ -2011,6 +2010,7 @@ def cmd_spawn(
                 "kind": "print", "harness": harness, "substrate": substrate,
                 "name": name, "payload": message or "",
                 "model": route_model or model or "", "effort": effort or "",
+                "permission_mode": permission_mode or "",
                 "route_env": route_env or {}, "account_env": account_env or {},
                 "cwd": str(workdir),
             })
@@ -2651,7 +2651,7 @@ def cmd_spawn(
                 and not (once or resume)
                 and bool(route_env)
                 and role_level is None
-                and not (model or permission_mode or add_dir or agent or tools
+                and not (model or add_dir or agent or tools
                          or deny_tools or passthrough or yolo or monitor)
             )
             if native_lane:
@@ -2669,7 +2669,7 @@ def cmd_spawn(
                         "harness": harness, "name": name, "payload": message or "",
                         "route_env": route_env or {}, "account_env": account_env or {},
                         "sandbox": sandbox_settings,
-                        "model": route_model or "", "effort": effort or "",
+                        "model": route_model or "", "effort": effort or "", "permission_mode": permission_mode or "",
                         "cwd": str(workdir), "provider": route_provider or "",
                         "node": (prov_env or {}).get("FNO_NODE") or "",
                         "launcher_session": launcher_session,

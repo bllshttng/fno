@@ -286,11 +286,16 @@ pub fn node_spawn_argv(
     extra: &[(&str, String)],
 ) -> Vec<String> {
     // Claude lanes first: a named lane resolves its whole row at the spawn
-    // door, so the axis tokens drop for a named claude lane. Every other
+    // door, so the substrate drops for a named claude lane. Every other
     // lane keeps today's spellings until wave 5 templates it.
     let lane_pinned = args.lane.is_some() && args.resolved_harness == "claude";
     let mut cmd: Vec<String> = Vec::new();
-    if !lane_pinned {
+    // The harness axis always emits: the door refuses --route on any other
+    // harness, and without the flag it infers the invoking session's, so a
+    // codex-originated dispatch of a claude lane would die at the door.
+    if lane_pinned {
+        cmd.extend(["--harness".to_string(), args.resolved_harness.clone()]);
+    } else {
         cmd.extend([
             "--harness".to_string(),
             args.harness.clone(),
