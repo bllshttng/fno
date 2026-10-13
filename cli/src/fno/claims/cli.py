@@ -26,7 +26,6 @@ import typer
 # xdist-scheduling flake in test_dispatch_barrier; see the regression test in
 # test_claims_cli.py). Constants and exception classes are safe to bind: the
 # suite patches functions, not classes.
-from . import core as _claims_core
 from . import roster as _roster
 from .core import (
     HANDOVER_HOLDER_PREFIX as _HANDOVER_HOLDER_PREFIX,
