@@ -80,6 +80,13 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     for (k, v) in vars {
         std::env::set_var(k, v);
     }
+    // A resumed row names its provider, and that record outranks whatever
+    // endpoint the asking session exports.
+    let ep = endpoint::resolve_endpoint(tmp.path(), &proxy, Some("zai")).unwrap();
+    assert_eq!(
+        (ep.route.as_str(), ep.provider_id.as_deref()),
+        ("config", Some("zai"))
+    );
     let o = dispatch_once(
         &home,
         "fx-missing",

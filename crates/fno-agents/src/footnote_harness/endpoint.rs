@@ -60,21 +60,66 @@ pub fn split_model<'a>(
     }
 }
 
-/// Resolve the endpoint: the spawn front's route env first, then the
-/// `config.model_routing.providers` record of `provider` (the one the model id
-/// or the resumed row named), then of `FNO_ROUTE_PROVIDER`. Never a Claude.ai
-/// login: an Anthropic host with no API key refuses.
+/// The endpoint of one `config.model_routing.providers` record.
+fn record_endpoint(cwd: &Path, provider: String) -> Result<EndpointSpec, String> {
+    let Some(table) = provider_record(cwd, &provider) else {
+        return Err(format!(
+            "provider {provider:?} is not configured: add config.model_routing.providers.{provider}"
+        ));
+    };
+    let field = |n: &str| {
+        table
+            .get(n)
+            .and_then(toml::Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let openai = field("protocol")
+        .unwrap_or_else(|| "anthropic".into())
+        .eq_ignore_ascii_case("openai");
+    let base_url = field("base_url")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| format!("provider {provider:?} has no base_url"))?;
+    let key_env = field("api_key_env").unwrap_or_else(|| {
+        if openai {
+            "OPENAI_API_KEY"
+        } else {
+            "ANTHROPIC_API_KEY"
+        }
+        .into()
+    });
+    let key = crate::provider_key::resolve_key(&key_env, field("api_key_file").as_deref())
+        .ok_or_else(|| format!("provider {provider:?} has no API key under {key_env:?}"))?;
+    Ok(EndpointSpec {
+        base_url,
+        key,
+        bearer: key_env != "ANTHROPIC_API_KEY",
+        wire: if openai { "openai" } else { "anthropic" }.into(),
+        provider_id: Some(provider),
+        route: "config".into(),
+    })
+}
+
+/// Resolve the endpoint. `provider` is the one the model id or the resumed
+/// row named, and its own record comes first: a resumed session returns to
+/// the provider it was spawned on, whatever endpoint the asking session
+/// exports. Then the spawn front's route env, then the
+/// `config.model_routing.providers.<FNO_ROUTE_PROVIDER>` record. Never a
+/// Claude.ai login: an Anthropic host with no API key refuses.
 pub fn resolve_endpoint(
     cwd: &Path,
     env: &dyn Fn(&str) -> Option<String>,
     provider: Option<&str>,
 ) -> Result<EndpointSpec, String> {
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
-    let route_provider = provider
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
-        .or_else(|| get(crate::codex_route::ROUTE_PROVIDER_ENV));
-    let ep = if let Some(base_url) = get("ANTHROPIC_BASE_URL") {
+    let named = provider.filter(|p| !p.is_empty()).map(str::to_string);
+    let stamp = get(crate::codex_route::ROUTE_PROVIDER_ENV);
+    // A named record with no key falls through, so a row spawned on an env
+    // endpoint that carried a stamp still resumes on that endpoint.
+    let recorded = named.clone().and_then(|p| record_endpoint(cwd, p).ok());
+    let ep = if let Some(ep) = recorded {
+        ep
+    } else if let Some(base_url) = get("ANTHROPIC_BASE_URL") {
         let (key, bearer) = match (get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_API_KEY")) {
             (Some(t), _) => (t, true),
             (None, Some(k)) => (k, false),
@@ -85,46 +130,11 @@ pub fn resolve_endpoint(
             key,
             bearer,
             wire: "anthropic".into(),
-            provider_id: route_provider,
+            provider_id: named.or(stamp),
             route: "env".into(),
         }
-    } else if let Some(provider) = route_provider {
-        let Some(table) = provider_record(cwd, &provider) else {
-            return Err(format!(
-                "provider {provider:?} is not configured: add config.model_routing.providers.{provider}"
-            ));
-        };
-        let field = |n: &str| {
-            table
-                .get(n)
-                .and_then(toml::Value::as_str)
-                .filter(|v| !v.is_empty())
-                .map(str::to_string)
-        };
-        let openai = field("protocol")
-            .unwrap_or_else(|| "anthropic".into())
-            .eq_ignore_ascii_case("openai");
-        let base_url = field("base_url")
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| format!("provider {provider:?} has no base_url"))?;
-        let key_env = field("api_key_env").unwrap_or_else(|| {
-            if openai {
-                "OPENAI_API_KEY"
-            } else {
-                "ANTHROPIC_API_KEY"
-            }
-            .into()
-        });
-        let key = crate::provider_key::resolve_key(&key_env, field("api_key_file").as_deref())
-            .ok_or_else(|| format!("provider {provider:?} has no API key under {key_env:?}"))?;
-        EndpointSpec {
-            base_url,
-            key,
-            bearer: key_env != "ANTHROPIC_API_KEY",
-            wire: if openai { "openai" } else { "anthropic" }.into(),
-            provider_id: Some(provider),
-            route: "config".into(),
-        }
+    } else if let Some(provider) = named.or(stamp) {
+        record_endpoint(cwd, provider)?
     } else {
         return Err(
             "no model endpoint: pass -m <provider>/<model> (a config.model_routing.providers name, e.g. zai/glm-5.3-flash), or set ANTHROPIC_BASE_URL and a key"
