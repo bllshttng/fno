@@ -11,20 +11,39 @@
 
 use std::collections::HashSet;
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
 use crate::announce::read_bus_segments;
-use crate::mail_cli::hold::bus_dir;
 use crate::mail_control_drain::{deliverable, withdrawn_ids};
-use crate::paths::AgentsHome;
+
+const HELP: &str = "\
+usage: fno-agents mail unread [--name NAME] [-n NAME] [--json] [-J] [--help]
+
+Show unread bus messages addressed to NAME (cursor-filtered): the bus log
+scanned oldest-first, rows addressed to NAME after its ack cursor.
+
+options:
+  -n, --name NAME  whose inbox to read (registry name or project; default fno)
+  -J, --json       emit JSON regardless of TTY
+  -h, --help       print this help
+";
 
 pub fn run(args: &[String]) -> i32 {
     let mut name = String::from("fno");
     let mut json_out = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        if let Some(value) = arg.strip_prefix("--name=") {
+            name = value.to_string();
+            continue;
+        }
         match arg.as_str() {
+            "--help" | "-h" => {
+                print!("{HELP}");
+                return 0;
+            }
             "--name" | "-n" => match it.next() {
                 Some(value) => name = value.clone(),
                 None => {
@@ -44,8 +63,7 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 
-    let home = AgentsHome::from_env();
-    let bus = bus_dir(&home);
+    let bus = bus_dir();
     let msgs = read_bus_segments(&bus.join("messages.jsonl"));
     let (cursor, warnings) = read_cursor(&bus.join("cursors").join(format!("{name}.json")));
     for warning in &warnings {
@@ -135,6 +153,31 @@ fn str_field<'a>(m: &'a Value, key: &str) -> &'a str {
     m.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// The bus directory as the Python oracle's `paths.bus_dir()` resolves it
+/// once both env overrides are absent: `<state root>/bus`. `FNO_BUS_DIR` and
+/// `FNO_INBOX_ROOT` live in `intel::bus_log_path`; the settings-file
+/// overrides (`config.paths.bus_dir`, `config.state_dir`) stay that
+/// function's documented gap. The bus hangs off the state root, not the
+/// agents home.
+fn bus_dir() -> PathBuf {
+    let file = crate::intel::bus_log_path(&state_root());
+    file.parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| state_root().join("bus"))
+}
+
+/// The state root behind the Python `config.state_dir` default:
+/// `$FNO_STATE_DIR`, else `$HOME/.fno`.
+fn state_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".fno"))
+        .unwrap_or_else(|| PathBuf::from(".fno"))
+}
+
 fn quote(v: &str) -> String {
     serde_json::to_string(v).unwrap_or_default()
 }
@@ -165,7 +208,7 @@ fn row_json(m: &Value) -> String {
     ];
     let inner: Vec<String> = pairs
         .iter()
-        .map(|(k, v)| format!("{}, {}", quote(k), v))
+        .map(|(k, v)| format!("{}: {}", quote(k), v))
         .collect();
     format!("{{{}}}", inner.join(", "))
 }
