@@ -288,17 +288,16 @@ def test_send_then_unread_then_ack(runner, mailbox):
     )
     assert sent.exit_code == 0, sent.output
 
-    listing = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert listing.exit_code == 0, listing.output
-    msgs = json.loads(listing.stdout.strip().splitlines()[-1])
-    assert [m["body"] for m in msgs] == ["build is green"]
-    msg_id = msgs[0]["id"]
+    from fno.bus.cursor import scan_unread
+
+    msgs = scan_unread("web")
+    assert [m.body for m in msgs] == ["build is green"]
+    msg_id = msgs[0].id
 
     acked = runner.invoke(app, ["agents", "mail", "ack", msg_id, "--name", "web"])
     assert acked.exit_code == 0, acked.output
 
-    after = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert json.loads(after.stdout.strip().splitlines()[-1]) == []
+    assert scan_unread("web") == []
 
 
 def _passing_mail_body(word_total: int) -> str:
@@ -354,12 +353,12 @@ def test_send_without_kind_reads_body_file(runner, mailbox):
     )
     assert sent.exit_code == 0, sent.output
 
-    listing = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
-    assert listing.exit_code == 0, listing.output
-    msgs = json.loads(listing.stdout.strip().splitlines()[-1])
+    from fno.bus.cursor import scan_unread
+
+    msgs = scan_unread("web")
     assert msgs, "the file-fed body never landed"
-    assert 'body with "quotes"' in msgs[0]["body"]
-    assert "and a newline" in msgs[0]["body"]
+    assert 'body with "quotes"' in msgs[0].body
+    assert "and a newline" in msgs[0].body
 
 
 def test_send_body_and_body_file_refused(runner, mailbox):

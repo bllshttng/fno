@@ -4248,7 +4248,7 @@ def cmd_team(
 
 
 @mail_app.command("unread")
-def cmd_unread(
+def unread(
     name: str = typer.Option(
         "fno", "--name", "-n",
         help="Whose inbox to read (registry name or project).",
@@ -4262,30 +4262,37 @@ def cmd_unread(
     "My inbox" is a cursor-bounded scan of the one global bus log filtered to
     ``to == name``: only messages after the consumer's cursor are shown,
     regardless of which provider sent them. ``fno agents mail ack`` advances the
-    cursor. JSON when stdout is not a TTY or ``--json`` is passed.
+    cursor. JSON when stdout is not a TTY or ``--json`` is passed. The reader
+    is the native fno-agents binary; this leaf forwards argv only, with the
+    streams inherited so the binary sees the real terminal.
     """
-    from fno.bus.cursor import scan_unread
+    _forward_unread(name, json_out)
 
-    msgs = scan_unread(name)
-    is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    if json_out or not is_tty:
-        payload = [
-            {
-                "id": m.id, "thread": m.thread, "from": m.from_, "to": m.to,
-                "kind": m.kind, "ts": m.ts, "in_reply_to": m.in_reply_to,
-                "body": m.body,
-            }
-            for m in msgs
-        ]
-        print(json.dumps(payload, ensure_ascii=False))
-        return
-    if not msgs:
-        print(f"inbox empty for {name!r} (no unread bus messages)")
-        return
-    for m in msgs:
-        excerpt = m.body.replace("\n", " ")[:100]
-        print(f"{m.id}  {m.from_} -> {m.to}  [{m.kind}]  {excerpt}")
-    print('\nto answer one: fno agents mail reply --to <id> --body "..."')
+
+def _forward_unread(name: str, json_out: bool) -> None:
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = ["--name", name]
+    if json_out:
+        argv.append("--json")
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno agents mail unread: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Inherited stdio, deliberately NOT captured like the claim leaves: the
+    # TTY branch is the native leaf's decision, and capturing would hide the
+    # real terminal from its isatty check.
+    result = subprocess.run([str(binary), "mail", "unread", *argv], check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @mail_app.command("sent")

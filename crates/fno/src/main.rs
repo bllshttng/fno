@@ -200,6 +200,9 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail unread`: the native cursor-bounded unread listing.
+    /// The verb and its tail pass through byte-verbatim.
+    MailUnread(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -342,6 +345,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
         "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "unread" => Some(Role::MailUnread(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -654,6 +662,9 @@ fn main() {
             &["mail"],
             &rest,
         )),
+        Role::MailUnread(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -855,6 +866,13 @@ mod tests {
             decide_role(&os(&["mail", "view"]), false),
             Role::MailViewRenamed
         ));
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "unread", "--name", "worker"]),
+                false
+            ),
+            Role::MailUnread(os(&["unread", "--name", "worker"]))
+        );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
             Role::Forward

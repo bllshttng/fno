@@ -497,7 +497,7 @@ fn deliver_live(session_id: &str, framed: &str) -> (bool, Option<String>) {
     }
 }
 
-fn bus_dir(home: &AgentsHome) -> PathBuf {
+pub(crate) fn bus_dir(home: &AgentsHome) -> PathBuf {
     crate::intel::bus_log_path(&home.root())
         .parent()
         .map(std::path::Path::to_path_buf)
