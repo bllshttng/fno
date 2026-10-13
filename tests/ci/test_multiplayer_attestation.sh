@@ -70,7 +70,7 @@ rows_b=$(env HOME="$HOME_B" "$FNO_BIN" doctor event rows \
 # The rows verb prints a JSON array, so envelope quotes arrive escaped;
 # strip the backslashes before matching the raw substring.
 echo "$rows_b" | tr -d '\\' | grep -F "\"head_sha\":\"$head_sha\"" >/dev/null \
-    || fail "machine B's gate read stayed machine-local; rows answered: $rows_b"
+    || fail "machine B's gate read stayed machine-local (rows.err: $(cat "$HOME_B/rows.err")); rows answered: $rows_b"
 echo "PASS: machine B's gate read sees A's review"
 
 # A's own read answers ONE copy: the journal original plus the primary

@@ -77,7 +77,7 @@ pub(crate) fn pull_segment() -> Vec<String> {
         .args(["attest", "pull"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
     {
         Ok(child) => child,
