@@ -1,7 +1,10 @@
 use super::*;
+// The drain-fold tests kept here use the routing module's step constant and
+// burst cap; server.rs itself no longer imports these two names.
 use crate::proto::{AgentRow, TemplateName};
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
+use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
 
 #[path = "server/server_thread_viewer_tests.rs"]
 mod thread_viewer_tests;

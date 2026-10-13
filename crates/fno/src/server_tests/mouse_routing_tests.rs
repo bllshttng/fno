@@ -6,6 +6,8 @@
 
 use super::*;
 use crate::server::mouse_route::MOUSE_WHEEL_LINES;
+// Glob imports skip the parent module's private items; name them by path.
+use super::{empty_core, seen_test_core};
 
 fn mouse_mode() -> Modes {
     Modes {

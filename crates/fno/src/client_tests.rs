@@ -3499,7 +3499,6 @@ async fn keys_modal_esc_click_and_escape_both_close() {
 
 #[tokio::test]
 async fn keys_modal_wheel_scrolls_and_click_off_dismisses() {
-    use crate::mouse::MouseReport;
     let mut v = two_pane_view();
     // Short: the binding list overflows and scrolls. Wide: the modal grows to
     // its content, so the top-left corner stays off it.
@@ -3528,7 +3527,6 @@ async fn hovering_the_footer_esc_close_keeps_the_selection() {
     // The footer's close target must never surface through `aux_hit` as a
     // row index: ESC_CLOSE_HIT clamps in `Popup::select` to the LAST entry,
     // so a hover sweep over the words would silently re-target Enter.
-    use crate::mouse::MouseReport;
     let mut v = two_pane_view();
     v.term = (30, 100);
     v.aux = Some(v.build_settings_modal());
