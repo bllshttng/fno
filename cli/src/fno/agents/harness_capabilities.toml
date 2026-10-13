@@ -148,6 +148,16 @@ headless = "argv-add-dir"
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir", "launch_role", "agent", "tools", "deny_tools"]
 passthrough = ["*"]
 
+# THE NATIVE BG LINE. The lane's launch argv, filled by spawn-overlay's
+# `print` kind and by the exec path - one renderer, two readers. A `{hole}`
+# token takes the spawn's value; an `optional` hole whose value is empty
+# drops its hole token AND the flag before it, so a lane with no route,
+# model or effort still renders a legal argv. A `[[routing.models]]` row may
+# override the argv with its own `launch` list, validated by the same rules.
+[harness.claude.launch]
+argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--name", "{name}", "{payload}"]
+optional = ["settings", "model", "effort"]
+
 [harness.claude.permission_response.allow_once]
 supported = true
 rule_ids = ["permission_prompt"]
