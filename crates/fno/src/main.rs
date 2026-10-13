@@ -176,6 +176,10 @@ enum Role {
     /// `fno agents claim backlog|export ...`: the shared-store verbs, run
     /// by `fno-agents claim`.
     ClaimStore(Vec<OsString>),
+    /// `fno do review resolve-level ...`: the sizing leaf, exec'd through
+    /// the sibling fno-agents `review-level` door. The rest of the review
+    /// tree stays Python until its port.
+    ReviewLevel(Vec<OsString>),
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
@@ -319,6 +323,20 @@ fn classify_claim_store(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[2..].to_vec())
 }
 
+/// `fno do review resolve-level ...`: the sizing leaf. The literal
+/// three-token prefix claims it here so it never reaches the Python
+/// forward as a near-miss of `fno do review classify`.
+fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "resolve-level"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     let (verb, tail): (&str, &[OsString]) = if args.len() >= 3
         && args[0].to_str() == Some("agents")
@@ -371,6 +389,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_claim_store(args) {
         return Role::ClaimStore(rest);
+    }
+    if let Some(rest) = classify_review_level(args) {
+        return Role::ReviewLevel(rest);
     }
     if let Some(rest) = classify_agents_verb(args, "top") {
         return Role::AgentsTop(rest);
@@ -643,6 +664,11 @@ fn main() {
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
         }
+        Role::ReviewLevel(rest) => std::process::exit(fno_agents_exec(
+            "fno do review resolve-level",
+            &["review-level"],
+            &rest,
+        )),
         Role::MailViewRenamed => {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
@@ -834,6 +860,25 @@ mod tests {
         );
         assert_eq!(
             decide_role(&os(&["agents", "mail", "send", "a", "b"]), false),
+            Role::Forward
+        );
+    }
+
+    #[test]
+    fn review_resolve_level_claims_the_leaf_prefix() {
+        // The `do` tree otherwise falls through to the Python forward; the
+        // sizing leaf is claimed by its literal three-token prefix.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
+            Role::ReviewLevel(os(&["high"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level"]), false),
+            Role::ReviewLevel(os(&[]))
+        );
+        // Sibling verbs under `fno do review` stay Python.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify"]), false),
             Role::Forward
         );
     }
