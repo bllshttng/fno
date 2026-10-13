@@ -327,7 +327,7 @@ pub fn node_spawn_argv(
     } else {
         cmd.push("--fresh".to_string());
     }
-    if let Some(model) = &args.model.filter(|_| !lane_pinned) {
+    if let Some(model) = args.model.as_ref().filter(|_| !lane_pinned) {
         cmd.extend(["--model".to_string(), model.clone()]);
     }
     // CLAUDE-ONLY: gate on the RESOLVED harness, so a claude ACCOUNT record

@@ -738,7 +738,7 @@ fn lane(payload: &Value, cwd: &Path) -> Value {
                             .get("route")
                             .and_then(Value::as_str)
                             .unwrap_or("")
-                            .split('/', 1)
+                            .splitn(2, '/')
                             .next()
                             == Some(provider)
                 })
@@ -757,7 +757,7 @@ fn lane(payload: &Value, cwd: &Path) -> Value {
             // The route's vendor half, split here so a caller never re-parses
             // the route string to learn who bills.
             let route = row.get("route").and_then(Value::as_str).unwrap_or("");
-            answer["vendor"] = json!(route.split('/', 1).next().unwrap_or(""));
+            answer["vendor"] = json!(route.splitn(2, '/').next().unwrap_or(""));
             answer["found"] = json!(true);
             answer
         }

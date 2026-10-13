@@ -380,10 +380,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         None,
     )?;
     let mut values = crate::spawn_compose::fill_values(payload);
-    values.insert(
-        "settings".to_string(),
-        Value::String(settings.unwrap_or_default()),
-    );
+    values.insert("settings".to_string(), settings.unwrap_or_default());
     let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
     Ok(json!({ "tokens": tokens }))
 }

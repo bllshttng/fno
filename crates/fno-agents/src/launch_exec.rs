@@ -159,10 +159,7 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
         None,
     )?;
     let mut values = crate::spawn_compose::fill_values(payload);
-    values.insert(
-        "settings".to_string(),
-        Value::String(settings_path.unwrap_or_default()),
-    );
+    values.insert("settings".to_string(), settings_path.unwrap_or_default());
     let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
     if tokens.is_empty() {
         return Err("the filled argv is empty".into());

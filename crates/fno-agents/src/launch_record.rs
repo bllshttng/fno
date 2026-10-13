@@ -391,6 +391,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(args, &["-n", "--name"]),
                 node: seed_node(pos.last()),
                 slot: None,
+                provider: None,
                 cwd: here.clone(),
             })
         }
@@ -431,6 +432,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         name: None,
                         node: seed_node(pos.last()),
                         slot: None,
+                        provider: None,
                         cwd,
                     })
                 }
@@ -451,6 +453,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         name: None,
                         node: seed_node(pos_all.last()),
                         slot: None,
+                        provider: None,
                         cwd,
                     })
                 }
@@ -478,6 +481,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(rest, &["--name"]),
                 node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
                 slot: None,
+                provider: None,
                 cwd,
             })
         }
@@ -499,6 +503,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(args, &["-n", "--name", "--title"]),
                 node: seed_node(seed.as_ref()),
                 slot: None,
+                provider: None,
                 cwd: here.clone(),
             })
         }

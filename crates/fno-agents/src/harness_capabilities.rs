@@ -560,7 +560,7 @@ impl LaunchTemplate {
                     "a hole must be the whole token",
                 ));
             }
-            let hole = captures[0][1].clone();
+            let hole = captures[0].get(1).unwrap_or_default().to_string();
             if !LAUNCH_HOLES.contains(&hole.as_str()) {
                 return Err(field_error(
                     harness,
@@ -571,7 +571,12 @@ impl LaunchTemplate {
             holes.push(hole);
         }
         for required in LAUNCH_REQUIRED_HOLES {
-            if holes.iter().filter(|hole| hole == required).count() != 1 {
+            if holes
+                .iter()
+                .filter(|hole| hole.as_str() == required)
+                .count()
+                != 1
+            {
                 return Err(field_error(
                     harness,
                     "launch",
