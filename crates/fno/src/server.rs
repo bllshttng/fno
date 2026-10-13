@@ -1045,10 +1045,9 @@ pub(crate) enum CoreMsg {
         /// been failing.
         stale: bool,
         holders: HashMap<String, String>,
-        /// node id -> pr_number, from the same graph read as `cards`.
-        prs: HashMap<String, u64>,
-        /// node id -> driving session short id, from the same graph read.
-        drivers: HashMap<String, String>,
+        /// The graph join from the same read as `cards`: node prs, driving
+        /// sessions, and per-session node bindings, joined at layout time.
+        join: backlog_view::BacklogJoin,
     },
     /// The per-pane counter snapshot cadence fired: snapshot every live pane's
     /// monotonic totals and emit one event onto the machine-global events
@@ -1630,13 +1629,11 @@ pub(crate) struct Core {
     /// Claim holder per in-flight node id, from the reader's sweep;
     /// joined at publish time into card routes / `where_hint`.
     backlog_holders: HashMap<String, String>,
-    /// node id -> pr_number, from the off-loop graph reader; joined at
-    /// layout time (holder name -> node -> pr) into `AgentRow.pr` for the peek
-    /// header's `PR #N` label.
-    backlog_pr: HashMap<String, u64>,
-    /// node id -> driving session short id; joined at layout time into
-    /// `AgentRow.pr_session_short` (the PR row's attach handle).
-    backlog_driver: HashMap<String, String>,
+    /// The graph join from the off-loop graph reader (node prs, driving
+    /// sessions, per-session node bindings); joined at layout time into
+    /// `AgentRow.pr` (the peek header's `PR #N` label), `AgentRow.pr_session_short`
+    /// (the PR row's attach handle), and `AgentRow.bindings` (v111).
+    backlog_join: backlog_view::BacklogJoin,
     /// Panes spawned claim-ELIGIBLE (`pane run --claim`, agent panes). A
     /// general pane never appears here and never consults a claim (Locked 5).
     claim_eligible: HashSet<u64>,
@@ -11949,8 +11946,7 @@ impl Core {
                 lanes,
                 stale,
                 holders,
-                prs,
-                drivers,
+                join,
             } => {
                 // Same as AgentRows: only sideline data moved, so push the
                 // Layout without a frame re-emit.
@@ -11958,8 +11954,7 @@ impl Core {
                 self.backlog_lanes = lanes;
                 self.backlog_stale = stale;
                 self.backlog_holders = holders;
-                self.backlog_pr = prs;
-                self.backlog_driver = drivers;
+                self.backlog_join = join;
                 self.push_layout(false);
                 Flow::Continue
             }

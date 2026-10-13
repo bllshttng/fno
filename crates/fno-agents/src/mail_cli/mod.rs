@@ -1,7 +1,8 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
 //! release timer, the `team` broadcast, the outbound sent view, and the
-//! withdraw leaf. Dispatch only; the verbs live in [hold], [team], [sent],
-//! and [withdraw].
+//! withdraw and ack leaves. Dispatch only; the verbs live in [hold], [team],
+//! [sent], [withdraw], and [ack].
+pub mod ack;
 pub mod hold;
 pub mod sent;
 pub mod team;
@@ -19,9 +20,10 @@ pub fn run(rest: &[String]) -> i32 {
         "team" => team::run_team(&rest[1..]),
         "withdraw" => withdraw::run(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
+        "ack" => ack::run_ack(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | withdraw | sent)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | withdraw | sent | ack)"
             );
             2
         }
@@ -30,11 +32,12 @@ pub fn run(rest: &[String]) -> i32 {
 
 fn print_help() {
     println!(
-        "fno-agents mail - the do-not-disturb hold, team broadcast, sent view, and withdraw for agent mail"
+        "fno-agents mail - the do-not-disturb hold, team broadcast, sent view, withdraw, and ack for agent mail"
     );
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  withdraw MSG_ID [--from-name NAME]");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
+    println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
 }

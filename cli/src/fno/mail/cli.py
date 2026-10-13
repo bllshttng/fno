@@ -4326,54 +4326,7 @@ def cmd_bus_ack(
     Spelled out because the old one-liner read as if ``<name>`` came first and
     cost a reader two failed invocations before they resorted to ``--help``.
     """
-    from fno.bus.cursor import advance_cursor, scan_unread
-    from fno.bus.log import is_deliverable, iter_messages
-
-    # The ack target must be a retained message addressed to `name`. Two failure
-    # modes this guards (both would silently corrupt the read position because
-    # the cursor is a single global-log position and scan_unread returns to==name
-    # AFTER it):
-    #   - an id not in the log -> scan_unread can't find it -> re-surfaces ALL mail;
-    #   - an id addressed to ANOTHER recipient but positioned after my unread ->
-    #     advances me past my own earlier unread, hiding it.
-    all_msgs = list(iter_messages())
-    target = next((m for m in all_msgs if m.id == msg_id), None)
-    if target is None:
-        print(
-            f"unknown message id {msg_id!r}: not found in the retained bus log; "
-            f"cursor not advanced (run `fno agents mail unread --name {name}` to see ids)",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    if target.to != name:
-        print(
-            f"message {msg_id!r} is addressed to {target.to!r}, not {name!r}; "
-            f"cursor not advanced (ack only your own messages)",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    if not is_deliverable(target):
-        # Each refusal names what the row is; the lines live in mail.ack_refusal.
-        from fno.mail.ack_refusal import refusal_line
-
-        print(refusal_line(target), file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    # The advance consumes every message addressed to `name` up through msg_id.
-    # Emit a receipt for each so a manual ack does not leave them unread with no
-    # terminal event -- the same accounting gap drain-self closes. Captured
-    # before the advance (after it, scan_unread no longer returns them).
-    pos = {m.id: i for i, m in enumerate(all_msgs)}
-    acked = [m for m in scan_unread(name) if m.id in pos and pos[m.id] <= pos[msg_id]]
-
-    if advance_cursor(name, msg_id):
-        print(f"cursor for {name!r} advanced to {msg_id}")
-        for m in acked:
-            _emit_drain_marker(m.id, name, name, m.from_, "acked")
-    else:
-        # Forward-only: the id is at or before the current cursor (re-ack / older
-        # message). Idempotent no-op, not an error - the cursor never rewinds.
-        print(f"cursor for {name!r} already at or past {msg_id}; unchanged")
+    _forward_mail(["ack", msg_id, "--name", name], label="fno mail ack")
 
 
 def _manifest_fields(*names: str) -> dict[str, Optional[str]]:
@@ -4430,8 +4383,8 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, team, sent, and withdraw verbs' bodies live in the Rust mail
-    front now; Python owns transport only, the same split as the claims
+    The hold, team, sent, withdraw, and ack verbs' bodies live in the Rust
+    mail front now; Python owns transport only, the same split as the claims
     forward.
     """
     import subprocess
