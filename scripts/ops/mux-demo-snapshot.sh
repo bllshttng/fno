@@ -66,6 +66,17 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
 # claims store crashes on the migration tombstone the fresh root gets.
 {
   printf 'schema_version = 1\nstate_dir = "%s"\n' "$ROOT/.fno"
+  # The two seeded teams lead configured projects: a live team's scope
+  # compiles only against work.workspaces projects or graph epics, so the
+  # payments and search leads name them here.
+  printf '%s\n' \
+    '[work.workspaces.checkout]' \
+    '[[work.workspaces.checkout.projects]]' \
+    'name = "payments"' \
+    'path = "~/code/checkout"' \
+    '[[work.workspaces.checkout.projects]]' \
+    'name = "search"' \
+    'path = "~/code/checkout"'
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
@@ -75,7 +86,11 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
 # path too or the python leg provisions from PyPI and mismatches the binary.
 mkdir -p "$ROOT/.fno"
 cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
-export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/agents"
+export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/.fno/agents"
+# The org gather shells `fno-agents` from PATH (org-fold), and the fresh
+# root provisions the python leg's executables under .local/bin. Without
+# this every fold dies with "could not run" and the org views shoot empty.
+export PATH="$ROOT/.local/bin:$PATH"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
 # crashes the lock. Give the demo's claims their own directory.
@@ -123,7 +138,7 @@ file p3 "Split the merchant onboarding wizard into three steps with save-and-res
 # wall of unowned workers.
 for i in "${!IDS[@]}"; do
   if [ $((i % 2)) -eq 0 ]; then s=payments; else s=search; fi
-  "$FNO" backlog update "${IDS[$i]}" --set scope="$s" >/dev/null
+  "$FNO" backlog update "${IDS[$i]}" --set project="$s" >/dev/null
 done
 
 # The three panes work the first three nodes: a claim moves each node to In
@@ -249,11 +264,11 @@ run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
 
 # The registry rows that name each pane's harness, model and state. The
-# store is the registry table in the root's graph.db: agents/registry.json
-# is a fence directory an older write can only die on. The rows land after
-# the panes start, and the server reads the registry on an interval, so
-# wait a few seconds for it.
-python3 - "$ROOT/db/graph.db" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
+# fence directory at agents/registry.json marks the table as the owner: the
+# rows live in the graph store's registry table, and the document envelope
+# they fold into rides beside them in registry_meta. A seed that writes rows
+# without the envelope reads as InvalidData, i.e. no registry at all.
+python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, sys, datetime
 db, server, cwd = sys.argv[1:4]
 sids = sys.argv[4:7]
@@ -293,13 +308,28 @@ agents = [
     thread("indexer", "claude", "unmeasured"),
     thread("migrator", "opencode", "exited"),
 ]
-
-# The table is the store (save_document's encoding): identity is
-# session:<harness>:<sid> or fno:<id>, payload is the row itself. The
-# fence directory above is never touched. A revision bump is what a
-# polling reader keys on.
 import sqlite3
 conn = sqlite3.connect(db)
+# The registry rides the graph store the verbs migrated to .fno/db. Its
+# tables are created lazily by the first Rust registry writer, so the seed
+# matches that DDL instead of assuming they exist.
+if not conn.execute(
+    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes')"
+).fetchone()[0]:
+    sys.exit(f"registry seed: no nodes table in {db}; the live store is missing")
+conn.executescript(
+    """
+    CREATE TABLE IF NOT EXISTS registry (
+        identity TEXT PRIMARY KEY,
+        ordinal INTEGER NOT NULL,
+        payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS registry_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """
+)
 records = []
 for i, agent in enumerate(agents):
     sid = agent.get("harness_session_id")
@@ -313,6 +343,17 @@ for i, agent in enumerate(agents):
 conn.execute("DELETE FROM registry")
 conn.executemany(
     "INSERT INTO registry(identity,ordinal,payload) VALUES (?,?,?)", records
+)
+# The document envelope the reader folds the rows into, plus the imported
+# marker the ownership probe checks: without them the read falls back to
+# the legacy file and the client serves live panes only.
+conn.executemany(
+    "INSERT INTO registry_meta(key,value) VALUES (?,?) "
+    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    [
+        ("document", json.dumps({"schema_version": 1, "agents": []})),
+        ("imported", "1"),
+    ],
 )
 row = conn.execute(
     "SELECT value FROM registry_meta WHERE key='revision'"
