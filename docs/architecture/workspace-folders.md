@@ -6,7 +6,7 @@ A workspace owns the rows under its folder. The folder is the workspace's origin
 
 A worker with a pane sits in the workspace that holds the pane. A thread, a headless worker, or a daemon row has no pane. It joins a workspace by its cwd alone, through `Session::find_by_cwd` in `crates/fno/src/squad.rs`.
 
-- A row matches an origin if its cwd is the origin or a child of it.
+- The row's cwd decides. It matches an origin that equals it or sits above it.
 - The longest matching origin wins. On a tie the first workspace wins.
 - A row that matches nothing renders under `~ elsewhere`.
 
