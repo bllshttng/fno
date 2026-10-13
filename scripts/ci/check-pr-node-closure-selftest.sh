@@ -4,9 +4,16 @@
 # Scenarios: target (branch id claimed) passes, contained (a second claimed id
 # also in the trailer) passes, missing (branch id absent from the trailer)
 # fails, malformed (trailer present but never names the branch id) fails,
-# non-node branch skips, and a prose-only mention (never the exact trailer
-# line) fails.
+# non-node branch skips, a prose-only mention (never the exact trailer
+# line) fails, an unavailable scanner binary exits 2, and every gate row in
+# the shared corpus fixture replays.
 # Exit: 0 pass, 1 fail.
+#
+# The gate reads its candidates from the fno-agents binary's
+# pr-closure-branch-ids verb, so this selftest needs that binary:
+# FNO_AGENTS_BIN if set, else the repo's debug build at
+# crates/fno-agents/target/debug/fno-agents (CI builds it there and exports
+# the variable).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +25,11 @@ pass() { printf '[pr-node-closure] PASS: %s\n' "$*"; }
 
 [[ -f "$GATE" ]] || fail "gate not found at ${GATE}"
 bash -n "$GATE" || fail "gate failed bash -n"
+
+GATE_BIN="${FNO_AGENTS_BIN:-${SCRIPT_DIR}/../../crates/fno-agents/target/debug/fno-agents}"
+[[ -x "$GATE_BIN" ]] || fail "fno-agents binary not found at ${GATE_BIN}; build it or set FNO_AGENTS_BIN"
+export FNO_AGENTS_BIN="$GATE_BIN"
+pass "scanner binary resolved: ${GATE_BIN}"
 
 # run <body> <head_ref>; echoes the gate's exit code via $?.
 run() {
@@ -93,6 +105,13 @@ run "Fixes x-aaaa" "revert-pr-2809" \
   && pass "revert branch word-hex segment is not a node id" \
   || fail "revert branch should skip, not demand pr-2809"
 
+# x-suffixed revert branch: a trailing -x after the word-hex segment must
+# not read as a minted-family candidate either (regression shape from the
+# re-glue era).
+run "Fixes x-aaaa" "revert-pr-2809-x" \
+  && pass "revert branch with -x suffix is not a node id" \
+  || fail "revert-pr-2809-x should skip, not demand a node"
+
 # prose-only: the id is mentioned in prose, never on the exact trailer line.
 if run "This PR also touches x-aaaa in passing." "feature/x-aaaa"; then
   fail "prose-only mention should fail"
@@ -114,7 +133,7 @@ run "no trailer here" "feat/cafe" \
   && pass "slash-spanning segments never glue into a candidate" \
   || fail "a candidate must never span a '/'"
 
-# no-space-after-colon: the runtime parser (fno.pr.closure) accepts zero
+# no-space-after-colon: the binary's pr-closure-parse grammar accepts zero
 # spaces after "Backlog-Closure:" - the gate must too (round-7 review fix:
 # reproduced live pre-fix, where this well-formed trailer read as missing).
 run "Backlog-Closure:x-aaaa" "feature/x-aaaa" \
@@ -167,8 +186,8 @@ run "Backlog-Closure:x-cccc,x-aaaa" "feature/x-aaaa" \
   || fail "no space after comma should still pass"
 
 # stray-internal-colon: a second id glued to the first with a bare ":" (no
-# comma, no space) is ONE malformed token to the runtime parser
-# (parse_closure_trailer tokenizes only on whitespace/",", so
+# comma, no space) is ONE malformed token to the Rust parser
+# (pr-closure-parse tokenizes only on whitespace/",", so
 # "x-aaaa:x-1111" never splits and is_wellformed_node_id rejects the whole
 # token - zero ids bound). The gate must fail this, not pass it via the
 # label's own colon being mistaken for a separator (round-10 review fix:
@@ -187,6 +206,17 @@ for want in "Retarget" "create.md"; do
   grep -q -e "$want" "$ERR" || fail "wrong-node refusal should name '$want'"
 done
 pass "wrong-node refusal names the Retarget line and the create.md recipe"
+
+# unavailable binary: a missing scanner must exit 2 (cannot judge), never 0.
+NOBIN_DIR=$(mktemp -d)
+GATE_RC=0
+PR_BODY="Fixes x-aaaa" PR_HEAD_REF="feature/x-aaaa" \
+  FNO_AGENTS_BIN="$NOBIN_DIR/absent-fno-agents" bash "$GATE" >/dev/null 2>"$ERR" || GATE_RC=$?
+[[ "$GATE_RC" -eq 2 ]] || fail "missing scanner binary should exit 2, got $GATE_RC"
+grep -q "unavailable" "$ERR" || fail "missing-binary refusal should say 'unavailable'"
+grep -q "build it first" "$ERR" || fail "missing-binary refusal should say 'build it first'"
+rm -rf "$NOBIN_DIR"
+pass "missing scanner binary exits 2 and names the remedy"
 
 # corpus gate rows: every fixture case carrying gate replays through the real
 # gate, so the shared corpus pins the bash leg the same way it pins the Rust

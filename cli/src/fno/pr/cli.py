@@ -956,71 +956,10 @@ def closure_trailer(
         "contained_in descendants (repeatable).",
     ),
 ) -> None:
-    from fno.graph.api import wire_rows
-    from fno.paths import graph_json
-    from fno.pr.closure import render_pr_closure_trailer
-    from fno.tracker import active_backend_name
-
-    from fno.graph._constants import is_wellformed_node_id
-
-    external = active_backend_name() != "graph"
-    if node is None:
-        # Bare mode is LOUD on every failure: silent empty is how a
-        # trailer-less PR ships. It never takes the legacy early returns.
-        if external:
-            typer.echo(
-                "closure-trailer: branch resolution needs the graph backend; "
-                "pass the node explicitly instead",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-    elif external:
-        # graph.json is not the delivery record of truth under an external
-        # tracker backend - nothing to render from, matching this command's
-        # own contract (prints nothing, exit 0, on any unresolvable input).
-        return
-
-    # One read for both modes, loud on failure: a dead keeper used to answer
-    # exactly like an unresolvable node here (bare except, print nothing,
-    # exit 0) and three PRs sat red on the closure gate with no cause.
-    try:
-        entries = wire_rows(path=graph_json())
-    except Exception as exc:  # noqa: BLE001 - the read failure IS the message
-        typer.echo(
-            f"closure-trailer: the graph read failed ({exc}); "
-            "exit 4 names a dead reader, not an unresolvable node",
-            err=True,
-        )
-        raise typer.Exit(code=4)
-
-    if node is None:
-        from fno.pr.closure import BranchResolutionError, resolve_branch_node_id
-
-        known_ids = frozenset(
-            str(entry["id"])
-            for entry in entries
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-        )
-        try:
-            node_id: str = resolve_branch_node_id(known_ids, cwd=os.getcwd())
-        except BranchResolutionError as exc:
-            typer.echo(f"closure-trailer: {exc}", err=True)
-            raise typer.Exit(code=1)
-    else:
-        node_id = node
-    # render_pr_closure_trailer silently drops a malformed id with no other
-    # signal - a bare-hex or slug typo in --extra would otherwise ship with
-    # the trailer one node short and no one the wiser (round-7 review fix).
-    dropped = [e for e in extra if not is_wellformed_node_id(e)]
-    if dropped:
-        typer.echo(
-            f"warning: dropping malformed --extra id(s) from the trailer: "
-            f"{', '.join(dropped)} (need the full <prefix>-<hex> form)",
-            err=True,
-        )
-    line = render_pr_closure_trailer(entries, node_id, extra_ids=list(extra))
-    if line:
-        typer.echo(line)
+    argv = [node] if node is not None else []
+    for item in extra:
+        argv.extend(["--extra", item])
+    _forward_to_binary("pr-closure-trailer", argv)
 
 
 @pr_app.command("bind-created", hidden=True)
@@ -1034,25 +973,8 @@ def bind_created(
     ),
 ) -> None:
     """Bind a raw ``gh pr create`` result to its one real node."""
-    from fno.pr.closure import bind_created_pr_from_branch
-
-    result = bind_created_pr_from_branch(url, cwd=repo or os.getcwd(), node_id=node)
-    if result.outcome == "bound":
-        # The ship row follows the binding, not one particular verb. This used
-        # to ride on `backlog update --pr-number`; when ship switched to this
-        # command the stamp silently stopped happening for every PR it opened.
-        from fno.graph.cli import _stamp_ship_on_pr_link
-
-        for bound_id in result.bound_ids:
-            _stamp_ship_on_pr_link(bound_id)
-    typer.echo(
-        json.dumps(
-            {
-                "outcome": result.outcome,
-                "claimed_ids": result.claimed_ids,
-                "refusal": result.refusal,
-            },
-            separators=(",", ":"),
-        )
-    )
-    raise typer.Exit(code=0 if result.outcome == "bound" else 1)
+    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # from argv, never stdin - the passthrough below inherits the caller's
+    # stdin, and a TTY there would hang a stdin read.
+    payload = json.dumps({"url": url, "repo": repo, "node": node})
+    _forward_to_binary("pr-closure-bind-created", [payload])

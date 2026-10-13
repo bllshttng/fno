@@ -3345,9 +3345,6 @@ pub(crate) fn commit_retirements(
                     report.retired_names.remove(&e.name);
                     continue;
                 }
-                // Retirement is a row drop with no stop seam; the stamp is
-                // what a later wake reads.
-                crate::wake_name::stamp_from_row(home, e);
                 let (receipt_node, node_resolution) = match node_id.as_deref() {
                     Some(node) => (Some(node.to_string()), "name"),
                     None => graph_join

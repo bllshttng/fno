@@ -9,18 +9,22 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _known_graph_ids(monkeypatch):
-    """Pin the closure producer's graph read.
+def _trailer_ensure_passthrough(monkeypatch):
+    """Answer ship's trailer write in process.
 
-    ensure_closure_trailer verifies a branch-derived id against the graph, and
-    that read shells out to git twice. These tests mock subprocess.run with a
-    fixed list of side effects, so a real read consumes one and every later
-    assertion shifts by one call. Pin it: this file tests ship's PR logic, and
-    the verification has its own suite.
+    The closure producer lives in the fno-agents binary now; ship reaches it
+    only through `fno.rust_binary.verb_call`. These tests mock subprocess.run
+    with a fixed list of side effects, so a real binary call would consume one
+    and every later assertion shifts by one call. Passthrough here: this file
+    tests ship's PR logic, and the trailer grammar has its own suite.
     """
-    monkeypatch.setattr(
-        "fno.pr.closure.known_node_ids", lambda: frozenset({"x-49ec", "ab-55ba9adb"})
-    )
+    import fno.rust_binary as rb
+
+    def _passthrough(verb, payload, unavailable=None, **kwargs):
+        assert verb == "pr-closure-ensure", verb
+        return {"body": payload["body"]}
+
+    monkeypatch.setattr(rb, "verb_call", _passthrough)
 
 
 @pytest.fixture(autouse=True)

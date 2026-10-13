@@ -2269,13 +2269,17 @@ event_types:
         provider:
           type: string
         pid:
-          type: integer
+          type: [integer, "null"]
+          description: "The harness pid; a native adopt reads none from the SessionStart payload, so it rides null."
         harness_session_id:
           type: string
           description: "Full harness resume identity captured at birth and retained outside the mutable registry."
-        cwd:
+        spawn_id:
           type: string
-          description: "Spawn cwd for the session receipt."
+          description: "For a native adopt, the claimed launch record's file key; for a spawn, the coordinator's spawn-attempt id."
+        launch:
+          type: string
+          description: "Carries native on an adopt-time birth: the harness launched itself and the session report adopted it."
         model:
           type: string
           description: "Resolved model requested for the spawned worker."
@@ -2848,7 +2852,7 @@ event_types:
           type: integer
 
   - name: session_report_stored
-    description: "A harness hook's raw SessionStart report was stamped onto the matching registry row (id additive, transcript path and start source recorded)."
+    description: "A harness hook's raw SessionStart report was stamped onto the matching registry row (id additive, transcript path and start source recorded); a mint carries the minted word (native | operator)."
     sources: [daemon]
     data:
       required: [harness, session_id, related_filled]
@@ -2861,6 +2865,9 @@ event_types:
           type: string
         related_filled:
           type: boolean
+        minted:
+          type: string
+          description: "Set when the report minted the row: native (a launch-record child adopted as the launcher's row) or operator (the user's own session, D3 revised)."
         source:
           type: [string, "null"]
 

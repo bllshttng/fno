@@ -56,6 +56,24 @@ The live rubric reads the spawn form from the capability table. A harness that d
 
 What each CLI can DO - a review command, a spawn arm, rpc, plugins, MCP - is the features dimension of the capability table, rendered per harness in [docs/harnesses/capability-matrix.md](harnesses/capability-matrix.md). That matrix is generated; never edit it by hand.
 
+## Launch each harness its own way
+
+Each harness documents its own CLI. The line it documents is the line that launches a worker, and fno translates no flags on this path. Around the launch fno does four things. It gates the launch where it sees it. It carries what only fno knows: a provider route through a claude `--settings` file, an account through `CLAUDE_CONFIG_DIR`. It records a provenance event holding the verbatim argv, caller and cwd. It adopts the session: the harness's own SessionStart hook reports to fno. The session then gets a registry row, a name, a parent edge and a node. `fno agents spawn <name> "<payload>" --node <node-id>` stays the path that applies your config preferences. Both paths end in the same adopt.
+
+Versions measured 2026-10-11: claude 2.1.296, codex 0.162.1, opencode 1.18.33, pi 0.84.2, agy 1.3.3. Links to each harness's own docs sit in [Official CLI documentation](#official-cli-documentation).
+
+| Harness | Native launch line | Background form | Model / permission / effort | Name | Resume / attach | Session list | SessionStart hook |
+|---|---|---|---|---|---|---|---|
+| claude | `claude --bg --name w "/fno:target x-aaaa"` | `--bg`: Claude's own supervisor, paneless | `--model M`, `--permission-mode P`, `--effort E`; route via `--settings <file>` | `--name` | `claude attach <short>` restarts a stopped one; `claude --resume <uuid> --bg` | `claude agents --json --all` | `hooks/context-hooks.json` |
+| codex | `codex -m M -a never -s workspace-write -c model_reasoning_effort=high "$fno:target x-aaaa"` | fno keeper via spawn | `-m`, `-a`, `-s`, `--yolo`, `-c model_reasoning_effort=E`, `-p <profile>` | none at launch (`/rename` in the TUI) | `codex resume <id> --remote unix://` | app-server thread list; `~/.codex/sessions` rollouts | `hooks/codex-hooks.json` |
+| opencode | `opencode run --attach $URL --title w -m zai/glm-5.3 --command fno:target x-aaaa` | fno keeper via spawn | `-m provider/model`, `--agent A`; permission only through the serve's `OPENCODE_CONFIG` file | `--title` | `opencode attach $URL`, then `-s <id>` | `opencode session list --format json` | `cli/src/fno/setup/assets/opencode/footnote.js` (`session.created`) |
+| pi | `pi --session-id <uuid> --model zai/glm-5.3:high "/skill:target x-aaaa"` | fno keeper via spawn | `--provider`, `--model p/id[:thinking]`, `--thinking L`; no permission prompts | none | `pi --session <id>` from the session's own cwd | the `--session-dir` store | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`) |
+| agy | `agy -i "/target x-aaaa" --model M --dangerously-skip-permissions` | fno keeper via spawn | `--model`, `--dangerously-skip-permissions`, `--effort` | none | `agy --conversation <id>` | none measured on 1.3.3 | `hooks/agy-session-report.sh` |
+
+Background mode is a keeper owned by a daemon. For claude that keeper is Claude's own supervisor: `claude --bg`, paneless, with peek, attach, detach and restart from the saved conversation. For every other harness it is fno's daemon and pane keeper. Reach it through `fno agents spawn --node <node-id> --name w -- <native argv verbatim>`. Spawn wraps the harness's own line after the `--` fence and keeper-hosts it. The session shows no pane until a portal opens one. The harness's flags pass through untouched. fno translates none.
+
+A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents list`, `fno agents peek`, mail and the stop verb reach it like any other.
+
 ## What this means in practice
 
 - **Skills are portable markdown** and work on every CLI in scope.

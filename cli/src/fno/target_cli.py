@@ -1126,7 +1126,7 @@ def review_invocation_cmd(
     """Print the sized self-review invocation for this session.
 
     Stdout is exactly one line: the invocation the worker should run, level
-    sized from the branch's diff via ``level_for_diff`` (never a hardcoded
+    sized from the branch's diff via ``diff_review_level`` (never a hardcoded
     level). The refusal surfaces a held worker reads (the stop gate's coverage
     reason, the merge guard, the CI status) embed this output; prose cannot
     carry it because ``check-review-invocation-single-source.sh`` bans any

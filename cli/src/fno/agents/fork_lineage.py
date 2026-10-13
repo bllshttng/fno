@@ -90,18 +90,21 @@ def respawn_ok(src):
 WAKE_NAME_PREFIX = "wake-"
 
 
-def wake_spawn_name(session_uuid: str) -> str:
-    """The wake fork's spawn name, owned by the Rust wake-name resolver beside
-    the reentry plan: the session's LAST recorded registry name for this uuid,
-    whatever the row's status or harness - the name is the worker-to-node join.
-    The uuid-derived wake- alias is only for a uuid that never named a row, and
-    is also the degrade when the owner is unavailable. Both answers are
-    deterministic, so concurrent wakes still serialize on one flock."""
-    from fno.harness_identity import canonical_handle
+def carried(session_uuid: Optional[str]) -> dict:
+    """The identity a revival carries for this uuid (Rust-owned); ``{}`` when unknown."""
+    if not session_uuid:
+        return {}
     try:
-        name = spawn_axes_call({"wake_name": {"session_id": session_uuid}}).get("name")
+        return spawn_axes_call({"wake_name": {"session_id": session_uuid}})
     except SpawnAxesUnavailable:
-        name = None
+        return {}
+
+
+def wake_spawn_name(session_uuid: str) -> str:
+    """The wake fork's spawn name: carried()'s name, else the wake- alias."""
+    from fno.harness_identity import canonical_handle
+
+    name = carried(session_uuid).get("name")
     return name or f"{WAKE_NAME_PREFIX}{canonical_handle(session_uuid)}"
 
 
@@ -125,6 +128,7 @@ def axis_overrides(
     model_name: Optional[str],
     resume_session_id: Optional[str],
     revive: bool,
+    carried: Optional[dict] = None,
 ) -> dict[str, Any]:
     """Mint kwargs carrying every lineage axis the caller left unstated.
 
@@ -133,6 +137,7 @@ def axis_overrides(
     what it stamped before this module existed.
     """
     return dict(
+        fno_id=(carried or {}).get("fno_id"),
         # Lineage beats the lane default but loses to an explicit route - a
         # woken worker bills on the provider it was running.
         provider=route_provider or getattr(src, "provider", None) or lane_provider,

@@ -142,6 +142,25 @@ fn report_script(adapter: &Path) -> Option<std::path::PathBuf> {
         .filter(|path| path.is_file())
 }
 
+/// The per-turn session-state shims ship beside the stop adapter too, one
+/// per wired event: agy runs hook commands as single program paths, so the
+/// event name is baked into the script, never passed as an argument. Empty
+/// when this stage carries none (an older stage stays presence-only).
+fn session_state_scripts(adapter: &Path) -> Vec<PathBuf> {
+    let dir = match adapter.parent() {
+        Some(dir) => dir,
+        None => return Vec::new(),
+    };
+    [
+        "agy-session-state-pre-invocation.sh",
+        "agy-session-state-stop.sh",
+    ]
+    .iter()
+    .map(|name| dir.join(name))
+    .filter(|path| path.is_file())
+    .collect()
+}
+
 /// Remove the handlers `gone` selects from every footnote event list. A group
 /// this removal empties goes too; a group that was already empty stays.
 /// Returns how many handlers went.
@@ -270,9 +289,11 @@ pub fn status(
         s.enabled = !matches!(fn_map.get("enabled"), Some(Value::Bool(false)));
         s.dead = count_handlers(fn_map, is_dead);
         let report = adapter.and_then(report_script);
+        let session_state = adapter.map(session_state_scripts).unwrap_or_default();
         let current: Vec<&Path> = [team, guard, report.as_deref()]
             .into_iter()
             .flatten()
+            .chain(session_state.iter().map(|p| p.as_path()))
             .collect();
         s.superseded = count_handlers(fn_map, |h| {
             !is_dead(h) && current.iter().any(|script| other_copy_of(h, script))
@@ -372,8 +393,13 @@ pub fn install(
     // PreInvocation (agy ignores Stop stdout, and the stop adapter owns that
     // event's decision contract). Append-once like the team.
     let report = report_script(adapter);
+    let session_state = session_state_scripts(adapter);
     let mut pruned = remove_handlers(fn_map, is_dead);
-    for script in [team, guard, report.as_deref()].into_iter().flatten() {
+    for script in [team, guard, report.as_deref()]
+        .into_iter()
+        .flatten()
+        .chain(session_state.iter().map(|p| p.as_path()))
+    {
         pruned += remove_handlers(fn_map, |h| other_copy_of(h, script));
     }
     fn_map.insert(
@@ -454,6 +480,42 @@ pub fn install(
             pre.push(json!({
                 "type": "command",
                 "command": report.display().to_string(),
+                "timeout": 10
+            }));
+        }
+    }
+    // The per-turn session-state shims report beside the handlers that own
+    // their events: PreInvocation is agy's turn start, and the Stop shim
+    // runs BESIDE the stop adapter (the decision contract stays there; the
+    // shim only reports done). Append-once like the team; agy runs every
+    // handler in the list.
+    for script in &session_state {
+        let event = if script.ends_with("agy-session-state-stop.sh") {
+            "Stop"
+        } else {
+            "PreInvocation"
+        };
+        match fn_map.get_mut(event) {
+            Some(Value::Array(_)) => {}
+            None => {
+                fn_map.insert(event.to_string(), Value::Array(Vec::new()));
+            }
+            Some(_) => {
+                return Err(format!(
+                    "{}: footnote.{event} is present but not a list; fix it or \
+                     move the file aside, then rerun `fno config setup`",
+                    hooks_file.display()
+                ))
+            }
+        }
+        if !has_handler(fn_map.get(event), script) {
+            let list = fn_map
+                .get_mut(event)
+                .and_then(Value::as_array_mut)
+                .expect("array checked above");
+            list.push(json!({
+                "type": "command",
+                "command": script.display().to_string(),
                 "timeout": 10
             }));
         }
@@ -719,5 +781,58 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             r#"{"footnote": "legacy string"}"#,
         );
+    }
+
+    /// The per-turn session-state shims register beside the handlers that
+    /// own their events: PreInvocation is agy's turn start, and the Stop
+    /// shim joins the stop adapter in the Stop list (the decision contract
+    /// stays with the adapter; the shim only reports). Append-once across
+    /// installs, and an older copy of a shim counts superseded.
+    #[test]
+    fn session_state_shims_register_once_on_both_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.json");
+        let stage = dir.path().join("stage").join("hooks");
+        std::fs::create_dir_all(&stage).unwrap();
+        let adapter = stage.join("footnote-agy-target-stop-hook.sh");
+        let pre_state = stage.join("agy-session-state-pre-invocation.sh");
+        let stop_state = stage.join("agy-session-state-stop.sh");
+        for p in [&adapter, &pre_state, &stop_state] {
+            std::fs::write(p, "#!/usr/bin/env bash\n").unwrap();
+        }
+        install(&path, &adapter, None, None).expect("install");
+        install(&path, &adapter, None, None).expect("second install");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let stop = data["footnote"]["Stop"].as_array().unwrap();
+        let stop_cmds: Vec<&str> = stop
+            .iter()
+            .map(|h| h["command"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            stop_cmds,
+            vec![
+                adapter.display().to_string(),
+                stop_state.display().to_string()
+            ],
+            "the stop shim joins the adapter, once"
+        );
+        let pre = data["footnote"]["PreInvocation"].as_array().unwrap();
+        let pre_cmds: Vec<&str> = pre.iter().map(|h| h["command"].as_str().unwrap()).collect();
+        assert_eq!(pre_cmds, vec![pre_state.display().to_string()]);
+        // An older stage's copy of a shim runs beside the new one and reads
+        // superseded, the same contract the reporter and team scripts carry.
+        let older_pre = dir
+            .path()
+            .join("older/hooks/agy-session-state-pre-invocation.sh");
+        std::fs::create_dir_all(older_pre.parent().unwrap()).unwrap();
+        std::fs::write(&older_pre, "#!/usr/bin/env bash\n").unwrap();
+        let data = json!({
+            "footnote": {"PreInvocation": [
+                {"type": "command", "command": older_pre.display().to_string()}
+            ]}
+        });
+        std::fs::write(&path, data.to_string()).unwrap();
+        let s = status(&path, Some(&adapter), None, None);
+        assert_eq!(s.superseded, 1, "the older shim copy reads superseded");
     }
 }

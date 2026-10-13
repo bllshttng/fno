@@ -262,7 +262,7 @@ fn load_snapshot(cwd: &Path) -> Option<Value> {
 
 /// The two tier tables from the canonical `model_tiers.toml`: strongest-band
 /// names per band, and `name -> [harness, model]` reachability pairs.
-fn load_model_tiers() -> (Vec<(String, Vec<String>)>, Map<String, Value>) {
+pub(crate) fn load_model_tiers() -> (Vec<(String, Vec<String>)>, Map<String, Value>) {
     let raw: toml::Value = toml::from_str(MODEL_TIERS_TABLE).expect("model_tiers.toml must parse");
     let table_list = |key: &str| -> Vec<(String, Vec<String>)> {
         let mut out = Vec::new();
@@ -765,7 +765,7 @@ fn dispatch_model(payload: &Value, cwd: &Path) -> Value {
 
 /// The tier leg `dispatch_model` resolves through: one in-process call to
 /// the walk's own `mode: "tier"` answer over the filled inventory.
-fn tier_leg(tier: &str, payload: &Value, cwd: &Path) -> (Value, Vec<Value>) {
+pub(crate) fn tier_leg(tier: &str, payload: &Value, cwd: &Path) -> (Value, Vec<Value>) {
     let inv = inventory(cwd);
     let ask = json!({
         "mode": "tier",

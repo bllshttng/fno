@@ -9,7 +9,7 @@
 //! is the session-free floor: it shells the same bare
 //! `fno backlog reconcile --json` the SessionStart hook runs, with no
 //! session in the loop. The closure decision stays in
-//! `graph._reconcile.scan_merge_drift`; nothing here re-implements it.
+//! `drift_scan::scan_merge_drift`; nothing here re-implements it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

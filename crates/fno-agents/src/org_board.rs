@@ -37,6 +37,7 @@ pub(crate) mod budget;
 mod claims;
 mod classify;
 pub mod pr_closure;
+pub mod pr_closure_produce;
 pub(crate) mod prs;
 mod queues;
 pub(crate) mod scope;

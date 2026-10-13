@@ -954,9 +954,10 @@ fn every_retirement_door_wires_the_removal_cascade() {
     }
 }
 
-/// AC-X4B27: retirement is a row drop, so it stamps the wake-name tombstone
-/// like the stop seams do: the dropped row's uuid wakes under its old name
-/// even though the row is gone and no stop record ever ran.
+/// AC1-HP: retirement is a row drop, so the removal accounting stamps the
+/// whole identity: the dropped row's uuid wakes under its old name, with its
+/// fno_id and parent edge, even though the row is gone and no stop record
+/// ever ran.
 #[test]
 fn a_retired_row_wakes_under_its_old_name() {
     let _env = crate::claims::test_env_lock()
@@ -970,6 +971,16 @@ fn a_retired_row_wakes_under_its_old_name() {
         "abcd1234",
         "abcd1234-1111-2222-3333-444444444444",
     );
+    // The row carries the joins a revival must keep.
+    crate::state::update_registry(&home.registry_json(), |r| {
+        if let Some(e) = r.entries.iter_mut().find(|e| e.name == "worker-named") {
+            e.fno_id = Some("f-retire-carry".into());
+            e.spawned_by_session = Some("lead-00000000-0000-4000-8000-000000000001".into());
+            e.spawned_by_harness = Some("claude".into());
+            e.spawned_by_cwd = Some("/lead/dir".into());
+        }
+    })
+    .unwrap();
     let store_dir = home.root().join("store");
     std::fs::create_dir_all(&store_dir).unwrap();
     let quiet = quiet_transcript(&store_dir, "q.jsonl", 2 * 3600);
@@ -980,8 +991,8 @@ fn a_retired_row_wakes_under_its_old_name() {
     let summary = production_sweep(&home, quiet);
 
     assert_eq!(summary.retired.len(), 1, "{:?}", summary.retired);
-    // The row is gone from the registry; the wake reads the tombstone and
-    // answers the name the board and mail knew.
+    // The row is gone from the registry; the tombstone answers the identity
+    // the board, mail and ledger knew.
     let after = crate::state::load_registry(&home.registry_json()).unwrap();
     assert!(
         !after.entries.iter().any(|e| e.name == "worker-named"),
@@ -996,4 +1007,16 @@ fn a_retired_row_wakes_under_its_old_name() {
         "worker-named",
         "the retired row's uuid wakes under its old name",
     );
+    let carried = crate::wake_name::lookup_beside(
+        &home.registry_json(),
+        "abcd1234-1111-2222-3333-444444444444",
+    )
+    .expect("the drop stamped the tombstone");
+    assert_eq!(carried.fno_id.as_deref(), Some("f-retire-carry"));
+    assert_eq!(
+        carried.spawned_by_session.as_deref(),
+        Some("lead-00000000-0000-4000-8000-000000000001")
+    );
+    assert_eq!(carried.spawned_by_harness.as_deref(), Some("claude"));
+    assert_eq!(carried.spawned_by_cwd.as_deref(), Some("/lead/dir"));
 }

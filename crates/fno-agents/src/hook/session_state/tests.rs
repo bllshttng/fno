@@ -172,6 +172,53 @@ fn the_row_map_wires_claude_and_codex() {
     // An unwired event decides nothing.
     assert_eq!(decide(&claude, &ev("PreCompact", json!({}))), None);
 }
+
+/// agy joins the row map: PreInvocation is the turn start (working), Stop
+/// ends the execution loop (done), and no permission-prompt producer
+/// exists (blocked stays "none" - the screen backstop keeps the row). The
+/// adapter files the report under agy's camelCase conversationId.
+#[test]
+fn the_row_map_wires_agy() {
+    let agy = job("agy");
+    assert_eq!(agy.blocked, "none");
+    assert_eq!(
+        agy.events.get("PreInvocation").map(String::as_str),
+        Some("working")
+    );
+    assert_eq!(agy.events.get("Stop").map(String::as_str), Some("done"));
+    let turn = decide(
+        &agy,
+        &adapter::normalize(
+            "agy",
+            "PreInvocation",
+            &json!({"conversationId": "conv-agy-1", "invocationNum": 2}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(turn.state, "working");
+    let done = decide(
+        &agy,
+        &adapter::normalize(
+            "agy",
+            "Stop",
+            &json!({"conversationId": "conv-agy-1", "terminationReason": "model_stop", "fullyIdle": true}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(done.state, "done");
+    // An unwired agy event (PostInvocation) decides nothing.
+    assert_eq!(
+        decide(
+            &agy,
+            &adapter::normalize(
+                "agy",
+                "PostInvocation",
+                &json!({"conversationId": "conv-agy-1"})
+            )
+        ),
+        None
+    );
+}
 // --- the marker bytes (the OSC 133 lane) ---
 
 /// T4/T5 + mT3/mT4: working opens a block only on a turn-start event, done

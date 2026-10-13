@@ -1,0 +1,1 @@
+{"level": "high", "level_source": "explicit", "band": "high", "effort": "high", "model": "sol", "provider": "openai", "chain": ["slot family catalog unreadable (<TMP>/codex/models_cache.json: No such file or directory (os error 2)); codex model values pass through verbatim", "tier(high)", "provider(codex)", "inventory band(>=high) -> codex-sol"], "degraded_max": false}

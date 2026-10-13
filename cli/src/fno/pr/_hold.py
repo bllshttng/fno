@@ -18,7 +18,7 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
     named on the PR's exact closure line - a trailer-only
     claim (a node never individually stamped at creation) was invisible to
     the ref-based match alone, so a held node named only on the trailer
-    passed this gate and closed post-merge via ``bind_closure_claims``,
+    passed this gate and closed post-merge via the bind-created step,
     which performs no hold check of its own (round-10 review fix).
     """
     from fno.graph.api import wire_rows
@@ -26,7 +26,7 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
     from fno.pr import _merge
     from fno.pr._merge import _find_pr_node_id
     from fno.pr._proc import ToolMissing
-    from fno.pr.closure import ClosureQueryError, fetch_pr_closure_context, parse_closure_trailer
+    from fno.rust_binary import VerbUnavailable, verb_call
     from fno.tracker import active_backend_name
 
     if active_backend_name() != "graph":
@@ -155,25 +155,14 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
         for number, _url in node_pr_refs(entry)
     )
 
-    def _gh_runner(cmd, *, cwd=None, timeout=None, **_ignored):
-        # Route through fno.pr._merge.run - the SAME swappable seam every
-        # other gh call in the merge path uses - rather than
-        # fetch_pr_closure_context's own default subprocess.run. That default
-        # bypasses every test fixture's FakeGH mock (which only ever
-        # monkeypatches `_merge.run`), so it shelled to the REAL gh binary in
-        # dozens of unrelated tests; round-10's fail-open-when-unstamped path
-        # masked that by silently swallowing the resulting failure, and
-        # round-11's fail-closed fix turned that masked bug into a hard
-        # failure across the suite (round-11 review fix, self-caught).
-        try:
-            result = _merge.run(cmd, cwd=cwd, timeout=timeout)
-        except ToolMissing as exc:
-            raise FileNotFoundError(str(exc)) from exc
-        return result
-
     try:
-        pr_ctx = fetch_pr_closure_context(pr_number, cwd=cwd, runner=_gh_runner)
-    except ClosureQueryError as exc:
+        pr_ctx = verb_call(
+            "pr-closure-context",
+            {"pr": pr_number, "repo": None, "cwd": cwd},
+            VerbUnavailable,
+            timeout=60,
+        )
+    except VerbUnavailable as exc:
         # Fail closed unconditionally, matching the graph-read handler above
         # and this module's own stated policy ("hold reads fail closed") - a
         # transient gh blip must never read as "nothing to check" for a
@@ -189,7 +178,7 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
 
     ref_node_id: Optional[str] = None
     if stamped:
-        ref_node_id = _find_pr_node_id(entries, pr_number, pr_ctx.url or "")
+        ref_node_id = _find_pr_node_id(entries, pr_number, pr_ctx["url"] or "")
         if ref_node_id is None:
             # _find_pr_node_id collapses ambiguity to None - a safe skip for
             # reconcile, but here None reads as "no binding" and lets the
@@ -198,7 +187,7 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
             # fail closed, the policy this module applies everywhere else.
             from fno.graph._reconcile import repo_slug_from_url
 
-            our_slug = repo_slug_from_url(pr_ctx.url or "")
+            our_slug = repo_slug_from_url(pr_ctx["url"] or "")
             if our_slug is not None:
                 from fno.pr._merge import _repo_scoped_number_matches
 
@@ -216,7 +205,7 @@ def hold_for_pr(pr_number: int, cwd: str) -> Optional[DispatchHoldVerdict]:
     candidate_ids: list[str] = []
     if ref_node_id is not None:
         candidate_ids.append(ref_node_id)
-    for claimed in parse_closure_trailer(pr_ctx.body):
+    for claimed in verb_call("pr-closure-parse", {"body": pr_ctx["body"]})["ids"]:
         if claimed not in candidate_ids:
             candidate_ids.append(claimed)
 

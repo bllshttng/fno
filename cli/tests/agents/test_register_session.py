@@ -86,33 +86,23 @@ def test_registry_registration_separates_harness_and_model_vendor(
     assert entry.effort == "low"
 
 
-def test_main_passes_harness_and_model_vendor_to_registry(
+def test_main_without_agent_self_is_the_daemon_mints_receipt(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """The hand-started register branch is gone: the Rust daemon mints the row
+    at the session report (decision D3 revised). A call with no --agent-self
+    is the retired-branch receipt: exit 0, no row, no event, one stderr line."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents import register_session
-    from fno.agents.registry import AgentEntry
+    from fno.agents.registry import load_registry
 
-    seen: dict[str, object] = {}
+    rc = register_session.main(
+        ["--provider", "codex", "--session-id", "sess-gone", "--cwd", "/proj"]
+    )
 
-    def fake_register(**kwargs):
-        seen.update(kwargs)
-        return AgentEntry(
-            name="session",
-            harness="claude",
-            provider="anthropic",
-            harness_session_id="session-id",
-            cwd="/project",
-            log_path="",
-        )
-
-    monkeypatch.setattr(register_session, "register_existing_session", fake_register)
-
-    assert register_session.main(
-        ["--harness", "claude", "--session-id", "session-id", "--cwd", "/project"]
-    ) == 0
-    assert seen["harness"] == "claude"
-    assert seen["provider"] == "anthropic"
+    assert rc == 0
+    assert load_registry() == []
+    assert _events(tmp_path) == []
 
 
 def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> None:
@@ -289,39 +279,6 @@ def test_register_rejects_empty_session_id(tmp_path: Path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_err_main_failopen_emits_event(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-
-    def _boom(**_kwargs):
-        raise OSError("registry locked")
-
-    monkeypatch.setattr(register_session, "register_existing_session", _boom)
-
-    rc = register_session.main(
-        ["--harness", "claude", "--session-id", "sess-x", "--cwd", "/s"]
-    )
-
-    assert rc == 0  # session start is never blocked
-    kinds = [e["kind"] for e in _events(tmp_path)]
-    assert "session_register_failed" in kinds
-
-
-def test_main_success_emits_registered_event(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--harness", "claude", "--session-id", "sess-ok", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    assert len(load_registry()) == 1
-    kinds = [e["kind"] for e in _events(tmp_path)]
-    assert "session_registered" in kinds
-
-
 def test_main_empty_session_id_is_silent_noop(tmp_path: Path, monkeypatch) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents import register_session
@@ -334,24 +291,6 @@ def test_main_empty_session_id_is_silent_noop(tmp_path: Path, monkeypatch) -> No
     assert rc == 0
     assert load_registry() == []
     assert _events(tmp_path) == []  # no noise when there's nothing to register
-
-
-def test_main_accepts_provider_alias(tmp_path: Path, monkeypatch) -> None:
-    # --provider is the axis-rename alias for --harness (x-bab1); it must still
-    # register the same harness so the fail-soft SessionStart hook survives any
-    # cutover skew between hook and module.
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--provider", "codex", "--session-id", "sess-alias", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].harness == "codex"
 
 
 # ---------------------------------------------------------------------------

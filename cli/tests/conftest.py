@@ -685,38 +685,6 @@ def _hermetic_promise_carveout_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_claim_reap(monkeypatch):
-    """Neutralise cmd_reconcile's claim-GC leg during tests.
-
-    ``reap_dead_claims()``'s default roots resolve through
-    ``resolve_canonical_repo_root()`` (cwd-based ``git worktree list``
-    discovery - the SAME channel hermetic.py documents as unclosable by any
-    env var, see its ``FNO_REPO_ROOT`` comment) and ``global_claims_root()``
-    (HOME, which IS sandboxed). A reconcile test run from inside a real
-    checkout would otherwise archive real dead claims on the host machine.
-    Closed at the reader, same pattern as ``_hermetic_promise_carveout_gate``
-    above. ``cmd_reconcile`` imports ``reap_dead_claims`` fresh inside the
-    function body, so patching the defining module's attribute reaches it;
-    a test module that imports the name directly (``test_claim_reap.py``)
-    binds its own reference at collection time and is unaffected.
-    """
-    import fno.claims.core as claims_core
-
-    def _noop_reap(*args, **kwargs):
-        # The verbs resolve core callables at call time, so this stub must
-        # absorb whatever signature the real reap_dead_claims grows (it
-        # already gained optout_sink after this fixture was written).
-        return {
-            "scanned": 0, "reaped": 0, "would_reap": 0, "kept_live": 0,
-            "kept_suspect": 0, "kept_offhost": 0, "corrupted": 0, "vanished": 0,
-            "contended": 0, "reap_failed": [],
-            "apply": kwargs.get("apply", False), "roots": [],
-        }
-
-    monkeypatch.setattr(claims_core, "reap_dead_claims", _noop_reap)
-
-
-@pytest.fixture(autouse=True)
 def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
     """Default every test to an empty fleet-incident home.
 
@@ -1188,52 +1156,57 @@ def _mint_fno_id_stubbed(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _closure_leg_hermetic(monkeypatch):
-    """Hermetic default for the closure-line forwarders.
+    """Hermetic default for the closure-line binary verbs.
 
-    `fno.pr.closure.parse_closure_trailer`/`render_closure_trailer` are thin
-    forwarders to the Rust leg (`fno-agents pr-closure-parse|render`, through
-    `fno.rust_binary.verb_call`). In the test environment that resolver can
-    find an installed binary without the new verb, or none at all, so the
-    default answers from a test-local copy of the shared-corpus grammar;
-    tests that pin the forwarder WIRING re-stub `fno.pr.closure.verb_call`
-    themselves (closure.py binds the transport at module level), and the
-    corpus test runs the real dev binary when one exists (skip otherwise,
-    the same contract as `native_backlog_door`).
+    The closure producer lives in the fno-agents binary now; the Python side
+    reaches it only through `fno.rust_binary.verb_call`. In the test
+    environment that resolver can find an installed binary without the new
+    verb, or none at all, so the default answers `pr-closure-parse` from a
+    test-local copy of the shared-corpus grammar and refuses the writer
+    verbs loudly; tests that pin the forwarder WIRING re-stub
+    `fno.rust_binary.verb_call` themselves.
     """
+    import fno.rust_binary as rb
     from fno.graph._constants import is_wellformed_node_id
 
+    real_verb_call = rb.verb_call
+
+    def _line_ids(line):
+        stripped = line.strip()
+        for kw in ("fixes", "backlog-closure"):
+            if stripped.lower().startswith(kw):
+                rest = stripped[len(kw):]
+                if rest.startswith(":"):
+                    rest = rest[1:]
+                if rest and not rest[0].isspace():
+                    return None  # glued word, not the keyword
+                toks = [t for t in rest.replace(",", " ").split() if t]
+                if not toks or not all(is_wellformed_node_id(t) for t in toks):
+                    return None  # one bad token: the line is prose
+                return list(dict.fromkeys(toks))
+        return None
+
     def _fake_verb_call(verb, payload, unavailable=None, **kwargs):
-        if verb == "pr-closure-render":
-            ids = [
-                t
-                for t in dict.fromkeys(payload.get("ids") or [])
-                if is_wellformed_node_id(t)
-            ]
-            return {"line": f"Fixes {' '.join(ids)}" if ids else ""}
+        if verb == "pr-closure-parse":
+            best = None
+            for line in (payload.get("body") or "").splitlines():
+                ids = _line_ids(line)
+                if ids is not None:
+                    best = ids
+            return {"ids": best or []}
+        if verb in (
+            "pr-closure-context",
+            "pr-closure-ensure",
+            "pr-closure-trailer",
+            "pr-closure-bind-created",
+            "pr-closure-branch-ids",
+        ):
+            raise (unavailable or rb.VerbUnavailable)(
+                "closure leg hermetic in tests: stub verb_call for " + verb
+            )
+        return real_verb_call(verb, payload, unavailable or rb.VerbUnavailable, **kwargs)
 
-        def _line_ids(line):
-            stripped = line.strip()
-            for kw in ("fixes", "backlog-closure"):
-                if stripped.lower().startswith(kw):
-                    rest = stripped[len(kw):]
-                    if rest.startswith(":"):
-                        rest = rest[1:]
-                    if rest and not rest[0].isspace():
-                        return None  # glued word, not the keyword
-                    toks = [t for t in rest.replace(",", " ").split() if t]
-                    if not toks or not all(is_wellformed_node_id(t) for t in toks):
-                        return None  # one bad token: the line is prose
-                    return list(dict.fromkeys(toks))
-            return None
-
-        best = None
-        for line in (payload.get("body") or "").splitlines():
-            ids = _line_ids(line)
-            if ids is not None:
-                best = ids
-        return {"ids": best or []}
-
-    monkeypatch.setattr("fno.pr.closure.verb_call", _fake_verb_call)
+    monkeypatch.setattr(rb, "verb_call", _fake_verb_call)
 
 
 @pytest.fixture(autouse=True)

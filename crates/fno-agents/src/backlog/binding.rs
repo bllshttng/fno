@@ -1,8 +1,7 @@
 //! PR claim binding: validate and bind a PR's closure claims as one
-//! graph-owned mutation, ported from graph/_reconcile.py (`bind_pr_rows`,
-//! `PrRowBinding`, `node_cwd_in_repo`). Validation completes before any row
-//! changes, so unknown or cross-repository claims cannot leave a partial
-//! binding behind.
+//! graph-owned mutation, ported from graph/_reconcile.py. Validation
+//! completes before any row changes, so unknown or cross-repository claims
+//! cannot leave a partial binding behind.
 
 use serde_json::{json, Value};
 use std::collections::BTreeSet;

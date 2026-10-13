@@ -688,10 +688,11 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
         "gate_axis": gate_axis,
         "gate_cpu": gate_cpu,
         "disagree": disagree,
-        "unparsed_lines": footprint_payload
-            .get("unparsed_lines")
-            .and_then(|u| u.as_i64())
-            .unwrap_or(0),
+        "unparsed_lines": footprint_payload.get("unparsed_lines").and_then(|u| u.as_i64()).unwrap_or(0),
+        // Occupants: the user's own live sessions in the slot count, shown
+        // apart (decision D3 revised). The probe answers at top level; an
+        // older probe without the field reads as none.
+        "occupants_yours": gate_payload.get("yours").and_then(Value::as_u64).unwrap_or(0),
         "lanes": lanes,
     }))
 }

@@ -46,9 +46,11 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 
 # Collapse-kept leaves the fno-agents binary serves natively after their
 # Python click leg retired (`backlog rank`'s lane pin answers in the binary
-# now, and the five `backlog session` lifecycle verbs answer from
-# backlog/session_cli.rs). The map row stays: the mux menu binds the leaf
-# and the Rust verb-baseline ratchet reads the same row.
+# now, the five `backlog session` lifecycle verbs answer from
+# backlog/session_cli.rs, and `do review resolve-level` answers from the
+# fno front's classifier execing the fno-agents review-level door). The map
+# row stays: the mux menu binds the leaf and the Rust verb-baseline ratchet
+# reads the same row.
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
@@ -76,6 +78,7 @@ NATIVE_SERVED_LEAVES = {
     "backlog session close",
     "backlog session open",
     "backlog session reap-open",
+    "do review resolve-level",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the

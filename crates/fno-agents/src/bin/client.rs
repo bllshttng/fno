@@ -418,14 +418,16 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::claude_supervisor::run_birth_exec(&args[1..]);
     }
 
-    // `review-summary` is the display-line author for a pre-push reviewed PR:
-    // the /fno:ship pr create worker runs it against the attestation journal (global
-    // state root by default) and appends its stdout to the body. Same
-    // `matches!` treatment as `claim`/`detect` so the
-    // routable-verb parity guard does not see it - it reads one file and
-    // prints, it is not an `fno agents` verb.
-    if matches!(verb, "review-summary") {
-        return fno_agents::review_summary::run_review_summary(&args[1..]);
+    // `review-summary` and `review-level` are binary-direct review doors:
+    // review-summary authors the display line a pre-push reviewed PR carries -
+    // the /fno:ship pr create worker runs it against the attestation journal
+    // (global state root by default) and appends its stdout to the body - and
+    // review-level is the resolve-level leaf the Python caller reaches through
+    // the binary. The `review_doors::dispatch` match table routes them the
+    // way the `matches!` arms route `claim`/`detect`, outside the
+    // routable-verb parity guard - they read state and print.
+    if let Some(code) = fno_agents::review_doors::dispatch(verb, &args[1..]) {
+        return code;
     }
 
     // PR creation reads this branch-vs-base test inventory for its body; it
@@ -1147,11 +1149,11 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "pr-create") {
         return fno_agents::pr_create::run_pr_create_verb(&args[1..]);
     }
-    // `pr-closure-parse` / `pr-closure-render`: the one parser/renderer for
-    // the PR-body closure line; the Python readers forward here (JSON payload
-    // in, JSON answer out, binary-direct like `pr-body-check`).
-    if matches!(verb, "pr-closure-parse" | "pr-closure-render") {
-        return fno_agents::org_board::pr_closure::run(&args);
+    // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
+    // the produce verbs ported from Python (branch-ids, ensure, trailer,
+    // bind-created, context); binary-direct like `pr-body-check`.
+    if verb.starts_with("pr-closure") {
+        return fno_agents::org_board::pr_closure::run_verb(&args);
     }
     if matches!(verb, "pr-rebase") {
         return fno_agents::pr_rebase::run_rebase(&args[1..]);
@@ -1438,7 +1440,7 @@ async fn run(args: Vec<String>) -> i32 {
             return code;
         }
         // Agy `ask` is intercepted client-side (Phase C): agy is plain-text with
-        // no session id, so a stateful resume is unsupported — this surfaces a
+        // no session id, so a stateful resume is unsupported - this surfaces a
         // clear error directing the caller to `spawn --harness agy --once`.
         if let Some(code) = maybe_run_agy_ask(&home, &params, &agent_name) {
             return code;
@@ -1454,7 +1456,7 @@ async fn run(args: Vec<String>) -> i32 {
             return code;
         }
         // Opencode `ask` is intercepted client-side: opencode is
-        // pane-hosted only in v1, so a stateful resume is unsupported — this
+        // pane-hosted only in v1, so a stateful resume is unsupported - this
         // surfaces a clear error directing the caller to drive the pane
         // directly, rather than the generic "provider required for new
         // agent" text an existing opencode row would otherwise hit below
@@ -1782,7 +1784,7 @@ async fn run(args: Vec<String>) -> i32 {
                 ) {
                     // ask FOLLOW-UP prints the reply verbatim with no added
                     // newline, matching Python `sys.stdout.write(result.reply or "")`
-                    // (Codex P2 on PR #361 — relevant under FNO_AGENTS_RUNTIME=rust,
+                    // (Codex P2 on PR #361 - relevant under FNO_AGENTS_RUNTIME=rust,
                     // the only path that routes ask to this client). Every other
                     // formatted output (ask create short_id, stop/rm/list/reconcile)
                     // keeps the trailing newline.
@@ -2724,7 +2726,7 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             if outcome.exit_code == 0 {
                 // The bg worker is claude's child (its exec can't be wrapped);
                 // demote post-hoc via the roster pid. short_id from the JSON
-                // receipt line (parsed, not string-split — gemini HIGH).
+                // receipt line (parsed, not string-split - gemini HIGH).
                 let parsed: Option<serde_json::Value> =
                     serde_json::from_str(outcome.stdout.trim()).ok();
                 if let Some(sid) = parsed
@@ -4425,8 +4427,8 @@ fn rm_failure_line(name: &str, err: &str, still_registered: Option<bool>) -> Str
 ///   daemon now includes in every stop success payload. Falls back to
 ///   `stopped: <name>` when `short_id` is absent (e.g. an old daemon).
 /// - `rm`: names each surface the daemon proved removed or unverified.
-/// - `list`: Task 3.1 — JSON when `json_flag` or not a TTY; table otherwise.
-/// - `reconcile`: Task 3.1 — JSON when `json_flag` or not a TTY; human summary otherwise.
+/// - `list`: Task 3.1 - JSON when `json_flag` or not a TTY; table otherwise.
+/// - `reconcile`: Task 3.1 - JSON when `json_flag` or not a TTY; human summary otherwise.
 fn format_success(
     verb: &str,
     name: &str,
