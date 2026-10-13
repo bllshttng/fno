@@ -1351,7 +1351,7 @@ pub fn deliver_via_keeper_socket_in(
 /// Trims surrounding whitespace because Python `int()` does (`int(" 4000 ")` ==
 /// 4000); without it, a value with stray whitespace would parse on one door and
 /// fall back to the default on the other, drifting the threshold.
-fn cap_env_int(name: &str, default: i64) -> i64 {
+pub(crate) fn cap_env_int(name: &str, default: i64) -> i64 {
     std::env::var(name)
         .ok()
         .and_then(|raw| raw.trim().parse().ok())
@@ -1366,7 +1366,7 @@ fn cap_env_int(name: &str, default: i64) -> i64 {
 /// Python. A tier <= 0 disables it (fail-open); both doors read the same knob, so
 /// disabling one disables both. Pure numeric core; [`body_cap_decision`] scopes
 /// it to unwrapped bodies so framed relay/mail traffic is never refused.
-fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
+pub(crate) fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
     if refuse > 0 && n > refuse as usize {
         eprintln!(
             "error: mail body is {n} bytes (cap {refuse}). Relay mail is re-read every turn; \
@@ -1421,7 +1421,7 @@ fn opens_envelope_tag(head: &str, tag: &str) -> bool {
 
 /// Case-insensitive `haystack.contains(needle)`. `needle` is always an ASCII
 /// literal already in canonical case.
-fn contains_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(needle)
 }
 
