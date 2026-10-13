@@ -1663,10 +1663,6 @@ def init(
         "init fold reads no free text. There is deliberately no "
         "--auto-merge twin; granting stays on config/TARGET_AUTO_MERGE.",
     ),
-    steps: bool = typer.Option(
-        False, "--steps",
-        help="Steps mode: a non-looping run an outer skill advances one step at a time.",
-    ),
     deliverables: Optional[int] = typer.Option(
         None,
         "--deliverables",
@@ -1987,8 +1983,6 @@ def init(
     # inherited one, so a stray flag omission cannot upgrade a run to mergeable.
     if no_merge:
         env["TARGET_NO_MERGE"] = "1"
-    if steps:
-        env["TARGET_TURN_MODE"] = "steps"
     # The review-capability gate already ran in-process above; say so, or the
     # script runs it again. Not free to repeat: resolve_github_apps
     # probes GitHub with two 30s-timeout `gh` calls per unrecognized login.
@@ -3019,7 +3013,7 @@ def _start_codex_native(
     model: Optional[str],
     harness: Optional[str],
     beastmode: bool,
-    no_merge: bool, steps: bool,
+    no_merge: bool,
     deliverables: Optional[int] = None,
     deadline: Optional[float] = None,
 ) -> None:
@@ -3115,8 +3109,6 @@ def _start_codex_native(
         cmd += ["--beastmode"]
     if no_merge:
         cmd += ["--no-merge"]
-    if steps:
-        cmd += ["--steps"]
     if deliverables is not None:
         cmd += ["--deliverables", str(deliverables)]
     init = subprocess.run(cmd, cwd=str(cwd)) if deadline is None else _run_bounded_init(
@@ -3513,10 +3505,6 @@ def start(
         "prose-level carrier: start resolves its argument to a bare node id, and "
         "the init fold reads no free text.",
     ),
-    steps: bool = typer.Option(
-        False, "--steps",
-        help="Steps mode: non-looping run, one instructed step at a time (forwarded to init).",
-    ),
     deliverables: Optional[int] = typer.Option(
         None, "--deliverables",
         help="Declare the scope denominator for a plan-less node (forwarded to "
@@ -3543,7 +3531,7 @@ def start(
     try:
         _start_body(
             node, plan_path, size, model, harness, _provider_tombstone,
-            beastmode, no_merge, deliverables, deadline, steps,
+            beastmode, no_merge, deliverables, deadline,
         )
     finally:
         faulthandler.cancel_dump_traceback_later()
@@ -3551,7 +3539,7 @@ def start(
 
 def _bind_worktree(
     node: str, wt_path: Path, *, base_label: str, in_place: bool,
-    node_match_guaranteed: bool, beastmode: bool, no_merge: bool, steps: bool,
+    node_match_guaranteed: bool, beastmode: bool, no_merge: bool,
 ) -> bool:
     """Classify and re-bind an existing manifest. True when the caller is done.
 
@@ -3653,8 +3641,6 @@ def _bind_worktree(
         _warn_if_authority_not_granted(wt_path)
     if no_merge:
         _warn_no_merge_dropped()
-    if steps:
-        typer.echo("WARNING: --steps did NOT take; steps mode is stamped only at init.", err=True)
     return True
 
 
@@ -3671,7 +3657,7 @@ def _init_from_worktree(
     model: Optional[str],
     harness: Optional[str],
     beastmode: bool,
-    no_merge: bool, steps: bool,
+    no_merge: bool,
     deliverables: Optional[int],
     deadline: float,
 ) -> None:
@@ -3691,8 +3677,6 @@ def _init_from_worktree(
     init_cmd = fno + ["do", "target", "init", "--input", node]
     if no_merge:
         init_cmd += ["--no-merge"]
-    if steps:
-        init_cmd += ["--steps"]
     if plan_path:
         init_cmd += ["--plan-path", plan_path]
     if size:
@@ -3743,7 +3727,7 @@ def _init_from_worktree(
 def _start_body(
     node: str, plan_path: Optional[str], size: Optional[str], model: Optional[str],
     harness: Optional[str], _provider_tombstone: Optional[str], beastmode: bool,
-    no_merge: bool, deliverables: Optional[int], deadline: float, steps: bool,
+    no_merge: bool, deliverables: Optional[int], deadline: float,
 ) -> None:
     from fno._flag_aliases import refuse_retired_provider
 
@@ -3777,7 +3761,7 @@ def _start_body(
                 model=model,
                 harness=harness,
                 beastmode=beastmode,
-                no_merge=no_merge, steps=steps,
+                no_merge=no_merge,
                 deliverables=deliverables,
                 deadline=deadline,
             )
@@ -3800,7 +3784,7 @@ def _start_body(
             base_label = "in-place"
         if _bind_worktree(node_id, cwd, base_label=base_label, in_place=False,
                           node_match_guaranteed=False, beastmode=beastmode,
-                          no_merge=no_merge, steps=steps):
+                          no_merge=no_merge):
             return
         # No manifest in this tree (a stranded session: mail woke it, so init
         # never ran and no claim was ever acquired). Bind the EXISTING tree
@@ -3810,7 +3794,7 @@ def _start_body(
             node_id, cwd, base_label=base_label, in_place=False,
             created_this_run=False, from_note="", plan_path=plan_path,
             size=size, model=model, harness=harness, beastmode=beastmode,
-            no_merge=no_merge, steps=steps, deliverables=deliverables, deadline=deadline,
+            no_merge=no_merge, deliverables=deliverables, deadline=deadline,
         )
         return
 
@@ -3953,7 +3937,7 @@ def _start_body(
     # error) or fall through to a fresh init against this tree.
     if _bind_worktree(node, wt_path, base_label=base_label, in_place=in_place,
                       node_match_guaranteed=not in_place, beastmode=beastmode,
-                      no_merge=no_merge, steps=steps):
+                      no_merge=no_merge):
         return
     # 3. Init the session FROM the worktree (binds owner_cwd, claims the node
     #    exactly once - preserve the existing one-call claim).
@@ -3961,6 +3945,6 @@ def _start_body(
         node, wt_path, base_label=base_label, in_place=in_place,
         created_this_run=created_this_run, from_note=from_note,
         plan_path=plan_path, size=size, model=model, harness=harness,
-        beastmode=beastmode, no_merge=no_merge, steps=steps,
-        deliverables=deliverables, deadline=deadline,
+        beastmode=beastmode, no_merge=no_merge, deliverables=deliverables,
+        deadline=deadline,
     )
