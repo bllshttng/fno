@@ -388,9 +388,12 @@ pub(crate) fn clock_description(clock: &Clock) -> String {
 /// third drain trigger that lifts the hold and delivers the digest with no
 /// further input. The timer re-enters the running binary's `mail hold-release`
 /// and re-reads the clock every poll, so a re-arm simply keeps it sleeping,
-/// and its designed exit is a vanished clock.
+/// and its designed exit is a vanished clock. The re-entry binary resolves
+/// through `FNO_AGENTS_TIMER_EXE` when set; production leaves it unset and
+/// the tests point it at an argv-logging stub.
 pub(crate) fn spawn_release_timer(handle: &str) {
-    let Ok(exe) = std::env::current_exe() else {
+    let seam = std::env::var_os("FNO_AGENTS_TIMER_EXE").map(std::path::PathBuf::from);
+    let Some(exe) = seam.or_else(|| std::env::current_exe().ok()) else {
         eprintln!("mail-hold: release timer did not start: cannot resolve the running binary");
         return;
     };
@@ -1503,7 +1506,7 @@ pub(crate) mod tests {
     /// Pin FNO_AGENTS_HOME (registry + journal), FNO_HOME (hold sidecars)
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
     /// crate-wide env lock (claim_verbs idiom). FNO_PY points at `true` so
-    /// the detached release-timer spawn is a no-op the test never waits on.
+    /// a parked-payload drain spawn is a no-op the test never waits on.
     /// Prior values are restored, so an ambient FNO_HOME survives the test.
     pub(crate) fn with_hold_env(f: impl FnOnce(&std::path::Path)) {
         let _guard = crate::claims::test_env_lock()
@@ -1688,7 +1691,7 @@ pub(crate) mod tests {
     #[test]
     fn release_lifts_the_hold_and_arms_the_standard_release_leg() {
         with_hold_env(|dir| {
-            let _g = env_guard(&["FNO_PY", "PARK_LOG"]);
+            let _g = env_guard(&["FNO_PY", "PARK_LOG", "FNO_AGENTS_TIMER_EXE"]);
             write_registry(dir, serde_json::json!([stamped_row("worker", SID)]));
             write_clock(
                 &identity_key(SID),
@@ -1699,11 +1702,11 @@ pub(crate) mod tests {
                 Some(CONVERSATION_SOURCE),
             )
             .unwrap();
-            // The release leg is the standard detached timer; the stub FNO_PY
+            // The release leg is the standard detached timer; the seam stub
             // logs its argv, so the test polls the log for the spawn.
             let stub = write_stub_py(dir);
             let log = dir.join("release.log");
-            std::env::set_var("FNO_PY", stub.to_string_lossy().to_string());
+            std::env::set_var("FNO_AGENTS_TIMER_EXE", stub.to_string_lossy().to_string());
             std::env::set_var("PARK_LOG", log.to_string_lossy().to_string());
             assert_eq!(
                 run_mail_hold(&["--session".into(), SID.into(), "--release".into()]),
@@ -2333,8 +2336,10 @@ pub(crate) mod tests {
         });
     }
 
-    /// The stub `fno-py` the runner drains through: appends its argv to
-    /// `$PARK_LOG` and exits 1 when `$PARK_FAIL` is set, else 0.
+    /// The argv-logging stub: appends its argv to `$PARK_LOG` and exits 1
+    /// when `$PARK_FAIL` is set, else 0. Backs the parked-payload drain
+    /// (as the `FNO_PY` runner) and the release-timer seam (as
+    /// `FNO_AGENTS_TIMER_EXE`).
     fn write_stub_py(dir: &std::path::Path) -> std::path::PathBuf {
         crate::write_exec_stub(
             dir,

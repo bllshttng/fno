@@ -428,11 +428,15 @@ fn register_existing_session(harness: &str, session_id: &str) -> Result<(), Stri
         registry.entries.push(crate::state::RegistryEntry {
             name,
             harness: Some(harness.to_string()),
-            harness_session_id: Some(session_id.to_string()),
             cwd,
             delivery_policy: Some("bus-only".to_string()),
             status: crate::AgentStatus::Idle,
-            ..Default::default()
+            ..crate::state::RegistryEntry::new(
+                Some(session_id.to_string()),
+                crate::state::Lineage::unproven(
+                    "mail-hold register: self-registration carries no parent edge",
+                ),
+            )
         });
     })
     .map_err(|e| format!("registry write failed: {e}"))?;
