@@ -672,12 +672,12 @@ def test_mesh_env_wrapper_route_wins_over_account() -> None:
 
 
 def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None:
-    """--print resolves the lane, writes the settings file and prints the
-    native line it would exec, then exits. Nothing is gated, registered or
-    launched. The render itself is the spawn-overlay print kind's; the Rust
-    goldens pin the tokens, so this test pins the transport: the ask carries
-    the resolved lane values (and the row's own launch list when the row
-    declares one), and stdout is the shell-quoted join of the answer."""
+    """--print resolves the lane and prints the native line it would exec,
+    then exits. Nothing is gated, registered or launched. The lane fold, the
+    compose and the render all live behind the spawn-overlay print kind; the
+    Rust goldens pin the tokens, so this test pins the transport: the ask
+    carries the RAW overlays and stdout is the shell-quoted join of the
+    answer."""
     from fno.agents import spawn_gate
     from fno.agents.cli import agents_app
 
@@ -686,20 +686,6 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno.agents import model_routing as mr
-    row = {
-        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
-        "route": "zai/glm-5.2",
-        "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
-    }
-    monkeypatch.setattr(
-        mr, "declared_lane", lambda provider, model: dict(row)
-    )
-    monkeypatch.setattr(
-        mr,
-        "route_settings_path_for",
-        lambda *a, **k: "/state/route-settings/lane-zai-flash.json",
-    )
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
@@ -723,9 +709,10 @@ def test_print_renders_the_lane_native_line(tmp_path: Path, monkeypatch) -> None
     assert "'/fno:target x-1abc'" in line
     [ask] = asks
     assert ask["kind"] == "print" and ask["harness"] == "claude"
-    assert ask["settings"] == "/state/route-settings/lane-zai-flash.json"
+    assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
+    assert ask["account_env"] == {}
     assert ask["model"] == "glm-5.2" and ask["effort"] == "xhigh"
-    assert ask["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
+    assert ask["cwd"], "the print ask carries the spawn's own cwd"
     assert gate_calls == [], "--print must not touch the gate"
 
 
@@ -743,10 +730,10 @@ def test_print_refuses_a_lane_without_a_native_line(monkeypatch) -> None:
 
 def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     """The lane pin spelling: ``--route zai-flash`` resolves the declared row
-    and the row's own axes answer the spawn - vendor and model for the
-    settings file, effort seeded when the spawn named none of its own, and
-    the row's launch list riding the print ask. A pair-shaped value never
-    reaches the name arm: the pair parse runs first."""
+    and the row's own axes answer the spawn - the door's vendor split names
+    the provider and effort seeds when the spawn named none of its own. A
+    pair-shaped value never reaches the name arm: the pair parse runs
+    first."""
     from fno.agents import spawn_gate
     from fno.agents.cli import agents_app
 
@@ -755,27 +742,17 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or _Gate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno import route_resolve
-    from fno.agents import model_routing as mr
-    from fno.route_resolve import Inventory, InventoryRow
+    from fno.route_slot_client import route_slot_call
 
-    row = InventoryRow(
-        name="zai-flash", harness="claude", model="glm-5.3-flash[1m]",
-        route="zai/glm-5.3-flash[1m]", effort="xhigh",
-        launch=["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
-    )
+    row = {
+        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
+    }
     monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda: Inventory(rows={"zai-flash": row}, declared=True),
+        route_slot_call,
+        "route_slot_call",
+        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
     )
-    aliases: list[str | None] = []
-
-    def fake_settings(*a: Any, **k: Any) -> str:
-        aliases.append(k.get("alias"))
-        return "/s/lane-zai-flash.json"
-
-    monkeypatch.setattr(mr, "route_settings_path_for", fake_settings)
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
@@ -794,14 +771,14 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     [ask] = asks
     assert ask["model"] == "glm-5.3-flash[1m]"
     assert ask["effort"] == "xhigh", "the row's effort seeded the spawn"
-    assert ask["launch"] == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
-    assert aliases == ["zai-flash"]
+    assert ask["route_env"].get("FNO_ROUTE_PROVIDER") == "zai"
 
 
 def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
     """A fresh routed claude thread spawn execs the lane's own bg line through
-    the launch-lane door: the ask carries the lane's values and the record
-    context, the dispatcher path never runs, and the gate still releases."""
+    the launch-lane door: the ask carries the RAW overlays and the record
+    context (the compose happens in the door), the dispatcher path never
+    runs, and the gate still releases."""
     from fno.agents import spawn_gate
     from fno.agents.cli import agents_app
 
@@ -817,22 +794,16 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
     )
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    from fno.agents import model_routing as mr
     from fno.route_slot_client import route_slot_call
 
     row = {
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
-        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh",
+        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
     monkeypatch.setattr(
         route_slot_call,
         "route_slot_call",
         lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
-    monkeypatch.setattr(
-        mr,
-        "route_settings_path_for",
-        lambda *a, **k: "/state/route-settings/lane-zai-flash.json",
     )
     from fno.agents import spawn_lineage
 
@@ -861,7 +832,8 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
     assert ask["harness"] == "claude"
     assert ask["name"] == "w"
     assert ask["payload"] == "/fno:target x-1abc"
-    assert ask["settings"] == "/state/route-settings/lane-zai-flash.json"
+    assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
+    assert ask["account_env"] == {}
     assert ask["model"] == "glm-5.3-flash[1m]"
     assert ask["effort"] == "xhigh"
     assert ask["provider"] == "zai"

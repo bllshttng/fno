@@ -99,6 +99,116 @@ fn digest_of(payload: &[u8]) -> String {
     full.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
+/// The scrub floor's var list: one list with Python's
+/// `account_env.SCRUB_AUTH_VARS` (the route stamp included, the model tiers
+/// folded in), which a Python test pins to this copy.
+fn scrub_auth_vars() -> Vec<&'static str> {
+    let mut vars: Vec<&'static str> = vec![
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "FNO_ROUTE_PROVIDER",
+    ];
+    vars.extend(crate::model_env_scrub::MODEL_ENV_KEYS);
+    vars
+}
+
+/// The subset of a route whose VALUE is a credential; a self-authed route
+/// drops the account secrets it does not name, else an api-key account's
+/// vendor key rides the file against the route's endpoint.
+const SECRET_ROUTE_VARS: [&str; 2] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
+const ENV_FALSY_WORDS: [&str; 5] = ["", "0", "false", "no", "off"];
+
+/// The inherited model claims worth flooring, read from the spawn's own
+/// environment: the five model vars carrying a value, but ONLY while no
+/// vendor lane is on and the endpoint is Anthropic's own (or unset). A
+/// foreign base serves those model ids, so flooring would break a working
+/// lane; Bedrock and Vertex serve Anthropic models under other id shapes.
+fn unrouted_model_keys(spawn_env: &Map<String, Value>) -> Vec<&'static str> {
+    for flag in ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"] {
+        let value = spawn_env
+            .get(flag)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if !ENV_FALSY_WORDS.contains(&value.as_str()) {
+            return Vec::new();
+        }
+    }
+    let base = spawn_env
+        .get("ANTHROPIC_BASE_URL")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !base.is_empty() {
+        let host = base_url_host(&base);
+        if host != "anthropic.com" && !host.ends_with(".anthropic.com") {
+            return Vec::new();
+        }
+    }
+    crate::model_env_scrub::MODEL_ENV_KEYS
+        .iter()
+        .filter(|key| {
+            spawn_env
+                .get(**key)
+                .and_then(Value::as_str)
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect()
+}
+
+/// The composed settings env from the RAW overlays - the port of Python's
+/// `route_settings_path_for` compose, so the Python leg is a transport to
+/// this door and a fourth seam cannot hand-roll a disagreeing order. The
+/// scrub floor first, the account overlay minus its config dir (the config
+/// dir selects the config the file is read FROM, so it rides the process
+/// env), the route written last so it wins every credential var as one unit,
+/// a self-authed route's drop of the account secrets it does not name, and
+/// the unrouted-model floor.
+pub fn compose_env(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    spawn_env: &Map<String, Value>,
+) -> Map<String, Value> {
+    let mut merged: Map<String, Value> = Map::new();
+    for var in scrub_auth_vars() {
+        merged.insert(var.to_string(), Value::String(String::new()));
+    }
+    for (key, value) in account_env {
+        if key.as_str() == "CLAUDE_CONFIG_DIR" {
+            continue;
+        }
+        merged.insert(key.clone(), value.clone());
+    }
+    for (key, value) in route_env {
+        merged.insert(key.clone(), value.clone());
+    }
+    let self_authed = route_env
+        .get("ANTHROPIC_AUTH_TOKEN")
+        .or_else(|| route_env.get("ANTHROPIC_API_KEY"))
+        .map(|v| !v.as_str().unwrap_or_default().trim().is_empty())
+        .unwrap_or(false);
+    if self_authed {
+        for var in SECRET_ROUTE_VARS {
+            if !route_env.contains_key(var) {
+                merged.remove(var);
+            }
+        }
+    }
+    for key in unrouted_model_keys(spawn_env) {
+        merged
+            .entry(key.to_string())
+            .or_insert_with(|| Value::String(String::new()));
+    }
+    merged
+}
+
 /// A lane alias is a CLI-handle-shaped name: one write per config row, and a
 /// stranger name must never turn into a path outside route-settings.
 fn valid_alias(alias: &str) -> bool {
@@ -161,10 +271,41 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     Ok(WriteReceipt { path, alias_path })
 }
 
-/// The door: one JSON payload on stdin (`{"env", "sandbox"?, "alias"?}`), one
-/// JSON receipt on stdout. The transport is the contract Python's forwarder
-/// holds, so a refusal is a loud non-zero, never a silent fallback to a
-/// Python write leg.
+/// Compose from the RAW overlays and write, the one helper behind both
+/// doors (the native exec and the print kind). `Ok(None)` when the ask
+/// names no overlay: a plain lane launch carries no settings file.
+pub fn write_composed(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    sandbox: Option<Value>,
+    alias: Option<&str>,
+    cwd: &Path,
+) -> Result<Option<String>, String> {
+    if route_env.is_empty() && account_env.is_empty() {
+        return Ok(None);
+    }
+    let spawn_env: Map<String, Value> = std::env::vars()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    let env = compose_env(route_env, account_env, &spawn_env);
+    let receipt = write(
+        &WriteAsk {
+            env,
+            sandbox,
+            alias: alias.map(str::to_string),
+        },
+        cwd,
+    )
+    .map_err(|e| format!("lane settings: {e}"))?;
+    Ok(Some(receipt.path.to_string_lossy().into_owned()))
+}
+
+/// The door: one JSON payload on stdin, one JSON receipt on stdout. Two ask
+/// shapes: `{"env", ...}` is a pre-composed env (the revive readers), and
+/// `{"route_env", "account_env", ...}` names the RAW overlays for the door's
+/// own compose. The transport is the contract Python's forwarder holds, so a
+/// refusal is a loud non-zero, never a silent fallback to a Python write
+/// leg.
 pub fn run_route_settings(args: &[String]) -> i32 {
     if !args.is_empty() {
         eprintln!("route-settings: the door takes no argv; the payload rides stdin");
@@ -182,16 +323,37 @@ pub fn run_route_settings(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let Some(env) = payload.get("env").and_then(Value::as_object).cloned() else {
-        eprintln!("route-settings: payload carries no env object");
-        return 2;
-    };
-    for (k, v) in &env {
-        if !v.is_string() {
-            eprintln!("route-settings: env[{k}] is not a string");
-            return 2;
+    let string_object = |field: &str| -> Option<Map<String, Value>> {
+        let obj = payload.get(field).and_then(Value::as_object)?;
+        if obj.values().all(Value::is_string) {
+            Some(obj.clone())
+        } else {
+            eprintln!("route-settings: {field} carries a non-string value");
+            None
         }
-    }
+    };
+    let env = if payload.get("route_env").is_some() || payload.get("account_env").is_some() {
+        let (Some(route_env), Some(account_env)) =
+            (string_object("route_env"), string_object("account_env"))
+        else {
+            eprintln!(
+                "route-settings: the overlay compose needs route_env and account_env objects"
+            );
+            return 2;
+        };
+        let spawn_env: Map<String, Value> = std::env::vars()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+        compose_env(&route_env, &account_env, &spawn_env)
+    } else {
+        match string_object("env") {
+            Some(env) => env,
+            None => {
+                eprintln!("route-settings: payload carries no env or overlay object");
+                return 2;
+            }
+        }
+    };
     let ask = WriteAsk {
         env,
         sandbox: payload.get("sandbox").filter(|v| v.is_object()).cloned(),
@@ -224,6 +386,30 @@ pub fn run_route_settings(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writer resolves its state root from the env (FNO_STATE_DIR, then
+    /// config, then $HOME/.fno); a test that writes pins it under the claims
+    /// env lock, so the sandbox never touches the real state root.
+    fn state_pin(
+        root: &Path,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        Option<std::ffi::OsString>,
+    ) {
+        let guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", root);
+        (guard, saved)
+    }
+
+    fn state_restore(saved: Option<std::ffi::OsString>) {
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+    }
 
     fn env_of(pairs: &[(&str, &str)]) -> Map<String, Value> {
         pairs
@@ -262,6 +448,7 @@ mod tests {
             alias: None,
         };
         let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
         let receipt = write(&base, root.path()).unwrap();
         let again = write(&base, root.path()).unwrap();
         assert_eq!(receipt.path, again.path);
@@ -274,11 +461,14 @@ mod tests {
         let on_disk = std::fs::read_to_string(&other.path).unwrap();
         let payload: Value = serde_json::from_str(&on_disk).unwrap();
         assert_eq!(payload["sandbox"]["enabled"], json!(true));
+        state_restore(saved);
+        drop(guard);
     }
 
     #[test]
     fn the_alias_lands_at_lane_name_and_refuses_a_stranger() {
         let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
         let ask = WriteAsk {
             env: env_of(&[("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")]),
             sandbox: None,
@@ -302,5 +492,75 @@ mod tests {
             ..ask
         };
         assert!(write(&bad, root.path()).is_err());
+        state_restore(saved);
+        drop(guard);
+    }
+
+    /// The compose from raw overlays: the scrub floor, the account overlay
+    /// minus its config dir, the route winning the credential slot, and the
+    /// self-authed drop of the account secret the route does not name.
+    #[test]
+    fn the_compose_floors_overlays_and_drops_the_foreign_secret() {
+        let route_env = env_of(&[
+            ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+            ("ANTHROPIC_AUTH_TOKEN", "zk-route"),
+            ("ANTHROPIC_MODEL", "glm-5.2"),
+        ]);
+        let account_env = env_of(&[
+            ("ANTHROPIC_API_KEY", "acct-key"),
+            ("CLAUDE_CONFIG_DIR", "/accounts/ccm"),
+            ("ANTHROPIC_LOG_LEVEL", "debug"),
+        ]);
+        let spawn_env = env_of(&[("ANTHROPIC_MODEL", "claude-opus-5-5")]);
+        let merged = compose_env(&route_env, &account_env, &spawn_env);
+        let as_str = |k: &str| merged.get(k).and_then(Value::as_str).expect(k).to_string();
+        // The route wins the credential slot; the account secret a
+        // self-authed route does not name is dropped, and the config dir
+        // never rides the file.
+        assert_eq!(
+            as_str("ANTHROPIC_BASE_URL"),
+            "https://api.z.ai/api/anthropic"
+        );
+        assert_eq!(as_str("ANTHROPIC_AUTH_TOKEN"), "zk-route");
+        assert!(!merged.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!merged.contains_key("CLAUDE_CONFIG_DIR"));
+        assert_eq!(as_str("ANTHROPIC_LOG_LEVEL"), "debug");
+        assert_eq!(as_str("ANTHROPIC_MODEL"), "glm-5.2");
+        // The floor covers every scrub var; a key the overlays do not name
+        // stays at the floor's empty string.
+        assert_eq!(as_str("CLAUDE_CODE_OAUTH_TOKEN"), "");
+        assert_eq!(as_str("FNO_ROUTE_PROVIDER"), "");
+        assert_eq!(as_str("ANTHROPIC_DEFAULT_FABLE_MODEL"), "");
+    }
+
+    /// The unrouted-model floor reads the spawn env, and the endpoint guard
+    /// is the one Python's coherence repair shares: a foreign base URL
+    /// serves foreign model ids, so an inherited claim is left to the floor.
+    #[test]
+    fn the_unrouted_floor_respects_the_endpoint_guard() {
+        let route_env = env_of(&[("ANTHROPIC_AUTH_TOKEN", "t")]);
+        let account_env = Map::new();
+        let spawn_env = env_of(&[
+            ("ANTHROPIC_BASE_URL", "https://anthropic.com"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
+        ]);
+        let merged = compose_env(&route_env, &account_env, &spawn_env);
+        assert_eq!(
+            merged
+                .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        let spawn_env = env_of(&[
+            ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
+        ]);
+        let merged = compose_env(&route_env, &account_env, &spawn_env);
+        assert_eq!(
+            merged
+                .get("ANTHROPIC_DEFAULT_OPUS_MODEL")
+                .and_then(Value::as_str),
+            Some("")
+        );
     }
 }

@@ -1117,8 +1117,8 @@ def cmd_spawn(
         False,
         "--print",
         help=(
-            "Resolve the lane, write its settings file and print the native "
-            "line it would exec, then exit. Launches nothing."
+            "Print the native line the spawn would exec, then exit. "
+            "Launches nothing."
         ),
     ),
     sandbox_write_policy: str | None = typer.Option(
@@ -1512,8 +1512,8 @@ def cmd_spawn(
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
 
-    # The substrate axis: headless is the ergonomic shortcut;
-    # an empty value resolves to the built-in default (thread where seated).
+    # The substrate axis: an empty value resolves to the built-in default
+    # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, thread_seatable, thread_uncarried
 
     # A flag the harness's thread lane cannot carry (a typed axis or a fenced
@@ -1662,39 +1662,6 @@ def cmd_spawn(
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
-    # Fail-closed for non-claude bg/headless (mirrors the Rust intercept): only
-    # claude's bg lane honors a mapped --permission-mode via the Python fallback
-    # (dispatch_spawn -> _claude_create_path); codex/gemini one-shot lanes
-    # hardcode their own bypass and can't express a mapped mode. The pane
-    # substrate maps every provider, so it's exempt here. The codex
-    # thread lane is exempt too: the shared app-server resolves the posture
-    # (resolve_thread_posture), so a mapped mode rides it natively.
-    # The capability table decides, through the one Rust vocabulary (see
-    # codex_posture.rs): a codex thread lane carries a mapped mode when the
-    # table declares the lane AND the mode resolves in codex's own words. An
-    # unavailable owner reads false, which degrades to the refusal below -
-    # never a guessed yes.
-    from fno.agents.permission_axis import codex_thread_lane_carries
-
-    codex_thread_lane = codex_thread_lane_carries(harness, substrate, once, permission_mode)
-    if (
-        permission_mode is not None
-        and harness != "claude"
-        and (substrate != "pane" or once)
-        and not codex_thread_lane
-    ):
-        remedy = (
-            "drop --permission-mode and pass -Y/--yolo"
-            if harness == "codex"
-            else "use --substrate pane"
-        )
-        print(
-            f"--permission-mode is not supported for harness {harness!r} on "
-            "--substrate bg/headless (its one-shot lane hardcodes its own bypass "
-            f"form); {remedy}",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
 
     #: Tier-3 fail-closed for the bg/headless lanes (the pane substrate
     # maps every provider via build_pane_argv, so it's exempt and validated
@@ -1797,8 +1764,7 @@ def cmd_spawn(
     # applied. A bare --model (no route) is still reported via the `model`
     # local below, since claude bg_create applies it as `claude --model`.
     route_model: str | None = None
-    # The routing row a lane-name route resolved, so the lane-specific
-    # surfaces downstream (the print ask's launch list) read the row once.
+    # The row a lane-name route resolved; the lane surfaces read it once.
     lane_row: dict | None = None
     if route is not None:
         # Pane routing is a per-harness evidence claim, independent from both
@@ -1836,31 +1802,20 @@ def cmd_spawn(
         )
 
         parsed = _parse_target(route)
-        lane_row: dict | None = None
         if parsed is None:
             # The lane pin spelling: a declared row's NAME resolves the whole
-            # coordinate - the dispatchers name one lane, never a flag
-            # vocabulary. The pair spelling parses first, so a row named like
-            # a pair cannot shadow it.
+            # coordinate; the pair parse ran first, so it cannot shadow.
             from fno.agents.model_routing import declared_lane
 
             lane_row = declared_lane(name=route)
             if lane_row is None:
-                print(
-                    f"--route takes 'provider,model' or a declared lane name; got {route!r}",
-                    file=sys.stderr,
-                )
+                print(f"--route takes 'provider,model' or a declared lane name; got {route!r}", file=sys.stderr)
                 raise typer.Exit(code=2)
         if lane_row is not None:
-            vendor = (lane_row.get("route") or "").split("/", 1)[0]
-            if not vendor:
-                print(
-                    f"--route {route!r} names a lane that declares no route; "
-                    "no worker launched, node stays dispatchable.",
-                    file=sys.stderr,
-                )
+            route_provider = lane_row.get("vendor") or ""
+            if not route_provider:
+                print(f"--route {route!r} names a lane that declares no route; no worker launched, node stays dispatchable.", file=sys.stderr)
                 raise typer.Exit(code=2)
-            route_provider = vendor
             route_model = lane_row.get("model") or ""
             if effort is None and lane_row.get("effort"):
                 effort = lane_row["effort"]
@@ -1868,10 +1823,7 @@ def cmd_spawn(
             route_provider = parsed[0]
             route_model = parsed[1]
         if monitor == "happy" and route_provider != "zai":
-            print(
-                "--monitor happy currently supports only the zai provider",
-                file=sys.stderr,
-            )
+            print("--monitor happy currently supports only the zai provider", file=sys.stderr)
             raise typer.Exit(code=2)
         if monitor == "happy" and model is not None:
             print(
@@ -2050,53 +2002,25 @@ def cmd_spawn(
             file=sys.stderr,
         )
 
-    # --print: resolve the lane, write its settings file and print the native
-    # line it would exec, then exit. Every refusal above already ran, so what
-    # prints is the line the real spawn would carry; nothing is gated,
-    # registered or launched. The render is the spawn-overlay print kind's -
-    # the same fill the exec path runs - so the printed line cannot drift
-    # from the executed one. Claude lanes first; wave 5 templates the rest.
+    # --print: the verb refuses, composes the settings file and renders the
+    # native line; this leg is the ask and the display. Nothing is gated,
+    # registered or launched, and the render is the exec path's own fill.
     if print_mode:
-        if harness != "claude" or substrate != "thread":
-            print(
-                f"--print renders claude --bg lines; harness "
-                f"{harness!r} substrate {substrate!r} has no native line yet.",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-        if not (route_env or account_env):
-            print(
-                "--print needs a routed or pinned-account lane (the settings "
-                "file is the lane); a plain bg line is just claude --bg.",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
         import shlex
 
-        from fno.agents.model_routing import declared_lane, route_settings_path_for
-        from fno.agents.spawn_overlay_client import spawn_overlay_call
+        from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
-        lane = (
-            lane_row
-            if lane_row is not None
-            else declared_lane(route_provider, route_model or model)
-        ) if route_env else None
-        settings_path = route_settings_path_for(
-            route_env, account_env, env=dict(os.environ), sandbox=None,
-            alias=(lane or {}).get("name"),
-        )
-        ask: dict = {
-            "kind": "print",
-            "harness": harness,
-            "name": name,
-            "payload": message or "",
-            "settings": settings_path or "",
-            "model": route_model or model or "",
-            "effort": effort or "",
-        }
-        if lane is not None and lane.get("launch"):
-            ask["launch"] = list(lane["launch"])
-        answer = spawn_overlay_call(ask)
+        try:
+            answer = spawn_overlay_call({
+                "kind": "print", "harness": harness, "substrate": substrate,
+                "name": name, "payload": message or "",
+                "model": route_model or model or "", "effort": effort or "",
+                "route_env": route_env or {}, "account_env": account_env or {},
+                "cwd": str(workdir),
+            })
+        except SpawnOverlayUnavailable as exc:
+            print(exc, file=sys.stderr)
+            raise typer.Exit(code=2)
         tokens = answer.get("tokens")
         if not isinstance(tokens, list):
             raise RuntimeError("spawn-overlay print answered no token list")
@@ -2724,95 +2648,53 @@ def cmd_spawn(
 
         try:
             # The native lane: a fresh routed claude thread spawn execs the
-            # lane's own bg line through the launch-lane door. The record is
-            # the dispatch reservation (it carries the lane's provider); the
-            # row mints at the adopt, from the record's name, node and parent
-            # edge, so this path runs no post-launch mint of its own. A lane
-            # spawn carrying axes the template does not express (a --model
-            # override, tier-3 passthrough, a role grant, a resume) keeps the
-            # dispatcher path.
+            # lane's own bg line through the launch-lane door; the record is
+            # the dispatch reservation and the row mints at the adopt. Axes
+            # the template cannot express keep the dispatcher path below.
             native_lane = (
                 harness == "claude"
                 and substrate == "thread"
-                and not once
-                and not resume
+                and not (once or resume)
                 and bool(route_env)
                 and role_level is None
-                and not (
-                    model or permission_mode or add_dir or agent or tools
-                    or deny_tools or passthrough or yolo or monitor
-                )
+                and not (model or permission_mode or add_dir or agent or tools
+                         or deny_tools or passthrough or yolo or monitor)
             )
             if native_lane:
                 from fno.agents.spawn_lineage import _capture_parent_edge
 
                 launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
                 if not launcher_session:
-                    print(
-                        "spawn: the native lane needs this session's own identity "
-                        "(the launch record names the parent); a spawn from outside "
-                        "any session keeps the dispatcher path.",
-                        file=sys.stderr,
-                    )
+                    print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
                 else:
                     from fno.rust_binary import resolve_binary
                     import subprocess as _subprocess
 
-                    from fno.agents.model_routing import route_settings_path_for
-
-                    settings_path = route_settings_path_for(
-                        route_env, account_env, env=dict(os.environ),
-                        sandbox=sandbox_settings,
-                    )
                     ask: dict = {
-                        "harness": harness,
-                        "name": name,
-                        "payload": message or "",
-                        "settings": settings_path or "",
-                        "model": route_model or "",
-                        "effort": effort or "",
-                        "cwd": str(workdir),
-                        "provider": route_provider or "",
+                        "harness": harness, "name": name, "payload": message or "",
+                        "route_env": route_env or {}, "account_env": account_env or {},
+                        "sandbox": sandbox_settings,
+                        "model": route_model or "", "effort": effort or "",
+                        "cwd": str(workdir), "provider": route_provider or "",
                         "node": (prov_env or {}).get("FNO_NODE") or "",
                         "launcher_session": launcher_session,
                     }
                     if launcher_harness:
                         ask["launcher_harness"] = launcher_harness
-                    if launcher_cwd:
-                        # The parent cwd rides the record; a launcher outside
-                        # any tracked cwd records none.
-                        if launcher_cwd.strip():
-                            ask["launcher_cwd"] = launcher_cwd
-                    if lane_row is not None and lane_row.get("launch"):
-                        ask["launch"] = list(lane_row["launch"])
-                    door_env = dict(os.environ)
-                    config_dir = (account_env or {}).get("CLAUDE_CONFIG_DIR")
-                    if config_dir:
-                        # A separate supervisor per config dir: the account's
-                        # own env rides the door's process env, where the
-                        # daemon fork keeps it; the rest of the account
-                        # overlay already rides the settings file.
-                        door_env["CLAUDE_CONFIG_DIR"] = config_dir
+                    if launcher_cwd and launcher_cwd.strip():
+                        ask["launcher_cwd"] = launcher_cwd
                     proc = _subprocess.run(
                         [str(resolve_binary()), "launch-lane"],
-                        input=json.dumps(ask),
-                        text=True,
-                        capture_output=True,
-                        env=door_env,
+                        input=json.dumps(ask), text=True, capture_output=True,
                     )
-                    if proc.stdout:
-                        sys.stdout.write(proc.stdout)
-                    if proc.stderr:
-                        sys.stderr.write(proc.stderr)
+                    sys.stdout.write(proc.stdout or "")
+                    sys.stderr.write(proc.stderr or "")
                     if proc.returncode != 0:
                         raise typer.Exit(code=proc.returncode)
                     spawn_succeeded = True
-                    print(
-                        f"spawn: {name} launched on the native lane; the row "
-                        "lands at its SessionStart adopt",
-                        file=sys.stderr,
-                    )
+                    print(f"spawn: {name} launched on the native lane; the row lands at its SessionStart adopt", file=sys.stderr)
                     return
+
             result: SpawnResult = dispatch_spawn(
                 name=name,
                 message=message,

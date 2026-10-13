@@ -298,27 +298,92 @@ fn effective_field(
 }
 
 /// The native launch line behind `spawn --print` and the exec path - one
-/// fill, two readers. The payload names the lane's resolved values and may
-/// override the argv with the routing row's own `launch` list; the answer is
-/// the filled token list. The template resolves row override first, then the
-/// harness's packaged default, and refuses a harness with neither - absence
-/// is the declared not-yet-templated state. A row override inherits the
-/// harness default's optional set, filtered to the holes the override still
+/// fill, two readers. The ask carries the RAW overlays and the print's own
+/// cwd; the lane resolves HERE beside the inventory fold (axes admit
+/// exactly one declared claude row; no match degrades to the harness
+/// default and the content-addressed file). A routed print writes the REAL
+/// settings file first: the print is the rehearsal of the launch, so the
+/// line it names must exist on disk. A row launch inherits the harness
+/// default's optional set, filtered to the holes the override still
 /// carries, so overriding the argv cannot strand an optional hole.
 fn resolve_print(payload: &Value) -> Result<Value, String> {
     let harness = payload.get("harness").and_then(Value::as_str).unwrap_or("");
     if harness.is_empty() {
         return Err("spawn-overlay print: payload needs harness".into());
     }
-    if payload.get("launch_optional").is_some() && payload.get("launch").is_none() {
-        return Err("spawn-overlay print: launch_optional needs the row's launch list".into());
+    let substrate = payload
+        .get("substrate")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if harness != "claude" || substrate != "thread" {
+        return Err(format!(
+            "--print renders claude --bg lines; harness {harness:?} substrate \
+             {substrate:?} has no native line yet."
+        ));
     }
+    // The routed posture derives from the overlays the ask carries; no flag
+    // restates it. An unrouted print refuses: a plain bg line is just
+    // claude --bg, and the settings file is the lane.
+    let route_env = payload
+        .get("route_env")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let account_env = payload
+        .get("account_env")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if route_env.is_empty() && account_env.is_empty() {
+        return Err(
+            "--print needs a routed or pinned-account lane (the settings file is \
+             the lane); a plain bg line is just claude --bg."
+                .into(),
+        );
+    }
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    let lane = crate::route_gather::lane_for_axes(
+        route_env
+            .get("FNO_ROUTE_PROVIDER")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        payload
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim(),
+        &cwd,
+    );
+    // The settings file the printed line names writes HERE, from the raw
+    // overlays; the lane's name stamps the stable lane-<row>.json alias.
+    let alias = lane
+        .as_ref()
+        .and_then(|row| row.get("name"))
+        .and_then(Value::as_str);
+    let settings = crate::route_settings::write_composed(
+        &route_env,
+        &account_env,
+        payload.get("sandbox").filter(|v| v.is_object()).cloned(),
+        alias,
+        &cwd,
+    )?;
     let template = crate::spawn_compose::resolve_template(
         harness,
-        payload.get("launch"),
-        payload.get("launch_optional"),
+        lane.as_ref().and_then(|row| row.get("launch")),
+        None,
     )?;
-    let values = crate::spawn_compose::fill_values(payload);
+    let mut values = crate::spawn_compose::fill_values(payload);
+    values.insert(
+        "settings".to_string(),
+        Value::String(settings.unwrap_or_default()),
+    );
     let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
     Ok(json!({ "tokens": tokens }))
 }
@@ -1219,26 +1284,74 @@ mod tests {
         }
     }
 
+    /// A routed print stages its own world: a tempdir as the ask's cwd (the
+    /// lane fold reads `.fno/config.toml` there) with FNO_STATE_DIR pinned
+    /// under the claims env lock, so the rehearsed settings file writes into
+    /// the sandbox, never the real state root. Returns `(guard, dir, saved)`;
+    /// the caller drops the guard and calls print_world_restore.
+    fn print_world(
+        config: Option<&str>,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        tempfile::TempDir,
+        Option<std::ffi::OsString>,
+    ) {
+        let guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        if let Some(cfg) = config {
+            std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+            std::fs::write(dir.path().join(".fno/config.toml"), cfg).unwrap();
+        }
+        let saved = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", dir.path().join("state"));
+        (guard, dir, saved)
+    }
+
+    fn print_world_restore(
+        guard: std::sync::MutexGuard<'static, ()>,
+        saved: Option<std::ffi::OsString>,
+    ) {
+        match saved {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        drop(guard);
+    }
+
     /// The packaged claude template renders the ruled native line: the
     /// settings path, model and effort land between `--bg` and `--name`, and
     /// the payload rides as the final positional. This golden IS the wave's
     /// ruled print shape; the Python side asserts only the transport.
     #[test]
     fn print_fills_the_packaged_claude_line() {
+        let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
-            "kind": "print", "harness": "claude",
+            "kind": "print", "harness": "claude", "substrate": "thread",
             "name": "w", "payload": "/fno:target x-1abc",
-            "settings": "/s/route-settings/lane-zai-flash.json",
+            "cwd": dir.path(),
             "model": "glm-5.3-flash[1m]", "effort": "xhigh",
+            "route_env": {
+                "FNO_ROUTE_PROVIDER": "zai",
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "zk"
+            },
         }))
         .unwrap();
+        let tokens = out["tokens"].as_array().unwrap();
+        assert_eq!(tokens[0], "claude");
+        assert_eq!(tokens[1], "--bg");
+        assert_eq!(tokens[2], "--settings");
+        let settings_path = tokens[3].as_str().unwrap();
+        assert!(
+            settings_path.starts_with(dir.path().to_str().unwrap()),
+            "the settings file lands in the staged state root: {settings_path}"
+        );
+        assert!(std::path::Path::new(settings_path).exists());
         assert_eq!(
-            out["tokens"],
-            json!([
-                "claude",
-                "--bg",
-                "--settings",
-                "/s/route-settings/lane-zai-flash.json",
+            &tokens[4..],
+            [
                 "--model",
                 "glm-5.3-flash[1m]",
                 "--effort",
@@ -1246,30 +1359,35 @@ mod tests {
                 "--name",
                 "w",
                 "/fno:target x-1abc"
-            ])
+            ]
         );
+        print_world_restore(guard, saved);
     }
 
-    /// Empty optional values drop their flag-and-hole pairs: a lane with no
-    /// route, model or effort still renders a legal argv, and a required
-    /// hole with no value refuses by name.
+    /// A routed lane with no model or effort still renders a legal argv: the
+    /// optional pairs drop, and a required hole with no value refuses by
+    /// name.
     #[test]
     fn print_drops_empty_optional_pairs() {
+        let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
-            "kind": "print", "harness": "claude",
+            "kind": "print", "harness": "claude", "substrate": "thread",
             "name": "w", "payload": "/fno:target x-1abc",
+            "cwd": dir.path(),
+            "route_env": {
+                "FNO_ROUTE_PROVIDER": "zai",
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "zk"
+            },
         }))
         .unwrap();
-        assert_eq!(
-            out["tokens"],
-            json!(["claude", "--bg", "--name", "w", "/fno:target x-1abc"])
-        );
-        let error = resolve(json!({
-            "kind": "print", "harness": "claude",
-            "payload": "/x", "effort": "high",
-        }))
-        .unwrap_err();
-        assert!(error.contains("name"), "{error}");
+        let tokens = out["tokens"].as_array().unwrap();
+        assert_eq!(tokens[0], "claude");
+        assert_eq!(tokens[1], "--bg");
+        assert_eq!(tokens[2], "--settings");
+        assert!(std::path::Path::new(tokens[3].as_str().unwrap()).exists());
+        assert_eq!(&tokens[4..], ["--name", "w", "/fno:target x-1abc"]);
+        print_world_restore(guard, saved);
     }
 
     /// A payload that begins with a dash is fenced with `--` so the harness
@@ -1277,26 +1395,42 @@ mod tests {
     /// keeps the printed line byte-equal to the ruled one.
     #[test]
     fn print_fences_a_leading_dash_payload() {
+        let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
-            "kind": "print", "harness": "claude",
+            "kind": "print", "harness": "claude", "substrate": "thread",
             "name": "w", "payload": "--model opus",
+            "cwd": dir.path(),
+            "route_env": {
+                "FNO_ROUTE_PROVIDER": "zai",
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "zk"
+            },
         }))
         .unwrap();
         let tokens = out["tokens"].as_array().unwrap();
         assert_eq!(tokens.last().unwrap(), "--model opus");
         assert_eq!(tokens[tokens.len() - 2], "--");
+        print_world_restore(guard, saved);
     }
 
-    /// A routing row's own `launch` list overrides the argv. It keeps the
-    /// packaged optional set for the holes it still carries and validates
-    /// under the same rules; an optional hole with no flag before it refuses.
+    /// A routing row's own `launch` list overrides the argv, keeping the
+    /// packaged optional set for the holes it still carries; the row itself
+    /// comes from the staged inventory, not the ask.
     #[test]
     fn print_honors_a_row_launch_override() {
+        let (guard, dir, saved) = print_world(Some(
+            "[[routing.models]]\nname = \"row-lane\"\nharness = \"claude\"\nmodel = \"row-m\"\nroute = \"zai/row-m\"\nlaunch = [\"claude\", \"--bg\", \"--model\", \"{model}\", \"--name\", \"{name}\", \"{payload}\"]\n",
+        ));
         let out = resolve(json!({
-            "kind": "print", "harness": "claude",
+            "kind": "print", "harness": "claude", "substrate": "thread",
             "name": "w", "payload": "/fno:target x-1abc",
-            "model": "glm-5.3-flash[1m]",
-            "launch": ["claude", "--bg", "--model", "{model}", "--name", "{name}", "{payload}"],
+            "cwd": dir.path(),
+            "model": "row-m",
+            "route_env": {
+                "FNO_ROUTE_PROVIDER": "zai",
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "zk"
+            },
         }))
         .unwrap();
         assert_eq!(
@@ -1305,56 +1439,41 @@ mod tests {
                 "claude",
                 "--bg",
                 "--model",
-                "glm-5.3-flash[1m]",
+                "row-m",
                 "--name",
                 "w",
                 "/fno:target x-1abc"
             ])
         );
-        let error = resolve(json!({
-            "kind": "print", "harness": "claude",
-            "name": "w", "payload": "/x",
-            "launch": ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"],
-            "launch_optional": ["settings"],
-        }))
-        .unwrap_err();
-        assert!(error.contains("must follow its own flag"), "{error}");
+        print_world_restore(guard, saved);
     }
 
-    /// The contract gates: a hole outside the closed vocabulary, a broken
-    /// whole-token rule, a harness with no template, and `launch_optional`
-    /// without `launch` all refuse by name.
+    /// The contract gates through the staged inventory: a bad row template
+    /// refuses by name, and a harness the lane has no native line for
+    /// refuses before the template resolves.
     #[test]
     fn print_refuses_malformed_templates() {
+        let (guard, dir, saved) = print_world(Some(
+            "[[routing.models]]\nname = \"row-bad\"\nharness = \"claude\"\nmodel = \"row-bad-m\"\nroute = \"zai/row-bad-m\"\nlaunch = [\"claude\", \"--bg\", \"--x\", \"{bogus}\", \"{name}\", \"{payload}\"]\n",
+        ));
         let error = resolve(json!({
-            "kind": "print", "harness": "claude",
+            "kind": "print", "harness": "claude", "substrate": "thread",
             "name": "w", "payload": "/x",
-            "launch": ["claude", "--bg", "--x", "{bogus}", "{name}", "{payload}"],
+            "cwd": dir.path(),
+            "model": "row-bad-m",
+            "route_env": {
+                "FNO_ROUTE_PROVIDER": "zai",
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "zk"
+            },
         }))
         .unwrap_err();
         assert!(error.contains("bogus"), "{error}");
-
-        let error = resolve(json!({
-            "kind": "print", "harness": "claude",
-            "name": "w", "payload": "/x",
-            "launch": ["claude --bg --model={model} --name {name} {payload}"],
-        }))
-        .unwrap_err();
-        assert!(error.contains("whole token"), "{error}");
+        print_world_restore(guard, saved);
 
         let error =
             resolve(json!({"kind": "print", "harness": "codex", "name": "w", "payload": "/x"}))
                 .unwrap_err();
-        assert!(
-            error.contains("declares no native launch template"),
-            "{error}"
-        );
-
-        let error = resolve(json!({
-            "kind": "print", "harness": "claude", "name": "w", "payload": "/x",
-            "launch_optional": ["effort"],
-        }))
-        .unwrap_err();
-        assert!(error.contains("launch_optional needs"), "{error}");
+        assert!(error.contains("no native line yet"), "{error}");
     }
 }

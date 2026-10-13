@@ -1273,29 +1273,34 @@ def route_settings_path_for(
     already-materialized overlay returns the same path rather than writing a
     second file - which is what lets a caller that only holds the resolved env
     recover the path without threading it through.
+
+    The compose (the scrub floor, the account overlay minus its config dir,
+    the route winning the credential slot, the self-authed secret drop, the
+    unrouted-model floor read from the spawn's own environment) lives in the
+    route-settings door. This leg is the transport; the ``env`` param is
+    superseded, since the door reads its own process env, which every
+    caller's spawn env is.
     """
     if not (route_env or account_env or sandbox):
         return None
-    overlay = {
-        k: v for k, v in (account_env or {}).items() if k != "CLAUDE_CONFIG_DIR"
-    }
-    # The same ONE composition rule as the env seams: a self-authed route owns
-    # the credential slot, so an account credential the route does not name
-    # stays on the scrub floor (""), never baked into the file against the
-    # route's endpoint.
-    from fno.agents.account_env import compose_worker_credentials
+    import json
 
-    merged, _ = compose_worker_credentials(overlay, route_env, {})
-    # An account or route spawn still owes the unrouted-model floor the plain
-    # case gets: the daemon fork carries the launching shell's env (so a
-    # shell-exported model claim reaches the serving session), and this file
-    # is the one channel that survives the fork. Only keys the overlay itself
-    # sets are spared - a route or account that names a model owns the slot;
-    # a bare config-dir account owns nothing, and the SCRUB_AUTH_VARS floor
-    # this file already writes never covered the model vars (round 3).
-    for key in unrouted_model_keys(env):
-        merged.setdefault(key, "")
-    return materialize_route_settings(merged, sandbox=sandbox, alias=alias)
+    from fno.rust_binary import call_binary_json
+
+    payload = json.dumps(
+        {
+            "route_env": dict(route_env or {}),
+            "account_env": dict(account_env or {}),
+            "sandbox": dict(sandbox) if sandbox else None,
+            "alias": alias,
+        },
+        sort_keys=True,
+    )
+    err, receipt = call_binary_json("route-settings", [], input_text=payload, timeout=30)
+    if err or not isinstance(receipt, dict) or not receipt.get("path"):
+        detail = err or f"unusable receipt: {receipt!r}"
+        raise RuntimeError(f"route-settings writer refused: {detail}")
+    return str(receipt["path"])
 
 
 def read_route_settings(path: str) -> dict[str, str]:
