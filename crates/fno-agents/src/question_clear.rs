@@ -346,7 +346,7 @@ mod tests {
         let result = run_clear(&req);
 
         assert_eq!(result.exit_code, 4);
-        assert!(result.lines[0].contains("q-open (no answer, withdrawn)"));
+        assert!(result.lines[0].contains("q-open (withdrawn)"));
         assert!(result.lines[1].contains("q-closed was already closed; nothing written"));
         assert!(result.lines[2].contains("q-missing is not a question id this machine knows"));
         assert_eq!(
@@ -663,24 +663,24 @@ mod tests {
         seed_question(&req, &ask_from("q-own", "01a0cbdd", "which lane?"));
         let result = run_clear(&req);
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert!(result.lines[0].contains("(no answer, withdrawn)"));
+        assert!(result.lines[0].contains("(withdrawn by asker: moot)"));
         assert!(rows(&req.journal_path, &["operator_decision"]).is_empty());
         assert_eq!(
             rows(&req.journal_path, &["operator_question_closed"]).len(),
             1
         );
 
-        // (d) A teamed session answers its own ask with --authority team.
+        // (d) A teamed session answers its own ask with --authority role.
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-team", Some("C: do as asked"));
-        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.caller.as_mut().unwrap().teamed = true;
         seed_question(&req, &ask_from("q-team", "01a0cbdd", "which lane?"));
         let result = run_clear(&req);
         assert_eq!(result.exit_code, 0, "{:?}", result.lines);
         let decisions = graph_decisions(&req);
         assert_eq!(decisions.len(), 1);
-        assert_eq!(decisions[0]["authority_source"], "team");
+        assert_eq!(decisions[0]["authority_source"], "role");
         assert!(
             result.deliveries.is_empty(),
             "a self-answer mails nobody: {:?}",
@@ -698,7 +698,7 @@ mod tests {
         // (e) The same answer without a live team: refused.
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-unpromoted", Some("C: do as asked"));
-        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         seed_question(&req, &ask_from("q-unpromoted", "01a0cbdd", "which lane?"));
         let result = run_clear(&req);
         assert_eq!(result.exit_code, 3, "{:?}", result.lines);
@@ -711,7 +711,7 @@ mod tests {
         // (f) A teamed team answering another session's ask: refused.
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-other", Some("C: do as asked"));
-        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.caller.as_mut().unwrap().teamed = true;
         seed_question(&req, &ask_from("q-other", "49a80492", "which lane?"));
         let result = run_clear(&req);
@@ -751,32 +751,32 @@ mod tests {
     #[test]
     fn a_full_session_id_pair_outranks_a_shared_handle() {
         // (a) Two same-window codex sessions share the eight-character
-        // handle: the closer is a different session, so the asker still
-        // gets the mail.
+        // handle: full ids present and different means different sessions,
+        // so the gate refuses the cross-session answer.
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-collide", Some("C: do as asked"));
-        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.caller.as_mut().unwrap().teamed = true;
         req.closed_by = Some("20261012_closer_full".to_string());
         let mut question = ask_from("q-collide", "01a0cbdd", "which lane?");
         question["data"]["session_id"] = json!("20261012_asker_full");
         seed_question(&req, &question);
         let result = run_clear(&req);
-        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
-        assert_eq!(result.deliveries.len(), 1, "{:?}", result.lines);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
         assert!(
-            !result
-                .lines
-                .iter()
-                .any(|l| l.contains("answered by its own asker")),
+            result.lines[0].contains("asks the user"),
             "{:?}",
             result.lines
         );
+    }
 
-        // (b) The full ids match: no mail even though the gate read handles.
+    // (b) The full ids match: the gate lets the asker through on the pair,
+    // and the receipt skips the mail.
+    #[test]
+    fn a_full_id_pair_answers_its_own_ask_without_mail() {
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(&tmp, "q-full", Some("C: do as asked"));
-        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "team"});
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
         req.caller.as_mut().unwrap().teamed = true;
         req.closed_by = Some("20261012_asker_full".to_string());
         let mut question = ask_from("q-full", "01a0cbdd", "which lane?");
@@ -793,6 +793,95 @@ mod tests {
             "{:?}",
             result.lines
         );
+    }
+
+    #[test]
+    fn the_asker_withdraws_its_own_question_by_the_full_session_id_pair() {
+        // The incident: the handle comparison failed while the full session
+        // ids matched, so the asker's own moot withdrawal was refused and
+        // the refusal prescribed an authority value the CLI flag rejects.
+        // The pair decides; the handle is only a backstop.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-incident", None);
+        req.closed_by = Some("246866bd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
+        req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
+        let mut question = ask_from("q-incident", "99bbaa00", "May PR 3122 merge at head?");
+        question["data"]["session_id"] = json!("246866bd-aaaa-4482-9135-37ba1cb0f0d2");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("(withdrawn by asker: moot)")),
+            "{:?}",
+            result.lines
+        );
+        let closed = rows(&req.journal_path, &["operator_question_closed"]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0]["data"]["reason"], "withdrawn by asker: moot");
+
+        // Full ids present and different: no handle backstop can slip a
+        // withdrawal through, even when the handles collide.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-other-w", None);
+        req.closed_by = Some("246866bd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
+        req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
+        let mut question = ask_from("q-other-w", "01a0cbdd", "which lane?");
+        question["data"]["session_id"] = json!("99998888-aaaa-4482-9135-37ba1cb0f0d2");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains("Only the asker withdraws"),
+            "{:?}",
+            result.lines
+        );
+    }
+
+    #[test]
+    fn refusal_text_names_only_authority_values_the_flag_accepts() {
+        // The flag accepts operator, role, agent, beastmode (the clear CLI's
+        // tuple and decide_door's AUTHORITY_SOURCES agree). A refusal that
+        // prescribes anything else sends the asker into a second refusal.
+        const ACCEPTED: [&str; 4] = ["operator", "role", "agent", "beastmode"];
+        let cases: Vec<Vec<String>> = vec![
+            {
+                // An agent answering another session's ask: the answer
+                // refusal.
+                let tmp = tempfile::tempdir().unwrap();
+                let mut req = request(&tmp, "q-pin-a", Some("C: do as asked"));
+                req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
+                seed_question(&req, &ask_from("q-pin-a", "49a80492", "which lane?"));
+                run_clear(&req).lines
+            },
+            {
+                // An agent withdrawing another session's ask: the
+                // withdrawal refusal.
+                let tmp = tempfile::tempdir().unwrap();
+                let mut req = request(&tmp, "q-pin-w", None);
+                req.caller.as_mut().unwrap().ancestry_handle = Some("01a0cbdd".to_string());
+                seed_question(&req, &ask_from("q-pin-w", "49a80492", "which lane?"));
+                run_clear(&req).lines
+            },
+        ];
+        for lines in &cases {
+            for line in lines {
+                let mut rest = line.as_str();
+                while let Some(pos) = rest.find("--authority ") {
+                    let value: String = rest[pos + "--authority ".len()..]
+                        .chars()
+                        .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '.')
+                        .collect();
+                    assert!(
+                        ACCEPTED.contains(&value.as_str()),
+                        "refusal names a rejected flag value: {line}"
+                    );
+                    rest = &rest[pos + 1..];
+                }
+            }
+        }
     }
 }
 use crate::backlog::api::{self, Store};
@@ -847,7 +936,7 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
         .get("authority_source")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if matches!(authority, "agent" | "team" | "beastmode") {
+    if matches!(authority, "agent" | "role" | "team" | "beastmode") {
         if let Some(decided_by) = req
             .provenance
             .get("decided_by")
@@ -858,6 +947,26 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
         }
     }
     caller.ancestry_handle.clone()
+}
+
+/// The asker's own question: the full session-id pair decides, the
+/// eight-character handle is the backstop (two same-window codex sessions
+/// can share it, identity.rs). The withdrawal gate and the self-answer
+/// receipt read the one matcher. Attendance is never a caller assertion:
+/// both sides come off the question row and the process, never off a flag.
+fn is_own_ask(
+    req: &ClearRequest,
+    asker: &str,
+    asker_session: Option<&str>,
+    agent: Option<&str>,
+) -> bool {
+    match (
+        req.closed_by.as_deref().filter(|value| !value.is_empty()),
+        asker_session,
+    ) {
+        (Some(closer_id), Some(asker_id)) => closer_id == asker_id,
+        _ => agent == Some(asker),
+    }
 }
 
 /// The user's own answer outranks a coordination row an agent wrote (agent,
@@ -879,7 +988,7 @@ fn override_coordination(
     }
     matches!(
         row.get("authority_source").and_then(Value::as_str),
-        Some("agent") | Some("team") | Some("beastmode")
+        Some("agent") | Some("role") | Some("team") | Some("beastmode")
     )
 }
 
@@ -1020,25 +1129,32 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             continue;
         };
         // The clear door is the user's answer lane: an agent session never
-        // answers or withdraws a question asked of the user, and a team
-        // answers (with --authority team) only a question it asked itself.
-        // This gate runs before make_decision, so the only agent session that
-        // reaches operator_can_grant below is a team on its own ask, whose
-        // authority team already fails there.
+        // answers or withdraws a question asked of the user. The asker
+        // always withdraws its own question, whatever why_user says; a
+        // teamed asker answers its own ask with the wire value the flag
+        // accepts (--authority role). This gate runs before
+        // make_decision, so the only agent session that reaches
+        // operator_can_grant below is a role on its own ask, whose
+        // authority never grants a merge there.
         let asker = question_event
             .get("data")
             .and_then(|data| data.get("asker"))
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let asker_session = question_event
+            .get("data")
+            .and_then(|data| data.get("session_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty());
         if let Some(agent) = closer.as_deref() {
-            let own_ask = asker == agent;
+            let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
             let allowed = if req.answer.is_some() {
                 own_ask
                     && req
                         .provenance
                         .get("authority_source")
                         .and_then(Value::as_str)
-                        == Some("team")
+                        == Some("role")
                     && caller.teamed
             } else {
                 own_ask
@@ -1047,7 +1163,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
                     format!(
-                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. The user answers it on the question board (fno-agents state path questions) or at their own terminal: fno inbox outstanding clear {qid} --answer \"<answer>\". A team answers only a question it asked, with --authority team."
+                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. The user answers it on the question board (fno-agents state path questions) or at their own terminal: fno inbox outstanding clear {qid} --answer \"<answer>\". A teamed asker answers only its own question, with --authority role."
                     )
                 } else {
                     let shown = if asker.is_empty() { "the user" } else { asker };
@@ -1164,7 +1280,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .and_then(|data| data.get("node"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let (close, close_line) = close_event(req, qid, Some(&text));
+            let (close, close_line) = close_event(req, qid, Some(&text), None);
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
@@ -1213,26 +1329,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .and_then(|data| data.get("asker"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let asker_session = question_event
-                .get("data")
-                .and_then(|data| data.get("session_id"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty());
             // A self-answer (the closer is the asker) mails nobody: the
             // deliver door transports whatever deliveries names, so push a
-            // receipt line instead and Python has nothing to send. Full
-            // session ids outrank the eight-character handle, which two
-            // same-window codex sessions can share (identity.rs); the
-            // deliver door resolves the asker by the full id. A full-id
-            // pair decides, and with no pair the handle comparison stands
-            // with the door's ambiguity guard as the backstop.
-            let self_answer = match (
-                req.closed_by.as_deref().filter(|value| !value.is_empty()),
-                asker_session,
-            ) {
-                (Some(closer_id), Some(asker_id)) => closer_id == asker_id,
-                _ => closer.as_deref() == Some(asker),
-            };
+            // receipt line instead and Python has nothing to send. The
+            // gate's one matcher decides here too, so the gate that let the
+            // close through and the receipt that skips the mail can never
+            // disagree.
+            let self_answer = is_own_ask(req, asker, asker_session, closer.as_deref());
             if !asker.is_empty() && self_answer {
                 answer.lines.push(format!(
                     "outstanding: {qid} answered by its own asker {asker}; no answer mail sent"
@@ -1251,7 +1354,14 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 });
             }
         } else {
-            let (close, close_line) = close_event(req, qid, None);
+            // The reason names who retired it: the asker's own withdrawal
+            // is moot; the user's reads plainly "withdrawn".
+            let withdrawn_reason = if is_own_ask(req, asker, asker_session, closer.as_deref()) {
+                "withdrawn by asker: moot"
+            } else {
+                "withdrawn"
+            };
+            let (close, close_line) = close_event(req, qid, None, Some(withdrawn_reason));
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
@@ -1268,7 +1378,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             }
             answer
                 .lines
-                .push(format!("outstanding: closed {qid} (no answer, withdrawn)"));
+                .push(format!("outstanding: closed {qid} ({withdrawn_reason})"));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
                 decision_id: None,
@@ -1497,7 +1607,7 @@ fn make_decision(
             decision.insert("rationale".into(), json!(answer));
         }
     }
-    if matches!(authority, "team" | "agent" | "beastmode") {
+    if matches!(authority, "role" | "team" | "agent" | "beastmode") {
         if let Some(node) = node {
             let connection = crate::backlog::open(&req.graph)?;
             let exists: bool = connection
@@ -1662,7 +1772,12 @@ fn picks_recommended_option(question_event: &Value, answer: &str) -> bool {
     }
 }
 
-fn close_event(req: &ClearRequest, qid: &str, answer: Option<&str>) -> (Value, String) {
+fn close_event(
+    req: &ClearRequest,
+    qid: &str,
+    answer: Option<&str>,
+    withdrawn_reason: Option<&str>,
+) -> (Value, String) {
     if let Some((event, line)) =
         crate::event_store::journal_text(&req.journal_path, &["operator_question_closed"])
             .lines()
@@ -1677,6 +1792,12 @@ fn close_event(req: &ClearRequest, qid: &str, answer: Option<&str>) -> (Value, S
     let mut data = json!({"question_id": qid});
     if let Some(answer) = answer {
         data["answer"] = json!(cut(answer, req.cap));
+    }
+    if let Some(reason) = withdrawn_reason {
+        // The asker's bare withdrawal is a moot close: the question's own
+        // asker retired it, nobody ruled on the merits. The user's reads
+        // plainly "withdrawn".
+        data["reason"] = json!(reason);
     }
     if let Some(closed_by) = req.closed_by.as_deref() {
         data["closed_by"] = json!(closed_by);

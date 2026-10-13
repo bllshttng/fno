@@ -58,7 +58,12 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, St
     if let Ok(rows) = crate::graph_store::read_rows_where(
         &store.graph,
         &crate::backlog::RowQuery {
-            fields: Some(["id", "status"].into_iter().map(str::to_string).collect()),
+            fields: Some(
+                ["id", "status", "merge_status"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
             with_blockers: true,
             ..Default::default()
         },
@@ -70,11 +75,26 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, St
                 row.get("id").and_then(serde_json::Value::as_str),
                 row.get("status").and_then(serde_json::Value::as_str),
             ) {
-                out.push((id.to_string(), status.to_string()));
+                out.push((id.to_string(), effective_rung(status, row)));
             }
         }
     }
     out
+}
+
+/// The closed-rung fold's view of one node: its status, with a recorded
+/// `merged` merge_status standing in for an open status, so a question
+/// about a merged PR reads closed before reconcile flips the node done.
+/// The only consumers are the node-closed folds.
+fn effective_rung(status: &str, row: &serde_json::Value) -> String {
+    if row.get("merge_status").and_then(serde_json::Value::as_str) == Some("merged")
+        && status != "done"
+        && status != "superseded"
+    {
+        "merged".to_string()
+    } else {
+        status.to_string()
+    }
 }
 
 /// Append the shared derived-close row for each question id and return its
@@ -83,6 +103,7 @@ pub(crate) fn close_questions(
     home: &AgentsHome,
     ids: &[String],
     now: i64,
+    reason: &str,
     closed_by: &str,
 ) -> (Vec<String>, Vec<String>) {
     let store = crate::provider_cap::questions_path(home);
@@ -98,7 +119,7 @@ pub(crate) fn close_questions(
                 "data": {
                     "question_id": qid,
                     "answer": "",
-                    "reason": "node-closed",
+                    "reason": reason,
                     "closed_by": closed_by,
                 },
             }),
@@ -157,7 +178,15 @@ pub fn question_sweep_in(
     let legacy_ids = crate::fleet_task::legacy_question_ids(&raw);
     let mut tasks_closed = Vec::new();
     let mut legacy_moved = Vec::new();
-    let (closed, mut errors) = close_questions(home, &ids, now, "question-sweep");
+    // The reason split: a machine question closes node-closed; a user-only
+    // one closes moot (its subject resolved while the user still owned the
+    // answer). One fold, two records.
+    let (machine, moot) = crate::needs::partition_by_user_only(&ids, &raw);
+    let (mut closed, mut errors) =
+        close_questions(home, &machine, now, "node-closed", "question-sweep");
+    let (moot_closed, moot_errors) = close_questions(home, &moot, now, "moot", "question-sweep");
+    closed.extend(moot_closed);
+    errors.extend(moot_errors);
     if ids.is_empty() && task_ids.is_empty() && legacy_ids.is_empty() {
         let _ = emitter.emit(
             "question_sweep",
@@ -379,9 +408,10 @@ mod tests {
     }
 
     #[test]
-    fn spares_a_user_only_question_and_still_closes_a_machine_one() {
-        // The sweep's node-closed close spares a user-only why_user; only an
-        // answer or a withdrawal closes such a question.
+    fn closes_a_user_only_question_as_moot_and_a_machine_one_as_node_closed() {
+        // A resolved subject closes both; the reason records which side
+        // owned the answer: a user-only why_user closes moot, a machine
+        // question node-closed.
         let home = tmp_home("user-only");
         let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
         let user_row = format!(
@@ -396,10 +426,34 @@ mod tests {
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
         );
-        assert!(questions.contains("q-mach"), "{questions}");
         assert!(
-            !questions.contains("q-user"),
-            "the user-only question survives: {questions}"
+            questions.contains("q-user") && questions.contains(r#""reason":"moot""#),
+            "{questions}"
+        );
+        assert!(
+            questions.contains("q-mach") && questions.contains(r#""reason":"node-closed""#),
+            "{questions}"
+        );
+    }
+
+    #[test]
+    fn effective_rung_reads_a_recorded_merged_as_closed() {
+        // An open status with a recorded merge_status reads closed for the
+        // question fold; done/superseded need no help; a recorded
+        // non-merged value never closes anything.
+        let row = |merge: serde_json::Value| serde_json::json!({ "merge_status": merge });
+        assert_eq!(
+            effective_rung("in_progress", &row(json!("merged"))),
+            "merged"
+        );
+        assert_eq!(effective_rung("done", &row(json!("merged"))), "done");
+        assert_eq!(
+            effective_rung("in_progress", &row(json!(null))),
+            "in_progress"
+        );
+        assert_eq!(
+            effective_rung("in_progress", &row(json!("conflicting"))),
+            "in_progress"
         );
     }
 
