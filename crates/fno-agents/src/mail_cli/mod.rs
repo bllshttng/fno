@@ -1,7 +1,8 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
-//! release timer, the `team` broadcast, the outbound sent view, and the
-//! unread listing. Dispatch only; the verbs live in [hold], [team], [sent]
-//! and [unread].
+//! release timer, the `team` broadcast, the outbound sent view, the
+//! unread listing, and the ack leaf. Dispatch only; the verbs live in
+//! [hold], [team], [sent], [unread] and [ack].
+pub mod ack;
 pub mod hold;
 pub mod sent;
 pub mod team;
@@ -19,9 +20,10 @@ pub fn run(rest: &[String]) -> i32 {
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
         "unread" => unread::run(&rest[1..]),
+        "ack" => ack::run_ack(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent | unread)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | team | sent | unread | ack)"
             );
 
             2
@@ -30,10 +32,11 @@ pub fn run(rest: &[String]) -> i32 {
 }
 
 fn print_help() {
-    println!("fno-agents mail - the do-not-disturb hold, team broadcast, sent view and unread listing for agent mail");
+    println!("fno-agents mail - the do-not-disturb hold, team broadcast, sent view, unread listing and ack leaf for agent mail");
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
     println!("  unread [--name NAME | -n NAME] [--json | -J]");
+    println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
 }

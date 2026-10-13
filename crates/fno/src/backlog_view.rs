@@ -795,35 +795,71 @@ fn mark_head(cards: &mut [BacklogCard]) {
     }
 }
 
-/// node id -> `pr_number` from the same graph read `derive_cards`
-/// consumes, for the peek header's `PR #N` label (server-joins holder -> node ->
-/// pr at layout time). A sibling of `derive_cards`: parses `entries[].pr_number`
-/// via `.as_u64()`, so a string/float/absent value is skipped (matching
-/// `AgentRow.pr: Option<u64>`). Pure; a malformed doc yields an empty map (the
-/// label simply never appears). `pr_number` is NOT unique across entries, but the
-/// map is keyed by node id, so that is irrelevant.
-/// node id -> the driving session's SHORT id (first 8 chars), from the same
-/// graph read `derive_pr_map` consumes: the live claim holder's session when
-/// one holds, else the node's last do/ship session. The operator's PR-row
-/// ask: a row whose driving session has ended names the sessions list, and
-/// an empty list maps to nothing (the row then says "no session"). Pure; a
-/// malformed doc yields an empty map.
-pub fn derive_session_map(raw: &str) -> HashMap<String, String> {
+/// One node binding a session carries, from the graph's `sessions[]` rows:
+/// the node, its pr when the entry has one, the lifecycle state (`merged`
+/// for done, `dropped` for superseded or a retracted deferral, else `open`),
+/// the row's phase, its best timestamp (`started_at`, else `ended_at`, else
+/// the legacy `at`/`claimed_at`), and whether the row is an explicit
+/// phase:bind record rather than an inferred work phase.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GraphBinding {
+    pub node: String,
+    pub pr: Option<u64>,
+    pub phase: String,
+    pub ts: Option<String>,
+    pub state: String,
+    pub explicit: bool,
+    /// How the row-set join reached this binding (`explicit`, `spawn`,
+    /// `branch`, `claim`, `name`, `history`); empty until the join labels it.
+    pub source: String,
+}
+
+/// The join of one graph read, shared by the card derive, the peek `PR #N`
+/// label, the PR-row driver handle, and the row-set session bindings. Pure;
+/// a malformed document joins to an empty `BacklogJoin`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BacklogJoin {
+    /// node id -> `pr_number`. String/float/absent values are skipped
+    /// (matching `AgentRow.pr: Option<u64>`); keyed by node id, so a
+    /// pr_number shared across entries is irrelevant.
+    pub pr: HashMap<String, u64>,
+    /// node id -> the driving session's SHORT id (first 8 chars): the live
+    /// claim holder's session when one holds, else the node's last
+    /// do/ship session.
+    pub driver: HashMap<String, String>,
+    /// FULL session id -> that session's node bindings, in graph order.
+    /// Keyed by the full id, never the row name, so any skill that records
+    /// its session joins back to the nodes it drove.
+    pub by_session: HashMap<String, Vec<GraphBinding>>,
+}
+
+pub fn derive_join(raw: &str) -> BacklogJoin {
+    let mut join = BacklogJoin::default();
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return HashMap::new();
+        return join;
     };
     let Some(entries) = doc
         .get("entries")
         .or_else(|| doc.get("nodes"))
         .and_then(|v| v.as_array())
     else {
-        return HashMap::new();
+        return join;
     };
     let short = |s: &str| s.chars().take(8).collect::<String>();
-    let mut out = HashMap::new();
     for e in entries {
         let Some(id) = e.get("id").and_then(|v| v.as_str()) else {
             continue;
+        };
+        if let Some(pr) = e.get("pr_number").and_then(|v| v.as_u64()) {
+            join.pr.insert(id.to_string(), pr);
+        }
+        let state = match e.get("status").and_then(|v| v.as_str()).unwrap_or("") {
+            "done" => "merged",
+            "superseded" => "dropped",
+            "deferred" if e.get("deferred_kind").and_then(|v| v.as_str()) == Some("retracted") => {
+                "dropped"
+            }
+            _ => "open",
         };
         let driving = e
             .get("locked_by_harness_session")
@@ -847,34 +883,40 @@ pub fn derive_session_map(raw: &str) -> HashMap<String, String> {
                     })
             });
         if let Some(d) = driving {
-            out.insert(id.to_string(), d);
+            join.driver.insert(id.to_string(), d);
+        }
+        for s in e
+            .get("sessions")
+            .and_then(|v| v.as_array())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+        {
+            let Some(sid) = s.get("session_id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let phase = s.get("phase").and_then(|v| v.as_str()).unwrap_or("");
+            let ts = s
+                .get("started_at")
+                .and_then(|v| v.as_str())
+                .or_else(|| s.get("ended_at").and_then(|v| v.as_str()))
+                .or_else(|| s.get("at").and_then(|v| v.as_str()))
+                .or_else(|| s.get("claimed_at").and_then(|v| v.as_str()))
+                .map(str::to_string);
+            join.by_session
+                .entry(sid.to_string())
+                .or_default()
+                .push(GraphBinding {
+                    node: id.to_string(),
+                    pr: join.pr.get(id).copied(),
+                    phase: phase.to_string(),
+                    ts,
+                    state: state.to_string(),
+                    explicit: phase == "bind",
+                    source: String::new(),
+                });
         }
     }
-    out
-}
-
-pub fn derive_pr_map(raw: &str) -> HashMap<String, u64> {
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return HashMap::new();
-    };
-    let Some(entries) = doc
-        .get("entries")
-        .or_else(|| doc.get("nodes"))
-        .and_then(|v| v.as_array())
-    else {
-        return HashMap::new();
-    };
-    let mut out = HashMap::new();
-    for e in entries {
-        let (Some(id), Some(pr)) = (
-            e.get("id").and_then(|v| v.as_str()),
-            e.get("pr_number").and_then(|v| v.as_u64()),
-        ) else {
-            continue;
-        };
-        out.insert(id.to_string(), pr);
-    }
-    out
+    join
 }
 
 /// Consecutive failed reads before the section is marked stale. The reader ticks
@@ -1005,18 +1047,14 @@ pub struct ReaderState {
     /// same card states, different/new holder - must republish too, not wait
     /// for a card flip (codex peer review of the v18 routes).
     last_live: Option<HashMap<String, String>>,
-    /// node id -> pr_number, recomputed ONLY when the graph read
-    /// refreshes (not per tick), so a second full JSON parse per second is
-    /// avoided. Cloned onto every publish; a pr-only change (a node gets a
-    /// pr_number, same card set + holders) still republishes via the gate below.
-    pr: HashMap<String, u64>,
-    /// The pr map as of the last publish, so a pr-only change is detected.
-    last_pr: Option<HashMap<String, u64>>,
-    /// node id -> driving session short id (the PR-row attach handle),
-    /// recomputed with `pr` on the same fresh read.
-    driver: HashMap<String, String>,
-    /// The driver map as of the last publish (the pr gate's mirror).
-    last_driver: Option<HashMap<String, String>>,
+    /// The graph join (node prs, driving sessions, session bindings),
+    /// recomputed ONLY when the graph read refreshes (not per tick), so a
+    /// second full JSON parse per second is avoided. Cloned onto every
+    /// publish; a join-only change (a node gets a pr_number, same card set
+    /// + holders) still republishes via the gate below.
+    join: BacklogJoin,
+    /// The join as of the last publish, so a join-only change is detected.
+    last_join: Option<BacklogJoin>,
     /// Consecutive ticks whose read failed while the file was still there. Feeds
     /// [`Queue::stale`]; reset by any read that lands.
     read_failures: u32,
@@ -1065,7 +1103,7 @@ impl ReaderState {
         stamp: Option<(i64, u64)>,
         read_if_changed: impl FnOnce() -> Option<String>,
         live: Option<&HashMap<String, String>>,
-    ) -> Option<(Queue, HashMap<String, u64>, HashMap<String, String>)> {
+    ) -> Option<(Queue, BacklogJoin)> {
         // Whether THIS tick pulled fresh bytes off disk. Only a fresh read that
         // also parses clears the failure counter: re-deriving the cached document
         // succeeds every tick by definition, so treating that as success would
@@ -1081,17 +1119,15 @@ impl ReaderState {
                 (Some(raw), _) => {
                     self.cached_stamp = stamp;
                     fresh_read = true;
-                    // The pr map derives from the SAME read; recompute it
+                    // The join derives from the SAME read; recompute it
                     // only here, not per tick, so we never parse the 4M graph
                     // twice a second.
-                    self.pr = derive_pr_map(&raw);
-                    self.driver = derive_session_map(&raw);
+                    self.join = derive_join(&raw);
                     self.cached_raw = Some(raw);
                 }
                 (None, None) => {
                     self.cached_stamp = stamp;
-                    self.pr = HashMap::new();
-                    self.driver = HashMap::new();
+                    self.join = BacklogJoin::default();
                     self.cached_raw = None; // file vanished: empty the lane
                 }
                 // Torn read: keep last-good AND retry next tick. A single one is
@@ -1166,16 +1202,18 @@ impl ReaderState {
         if live_changed {
             self.last_live = live.cloned();
         }
-        // A pr-only change (a node gains a pr_number while its card + holder stay
-        // put) must republish too, else the `PR #N` label would lag until an
-        // unrelated card/claim flip.
-        let pr_changed = self.last_pr.as_ref() != Some(&self.pr);
-        let driver_changed = self.last_driver.as_ref() != Some(&self.driver);
-        if live_changed || pr_changed || driver_changed || self.last_sent.as_ref() != Some(&queue) {
+        // A join-only change (a node gains a pr_number while its card + holder
+        // stay put, or a session binding moves) must republish too, else the
+        // `PR #N` label and the row bindings would lag until an unrelated
+        // card/claim flip.
+        if live_changed
+            || self.last_join.as_ref() != Some(&self.join)
+            || self.last_sent.as_ref() != Some(&queue)
+        {
+            let join = self.join.clone();
             self.last_sent = Some(queue.clone());
-            self.last_pr = Some(self.pr.clone());
-            self.last_driver = Some(self.driver.clone());
-            Some((queue, self.pr.clone(), self.driver.clone()))
+            self.last_join = Some(join.clone());
+            Some((queue, join))
         } else {
             None
         }
@@ -1464,7 +1502,7 @@ mod tests {
             {"id":"n3","sessions":[{"phase":"blueprint","session_id":"ffffffff-6666"}]},
             {"id":"n4"}
         ]}"#;
-        let m = derive_session_map(raw);
+        let m = derive_join(raw).driver;
         // A live claim holder wins.
         assert_eq!(m.get("n1").map(String::as_str), Some("aaaaaaaa"));
         // No claim: the LAST do/ship session wins (the blueprint row loses).
@@ -1472,6 +1510,55 @@ mod tests {
         // Sessions exist but none is do/ship: nothing maps (the row says so).
         assert!(!m.contains_key("n3"));
         assert!(!m.contains_key("n4"));
+    }
+
+    #[test]
+    fn the_join_maps_every_session_id_to_its_node_bindings() {
+        let raw = r#"{"entries":[
+            {"id":"x-aaaa","slug":"a","priority":"p1","status":"done","pr_number":1,
+             "sessions":[{"phase":"ship","session_id":"s-done","started_at":"2026-01-01T00:00:00Z"}]},
+            {"id":"x-bbbb","slug":"b","priority":"p2","status":"superseded","pr_number":2,
+             "sessions":[{"phase":"execute","session_id":"s-sup",
+                          "started_at":"2026-01-02T00:00:00Z","ended_at":"2026-01-03T00:00:00Z"}]},
+            {"id":"x-cccc","slug":"c","priority":"p2","status":"deferred","deferred_kind":"retracted","pr_number":3,
+             "sessions":[{"phase":"bind","session_id":"s-ret"}]},
+            {"id":"x-dddd","slug":"d","priority":"p3","status":"ready","pr_number":4,
+             "sessions":[{"phase":"execute","session_id":"s-open","started_at":"2026-01-04T00:00:00Z"},
+                         {"phase":"bind","session_id":"s-open"}]},
+            {"id":"x-eeee","slug":"e","priority":"p3","status":"ready",
+             "sessions":[{"phase":"execute","session_id":"s-end","ended_at":"2026-01-05T00:00:00Z"}]}
+        ]}"#;
+        let join = derive_join(raw);
+        // done -> merged, and the ts prefers started_at.
+        let done = &join.by_session["s-done"];
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].node, "x-aaaa");
+        assert_eq!(done[0].pr, Some(1));
+        assert_eq!(done[0].state, "merged");
+        assert!(!done[0].explicit);
+        assert_eq!(done[0].ts.as_deref(), Some("2026-01-01T00:00:00Z"));
+        // superseded -> dropped; started_at wins over ended_at for ts.
+        let sup = &join.by_session["s-sup"];
+        assert_eq!(sup[0].state, "dropped");
+        assert_eq!(
+            sup[0].ts.as_deref(),
+            Some("2026-01-02T00:00:00Z"),
+            "started_at wins over ended_at"
+        );
+        // deferred_kind: retracted -> dropped, and phase: bind is explicit.
+        let ret = &join.by_session["s-ret"];
+        assert_eq!(ret[0].state, "dropped");
+        assert!(ret[0].explicit, "phase: bind marks the binding explicit");
+        // Two rows on one session map individually; non-bind is open.
+        let open = &join.by_session["s-open"];
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0].state, "open");
+        assert!(open[1].explicit && open[1].state == "open");
+        // A row with only ended_at still carries a ts (sorting fuel).
+        assert_eq!(
+            join.by_session["s-end"][0].ts.as_deref(),
+            Some("2026-01-05T00:00:00Z")
+        );
     }
 
     #[test]
@@ -1641,9 +1728,9 @@ mod tests {
         assert_eq!(queue.cards[1].state, CardState::Ready);
         assert_eq!(queue.cards[0].plan_path.as_deref(), Some("/plans/one.md"));
         // the pr map derives from the same document.
-        let prs = derive_pr_map(raw);
-        assert_eq!(prs.get("EXT-3"), Some(&31u64));
-        assert!(!prs.contains_key("EXT-1"));
+        let join = derive_join(raw);
+        assert_eq!(join.pr.get("EXT-3"), Some(&31u64));
+        assert!(!join.pr.contains_key("EXT-1"));
     }
 
     #[test]
@@ -1678,7 +1765,7 @@ mod tests {
             if i < 3 {
                 assert!(out.is_none(), "failures below the threshold never publish");
             } else {
-                let (queue, _, _) = out.expect("the stale crossing publishes");
+                let (queue, _) = out.expect("the stale crossing publishes");
                 assert!(queue.stale, "the crossing publish carries the stale marker");
                 assert!(
                     !queue.cards.is_empty(),
@@ -1698,7 +1785,7 @@ mod tests {
             },
             None,
         );
-        let (queue, _, _) = recovered.expect("recovery republishes");
+        let (queue, _) = recovered.expect("recovery republishes");
         assert!(!queue.stale, "a landed read clears the failure run");
     }
 
@@ -2148,11 +2235,16 @@ mod tests {
                {"id":"x-b","slug":"b","priority":"p2","status":"ready"},
                {"id":"x-c","slug":"c","priority":"p2","status":"claimed","pr_number":"nope"}"#,
         );
-        let m = derive_pr_map(&raw);
-        assert_eq!(m.get("x-a"), Some(&385));
-        assert_eq!(m.get("x-b"), None, "no pr_number -> absent");
-        assert_eq!(m.get("x-c"), None, "non-u64 pr_number -> skipped");
-        assert!(derive_pr_map("not json").is_empty());
+        let m = derive_join(&raw);
+        assert_eq!(m.pr.get("x-a"), Some(&385));
+        assert_eq!(m.pr.get("x-b"), None, "no pr_number -> absent");
+        assert_eq!(m.pr.get("x-c"), None, "non-u64 pr_number -> skipped");
+        assert!(derive_join("not json").pr.is_empty());
+        assert!(
+            derive_join("not json").by_session.is_empty()
+                && derive_join("not json").driver.is_empty(),
+            "a malformed document joins to an empty BacklogJoin"
+        );
     }
 
     /// AC4-EDGE, publish half: a claim appearing under an unchanged stamp
@@ -2212,9 +2304,9 @@ mod tests {
         assert_eq!(full.0.cards[0].state, CardState::Ready);
         assert_eq!(full.0.cards[0].lane.as_deref(), Some("Triage"));
         assert_eq!(full.0.cards[1].lane.as_deref(), Some("In Progress"));
-        assert_eq!(full.1["x-done"], 42);
-        assert_eq!(full.2["x-done"], "closed-s");
-        assert_eq!(full.2["x-deferred"], "deferred");
+        assert_eq!(full.1.pr["x-done"], 42);
+        assert_eq!(full.1.driver["x-done"], "closed-s");
+        assert_eq!(full.1.driver["x-deferred"], "deferred");
         let mut projected = serde_json::from_str::<serde_json::Value>(&raw).unwrap();
         for row in projected["entries"].as_array_mut().unwrap() {
             row.as_object_mut()
@@ -2258,7 +2350,7 @@ mod tests {
         let s1 = Some((0, raw1.len() as u64));
         let out = st.tick(s1, || Some(raw1.clone()), None);
         assert!(out.is_some(), "pr-only change republishes");
-        assert_eq!(out.unwrap().1.get("x-a"), Some(&42));
+        assert_eq!(out.unwrap().1.pr.get("x-a"), Some(&42));
 
         reset_derive_queue_calls();
         let mut st = ReaderState::default();

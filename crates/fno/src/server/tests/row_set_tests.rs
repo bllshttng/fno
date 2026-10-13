@@ -16,8 +16,9 @@ fn agent_rows_join_pr_from_holder_map() {
     worker.updated_at = Some(42);
     core.agents = vec![worker, bg_row("holder-only", "/x", None)];
     core.backlog_holders = HashMap::from([("x-9c5f".to_string(), "holder-only".to_string())]);
-    core.backlog_pr = HashMap::from([("x-dae5".to_string(), 999), ("x-9c5f".to_string(), 385)]);
-    core.backlog_driver = HashMap::from([("x-dae5".to_string(), "09234474".to_string())]);
+    core.backlog_join.pr =
+        HashMap::from([("x-dae5".to_string(), 999), ("x-9c5f".to_string(), 385)]);
+    core.backlog_join.driver = HashMap::from([("x-dae5".to_string(), "09234474".to_string())]);
     let rows = core.agent_rows();
     let joined = rows
         .iter()

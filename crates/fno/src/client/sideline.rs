@@ -1009,9 +1009,12 @@ impl View {
                 let tail = row_message_text(a)
                     .map(|t| format!("\u{b7} {t}"))
                     .unwrap_or_default();
+                // Other bindings count after the PR (or the dash when this
+                // row has none): `+2 PRs` / `+1 open`.
+                let count = card_line::binding_suffix(a);
                 let pr =
-                    a.pr.map(|n| format!("#{n}"))
-                        .unwrap_or_else(|| "\u{2014}".into());
+                    a.pr.map(|n| format!("#{n}{count}"))
+                        .unwrap_or_else(|| format!("\u{2014}{count}"));
                 let age = row_age(a, now);
                 let (pr_cell, age_cell) = if card {
                     (String::new(), String::new())
@@ -1251,10 +1254,17 @@ impl View {
         let on_chosen_fill = agent.pane_id == Some(self.layout.focus) && !agent.exited;
         if let (Some(node), Some(span)) = (agent.node.as_deref(), spans.node) {
             let node_start = span.start;
+            // An inferred current binding dims the node: the row's node is
+            // a guess (branch, spawn, name, history), not a stamp.
+            let inferred = agent.bindings.iter().any(|b| b.node == node && b.inferred);
             for (cell, ch) in line[span].iter_mut().zip(node.chars()) {
                 cell.c = ch;
                 cell.fg = if on_chosen_fill { fill_fg } else { status_fg };
-                cell.flags = cell_flags::BOLD;
+                cell.flags = if inferred {
+                    cell_flags::DIM
+                } else {
+                    cell_flags::BOLD
+                };
             }
             // The name yields before the node: an ellipsis marks the cut
             // and one space keeps the gap. Under three columns
@@ -1279,10 +1289,8 @@ impl View {
             }
         }
         if let Some(span) = spans.pr {
-            for (cell, ch) in line[span]
-                .iter_mut()
-                .zip(format!("#{}", agent.pr.unwrap()).chars())
-            {
+            let text = format!("#{}{}", agent.pr.unwrap(), card_line::binding_suffix(agent));
+            for (cell, ch) in line[span].iter_mut().zip(text.chars()) {
                 cell.c = ch;
                 cell.fg = if on_chosen_fill {
                     fill_fg
@@ -1381,6 +1389,13 @@ impl View {
         }
         if let Some(cents) = a.session_cost_cents {
             segments.push(row_meter::cost_cell(cents));
+        }
+        // Every binding rides the detail head in wire order (the fold's
+        // strongest-first order; the wire carries no ts), each as node,
+        // source, pr when known, state.
+        for b in &a.bindings {
+            let pr = b.pr.map(|n| format!(" #{n}")).unwrap_or_default();
+            segments.push(format!("{} {}{} {}", b.node, b.source, pr, b.state));
         }
         let left = segments.join(" \u{b7} ");
         let created = a
