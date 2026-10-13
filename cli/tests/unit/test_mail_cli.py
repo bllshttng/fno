@@ -850,7 +850,9 @@ def test_drain_self_forward_execs_the_binary_with_the_mail_group_argv(
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: str(fake))
     res = runner.invoke(app, ["agents", "mail", "drain-self"])
     streams = res.stdout + (res.stderr or "")
-    assert "argv: mail drain-self" in streams
+    # The stub's printf reuses the format per argument, so argv order reads
+    # as stacked lines, not one joined line.
+    assert "argv: mail\nargv: drain-self" in streams
     assert "drain-stdout-line" in streams
     assert "drain-stderr-line" in streams
     assert res.exit_code == 3
