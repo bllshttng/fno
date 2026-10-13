@@ -172,7 +172,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${PLUGIN_ROOT}/hooks/spend-drift-monitor.js"
+            "command": "bash ${PLUGIN_ROOT}/hooks/spend-drift-monitor.sh"
           },
           {
             "type": "command",
