@@ -4512,16 +4512,18 @@ def _forward_mail_pane_prepare(argv: list[str]) -> None:
             err=True,
         )
         raise typer.Exit(code=127)
+    # Byte mode on purpose: text=True enables universal newlines, which
+    # rewrites the envelope's CRLF line endings and breaks the byte-exact
+    # contract the docstring states.
     result = subprocess.run(
         [str(binary), "mail", *argv],
         capture_output=True,
-        text=True,
         check=False,
     )
     if result.stdout:
-        sys.stdout.write(result.stdout)
+        sys.stdout.buffer.write(result.stdout)
     if result.stderr:
-        typer.echo(result.stderr.rstrip("\n"), err=True)
+        typer.echo(result.stderr.decode(errors="replace").rstrip("\n"), err=True)
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
