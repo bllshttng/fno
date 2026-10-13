@@ -283,6 +283,7 @@ fn invocation(case: &Value) -> (Vec<String>, Option<String>) {
             for extra in case
                 .get("extra")
                 .and_then(Value::as_array)
+                .map(Vec::as_slice)
                 .unwrap_or_default()
             {
                 argv.push("--extra".to_string());
