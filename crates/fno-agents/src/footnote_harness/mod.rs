@@ -212,7 +212,7 @@ pub fn dispatch_once(
     let Some(model) = model.filter(|m| !m.is_empty()) else {
         return outcome(2, String::new(), "-H footnote needs -m <model>\n".into());
     };
-    let (provider, model) = endpoint::split_model(cwd, model);
+    let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     match load_registry(&home.registry_json()) {
         Ok(reg) if reg.find(name).is_some() => {
             return outcome(
@@ -320,12 +320,9 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     let model = entry.requested_model.clone().unwrap_or_default();
     // A resume keeps the mode the session was spawned with.
     let mode = entry.requested_permission_mode.clone();
-    // An env-routed row also records its provider stamp, and a named provider
-    // outranks the env: name the row's provider only when no env route exists.
-    let provider = entry
-        .route_provider_id
-        .clone()
-        .filter(|_| !std::env::var("ANTHROPIC_BASE_URL").is_ok_and(|v| !v.is_empty()));
+    // A resume reaches the provider the row recorded, whatever stamp the
+    // asking session carries.
+    let provider = entry.route_provider_id.clone();
     let message = params["message"].as_str().unwrap_or("").to_string();
     let timeout = params["timeout"].as_u64().map(Duration::from_secs);
     let Some(dir) = transcript::find_session_dir(&transcript::sessions_root(), &fno_id) else {

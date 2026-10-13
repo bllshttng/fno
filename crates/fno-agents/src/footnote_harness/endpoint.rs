@@ -38,34 +38,43 @@ pub fn provider_record(cwd: &Path, provider: &str) -> Option<toml::Table> {
 }
 
 /// `-m <provider>/<model>`: the provider a footnote model id names, and the
-/// model without it. A prefix that names no provider record is part of the id.
-pub fn split_model<'a>(cwd: &Path, model: &'a str) -> (Option<String>, &'a str) {
-    match model.split_once('/') {
-        Some((p, rest)) if !rest.is_empty() && provider_record(cwd, p).is_some() => {
-            (Some(p.to_string()), rest)
-        }
-        _ => (None, model),
+/// model without it. A prefix equal to the route stamp is dropped, because the
+/// route already is that provider. Under an env endpoint any other id goes
+/// whole: a proxy's own ids carry slashes, and the env route must not move to
+/// another vendor. A prefix that names no provider record is part of the id.
+pub fn split_model<'a>(
+    cwd: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    model: &'a str,
+) -> (Option<String>, &'a str) {
+    let get = |k: &str| env(k).filter(|v| !v.is_empty());
+    let Some((prefix, rest)) = model.split_once('/').filter(|(_, rest)| !rest.is_empty()) else {
+        return (None, model);
+    };
+    if get(crate::codex_route::ROUTE_PROVIDER_ENV).as_deref() == Some(prefix) {
+        (None, rest)
+    } else if get("ANTHROPIC_BASE_URL").is_none() && provider_record(cwd, prefix).is_some() {
+        (Some(prefix.to_string()), rest)
+    } else {
+        (None, model)
     }
 }
 
-/// Resolve the endpoint: the provider the model id named first, then the
-/// spawn front's route env, then the
-/// `config.model_routing.providers.<FNO_ROUTE_PROVIDER>` record. A named
-/// provider outranks the env, so a spawn from a routed session never sends
-/// its model to that session's endpoint. Never a Claude.ai login: an
-/// Anthropic host with no API key refuses.
+/// Resolve the endpoint: the spawn front's route env first, then the
+/// `config.model_routing.providers` record of `provider` (the one the model id
+/// or the resumed row named), then of `FNO_ROUTE_PROVIDER`. Never a Claude.ai
+/// login: an Anthropic host with no API key refuses.
 pub fn resolve_endpoint(
     cwd: &Path,
     env: &dyn Fn(&str) -> Option<String>,
     provider: Option<&str>,
 ) -> Result<EndpointSpec, String> {
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
-    let named = provider.filter(|p| !p.is_empty()).map(str::to_string);
-    let route_provider = named
-        .clone()
+    let route_provider = provider
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
         .or_else(|| get(crate::codex_route::ROUTE_PROVIDER_ENV));
-    let env_url = get("ANTHROPIC_BASE_URL").filter(|_| named.is_none());
-    let ep = if let Some(base_url) = env_url {
+    let ep = if let Some(base_url) = get("ANTHROPIC_BASE_URL") {
         let (key, bearer) = match (get("ANTHROPIC_AUTH_TOKEN"), get("ANTHROPIC_API_KEY")) {
             (Some(t), _) => (t, true),
             (None, Some(k)) => (k, false),
