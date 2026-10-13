@@ -64,6 +64,7 @@ fn unreadable(stdout: &str) -> CloseOutcome {
 /// GitHub's own refusal, since both clear by waiting.
 fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
     row.get("error")
+        .or_else(|| row.get("reason"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_ascii_lowercase)
         .is_some_and(|error| {
@@ -134,7 +135,19 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
         .unwrap_or_default();
     let waiting = rows.iter().filter(|row| is_rate_limit_wait(row)).count() as u64;
     let failures = rows.len() as u64 - waiting;
-    let evidence = count_of("supersession_evidence_failures");
+    // Evidence rows carry their cause under `reason`; a rate-limited
+    // evidence read waits the same way.
+    let evidence_rows = parsed
+        .get("supersession_evidence_failures")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let evidence_waiting = evidence_rows
+        .iter()
+        .filter(|row| is_rate_limit_wait(row))
+        .count() as u64;
+    let evidence = evidence_rows.len() as u64 - evidence_waiting;
+    let waiting = waiting + evidence_waiting;
     let mut detail = format!(
         "closed={acted} promise_unmet={} failures={failures}",
         count_of("promise_unmet")
@@ -500,6 +513,19 @@ mod tests {
             o.detail.contains("evidence_failures=1"),
             "detail: {}",
             o.detail
+        );
+
+        // A rate-limited evidence read waits; it is not an evidence failure.
+        let stdout = r#"{
+  "closed": [],
+  "failures": [],
+  "supersession_evidence_failures": [{"node_id": "x-2", "reason": "API rate limit exceeded"}]
+}"#;
+        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
+        assert_eq!(
+            o.detail,
+            "closed=0 promise_unmet=0 failures=0 waiting=1 (GitHub rate limit)"
         );
     }
 
