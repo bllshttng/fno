@@ -1005,7 +1005,7 @@ fn stamp_row(
 
 /// The plan's frontmatter `claims:` names, or None when unreadable/absent
 /// (agreement-unknown, which skips loudly rather than failing the stamp).
-fn plan_claims(plan_path: &str) -> Option<Vec<String>> {
+pub(crate) fn plan_claims(plan_path: &str) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(plan_path).ok()?;
     let mut in_frontmatter = false;
     let mut claims: Option<Vec<String>> = None;

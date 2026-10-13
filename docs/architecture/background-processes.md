@@ -80,7 +80,7 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 | `slot_cutover` | `daemon` | `fno-agents-daemon` | switches to a globally declared managed Claude account when the proven account is low or exhausted | 120 s |
 | `slot_login_health` | `daemon` | `fno-agents-daemon` | health-checks every shared-slot managed Claude login and raises one operator notice when one dies | 120 s |
 | `merge_close` | `daemon` | `fno-agents-daemon` | merge-close sweeps | 900 s |
-| `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 60 s |
+| `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 300 s |
 | `team_ledger` | `daemon` | `fno-agents-daemon` | renders rundown.html | 300 s |
 | `lead_eval` | `daemon` | `fno-agents-daemon` | writes missing eval parts for ended Claude leads | 600 s |
 | `fleet_page` | `daemon` | `fno-agents-daemon` | renders fleet.html | 1800 s |

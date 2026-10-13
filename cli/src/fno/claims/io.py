@@ -246,6 +246,18 @@ def atomic_create_exclusive(path: Path, content: str) -> None:
             _attempt()
         except OSError as exc:
             raise _map(exc) from exc
+    except NotADirectoryError:
+        # The store migration publishes its tombstone AS the claims path: a
+        # marker file where the lock needs a directory. The backup the marker
+        # names was imported at publish, so the designed next step is a
+        # legacy writer recreating the directory; retire the marker and
+        # retry once, same as the missing-parent case above.
+        try:
+            path.parent.unlink()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _attempt()
+        except OSError as exc:
+            raise _map(exc) from exc
     except OSError as exc:
         raise _map(exc) from exc
     # Reached only when the claim file was actually created, by either the
