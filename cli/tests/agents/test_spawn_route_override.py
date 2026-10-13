@@ -935,8 +935,6 @@ def test_lane_alias_matches_one_declared_row(monkeypatch) -> None:
     lane = mr.declared_lane("zai", "glm-5.3-flash[1m]")
     assert lane is not None and lane.name == "zai-flash"
     assert lane.launch == ["claude", "--bg", "--settings", "{settings}", "--name", "{name}", "{payload}"]
-    assert mr.lane_alias_for("zai", "glm-5.3-flash[1m]") == "zai-flash"
-    assert mr.lane_alias_for("zai", "glm-5.3[1m]") is None
     twin = InventoryRow(
         name="zai-flash-2", harness="claude", model="glm-5.3-flash[1m]",
         route="zai/glm-5.3-flash[1m]",

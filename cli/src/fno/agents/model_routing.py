@@ -1239,21 +1239,6 @@ def declared_lane(
     return matches[0] if len(matches) == 1 else None
 
 
-def lane_alias_for(
-    provider: Optional[str], model: Optional[str]
-) -> Optional[str]:
-    """The routing row's name when exactly one declared claude row matches the
-    resolved (provider, model), else None.
-
-    The stable ``lane-<row>.json`` alias needs the row's own name:
-    ``zai-flash``, not a digest. Ambiguous or unmatched lanes read no alias -
-    the spawn still carries the content-addressed file, only the printed name
-    degrades.
-    """
-    lane = declared_lane(provider, model)
-    return lane.name if lane else None
-
-
 def lane_row_by_name(name: str) -> Optional["InventoryRow"]:
     """The declared row whose name is exactly this, else None - the lane pin
     spelling: ``--route zai-flash`` resolves the declared row, and the row's
