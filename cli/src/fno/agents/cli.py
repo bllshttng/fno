@@ -1816,7 +1816,7 @@ def cmd_spawn(
             route_model = lane_row.get("model") or ""
             if effort is None and lane_row.get("effort"):
                 effort = lane_row["effort"]
-        else:
+        elif parsed is not None:
             route_provider = parsed[0]
             route_model = parsed[1]
         if monitor == "happy" and route_provider != "zai":
@@ -1830,7 +1830,7 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         notes: list[str] = []
-        route_env = resolve_explicit_route(route_provider, route_model, notice=notes.append)
+        route_env = resolve_explicit_route(route_provider or "", route_model or "", notice=notes.append)
         if not route_env:
             reason = "; ".join(notes) or "provider unknown, non-anthropic, or keyless"
             print(
@@ -1839,7 +1839,7 @@ def cmd_spawn(
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
-        route_env = bind_route_provider(route_env, route_provider)
+        route_env = bind_route_provider(route_env, route_provider or "")
 
     if monitor == "happy" and route_provider != "zai":
         print(
