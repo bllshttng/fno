@@ -5,7 +5,7 @@ Grant-at-spawn (``--promote level=N,scope=X``) is implemented only in the Python
 DEFAULT substrate and pane spawns already divert to Python via
 ``_is_pane_substrate_spawn`` - so a BARE ``spawn --promote`` already works. The
 defect lives only on the autonomous substrates (``--substrate bg`` and the
-headless spellings ``-p``/``--headless``/``--once``/``-o``), where
+headless spellings ``--substrate headless``/``--once``/``-o``), where
 ``_is_pane_substrate_spawn`` returns False and the spawn would otherwise reach
 the Rust client and die with ``unknown flag: --promote``. Those are exactly the
 substrates where succession matters most (an stepping_down lead grants on a worker).
@@ -36,7 +36,6 @@ def test_role_bearing_spawn_detected_across_forms() -> None:
 
 @pytest.mark.parametrize("substrate_args", [
     ["--substrate", "thread"],
-    ["-p"],            # headless spellings route the same Rust path
     ["--once"],
 ])
 def test_role_fix_load_bearing_on_autonomous_substrates(substrate_args) -> None:
@@ -146,7 +145,7 @@ def test_pane_detector_stops_at_the_passthrough_fence() -> None:
     assert _is_pane_substrate_spawn("spawn", ["spawn", "hi", "--", "--once", "x"])
     assert _is_pane_substrate_spawn("spawn", ["spawn", "hi", "--", "--substrate", "thread"])
     # Pre-fence spellings still count, and the --argv payload boundary holds.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "hi", "-p"])
+    assert not _is_pane_substrate_spawn("spawn", ["spawn", "hi", "-o"])
     assert not _is_pane_substrate_spawn(
         "spawn", ["spawn", "hi", "--substrate", "headless"]
     )

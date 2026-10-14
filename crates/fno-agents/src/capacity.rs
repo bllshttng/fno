@@ -348,7 +348,7 @@ fn step(
     Some(next)
 }
 
-fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
+pub(crate) fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
     let total = sample.total_mem_gb?;
     let occupied = sample.compressor_gb?;
     if total <= 0.0 {

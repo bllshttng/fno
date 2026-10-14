@@ -1,0 +1,12 @@
+[fno agents mail] 3 message(s) for a1b2c3d4:
+
+--- from lead (2026-10-12T09:00:00Z)  id:m1 ---
+first unread
+
+--- from lead (2026-10-12T09:05:00Z)  id:m2  origin:pane ---
+second unread
+
+--- from lead (2026-10-12T09:07:00Z)  id:m3 ---
+peer sent this
+
+[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."

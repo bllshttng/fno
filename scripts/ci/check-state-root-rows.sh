@@ -2,13 +2,14 @@
 # check-state-root-rows.sh - the inventory doc's root rows are SHRINK-ONLY.
 #
 # The state-root tidiness rule (docs/state-root-inventory.md, "The rule"):
-# the root holds folders plus the rows it already has, and nothing new lands
-# at the top level. A writer that moves into a subfolder deletes its row; a
-# PR that ADDS a root pattern to the doc refuses. The baseline is the
-# checked-in pattern list at the freeze (scripts/ci/state-root-rows.baseline),
-# so the backfill PR itself passes and every later PR diffs against frozen
-# names: added = refused, removed = banked. Regenerate the baseline in the
-# same PR as a removal to bank it for good.
+# the root holds a closed set of folders plus the rows it already has, and
+# nothing new lands at the top level - an added folder refuses like an added
+# file. A writer that moves into a subfolder deletes its row; a PR that ADDS
+# a root pattern to the doc refuses. The baseline is the checked-in pattern
+# list at the freeze (scripts/ci/state-root-rows.baseline), so the backfill
+# PR itself passes and every later PR diffs against frozen names: added =
+# refused, removed = banked. Regenerate the baseline in the same PR as a
+# removal to bank it for good.
 #
 # The extractor is fno.graph._state_root_inventory.top_level_patterns - the
 # same parser the drift report and the Rust reading use, so one dialect
@@ -43,7 +44,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, "src")
-from fno.graph._state_root_inventory import _BACKTICK, _PLACEHOLDER, top_level_patterns
+from fno.graph._state_root_inventory import top_level_patterns
 
 doc, baseline, quiet = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3] == "--quiet"
 if not doc.is_file() or not baseline.is_file():
@@ -56,53 +57,17 @@ base = {
     if (entry := line.partition("#")[0].strip())
 }
 banked = sorted(base - head)
-added = sorted(head - base)
-
-# Folder-row provenance: a row whose Entry span holds "/" documents a folder,
-# and the parser emits its first segment. The root holds folders, so an added
-# pattern that comes only from such spans is lawful; the same span parsing
-# (module regexes, not a second dialect) also collects the bare-name yields,
-# which stay refused - a bare row may never enter, folder or not.
-import re
-
-folder_names, bare_names = set(), set()
-for line in doc.read_text(encoding="utf-8").splitlines():
-    if not line.lstrip().startswith("|"):
-        continue
-    cells = line.split("|")
-    if len(cells) < 2:
-        continue
-    spans = [s for s in (_PLACEHOLDER.sub("*", t.strip()) for t in _BACKTICK.findall(cells[1])) if s]
-    slashed = any("/" in s for s in spans)
-    bases = [s for s in spans if "/" not in s and "*" not in s and not s.startswith(".")]
-    for span in spans:
-        if "/" in span:
-            folder_names.add(span.split("/", 1)[0])
-        elif not slashed:
-            bare_names.add(span)
-            if span.startswith(".") and len(span) > 1 and "*" not in span:
-                for b in bases:
-                    bare_names.add(b + span)
-
-lawful = sorted(p for p in added if p in folder_names and p not in bare_names)
-refused = sorted(p for p in added if p not in folder_names or p in bare_names)
+refused = sorted(head - base)
 if not quiet:
     for pattern in banked:
         print(f"banked: {pattern}")
-    for pattern in lawful:
-        print(f"folder: {pattern}")
 if refused:
     for pattern in refused:
         print(f"added: {pattern}", file=sys.stderr)
-        if pattern in folder_names:
-            print(
-                f"check-state-root-rows: '{pattern}' names a folder; admit it with "
-                f"rows like '{pattern}/<file>', never a bare folder row.",
-                file=sys.stderr,
-            )
     print(
-        "check-state-root-rows: the inventory doc grew a root row; root rows are shrink-only. "
-        "The remedy is a subfolder: put the state under a named directory and do not add the row.",
+        "check-state-root-rows: the inventory doc grew a root row; root rows are shrink-only, "
+        "and that includes folders. The top-level folder set is closed: put the state under a "
+        "folder the baseline already names and do not add the row.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -128,15 +93,15 @@ if [[ "$SELF_TEST" == 1 ]]; then
         exit 2
     fi
     printf '| `graph.db` | store |\n| `backups/` | rotation |\n| `newdir/x.json` | someone |\n' >"$tmp/grown-folder.md"
-    check_rows "$tmp/grown-folder.md" "$tmp/baseline.txt" --quiet || {
-        echo "check-state-root-rows: self-test: an added folder row must pass" >&2
-        exit 2
-    }
-    printf '| `graph.db` | store |\n| `backups/` | rotation |\n| `newdir/x.json` | someone |\n| `newdir` | bare folder |\n' >"$tmp/grown-bare-folder.md"
-    if check_rows "$tmp/grown-bare-folder.md" "$tmp/baseline.txt" --quiet 2>/dev/null; then
-        echo "check-state-root-rows: self-test: a bare folder row must refuse" >&2
+    if check_rows "$tmp/grown-folder.md" "$tmp/baseline.txt" --quiet 2>/dev/null; then
+        echo "check-state-root-rows: self-test: an added folder row must refuse" >&2
         exit 2
     fi
+    printf '| `graph.db` | store |\n| `backups/` | rotation |\n| `backups/new.json` | someone |\n' >"$tmp/grown-under-folder.md"
+    check_rows "$tmp/grown-under-folder.md" "$tmp/baseline.txt" --quiet || {
+        echo "check-state-root-rows: self-test: a row under an existing folder must pass" >&2
+        exit 2
+    }
     check_rows "$tmp/shrunk.md" "$tmp/baseline.txt" --quiet || {
         echo "check-state-root-rows: self-test: a shrunk doc must pass" >&2
         exit 2

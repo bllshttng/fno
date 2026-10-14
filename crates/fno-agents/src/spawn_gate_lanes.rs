@@ -516,6 +516,10 @@ pub(crate) struct LaneReading {
     /// The `(name, expires_at)` pairs of the slot claims the count included:
     /// the lane's held-by-claim share, reservations named.
     pub reserved: Vec<(String, i64)>,
+    /// The pending launch records the count included: a dispatcher's record
+    /// stands between the gate pass and the session report, where no row
+    /// exists to count, so the record itself is the seat.
+    pub launches: Vec<String>,
 }
 
 /// Count rows of ONE provider only when status and positive liveness agree
@@ -715,12 +719,27 @@ pub(crate) fn provider_live_count_with_questions(
     let (claim_count, reserved) =
         provider_live_slot_claims(provider, &claim_seen, redeemer, warnings)?;
     count += claim_count;
+    let launches = pending_launch_records(registry_path, provider);
+    count += launches.len();
     Ok(LaneReading {
         count,
         counted: counted_names,
         parked,
         reserved,
+        launches,
     })
+}
+
+/// The pending dispatch records holding `provider`'s lane (the change-7
+/// reservation rule): a burst of dispatches cannot all pass on one free
+/// slot, because the first unclaimed record already holds it. A missing
+/// record dir is the no-dispatch-yet case, not a fault - the same posture
+/// the claims share takes.
+fn pending_launch_records(registry_path: &Path, provider: &str) -> Vec<String> {
+    let Some(home) = registry_path.parent().map(crate::paths::AgentsHome::at) else {
+        return Vec::new();
+    };
+    crate::launch_record::pending_for_provider(home.root(), provider, crate::claims::now_ms())
 }
 
 /// Pane liveness for one row: `Some(bool)` decided, `None` when the row
@@ -1235,7 +1254,7 @@ fn runtime_state_payload(config_cwd: &Path) -> Value {
 /// The account's binding rate-limit deadline, when its health entry is fresh
 /// (the shared record-level TTL) and the lock is in the future. Reuses the
 /// fallback-chain's health parse instead of a second one.
-fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
+pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
     let health = crate::fallback_chain::parse_provider_health(raw).remove(account)?;
     let rlu = health.get("rate_limited_until").and_then(Value::as_f64)?;
     match health.get("last_error_at").and_then(Value::as_f64) {
@@ -1395,6 +1414,81 @@ mod tests {
             reading.reserved.is_empty(),
             "no slot claims in the plain fixture"
         );
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dispatch reservation rule: a pending record the dispatcher wrote
+    /// before exec holds the provider's lane through the exec-to-adopt gap,
+    /// and the reading names it. Another provider's record, a provider-less
+    /// one, and a record past its claim window hold nothing.
+    #[test]
+    fn a_pending_dispatch_record_holds_the_lane() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
+        let reg = dir.join("registry.json");
+        write_registry(&reg, &[]);
+        let now = crate::claims::now_ms();
+        let launch = |name: &str, provider: Option<&str>| crate::launch_record::Launch {
+            harness: "claude".into(),
+            name: Some(name.into()),
+            node: None,
+            slot: None,
+            provider: provider.map(str::to_string),
+            cwd: "/tmp".into(),
+        };
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-burst", Some("zai")),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-other-lane", Some("codex")),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-typed-line", None),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-lapsed", Some("zai")),
+            "lead-1",
+            None,
+            "/tmp",
+            now - crate::launch_record::WINDOW_MS - 1_000,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
+        assert_eq!(
+            reading.count, 1,
+            "only the in-window zai record holds: {reading:?}"
+        );
+        assert_eq!(reading.launches, vec!["w-burst".to_string()]);
+
+        let other = provider_live_count(&reg, "codex", None, &mut warnings).unwrap();
+        assert_eq!(other.count, 1);
+        assert_eq!(other.launches, vec!["w-other-lane".to_string()]);
         std::env::remove_var("FNO_CLAIMS_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
     }

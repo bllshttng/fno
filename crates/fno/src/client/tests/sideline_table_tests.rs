@@ -828,3 +828,16 @@ fn manual_sort_and_pins_reorder_the_run() {
         "the pinned row leads the status sort: {agents:?}"
     );
 }
+
+#[test]
+fn header_hint_takes_only_the_gap_the_fit_left_over() {
+    let rollup = [(LatticeState::Working, 3)];
+    // Room to spare: the hint follows the label, the counts keep the edge.
+    let roomy = header_band::header_band_hinted("sq", "(no folder)", &rollup, 40);
+    assert!(roomy.starts_with("sq (no folder)") && roomy.ends_with("\u{25cf}3"));
+    assert_eq!(roomy.chars().count(), 40);
+    // No room: the hint drops whole and never clips the label or a count.
+    let tight = header_band::header_band_hinted("sq", "(no folder)", &rollup, 12);
+    assert_eq!(tight, header_band_text("sq", &rollup, 12));
+    assert_eq!(header_band::folder_hint(""), "(no folder)");
+}

@@ -1830,9 +1830,9 @@ fn is_well_formed_paired_fno_mail(text: &str) -> bool {
 /// refuse, just arriving through the "already framed" branch instead of the
 /// unframed one. Validate the complete structure rather than trusting the
 /// prefix, BUT ONLY when the payload contains a `</fno_mail>` at all: the
-/// documented relay single-line variant (`frame()` in
-/// `cli/src/fno/relay/envelope.py`, delivered by
-/// `cli/src/fno/relay/roundtrip.py::deliver_attached`) has no close tag by
+/// documented relay single-line variant (once built by `frame()` in
+/// the retired Python relay envelope, delivered by
+/// `deliver_attached` from the same retired package) has no close tag by
 /// design - "no close tag, no trailer... out of scope" per the plan - so a
 /// close-tag-free payload is passed through unchanged, exactly as it was
 /// before this predicate existed. A payload that DOES carry a close tag is
@@ -1889,7 +1889,7 @@ fn forged_envelope_decision_at(text: &str, registry_path: Option<&Path>) -> Opti
             }
             if !contains_ci(text, "</fno_mail>") {
                 // Close-tag-free: the documented relay single-line variant. Its
-                // producer (`frame()` in `cli/src/fno/relay/envelope.py`) embeds
+                // producer (the retired Python relay envelope's `frame()`) embeds
                 // peer-controlled body text without validating it, so a second
                 // `<fno_mail` open smuggled in there would otherwise pass
                 // through unchecked. Still require exactly one open tag.
@@ -2977,7 +2977,7 @@ mod tests {
     #[test]
     fn forged_envelope_passes_the_documented_relay_single_line_variant() {
         // codex P1 (a real regression the earlier well-formed check
-        // introduced): `frame()` in cli/src/fno/relay/envelope.py produces
+        // introduced): the retired Python relay envelope produced
         // `<fno_mail from="..." harness="..."> body` with NO close tag, by
         // design - "no close tag, no trailer... out of scope" per the plan.
         // deliver_attached in cli/src/fno/relay/roundtrip.py pipes exactly

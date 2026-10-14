@@ -582,6 +582,21 @@ pub fn is_light(t: &Theme) -> bool {
     matches!(t.base, Color::Rgb(r, g, b) if r > 127 && g > 127 && b > 127)
 }
 
+/// The Claude Code theme that matches a mux theme: the plugin ships one per
+/// brand theme under `themes/`, and Claude Code lists each as "<name> from
+/// fno" (selected as `custom:fno:<file stem>`). A light ground gets Footnote
+/// Paper, a theme built on the dark brand palette gets Footnote Superscript,
+/// and any other theme gets `None` so Claude Code keeps its own.
+pub fn claude_theme(t: &Theme) -> Option<&'static str> {
+    if is_light(t) {
+        Some("custom:fno:footnote-paper")
+    } else if t.name == "footnote-superscript" || t.inherit_from == "footnote-superscript" {
+        Some("custom:fno:footnote-superscript")
+    } else {
+        None
+    }
+}
+
 /// The OSC sequences that paint the terminal ground under a footnote theme:
 /// default background (11), default foreground (10), and the 16 palette
 /// slots (4), all from the theme's own tokens. `None` = the theme defines no
@@ -1150,5 +1165,20 @@ mod tests {
             );
         }
         assert!(ratio(t.dim) >= 4.5, "dim is {:.2}:1", ratio(t.dim));
+    }
+
+    #[test]
+    fn each_brand_theme_selects_its_claude_theme() {
+        let pick = |name: &str| claude_theme(&Theme::from_name(name).0);
+        assert_eq!(
+            pick("footnote-superscript"),
+            Some("custom:fno:footnote-superscript")
+        );
+        assert_eq!(pick("footnote-paper"), Some("custom:fno:footnote-paper"));
+        assert_eq!(pick("terminal"), None);
+        let mut user = theme_catppuccin();
+        user.name = "midnight";
+        user.inherit_from = "footnote-superscript";
+        assert_eq!(claude_theme(&user), Some("custom:fno:footnote-superscript"));
     }
 }

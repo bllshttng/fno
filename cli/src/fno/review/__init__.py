@@ -9,6 +9,4 @@ replacement. What remains is what the retained lanes use:
 - :mod:`fno.review.cli` - ``fno do review classify``
 - :mod:`fno.review.invocation` - review invocation records
 - :mod:`fno.review.locking` - the review lock the lane holds while it runs
-- :mod:`fno.review.policy` - risk classification + assurance resolution
-- :mod:`fno.review.provider_resolution` - cross-model capacity substrate
 """
