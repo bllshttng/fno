@@ -596,8 +596,12 @@ fn assess_alias_outcome(base: &Path) -> (String, i32) {
 #[test]
 fn review_policy_door_posture() {
     let bin = env!("CARGO_BIN_EXE_fno-agents");
+    // Every spawn declares its test-owner pair so the keeper-reap attributes
+    // the children (the static guard in test_owned_keeper_reap.rs reads this
+    // file for that declaration).
     let out = Command::new(bin)
         .args(["review-policy", "--help"])
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary spawns");
     assert!(out.status.success(), "--help must exit 0");
@@ -607,6 +611,7 @@ fn review_policy_door_posture() {
     );
     let out = Command::new(bin)
         .args(["review-policy", "assess"])
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary spawns");
     assert_eq!(
@@ -623,6 +628,7 @@ fn review_policy_door_posture() {
     );
     let out = Command::new(bin)
         .args(["review-policy", "assess", "--bogus-flag"])
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary spawns");
     assert_eq!(out.status.code(), Some(2), "unknown flag must exit 2");
@@ -633,6 +639,7 @@ fn review_policy_door_posture() {
             "FNO_RUNTIME_STATE_PATH",
             "/nonexistent-review-policy-posture.json",
         )
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary spawns");
     assert!(out.status.success(), "kinds must exit 0");
