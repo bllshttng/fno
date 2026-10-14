@@ -340,6 +340,9 @@ def test_codex_ask_short_flags_match_long_through_rust_binary(
             **os.environ,
             "FNO_AGENTS_HOME": str(home),
             "PATH": fake_path,
+            # The harness axis retired: the ambient codex marker names the
+            # harness, the way a codex-hosted session would.
+            "CODEX_THREAD_ID": _SESSION_ID,
             "FAKE_CODEX_SESSION_ID": _SESSION_ID,
             "FAKE_CODEX_REPLY": _REPLY,
         }
@@ -353,9 +356,9 @@ def test_codex_ask_short_flags_match_long_through_rust_binary(
             timeout=30,
         )
 
-    short = _run(["-H", "codex", "-c", str(cwd), "-t", "10", "-o"], tmp_path / "short-home")
+    short = _run(["-c", str(cwd), "-t", "10", "-o"], tmp_path / "short-home")
     long = _run(
-        ["--harness", "codex", "--cwd", str(cwd), "--timeout", "10", "--once"],
+        ["--cwd", str(cwd), "--timeout", "10", "--once"],
         tmp_path / "long-home",
     )
 
