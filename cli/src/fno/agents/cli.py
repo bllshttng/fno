@@ -1083,7 +1083,7 @@ def cmd_spawn(
         "-P",
         help=(
             "The model VENDOR (zai or a model_routing.providers name), paired "
-            "with --model. NOT the CLI binary (-H). -p is headless."
+            "with --model. NOT the CLI binary (-H)."
         ),
     ),
     recorded_provider: str | None = typer.Option(
@@ -1113,11 +1113,10 @@ def cmd_spawn(
             "headless (one-shot). Placement flags and a `--` fence imply pane."
         ),
     ),
-    headless: bool = typer.Option(
+    print_mode: bool = typer.Option(
         False,
-        "--headless",
-        "-p",
-        help="Shortcut for --substrate headless: a one-shot worker. Wins over --substrate.",
+        "--print",
+        help="Print the native line the spawn would exec, then exit. Launches nothing.",
     ),
     sandbox_write_policy: str | None = typer.Option(
         None,
@@ -1510,8 +1509,8 @@ def cmd_spawn(
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
 
-    # The substrate axis: headless is the ergonomic shortcut;
-    # an empty value resolves to the built-in default (thread where seated).
+    # The substrate axis: an empty value resolves to the built-in default
+    # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, thread_seatable, thread_uncarried
 
     # A flag the harness's thread lane cannot carry (a typed axis or a fenced
@@ -1528,8 +1527,6 @@ def cmd_spawn(
         passthrough,
     )
     defaulted = False
-    if headless:
-        substrate = "headless"
     if not substrate and once:  # --once always means a one-shot
         substrate = "headless"
     if not substrate:
@@ -1662,39 +1659,6 @@ def cmd_spawn(
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
-    # Fail-closed for non-claude bg/headless (mirrors the Rust intercept): only
-    # claude's bg lane honors a mapped --permission-mode via the Python fallback
-    # (dispatch_spawn -> _claude_create_path); codex/gemini one-shot lanes
-    # hardcode their own bypass and can't express a mapped mode. The pane
-    # substrate maps every provider, so it's exempt here. The codex
-    # thread lane is exempt too: the shared app-server resolves the posture
-    # (resolve_thread_posture), so a mapped mode rides it natively.
-    # The capability table decides, through the one Rust vocabulary (see
-    # codex_posture.rs): a codex thread lane carries a mapped mode when the
-    # table declares the lane AND the mode resolves in codex's own words. An
-    # unavailable owner reads false, which degrades to the refusal below -
-    # never a guessed yes.
-    from fno.agents.permission_axis import codex_thread_lane_carries
-
-    codex_thread_lane = codex_thread_lane_carries(harness, substrate, once, permission_mode)
-    if (
-        permission_mode is not None
-        and harness != "claude"
-        and (substrate != "pane" or once)
-        and not codex_thread_lane
-    ):
-        remedy = (
-            "drop --permission-mode and pass -Y/--yolo"
-            if harness == "codex"
-            else "use --substrate pane"
-        )
-        print(
-            f"--permission-mode is not supported for harness {harness!r} on "
-            "--substrate bg/headless (its one-shot lane hardcodes its own bypass "
-            f"form); {remedy}",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
 
     #: Tier-3 fail-closed for the bg/headless lanes (the pane substrate
     # maps every provider via build_pane_argv, so it's exempt and validated
@@ -1797,6 +1761,8 @@ def cmd_spawn(
     # applied. A bare --model (no route) is still reported via the `model`
     # local below, since claude bg_create applies it as `claude --model`.
     route_model: str | None = None
+    # The row a lane-name route resolved; the lane surfaces read it once.
+    lane_row: dict | None = None
     if route is not None:
         # Pane routing is a per-harness evidence claim, independent from both
         # pane autonomy and substrate preference. Missing capability stays
@@ -1834,18 +1800,27 @@ def cmd_spawn(
 
         parsed = _parse_target(route)
         if parsed is None:
-            print(
-                f"--route must be 'provider,model' with a non-empty model token; got {route!r}",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-        route_provider = parsed[0]
-        route_model = parsed[1]
+            # The lane pin spelling: a declared row's NAME resolves the whole
+            # coordinate; the pair parse ran first, so it cannot shadow.
+            from fno.agents.model_routing import declared_lane
+
+            lane_row = declared_lane(name=route)
+            if lane_row is None:
+                print(f"--route takes 'provider,model' or a declared lane name; got {route!r}", file=sys.stderr)
+                raise typer.Exit(code=2)
+        if lane_row is not None:
+            route_provider = lane_row.get("vendor") or ""
+            if not route_provider:
+                print(f"--route {route!r} names a lane that declares no route; no worker launched, node stays dispatchable.", file=sys.stderr)
+                raise typer.Exit(code=2)
+            route_model = lane_row.get("model") or ""
+            if effort is None and lane_row.get("effort"):
+                effort = lane_row["effort"]
+        elif parsed is not None:
+            route_provider = parsed[0]
+            route_model = parsed[1]
         if monitor == "happy" and route_provider != "zai":
-            print(
-                "--monitor happy currently supports only the zai provider",
-                file=sys.stderr,
-            )
+            print("--monitor happy currently supports only the zai provider", file=sys.stderr)
             raise typer.Exit(code=2)
         if monitor == "happy" and model is not None:
             print(
@@ -1855,7 +1830,7 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         notes: list[str] = []
-        route_env = resolve_explicit_route(parsed[0], parsed[1], notice=notes.append)
+        route_env = resolve_explicit_route(route_provider or "", route_model or "", notice=notes.append)
         if not route_env:
             reason = "; ".join(notes) or "provider unknown, non-anthropic, or keyless"
             print(
@@ -1864,7 +1839,7 @@ def cmd_spawn(
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
-        route_env = bind_route_provider(route_env, route_provider)
+        route_env = bind_route_provider(route_env, route_provider or "")
 
     if monitor == "happy" and route_provider != "zai":
         print(
@@ -2023,6 +1998,29 @@ def cmd_spawn(
             f"bills {credential.bills})",
             file=sys.stderr,
         )
+
+    # --print: the verb refuses, composes and renders; this leg is the ask and display.
+    if print_mode:
+        import shlex
+        from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+        try:
+            answer = spawn_overlay_call({
+                "kind": "print", "harness": harness, "substrate": substrate,
+                "name": name, "payload": message or "",
+                "model": route_model or model or "", "effort": effort or "",
+                "permission_mode": permission_mode or "",
+                "route_env": route_env or {}, "account_env": account_env or {},
+                "cwd": str(workdir),
+            })
+        except SpawnOverlayUnavailable as exc:
+            print(exc, file=sys.stderr)
+            raise typer.Exit(code=2)
+        tokens = answer.get("tokens")
+        if not isinstance(tokens, list):
+            raise RuntimeError("spawn-overlay print answered no token list")
+        print(" ".join(shlex.quote(token) for token in tokens))
+        raise typer.Exit(code=0)
 
     # Resolve node provenance once for every substrate. A node-bearing spawn is
     # itself a dispatcher route, so it must cross the same family-2 decision and
@@ -2644,6 +2642,59 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
+            # The native lane: a routed claude bg spawn (bg is resolve_spawn_gates' canonical thread) execs the lane's own line; other axes fall through.
+            native_lane = (
+                harness == "claude"
+                and substrate == "bg"
+                and not (once or resume)
+                and bool(route_env)
+                and role_level is None
+                and not (model or add_dir or agent or tools
+                         or deny_tools or passthrough or yolo or monitor)
+            )
+            if native_lane:
+                from fno.agents.spawn_lineage import _capture_parent_edge
+
+                launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
+                if not launcher_session:
+                    print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
+                else:
+                    from fno.rust_binary import resolve_binary
+                    import subprocess as _subprocess
+
+                    ask: dict = {
+                        "kind": "launch",
+                        "harness": harness, "name": name, "payload": message or "",
+                        "route_env": route_env or {}, "account_env": account_env or {},
+                        "sandbox": sandbox_settings,
+                        "model": route_model or "", "effort": effort or "", "permission_mode": permission_mode or "",
+                        "cwd": str(workdir), "provider": route_provider or "",
+                        "node": (prov_env or {}).get("FNO_NODE") or "",
+                        "launcher_session": launcher_session,
+                    }
+                    if launcher_harness:
+                        ask["launcher_harness"] = launcher_harness
+                    if launcher_cwd and launcher_cwd.strip():
+                        ask["launcher_cwd"] = launcher_cwd
+                    proc = _subprocess.run(
+                        [str(resolve_binary()), "spawn-overlay"],
+                        input=json.dumps(ask), text=True, capture_output=True,
+                    )
+                    sys.stdout.write(proc.stdout or "")
+                    sys.stderr.write(proc.stderr or "")
+                    if proc.returncode != 0:
+                        raise typer.Exit(code=proc.returncode)
+                    # The launch kind answers {"exit": N} after the stream.
+                    try:
+                        answer = json.loads((proc.stdout or "").strip().rsplit("\n", 1)[-1])
+                    except ValueError:
+                        answer = {}
+                    if isinstance(answer, dict) and answer.get("exit"):
+                        raise typer.Exit(code=int(answer["exit"]))
+                    spawn_succeeded = True
+                    print(f"spawn: {name} launched on the native lane; the row lands at its SessionStart adopt", file=sys.stderr)
+                    return
+
             result: SpawnResult = dispatch_spawn(
                 name=name,
                 message=message,

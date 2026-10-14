@@ -1433,9 +1433,8 @@ def test_routing_pane_substrate_spawn_stays_python() -> None:
     assert not _is_pane_substrate_spawn(
         "spawn", ["spawn", "p", "--substrate=headless"]
     )
-    # x-c772: --headless / --once is the headless shortcut -> never a pane. `-H`
+    # x-c772: --once is the headless shortcut -> never a pane. `-H`
     # was reassigned to --harness (x-6de8), so `-H codex` is a default-pane spawn.
-    assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--headless"])
     assert not _is_pane_substrate_spawn("spawn", ["spawn", "p", "--once"])
     assert _is_pane_substrate_spawn("spawn", ["spawn", "p", "-H", "codex"])
     assert not _is_pane_substrate_spawn("ask", ["ask", "peer", "hi"])
@@ -2958,7 +2957,6 @@ def test_cmd_spawn_explicit_happy_monitor_routes_zai_pane(
         ["--substrate", "thread"],
         ["--substrate", "headless"],
         ["--once"],
-        ["--headless"],
     ],
 )
 def test_cmd_spawn_explicit_happy_monitor_refuses_non_pane_before_dispatch(

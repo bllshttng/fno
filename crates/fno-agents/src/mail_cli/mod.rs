@@ -1,9 +1,11 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
 //! release timer, the session seed-provenance leaf, the `team` broadcast,
-//! the outbound sent view, the unread listing, the ack leaf, and the raw
-//! prompt-line send. Dispatch only; the verbs live in [hold],
-//! [seed_provenance], [team], [sent], [unread], [ack], and [send_raw].
+//! the outbound sent view, the unread listing, the ack leaf, the raw
+//! prompt-line send, and the drain-self leaf. Dispatch only; the verbs
+//! live in [hold], [seed_provenance], [team], [sent], [unread], [ack],
+//! [send_raw], and [drain_self].
 pub mod ack;
+pub mod drain_self;
 pub mod hold;
 pub mod seed_provenance;
 pub mod send_raw;
@@ -26,9 +28,10 @@ pub fn run(rest: &[String]) -> i32 {
         "send" => send_raw::run(&rest[1..]),
         "unread" => unread::run(&rest[1..]),
         "ack" => ack::run_ack(&rest[1..]),
+        "drain-self" => drain_self::run_drain_self(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | seed-provenance | team | sent | send | unread | ack)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | seed-provenance | team | sent | send | unread | ack | drain-self)"
             );
 
             2
@@ -37,7 +40,7 @@ pub fn run(rest: &[String]) -> i32 {
 }
 
 fn print_help() {
-    println!("fno-agents mail - the do-not-disturb hold, team broadcast, sent view, unread listing and ack leaf for agent mail");
+    println!("fno-agents mail - the do-not-disturb hold, team broadcast, sent view, unread listing, ack, raw prompt-line send, and drain-self for agent mail");
     println!("  hold [--minutes N | --for N] [--status] [--off]   alias: dnd");
     println!("  hold-release --handle KEY [--poll-s S]");
     println!("  seed-provenance                                 payload from FNO_SEED_PROV_* env");
@@ -46,4 +49,5 @@ fn print_help() {
     println!("  send [--check] [--self-ok] [--review-request] [--style-exception <r>] [--origin <o>] <name> <payload>   raw prompt-line lane");
     println!("  unread [--name NAME | -n NAME] [--json | -J]");
     println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
+    println!("  drain-self [--json]");
 }

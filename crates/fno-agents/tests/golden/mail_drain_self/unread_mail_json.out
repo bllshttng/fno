@@ -1,0 +1,1 @@
+[{"id": "m1", "from": "lead", "to": "a1b2c3d4", "kind": "send", "ts": "2026-10-12T09:00:00Z", "body": "first unread"}, {"id": "m2", "from": "lead", "to": "a1b2c3d4", "kind": "send", "ts": "2026-10-12T09:05:00Z", "body": "second unread", "origin": "pane"}, {"id": "m3", "from": "lead", "to": "a1b2c3d4", "kind": "send", "ts": "2026-10-12T09:07:00Z", "body": "peer sent this"}]
