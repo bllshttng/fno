@@ -145,10 +145,7 @@ fn build_case(row: &serde_json::Value) -> Case {
         "ghost-worktree" => Setup::GhostWorktree,
         _ => Setup::ManifestAnother,
     };
-    let seed = match row["seed"] {
-        serde_json::Value::Null => None,
-        v => v.as_str().map(|s| s.to_string()),
-    };
+    let seed = row.get("seed").and_then(|v| v.as_str()).map(|s| s.to_string());
     let mut env_extra: Vec<(String, String)> = Vec::new();
     if let Some(pairs) = row["env_extra"].as_array() {
         for pair in pairs {
@@ -284,7 +281,7 @@ pub fn make_stub_plugin(root: &Path) -> PathBuf {
 pub fn make_shim(root: &Path) -> PathBuf {
     let bindir = root.join("bin");
     std::fs::create_dir_all(&bindir).unwrap();
-    let python = crate::common::python_executable();
+    let python = crate::common::python_executable().to_string_lossy().to_string();
     let src = cli_src().to_string_lossy().to_string();
     let agents = AGENTS_BIN;
     for name in ["fno", "fno-py"] {
@@ -585,7 +582,7 @@ fn manifest_paths(root: &Path) -> Vec<PathBuf> {
             for wt in wts.flatten() {
                 let level2 = if wt.path().is_dir() {
                     match std::fs::read_dir(wt.path()) {
-                        Ok(rows) => rows.map(|r| r.map(|e| e.path())).collect::<Vec<_>>(),
+                        Ok(rows) => rows.flatten().map(|e| e.path()).collect::<Vec<_>>(),
                         Err(_) => vec![],
                     }
                 } else {
@@ -929,7 +926,7 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
         String::new()
     };
 
-    let frozen = read_golden(subject, case.label);
+    let frozen = read_golden(subject, &case.label);
     assert_eq!(
         frozen.exit,
         Some(code),
