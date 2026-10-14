@@ -394,7 +394,7 @@ pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
     )
     .then(|| {
         format!(
-            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together"
+            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together (`--no-rust` moves python alone, at your risk)"
         )
     })
 }
