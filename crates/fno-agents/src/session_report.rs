@@ -182,7 +182,7 @@ pub(crate) fn handle_session_report(
     let launch_child_name = str_field(p, "launch_child_name");
     // A proven pane claim rides as {session, pane_id}; anything else (absent,
     // malformed) is ignored - the report still stores normally, it just
-    // binds no pane (x-763c).
+    // binds no pane.
     let pane_claim: Option<crate::pane_claim::PaneClaim> = params_object(p, "pane").and_then(|v| {
         let obj = v.as_object()?;
         let session = obj.get("session")?.as_str()?.to_string();
@@ -851,8 +851,8 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
             params["launch_child_name"] = Value::String(name);
         }
     }
-    // A proven pane claim rides the request too (x-763c): a session outside
-    // any pane, or one the ancestry walk cannot prove, pays nothing and adds
+    // A proven pane claim rides the request too: a session outside any
+    // pane, or one the ancestry walk cannot prove, pays nothing and adds
     // nothing.
     if let Some(claim) = crate::pane_claim::ambient() {
         params["pane"] = json!({"session": claim.session, "pane_id": claim.pane_id});

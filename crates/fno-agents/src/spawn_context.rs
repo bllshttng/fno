@@ -449,9 +449,9 @@ pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
         }
         // The part BEFORE the last dot, not after: `rsplit('.').next()`
         // answers the extension ("js", "exe"), the opposite of "gemini.js ->
-        // gemini" this is meant to implement. Measured live (x-763c task
-        // 1.1): the installed opencode binary is literally `opencode.exe`
-        // (a bun-compiled executable), and the old `.next()` form matched
+        // gemini" this is meant to implement. Measured against a live
+        // opencode install: its binary is literally `opencode.exe` (a
+        // bun-compiled executable), and the old `.next()` form matched
         // neither it nor any other dotted name, ever.
         let stem = basename.rsplit_once('.').map_or(basename, |(s, _)| s);
         if SEGMENT_TOKENS.contains(&stem) {

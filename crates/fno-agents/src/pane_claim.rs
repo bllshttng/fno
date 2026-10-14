@@ -1,5 +1,5 @@
 //! A foreground harness typed into an fno pane proves which pane it runs in,
-//! so the session report can bind the registry row there (x-763c).
+//! so the session report can bind the registry row there.
 //!
 //! `FNO_PANE` is inherited by anything a pane process spawns, including a
 //! long-lived daemon merely BORN in a pane once. [`from_parts`] tells a real

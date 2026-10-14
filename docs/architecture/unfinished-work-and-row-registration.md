@@ -26,7 +26,7 @@ The daemon handler (`crates/fno-agents/src/session_report.rs`) matches the row e
 
 ### Pane binding by harness
 
-Measured 2026-10-14 (x-763c task 1.1) against a live fno shell pane (`fno mux pane run -- /bin/zsh -il`, pane 74). `FNO_AGENTS_BIN` pointed at a wrapper that logged env and the process ancestry of every `fno-agents` call. One row per launch.
+Measured 2026-10-14 against a live fno shell pane (`fno mux pane run -- /bin/zsh -il`, pane 74). `FNO_AGENTS_BIN` pointed at a wrapper that logged env and the process ancestry of every `fno-agents` call. One row per launch.
 
 | Harness | Version | FNO_PANE seen | Ancestry walk | Notes |
 |---|---|---|---|---|
