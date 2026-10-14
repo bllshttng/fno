@@ -4285,62 +4285,12 @@ def cmd_bus_ack(
     _forward_mail(["ack", msg_id, "--name", name], label="fno mail ack")
 
 
-def _manifest_fields(*names: str) -> dict[str, Optional[str]]:
-    """Read named fields from this session's ``.fno/target-state.md`` (cwd-relative).
-
-    The manifest is per-worktree (each target session owns one), so reading it
-    from cwd is reading THIS session's own claim binding. Returns ``{}`` when no
-    manifest is present (a non-target session has no job to drain)."""
-    from fno.mail.receipts import _render
-
-    try:
-        raw = _render(["manifest", "--names", ",".join(names)])
-        return json.loads(raw) if raw else {}
-    except Exception:  # noqa: BLE001 - an unreadable manifest degrades to {}
-        return {}
-
-
-def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
-    """Scan job-addressed mail for the node THIS session holds, verified live.
-
-    The job address outlives any session, so a successor re-claiming the node
-    drains mail here that the prior holder never read (part 2). The node
-    comes from this session's own manifest (``target_claim_key``); the holder
-    check reuses ``resolve_truth_status`` -- the same node->holder-session join
-    ``fno agents list`` runs -- so this session drains only when IT is the live
-    holder. A successor sees a different holder -> ``session_id`` None -> no
-    drain, which is the security gate (a stale manifest must not drain another
-    holder's mail).
-
-    Returns ``(job_address, envelopes)``; ``(None, [])`` when this session holds
-    no live node claim. Never raises: an unreadable manifest or claim degrades to
-    no job mail, so the drain still surfaces handle mail.
-    """
-    from fno.agents.truth_status import resolve_truth_status
-    from fno.bus.cursor import scan_unread
-    from fno.mail.job_address import HOLDER_STATES
-
-    key = _manifest_fields("target_claim_key").get("target_claim_key")
-    if not key or not key.startswith("node:"):
-        return None, []
-    res = resolve_truth_status(
-        key[len("node:"):], manifest_cwd=str(Path.cwd())
-    )
-    if res.get("claim_state") not in HOLDER_STATES:
-        return None, []
-    # resolve_truth_status returns the holder's session id only when the live
-    # claim holder still matches this manifest's recorded holder; equalling
-    # ident.session_id means THIS session is that holder.
-    if not ident.session_id or res.get("session_id") != ident.session_id:
-        return None, []
-    return key, scan_unread(key)
-
-
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, team, sent and ack verbs' bodies live in the Rust mail front
-    now; Python owns transport only, the same split as the claims forward.
+    The hold, team, sent, ack, and drain-self verbs' bodies live in the Rust
+    mail front now; Python owns transport only, the same split as the claims
+    forward.
     """
     import subprocess
 
@@ -4517,181 +4467,22 @@ mail_app.command("seed-provenance", hidden=True)(cmd_seed_provenance_front)
 
 
 @mail_app.command("drain-self", hidden=True)
-def cmd_drain_self(
+def cmd_drain_self_forward(
     json_out: bool = typer.Option(
         False, "--json", "-J", help="Emit JSON regardless of TTY."
     ),
 ) -> None:
     """Drain THIS session's own cross-harness inbox and mark it seen (US5).
 
-    The receive side of the a2a relay: a session computes its own handle from
-    the ambient harness env markers (``canonical_handle(session-id)``,
-    the SAME string a sender resolves and the registry registers under), reads
-    its unread bus mail, prints it for injection into the session, then advances
-    its own cursor so nothing re-surfaces next wake. Wired into each harness's
-    SessionStart hook, this is what makes a codex/gemini session actually
-    RECEIVE its mail -- addressability already existed, drainage did not.
-
-    Forward-only + inject-before-ack: a crash between print and ack re-surfaces
-    the message next SessionStart (a harmless repeat), never a loss. No harness
-    identity in env -> silent no-op (nothing to drain), never an error, so the
-    hook is safe on any surface.
+    Forward-only: the body lives in the Rust mail front, on the same mount as
+    the hold verbs. Python owns transport only. The behavior contract is
+    characterized byte-for-byte by the Rust parity suite frozen from this
+    leaf's goldens (crates/fno-agents/tests/mail_drain_self_parity.rs).
     """
-    from fno.bus.cursor import advance_cursor, scan_unread
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
-    from fno.harness_identity import canonical_handle, legacy_suffix_handle, session_identity_key
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        print(f"error: drain-self: {exc}", file=sys.stderr)
-        return
-    if not ident.harness or not ident.session_id:
-        if json_out:
-            print(json.dumps([]))
-        return
-
-    sid = ident.session_id
-    handle = canonical_handle(sid)  # primary address, used in the render label
-    # Drain every address form this session owns: the canonical first-eight (new
-    # mail), the full id (the collision-escape send path), and the legacy
-    # last-eight (pre-flip mail still on the bus). Each address has its own
-    # cursor; a message has one `to`, so it matches exactly one form.
-    last_by_form: dict[str, str] = {}
-    form_by_id: dict[str, str] = {}
-    all_msgs: list = []
-    for _form in (handle, session_identity_key(sid), legacy_suffix_handle(sid)):
-        _got = scan_unread(_form)
-        if _got:
-            last_by_form[_form] = _got[-1].id
-            for _m in _got:
-                form_by_id.setdefault(_m.id, _form)
-            all_msgs.extend(_got)
-    _seen: set[str] = set()
-    msgs = []
-    for _m in all_msgs:
-        if _m.id not in _seen:
-            _seen.add(_m.id)
-            msgs.append(_m)
-    # Render chronologically: the three forms are scanned in address-order, not
-    # log-order, so without this a legacy (pre-flip) message would render after a
-    # newer canonical one. Cursor advance below is per-form and unaffected.
-    msgs.sort(key=lambda _m: _m.ts)
-    # Job mail: also drain mail addressed to the node THIS session holds. The
-    # address outlives any session, so this is where a successor picks up mail
-    # the prior holder never read (part 2). Per-address cursor, so this is
-    # independent of the handle/form cursors -- no double-delivery across them.
-    job_addr, job_msgs = _scan_held_job_mail(ident)
-
-    # W2 cross-delivery dedup: a message whose id already landed in THIS
-    # session's transcript (a live inject that confirmed after the durable copy
-    # was written) is not surfaced again. The transcript is the ledger -- no new
-    # state -- built in one read per drain, not one per message. ``present`` is
-    # None when the transcript could not be read; a read failure is not evidence
-    # of absence, so we print everything rather than risk a drop (AC5-ERR).
-    from fno.mail.reply_resolve import present_mail_ids
-
-    present = present_mail_ids()
-
-    def _already_landed(m) -> bool:
-        return present is not None and getattr(m, "id", "") in present
-
-    to_print = [m for m in msgs if not _already_landed(m)]
-    skipped = [m for m in msgs if _already_landed(m)]
-    job_to_print = [m for m in job_msgs if not _already_landed(m)]
-    job_skipped = [m for m in job_msgs if _already_landed(m)]
-
-    # The body prints exactly as stored -- the envelope carries the
-    # authority boundary in its header attributes, so the drain re-stamp is
-    # gone. A non-peer origin surfaces as a label on the header line (the
-    # record's own origin, gated at write time by classify_origin), so the
-    # reader still sees the provenance a peer cannot forge by body text.
-    def _header(m) -> str:
-        label = f"  origin:{m.origin}" if getattr(m, "origin", None) not in (None, "peer") else ""
-        return f"\n--- from {m.from_} ({m.ts})  id:{m.id}{label} ---"
-
+    argv = ["drain-self"]
     if json_out:
-        out = []
-        for m in to_print:
-            row = {
-                "id": m.id, "from": m.from_, "to": m.to,
-                "kind": m.kind, "ts": m.ts, "body": m.body,
-            }
-            if getattr(m, "origin", None) not in (None, "peer"):
-                row["origin"] = m.origin
-            out.append(row)
-        for m in job_to_print:
-            row = {
-                "id": m.id, "from": m.from_, "to": m.to,
-                "kind": m.kind, "ts": m.ts, "body": m.body,
-                "job": job_addr or "",
-            }
-            if getattr(m, "origin", None) not in (None, "peer"):
-                row["origin"] = m.origin
-            out.append(row)
-        print(json.dumps(out, ensure_ascii=False))
-    else:
-        if to_print:
-            print(f"[fno agents mail] {len(to_print)} message(s) for {handle}:")
-            for m in to_print:
-                print(_header(m))
-                print(m.body)
-        if job_to_print:
-            print(f"\n[fno agents mail] {len(job_to_print)} job message(s) for {job_addr}:")
-            for m in job_to_print:
-                print(_header(m))
-                print(m.body)
-        # This render is what a session sees on receive, so surface the id (which
-        # `reply --to` correlates against) and the how-to. Replying is optional --
-        # an FYI/broadcast needs none.
-        if to_print or job_to_print:
-            print(
-                '\n[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."'
-            )
-
-    # Inject-before-ack: advance the cursor to the last drained id only after
-    # the bodies are out, so a crash re-surfaces rather than drops.
-    #
-    # "out" means flushed, not printed. The SessionStart drain hook reads this
-    # through a command substitution, so stdout is a pipe and block-buffered:
-    # without the flush, the bodies sit in this process's buffer while the cursor
-    # is already advanced, and a SIGTERM from the hook's wall-clock bound
-    # discards them with the mail marked consumed. Losing it permanently, which
-    # is the opposite of what the paragraph above promises.
-    if msgs or job_msgs:
-        sys.stdout.flush()
-        # Per-form receipt (W1.1): advance one address form, then emit that
-        # form's drained markers before the next advance. A later form's cursor
-        # failure cannot strand the markers for an already-acked form, because
-        # each marker rides its own form's commit. The marker is emitted at the
-        # ack point, never the print point: this function is inject-before-ack,
-        # so a crash between print and here re-surfaces the message, and a marker
-        # at print would claim delivery for one about to be delivered again.
-        # Best-effort and swallowed (AC9-ERR): the message is already acked, so
-        # an observability gap must never become a delivery failure. A skipped
-        # duplicate still advances and still gets a marker (reason distinguishes
-        # it) so the dedup is observable, never a silent swallow (W2).
-        for _form, _last_id in last_by_form.items():
-            advance_cursor(_form, _last_id)
-            for m in to_print:
-                if form_by_id.get(m.id, handle) == _form:
-                    _emit_drain_marker(m.id, handle, _form, m.from_, "printed")
-            for m in skipped:
-                if form_by_id.get(m.id, handle) == _form:
-                    _emit_drain_marker(m.id, handle, _form, m.from_, "skipped-duplicate")
-        if job_addr and job_msgs:
-            advance_cursor(job_addr, job_msgs[-1].id)
-            for m in job_to_print:
-                _emit_drain_marker(
-                    m.id, job_addr or handle, job_addr or handle, m.from_, "printed"
-                )
-            for m in job_skipped:
-                _emit_drain_marker(
-                    m.id, job_addr or handle, job_addr or handle, m.from_, "skipped-duplicate"
-                )
-
-
-from fno.mail.hold import _emit_drain_marker  # noqa: E402
+        argv.append("--json")
+    _forward_mail(argv, label="fno agents mail drain-self")
 
 
 @mail_app.command("rebuild-render", hidden=True)

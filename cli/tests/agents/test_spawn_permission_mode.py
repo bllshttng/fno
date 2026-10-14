@@ -304,28 +304,6 @@ def test_resume_requires_claude_bg(runner, monkeypatch, extra_args):
     assert "--resume requires --substrate thread" in result.output
 
 
-def test_bg_permission_mode_non_claude_fails_closed(runner, monkeypatch):
-    """codex bg/headless via the Python fallback refuses --permission-mode
-    (its one-shot lane hardcodes its bypass); mirrors the Rust guard."""
-    _stub_pane_path(monkeypatch)
-    from fno import rust_binary
-    from fno.agents.cli import agents_app
-
-    # Force the Python fallback: a smoke run may leave a real fno-agents
-    # reachable for the claim door, which would route this to the Rust guard.
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
-    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "headless",
-         "--permission-mode", "acceptEdits"],
-    )
-    assert result.exit_code == 2
-    assert "not supported" in result.output and "-Y" in result.output
-    assert "use --substrate pane" not in result.output
-
-
 def test_bg_permission_mode_claude_honored_via_python(runner, monkeypatch):
     """claude bg via the Python fallback HONORS --permission-mode (it threads to
     _claude_create_path -> bg_create), never a hard-fail. Regression guard for
@@ -702,7 +680,6 @@ def _rust_answer(provider: str, mode: str, substrate: str | None) -> dict:
 def test_python_bridge_matches_the_rust_vocabulary(provider, mode):
     """AC4-EDGE: the bridge and the owner answer identically, so the tree
     holds ONE table. The refusal messages compare byte-for-byte too."""
-    from fno.rust_binary import VerbUnavailable, verb_call
 
     py_refusal = None
     py_tokens = None

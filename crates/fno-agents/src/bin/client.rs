@@ -394,8 +394,8 @@ async fn run(args: Vec<String>) -> i32 {
     // `name-mint`/`name-parse`/`name-codes` are the INTERNAL machine verbs
     // behind the delegation flip: Python's naming.py shells them so the
     // vocabulary tables, mint, and parse own exactly one implementation.
-    // Matched with `matches!` like `reentry-plan` - they are not `fno agents`
-    // verbs, so the routable-verb parity sets never see them.
+    // `matches!` like `reentry-plan`: not `fno agents` verbs, so the
+    // routable-verb parity sets never see them.
     if matches!(verb, "name-mint") {
         return fno_agents::naming::run_name_mint(&args[1..]);
     }
@@ -409,8 +409,7 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "claude-birth-exec") {
         // `revive-proof` rides this action as an argument (the fleet-incident
         // gh-budget shape): law d-fe66560a allows no new client action, and
-        // the revival liveness gate belongs to the same claude birth/relaunch
-        // door. Direct dispatch, no daemon RPC - a fork that never started
+        // the revival gate belongs to this door. A fork that never started
         // must refuse even when the daemon is the thing wedged.
         if args.get(1).map(String::as_str) == Some("revive-proof") {
             return fno_agents::revive_proof::run_revive_proof(&args[2..]);
@@ -791,47 +790,39 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::retask::transport::run_payload();
     }
 
-    // `route-slot`: the delivery-slot resolver (see route_slot.rs doc). Direct
-    // dispatch; no daemon RPC. Python's spawn seam, advance and the readouts
-    // send one JSON payload and read {status, candidate, chain} back.
+    // `route-slot`: the delivery-slot resolver; Python's spawn seam, advance
+    // and the readouts send one JSON payload, read {status, candidate, chain}.
     if verb == "route-slot" {
         return fno_agents::route_slot::run_route_slot(&args[1..]);
     }
 
-    // `spawn-gate`: the ONE spawn gate (see spawn_gate_verb.rs doc). Direct
-    // dispatch; no daemon RPC. The Python transport sends one JSON payload
-    // and reads the admit (with the held claim keys) or the refusal back.
+    // `spawn-gate`: the ONE spawn gate; the Python transport sends one JSON
+    // payload and reads the admit (with held claim keys) or refusal back.
     if verb == "spawn-gate" {
         return fno_agents::spawn_gate_verb::run_spawn_gate(&args[1..]);
     }
 
-    // `spawn-overlay`: the harness-keyed spawn-defaults resolver (see
-    // spawn_overlay.rs doc). Direct dispatch; no daemon RPC. Python's spawn
-    // seam, the doctor readout and the failover walker send one JSON payload
-    // and read the answer back.
+    // `spawn-overlay`: the spawn-defaults resolver; Python's spawn seam, the
+    // doctor readout and the failover walker send one payload, read the answer.
     if verb == "spawn-overlay" {
         return fno_agents::spawn_overlay::run_spawn_overlay(&args[1..]);
     }
 
-    // `spawn-axes`: the billing axes of the spawn seam (route/account/model),
-    // decided in one place (see spawn_axes.rs doc). The Python front door
-    // projects the seam's facts and applies the returned plan verbatim.
+    // `spawn-axes`: the seam's billing axes (route/account/model); the Python
+    // front door projects the seam's facts and applies the returned plan.
     if verb == "spawn-axes" {
         return fno_agents::spawn_axes::run_spawn_axes(&args[1..]);
     }
 
-    // `permission-tokens`: the one permission vocabulary and mappability
-    // answer (see codex_posture.rs). Direct dispatch; no daemon RPC. Python's
-    // pane mapper, the spawn seam's mappability read and both front doors
-    // call this so the tree holds ONE table, not three disagreeing copies.
+    // `permission-tokens`: the one permission vocabulary; Python's pane mapper,
+    // the seam's mappability read and both front doors call it - ONE table,
+    // not three disagreeing copies.
     if verb == "permission-tokens" {
         return fno_agents::codex_posture::run_permission_tokens(&args[1..]);
     }
 
-    // `sandbox-probe`: the pre-seating sandbox verdict (see sandbox_probe.rs).
-    // Direct dispatch; no daemon RPC. Python's spawn gate (rust_runtime.py)
-    // calls it and owns the exit-85 refusal; the verb never refuses on its
-    // own - it answers, the caller judges.
+    // `sandbox-probe`: the pre-seating verdict; Python's spawn gate owns the
+    // exit-85 refusal - the verb answers, the caller judges.
     if verb == "sandbox-probe" {
         return fno_agents::sandbox_probe::run_sandbox_probe(&args[1..]);
     }
@@ -4081,16 +4072,8 @@ fn build_request(verb: &str, rest: &[String]) -> Result<(String, Value), String>
                 // Back-compat alias: every live `--once` caller is a codex/gemini
                 // one-shot, i.e. headless. Map it to --substrate headless so old
                 // callers keep working without the conflated `once` boolean. An
-                // explicit --substrate already present wins.
-                params
-                    .entry("substrate")
-                    .or_insert_with(|| Value::String("headless".into()));
-            }
-            "--headless" | "-p" => {
-                // Ergonomic front for --substrate headless. Same routing
-                // key as --once; explicit --substrate already present wins. `-p`
-                // mirrors the harnesses' own one-shot short; the vendor axis took
-                // the capital -P so this letter could mean what it means in claude.
+                // explicit --substrate already present wins. `--headless`/`-p`
+                // retired with change 6; `--substrate headless` is the spelling.
                 params
                     .entry("substrate")
                     .or_insert_with(|| Value::String("headless".into()));
