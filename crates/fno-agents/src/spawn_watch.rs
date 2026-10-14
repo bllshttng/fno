@@ -16,9 +16,6 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// The notice deadline. With the 60s tick the caller hears by 5 minutes.
 const DEADLINE_MS: i64 = 4 * 60_000;
@@ -26,33 +23,26 @@ const DEADLINE_MS: i64 = 4 * 60_000;
 const HORIZON_MS: i64 = 2 * 60 * 60_000;
 /// A closed watch stays readable for a day, then prunes.
 const KEEP_MS: i64 = 24 * 60 * 60_000;
+const SENDER: &str = "fno-spawn-watch";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Watch {
     caller: String,
     harness: String,
     cwd: String,
     name: Option<String>,
     called_at_ms: i64,
-    #[serde(default)]
     child_session: Option<String>,
     /// The worker row this launch matched, as (created_at, name), so a later
     /// launch from the same caller cannot take it.
-    #[serde(default)]
     row: Option<(String, String)>,
-    #[serde(default)]
     stage: Option<String>,
-    #[serde(default)]
     notified: bool,
-    #[serde(default)]
     answered: Option<String>,
-    #[serde(default)]
     first_turn_at_ms: Option<i64>,
-    #[serde(default)]
     latency_ms: Option<i64>,
-    #[serde(default)]
     followed_up: bool,
-    #[serde(default)]
     closed: bool,
 }
 
@@ -66,11 +56,21 @@ fn record_key(r: &Record) -> String {
     let at = r.launched_at_ms.to_string();
     let tail = r.launch.name.as_deref().unwrap_or(&r.launch.cwd);
     let mut h = Sha256::new();
-    for part in [r.launcher_session.as_str(), at.as_str(), r.launch.harness.as_str(), tail] {
+    for part in [
+        r.launcher_session.as_str(),
+        at.as_str(),
+        r.launch.harness.as_str(),
+        tail,
+    ] {
         h.update(part.as_bytes());
         h.update(b"\0");
     }
-    let hex: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
+    let hex: String = h
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect();
     format!("{hex}.json")
 }
 
@@ -119,8 +119,10 @@ pub(crate) fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str
                 && now.saturating_sub(r.launched_at_ms) <= crate::launch_record::WINDOW_MS
         })
         .collect();
-    let unnamed: Vec<&(PathBuf, Record)> =
-        pending.iter().filter(|(_, r)| r.launch.name.is_none()).collect();
+    let unnamed: Vec<&(PathBuf, Record)> = pending
+        .iter()
+        .filter(|(_, r)| r.launch.name.is_none())
+        .collect();
     let pick = pending
         .iter()
         .filter(|(_, r)| r.launch.name.as_deref() == Some(name))
@@ -211,7 +213,14 @@ pub(crate) fn run_pass(
         }
         // The judge leaves the watch consistent even when a send fails, so
         // the state is written either way and the send retries next pass.
-        let result = judge(&mut watch, &registry, &mut taken, now, &emitter, &mut *runner);
+        let result = judge(
+            &mut watch,
+            &registry,
+            &mut taken,
+            now,
+            &emitter,
+            &mut *runner,
+        );
         let written = state::write_json_atomic(&path, &watch).map_err(|e| e.to_string());
         if let Err(error) = result.and(written) {
             first_error.get_or_insert_with(|| format!("{}: {error}", path.display()));
@@ -312,8 +321,9 @@ fn judge(
     if let Some(latency) = watch.latency_ms {
         if watch.notified && !watch.followed_up {
             let stage = watch.stage.as_deref().unwrap_or("an earlier stage");
-            send(
+            crate::first_check::send_mail(
                 runner,
+                SENDER,
                 &watch.caller,
                 &format!(
                     "spawn {name}: first turn {}s after the call (reported stuck at {stage} earlier).",
@@ -334,8 +344,9 @@ fn judge(
         return Ok(());
     }
     let (stage, evidence) = stage(watch, row, transcript.is_some());
-    send(
+    crate::first_check::send_mail(
         runner,
+        SENDER,
         &watch.caller,
         &format!(
             "spawn {name}: no first turn {}m after the call. Stuck at {stage}: {evidence}. Inspect `fno agents peek {name}`.",
@@ -348,7 +359,11 @@ fn judge(
 }
 
 /// The furthest stage the world proves, with the reading that proves it.
-fn stage(watch: &Watch, row: Option<&RegistryEntry>, has_transcript: bool) -> (&'static str, String) {
+fn stage(
+    watch: &Watch,
+    row: Option<&RegistryEntry>,
+    has_transcript: bool,
+) -> (&'static str, String) {
     if let Some(sid) = watch.child_session.as_deref() {
         let short: String = sid.chars().take(8).collect();
         let seen = if has_transcript {
@@ -361,7 +376,10 @@ fn stage(watch: &Watch, row: Option<&RegistryEntry>, has_transcript: bool) -> (&
     if let Some(row) = row {
         return (
             "harness boot",
-            format!("worker row {} exists ({:?}) with no harness session id", row.name, row.status),
+            format!(
+                "worker row {} exists ({:?}) with no harness session id",
+                row.name, row.status
+            ),
         );
     }
     if let Some(name) = &watch.name {
@@ -399,66 +417,6 @@ fn first_turn(path: &Path, now: i64) -> Option<i64> {
             .and_then(millis)
             .unwrap_or(now),
     )
-}
-
-fn send(runner: crate::burn_watch::Runner<'_>, to: &str, text: &str) -> Result<(), String> {
-    let argv: Vec<String> = [
-        "fno",
-        "agents",
-        "mail",
-        "send",
-        "--from-name",
-        "fno-spawn-watch",
-        "--origin",
-        "scheduler",
-        to,
-        text,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    let (code, out, err) = runner(&argv, "");
-    if crate::mail_inject::mail_send_accepted(code, &out)
-        || (code == 0 && crate::mail_inject::mail_send_receipt(&out).contains("queued (durable)"))
-    {
-        Ok(())
-    } else {
-        Err(format!("spawn-watch delivery failed: {err}"))
-    }
-}
-
-pub(crate) struct Arm {
-    last: Instant,
-    in_flight: Arc<AtomicBool>,
-}
-
-impl Default for Arm {
-    fn default() -> Self {
-        let now = Instant::now();
-        Self {
-            last: now.checked_sub(Duration::from_secs(60)).unwrap_or(now),
-            in_flight: Arc::new(AtomicBool::new(false)),
-        }
-    }
-}
-
-impl Arm {
-    pub(crate) fn tick(&mut self, home: AgentsHome) {
-        if self.last.elapsed() < Duration::from_secs(60)
-            || self.in_flight.swap(true, Ordering::SeqCst)
-        {
-            return;
-        }
-        self.last = Instant::now();
-        let flag = self.in_flight.clone();
-        tokio::task::spawn_blocking(move || {
-            let _gate = crate::daemon::SweepGate(flag);
-            let now = crate::claims::now_ms();
-            if let Err(e) = run_pass(&home, now, &mut crate::burn_watch::run_command) {
-                eprintln!("spawn-watch: {e}");
-            }
-        });
-    }
 }
 
 #[cfg(test)]

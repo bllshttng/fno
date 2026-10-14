@@ -422,25 +422,7 @@ pub(crate) fn run_pass(
                 check.finished = true;
             } else {
                 let text = format!("worker {}: no progress {}m after spawn. Evidence: {evidence}. First-check notice {} of 2. Inspect fno agents peek {}.", check.name, (now - check.born_at) / 60_000, check.notices + 1, check.name);
-                let argv = vec![
-                    "fno".into(),
-                    "agents".into(),
-                    "mail".into(),
-                    "send".into(),
-                    "--from-name".into(),
-                    "fno-first-check".into(),
-                    "--origin".into(),
-                    "scheduler".into(),
-                    check.parent.clone(),
-                    text,
-                ];
-                let (code, out, err) = runner(&argv, "");
-                if !crate::mail_inject::mail_send_accepted(code, &out)
-                    && !(code == 0
-                        && crate::mail_inject::mail_send_receipt(&out).contains("queued (durable)"))
-                {
-                    return Err(format!("first-check delivery failed: {err}"));
-                }
+                send_mail(&mut *runner, "fno-first-check", &check.parent, &text)?;
                 check.notices += 1;
                 check.finished = check.notices >= 2;
                 check.deadline = now.saturating_add(check.interval);
@@ -502,20 +484,64 @@ pub(crate) fn is_assistant(row: &Value) -> bool {
             .is_some_and(|v| v == "agent_message")
 }
 
+/// One scheduler mail to a session. Delivered or queued durably both count.
+pub(crate) fn send_mail(
+    runner: crate::burn_watch::Runner<'_>,
+    from: &str,
+    to: &str,
+    text: &str,
+) -> Result<(), String> {
+    let argv: Vec<String> = [
+        "fno",
+        "agents",
+        "mail",
+        "send",
+        "--from-name",
+        from,
+        "--origin",
+        "scheduler",
+        to,
+        text,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let (code, out, err) = runner(&argv, "");
+    if crate::mail_inject::mail_send_accepted(code, &out)
+        || (code == 0 && crate::mail_inject::mail_send_receipt(&out).contains("queued (durable)"))
+    {
+        Ok(())
+    } else {
+        Err(format!("{from} delivery failed: {err}"))
+    }
+}
+
+type Pass = fn(&AgentsHome, i64, crate::burn_watch::Runner<'_>) -> Result<(), String>;
+
+/// A 60s daemon arm with one pass in flight. The first check and the
+/// first-turn watch (`spawn_watch`) both tick on it.
 pub(crate) struct Arm {
     last: Instant,
     in_flight: Arc<AtomicBool>,
+    label: &'static str,
+    pass: Pass,
 }
 impl Default for Arm {
     fn default() -> Self {
+        Self::new("first-check", run_pass)
+    }
+}
+impl Arm {
+    pub(crate) fn new(label: &'static str, pass: Pass) -> Self {
         let now = Instant::now();
         Self {
             last: now.checked_sub(Duration::from_secs(60)).unwrap_or(now),
             in_flight: Arc::new(AtomicBool::new(false)),
+            label,
+            pass,
         }
     }
-}
-impl Arm {
+
     pub(crate) fn tick(&mut self, home: AgentsHome) {
         if self.last.elapsed() < Duration::from_secs(60)
             || self.in_flight.swap(true, Ordering::SeqCst)
@@ -523,11 +549,11 @@ impl Arm {
             return;
         }
         self.last = Instant::now();
-        let flag = self.in_flight.clone();
+        let (flag, label, pass) = (self.in_flight.clone(), self.label, self.pass);
         tokio::task::spawn_blocking(move || {
             let _gate = crate::daemon::SweepGate(flag);
-            if let Err(e) = run_pass(&home, claims::now_ms(), &mut crate::burn_watch::run_command) {
-                eprintln!("first-check: {e}");
+            if let Err(e) = pass(&home, claims::now_ms(), &mut crate::burn_watch::run_command) {
+                eprintln!("{label}: {e}");
             }
         });
     }
