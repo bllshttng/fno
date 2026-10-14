@@ -8,9 +8,9 @@ Measured 2026-08-13 against one real install: 527 top-level entries, 395 of them
 
 ## The rule
 
-The root holds a closed set of folders, plus the rows this page already has. Nothing new lands at the top level: state goes under a folder the page already names. A new folder is not the remedy for a new root file; an existing folder is.
+The root holds a closed set of folders, plus the rows this page already has. Nothing new lands at the top level: state goes under a folder the page already names. A new folder is not the remedy for a new root file. An existing folder is.
 
-Two gates hold that line. At runtime, the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agents/src/hook/write_gate.rs`) refuses an agent write creating a new top-level entry, in the state root or the Claude config dir, whatever its name, and refuses a write under a top-level folder that does not exist. The refusal names the session's job tmp dir. In CI, `scripts/ci/check-state-root-rows.sh` fails any PR that adds a root pattern to this page against the checked-in baseline, an added folder row like any other, so the root rows below are SHRINK-ONLY. A writer that moves into a subfolder or dies takes its row with it. A row never enters.
+Two gates hold that line. At runtime, the write gate (`hooks/write-gate.sh`, policy in `crates/fno-agents/src/hook/write_gate.rs`) refuses a new top-level entry, in the state root or the Claude config dir. It also refuses a write under a top-level folder that does not exist. The refusal names the session's job tmp dir. In CI, `scripts/ci/check-state-root-rows.sh` fails any PR that adds a root pattern to this page against the checked-in baseline. An added folder row refuses like any other. The root rows below are SHRINK-ONLY. A writer that moves into a subfolder or dies takes its row with it. A row never enters.
 
 "Belongs at the root" used to mean one durable file per install, named for what it is: `graph.db`, `ledger.json`, `config.toml`. That set closed on 2026-09-27. A family of files keyed by session, band, or timestamp never belonged there, however small each one is. The cost is legibility, not bytes: all 395 context-nudge latches together were 14,625 bytes and made the directory unreadable.
 
@@ -99,7 +99,7 @@ The migration moves every movable file into a named subfolder (`docs/state-root-
 
 ## Owned subfolders and remaining root state
 
-Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level folder set is closed: the CI row gate refuses a row naming a folder the baseline does not hold. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test - `cli/tests/test_state_root_inventory.py` builds its root from this page and runs one Python writer, so it cannot see a Rust or shell writer.
+Every subfolder and file below was found in the real root unnamed at the 2026-09-08 backfill and given a writer and a lifetime. The top-level folder set is closed: the CI row gate refuses a row naming a folder the baseline does not hold. What reads the real root is the drift reading in the lead check-in and the reclaim receipt, not a test. `cli/tests/test_state_root_inventory.py` builds its root from this page and runs one Python writer. It cannot see a Rust or shell writer.
 
 | Entry | Writer | Lifetime |
 |---|---|---|
