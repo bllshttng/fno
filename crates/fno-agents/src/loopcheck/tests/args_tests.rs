@@ -125,7 +125,11 @@ fn budget_flat_key_enforces_cost_cap_ab41b13d9d() {
     // Ledger with cost > 0.10
     let tmp = tempfile::tempdir().unwrap();
     let ledger = tmp.path().join("ledger.json");
-    std::fs::write(&ledger, r#"[{"session_id":"s1","cost_usd":0.50}]"#).unwrap();
+    std::fs::write(
+        &ledger,
+        r#"{"entries":[{"session_id":"s1","cost_usd":0.50}]}"#,
+    )
+    .unwrap();
 
     let now: DateTime<Utc> = "2026-06-05T01:00:00Z".parse().unwrap();
 
@@ -160,7 +164,11 @@ fn check_budget_malformed_cost_cap_trips_budget() {
     let now: DateTime<Utc> = "2026-06-05T01:00:00Z".parse().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let ledger = tmp.path().join("ledger.json");
-    std::fs::write(&ledger, r#"[{"session_id":"s","cost_usd":0.0}]"#).unwrap();
+    std::fs::write(
+        &ledger,
+        r#"{"entries":[{"session_id":"s","cost_usd":0.0}]}"#,
+    )
+    .unwrap();
     assert_eq!(
         check_budget(&m, &s, &now, &ledger),
         Some(BudgetTrip::Cost {
@@ -183,7 +191,11 @@ fn check_budget_absent_cap_is_unlimited() {
     let now: DateTime<Utc> = "2026-06-05T01:00:00Z".parse().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let ledger = tmp.path().join("ledger.json");
-    std::fs::write(&ledger, r#"[{"session_id":"s","cost_usd":9999.0}]"#).unwrap();
+    std::fs::write(
+        &ledger,
+        r#"{"entries":[{"session_id":"s","cost_usd":9999.0}]}"#,
+    )
+    .unwrap();
     assert_eq!(
         check_budget(&m, &s, &now, &ledger),
         None,

@@ -240,9 +240,14 @@ fn parse_settings_comments_ignored() {
 fn session_cost_from_ledger_sums_session_only() {
     let tmp = tempfile::tempdir().unwrap();
     let ledger = tmp.path().join("l.json");
-    std::fs::write(&ledger, format!("{}\n", r#"[{"session_id":"a","cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]"#)).unwrap();
+    std::fs::write(&ledger, format!("{}\n", r#"{"entries":[{"session_id":"a","cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]}"#)).unwrap();
     let cost = session_cost_from_ledger(&ledger, "a");
     assert!((cost - 1.25).abs() < 0.001, "expected 1.25, got {cost}");
+    // The bare-array spelling no writer emits reads as no history.
+    let bare = tmp.path().join("bare.json");
+    std::fs::write(&bare, format!("{}\n", r#"[{"session_id":"a","cost_usd":1.0},{"session_id":"b","cost_usd":0.5},{"session_id":"a","cost_usd":0.25}]"#)).unwrap();
+    let cost = session_cost_from_ledger(&bare, "a");
+    assert_eq!(cost, 0.0);
 }
 
 #[test]
