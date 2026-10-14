@@ -607,13 +607,23 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
 /// used: entries blob rows, the typed nodes table, and nodes_raw, which the
 /// working import parks an unrepresentable row in (both tables count as
 /// live, so all three feed the exclusion set). The open is read-only: an
-/// ordinary open creates the file it opens, and a WAL-mode twin whose -shm
-/// is absent still fails read-only and degrades to nothing.
+/// ordinary open creates the file it opens. A WAL-mode twin whose -shm is
+/// gone (a daemon that exited clean) refuses a plain read-only open, so a
+/// second attempt reads it immutable: safe with no live writer, and only
+/// reached after the ordinary open failed.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
-    let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
-        return out;
+    let conn = match rusqlite::Connection::open_with_flags(path, flags) {
+        Ok(conn) => conn,
+        Err(_) => {
+            let uri = format!("file:{}?immutable=1", uri_path(path));
+            let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+            match rusqlite::Connection::open_with_flags_and_uri(&uri, uri_flags) {
+                Ok(conn) => conn,
+                Err(_) => return out,
+            }
+        }
     };
     for sql in [
         "SELECT id FROM entries",
@@ -630,6 +640,21 @@ fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
             if let Ok(id) = row.get::<_, String>(0) {
                 out.insert(id);
             }
+        }
+    }
+    out
+}
+
+/// Percent-encoded path for a `file:` URI: the query (`?immutable=1`) must
+/// survive, so reserved characters in the path itself are escaped.
+fn uri_path(path: &Path) -> String {
+    let mut out = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                out.push(*byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
     out
@@ -1560,6 +1585,28 @@ mod tests {
         assert!(dir.path().join("graph-archive.db").exists());
         let bytes = std::fs::read(dir.path().join("graph-archive.db")).unwrap();
         assert_eq!(bytes, b"not a database at all");
+    }
+
+    #[test]
+    fn archived_pool_reads_a_wal_store_whose_shm_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        // A clean close checkpoints and removes the -wal and -shm, but the
+        // header stays WAL: the exact state a daemon's clean exit leaves
+        // behind. A plain read-only open refuses it; the immutable retry
+        // must read the checkpointed file.
+        let conn = rusqlite::Connection::open(dir.path().join("graph-archive.db")).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;\n\
+             CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\n\
+             INSERT INTO entries VALUES ('q-04bd', 0, '{}');\n\
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!dir.path().join("graph-archive.db-shm").exists());
+        let pool = archived_id_pool_in(dir.path());
+        assert!(pool.contains("q-04bd"), "pool = {pool:?}");
     }
 
     #[test]
