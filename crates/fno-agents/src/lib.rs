@@ -310,6 +310,7 @@ pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
 pub mod merge_reap;
+pub mod merge_verb;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
@@ -477,8 +478,11 @@ pub mod spawn_cwd;
 pub mod spawn_edge;
 pub mod spawn_gate;
 pub mod spawn_gate_admission;
+pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
+pub(crate) mod spawn_gate_slots;
 pub mod spawn_gate_verb;
 pub mod spawn_lineage;
 pub mod spawn_overlay;

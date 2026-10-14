@@ -40,6 +40,26 @@ pub(super) fn title_session_name(title: &str) -> &str {
     }
 }
 
+/// The (rows, cols) a portal viewer spawns at, so the harness draws its
+/// first frame at the size it will keep. A replaced seat keeps its own size;
+/// a fresh open takes the tab rect; the client terminal only stands in for an
+/// empty rect, and a passive observer's (0, 0) sentinel never sizes a pane.
+pub(super) fn portal_spawn_size(
+    seat: Option<(u16, u16)>,
+    tab_rect: (u16, u16),
+    client: Option<(u16, u16)>,
+) -> (u16, u16) {
+    if let Some(size) = seat {
+        return size;
+    }
+    if tab_rect.0 > 0 && tab_rect.1 > 0 {
+        return tab_rect;
+    }
+    client
+        .filter(|(rows, cols)| *rows > 0 && *cols > 0)
+        .unwrap_or(tab_rect)
+}
+
 /// Remember every restored portal slot's seat (index, row, pane,
 /// tab id, recorded session guard) until the tab ids are final.
 pub(super) fn collect_portal_slot_seats(
@@ -747,16 +767,12 @@ impl Core {
         // the fallback for an empty rect. A passive observer's (0,0)
         // sentinel must never size a pane (the control-path reach rides an
         // observer client).
-        let (rows, cols) = if vp.rows > 0 && vp.cols > 0 {
-            (vp.rows, vp.cols)
-        } else {
-            self.clients
-                .iter()
-                .find(|c| c.id == client_id)
-                .map(|c| c.dims)
-                .filter(|(r, c)| *r > 0 && *c > 0)
-                .unwrap_or((vp.rows, vp.cols))
-        };
+        let client_dims = self
+            .clients
+            .iter()
+            .find(|c| c.id == client_id)
+            .map(|c| c.dims);
+        let (rows, cols) = portal_spawn_size(None, (vp.rows, vp.cols), client_dims);
         // Entry: take THIS portal, then verify against the live tree (the
         // diff-pane stale-id guard - a recorded pane closed by any other path
         // reads as closed and never wedges the portal). Only this index is
@@ -851,11 +867,8 @@ impl Core {
                     };
                     // The seat is replaced in place, so the replacement
                     // spawns at the size the seat already holds.
-                    let (rows, cols) = self
-                        .panes
-                        .get(&pid)
-                        .map(|e| e.vt.size())
-                        .unwrap_or((rows, cols));
+                    let seat_size = self.panes.get(&pid).map(|e| e.vt.size());
+                    let (rows, cols) = portal_spawn_size(seat_size, (rows, cols), None);
                     let order = SpawnOrder {
                         argv,
                         rows,
