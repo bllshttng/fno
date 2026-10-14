@@ -619,7 +619,7 @@ fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
         Err(_) => {
             let uri = format!("file:{}?immutable=1", uri_path(path));
             let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-            match rusqlite::Connection::open_with_flags_and_uri(&uri, uri_flags) {
+            match rusqlite::Connection::open_with_flags(uri, uri_flags) {
                 Ok(conn) => conn,
                 Err(_) => return out,
             }
