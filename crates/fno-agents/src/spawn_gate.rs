@@ -32,6 +32,7 @@ use crate::spawn_gate_lanes;
 use crate::spawn_gate_lanes::{
     check_account_login, check_account_quota_lock, check_lane_quota_lock, check_registry_schema,
 };
+use crate::spawn_gate_queue::slot_refusal_line;
 use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
 use crate::state::{load_registry, Registry, RegistryEntry};
 use crate::AgentStatus;
@@ -244,7 +245,6 @@ fn fleet_incident_gate() -> Result<(), Refusal> {
 
 /// Queue mechanics (Claude's Discretion 2: targets, not contracts).
 const QUEUE_POLL: Duration = Duration::from_secs(2);
-const QUEUE_PROGRESS_EVERY: Duration = Duration::from_secs(30);
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(600);
 /// LD4: the CPU-hold re-sample gap and the admission debounce. Longer
 /// than the slot poll because the `ps` CPU column is a decaying average on
@@ -592,7 +592,8 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
 }
 
 /// Count fno WORKER SLOTS in use for the `max_live` cap: liveness-filtered fno
-/// registry rows + live `worker:<name>` headless slot claims.
+/// registry rows + live `worker:<name>` headless slot claims. A lead row (it
+/// carries a role) takes no worker slot.
 ///
 /// This is deliberately NOT the full claude daemon roster. The roster
 /// carries every live claude session, dozens of memory-plugin observers and
@@ -620,55 +621,15 @@ pub fn slot_count(registry_path: &Path, warnings: &mut Vec<String>) -> usize {
     rows.len() + claims.len()
 }
 
-/// The slot count's two inputs, together: the live registry rows and the live
+/// The slot count's two inputs, together: the live worker rows and the live
 /// `worker:<name>` headless reservations, each reservation named. `slot_count`
 /// is the sum; the refusal paths need the rows themselves to name them.
 pub(crate) fn slot_reading(
     registry_path: &Path,
     warnings: &mut Vec<String>,
 ) -> (Vec<RegistryEntry>, Vec<SlotReservation>) {
-    let rows = live_rows(registry_path, warnings);
-    let claims = live_worker_slot_claims(warnings);
-    (rows, claims)
-}
-
-/// The one slot-refusal sentence both print paths share, so a display can
-/// never quote a count the gate did not measure. Pure text; the caller adds
-/// its own tail (`refusing (--no-wait).`, or the queue line's advice). The
-/// rows are named by the probe's `slot_rows` field (`fno agents gate-status`),
-/// never by a second walk. When a reservation is counted, the sentence names
-/// the release verb for the first suspect one; all-live saturation names none.
-fn slot_refusal_line(
-    slots: usize,
-    learned: &crate::capacity::Effective,
-    rows: usize,
-    claims: &[SlotReservation],
-    waiting: usize,
-    tail: &str,
-) -> String {
-    let waiting_note = if waiting > 0 {
-        format!("; {waiting} of the rows wait on an operator question")
-    } else {
-        String::new()
-    };
-    // Name the remedy only for a SUSPECT reservation: a live one still holds
-    // its slot on purpose, and releasing it would leave the worker running
-    // uncounted. All-live saturation names no release target.
-    let remedy = match claims.iter().find(|r| r.state == "suspect") {
-        Some(r) => format!(
-            "; free a dead reservation: fno agents claim release worker:{} --force \
-             --reason \"<why>\"",
-            r.name
-        ),
-        None => String::new(),
-    };
-    format!(
-        "{slots} live worker slots >= {cap_clause} ({rows} registry rows, {n} headless \
-         reservations{waiting_note}); every counted row: fno agents gate-status, field \
-         slot_rows{remedy}; {tail}",
-        cap_clause = learned.clause(),
-        n = claims.len()
-    )
+    let (rows, _leads) = crate::spawn_gate_slots::split_leads(live_rows(registry_path, warnings));
+    (rows, live_worker_slot_claims(warnings))
 }
 
 /// The territory (key, member node ids, leadless) a node belongs to, or
@@ -1516,7 +1477,8 @@ fn decide_gate(
     }
 
     let started = Instant::now();
-    let mut last_progress = Instant::now();
+    // The ticket that names this spawn's place while it waits.
+    let mut queue = crate::spawn_gate_queue::Queue::new(root.clone(), &holder, holder_pid);
     let mut announced = false;
     let mut last_slots: usize = 0;
     let mut last_succession_error: Option<&'static str>;
@@ -1537,8 +1499,8 @@ fn decide_gate(
         // Each pass reads afresh: a refusal names only what IT read, never a
         // slot count from an earlier pass. The cap is read per pass too, so a
         // floor raised while a spawn is queued releases it.
-        let learned = crate::capacity::effective_for(config_cwd);
-        let cap = learned.cap;
+        let mut learned = crate::capacity::effective_for(config_cwd);
+        let mut cap = learned.cap;
         last_succession_error = None;
         let mut axes_read = serde_json::Map::new();
         let mut pause = QUEUE_POLL;
@@ -1602,14 +1564,13 @@ fn decide_gate(
                     "spawn-gate: a holder the gate cannot prove dead holds the gate mutex; refusing \
                      (--no-wait). Read the holder with `fno agents claim status gate:spawn`."
                 );
-                return Err(Refusal::with_receipt(
-                    EXIT_NO_WAIT,
-                    serde_json::json!({
-                        "status": "refused",
-                        "reason": "no_wait_mutex_held",
-                        "max_live": cap,
-                    }),
-                ));
+                let mut receipt = serde_json::json!({
+                    "status": "refused",
+                    "reason": "no_wait_mutex_held",
+                    "max_live": cap,
+                });
+                queue.annotate(&mut receipt, "gate_mutex");
+                return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
             }
             if now.duration_since(since) >= MUTEX_WAIT_BUDGET && !fail_closed {
                 eprintln!(
@@ -1617,6 +1578,8 @@ fn decide_gate(
                     MUTEX_WAIT_BUDGET.as_secs()
                 );
                 acquired_mutex = true;
+            } else if let Some(line) = queue.tick("the gate mutex") {
+                eprintln!("{line}");
             }
         }
 
@@ -1783,6 +1746,7 @@ fn decide_gate(
                         for (k, v) in figures.as_object().into_iter().flatten() {
                             receipt[k] = v.clone();
                         }
+                        queue.annotate(&mut receipt, "fleet_cpu_share");
                         return Err(Refusal::with_receipt(EXIT_LOAD_REFUSED, receipt)
                             .ev("reason", serde_json::json!("fleet_cpu_share"))
                             .ev("samples", serde_json::json!(1))
@@ -1791,16 +1755,16 @@ fn decide_gate(
                             .ev("axes_read", serde_json::json!(axes_read))
                             .ev("figures", figures));
                     }
-                    if !announced {
-                        eprintln!("{}", admission.reason);
+                    if let Some(line) = queue.tick("the fleet CPU hold") {
+                        match announced {
+                            true => eprintln!(
+                                "{}",
+                                held_progress_line(admission, started.elapsed().as_secs())
+                            ),
+                            false => eprintln!("{}", admission.reason),
+                        }
+                        eprintln!("{line}");
                         announced = true;
-                        last_progress = Instant::now();
-                    } else if last_progress.elapsed() >= QUEUE_PROGRESS_EVERY {
-                        eprintln!(
-                            "{}",
-                            held_progress_line(admission, started.elapsed().as_secs())
-                        );
-                        last_progress = Instant::now();
                     }
                     pause = CPU_HOLD_POLL;
                 }
@@ -1837,9 +1801,10 @@ fn decide_gate(
                             .iter()
                             .any(|reservation| reservation.name == name && reservation.redeemable);
                         last_slots = slots;
+                        // The caller is a lead, and a lead row is no worker row.
                         let succession = input.succession_scope.as_deref().map(|scope| {
                             spawn_gate_lanes::succession_replaces(
-                                &live,
+                                &live_rows(registry_path, &mut warnings),
                                 input.caller_session.as_deref(),
                                 scope,
                             )
@@ -1851,18 +1816,29 @@ fn decide_gate(
                         for w in &warnings {
                             eprintln!("{w}");
                         }
-                        if slots
-                            .saturating_sub(usize::from(redeeming_own_reservation))
-                            .saturating_sub(replaced)
-                            < cap
-                        {
-                            let slot_reading = succession
-                                .as_ref()
-                                .and_then(|result| result.as_ref().ok())
-                                .map(|name| {
+                        let counted = slots.saturating_sub(usize::from(redeeming_own_reservation));
+                        // The CPU axis admitted this pass; with RAM room too the
+                        // learned cap yields and the user's max_live binds.
+                        let yielded = crate::spawn_gate_slots::cap_yields(
+                            &learned, counted, floor_gb, swap_cap,
+                        )
+                        .then_some(cap);
+                        if yielded.is_some() {
+                            learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                            cap = learned.cap;
+                        }
+                        // A successor holds a worker slot until its role lands, so a
+                        // succession may sit one row over the cap, never two.
+                        if counted.saturating_sub(replaced) < cap {
+                            let slot_reading = match (&succession, yielded) {
+                                (Some(Ok(name)), _) => {
                                     format!("{slots}/{cap} ok (succession replaces {name})")
-                                })
-                                .unwrap_or_else(|| format!("{slots}/{cap} ok"));
+                                }
+                                (_, Some(was)) => format!(
+                                    "{slots}/{cap} ok (learned cap {was} yields: CPU and RAM have room)"
+                                ),
+                                _ => format!("{slots}/{cap} ok"),
+                            };
                             axes_read.insert("slots".into(), serde_json::json!(slot_reading));
                             // Re-checked on dequeue for the same reason the RAM floor is: a
                             // spawn can sit queued past QUEUE_POLL for minutes, and another
@@ -2000,12 +1976,14 @@ fn decide_gate(
                                 })).collect::<Vec<_>>(),
                             });
                             learned.annotate(&mut receipt);
+                            queue.annotate(&mut receipt, "max_live");
                             if let Some(reason) = last_succession_error {
                                 receipt["succession"] = serde_json::json!(reason);
                             }
                             return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
                         }
-                        if !announced {
+                        let place = queue.tick(&format!("the slot cap, {slots} live of {cap}"));
+                        if !announced && place.is_some() {
                             let row_refs: Vec<&RegistryEntry> = live.iter().collect();
                             let drained = warnings.len();
                             let waiting = spawn_gate_lanes::read_awaiting_operator(
@@ -2027,13 +2005,9 @@ fn decide_gate(
                             eprintln!("spawn queued: {line}");
                             learned.eprint_slot_hint();
                             announced = true;
-                            last_progress = Instant::now();
-                        } else if last_progress.elapsed() >= QUEUE_PROGRESS_EVERY {
-                            eprintln!(
-                                "still queued: {slots}/{cap} live worker slots, waited {}s",
-                                started.elapsed().as_secs()
-                            );
-                            last_progress = Instant::now();
+                        }
+                        if let Some(place) = place {
+                            eprintln!("{place}");
                         }
                     }
                 }
@@ -2103,6 +2077,7 @@ fn decide_gate(
                 "current_count": last_slots,
             });
             learned.annotate(&mut receipt);
+            queue.annotate(&mut receipt, held_on);
             if let Some(reason) = last_succession_error {
                 receipt["succession"] = serde_json::json!(reason);
             }
@@ -3869,34 +3844,6 @@ Swapouts: 3444531.\n";
             None => std::env::remove_var("FNO_SPAWN_GATE"),
         }
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// An unknown effective cap, the shape every fallback clause test wants.
-    fn no_state() -> crate::capacity::Effective {
-        crate::capacity::Effective {
-            cap: 23,
-            ceiling: 23,
-            ..Default::default()
-        }
-    }
-
-    /// AC5-TEXT: the shared refusal sentence names the probe field that lists
-    /// every counted row, marks the operator-waiting share, and never again
-    /// blames a population its own recommended reader cannot see.
-    #[test]
-    fn slot_refusal_line_names_the_probe_and_marks_waiting_rows() {
-        let line = slot_refusal_line(3, &no_state(), 3, &[], 1, "refusing (--no-wait).");
-        assert!(line.contains("fno agents gate-status"), "{line}");
-        assert!(line.contains("slot_rows"), "{line}");
-        assert!(
-            line.contains("1 of the rows wait on an operator question"),
-            "{line}"
-        );
-        assert!(!line.contains("--status quiet"), "{line}");
-        assert!(!line.contains("fno agents top"), "{line}");
-
-        let line = slot_refusal_line(3, &no_state(), 3, &[], 0, "refusing (--no-wait).");
-        assert!(!line.contains("wait on an operator question"), "{line}");
     }
 
     /// AC5-HP: the --no-wait slot refusal carries the receipt naming every

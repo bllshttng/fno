@@ -196,8 +196,9 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
                     .and_then(Value::as_str)
                     .unwrap_or("check fno agents gate-status");
                 let remedy = crate::capacity::native_remedy(remedy, receipt);
+                let place = crate::spawn_gate_queue::place_note(receipt);
                 return Some(format!(
-                    "spawn gate refused the native launch ({reason}): {remedy}"
+                    "spawn gate refused the native launch ({reason}{place}): {remedy}"
                 ));
             }
         }

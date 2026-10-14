@@ -28,6 +28,9 @@ pub const DEFAULT_RAISE_LOAD_PER_CORE: f64 = 2.0;
 pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
 /// The learned cap never drops below this unless the user sets a higher floor.
 pub const DEFAULT_FLOOR: u32 = 1;
+/// The reason an older first run stamped on a cap it guessed from the machine
+/// budget. The reader treats it as no measurement.
+const SEED_REASON: &str = "seeded from machine budget";
 /// What every soft-cap refusal names to hold the learned cap up. `fno config
 /// set` refuses this key, so the hint names the file the gate reads.
 /// What every soft refusal says about --force.
@@ -329,6 +332,14 @@ pub fn read_state(home: &AgentsHome) -> Option<CapacityState> {
     serde_json::from_str(&raw).ok()
 }
 
+/// The learned cap when the loop measured it below the ceiling. A seed guess,
+/// or a cap that sat at an older and lower ceiling, is no measurement: it
+/// follows the ceiling, so a raised `agents.max_live` binds at once.
+fn measured_cut(state: &CapacityState) -> Option<u32> {
+    (state.effective < state.ceiling && state.reason.as_deref() != Some(SEED_REASON))
+        .then_some(state.effective)
+}
+
 /// The cap answer for this machine: the learned effective cap raised to the
 /// user's floor and clamped under the given ceiling, or the ceiling itself
 /// when no usable state exists. The reader applies the floor itself so a
@@ -337,7 +348,7 @@ pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
     let ceiling = ceiling.max(1);
     match read_state(home) {
         Some(state) if state.effective >= 1 => {
-            let learned = (state.effective as usize).min(ceiling);
+            let learned = measured_cut(&state).map_or(ceiling, |cut| (cut as usize).min(ceiling));
             let floor_cap = floor.min(ceiling);
             let cap = learned.max(floor_cap);
             let known = cap < ceiling || state.reason.is_some();
@@ -370,8 +381,8 @@ fn render_clock(epoch: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// One AIMD step from a tick's sample. Seeds the state from the machine
-/// budget on first run, folds the memory figure and the account windows, and
+/// One AIMD step from a tick's sample. Seeds the state at the ceiling on
+/// first run, folds the memory figure and the account windows, and
 /// persists the result. `Ok(None)` when the sample carries no run queue (the
 /// one signal the loop reads) and there is nothing to refresh.
 pub fn feed(
@@ -382,8 +393,12 @@ pub fn feed(
 ) -> io::Result<CapacityState> {
     let ceiling = crate::agents_config::max_live(cwd);
     let thresholds = thresholds(cwd);
-    let mut state =
-        read_state(home).unwrap_or_else(|| seed(sample, ceiling, thresholds.floor, now_epoch));
+    let mut state = read_state(home).unwrap_or_else(|| seed(ceiling, now_epoch));
+    if measured_cut(&state).is_none() {
+        state.effective = ceiling;
+        state.reason = None;
+        state.since = None;
+    }
     state.ceiling = ceiling;
     if let Some(next) = step(&state, sample, &thresholds, now_epoch) {
         state = next;
@@ -398,17 +413,13 @@ pub fn feed(
     Ok(state)
 }
 
-/// First run: the p75 machine budget raised to the floor, clamped under the
-/// ceiling.
-fn seed(sample: &MachineSample, ceiling: u32, floor: u32, now_epoch: i64) -> CapacityState {
-    let budget =
-        crate::machine_load::budget(sample.cores, sample.total_mem_gb, sample.sessions.as_ref());
-    let effective = budget.max_live.max(floor).min(ceiling).max(1);
+/// First run: the cap starts at the ceiling. Only a measured breach lowers it.
+fn seed(ceiling: u32, now_epoch: i64) -> CapacityState {
     CapacityState {
         ceiling,
-        effective,
-        reason: Some("seeded from machine budget".into()),
-        since: Some(now_epoch),
+        effective: ceiling.max(1),
+        reason: None,
+        since: None,
         slots_learned: None,
         over_since: None,
         calm_since: None,
@@ -847,8 +858,7 @@ mod tests {
         // cutting, the state file carries it, and the tick past the hold
         // window fires the cut - no pre-seeded timestamps.
         let natural = tmp_home("natural");
-        let mut hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
-        hot.total_mem_gb = Some(96.0); // the seed budget reads 23 under this box
+        let hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
         let armed = feed(&hot, &cwd, &natural, now).unwrap();
         assert_eq!(armed.effective, 23, "the arming tick does not cut");
         assert_eq!(armed.over_since, Some(now), "the breach clock is persisted");
@@ -1020,6 +1030,20 @@ mod tests {
         let mut receipt = serde_json::json!({"axis": "max_live"});
         at_ceiling.annotate(&mut receipt);
         assert_eq!(receipt["remedy"], MAX_LIVE_REMEDY);
+
+        // max_live 32 with no floor reads 32: a first run seeds at the
+        // ceiling, and neither an old seed guess nor a cap that sat at an
+        // older ceiling of 24 holds the cap at 24.
+        assert_eq!(seed(32, now).effective, 32);
+        let home = tmp_home("raised-ceiling");
+        let mut at_old = learned_five.clone();
+        (at_old.effective, at_old.reason) = (24, None);
+        write_state(&home, &at_old).unwrap();
+        assert_eq!(effective(&home, 32, 1).cap, 32);
+        (at_old.ceiling, at_old.reason) = (32, Some(SEED_REASON.into()));
+        write_state(&home, &at_old).unwrap();
+        assert_eq!(effective(&home, 32, 1).cap, 32);
+        let _ = std::fs::remove_dir_all(home.root());
     }
 
     #[test]
