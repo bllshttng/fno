@@ -182,7 +182,9 @@ jobs:
         if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-          FNO_DEMO_PY_SOURCE: ${{ github.workspace }}/cli
+          # The bootstrap validates the pin at <source>/cli/pyproject.toml,
+          # so the pin is the repo root, not the cli directory.
+          FNO_DEMO_PY_SOURCE: ${{ github.workspace }}
         run: |
           mkdir -p shots
           for view in bell bell-wide bell-full; do
