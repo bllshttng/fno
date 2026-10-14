@@ -932,6 +932,9 @@ fn screen_review_merge(state: &mut State, pr: &mut dyn Prompter, stops: bool) ->
             .answers
             .insert("review", Answer::Text("self_review".into()));
     } else {
+        // A prior pass may have seeded self_review; leaving it would keep
+        // proposing the posture the user just declined.
+        state.answers.remove("review");
         pr.note("review-merge", "the review posture stays as configured");
     }
     state

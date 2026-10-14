@@ -144,6 +144,10 @@ const CODES: &[(&str, &str)] = &[
         "join_pending",
         "inspect the backup named in the message, restore the global config by hand if it is wrong, then remove the in-progress flag",
     ),
+    (
+        "projects_hand_set",
+        "move the hand-set work.workspaces.main.projects value into an array of {name, path} tables, then rerun `fno config setup run`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -1014,7 +1018,13 @@ fn step_join(
         }
     }
     if applied == 0 {
+        // Every key refused, but the join still consumed its source:
+        // persist the profile so a retry starts from here, matching the
+        // empty branch below.
         let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
+        crate::setup_profile::save_profile(&profile.text);
+        rep.paths
+            .push(crate::setup_profile::profile_path().display().to_string());
         return;
     }
     let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
@@ -1187,11 +1197,18 @@ fn step_projects(exe: &Path, root: &Path, rep: &mut Report) {
             return;
         }
         Ok(None) => Vec::new(),
-        Ok(Some(map)) => map
-            .get(PROJECTS_KEY)
-            .and_then(toml::Value::as_array)
-            .map(|a| a.iter().map(toml_as_json).collect())
-            .unwrap_or_default(),
+        Ok(Some(map)) => match projects_rows(map.get(PROJECTS_KEY)) {
+            Ok(existing) => existing,
+            Err(()) => {
+                let message = format!(
+                    "projects: {PROJECTS_KEY} is hand-set to a non-array value; setup would overwrite it"
+                );
+                rep.rows
+                    .push(row("needs_human", "projects_hand_set", message.clone()));
+                rep.needs_human.push(message);
+                return;
+            }
+        },
     };
     let display = root.display().to_string();
     if rows
@@ -1220,6 +1237,17 @@ fn step_projects(exe: &Path, root: &Path, rep: &mut Report) {
                 .push(row("needs_human", "config_set_refused", message.clone()));
             rep.needs_human.push(message);
         }
+    }
+}
+
+/// The existing workspace list as JSON rows. A missing key and a real
+/// array both pass through; any other hand-set shape refuses so the
+/// caller never overwrites it with setup's own array.
+fn projects_rows(value: Option<&toml::Value>) -> Result<Vec<serde_json::Value>, ()> {
+    match value {
+        None => Ok(Vec::new()),
+        Some(toml::Value::Array(items)) => Ok(items.iter().map(toml_as_json).collect()),
+        Some(_) => Err(()),
     }
 }
 
@@ -1904,8 +1932,11 @@ pub(crate) fn apply_wizard_pending(
         if let Some(reason) = outcome.1 {
             data["skip_reason"] = json!(reason);
         }
-        if let Some(r) = rep.rows.get(rows_len) {
-            data["code"] = json!(r.code);
+        // A step can push several rows; name every new code so the event
+        // never under-reports the step's failure shape.
+        let codes: Vec<&str> = rep.rows[rows_len..].iter().map(|r| r.code).collect();
+        if !codes.is_empty() {
+            data["code"] = json!(codes.join(","));
         }
         append_setup_event("setup_step", data);
     }
@@ -2302,8 +2333,11 @@ pub fn run(tail: &[OsString]) -> i32 {
         if let Some(reason) = outcome.1 {
             data["skip_reason"] = json!(reason);
         }
-        if let Some(r) = rep.rows.get(rows_len) {
-            data["code"] = json!(r.code);
+        // A step can push several rows; name every new code so the event
+        // never under-reports the step's failure shape.
+        let codes: Vec<&str> = rep.rows[rows_len..].iter().map(|r| r.code).collect();
+        if !codes.is_empty() {
+            data["code"] = json!(codes.join(","));
         }
         append_setup_event("setup_step", data);
     }
