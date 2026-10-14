@@ -24,7 +24,7 @@ mod common;
 use common::{assert_golden as assert_golden_common, Golden};
 use std::collections::HashSet;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 

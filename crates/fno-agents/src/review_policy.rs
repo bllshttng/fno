@@ -615,11 +615,10 @@ pub fn assess_outcome(
     risk_surfaces: &[String],
 ) -> (String, i32) {
     let now = now_epoch();
-    let sid = resolve_session_id(
-        session_id,
-        &state_path.unwrap_or(Path::new(".fno/target-state.md")),
-    )
-    .unwrap_or_default();
+    let state = state_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.join(".fno/target-state.md"));
+    let sid = resolve_session_id(session_id, &state).unwrap_or_default();
     let (mut implementer, mut identity_known) = load_implementer_identity(&sid, &cwd);
     let ambient = local_runtime_kind();
     if !identity_known {
