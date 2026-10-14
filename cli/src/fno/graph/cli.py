@@ -3890,7 +3890,9 @@ def _refuse_tracker_owned_on_external_backend(label: str) -> None:
             err=True,
         )
         if label in _NO_GRAIN_ON_EXTERNAL_BACKEND:
-            raise typer.Exit(code=TASK_NO_GRAIN_EXIT)
+            # Exit 6: the shared no-task-grain shape (the native task verb
+            # answers with the same code).
+            raise typer.Exit(code=6)
         raise typer.Exit(code=1)
 
 
