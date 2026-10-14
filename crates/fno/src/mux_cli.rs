@@ -43,7 +43,7 @@ use self::restore::workspace_restore;
 
 use std::ffi::OsString;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::server::lifecycle_target;
