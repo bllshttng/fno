@@ -587,6 +587,63 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     }
 }
 
+/// Begin a width drag when a left press lands on the border column. Full
+/// screen has no border to grab.
+pub(super) fn begin_drag(view: &mut View, col: u16) -> bool {
+    if !view.bell.open || view.bell.size == Size::Full {
+        return false;
+    }
+    let cols = view.term.1 as usize;
+    if col as usize != cols - panel_width(view, cols) {
+        return false;
+    }
+    view.bell.drag_from = Some(view.bell.width);
+    true
+}
+
+/// Set the width from the dragged border column; true when the painted
+/// width changed. A drag out of Wide drops to Normal at the dragged width.
+fn drag_to(view: &mut View, col: u16) -> bool {
+    let cols = view.term.1 as usize;
+    let max = cols.saturating_sub(1);
+    if (MIN_W as usize) > max {
+        return false;
+    }
+    let before = panel_width(view, cols);
+    let want = cols.saturating_sub(col as usize).clamp(MIN_W as usize, max);
+    view.bell.size = Size::Normal;
+    view.bell.width = want as u16;
+    panel_width(view, cols) != before
+}
+
+/// End the drag; persist the width when it moved.
+fn end_drag(view: &mut View) {
+    if let Some(from) = view.bell.drag_from.take() {
+        if view.bell.width != from {
+            crate::view_store::save_bell_width(view.bell.width);
+        }
+    }
+}
+
+/// The live drag owns every mouse event: Drag(Left) moves the border,
+/// anything else ends it. False when no drag is live, so a panel with no
+/// drag falls through to the hit and close lines the block ends with.
+pub(super) fn drag_mouse(view: &mut View, col: u16, kind: MouseKind) -> bool {
+    if view.bell.drag_from.is_none() {
+        return false;
+    }
+    match kind {
+        MouseKind::Drag(MouseButton::Left) => {
+            drag_to(view, col);
+            true
+        }
+        _ => {
+            end_drag(view);
+            true
+        }
+    }
+}
+
 pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
     if let Some(projection) = view.bell.projection.as_ref() {
         mark_seen(projection);
@@ -1069,5 +1126,83 @@ mod tests {
         assert!(!stale(&v), "the index backs the list; no stale banner");
         v.questions_index = None;
         assert!(stale(&v), "no index: the banner says so");
+    }
+
+    #[test]
+    fn panel_sizes_drag_and_rewrap() {
+        // A body of one 44-, one 21- and one 20-column word: at the default
+        // width the wrap packs 44 and 42 on two lines; after the drag one
+        // line packs 44 + 1 + 21 = 66, so the rewrap is measurable.
+        let body = format!("{} {} {}", "a".repeat(44), "b".repeat(21), "c".repeat(20));
+        let mut v = view_with_announcements(vec![serde_json::json!({
+            "ts": "2026-10-14T10:00:00Z",
+            "from": "fno/fleet-incident",
+            "summary": "rollout",
+            "body": body,
+            "expires": "2027-01-01T00:00:00Z",
+            "system": true,
+        })]);
+        v.bell.open = true;
+        let x0 = |v: &View| (v.term.1 as usize) - panel_width(v, v.term.1 as usize);
+        let widest_info = |v: &View| {
+            rows(v)
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Info(s) if s.starts_with("  ") => Some(s.chars().count()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+        };
+
+        // AC1: the default paints 48 wide (x0 52 on 100 columns), and the
+        // announcement body wraps at the painted width less 4.
+        assert_eq!(x0(&v), 52, "the default panel paints 48 wide");
+        assert_eq!(widest_info(&v), 46, "the body wraps at 44 columns");
+
+        // AC2: w paints three fifths of the terminal and back.
+        keys(&mut v, b"w");
+        assert_eq!(x0(&v), 40, "wide paints 60 of 100 columns");
+        keys(&mut v, b"w");
+        assert_eq!(x0(&v), 52, "a second w returns to the dragged width");
+
+        // AC4: a stored 90 clamps transiently on 60 columns and survives.
+        v.bell.width = 90;
+        v.term = (24, 60);
+        assert_eq!(
+            60 - panel_width(&v, 60),
+            1,
+            "a stored 90 paints 59 on 60 columns"
+        );
+        v.term = (24, 100);
+        assert_eq!(v.bell.width, 90, "the stored width survives the clamp");
+
+        // AC6: grab the border at column 52 and drag to 30: the panel paints
+        // 70 columns, the body rewraps to 66, and release leaves 70 stored.
+        v.bell.width = 48;
+        v.bell.size = Size::Normal;
+        assert!(begin_drag(&mut v, 52), "the border column starts a drag");
+        assert!(
+            drag_mouse(&mut v, 30, MouseKind::Drag(MouseButton::Left)),
+            "the drag consumes its own report"
+        );
+        assert!(
+            v.bell.open,
+            "a drag report left of the old border keeps the panel open"
+        );
+        assert_eq!(x0(&v), 30, "the border rides the pointer to column 30");
+        assert_eq!(widest_info(&v), 68, "the body rewraps to 66 columns");
+        end_drag(&mut v);
+        assert_eq!(v.bell.width, 70, "release leaves the dragged width");
+        assert!(v.bell.drag_from.is_none(), "the drag is over");
+
+        // AC7: a grab-release with no movement changes nothing.
+        assert!(begin_drag(&mut v, 30));
+        assert!(drag_mouse(
+            &mut v,
+            31,
+            MouseKind::Release(MouseButton::Left)
+        ));
+        assert_eq!(v.bell.width, 70, "no movement, no change");
     }
 }
