@@ -352,8 +352,14 @@ fn validate_record(row: &toml::Value) -> Result<(String, String), ()> {
             }
         }
         "api_key" => {
-            let recognized: Vec<&str> = env
-                .map(|e| {
+            let env_nonempty = env.map(|e| !e.is_empty()).unwrap_or(false);
+            let has_route = route.is_some();
+            if env_nonempty == has_route {
+                // Exactly one of a non-empty env or a route.
+                return Err(());
+            }
+            if env_nonempty {
+                let recognized = env.map(|e| {
                     e.keys()
                         .filter(|k| {
                             matches!(
@@ -365,18 +371,21 @@ fn validate_record(row: &toml::Value) -> Result<(String, String), ()> {
                             )
                         })
                         .count()
-                })
-                .unwrap_or(0);
-            let has_env = recognized > 0;
-            let has_route = route.is_some();
-            if has_env == has_route {
-                // Exactly one of a recognized env key or a route.
-                return Err(());
+                });
+                if recognized.unwrap_or(0) == 0 {
+                    return Err(());
+                }
             }
         }
         _ => {
-            // managed: neither field may be set.
-            if env.map(|e| !e.is_empty()).unwrap_or(false) || route.is_some() {
+            // managed: neither credentials_source nor env (the route ban is
+            // the shared route arm above).
+            if env.map(|e| !e.is_empty()).unwrap_or(false)
+                || table
+                    .get("credentials_source")
+                    .and_then(toml::Value::as_str)
+                    .is_some()
+            {
                 return Err(());
             }
         }
@@ -406,8 +415,11 @@ pub(crate) fn load_provider_records(cwd: &Path) -> Option<Vec<(String, String)>>
         if records.is_empty() {
             continue;
         }
-        // `_overlay_records`: incoming wins per id, new ids append; duplicate
-        // ids within one file are preserved.
+        // `_overlay_records`: incoming wins per id against the layers already
+        // merged, new ids append; duplicate ids within ONE file are
+        // preserved (the within-file `seen` set skips the removal).
+        let file_start = merged.len();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for record in records {
             let rid = record
                 .as_table()
@@ -415,7 +427,12 @@ pub(crate) fn load_provider_records(cwd: &Path) -> Option<Vec<(String, String)>>
                 .and_then(toml::Value::as_str);
             match rid {
                 Some(rid) => {
-                    if let Some(pos) = merged.iter().position(|existing| {
+                    if seen.contains(rid) {
+                        merged.push(record.clone());
+                        continue;
+                    }
+                    seen.insert(rid.to_string());
+                    if let Some(pos) = merged[..file_start].iter().position(|existing| {
                         existing
                             .as_table()
                             .and_then(|t| t.get("id"))
@@ -511,10 +528,13 @@ pub(crate) fn available_provider_kinds(cwd: &Path, now: f64) -> Vec<String> {
     head
 }
 
-/// `config.review.cross_model.enabled` through a STRICT layered read: the
-/// first layer defining the leaf answers, an unparseable layer or a
-/// non-bool leaf fails OPEN (`true`), and no definition anywhere is `false`.
+/// `config.review.cross_model.enabled` through a STRICT layered read: every
+/// readable layer must parse (one that fails answers `true`, exactly where
+/// Python's whole-load settings refusal fails open), then the first layer
+/// defining the leaf wins, a non-bool leaf fails open, and no definition
+/// anywhere is `false`.
 fn cross_model_enabled(cwd: &Path) -> bool {
+    let mut parsed: Vec<toml::Table> = Vec::new();
     for path in crate::agents_config::config_candidates(cwd) {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
@@ -522,6 +542,9 @@ fn cross_model_enabled(cwd: &Path) -> bool {
         let Ok(table) = content.parse::<toml::Table>() else {
             return true;
         };
+        parsed.push(table);
+    }
+    for table in &parsed {
         let leaf = table
             .get("review")
             .and_then(|v| v.get("cross_model"))

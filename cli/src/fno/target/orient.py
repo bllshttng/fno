@@ -874,8 +874,8 @@ def _self_check() -> None:
     print("orient self-check OK")
 
 
-if __name__ == "__main__":
-    _self_check()
+#: The cached kinds-door read; None until the first process read lands.
+_DOOR_DISPATCHABLE: set[str] | None = None
 
 
 def _dispatchable_providers() -> set[str]:
@@ -892,3 +892,7 @@ def _dispatchable_providers() -> set[str]:
             str(k).strip().lower() for k in (row.get("dispatchable") or [])
         }
     return _DOOR_DISPATCHABLE
+
+
+if __name__ == "__main__":
+    _self_check()
