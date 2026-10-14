@@ -616,11 +616,12 @@ fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
         let Ok(mut stmt) = conn.prepare(sql) else {
             continue;
         };
-        if let Ok(rows) = stmt.query([]) {
-            for row in rows.flatten() {
-                if let Ok(id) = row.get::<_, String>(0) {
-                    out.insert(id);
-                }
+        let Ok(mut rows) = stmt.query([]) else {
+            continue;
+        };
+        while let Ok(Some(row)) = rows.next() {
+            if let Ok(id) = row.get::<_, String>(0) {
+                out.insert(id);
             }
         }
     }
