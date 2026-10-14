@@ -595,7 +595,7 @@ def window_providers(
 # unmappable bot is silently skipped (fail-open).
 _REQUIRED_BOT_CLI: dict[str, str] = {
     "codex": "codex",   # chatgpt-codex-connector
-    "gemini": "gemini",  # gemini-code-assist
+    "gemini": "gemini",
     "claude": "claude",
 }
 

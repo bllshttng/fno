@@ -30,8 +30,9 @@ enabled = true          # born-with-why: spawn a /think for generated ideas
 external_reviewers = ["gemini", "codex"]
 # The completion GATE: which reviews must land before a session is 'done'.
 # Distinct from external_reviewers above (that only ASKS; this DECIDES done).
-# App-bot logins that MUST review (empty/absent = no hard gate); gemini is reliable.
-github_apps = ["gemini-code-assist"]
+# App-bot logins that MUST review (empty/absent = no hard gate). Name an App
+# that is installed on this repo and still posts reviews.
+github_apps = ["chatgpt-codex-connector"]
 # honored-if-present: counts if it reviews, never WAITS on it (so a codex
 # usage-limit wedge can't stall you).
 optional_apps = ["chatgpt-codex-connector"]

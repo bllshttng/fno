@@ -1196,7 +1196,7 @@ class ApprovalsBlock(BaseModel):
 #: measure different lanes on one PR, which is what a remedy printed by one and
 #: refused by the other looked like. Parity is pinned against the shared golden
 #: file cli/tests/config/optional_apps_default.json.
-DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("gemini-code-assist", "chatgpt-codex-connector")
+DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("chatgpt-codex-connector",)
 
 
 def resolved_optional_apps(review: "ReviewBlock") -> list[str]:

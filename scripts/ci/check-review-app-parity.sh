@@ -143,15 +143,43 @@ def extract_rust(src, path):
     """{login: sorted[markers]} from BOT_PROFILES, plus a per-profile marker
     completeness check. A profile without an explicit `usage_markers:` field is
     a new App whose refusal shape was never decided (AC10)."""
-    m = re.search(
-        r"const\s+BOT_PROFILES\s*:\s*&\[BotProfile\]\s*=\s*&\[(.*?)\n\];",
-        src,
-        re.S,
-    )
+    m = re.search(r"const\s+BOT_PROFILES\s*:\s*&\[BotProfile\]\s*=\s*&\[", src)
     if not m:
         fail(f"BOT_PROFILES not found in {path}")
-    body = m.group(1)
-    blocks = re.findall(r"BotProfile\s*\{(.*?)\n\s*\},", body, re.S)
+    # Brace-scan to the matching close, then brace-scan each BotProfile
+    # literal: rustfmt collapses a single-entry table onto fewer lines, so a
+    # layout regex (`\n];`, entries ending `\n},`) misses real tables.
+    start = m.end()
+    depth = 1
+    end = start
+    while end < len(src) and depth:
+        if src[end] == "[":
+            depth += 1
+        elif src[end] == "]":
+            depth -= 1
+        end += 1
+    if depth:
+        fail(f"BOT_PROFILES in {path} is unterminated")
+    body = src[start:end - 1]
+    blocks = []
+    pos = 0
+    while True:
+        b = re.search(r"BotProfile\s*\{", body[pos:])
+        if not b:
+            break
+        open_at = pos + b.end() - 1
+        depth = 1
+        close_at = open_at + 1
+        while close_at < len(body) and depth:
+            if body[close_at] == "{":
+                depth += 1
+            elif body[close_at] == "}":
+                depth -= 1
+            close_at += 1
+        if depth:
+            fail(f"BOT_PROFILES in {path} has an unterminated BotProfile entry")
+        blocks.append(body[open_at + 1:close_at - 1])
+        pos = close_at
     if not blocks:
         fail(f"BOT_PROFILES in {path} had no BotProfile entries")
     out = {}
@@ -314,6 +342,26 @@ EOF
     # profile without usage_markers
     _rust_nomarker "$tmp/r5.rs"
     _case "profile without usage_markers" 1 "$tmp/r5.rs" "$tmp/o.py" "$tmp/c.py"
+
+    # rustfmt-collapsed single-entry table (the shape rustfmt gives a one-bot
+    # table) must parse like the expanded one
+    cat > "$tmp/r6.rs" <<'EOF'
+pub(super) const BOT_PROFILES: &[BotProfile] = &[BotProfile {
+    login: "chatgpt-codex-connector",
+    review_handle: "@codex review",
+    usage_markers: &["usage limits for code reviews", "codex usage limits"],
+    nudgeable: true,
+}];
+EOF
+    cat > "$tmp/o6.py" <<'EOF'
+DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("chatgpt-codex-connector",)
+EOF
+    cat > "$tmp/c6.py" <<'EOF'
+_KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset(
+    {"chatgpt-codex-connector"}
+)
+EOF
+    _case "collapsed single-entry table parses" 0 "$tmp/r6.rs" "$tmp/o6.py" "$tmp/c6.py"
 
     if [[ "$fails" == 0 ]]; then
         echo "selftest OK"
