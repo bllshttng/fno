@@ -57,6 +57,10 @@ impl Core {
     /// absent, so a fill or a reseat of a live portal stays silent.
     pub(super) fn journal_portal_open(&mut self, idx: u8, portal: Portal) {
         let fresh = !self.portals.contains_key(&idx);
+        // A restore guard binds an index to the row it was captured for; a
+        // portal that changes hands must not inherit it. The restore re-arm
+        // inserts its guard after this call.
+        self.portal_session_guards.remove(&idx);
         let row_key = portal.row_key.clone();
         let seat = portal.seat;
         self.portals.insert(idx, portal);
@@ -70,6 +74,7 @@ impl Core {
     /// needs the slot keeps it (the retune door).
     pub(super) fn journal_portal_take(&mut self, idx: u8, cause: &str) -> Option<Portal> {
         let slot = self.portals.remove(&idx);
+        self.portal_session_guards.remove(&idx);
         if let Some(portal) = &slot {
             self.append_portal_event(portal_closed_row(
                 &self.session_name,

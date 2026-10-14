@@ -1797,7 +1797,11 @@ async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
     );
     core.command(client_id, thread_reach_cmd("deadbee1"));
 
-    let seat = core.portals.get(&0).expect("the reach lands without a plan").seat;
+    let seat = core
+        .portals
+        .get(&0)
+        .expect("the reach lands without a plan")
+        .seat;
     assert!(core.reentry_verdict.is_none(), "no plan was staged or used");
     assert_eq!(witness.id(), pid_before, "the session process is untouched");
     core.reap_pane(seat);
@@ -2523,6 +2527,7 @@ fn held_fill_refusal_rows() {
     // incarnation at capture. A different full id under the same key is a
     // different thread wearing a familiar label: the fill refuses, names
     // both ids, and the seat stays held.
+    set_attach_program(&["/bin/cat"]);
     let _s = hold_fixture("portal-guard");
     let mut core = empty_core();
     core.shells = vec!["/bin/cat".into()];
@@ -2541,10 +2546,10 @@ fn held_fill_refusal_rows() {
 
     let notices = drain_notices(&mut rx);
     assert!(
-        notices
-            .iter()
-            .any(|t| t.contains("sid-recorded") && t.contains("sid-arrived")),
-        "the refusal names both ids: {notices:?}"
+        notices.iter().any(|t| t.contains("sid-recorded")
+            && t.contains("sid-arrived")
+            && t.contains("retune this portal")),
+        "the refusal names both ids and the retune action: {notices:?}"
     );
     assert_eq!(core.panes.len(), panes_before, "nothing spawned");
     assert_eq!(
@@ -2555,6 +2560,49 @@ fn held_fill_refusal_rows() {
     assert!(
         core.portal_session_guards.contains_key(&1),
         "the guard stays armed"
+    );
+
+    // A fork of the recorded session is a different thread: it refuses even
+    // though the row names the recorded id in its lineage.
+    core.agents[0].predecessor_session_ids = vec!["sid-recorded".to_string()];
+    core.agents[0].forked_from_session_id = Some("sid-recorded".to_string());
+    core.command(1, Command::FocusPane(seat));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("fill refused")),
+        "a fork refuses"
+    );
+    assert!(
+        core.portal_session_guards.contains_key(&1),
+        "the fork keeps the guard"
+    );
+
+    // AC7: the row's lineage names the recorded id, so the same worker
+    // resumed: the fill follows the key, says so once, and drops the guard.
+    core.agents[0].forked_from_session_id = None;
+    core.command(1, Command::FocusPane(seat));
+    let notices = drain_notices(&mut rx);
+    assert!(
+        notices
+            .iter()
+            .any(|t| t.contains("target-a resumed as") && t.contains("following")),
+        "the fill follows the resumed row: {notices:?}"
+    );
+    assert!(
+        !core.portal_session_guards.contains_key(&1),
+        "the followed guard is gone"
+    );
+
+    // AC9: a guard dies when its portal index changes hands, so a later
+    // park of a different row never refuses with the old recorded id.
+    core.portal_session_guards
+        .insert(1, "sid-stale".to_string());
+    let gone = core.journal_portal_take(1, "retune");
+    assert!(gone.is_some(), "fixture: portal 1 was open");
+    assert!(
+        !core.portal_session_guards.contains_key(&1),
+        "a retune drops the old row's guard"
     );
 
     // AC3-ERR/EDGE: a held seat whose row is gone keeps the shell and

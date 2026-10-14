@@ -209,17 +209,31 @@ pub(super) fn fill_held_portal_at(
         }
     };
     // A recorded session id binds the seat to the row's incarnation at
-    // capture. A different full id under the same key is a DIFFERENT
-    // thread wearing a familiar label: refuse, keep the seat held, and
-    // name both ids - no pane ever renders B under A's label.
-    if let Some(recorded) = core.portal_session_guards.get(&idx) {
-        if row.harness_session_id.as_deref() != Some(recorded.as_str()) {
-            core.notice_all(format!(
-                "portal {idx} fill refused: stored session {} resolved to {} under the same key; seat stays held",
-                recorded,
-                row.harness_session_id.as_deref().unwrap_or("(unreadable)")
-            ));
-            return Some(Flow::Continue);
+    // capture. A resume mints a new id under the same row, and the row's own
+    // lineage names the old one: that is the same worker, so the fill
+    // follows the key. A different full id with no lineage to the recorded
+    // one (or a fork of it) is a DIFFERENT thread wearing a familiar label:
+    // refuse, keep the seat held, and name both ids - no pane ever renders
+    // B under A's label.
+    if let Some(recorded) = core.portal_session_guards.get(&idx).cloned() {
+        let current = row.harness_session_id.clone();
+        if current.as_deref() != Some(recorded.as_str()) {
+            let resumed = row.forked_from_session_id.as_deref() != Some(recorded.as_str())
+                && (row.predecessor_session_ids.contains(&recorded)
+                    || row.related_session_id.as_deref() == Some(recorded.as_str()));
+            let shown = current.as_deref().unwrap_or("(unreadable)");
+            if !resumed {
+                core.notice_all(format!(
+                    "portal {idx} fill refused: stored session {recorded} resolved to {shown} under the same key; reach the row again to retune this portal; seat stays held"
+                ));
+                return Some(Flow::Continue);
+            }
+            let note = format!(
+                "portal {idx}: {} resumed as {}; following",
+                row.name,
+                shown.get(..8).unwrap_or(shown)
+            );
+            core.notice_all(note);
         }
     }
     core.portal_session_guards.remove(&idx);
