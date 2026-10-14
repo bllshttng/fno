@@ -1,0 +1,1 @@
+pane send refused: empty payload: there is nothing to attribute, and gemini has no programmable submit key. Type the payload with --raw and submit it in that pane's own UI.

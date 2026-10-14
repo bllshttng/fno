@@ -1,0 +1,1 @@
+pane send refused: empty payload: there is nothing to attribute. Use --raw --submit for a bare submit keystroke; its 'submitted' marker or exit 22 reports whether the pane took it.

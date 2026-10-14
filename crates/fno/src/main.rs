@@ -215,6 +215,9 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail pane-prepare`: the pane-send renderer. No aliases,
+    /// so the carried tail is everything after the verb name.
+    MailPanePrepare(Vec<OsString>),
     /// `fno agents mail seed-provenance`: the session seed sidecar,
     /// re-wrapped for attribution. Hidden verb; the harness invokes it,
     /// never a typist. The verb and its tail pass through byte-verbatim.
@@ -419,6 +422,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .chain(tail.to_vec())
                 .collect(),
         )),
+        "pane-prepare" => Some(Role::MailPanePrepare(tail.to_vec())),
         "drain-self" => Some(Role::MailDrainSelf(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -754,6 +758,11 @@ fn main() {
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail hold|dnd|hold-release|sent|ack",
+            &["mail"],
+            &rest,
+        )),
+        Role::MailPanePrepare(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail pane-prepare",
             &["mail"],
             &rest,
         )),

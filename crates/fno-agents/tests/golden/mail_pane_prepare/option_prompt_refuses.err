@@ -1,0 +1,1 @@
+pane send refused: pane 3 is showing an option prompt (permission_prompt); a submit would dismiss this payload and select the highlighted default. Answer the prompt with --raw, or wait for it to clear.

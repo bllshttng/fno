@@ -1,0 +1,1 @@
+note: pane 5 hosts undeclared harness 'weirdterm'; no prompt model exists for it, so sends to it are not prompt-gated
