@@ -466,8 +466,11 @@ mod init_script_tests {
     fn toplevel_is_the_last_hint_before_the_bare_relative() {
         let from_toplevel = resolve_init_script_from(None, None, None, Some("/repo"));
         assert!(from_toplevel.starts_with("/repo"));
+        // An empty toplevel behaves like no answer at all: both fall through
+        // to the bare relative path.
+        let expected = resolve_init_script_from(None, None, None, None);
         assert_eq!(
-            from_toplevel,
+            expected,
             resolve_init_script_from(None, None, None, Some(""))
         );
     }

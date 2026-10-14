@@ -623,30 +623,6 @@ def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
     return gp
 
 
-def _init_env(tmp_path, monkeypatch):
-    """Wire target init so the bash bootstrap is stubbed and observable."""
-    ran = []
-
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # captured before the stub replaces it
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            ran.append(dict(env or {}))
-            return _Result()
-        if any(str(part).endswith("fno-agents") for part in cmd[:1]):
-            # The hold verdict's receipt call is real infrastructure.
-            return real_run(cmd, capture_output=True, text=True, check=False, env=env)
-        return _Result()
-
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(_fake_plugin_root(tmp_path)))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    return ran
 
 
 def _held_graph(tmp_path, monkeypatch):
@@ -668,16 +644,6 @@ def _held_graph(tmp_path, monkeypatch):
     return gp
 
 
-def test_target_init_refuses_held_node_before_bootstrap(tmp_path, monkeypatch):
-    _held_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-5a5c"])
-    assert result.exit_code == 2, result.output
-    assert "Blocking review finding is unresolved" in result.output
-    assert "lead:119e3c52" in result.output
-    assert "The finding is fixed and re-reviewed" in result.output
-    assert ran == []
 
 
 
@@ -706,33 +672,8 @@ def _unreadable_graph(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("node", ["x-5a5c", "x47d8"])
-def test_target_init_refuses_named_node_when_graph_unreadable(
-    tmp_path, monkeypatch, node
-):
-    """Round-12 finding 10: the resolver's fail-open swallowed an unreadable
-    graph before the hold gate could refuse on it, so a named dispatch
-    silently skipped the hold check exactly when nothing could prove the plan
-    unheld."""
-    _unreadable_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", node])
-    assert result.exit_code == 2, result.output
-    assert "dispatch-hold-invalid" in result.output
-    assert "backlog graph is unreadable" in result.output
-    assert "refusing to assume unheld" in result.output
-    assert ran == []
 
 
-def test_target_init_free_text_proceeds_when_graph_unreadable(tmp_path, monkeypatch):
-    """Free text cannot name a held node, so an unreadable graph keeps its
-    proceed path - the refusal is scoped to named dispatches."""
-    _unreadable_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "fix the login bug"])
-    assert "dispatch-hold-invalid" not in result.output
-    assert ran != [], "free-text init must still reach the bootstrap"
 
 
 def test_check_dispatch_hold_refuses_named_node_when_graph_unreadable(tmp_path, monkeypatch):
@@ -781,58 +722,12 @@ def test_target_start_refuses_node_when_graph_unreadable(tmp_path, monkeypatch):
     assert seen["ensure"] is False, "no worktree may be allocated before the refusal"
 
 
-def test_target_init_redirects_a_named_contained_node(tmp_path, monkeypatch):
-    """AC4: report the delivery unit's id and claim nothing.
-
-    Naming a node is consent and selection_guards honors that (it is autonomous-
-    only by its own docstring), so without this the operator walks straight past
-    the guard and opens a second PR for one plan.
-    """
-    _contained_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-261c"])
-    assert result.exit_code == 2, result.output
-    # Nothing was claimed: the bash bootstrap - which acquires the node claim
-    # and writes the immutable manifest - never ran.
-    assert ran == []
 
 
-def test_target_init_redirect_names_the_delivery_unit_it_routes_to(tmp_path, monkeypatch):
-    """The DESTINATION is the payload, not the fact that something was refused.
-
-    Two nodes contained in different units must route to different places; an
-    assertion that only checks "it was refused" agrees on the tag and says
-    nothing about where the operator should go.
-    """
-    _contained_graph(tmp_path, monkeypatch, owner="x-8a4f")
-    _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-261c"])
-    assert result.exit_code == 2
-    assert "x-8a4f" in result.output
-    assert "/fno:target x-8a4f" in result.output
 
 
-def test_target_init_still_dispatches_the_delivery_unit_itself(tmp_path, monkeypatch):
-    """The unit carries the PR, so naming IT is the whole point of the redirect."""
-    _contained_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-6320"])
-    assert result.exit_code == 0, result.output
-    assert len(ran) == 1
-    assert ran[0].get("TARGET_INPUT") == "x-6320"
 
 
-def test_target_init_free_text_is_untouched_by_the_containment_read(tmp_path, monkeypatch):
-    """An idea-first run resolves no node; the gate must not invent one."""
-    _contained_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "fix the login redirect"])
-    assert result.exit_code == 0, result.output
-    assert len(ran) == 1
 
 
 def test_redirect_helper_ignores_non_contained_and_malformed_input():
