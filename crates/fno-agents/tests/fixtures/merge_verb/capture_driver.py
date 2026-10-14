@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -560,6 +561,13 @@ def build_case(root_path, case, index):
             "exit %d\n" % case["merge_result_script"]
         )
         os.chmod(str(script), 0o755)
+    if case.get("path") == "gitbin":
+        # git without gh: the leg resolves the repo through git while the gh
+        # probe finds nothing, on every machine (CI runners ship a real gh).
+        bin_dir = case_dir / "gitbin"
+        bin_dir.mkdir()
+        git_abs = shutil.which("git") or "/usr/bin/git"
+        os.symlink(git_abs, str(bin_dir / "git"))
     (case_dir / "case.json").write_text(
         json.dumps(case, sort_keys=True, indent=2) + "\n"
     )
@@ -646,6 +654,8 @@ def cmd_case(case_dir):
         # while the fno-agents stubs stay reachable through their FNO_AGENTS_*
         # env pins. This is the "gh CLI not installed" case.
         env["PATH"] = "/usr/bin:/bin"
+    elif case.get("path") == "gitbin":
+        env["PATH"] = str(case_dir / "gitbin")
     else:
         env["PATH"] = "%s:/usr/bin:/bin" % stubbin
     env.update(case.get("env") or {})

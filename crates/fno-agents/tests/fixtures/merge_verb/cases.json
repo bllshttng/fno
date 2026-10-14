@@ -33,7 +33,7 @@
     "label": "merge gh missing",
     "entry": "merge",
     "pr": "7",
-    "path": "system"
+    "path": "gitbin"
   },
   {
     "label": "merge lock held",

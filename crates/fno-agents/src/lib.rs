@@ -309,6 +309,7 @@ pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
 pub mod merge_reap;
+pub mod merge_verb;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
