@@ -61,6 +61,11 @@ fn proto_v4_control_verbs_roundtrip() {
             harness: "codex".into(),
             session_id: "01a03a85-1111-7222-8333-444455556666".into(),
         },
+        ControlVerb::WorkspaceOrigin {
+            workspace: "footnote".into(),
+            path: "/code/footnote".into(),
+            remove: true,
+        },
     ] {
         let msg = ClientMsg::Control {
             proto: PROTO_VERSION,

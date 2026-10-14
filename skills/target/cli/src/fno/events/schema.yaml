@@ -931,7 +931,7 @@ event_types:
           description: "GitHub PR number being polled. Integer or string accepted."
         reviewer_bot:
           type: string
-          description: "Identity of the awaited external reviewer (e.g. gemini-code-assist[bot])."
+          description: "Identity of the awaited external reviewer (e.g. chatgpt-codex-connector[bot])."
         wait_kind:
           type: string
           enum: [cron, inline]

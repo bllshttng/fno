@@ -381,7 +381,9 @@ fn default_true() -> bool {
 /// v112: `MouseEvent.alt` (serde default) - the client forwards the SGR alt bit
 /// so the server can claim a modifier-click pair on a mouse-reporting pane and
 /// open the link under it; floor stays 58.
-pub const PROTO_VERSION: u32 = 112;
+/// v113: `ControlVerb::WorkspaceOrigin`, the folder edit behind
+/// `fno mux workspace origin`; floor stays 58.
+pub const PROTO_VERSION: u32 = 113;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -827,6 +829,17 @@ pub enum ControlVerb {
     /// [`ServerMsg::SquadReloaded`]. The prune CLI sends this after an
     /// applied store pass, so `persist_squad` cannot write reaped members back.
     SquadReload,
+    /// (v113) Add or drop one folder (`path`, absolute) on the open workspace
+    /// named `workspace`. The folder decides which paneless rows (thread,
+    /// headless, daemon) the workspace owns. Persists before it replies.
+    /// -> [`ServerMsg::Ok`], or `Err`: `NOT_FOUND` when this server holds no
+    /// such workspace, `BAD_REQUEST` for a relative path.
+    WorkspaceOrigin {
+        workspace: String,
+        path: String,
+        #[serde(default)]
+        remove: bool,
+    },
     /// (v75) Retire every member whose (harness, full session id)
     /// matches, across every squad this server holds. Closes only the
     /// matching member's attached panes, tombstones through the store's own
@@ -4029,7 +4042,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 112);
+        assert_eq!(PROTO_VERSION, 113);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
