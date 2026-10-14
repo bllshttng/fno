@@ -60,11 +60,9 @@ def test_backlog_add_requires_difficulty_noninteractive(tmp_graph):
 
 
 def test_backlog_new_writes_difficulty(tmp_graph):
-    result = runner.invoke(
-        app, ["backlog", "new", "mail-born work", "--difficulty", "high"]
-    )
+    result = run_native_create(tmp_graph, "new", "mail-born work", "--difficulty", "high")
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     row = read_graph_strict(tmp_graph)[0]
     assert row["difficulty"] == "high"
     assert row["difficulty_history"][-1]["source"] == "filed"

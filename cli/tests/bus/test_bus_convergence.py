@@ -265,11 +265,10 @@ def test_ac8_ui_heads_up_on_bus_triaged_with_provenance(inbox_and_bus, tmp_path,
     def fake_run(cmd, *args, **kwargs):
         if len(cmd) >= 2 and cmd[1] == "mail-envelope":
             return real_run(cmd, *args, **kwargs)
-        if cmd[:4] == ["fno-py", "backlog", "new", "--help"]:
-            return _FakeRun(stdout="--source-kind --source-project --source-inbox-msg\n")
-        if cmd[:3] == ["fno-py", "backlog", "new"]:
+        # The mux binary: `fno backlog new` is the native create door.
+        if cmd[:3] == ["fno", "backlog", "new"]:
             captured["argv"] = cmd
-            return _FakeRun(stdout="created node ab-abc123\n")
+            return _FakeRun(stdout='{"id": "ab-abc123", "title": "t"}\n')
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     monkeypatch.setattr(drain_mod, "triage_thread", fake_triage_thread)

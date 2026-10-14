@@ -859,15 +859,15 @@ def test_priority_p0_requires_breaking_acknowledgment(tmp_graph):
 
 def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     """Every CLI birth path applies the p0 acknowledgment before mutation."""
-    refused = _invoke("backlog", "new", "Not actually broken", "--priority", "p0")
+    refused = _native_verb("new", "Not actually broken", "--priority", "p0")
     assert refused.exit_code != 0
-    assert "p0 blocks everything else, usually a bug" in refused.output
+    assert "p0 blocks everything else, usually a bug" in refused.output + refused.err
     assert _read_graph(tmp_graph) == []
 
-    accepted = _invoke(
-        "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything"
+    accepted = _native_verb(
+        "new", "Broken service", "--priority", "p0", "--blocks-everything"
     )
-    assert accepted.exit_code == 0, accepted.output
+    assert accepted.exit_code == 0, accepted.output + accepted.err
     assert _read_graph(tmp_graph)[0]["blocks_everything"] is True
 
 
