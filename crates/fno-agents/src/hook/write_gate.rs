@@ -463,10 +463,12 @@ struct Root {
     physical: PathBuf,
 }
 
-/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, quotes stripped, a RELATIVE token
-/// resolved against the payload cwd; then physicalized. A relative token with
-/// no payload cwd stays unresolved: guessing the hook's own cwd would
-/// misresolve.
+/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, `$FNO_STATE_DIR`, `$FNO_HOME`, quotes
+/// stripped, a RELATIVE token resolved against the payload cwd; then
+/// physicalized. A state-root variable the shell would expand empty (env
+/// unset) resolves to the bare remainder, the same path the command writes.
+/// A relative token with no payload cwd stays unresolved: guessing the
+/// hook's own cwd would misresolve.
 fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     let mut t = tok.replace('"', "").replace('`', "");
     if t.is_empty() {
@@ -482,6 +484,12 @@ fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     } else if let Some(rest) = t.strip_prefix("$CLAUDE_CONFIG_DIR") {
         let cfg = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{home}/.claude"));
         t = format!("{cfg}{rest}");
+    } else if let Some(rest) = t.strip_prefix("$FNO_STATE_DIR") {
+        let dir = std::env::var("FNO_STATE_DIR").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
+    } else if let Some(rest) = t.strip_prefix("$FNO_HOME") {
+        let dir = std::env::var("FNO_HOME").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
     } else {
         let c = cwd.trim_end_matches('/');
         if c.is_empty() {
@@ -588,8 +596,9 @@ fn config_roots() -> (Vec<Root>, Root) {
 
 /// True when ABS sits directly inside a guarded root (or is the root itself),
 /// outside the keep-list; or when ABS would CREATE a new top-level entry in
-/// the state root. The refusal names a job tmp dir under the VIOLATED
-/// namespace, so an isolated-account write is never pointed at the ambient one.
+/// the state root - directly, or under a top-level folder that does not
+/// exist. The refusal names a job tmp dir under the VIOLATED namespace, so
+/// an isolated-account write is never pointed at the ambient one.
 fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Option<String> {
     let Some(phys) = abs.to_str() else {
         return None;
@@ -620,6 +629,17 @@ fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Opt
             ));
         }
     }
+    state_root_refusal(abs, state, session_id)
+}
+
+/// The state-root half of `refuse_for`, so the mkdir family can take the
+/// state-root scoping without the config-dir branch (the mkdir ruling keeps
+/// mkdir lawful in the Claude config dir). A write whose FIRST segment under
+/// the state root names a missing entry refuses: a folder created in one tool
+/// call and written in the next no longer slips past this gate, and a
+/// standalone mkdir does not either.
+fn state_root_refusal(abs: &Path, state: &Root, session_id: &str) -> Option<String> {
+    let phys = abs.to_str()?;
     let sp = state
         .physical
         .to_string_lossy()
@@ -632,11 +652,14 @@ fn refuse_for(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> Opt
         ));
     }
     let under_state = phys.strip_prefix(&format!("{sp}/"));
-    let state_top_level = under_state.is_some_and(|rest| !rest.is_empty() && !rest.contains('/'));
-    if state_top_level && !abs.exists() {
+    let Some(rest) = under_state.filter(|rest| !rest.is_empty()) else {
+        return None;
+    };
+    let first = rest.split('/').next().unwrap_or(rest);
+    if !state.physical.join(first).exists() {
         let jd = jobdir_for(&ambient_cfg(), session_id);
         return Some(format!(
-            "{phys} would create a new top-level entry in the fno state root ({}). Nothing writes at the top level: put state in a named subfolder under it, or this session's job dir: {jd}.",
+            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The top-level set is closed: write under a folder that already exists there, or in this session's job dir: {jd}.",
             state.spelled
         ));
     }
@@ -778,6 +801,32 @@ fn config_bash_arm(
             if let Some(abs) = abs_of(token, payload_cwd) {
                 if let Some(reason) = refuse_for(&abs, roots, state, session_id) {
                     return Sec::Block(reason);
+                }
+            }
+        }
+    }
+    // mkdir: the folder-creation family, scoped to the state root only.
+    // Every operand of a mkdir is a write destination, so unlike the
+    // first-match families above this arm captures the whole clause, splits
+    // it into tokens, and routes each operand through the state-root half of
+    // refuse_for. Ruled separate from the families because a config-dir mkdir
+    // must stay lawful (jobs/, projects/ are made there).
+    let mkdir_clause = regex::Regex::new(&format!(
+        r"{lead}mkdir[[:space:]]+(-[^[:space:];|&]+[[:space:]]+)*([^;|&]+)"
+    ))
+    .unwrap();
+    // Every mkdir clause in the command, not only the first: `mkdir ok;
+    // mkdir ~/.fno/newdir` must refuse on the second clause.
+    for caps in mkdir_clause.captures_iter(cmd) {
+        if let Some(clause) = caps.get(3).map(|m| m.as_str()) {
+            for tok in clause.split_whitespace() {
+                if tok.starts_with('-') {
+                    continue;
+                }
+                if let Some(abs) = abs_of(tok, payload_cwd) {
+                    if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+                        return Sec::Block(reason);
+                    }
                 }
             }
         }
@@ -1258,5 +1307,37 @@ mod tests {
         assert!(bash_glob_match("a?c", "abc"));
         assert!(bash_glob_match("[abc]x", "bx"));
         assert!(bash_glob_match("[!abc]x", "dx"));
+    }
+
+    #[test]
+    fn state_root_refuses_a_write_under_a_missing_top_level_folder() {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-write-gate-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("spaces")).unwrap();
+        std::fs::write(dir.join("ledger.json"), b"{}\n").unwrap();
+        let state = Root {
+            spelled: dir.to_string_lossy().into_owned(),
+            physical: physicalize(&dir),
+        };
+        let refuse = |p: &str| refuse_for(Path::new(p), &[], &state, "");
+        // A new one-segment path keeps today's refusal.
+        let r = refuse(&dir.join("foo.out").to_string_lossy())
+            .expect("a new one-segment path must refuse");
+        assert!(r.contains("top-level entry"), "refusal text: {r}");
+        // An existing root file stays allowed.
+        assert!(refuse(&dir.join("ledger.json").to_string_lossy()).is_none());
+        // A write under an existing folder stays allowed.
+        assert!(refuse(&dir.join("spaces/x/out.out").to_string_lossy()).is_none());
+        // A nested write under a missing folder now refuses, naming it.
+        let r2 = refuse(&dir.join("newdir/a/b.json").to_string_lossy())
+            .expect("a write under a missing top-level folder must refuse");
+        assert!(r2.contains("newdir"), "refusal text: {r2}");
+        assert!(r2.contains("job dir"), "refusal text: {r2}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
