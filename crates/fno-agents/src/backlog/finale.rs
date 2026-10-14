@@ -846,3 +846,601 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// pick - the fzf queue picker
+// ---------------------------------------------------------------------------
+
+const PICK_HELP: &str = "Usage: fno backlog pick [--project NAME] [--all] [--ideas/--no-ideas] [--blocked/--no-blocked] [--reason TEXT]
+
+Interactively manage the backlog queue via fzf with live marker updates.
+";
+
+const PICK_RENDER_AWK: &str = r##"
+# Reads two files:
+#   ARGV[1] = pending.txt (lines: "Q ab-xxxx" / "U ab-xxxx" / "T ab-xxxx",
+#                          plus an initial "# pending" sentinel)
+#   ARGV[2] = cands.tsv   (tab-delimited candidate snapshot)
+# Emits TAB-delimited fzf rows: "<url>\t<id>\t<visible row>".
+BEGIN { FS = "\t" }
+NR == FNR {
+    if (length($0) >= 3) {
+        kind = substr($0, 1, 1)
+        if (kind == "Q" || kind == "U" || kind == "T") {
+            rest = substr($0, 3)
+            gsub(/[ \t\r\n]+$/, "", rest)
+            gsub(/^[ \t]+/, "", rest)
+            if (rest != "") {
+                cnt = ++pending_count[rest]
+                pending_seq[rest "|" cnt] = kind
+            }
+        }
+    }
+    next
+}
+{
+    id = $1; title = $2; prio = $3; project = $4; status = $5
+    q_initial = ($6 == "1") ? 1 : 0
+    plan_path = $7; blocked_by = $8; url = $9
+
+    queued = q_initial
+    n = pending_count[id]
+    for (i = 1; i <= n; i++) {
+        k = pending_seq[id "|" i]
+        if (k == "Q") queued = 1
+        else if (k == "U") queued = 0
+        else if (k == "T") queued = (1 - queued)
+    }
+
+    is_blocked = (status == "blocked")
+    if (queued && is_blocked)       marker = "[Q!]"
+    else if (queued)                 marker = "[Q]"
+    else if (is_blocked)             marker = "[B]"
+    else                             marker = "[ ]"
+
+    kind_col = (plan_path == "") ? "idea" : "plan"
+
+    if (length(project) > 22) project = substr(project, 1, 21) "."
+    if (length(title)   > 75) title   = substr(title,   1, 74) "."
+
+    while (length(marker) < 5)   marker = marker " "
+    while (length(project) < 22) project = project " "
+
+    blocker_suffix = ""
+    if (is_blocked && blocked_by != "")
+        blocker_suffix = "  (blocked by " blocked_by ")"
+
+    printf "%s\t%s\t%s %s  %s  %s  %s  %s%s\n", \
+        url, id, marker, kind_col, prio, project, id, title, blocker_suffix
+}
+"##;
+
+fn tsv_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Percent-encode with a safe set (urllib.parse.quote's shapes: no safe
+/// chars for the vault, `/` for the file path).
+fn uri_encode(text: &str, safe_slash: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        let keep = b.is_ascii_alphanumeric()
+            || matches!(b, b'-' | b'_' | b'.' | b'~')
+            || (safe_slash && b == b'/');
+        if keep {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The global config's `[obsidian]` block: vault when enabled (the wheel's
+/// read_global_block shape).
+fn obsidian_vault() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let text =
+        std::fs::read_to_string(std::path::Path::new(&home).join(".fno/config.toml")).ok()?;
+    let value: Value = text.parse().ok()?;
+    let obs = value.get("obsidian")?;
+    if obs.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    obs.get("vault")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(String::from)
+}
+
+fn obsidian_url(vault: &str, plan_path: &str) -> Option<String> {
+    let mut p = plan_path.trim().to_string();
+    if !p.starts_with("internal/") {
+        let marker = format!("/{vault}/");
+        let vault_cut = p.rfind(&marker).map(|idx| {
+            let rest = p[idx + marker.len()..].to_string();
+            rest.starts_with("internal/").then_some(rest)
+        });
+        match vault_cut {
+            Some(Some(rest)) => p = rest,
+            _ => {
+                let internal_cut = p.rfind("/internal/").map(|i| p[i + 1..].to_string());
+                p = internal_cut?;
+            }
+        }
+    }
+    let p = p.trim_end_matches('/');
+    if !p.ends_with(".md") {
+        return None;
+    }
+    Some(format!(
+        "obsidian://open?vault={}&file={}",
+        uri_encode(vault, false),
+        uri_encode(p.trim_end_matches(".md"), true)
+    ))
+}
+
+/// The wheel's entries-based project detection: the first node whose cwd
+/// (expanduser + normpath) equals the repo root names the project; else the
+/// first node under it.
+fn detect_project_from_entries(entries: &[Value], cwd: &std::path::Path) -> Option<String> {
+    let norm_root = cwd.to_string_lossy().to_string();
+    let root_with_sep = format!("{}/", norm_root.trim_end_matches('/'));
+    let mut fallback: Option<String> = None;
+    for e in entries {
+        let Some(entry_cwd) = e.get("cwd").and_then(Value::as_str) else {
+            continue;
+        };
+        let expanded = shellexpand_tilde(entry_cwd);
+        let norm = std::path::Path::new(&expanded)
+            .to_string_lossy()
+            .to_string();
+        if norm == norm_root {
+            return e.get("project").and_then(Value::as_str).map(String::from);
+        }
+        if fallback.is_none() && norm.starts_with(&root_with_sep) {
+            fallback = e.get("project").and_then(Value::as_str).map(String::from);
+        }
+    }
+    fallback
+}
+
+fn shellexpand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    }
+    path.to_string()
+}
+
+fn priority_rank(p: Option<&str>) -> i64 {
+    match p {
+        Some("p0") => 0,
+        Some("p1") => 1,
+        Some("p3") => 3,
+        _ => 2,
+    }
+}
+
+pub fn run_pick(tail: &[String]) -> i32 {
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{PICK_HELP}");
+        return 0;
+    }
+    let mut project: Option<String> = None;
+    let mut all = false;
+    let mut include_ideas = true;
+    let mut include_blocked = false;
+    let mut reason: Option<String> = None;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "--project" | "-p" => {
+                project = Some(inline.or_else(|| it.next().cloned()).unwrap_or_default());
+            }
+            "--all" | "-A" => all = true,
+            "--ideas" => include_ideas = true,
+            "--no-ideas" => include_ideas = false,
+            "--blocked" | "-b" => include_blocked = true,
+            "--no-blocked" => include_blocked = false,
+            "--reason" | "-R" => {
+                reason = inline.or_else(|| it.next().cloned());
+            }
+            other => {
+                eprintln!("pick: unknown argument '{other}'");
+                return 2;
+            }
+        }
+    }
+    let Some(fzf) = which("fzf") else {
+        eprintln!(
+            "Error: fzf not found on PATH. Install with `brew install fzf` (macOS) or your package manager."
+        );
+        return 1;
+    };
+    let Some(awk_bin) = which("awk") else {
+        eprintln!("Error: awk not found on PATH (needed for live marker updates).");
+        return 1;
+    };
+    let graph = settings::graph_path();
+    let store = super::api::Store::new(&graph);
+    let entries = match super::api::rows(&store) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e.0);
+            return 1;
+        }
+    };
+    let mut candidates: Vec<Value> = entries
+        .iter()
+        .filter(|e| {
+            let s = e.get("status").and_then(Value::as_str).unwrap_or("");
+            s == "ready" || (include_ideas && s == "idea") || (include_blocked && s == "blocked")
+        })
+        .cloned()
+        .collect();
+    if let Some(p) = &project {
+        candidates.retain(|e| e.get("project").and_then(Value::as_str) == Some(p.as_str()));
+    } else if !all {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        if let Some(detected) = detect_project_from_entries(&candidates, &cwd) {
+            candidates
+                .retain(|e| e.get("project").and_then(Value::as_str) == Some(detected.as_str()));
+        }
+    }
+    if candidates.is_empty() {
+        let mut scope: Vec<&str> = vec!["ready"];
+        if include_ideas {
+            scope.push("idea");
+        }
+        if include_blocked {
+            scope.push("blocked");
+        }
+        scope.sort_unstable();
+        println!("No {} rows to pick from in this scope.", scope.join("/"));
+        return 0;
+    }
+    let currently_queued: std::collections::HashSet<String> = candidates
+        .iter()
+        .filter(|e| e.get("queued_at").is_some_and(|v| !v.is_null()))
+        .filter_map(|e| text_at(e, "id").map(String::from))
+        .collect();
+    candidates.sort_by(|a, b| {
+        let aid = text_at(a, "id").unwrap_or("").to_string();
+        let bid = text_at(b, "id").unwrap_or("").to_string();
+        let qa = i64::from(currently_queued.contains(aid.as_str()));
+        let qb = i64::from(currently_queued.contains(bid.as_str()));
+        qa.cmp(&qb)
+            .then_with(|| {
+                priority_rank(a.get("priority").and_then(Value::as_str))
+                    .cmp(&priority_rank(b.get("priority").and_then(Value::as_str)))
+            })
+            .then_with(|| {
+                a.get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .cmp(b.get("created_at").and_then(Value::as_str).unwrap_or(""))
+            })
+    });
+
+    let vault = obsidian_vault();
+    let open_cmd = if cfg!(target_os = "macos") {
+        "open".to_string()
+    } else {
+        which("xdg-open").unwrap_or_else(|| "xdg-open".to_string())
+    };
+
+    let tmp = std::env::temp_dir();
+    let uniq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let cand_path = tmp.join(format!("fno-pick-{uniq}.cands.tsv"));
+    let pend_path = tmp.join(format!("fno-pick-{uniq}.pending.txt"));
+    let awk_path = tmp.join(format!("fno-pick-{uniq}.awk"));
+    let cand_for_cleanup = cand_path.clone();
+    let pend_for_cleanup = pend_path.clone();
+    let awk_for_cleanup = awk_path.clone();
+    let cleanup = move || {
+        for p in [&cand_for_cleanup, &pend_for_cleanup, &awk_for_cleanup] {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+    // Seed pending.txt with the sentinel comment line: awk's NR==FNR test
+    // misfires when the first file is empty.
+    if std::fs::write(&pend_path, "# pending\n").is_err() {
+        eprintln!("pick: could not write the pending file");
+        return 1;
+    }
+    let mut cands_tsv = String::new();
+    for e in &candidates {
+        let id = text_at(e, "id").unwrap_or("");
+        let title = e.get("title").and_then(Value::as_str).unwrap_or("");
+        let prio = e.get("priority").and_then(Value::as_str).unwrap_or("p2");
+        let proj = e.get("project").and_then(Value::as_str).unwrap_or("-");
+        let status = e.get("status").and_then(Value::as_str).unwrap_or("ready");
+        let queued = if e.get("queued_at").is_some_and(|v| !v.is_null()) {
+            "1"
+        } else {
+            "0"
+        };
+        let plan_path = e.get("plan_path").and_then(Value::as_str).unwrap_or("");
+        let blockers = e
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        let mut url = String::new();
+        if let (Some(v), Some(plan)) =
+            (vault.as_deref(), e.get("plan_path").and_then(Value::as_str))
+        {
+            url = obsidian_url(v, plan).unwrap_or_default();
+        }
+        cands_tsv.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            url,
+            id,
+            tsv_safe(title),
+            prio,
+            tsv_safe(proj),
+            status,
+            queued,
+            tsv_safe(plan_path),
+            blockers
+        ));
+    }
+    if std::fs::write(&cand_path, &cands_tsv).is_err() {
+        eprintln!("pick: could not write the candidate snapshot");
+        return 1;
+    }
+    if std::fs::write(&awk_path, PICK_RENDER_AWK).is_err() {
+        eprintln!("pick: could not write the renderer");
+        cleanup();
+        return 1;
+    }
+
+    let qp = shell_quote(&pend_path.to_string_lossy());
+    let qc = shell_quote(&cand_path.to_string_lossy());
+    let qs = shell_quote(&awk_path.to_string_lossy());
+    let qa = shell_quote(&awk_bin);
+    let render_cmd = format!("{qa} -f {qs} {qp} {qc}");
+    let mut header = format!(
+        "q=queue  u=unqueue  space=toggle  o=open plan  Enter=commit  Ctrl-C=cancel  ({} rows, {} queued initially)\nMarkers update in-place as you press keys: [ ] not queued  [Q] queued  [B] blocked  [Q!] queued+blocked",
+        candidates.len(),
+        currently_queued.len()
+    );
+    if vault.is_none() {
+        header.push_str("\n(set config.obsidian.vault in settings.yaml to enable 'o' opener)");
+    }
+
+    // Initial row set: run the renderer once with empty pending.
+    let initial = std::process::Command::new(&awk_bin)
+        .arg("-f")
+        .arg(&awk_path)
+        .arg(&pend_path)
+        .arg(&cand_path)
+        .output();
+    let initial_rows = match initial {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => String::new(),
+    };
+
+    // rc 130 = Ctrl-C / Esc - the pending file drops unread.
+    let spawned = std::process::Command::new(&fzf)
+        .args([
+            "--no-multi",
+            "--delimiter",
+            "\t",
+            "--with-nth",
+            "3..",
+            "--nth",
+            "3..",
+            "--bind",
+            &format!("q:execute-silent(printf 'Q %s\\n' {{2}} >> {qp})+reload({render_cmd})+down"),
+            "--bind",
+            &format!("u:execute-silent(printf 'U %s\\n' {{2}} >> {qp})+reload({render_cmd})+down"),
+            "--bind",
+            &format!(
+                "space:execute-silent(printf 'T %s\\n' {{2}} >> {qp})+reload({render_cmd})+down"
+            ),
+            "--bind",
+            "enter:accept",
+            "--bind",
+            &format!("o:execute-silent(u={{1}}; [[ -n \"$u\" ]] && {open_cmd} \"$u\")"),
+            "--header",
+            &header,
+            "--prompt",
+            "pick> ",
+            "--height",
+            "85%",
+            "--reverse",
+            "--no-sort",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut out = match spawned {
+        Ok(mut child) => {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.take() {
+                let mut stdin = stdin;
+                let _ = stdin.write_all(initial_rows.as_bytes());
+            }
+            match child.wait_with_output() {
+                Ok(o) => o,
+                Err(_) => {
+                    cleanup();
+                    println!("Cancelled.");
+                    return 0;
+                }
+            }
+        }
+        Err(_) => {
+            eprintln!("pick: fzf failed to start");
+            cleanup();
+            return 1;
+        }
+    };
+    let _ = &mut out;
+    cleanup();
+    if out.status.code() == Some(130) {
+        println!("Cancelled.");
+        return 0;
+    }
+
+    // Parse pending.txt preserving order so T flips the running state.
+    let mut ordered_intents: Vec<(String, char)> = Vec::new();
+    if let Ok(pending) = std::fs::read_to_string(&pend_path) {
+        for raw in pending.lines() {
+            if raw.len() < 3 {
+                continue;
+            }
+            let kind = raw.chars().next().unwrap_or(' ');
+            if !matches!(kind, 'Q' | 'U' | 'T') {
+                continue;
+            }
+            let rest = raw[2..].trim();
+            if has_node_id_prefix(rest) {
+                ordered_intents.push((rest.to_string(), kind));
+            }
+        }
+    }
+    if ordered_intents.is_empty() {
+        println!("No changes.");
+        return 0;
+    }
+    let mut final_queued: std::collections::BTreeMap<String, bool> = Default::default();
+    for (tid, kind) in &ordered_intents {
+        match kind {
+            'Q' => {
+                final_queued.insert(tid.clone(), true);
+            }
+            'U' => {
+                final_queued.insert(tid.clone(), false);
+            }
+            _ => {
+                let prev = final_queued
+                    .get(tid)
+                    .copied()
+                    .unwrap_or(currently_queued.contains(tid));
+                final_queued.insert(tid.clone(), !prev);
+            }
+        }
+    }
+    let mut to_queue: Vec<String> = Vec::new();
+    let mut to_unqueue: Vec<String> = Vec::new();
+    for (tid, want) in &final_queued {
+        let was = currently_queued.contains(tid);
+        if *want && !was {
+            to_queue.push(tid.clone());
+        } else if was && !*want {
+            to_unqueue.push(tid.clone());
+        }
+    }
+    if to_queue.is_empty() && to_unqueue.is_empty() {
+        println!("No changes (marks ended at original state).");
+        return 0;
+    }
+    let cleaned_reason = reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(String::from);
+    let now = graph_store::now_isoformat();
+    let queue_ids = to_queue.clone();
+    let unqueue_ids = to_unqueue.clone();
+    let reason_value = cleaned_reason.clone();
+    let applied = graph_store::mutate_rows(
+        &graph,
+        std::time::Duration::from_secs(5),
+        None,
+        None,
+        |working| {
+            let mut any = false;
+            for tid in &queue_ids {
+                // Silent skip when a node is missing or already in the
+                // target state: the snapshot-to-lock race loses one mark,
+                // never the user's other valid ones.
+                let Some(node) = find_node(working, tid) else {
+                    continue;
+                };
+                if node.get("queued_at").is_some_and(|v| !v.is_null()) {
+                    continue;
+                }
+                let Some(obj) = node.as_object_mut() else {
+                    continue;
+                };
+                obj.insert("queued_at".into(), Value::String(now.clone()));
+                if let Some(r) = &reason_value {
+                    obj.insert("queued_reason".into(), Value::String(r.clone()));
+                }
+                any = true;
+            }
+            for tid in &unqueue_ids {
+                let Some(node) = find_node(working, tid) else {
+                    continue;
+                };
+                if !node.get("queued_at").is_some_and(|v| !v.is_null()) {
+                    continue;
+                }
+                let Some(obj) = node.as_object_mut() else {
+                    continue;
+                };
+                obj.insert("queued_at".into(), Value::Null);
+                obj.insert("queued_reason".into(), Value::Null);
+                any = true;
+            }
+            Ok(any)
+        },
+    );
+    if applied.is_err() {
+        eprintln!("pick: the queue write failed");
+        return 1;
+    }
+    let suffix = cleaned_reason
+        .as_ref()
+        .map(|r| format!(": \"{r}\""))
+        .unwrap_or_default();
+    for tid in &to_queue {
+        println!("Queued {tid}{suffix}");
+    }
+    for tid in &to_unqueue {
+        println!("Unqueued {tid}");
+    }
+    println!("({} queued, {} unqueued)", to_queue.len(), to_unqueue.len());
+    0
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn which(name: &str) -> Option<String> {
+    let path = std::env::var("PATH").ok()?;
+    for dir in path.split(':') {
+        let candidate = std::path::Path::new(dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
