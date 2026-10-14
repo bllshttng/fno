@@ -251,10 +251,9 @@ pub(crate) fn handle_session_report(
         };
         let idx = match find {
             Find::Holds(i) => {
-                // An operator row's own re-identification (a `claude
-                // --resume` typed into a pane): the pane bind is as live
-                // here as a fresh mint. Never for a spawned row - a worker's
-                // mux is the keeper's business, not this report's.
+                // An operator row's own re-identification (`claude
+                // --resume` typed into a pane); a worker's mux is the
+                // keeper's business, not this report's.
                 if r.entries[i].origin.as_deref() == Some("operator") {
                     if let Some(claim) = &pane_claim {
                         pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
@@ -354,13 +353,10 @@ pub(crate) fn handle_session_report(
         );
     }
 
-    // The row moved to a new pane (or minted straight onto one): announce
-    // it, same kind and nested old/new shape the retired Python heal already
-    // emitted (register_session.py's `_heal_own_mux_ref`) - the schema's
-    // "legacy agents-family" entry for this kind already allows source
-    // daemon with no field shape enforced, so no schema change rides with
-    // this. A repeat report on the same pane leaves `pane_rebind` unset, so
-    // this never re-emits on every idle heartbeat.
+    // The row moved to a new pane: announce it, same kind and nested
+    // old/new shape the retired Python heal already emitted
+    // (`_heal_own_mux_ref`); the schema's legacy entry for this kind needs
+    // no change. A repeat report on the same pane leaves this unset.
     if let Some((old, new)) = pane_rebind {
         let _ = emitter.emit(
             "session_pane_rebound",
