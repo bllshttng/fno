@@ -14,6 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 GUARD="${REPO_ROOT}/hooks/write-gate.sh"
 
+# The smoke lanes build the front and expose it as FNO_AGENTS_FRONT; hand it
+# to the relay's own FNO_AGENTS_BIN door when nothing more specific is set,
+# so the suite exercises the real policy instead of the relay's no-binary
+# fallback.
+export FNO_AGENTS_BIN="${FNO_AGENTS_BIN:-${FNO_AGENTS_FRONT:-}}"
+
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf '[ccw] PASS: %s\n' "$*"; }
 fail() { FAIL=$((FAIL+1)); printf '[ccw] FAIL: %s\n' "$*" >&2; }
