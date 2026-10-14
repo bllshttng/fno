@@ -613,6 +613,7 @@ fn drag_to(view: &mut View, col: u16) -> bool {
     let want = cols.saturating_sub(col as usize).clamp(MIN_W as usize, max);
     view.bell.size = Size::Normal;
     view.bell.width = want as u16;
+    clamp_selection(view);
     panel_width(view, cols) != before
 }
 
@@ -681,6 +682,16 @@ fn question_title(view: &View, id: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(id)
         .to_string()
+}
+
+/// Whether the merged fold still lists `id` as an open question: the
+/// archive door refuses settled ids, so marks and sends gate on this.
+fn question_open(view: &View, id: &str) -> bool {
+    view.questions_merged().is_some_and(|fold| {
+        fold.items
+            .iter()
+            .any(|q| q.id == id && q.state == "open" && !q.settled)
+    })
 }
 
 fn wrap_body(body: &str, width: usize) -> Vec<String> {
@@ -762,6 +773,9 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 } else {
                     Size::Wide
                 };
+                // A wider panel rewraps announcement bodies into fewer
+                // rows, so the cursor can fall off the end.
+                clamp_selection(view);
             }
             b'F' => {
                 if view.bell.size == Size::Full {
@@ -770,18 +784,24 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                     view.bell.restore = view.bell.size;
                     view.bell.size = Size::Full;
                 }
+                clamp_selection(view);
             }
             b' ' => {
                 let selected = view.bell.selected;
                 if view.bell.tab == Tab::Questions {
                     if let Some(Row::Question(id)) = rows(view).get(selected).cloned() {
-                        if !view.bell.marks.remove(&id) {
-                            view.bell.marks.insert(id);
+                        // Only an open question marks: the archive door
+                        // refuses settled ids, so a marked Answered row
+                        // would turn c into a refusal instead of a clear.
+                        if question_open(view, &id) {
+                            if !view.bell.marks.remove(&id) {
+                                view.bell.marks.insert(id);
+                            }
+                            // A mark advances the cursor, so space space
+                            // space marks three rows.
+                            view.bell.selected =
+                                (view.bell.selected + 1).min(rows(view).len().saturating_sub(1));
                         }
-                        // A mark advances the cursor, so space space space
-                        // marks three rows.
-                        view.bell.selected =
-                            (view.bell.selected + 1).min(rows(view).len().saturating_sub(1));
                     }
                 }
             }
@@ -792,6 +812,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                         Row::Question(id) => Some(id),
                         _ => None,
                     })
+                    .filter(|id| question_open(view, id))
                     .collect();
                 view.bell.marks.retain(|id| listed.contains(id));
                 if !view.bell.marks.is_empty() && !view.question_acting {
@@ -1338,6 +1359,12 @@ mod tests {
             ],
             ..Default::default()
         });
+        // A settled row never marks: the archive door would refuse it, and
+        // space on it neither marks nor advances.
+        v2.bell.selected = 2;
+        keys(&mut v2, b" ");
+        assert!(v2.bell.marks.is_empty(), "a settled row does not mark");
+        assert_eq!(v2.bell.selected, 2, "no mark, no advance");
         keys(&mut v2, b"c");
         assert!(v2.question_clear_settled, "no marks: clear settled fires");
         assert_eq!(v2.question_archive, None);
