@@ -102,6 +102,9 @@ fn type_message(v: &mut View, text: &str) {
 #[test]
 fn open_seeds_project_candidates_and_kicks_the_catalog_probe() {
     let mut v = plain_view();
+    let mut bare = named_meta(9, "bare", &["t"], 0);
+    bare.canonical_cwd = String::new();
+    v.layout.squads.push(bare);
     open(&mut v);
     assert!(v.launcher.is_some());
     assert!(v.catalog_want, "first open arms the catalog probe");
@@ -109,6 +112,10 @@ fn open_seeds_project_candidates_and_kicks_the_catalog_probe() {
     let own = std::env::current_dir().unwrap().display().to_string();
     let l = v.launcher.as_ref().unwrap();
     assert_eq!(l.draft.projects.first().map(String::as_str), Some(&own[..]));
+    assert!(
+        l.draft.projects.iter().all(|p| !p.is_empty()),
+        "a workspace with no folder offers no project, so the picker paints no blank row"
+    );
 }
 
 #[test]
