@@ -52,7 +52,9 @@ def test_every_live_verb_is_classified_exactly_once():
     labels = dict(_registry_labels())
     assert getattr(labels["contain"].callback, "_fno_tracker_owned", False)
     assert getattr(labels["get"].callback, "_fno_footnote_owned", False)
-    assert tracker_owned > 10 and footnote_owned > 10
+    # Re-pinned when the batch family left the wheel for the native lane: ten
+    # tracker-owned verbs remain. The next wheel departure re-pins again.
+    assert tracker_owned >= 10 and footnote_owned > 10
 
 
 @pytest.mark.parametrize(
