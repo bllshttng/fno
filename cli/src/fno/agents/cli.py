@@ -1370,10 +1370,7 @@ def cmd_spawn(
         False,
         "--force",
         "-F",
-        help=(
-            "Pass the soft limits: max_live, the learned cap, the provider lane cap and "
-            "the CPU hold. The RAM floor still applies. The worker is still counted."
-        ),
+        help="Pass every soft limit, never the RAM floor; the worker is still counted.",
     ),
     no_wait: bool = typer.Option(
         False,
