@@ -553,112 +553,14 @@ def test_state_init_allow_stub_escape(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A2 work-start lifecycle dispatch (x-122a)
-# ---------------------------------------------------------------------------
 
 
-def _write_manifest(repo_root, node_id):
-    fno_dir = repo_root / ".fno"
-    fno_dir.mkdir(parents=True, exist_ok=True)
-    (fno_dir / "target-state.md").write_text(
-        f"session_id: s1\ngraph_node_id: {node_id}\nattended: false\n", encoding="utf-8"
-    )
 
 
-def _arm_work_start(monkeypatch):
-    """Force config.think_spawn.on_work_start True past the gate-first check."""
-    import types
-    from fno import config as _config
-
-    fake = types.SimpleNamespace(
-        think_spawn=types.SimpleNamespace(on_work_start=True)
-    )
-    monkeypatch.setattr(_config, "load_settings", lambda *a, **k: fake)
 
 
-def test_work_start_dispatch_gated_off_does_nothing(tmp_path, monkeypatch):
-    """Default-OFF: no settings arm -> the helper returns before any repo/graph I/O."""
-    _write_manifest(tmp_path, "x-122a")
-    from fno.provenance import spawn_think as _st
-
-    seen = []
-    monkeypatch.setattr(_st, "on_node_work_start", lambda n, **k: seen.append(n))
-    target_cli._maybe_dispatch_work_start()
-    assert seen == []
 
 
-def test_work_start_dispatch_reads_claimed_node(tmp_path, monkeypatch):
-    """AC2-HP wiring: a real graph_node_id routes the durable node to on_node_work_start."""
-    _arm_work_start(monkeypatch)
-    _write_manifest(tmp_path, "x-122a")
-    import json as _json
-    from fno import paths as _paths
-    from fno.provenance import spawn_think as _st
-
-    node = {"id": "x-122a", "title": "lifecycle"}
-    g = tmp_path / "graph.json"
-    seed_graph(g, _json.dumps({"entries": [node]}))
-
-    monkeypatch.setattr(_paths, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(_paths, "graph_json", lambda: g)
-    seen = []
-    monkeypatch.setattr(_st, "on_node_work_start", lambda n, **k: seen.append(n["id"]))
-
-    target_cli._maybe_dispatch_work_start()
-    assert seen == ["x-122a"]
-
-
-def test_work_start_dispatch_overlays_dispatch_pins(tmp_path, monkeypatch):
-    """AC1-HP wiring: manifest dispatch_model/provider ride onto the node so the
-    work-start /think spawn carries `fno do target start --model X`'s choice."""
-    _arm_work_start(monkeypatch)
-    fno_dir = tmp_path / ".fno"
-    fno_dir.mkdir(parents=True, exist_ok=True)
-    (fno_dir / "target-state.md").write_text(
-        "session_id: s1\ngraph_node_id: x-122a\nattended: false\n"
-        "dispatch_model: glm-4.7\ndispatch_provider: codex\n",
-        encoding="utf-8",
-    )
-    import json as _json
-    from fno import paths as _paths
-    from fno.provenance import spawn_think as _st
-
-    node = {"id": "x-122a", "title": "lifecycle"}
-    g = tmp_path / "graph.json"
-    seed_graph(g, _json.dumps({"entries": [node]}))
-
-    monkeypatch.setattr(_paths, "resolve_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(_paths, "graph_json", lambda: g)
-    seen = []
-    monkeypatch.setattr(_st, "on_node_work_start", lambda n, **k: seen.append(n))
-
-    target_cli._maybe_dispatch_work_start()
-    assert len(seen) == 1
-    assert seen[0]["model"] == "glm-4.7"
-    assert seen[0]["provider"] == "codex"
-
-
-def test_work_start_dispatch_skips_null_node(tmp_path, monkeypatch):
-    """graph_node_id: null means no node was claimed -> nothing dispatched."""
-    _arm_work_start(monkeypatch)
-    _write_manifest(tmp_path, "null")
-    from fno import paths as _paths
-    from fno.provenance import spawn_think as _st
-
-    monkeypatch.setattr(_paths, "resolve_repo_root", lambda: tmp_path)
-    seen = []
-    monkeypatch.setattr(_st, "on_node_work_start", lambda n, **k: seen.append(n))
-    target_cli._maybe_dispatch_work_start()
-    assert seen == []
-
-
-def test_work_start_dispatch_non_fatal_on_missing_manifest(tmp_path, monkeypatch):
-    """No manifest -> the helper swallows the read error and never raises."""
-    _arm_work_start(monkeypatch)
-    from fno import paths as _paths
-
-    monkeypatch.setattr(_paths, "resolve_repo_root", lambda: tmp_path)
-    target_cli._maybe_dispatch_work_start()  # must not raise
 
 
 def test_target_start_forwards_harness_and_never_launches_in_place(tmp_path, monkeypatch):

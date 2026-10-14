@@ -13,16 +13,24 @@ use regex::Regex;
 
 // ── the manifest read ─────────────────────────────────────────────────────────
 
-/// The merged session manifest: the frontmatter keys plus the body
-/// `key: value` lines the helper appends below it (claim keys,
-/// graph_node_id); prose lines carry no snake_case key and drop out.
+/// The merged session manifest: the YAML frontmatter keys (between the `---`
+/// fence lines) plus exactly the three body keys the helper appends below
+/// them -- the shared reader's contract. Body-key ORDER is not assumed (the
+/// helper writes `graph_node_id` after the claim keys), and any other line
+/// below the fence is prose about the manifest, not a field.
 pub fn read_manifest(project_root: &Path) -> Option<BTreeMap<String, String>> {
+    const BODY_KEYS: [&str; 3] = ["graph_node_id", "target_claim_key", "target_claim_holder"];
     let path = manifest_path(project_root)?;
     let text = std::fs::read_to_string(path).ok()?;
     let mut raw = BTreeMap::new();
+    let mut fence = 0usize; // 0 before the frontmatter, 1 inside, 2 in the body
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line == "---" {
+        if line == "---" {
+            fence += 1;
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let Some((key, value)) = line.split_once(':') else {
@@ -34,17 +42,14 @@ pub fn read_manifest(project_root: &Path) -> Option<BTreeMap<String, String>> {
         if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             continue;
         }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-            .unwrap_or(value);
-        raw.insert(key.to_string(), value.to_string());
-        if key == "target_claim_holder" {
-            // The body keys are the manifest's last fields; later lines are
-            // prose about the manifest, not fields.
-            break;
+        if fence < 2 || BODY_KEYS.contains(&key) {
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value);
+            raw.insert(key.to_string(), value.to_string());
         }
     }
     if raw.is_empty() {
@@ -198,21 +203,12 @@ fn is_linked_worktree(cwd: &Path) -> bool {
     abs(&gdir) != abs(&common)
 }
 
-/// The shared graph-rows read: one load, both readers. A load error
-/// propagates so a caller can degrade distinctly (not-in-graph vs
+/// The graph-rows read for the report: the ONE loader in `target_init`, with
+/// the error surfaced so a caller can degrade distinctly (not-in-graph vs
 /// unreadable).
 fn graph_rows() -> Result<Vec<serde_json::Value>, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let graph_path = crate::org_board::scope::graph_json_path(&cwd);
-    let store = crate::backlog::api::Store::new(&graph_path);
-    crate::graph_store::read_rows_where(
-        &store.graph,
-        &crate::backlog::RowQuery {
-            with_blockers: true,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| e.to_string())
+    crate::target_init::graph_rows(&cwd).ok_or_else(|| "graph unreadable".to_string())
 }
 
 /// The graph entry for `node_id` by id (case-insensitive), or a read error so

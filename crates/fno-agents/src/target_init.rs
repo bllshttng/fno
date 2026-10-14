@@ -621,8 +621,9 @@ fn warn_if_authority_not_granted(cwd: &Path) {
     eprintln!("--beastmode did NOT take - this session has no authority grant.\n{fix}");
 }
 
-/// The shared graph rows read.
-fn graph_rows(cwd: &Path) -> Option<Vec<serde_json::Value>> {
+/// The shared graph rows read. One loader, both consumers: this module's
+/// dispatch-node resolution and the orient report's node and boundary lines.
+pub(crate) fn graph_rows(cwd: &Path) -> Option<Vec<serde_json::Value>> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph_path);
     crate::graph_store::read_rows_where(
