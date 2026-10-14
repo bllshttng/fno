@@ -191,6 +191,9 @@ jobs:
           # so the pin is the repo root, not the cli directory.
           FNO_DEMO_PY_SOURCE: ${{ github.workspace }}
         run: |
+          # The gathers shell fno-agents from PATH the way the org fold
+          # does; the Mac demo works because the binary is installed there.
+          export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
           for view in bell bell-wide bell-full; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
