@@ -451,7 +451,7 @@ fn verify_merge(child: &Value) -> Option<String> {
         })
         .or_else(|| child.get("cwd").and_then(Value::as_str).map(String::from))?;
     let cwd = std::path::PathBuf::from(root);
-    let (ok, out, err) = crate::pr_push::run_labeled(
+    let (ok, out, _err) = crate::pr_push::run_labeled(
         "epic-status",
         "gh",
         &["pr", "view", &pr, "--json", "state,mergedAt"],
@@ -594,6 +594,7 @@ pub fn run_epic(tail: &[String]) -> i32 {
 
     let mut children: Vec<&Value> = live
         .iter()
+        .copied()
         .filter(|e| e.get("parent").and_then(Value::as_str) == Some(epic_id.as_str()))
         .collect();
     children.sort_by_key(|c| c.get("id").and_then(Value::as_str).unwrap_or(""));
