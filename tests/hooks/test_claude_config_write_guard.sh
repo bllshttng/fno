@@ -160,6 +160,7 @@ rm -rf "$CFGDIR"
 #    stays writable, subfolders stay allowed. Hermetic via FNO_STATE_DIR. ─────
 STATEDIR="$(mktemp -d)"
 touch "$STATEDIR/ledger.json"
+mkdir "$STATEDIR/spaces"
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > $STATEDIR/foo.out\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
   pass "AC13: new top-level entry in the state root is refused"
@@ -177,6 +178,24 @@ if [[ "$out" == "{}" ]]; then
   pass "AC13: state-root subfolder stays allowed"
 else
   fail "AC13: subfolder write blocked: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > $STATEDIR/newdir/x.out\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: a write under a missing top-level folder is refused"
+else
+  fail "AC13: nested newdir write approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/newdir\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir of a missing top-level folder is refused"
+else
+  fail "AC13: state-root mkdir approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if [[ "$out" == "{}" ]]; then
+  pass "AC13: mkdir under an existing folder stays allowed"
+else
+  fail "AC13: state-root mkdir under spaces blocked: $out"
 fi
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp staged $STATEDIR/\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
