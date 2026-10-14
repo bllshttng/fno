@@ -175,6 +175,7 @@ def test_an_attempt_starts_with_exactly_the_merge_floor_left(tmp_path, monkeypat
     now = [100.0]
     monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(d, "_phase_deadline", now[0] + d._MERGE_FLOOR_S)
+    monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 0.0)
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
         lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
@@ -223,6 +224,7 @@ def test_the_next_row_prepares_under_merge_prepare(tmp_path, monkeypatch):
     now = [100.0]
     monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(d, "_phase_deadline", now[0] + 400.0)
+    monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 0.0)
     monkeypatch.setattr(
         "fno.rust_binary.verb_call",
         lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
