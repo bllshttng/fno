@@ -416,12 +416,12 @@ def census(socket_map: Optional[dict[str, int]] = None) -> LiveCensus:
         # The row's own name dedups its slot claim below (a revived row does
         # not pay twice for the claim that spawned it).
         live_registry_names.add(row.name)
-        # A live fno row is fno work: it holds a slot regardless of the display
-        # dedup below (— a bg/adopted worker also appears in the roster,
-        # but its registry row is the slot, matching the registry-only Rust gate).
-        out.fno_slot_workers += 1
-        # a promoted row divides the cap and pays no per-lead tax.
+        # A live fno worker row holds a slot regardless of the display dedup
+        # below (a bg/adopted worker also appears in the roster, but its
+        # registry row is the slot, matching the registry-only Rust gate). A
+        # promoted row takes no worker slot and pays no per-lead tax.
         if row.role_level is None:
+            out.fno_slot_workers += 1
             out.worker_rows.setdefault(row.spawned_by_session, []).append(row.name)
         dedup_key = row.short_id or None
         if dedup_key and dedup_key in counted_short_ids:

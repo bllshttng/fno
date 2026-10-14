@@ -94,13 +94,11 @@ def _run_queue(monkeypatch, entries, pr, receipt=None):
     )
     _door(monkeypatch, receipt=receipt if receipt is not None else CLEAR)
 
-    def _fake_merge(argv, cwd=None, *, authority="", timeout_s=0.0):
-        from fno.pr import _merge as m
-
-        m.LAST_RECEIPT.clear()
-        return 0
-
-    monkeypatch.setattr("fno.pr._merge.run_merge", _fake_merge, raising=True)
+    monkeypatch.setattr(
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: {"exit": 0},
+        raising=True,
+    )
     counts = run_execute_queue(
         [(_Cand(pr), f"o/r#{pr}", {})],
         store_path=None,

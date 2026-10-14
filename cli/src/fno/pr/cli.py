@@ -117,10 +117,7 @@ pr_app.add_typer(attestation_app, name="attestation", hidden=True)
     ),
 )
 def merge(ctx: typer.Context) -> None:
-    from fno.pr import _merge
-
-    rc = _merge.run_merge(list(ctx.args))
-    raise typer.Exit(code=rc)
+    _forward_to_binary("authorized-merge", ["merge", *ctx.args])
 
 
 @pr_app.command(

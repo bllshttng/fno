@@ -10,9 +10,7 @@ fn cap_ceiling(ceiling: usize) -> crate::capacity::Effective {
     crate::capacity::Effective {
         cap: ceiling,
         ceiling,
-        known: false,
-        reason: None,
-        since: None,
+        ..Default::default()
     }
 }
 
@@ -178,17 +176,66 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
     fixture.write_entries(vec![
         fixture.lead("lead", "session-lead", "x-epic"),
         fixture.worker("worker", "session-lead"),
+        fixture.worker("worker-2", "session-lead"),
     ]);
 
     let refusal = fixture
         .spawn("plain", Some("session-lead"), None)
-        .expect_err("ordinary spawn cannot reuse the lead's slot");
+        .expect_err("two workers fill max_live 2; the lead takes no slot");
     assert_eq!(refusal.exit_code, EXIT_NO_WAIT);
     assert_eq!(refusal.receipt.as_ref().unwrap()["axis"], "max_live");
 
     fixture
         .spawn("successor", Some("session-lead"), Some("x-epic"))
         .expect("a sole teamed caller replaces its row")
+        .release();
+
+    // Below the ceiling a refusal names the learned cap, the ceiling and the
+    // floor command, and a floor raised in config releases the same spawn on
+    // its next gate call.
+    let home = crate::paths::AgentsHome::from_env();
+    let now = chrono::Utc::now().timestamp();
+    let learned_one = crate::capacity::CapacityState {
+        ceiling: 2,
+        effective: 1,
+        reason: Some("CPU-bound".into()),
+        since: Some(now - 60),
+        slots_learned: None,
+        over_since: None,
+        calm_since: None,
+        memory: None,
+        accounts: Vec::new(),
+        workers_live: None,
+        updated_epoch: now - 60,
+    };
+    crate::capacity::write_state(&home, &learned_one).unwrap();
+    fixture.write_entries(vec![
+        fixture.lead("lead", "session-lead", "x-epic"),
+        fixture.worker("worker", "session-lead"),
+    ]);
+    // A RAM floor no machine meets: with no RAM room the learned cap holds.
+    std::fs::write(
+        fixture.dir.join(".fno").join("config.toml"),
+        "[agents]\nmax_live = 2\nmin_free_gb = 1000000\nmax_swap_pct = 0\n",
+    )
+    .unwrap();
+    let refusal = fixture
+        .spawn("plain-2", Some("session-lead"), None)
+        .expect_err("the learned cap of 1 holds the one worker slot");
+    let line = verdict_line(&refusal);
+    assert!(line.contains("learned_cap=1, ceiling=2"), "{line}");
+    assert!(
+        line.ends_with("remedy: set [agents.capacity] floor = N in ~/.fno/config.toml"),
+        "{line}"
+    );
+    std::fs::write(
+        fixture.dir.join(".fno").join("config.toml"),
+        "[agents]\nmax_live = 2\nmin_free_gb = 0\nmax_swap_pct = 0\n[agents.capacity]\nfloor = 2\n",
+    )
+    .unwrap();
+    fixture
+        .spawn("plain-2", Some("session-lead"), None)
+        .expect("a floor of 2 releases the spawn on the next gate call")
         .release();
 }
 
@@ -228,6 +275,8 @@ fn succession_refusal_reports_an_ineligible_caller() {
     fixture.write_entries(vec![
         fixture.lead("lead-a", "session-a", "x-epic"),
         fixture.lead("lead-b", "session-b", "x-epic"),
+        fixture.worker("worker-a", "session-a"),
+        fixture.worker("worker-b", "session-b"),
     ]);
 
     let refusal = fixture
@@ -246,6 +295,8 @@ fn succession_refusal_reports_a_scope_held_by_another_caller() {
     fixture.write_entries(vec![
         fixture.lead("lead-a", "session-a", "y-epic"),
         fixture.lead("lead-b", "session-b", "x-epic"),
+        fixture.worker("worker-a", "session-a"),
+        fixture.worker("worker-b", "session-b"),
     ]);
 
     let refusal = fixture
@@ -264,6 +315,7 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
     fixture.write_entries(vec![
         fixture.lead("lead-a", "session-a", "x-epic"),
         fixture.worker("worker", "session-a"),
+        fixture.worker("worker-2", "session-a"),
     ]);
     let no_caller = fixture
         .spawn("successor-no-caller", None, Some("x-epic"))
@@ -282,6 +334,7 @@ fn succession_refusal_reports_no_caller_and_a_caller_without_a_live_row() {
         dead,
         fixture.lead("other-lead", "session-other", "y-epic"),
         fixture.worker("other-worker", "session-other"),
+        fixture.worker("other-worker-2", "session-other"),
     ]);
     let not_live = fixture
         .spawn(
@@ -304,6 +357,7 @@ fn succession_cannot_take_a_second_slot_at_cap_plus_one() {
     fixture.write_entries(vec![
         fixture.lead("lead", "session-lead", "x-epic"),
         fixture.worker("worker", "session-lead"),
+        fixture.worker("worker-2", "session-lead"),
         successor,
     ]);
 
@@ -323,6 +377,7 @@ fn succession_refuses_the_old_lead_after_transfer() {
         old_lead,
         fixture.lead("new-lead", "session-new", "x-epic"),
         fixture.worker("worker", "session-new"),
+        fixture.worker("worker-2", "session-new"),
     ]);
 
     let refusal = fixture
@@ -347,6 +402,69 @@ fn succession_refuses_ambiguous_caller_session() {
     assert_eq!(
         spawn_gate_lanes::succession_replaces(&rows, Some("session-shared"), "x-epic"),
         Err("caller_ambiguous")
+    );
+}
+
+/// Seven leads held seven of 24 slots on the iMac. A lead row takes no
+/// worker slot: two leads and one worker leave room under max_live 2.
+#[test]
+fn a_lead_row_takes_no_worker_slot() {
+    let fixture = SuccessionFixture::new(2);
+    fixture.write_entries(vec![
+        fixture.lead("lead-a", "session-a", "x-epic"),
+        fixture.lead("lead-b", "session-b", "y-epic"),
+        fixture.worker("worker", "session-a"),
+    ]);
+    let mut warnings = Vec::new();
+    assert_eq!(slot_count(&fixture.registry, &mut warnings), 1);
+    fixture
+        .spawn("next", None, None)
+        .expect("two leads and one worker hold one slot of 2")
+        .release();
+}
+
+/// The gate refused at load 8 of 16 cores with 90 percent of RAM free. With
+/// CPU and RAM room the learned cap yields; the user's max_live still holds.
+#[test]
+fn the_learned_cap_yields_when_cpu_and_ram_have_room() {
+    let fixture = SuccessionFixture::new(3);
+    let now = chrono::Utc::now().timestamp();
+    let learned_one = crate::capacity::CapacityState {
+        ceiling: 3,
+        effective: 1,
+        reason: Some("CPU-bound".into()),
+        since: Some(now - 60),
+        slots_learned: None,
+        over_since: None,
+        calm_since: None,
+        memory: None,
+        accounts: Vec::new(),
+        workers_live: None,
+        updated_epoch: now - 60,
+    };
+    let home = crate::paths::AgentsHome::from_env();
+    crate::capacity::write_state(&home, &learned_one).unwrap();
+    let workers = |n: usize| {
+        (0..n)
+            .map(|i| fixture.worker(&format!("w{i}"), "s"))
+            .collect::<Vec<_>>()
+    };
+    fixture.write_entries(workers(2));
+    fixture
+        .spawn("next", None, None)
+        .expect("2 live of max_live 3: the learned cap of 1 yields")
+        .release();
+    fixture.write_entries(workers(3));
+    let refusal = fixture
+        .spawn("next", None, None)
+        .expect_err("3 live of max_live 3: the user's ceiling holds");
+    let receipt = refusal.receipt.unwrap();
+    assert_eq!(
+        (&receipt["max_live"], &receipt["remedy"]),
+        (
+            &serde_json::json!(3),
+            &serde_json::json!(crate::capacity::MAX_LIVE_REMEDY)
+        )
     );
 }
 

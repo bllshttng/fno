@@ -239,7 +239,7 @@ fn build_bench() -> Bench {
     executable(
         &shim,
         &format!(
-            "#!/bin/sh\nif [ \"$1\" = \"loop-check\" ]; then\n  exec {:?} \"$@\" --events {:?} --global-events {:?} --settings {:?} --global-settings {:?} -- ledger {:?} --gh-budget-ledger {:?}\nfi\nif [ \"$1\" = \"manifest-for-session\" ] && [ -n \"$FNO_FIXTURE_STATE\" ]; then\n  echo \"$FNO_FIXTURE_STATE\"\n  exit 0\nfi\nif [ \"$1 $2 $3\" = \"state path target-state\" ] && [ -n \"$FNO_FIXTURE_STATE\" ]; then\n  echo \"$FNO_FIXTURE_STATE\"\n  exit 0\nfi\nif [ \"$1 $2 $3\" = \"state path events\" ] && [ -n \"$FNO_EVENTS_PATH\" ]; then\n  echo \"$FNO_EVENTS_PATH\"\n  exit 0\nfi\nexec {:?} \"$@\"\n",
+            "#!/bin/sh\nif [ \"$1\" = \"loop-check\" ]; then\n  exec {:?} \"$@\" --events {:?} --global-events {:?} --settings {:?} --global-settings {:?} --ledger {:?} --gh-budget-ledger {:?}\nfi\nif [ \"$1\" = \"manifest-for-session\" ] && [ -n \"$FNO_FIXTURE_STATE\" ]; then\n  echo \"$FNO_FIXTURE_STATE\"\n  exit 0\nfi\nif [ \"$1 $2 $3\" = \"state path target-state\" ] && [ -n \"$FNO_FIXTURE_STATE\" ]; then\n  echo \"$FNO_FIXTURE_STATE\"\n  exit 0\nfi\nif [ \"$1 $2 $3\" = \"state path events\" ] && [ -n \"$FNO_EVENTS_PATH\" ]; then\n  echo \"$FNO_EVENTS_PATH\"\n  exit 0\nfi\nexec {:?} \"$@\"\n",
             real,
             events,
             global,
