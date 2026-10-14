@@ -122,8 +122,6 @@ def test_unknown_kind_in_thread_file_returns_unknown_kind(inbox_root, repo_root)
 
 def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
     """Mock triage_thread to return create_node, mock subprocess for `fno new`."""
-    import subprocess as _subprocess
-
     from fno.inbox import drain as drain_mod
     from fno.inbox.store import (
         write_new_thread, Kind, read_unread_threads,
@@ -149,11 +147,12 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
             self.stdout = stdout
             self.stderr = stderr
 
-    real_run = _subprocess.run  # the stub patches the shared module attr
-
     def fake_run(cmd, *args, **kwargs):
-        if len(cmd) >= 2 and cmd[1] == "mail-envelope":
-            return real_run(cmd, *args, **kwargs)
+        # The dedupe classifier resolves the same stubbed binary; answer its
+        # shape classify locally (one tagless body) so the stub never
+        # reaches a real exec.
+        if cmd[1:3] == ["mail-envelope", "--classify"]:
+            return _FakeRun(stdout='[{"ids": []}]')
         # The native create door: drain resolves fno-agents and argv[0] is
         # its path, so the fake matches on the verb words, not the binary.
         if cmd[1:3] == ["backlog", "new"]:
