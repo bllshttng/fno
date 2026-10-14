@@ -414,8 +414,8 @@ fn every_viewer_death_parks_its_portal_on_no_signal() {
     );
     assert_eq!(
         core.panes.get(&seat).and_then(|e| e.name.as_deref()),
-        Some("deadbee2"),
-        "a parked screen's pane name is its channel"
+        Some("target-b"),
+        "a parked screen wears its row's registry name, never the attach id"
     );
     let (sid, ti) = core.session.find_pane(seat).expect("kept seat in tree");
     let tab = &core.session.squad(sid).unwrap().tabs[ti];
@@ -439,8 +439,8 @@ fn every_viewer_death_parks_its_portal_on_no_signal() {
     assert!(
         notices
             .iter()
-            .any(|t| t.contains("portal 1") && t.contains("no signal") && t.contains("deadbee2")),
-        "the notice names the portal and the channel that ended: {notices:?}"
+            .any(|t| t.contains("portal 1") && t.contains("no signal") && t.contains("target-b")),
+        "the notice names the portal and the row that ended: {notices:?}"
     );
 }
 
@@ -2947,7 +2947,7 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     core.close_viewer_died(a_seat, "child exited");
     let kept = collect_until_portal_closed(&mut rx, "portal 0").expect("the kept notice arrived");
     assert!(
-        kept.contains("deadbee1") && kept.contains("no signal"),
+        kept.contains("target-a") && kept.contains("no signal"),
         "the death notice reads as no signal, not lost: {kept:?}"
     );
 }
