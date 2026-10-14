@@ -1288,9 +1288,9 @@ mod process_table_tests {
             .arg(format!("sleep 20; : # {needle}"))
             .spawn()
             .unwrap();
-        let found = live_argv_contains(needle);
-        let absent = live_argv_contains("census-witness-never-run-9b2e");
-        let empty = live_argv_contains("");
+        let found = super::live_argv_contains(needle);
+        let absent = super::live_argv_contains("census-witness-never-run-9b2e");
+        let empty = super::live_argv_contains("");
         let _ = child.kill();
         child.wait().unwrap();
         assert!(found, "a live argv naming the needle is a witness");
