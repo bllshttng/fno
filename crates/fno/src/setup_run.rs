@@ -248,7 +248,7 @@ impl Report {
 
 /// A short unique id for one run or refusal: nanos plus the pid's low
 /// bits, hex. Not a security token - a correlate for logs and mails.
-fn run_id() -> String {
+pub(crate) fn run_id() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -603,7 +603,7 @@ fn marker_line() -> String {
 /// The nearest repo root: `$FNO_REPO_ROOT` when pinned, else the nearest
 /// ancestor holding a `.git` dir, else the working directory. The same
 /// resolution `config_defaults` applies to the project config file.
-fn repo_root() -> PathBuf {
+pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("FNO_REPO_ROOT").filter(|r| !r.is_empty()) {
         return PathBuf::from(root);
     }
@@ -1575,7 +1575,7 @@ fn first_merged_pr_at(first_run_at: Option<&str>) -> Option<String> {
 /// Best-effort journal append for setup's own events: one stderr line on
 /// failure, never a failed setup. No config key and no value rides in
 /// `data`; callers pass ids, outcomes and durations only.
-fn append_setup_event(kind: &str, data: serde_json::Value) {
+pub(crate) fn append_setup_event(kind: &str, data: serde_json::Value) {
     let envelope = json!({
         "ts": utc_now(),
         "type": kind,
@@ -1827,6 +1827,143 @@ fn ask(question: &str) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// The wizard's apply pass: the proposal rows the flow confirmed, applied
+/// once after the conversation ends. Keyed rows go through `config_set`
+/// with the row's committed value - the run's own band step re-detects the
+/// number and the review-merge step has no source but a wizard answer -
+/// while service and project rows call the same runners `run` uses, so
+/// installs, keys and verify behave identically. The loaded set starts
+/// empty and the runners seed it, exactly as a run does. Join emits no
+/// rows here; its writes happen in the flow's join step. Returns the
+/// redacted report JSON for the wizard's own report.
+pub(crate) fn apply_wizard_pending(
+    exe: &Path,
+    root: &Path,
+    rid: &str,
+    rows: &[Proposal],
+) -> serde_json::Value {
+    let started = std::time::Instant::now();
+    let mut rep = Report::default();
+    rep.run_id = rid.to_string();
+    rep.host = "wizard";
+    let mut loaded: Vec<String> = Vec::new();
+    for p in rows {
+        let step_started = std::time::Instant::now();
+        let done_len = rep.done.len();
+        let skipped_len = rep.skipped.len();
+        let rows_len = rep.rows.len();
+        match p.id {
+            "concurrency-band" => {
+                let pairs = [("agents.max_live", p.value.as_str())];
+                match config_set(exe, &pairs, false) {
+                    Ok(path) => {
+                        rep.done
+                            .push(format!("concurrency-band: agents.max_live = {}", p.value));
+                        rep.paths.push(path.display().to_string());
+                        rep.restart_needed = true;
+                    }
+                    Err(e) => {
+                        let message = format!("concurrency-band: {e}");
+                        rep.rows
+                            .push(row("needs_human", "config_set_refused", message.clone()));
+                        rep.needs_human.push(message);
+                    }
+                }
+            }
+            "review-merge" => {
+                let pairs = [(p.key.as_str(), p.value.as_str())];
+                match config_set(exe, &pairs, false) {
+                    Ok(path) => {
+                        rep.done
+                            .push(format!("review-merge: {} = {}", p.key, p.value));
+                        rep.paths.push(path.display().to_string());
+                    }
+                    Err(e) => {
+                        let message = format!("review-merge: {e}");
+                        rep.rows
+                            .push(row("needs_human", "config_set_refused", message.clone()));
+                        rep.needs_human.push(message);
+                    }
+                }
+            }
+            "pr-watcher" => step_pr_watcher(exe, &mut rep, &mut loaded),
+            "auto-heal" => step_auto_heal(exe, &mut rep),
+            "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
+            "projects" => step_projects(exe, root, &mut rep),
+            _ => rep.skipped.push(format!("{}: no runner", p.id)),
+        }
+        let outcome = step_outcome(p.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
+        let mut data = json!({
+            "run_id": rid,
+            "step": p.id,
+            "outcome": outcome.0,
+            "duration_ms": step_started.elapsed().as_millis() as u64,
+        });
+        if let Some(reason) = outcome.1 {
+            data["skip_reason"] = json!(reason);
+        }
+        if let Some(r) = rep.rows.get(rows_len) {
+            data["code"] = json!(r.code);
+        }
+        append_setup_event("setup_step", data);
+    }
+    run_verify(exe, &loaded, &mut rep);
+    append_setup_event(
+        "setup_run",
+        json!({
+            "run_id": rid,
+            "host": rep.host,
+            "outcome": if rep.needs_human.is_empty() {
+                "finished"
+            } else {
+                "blocked"
+            },
+            "duration_ms": started.elapsed().as_millis() as u64,
+        }),
+    );
+    rep.next_action = next_action(&rep.rows, "/fno:target \"<your first feature>\"");
+    crate::setup_profile::redact(&rep.to_json())
+}
+
+/// The wizard's join lane. `step_join` already backs up, marks the
+/// in-progress flag and restores on a refused write; the wrapper only
+/// gives the report the wizard's host and run id, journals the lane's
+/// `setup_run` event, and returns the redacted JSON for the wizard's own
+/// report. Profile rows never pass through `pending`: a joined machine's
+/// changes are the profile's, not the flow's answers.
+pub(crate) fn apply_wizard_join(
+    exe: &Path,
+    profile: &crate::setup_profile::Profile,
+    rows: &[crate::setup_profile::DiffRow],
+    rid: &str,
+) -> serde_json::Value {
+    let started = std::time::Instant::now();
+    let mut rep = Report::default();
+    rep.run_id = rid.to_string();
+    rep.host = "wizard";
+    step_join(exe, profile, rows, &mut rep);
+    append_setup_event(
+        "setup_run",
+        json!({
+            "run_id": rid,
+            "host": rep.host,
+            "lane": "join",
+            "outcome": if rep.needs_human.is_empty() {
+                "finished"
+            } else {
+                "blocked"
+            },
+            "duration_ms": started.elapsed().as_millis() as u64,
+        }),
+    );
+    rep.next_action = if rep.needs_human.is_empty() {
+        "/fno:target \"<your first feature>\"".to_string()
+    } else {
+        "fix the needs-human rows above, then rerun `fno do wizard`".to_string()
+    };
+    crate::setup_profile::redact(&rep.to_json())
 }
 
 /// The verb. `--list` prints the table; `--once` stops at its markers; the
