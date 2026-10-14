@@ -796,13 +796,49 @@ fn config_bash_arm(
     ));
 
     for (re, grp) in &families {
-        if let Some(caps) = re.captures(cmd) {
+        for caps in re.captures_iter(cmd) {
             let token = caps.get(*grp).map(|m| m.as_str()).unwrap_or("");
             if let Some(abs) = abs_of(token, payload_cwd) {
                 if let Some(reason) = refuse_for(&abs, roots, state, session_id) {
                     return Sec::Block(reason);
                 }
             }
+        }
+    }
+    // sqlite3: the shell creates the file it opens unless -readonly is
+    // given, so an open of a missing state-root path lands a new top-level
+    // entry. Judged on every invocation: the offending call was the second
+    // of two in one command. The config-dir arms do not apply: a sqlite3
+    // read of an existing file in the Claude config dir stays lawful.
+    let sqlite_arm = regex::Regex::new(&format!(
+        r"{lead}sqlite3((?:[[:space:]]+-[^[:space:]]+)*)[[:space:]]+({name_cls})"
+    ))
+    .unwrap();
+    for caps in sqlite_arm.captures_iter(cmd) {
+        let flags = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        if flags.split_whitespace().any(|f| f == "-readonly") {
+            continue;
+        }
+        let token = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+        if token == ":memory:" || (token.starts_with("file:") && token.contains("mode=ro")) {
+            continue;
+        }
+        let Some(abs) = abs_of(token, payload_cwd) else {
+            continue;
+        };
+        if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+            if abs == state.physical {
+                return Sec::Block(reason);
+            }
+            let sp = state
+                .physical
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string();
+            return Sec::Block(format!(
+                "{abs} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
+                state.spelled
+            ));
         }
     }
     // mkdir: the folder-creation family, scoped to the state root only.
@@ -1338,6 +1374,72 @@ mod tests {
             .expect("a write under a missing top-level folder must refuse");
         assert!(r2.contains("newdir"), "refusal text: {r2}");
         assert!(r2.contains("job dir"), "refusal text: {r2}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sqlite3_open_of_a_missing_state_root_entry_refuses() {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-write-gate-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("db")).unwrap();
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+        std::fs::write(dir.join("db/events.db"), b"x").unwrap();
+        std::fs::write(dir.join("agents/events.db"), b"x").unwrap();
+        std::fs::write(dir.join("ledger.json"), b"x").unwrap();
+        let state = Root {
+            spelled: dir.to_string_lossy().into_owned(),
+            physical: physicalize(&dir),
+        };
+        let arm = |cmd: &str| config_bash_arm(&norm(cmd), "", &[], &state, "");
+        // The offending invocation is the second of two: the first reads an
+        // existing store, the second would create one at the root.
+        let r = arm(&format!(
+            "sqlite3 {} \".tables\"; sqlite3 {} \".tables\"",
+            dir.join("agents/events.db").display(),
+            dir.join("events.db").display()
+        ));
+        let Sec::Block(text) = r else {
+            panic!("a second-invocation open must refuse");
+        };
+        assert!(text.contains("top-level entry"), "refusal text: {text}");
+        assert!(text.contains("-readonly"), "refusal text: {text}");
+        // The -readonly form, :memory:, and an existing db/ store stay
+        // allowed; a read of an existing top-level file too.
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 -readonly {} .tables",
+                dir.join("events.db").display()
+            )),
+            Sec::Allow
+        ));
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 {} .tables",
+                dir.join("db/events.db").display()
+            )),
+            Sec::Allow
+        ));
+        assert!(matches!(arm("sqlite3 :memory: 'select 1'"), Sec::Allow));
+        assert!(
+            matches!(
+                arm(&format!("sqlite3 {}", dir.join("ledger.json").display())),
+                Sec::Allow
+            ),
+            "an existing top-level file reads lawfully"
+        );
+        // Two redirects: the second one is the offender (the families loop
+        // is per-match now, not first-match).
+        let r2 = arm(&format!(
+            "echo a > {}; echo b > {}",
+            dir.join("db/x").display(),
+            dir.join("junk.out").display()
+        ));
+        assert!(matches!(r2, Sec::Block(_)), "a second redirect must refuse");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
