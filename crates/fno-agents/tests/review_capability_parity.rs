@@ -504,6 +504,10 @@ fn run_child(root: &Path, spec: &Case) -> Golden {
     let case_dir = root.join(common::slug(spec.label));
     let repo = build_fixtures(&case_dir, spec);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+    // wait_with_output only captures PIPED streams; unpiped children inherit
+    // the test's stdout and the Golden reads empty.
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     cmd.args(["review-level", "capability"]);
     let mut stdin_payload = String::new();
     match &spec.action {

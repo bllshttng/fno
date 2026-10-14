@@ -38,6 +38,88 @@ pub(super) fn sized_self_review_hint(cwd: &Path, harness: Option<&str>) -> Optio
     }
 }
 
+/// The unattested-local-reviewer blocker reason, extracted so both render
+/// branches are pinnable without env or cwd games: the production caller
+/// feeds `sized` from the native render, tests pass the line (or None)
+/// directly. The reviewer rows, the recover-with step, and the do-not-wait
+/// tail are composed here and nowhere else.
+pub(super) fn unattested_reviewers_reason(
+    pr: &PrInfo,
+    head: &str,
+    author_harness: Option<&str>,
+    sized: Option<&str>,
+) -> String {
+    let items: Vec<String> = pr
+        .unattested_reviewers
+        .iter()
+        .map(|r| {
+            // "no attestation" is a lie to a session that ran the
+            // reviewer and got told no; name that case separately.
+            let state = if r.failed_at_head {
+                " (attested at this head, verdict NOT pass)".to_string()
+            } else {
+                match &r.superseded_head {
+                    Some(h) => format!(" (passed at {}, superseded by this head)", short_sha(h)),
+                    None => String::new(),
+                }
+            };
+            if r.name == SAME_MODEL_LOCAL_PEER_SENTINEL {
+                return format!("peer{} -> configure a cross-model peer or routed model", state);
+            }
+            if r.name == LOCAL_PEER_REVIEWER {
+                return format!("peer{} -> run `/fno:review peer --attest`", state);
+            }
+            match reviewer_invocation_for(&r.name, author_harness) {
+                Some((inv, self_cert)) => {
+                    let mark = if self_cert {
+                        " [self-cert: asserts no review evidence]"
+                    } else {
+                        ""
+                    };
+                    // The sized render replaces the placeholder-carrying
+                    // map value verbatim: it IS the same invocation with
+                    // the level substituted by the single source the
+                    // parity goldens freeze.
+                    let inv = if r.name == "code-review" {
+                        sized.unwrap_or(inv)
+                    } else {
+                        inv
+                    };
+                    // code-review is a native harness verb whose clean
+                    // result normally reaches the shared attester. The
+                    // helper remains the loud recovery path if that
+                    // confirmed clean result did not produce evidence.
+                    // The fno-skill reviewers (sigma, declare) attest
+                    // inside their own invocation.
+                    let emit_step = if r.name == "code-review" {
+                        format!(
+                            ", if the confirmed clean review did not emit, recover with `bash skills/review/scripts/emit-attestation.sh {}`",
+                            r.name
+                        )
+                    } else {
+                        String::new()
+                    };
+                    format!("{}{} -> run `{}`{}{}", r.name, state, inv, emit_step, mark)
+                }
+                None => format!("{}{}", r.name, state),
+            }
+        })
+        .collect();
+    let corrupt = match pr.malformed_attestations {
+        0 => String::new(),
+        n => format!(" ({n} unparseable attestation line(s) ignored)"),
+    };
+    format!(
+        "PR #{}: reviewers gate unmet at {} - missing attestation for: {}{}. \
+         This is local work to DO, not a wait: no GitHub reviewer posts these, \
+         so do not arm a watcher.",
+        pr.number,
+        head,
+        items.join("; "),
+        corrupt
+    )
+}
+
 /// `head_shipped` is passed in for the same reason `async_wait_class` takes
 /// it: this function held the THIRD copy of the predicate, and its copy is the
 /// one that rendered "push the latest commits" at a session with nothing to
@@ -220,85 +302,18 @@ pub(super) fn build_block_reason(
             let author_harness = crate::claims::resolve_harness();
             // The sized render for the code-review verb, resolved once for the
             // whole list. The map value carries a `<level>` placeholder this
-            // surface's reader has no renderer for; the bridge substitutes the
+            // surface's reader has no renderer for; the render substitutes the
             // diff-sized level. None keeps the placeholder form (fail-open,
             // same as every other hint consumer).
             let sized = sized_self_review_hint(
                 &std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf()),
                 author_harness.as_deref(),
             );
-            let items: Vec<String> = pr
-                .unattested_reviewers
-                .iter()
-                .map(|r| {
-                    // "no attestation" is a lie to a session that ran the
-                    // reviewer and got told no; name that case separately.
-                    let state = if r.failed_at_head {
-                        " (attested at this head, verdict NOT pass)".to_string()
-                    } else {
-                        match &r.superseded_head {
-                            Some(h) => {
-                                format!(" (passed at {}, superseded by this head)", short_sha(h))
-                            }
-                            None => String::new(),
-                        }
-                    };
-                    if r.name == SAME_MODEL_LOCAL_PEER_SENTINEL {
-                        return format!(
-                            "peer{} -> configure a cross-model peer or routed model",
-                            state
-                        );
-                    }
-                    if r.name == LOCAL_PEER_REVIEWER {
-                        return format!("peer{} -> run `/fno:review peer --attest`", state);
-                    }
-                    match reviewer_invocation_for(&r.name, author_harness.as_deref()) {
-                        Some((inv, self_cert)) => {
-                            let mark = if self_cert {
-                                " [self-cert: asserts no review evidence]"
-                            } else {
-                                ""
-                            };
-                            // The sized render replaces the placeholder-carrying
-                            // map value verbatim: it IS the same invocation with
-                            // the level substituted by the Python single source.
-                            let inv = if r.name == "code-review" {
-                                sized.as_deref().unwrap_or(inv)
-                            } else {
-                                inv
-                            };
-                            // code-review is a native harness verb whose clean
-                            // result normally reaches the shared attester. The
-                            // helper remains the loud recovery path if that
-                            // confirmed clean result did not produce evidence.
-                            // The fno-skill reviewers (sigma, declare) attest
-                            // inside their own invocation.
-                            let emit_step = if r.name == "code-review" {
-                                format!(
-                                    ", if the confirmed clean review did not emit, recover with `bash skills/review/scripts/emit-attestation.sh {}`",
-                                    r.name
-                                )
-                            } else {
-                                String::new()
-                            };
-                            format!("{}{} -> run `{}`{}{}", r.name, state, inv, emit_step, mark)
-                        }
-                        None => format!("{}{}", r.name, state),
-                    }
-                })
-                .collect();
-            let corrupt = match pr.malformed_attestations {
-                0 => String::new(),
-                n => format!(" ({n} unparseable attestation line(s) ignored)"),
-            };
-            return format!(
-                "PR #{}: reviewers gate unmet at {} - missing attestation for: {}{}. \
-                 This is local work to DO, not a wait: no GitHub reviewer posts these, \
-                 so do not arm a watcher.",
-                pr.number,
-                head,
-                items.join("; "),
-                corrupt
+            return unattested_reviewers_reason(
+                pr,
+                &head,
+                author_harness.as_deref(),
+                sized.as_deref(),
             );
         }
         if !pr.missing_bots.is_empty() || !pr.stale_bots.is_empty() {

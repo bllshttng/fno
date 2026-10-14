@@ -220,16 +220,18 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
     """The hold key and the payload target are two different things.
 
     Reusing one variable for both broke the post-push form outright: the
-    renderer refuses `pr_number` and `branch` together, that ValueError was
-    caught as a refusal, and every `request-self-review --pr <n>` exited 2. The
-    hold still has to key on the PR's own head ref, because the merge guard
-    resolves the branch from GitHub and looks up that key.
+    renderer refuses `pr_number` and `branch` together, that refusal was
+    caught as a generic failure, and every `request-self-review --pr <n>`
+    exited 2. The hold still has to key on the PR's own head ref, because
+    the merge guard resolves the branch from GitHub and looks up that key.
+    The door now takes the target as flags, so the argv carries `--pr-number`
+    and must carry no `--branch`.
     """
-    rendered: dict = {}
+    calls: list[list] = []
     held: list[dict] = []
 
-    def _render(verb, payload, *args, **kwargs):
-        rendered.update(kwargs)
+    def _render(argv, payload, *args, **kwargs):
+        calls.append(list(argv))
         return {"invocation": "/review high --comment", "harness": "claude"}
 
     monkeypatch.setattr("fno.rust_binary.verb_call", _render)
@@ -256,6 +258,8 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
 
     receipt = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert receipt["outcome"] == "queued"
-    assert rendered["pr_number"] == 1584
-    assert rendered["branch"] is None
+    argv = calls[0]
+    assert argv[:3] == ["review-level", "capability", "invocation"]
+    assert "--pr-number" in argv and "1584" in argv
+    assert "--branch" not in argv
     assert held[0]["branch"] == "feature/pr-head"

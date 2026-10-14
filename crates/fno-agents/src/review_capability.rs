@@ -1228,18 +1228,42 @@ mod tests {
     }
 
     /// AC3-EDGE, claude side: a searched-and-absent skill refuses, naming
-    /// the roots searched.
+    /// the roots searched. The roots are injected, so the boundary is
+    /// pinned without touching HOME.
     #[test]
     fn claude_dispatch_absent_skill_refuses() {
-        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence(
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&root).unwrap();
+        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence_in(
             "no-such-skill-anywhere",
             "claude",
             "config.dispatch.verb_registry",
+            vec![root],
         );
         assert_eq!(status, "unavailable");
         assert!(
             reason.contains("resolves in none of the roots searched"),
             "reason must name the miss, got: {reason}"
+        );
+    }
+
+    /// A root set where nothing exists cannot answer absent - the probe
+    /// degrades to unverifiable instead of inventing a search it never ran.
+    #[test]
+    fn claude_dispatch_without_roots_answers_unverifiable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope").join("skills");
+        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence_in(
+            "no-such-skill-anywhere",
+            "claude",
+            "config.dispatch.verb_registry",
+            vec![missing],
+        );
+        assert_eq!(status, "unverifiable");
+        assert!(
+            reason.contains("no skill root exists on this host"),
+            "reason must name the unanswerable probe, got: {reason}"
         );
     }
 }

@@ -164,6 +164,17 @@ APPS_OK = {
 }
 
 
+SUBAGENT_REVIEWER_YAML = (
+    "[subagent-only]\n"
+    "    reviewer_registry:\n"
+    "      subagent-only:\n"
+    "        kind: local-attestation\n"
+    "        requires: subagent-dispatch\n"
+    "        invocation: /fno:review\n"
+    "        asserts: review-evidence\n"
+)
+
+
 def _stub_verb_call(monkeypatch: pytest.MonkeyPatch, answers: dict):
     """Stub the door on its argv tail (`reviewers` vs `github-apps`). Returns
     the calls so payload plumbing is assertable."""
@@ -268,7 +279,7 @@ def test_unverifiable_verdicts_are_echoed_as_notes_not_refusals(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     """An unclassifiable session proceeds, but never silently."""
-    _config(tmp_path, monkeypatch, "[subagent-only]")
+    _config(tmp_path, monkeypatch, SUBAGENT_REVIEWER_YAML)
     _stub_verb_call(
         monkeypatch,
         {"reviewers": SUBAGENT_UNVERIFIABLE, "github-apps": APPS_OK},
@@ -369,7 +380,7 @@ def test_init_command_prints_the_unverifiable_note(
     _stub_verb_call(
         monkeypatch, {"reviewers": SUBAGENT_UNVERIFIABLE, "github-apps": APPS_OK}
     )
-    r = _invoke_init(tmp_path, monkeypatch, "[subagent-only]", {})
+    r = _invoke_init(tmp_path, monkeypatch, SUBAGENT_REVIEWER_YAML, {})
     assert "note target init:" in r.output
     assert "cannot be verified" in r.output
     # It got past the reviewer check and died on the absent plugin root instead.

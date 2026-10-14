@@ -216,6 +216,17 @@ fn claude_skill_roots() -> Vec<std::path::PathBuf> {
 /// port collapses (the Python resolver gated on harness; the Rust one
 /// probed every harness).
 pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'static str, String) {
+    skill_presence_in(name, harness, context, claude_skill_roots())
+}
+
+/// The roots are injected so the absent/unverifiable boundary is testable
+/// without mutating HOME (cargo runs unit tests in parallel).
+pub(crate) fn skill_presence_in(
+    name: &str,
+    harness: &str,
+    context: &str,
+    roots: Vec<std::path::PathBuf>,
+) -> (&'static str, String) {
     let proceed = "Proceeding - if the gate does go unmet, run the skill by hand";
     if harness != "claude" {
         return (
@@ -237,7 +248,7 @@ pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'sta
         );
     }
     let mut searched: Vec<String> = Vec::new();
-    for root in claude_skill_roots() {
+    for root in &roots {
         if !root.is_dir() {
             continue;
         }
@@ -250,7 +261,7 @@ pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'sta
         }
     }
     if searched.is_empty() {
-        let looked: Vec<String> = claude_skill_roots()
+        let looked: Vec<String> = roots
             .iter()
             .map(|r| r.to_string_lossy().to_string())
             .collect();
