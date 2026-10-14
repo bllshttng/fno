@@ -81,13 +81,32 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
 /// (d-d0c63de7). Bounded, never terminal (d-10a72d88): no exit is modeled.
 const REPORT_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The row shapes the claude roster POLICES: the fleet mints a claude bg
-/// worker with origin `spawn` (claude_ask.rs, claude_stream_entry.rs), so
-/// for these a roster miss is a definitive death. Every other pid-less row -
-/// the user's own session (origin `operator`, d-d0c63de7), an adopted row, a
-/// non-claude native - is outside the roster's jurisdiction.
+/// The row shapes the claude roster POLICES: a claude bg worker minted by
+/// the ask lane (origin `spawn`, substrate `thread`, no pane ref, no
+/// unproven-lineage receipt), whose liveness the daemon roster settles. A
+/// roster miss on one of these is a definitive death. Every other pid-less
+/// row - the user's own session (origin `operator`, d-d0c63de7), an adopted
+/// row, a non-claude native, a hosted pane row whose pid lookup failed, a
+/// spawned row re-minted at its session report - is outside the roster's
+/// jurisdiction, and its report freshness is the evidence.
 fn is_roster_policed(e: &RegistryEntry) -> bool {
-    e.harness_name() == "claude" && e.origin.as_deref() == Some("spawn")
+    if e.harness_name() != "claude" || e.origin.as_deref() != Some("spawn") {
+        return false;
+    }
+    // A hosted pane row is not a daemon job: pid None is a supported
+    // outcome there (the pane pid lookup can fail) and the roster never
+    // lists it. The mux ref the pane restamp heals, or an explicit
+    // interactive host mode, names the shape.
+    if e.mux.is_some() || e.host_mode.as_deref() == Some(crate::state::HOST_MODE_INTERACTIVE) {
+        return false;
+    }
+    // A spawned row whose original went missing before its first report
+    // re-mints at that report under an unproven lineage; the receipt names
+    // it, and freshness is its evidence too.
+    if e.lineage_reason.as_deref().is_some_and(|r| !r.is_empty()) {
+        return false;
+    }
+    true
 }
 
 /// Whether the row's last session report is inside [`REPORT_FRESHNESS`].
@@ -215,6 +234,51 @@ mod tests {
         let mut warnings = Vec::new();
         let rows = live_rows(&reg, &mut warnings);
         assert_eq!(rows.len(), 0, "{warnings:?}");
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    #[test]
+    fn a_pane_row_with_a_failed_pid_lookup_counts_on_a_fresh_stamp() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        // A hosted pane row whose pid lookup failed: pid None is supported
+        // there and the roster never lists it, so the pane restamp's mux ref
+        // takes the row out of the roster-policed shape and the report's
+        // freshness stands in.
+        let mut pane = pidless_reported_row("pane-worker", "spawn", "claude");
+        pane.mux = Some(crate::state::MuxRef {
+            session: "sess".into(),
+            pane_id: 2,
+        });
+        pane.last_report_at = Some(stamp_ago(60));
+        let reg = write_reg(&dir, &[pane]);
+        let mut warnings = Vec::new();
+        let rows = live_rows(&reg, &mut warnings);
+        assert_eq!(rows.len(), 1, "{warnings:?}");
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    #[test]
+    fn a_report_reminted_spawned_row_counts_on_a_fresh_stamp() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        // A spawned row whose original went missing before its first report
+        // re-mints under an unproven lineage (native_adopt.rs:112); the
+        // receipt names it, and the freshness of its own report counts it.
+        let mut reminted = pidless_reported_row("reminted", "spawn", "claude");
+        reminted.lineage_reason =
+            Some("spawned row absent at first report; minted at the session report".into());
+        reminted.last_report_at = Some(stamp_ago(60));
+        let reg = write_reg(&dir, &[reminted]);
+        let mut warnings = Vec::new();
+        let rows = live_rows(&reg, &mut warnings);
+        assert_eq!(rows.len(), 1, "{warnings:?}");
         std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
