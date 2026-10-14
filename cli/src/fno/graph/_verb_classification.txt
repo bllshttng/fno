@@ -18,19 +18,14 @@ decompose
 note
 supersede
 # board and queue state
-reprioritize
 # stamps contained_in + parent under the lock
 contain
 queue
 unqueue
-pick
-requeue
 # graph-state read: under an external backend the local graph is not
 # the store, so the read must refuse with the rest
-stuck-epics
 # orchestration that stamps nodes
 reconcile-findings
-lanes
 lane-fill
 # join spawns workers into a held worktree; the joiners, not join,
 # write task rows ()
@@ -55,7 +50,6 @@ provenance
 undispatched
 # replays the post-publish views after a native (mux) store write;
 # renders only, never a graph write
-discover
 # completion works on any backend by design (task 4.1)
 done
 # footnote-owned sidecar files, no graph write
