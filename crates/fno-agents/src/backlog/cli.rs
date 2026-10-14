@@ -331,6 +331,7 @@ pub fn run(args: &[String]) -> i32 {
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),
+        "discover" => super::finale::run_discover(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

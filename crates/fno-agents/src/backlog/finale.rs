@@ -12,6 +12,505 @@ use crate::graph_store;
 use crate::lanes::LANE_SLOT_PREFIX;
 
 // ---------------------------------------------------------------------------
+// discover - the expired-deferral worklist (read-only)
+// ---------------------------------------------------------------------------
+
+const DISCOVER_HELP: &str = "Usage: fno backlog discover [--limit N] [--json|-J]
+
+Review expired deferred nodes without changing backlog state. The output is
+a ranked worklist for a human; it never closes, undefers, or writes a node.
+";
+
+/// The wheel's `fno.graph.discovery._PATH_RE` shape: a repo-relative path
+/// token embedded in prose (no backticks, no anchors).
+fn path_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'.';
+    let mut i = 0;
+    while i < n {
+        // A token starts after a non-word byte (the wheel's negative
+        // lookbehind) and looks like a slash path.
+        if is_word(bytes[i]) && (i == 0 || !is_word(bytes[i - 1])) {
+            let start = i;
+            let mut slashes = 0;
+            let mut j = i;
+            let mut last = start;
+            while j < n {
+                let b = bytes[j];
+                if b == b'/' {
+                    if j == start || slashes >= 16 {
+                        break;
+                    }
+                    slashes += 1;
+                    j += 1;
+                } else if is_word(b) || b == b'-' {
+                    j += 1;
+                    last = j;
+                } else {
+                    break;
+                }
+            }
+            if slashes >= 1 && last > start {
+                out.push(text[start..last].to_string());
+            }
+            i = j.max(start + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The `fno backlog maintain` stale-drain stamp shape, at any staleness
+/// days: the deferral is a 30-day park, not a decision.
+fn stale_drain_reason_still_true(node: &Value) -> bool {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let Some(reason) = node.get("deferred_reason").and_then(Value::as_str) else {
+        return false;
+    };
+    if !reason.starts_with("stale >") || !reason.ends_with("d, drained by maintain") {
+        return false;
+    }
+    let Some(deferred_at) = node.get("deferred_at").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(parked) =
+        super::maintenance_archive::parse_ts(Some(&Value::String(deferred_at.to_string())))
+    else {
+        return false;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let age_days = (now - parked.timestamp()) as f64 / 86400.0;
+    age_days >= 30.0
+}
+
+/// The wheel's `_file_evidence`: repo-relative paths the node's own text
+/// names that exist on disk right now.
+fn file_evidence(node: &Value) -> Vec<String> {
+    let mut text = node
+        .get("details")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    text.push(' ');
+    text.push_str(node.get("title").and_then(Value::as_str).unwrap_or(""));
+    path_tokens(&text)
+        .into_iter()
+        .filter(|p| std::path::Path::new(p).is_file())
+        .collect()
+}
+
+struct Assessment {
+    verdict: &'static str,
+    evidence: Vec<Value>,
+    reason: String,
+}
+
+/// The wheel's assess ladder: merged PR, then recorded files, then a top
+/// candidate, then the still-true stale drain, then undecided.
+fn assess_one(
+    node: &Value,
+    cands: &[Value],
+    pr_merged: &dyn Fn(i64) -> Option<bool>,
+) -> Assessment {
+    let pr_number = node.get("pr_number").and_then(Value::as_i64);
+    if let Some(pr) = pr_number {
+        let satisfied = node.get("status").and_then(Value::as_str) == Some("done")
+            || node.get("completed_at").is_some()
+            || node.get("merged_at").is_some()
+            || node.get("pr_merged") == Some(Value::Bool(true))
+            || pr_merged(pr).unwrap_or(false);
+        if satisfied {
+            return Assessment {
+                verdict: "satisfied",
+                evidence: vec![json!(format!("PR#{pr}"))],
+                reason: "merged PR recorded on node".into(),
+            };
+        }
+    }
+    let has_pr = pr_number.is_some();
+    let files = file_evidence(node);
+    if !files.is_empty() && (node.get("status").and_then(Value::as_str) == Some("done") || has_pr) {
+        return Assessment {
+            verdict: "satisfied",
+            evidence: files.into_iter().map(Value::String).collect(),
+            reason: "existing file recorded by node".into(),
+        };
+    }
+    if let Some(top) = cands.first() {
+        let lanes = top["lanes"]
+            .as_array()
+            .map(|a| {
+                let mut names: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
+                names.sort_unstable();
+                names.join(", ")
+            })
+            .unwrap_or_default();
+        return Assessment {
+            verdict: "duplicate",
+            evidence: vec![top["node_id"].clone()],
+            reason: format!("candidate surfaced by {lanes}"),
+        };
+    }
+    if stale_drain_reason_still_true(node) {
+        let reason_text = node
+            .get("deferred_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return Assessment {
+            verdict: "still_real",
+            evidence: vec![json!(format!("deferred reason: {reason_text}"))],
+            reason: "the exact expiry condition remains true".into(),
+        };
+    }
+    Assessment {
+        verdict: "undecided",
+        evidence: vec![],
+        reason: "no duplicate or completion evidence, and the original condition is not provable"
+            .into(),
+    }
+}
+
+/// The wheel's `_fts_search` degraded lane: a substring pass over title,
+/// slug and details (also the positive control's fallback).
+fn substring_matches(query: &str, pool: &[Value]) -> Vec<String> {
+    let lowered = query.to_lowercase();
+    pool.iter()
+        .filter_map(|e| {
+            let id = text_at(e, "id")?;
+            let hay = format!(
+                "{} {} {}",
+                e.get("title").and_then(Value::as_str).unwrap_or(""),
+                e.get("slug").and_then(Value::as_str).unwrap_or(""),
+                e.get("details").and_then(Value::as_str).unwrap_or("")
+            )
+            .to_lowercase();
+            hay.contains(&lowered).then(|| id.to_string())
+        })
+        .collect()
+}
+
+pub fn run_discover(tail: &[String]) -> i32 {
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{DISCOVER_HELP}");
+        return 0;
+    }
+    let mut limit: i64 = 20;
+    let mut json_output = false;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "--limit" | "-L" => {
+                let raw = inline.or_else(|| it.next().cloned()).unwrap_or_default();
+                limit = raw.parse().unwrap_or(0);
+                if limit < 1 {
+                    eprintln!("discover: --limit must be >= 1");
+                    return 2;
+                }
+            }
+            "--json" | "-J" => json_output = true,
+            other => {
+                eprintln!("discover: unknown argument '{other}'");
+                return 2;
+            }
+        }
+    }
+    let graph = settings::graph_path();
+    let store = super::api::Store::new(&graph);
+    let rows = match super::api::rows(&store) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e.0);
+            return 1;
+        }
+    };
+    let expired: Vec<&Value> = rows
+        .iter()
+        .filter(|e| {
+            e.get("status").and_then(Value::as_str) == Some("deferred")
+                && e.get("deferred_kind").and_then(Value::as_str) == Some("expired")
+        })
+        .collect();
+    let excluded_by_kind = rows
+        .iter()
+        .filter(|e| {
+            e.get("status").and_then(Value::as_str) == Some("deferred")
+                && e.get("deferred_kind").and_then(Value::as_str) != Some("expired")
+        })
+        .count();
+    // The gh-verified merge state, cached per PR (deferral clears every
+    // node-side completion field, so the check is the only truth).
+    let repo = crate::finalize::repo_identity_from_git_remote(
+        &std::env::current_dir().unwrap_or_default(),
+    )
+    .map(|full| {
+        full.splitn(3, '/')
+            .nth(1)
+            .map(|rest| {
+                let idx = full.find(rest).unwrap_or(0);
+                full[idx..].to_string()
+            })
+            .unwrap_or(full.clone())
+    });
+    let pr_merged = |number: i64| -> Option<bool> {
+        let Some(slug) = &repo else {
+            return None;
+        };
+        let out = std::process::Command::new("gh")
+            .args([
+                "api",
+                &format!("repos/{slug}/pulls/{number}"),
+                "--jq",
+                ".merged",
+            ])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        match text.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        }
+    };
+
+    let mut worklist: Vec<Value> = Vec::new();
+    let mut degraded_warnings: Vec<String> = Vec::new();
+    let mut fts_degraded = false;
+    for entry in &expired {
+        let title = entry.get("title").and_then(Value::as_str).unwrap_or("");
+        let details = entry.get("details").and_then(Value::as_str).unwrap_or("");
+        let exclude = text_at(entry, "id").unwrap_or("");
+        let pool: Vec<Value> = rows
+            .iter()
+            .filter(|e| text_at(e, "id").map(|i| i != exclude).unwrap_or(false))
+            .cloned()
+            .collect();
+        // The FTS lane: one query, no cap (the wheel passes limit=None).
+        let query = format!("{} {}", title, details);
+        let (fts_ids, fts_warning): (Vec<String>, Option<String>) =
+            match super::search::search(&store, &query, None) {
+                Ok(ids) => (ids, None),
+                Err(e) => {
+                    fts_degraded = true;
+                    (
+                        substring_matches(&query, &pool),
+                        Some(format!(
+                            "fts lane unavailable ({e}); substring fallback ranked the candidates"
+                        )),
+                    )
+                }
+            };
+        if let Some(w) = &fts_warning {
+            if !degraded_warnings.contains(w) {
+                degraded_warnings.push(w.clone());
+            }
+        }
+        let by_id: std::collections::BTreeMap<String, Value> = pool
+            .iter()
+            .filter_map(|e| text_at(e, "id").map(|i| (i.to_string(), e.clone())))
+            .collect();
+        let incoming = json!({
+            "id": "__incoming__",
+            "title": title,
+            "details": details,
+            "domain": entry.get("domain").and_then(Value::as_str).unwrap_or("code"),
+        });
+        let related = super::relatedness::similar_nodes(&incoming, &pool, usize::MAX, None);
+        let mut all_ids: Vec<String> = Vec::new();
+        all_ids.extend(fts_ids.iter().filter(|i| by_id.contains_key(*i)).cloned());
+        all_ids.extend(related.iter().map(|(id, _, _)| id.clone()));
+        all_ids.sort();
+        all_ids.dedup();
+        let mut cands: Vec<Value> = Vec::new();
+        for node_id in &all_ids {
+            let Some(row) = by_id.get(node_id) else {
+                continue;
+            };
+            let (score, reason) = related
+                .iter()
+                .find(|(id, _, _)| id == node_id)
+                .map(|(_, s, r)| (*s, r.clone()))
+                .unwrap_or_else(|| {
+                    let (s, r) = super::relatedness::score_pair(&incoming, row, false);
+                    (s, r)
+                });
+            let lanes: Vec<&str> = [
+                ("fts", fts_ids.contains(node_id)),
+                (
+                    "relatedness",
+                    related.iter().any(|(id, _, _)| id == node_id),
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, present)| *present)
+            .map(|(name, _)| name)
+            .collect();
+            cands.push(json!({
+                "node_id": node_id,
+                "score": score,
+                "lanes": lanes,
+                "reason": reason,
+            }));
+        }
+        cands.sort_by(|a, b| {
+            b["score"]
+                .as_f64()
+                .unwrap_or(0.0)
+                .partial_cmp(&a["score"].as_f64().unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a["node_id"]
+                        .as_str()
+                        .unwrap_or("")
+                        .cmp(b["node_id"].as_str().unwrap_or(""))
+                })
+        });
+        cands.truncate(limit.max(0) as usize);
+        let assessment = assess_one(entry, &cands, &pr_merged);
+        worklist.push(json!({
+            "id": entry.get("id"),
+            "title": entry.get("title"),
+            "verdict": assessment.verdict,
+            "evidence": assessment.evidence,
+            "reason": assessment.reason,
+            "candidates": cands,
+        }));
+    }
+    worklist.sort_by(|a, b| {
+        let sa = a["candidates"]
+            .as_array()
+            .and_then(|c| c.first())
+            .and_then(|c| c["score"].as_f64())
+            .unwrap_or(0.0);
+        let sb = b["candidates"]
+            .as_array()
+            .and_then(|c| c.first())
+            .and_then(|c| c["score"].as_f64())
+            .unwrap_or(0.0);
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a["id"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(b["id"].as_str().unwrap_or(""))
+            })
+    });
+    if !worklist.is_empty()
+        && worklist
+            .iter()
+            .all(|r| r["candidates"].as_array().is_some_and(|c| !c.is_empty()))
+    {
+        eprintln!("failed instrument: every expired node matched a candidate; refusing to report an all-match worklist");
+        return 2;
+    }
+    let mut positive: Option<Value> = None;
+    if !worklist.is_empty()
+        && worklist
+            .iter()
+            .all(|r| r["candidates"].as_array().is_some_and(|c| c.is_empty()))
+    {
+        let control_query = expired
+            .first()
+            .map(|e| {
+                e.get("title")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .unwrap_or_else(|| text_at(e, "id").unwrap_or("").to_string())
+            })
+            .unwrap_or_default();
+        let matches = match super::search::search(&store, &control_query, None) {
+            Ok(ids) => ids,
+            Err(_) => {
+                fts_degraded = true;
+                substring_matches(&control_query, &rows)
+            }
+        };
+        if matches.is_empty() {
+            eprintln!("failed instrument: the positive control matched nothing, so the all-empty worklist is not trusted");
+            return 2;
+        }
+        positive = Some(json!({
+            "query": control_query,
+            "matches": matches,
+            "lane": if fts_degraded { "substring" } else { "fts" },
+            "degraded": fts_degraded,
+        }));
+    }
+    if json_output {
+        let report = json!({
+            "population": "deferred_kind=expired",
+            "assessed": expired.len(),
+            "excluded_by_kind": excluded_by_kind,
+            "degraded": !degraded_warnings.is_empty(),
+            "warnings": degraded_warnings,
+            "positive_control": positive,
+            "worklist": worklist,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        return 0;
+    }
+    println!(
+        "discover: assessed={} excluded-by-kind={}",
+        expired.len(),
+        excluded_by_kind
+    );
+    for row in &worklist {
+        let evidence = row["evidence"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let evidence = if evidence.is_empty() {
+            row["reason"].as_str().unwrap_or("").to_string()
+        } else {
+            evidence
+        };
+        println!(
+            "{}\t{}\t{}",
+            row["id"].as_str().unwrap_or(""),
+            row["verdict"].as_str().unwrap_or(""),
+            evidence
+        );
+    }
+    if let Some(p) = &positive {
+        println!(
+            "positive control: {:?} -> {} ({})",
+            p["query"].as_str().unwrap_or(""),
+            p["matches"]
+                .as_array()
+                .map(|a| a
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_else(|| "no matches".to_string()),
+            p["lane"].as_str().unwrap_or("")
+        );
+    }
+    for w in &degraded_warnings {
+        eprintln!("degraded: {w}");
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
 // new - the scoped-add legacy word
 // ---------------------------------------------------------------------------
 
