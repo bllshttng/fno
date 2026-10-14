@@ -1388,6 +1388,7 @@ stops
             let mut r = req("does the paint look right?", &root);
             r.subject = Some(subject.to_string());
             r.node = Some(node.to_string());
+            r.ask = Some("approve the paint at this head".to_string());
             run_intake(&r, &home)
         };
         let first = ask("visual approval PR 7 at 1111111a", "x-aaaa");
