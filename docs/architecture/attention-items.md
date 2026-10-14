@@ -91,6 +91,20 @@ A reversible question that carries a recommendation is one the asker must decide
 
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 
+## The machine close
+
+When its subject resolves, an open question closes by itself. Three rules, first match wins.
+
+- `pr-merged`: a node the question points at reads `merge_status: merged` for PR P. The subject names P: head-scoped, or `PR P` or `#P` in the text. This rule ignores `why_user`. The reason reads `pr-merged: PR P merged (node N)`.
+- `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
+- `node-closed` / `moot`: a node the question points at reads done or superseded. A user-only `why_user` closes `moot`, every other question closes `node-closed`. The reason reads `node-closed: N done` or `moot: N done`.
+
+A head-scoped subject names one commit. Its last token, after the last space or `@`, is 7 to 40 lowercase hex characters with at least one digit. `visual approval PR 7 at 05ea5bcc` and `merge-grant:footnote#3354@d2ad514d` are the two shipped spellings.
+
+The derived close claims no authority. The row keeps the answer empty and puts the outcome in `reason`, so the page reads `closed`, not `answered`. No decision row, no grant, no answer mail. The machine close never answers for the user. It never touches a question whose subject has not resolved. A taste ask about rules on a live node stays open.
+
+The close runs two ways: the daemon sweep every hour, and the bell's Questions-tab `c` key, which runs `fno-agents needs --clear-settled` on demand. A re-ask at a new head also closes the older head's question at the intake, so one open question stays per head family. Preview the read with `fno-agents needs --items --json`: settled items carry `settled: true`. Count them before the sweep or the key.
+
 ## Question pages
 
 One page per question. The page name is `<ask date>-<question id>-<slug>-<node>.md`, for example `20260922-q-aaaaaaaa-wont-do-deferral-kind-x-bbbb.md`. When the frontmatter `question_id` is the id inside the file name, the file is a page. A sync client's `q-1 (conflicted copy)` is ignored. Closed pages move to `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when the name is taken).
