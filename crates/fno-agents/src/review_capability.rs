@@ -788,10 +788,10 @@ fn app_is_recognized(login: &str) -> bool {
 /// by contract: None on ANY doubt so init never refuses on a probe it could
 /// not run. A clean zero is the only False, and only a login footnote does
 /// not recognize ever reaches this probe.
-fn app_ever_acted(login: &str, cwd: Option<&Path>) -> Option<bool> {
-    let dir = cwd
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+fn app_ever_acted(login: &str, _cwd: Option<&Path>) -> Option<bool> {
+    // The probe runs the two gh calls from the door process's cwd, which IS
+    // the caller's repo (the transport takes no root name), so the explicit
+    // cwd parameter is honored by inheritance, not by passing it down.
     let run = |args: &[&str]| -> Option<String> {
         let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let out =
