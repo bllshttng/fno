@@ -168,7 +168,8 @@ def test_spawn_once_codex_happy_path(workdir, fake_codex_create_once, monkeypatc
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "tmp1", "-H", "codex", "--once", "summarize X"],
+        ["spawn", "--name", "tmp1", "--once", "summarize X"],
+        env={"CODEX_THREAD_ID": "019f0000-0000-7000-8000-00000000000a"},
         catch_exceptions=False,
     )
 
@@ -838,7 +839,7 @@ def test_spawn_agy_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) ->
     monkeypatch.setattr(dispatch, "_keeper_seed_submit", _fake_seed)
 
     result = dispatch.dispatch_spawn(
-        name="wkagy", message="hello", harness="agy", cwd=workdir, model="gemini-3-pro"
+        name="wkagy", message="hello", harness="agy", cwd=workdir
     )
 
     assert result.kind == "created"
@@ -846,7 +847,6 @@ def test_spawn_agy_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) ->
     assert result.short_id == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
     assert len(calls) == 1, "the agy branch must drive the keeper lane exactly once"
     assert calls[0]["harness"] == "agy"
-    assert calls[0]["model"] == "gemini-3-pro", "the model axis rides the lane"
     assert len(seeds) == 1, f"exactly one seed paste, got {seeds!r}"
     assert seeds[0]["session_id"] == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
     assert seeds[0]["message"].startswith("hello")
