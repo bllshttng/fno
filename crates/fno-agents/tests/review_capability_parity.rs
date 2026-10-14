@@ -122,7 +122,6 @@ impl Case {
 const CLAUDE_MARK: &[(&str, &str)] = &[("CLAUDE_CODE_SESSION_ID", "s-claude-1")];
 const CODEX_MARK: &[(&str, &str)] = &[("CODEX_THREAD_ID", "s-codex-1")];
 const GEMINI_MARK: &[(&str, &str)] = &[("GEMINI_SESSION_ID", "s-gemini-1")];
-const UNATTENDED: &[(&str, &str)] = &[("TARGET_UNATTENDED", "1")];
 
 fn app(
     label: &'static str,
