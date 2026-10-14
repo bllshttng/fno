@@ -910,7 +910,7 @@ mod tests {
     fn a_claim_only_name_never_flavors_a_mint() {
         // --launch-name with NO matching record: the session is the user's
         // own. The row mints operator under the draw name, never the title.
-        let (dir, home) = temp_home("claim_name_operator");
+        let (_dir, home) = temp_home("claim_name_operator");
         let resp = handle_session_report(
             &home,
             &emitter(&home),
