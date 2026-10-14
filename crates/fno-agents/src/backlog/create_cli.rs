@@ -14,7 +14,7 @@ use super::{birth, node_ref};
 
 /// The captured `fno backlog add --help` (typer's rendering, byte for byte);
 /// the cut-over wave prints this where the forward used to.
-const ADD_HELP: &str = include_str!("create_help.txt");
+pub(crate) const ADD_HELP: &str = include_str!("create_help.txt");
 
 const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
 const SOURCE_KINDS: [&str; 5] = [
@@ -50,6 +50,17 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
+    // The legacy `new` word's extras (node_builder.cmd_new's surface, which
+    // `fno inbox drain` files with): scoped opt-outs and inbox provenance.
+    pub source_project: Option<String>,
+    pub source_inbox_msg: Option<String>,
+    pub source_session_id: Option<String>,
+    pub unscoped: bool,
+    pub force_domain: bool,
+    /// Set programmatically by the `new` word's arm (never a CLI flag): the
+    /// scoped-create spelling stamps `source: "fno-new"` where plain add
+    /// records null.
+    pub scoped_new: bool,
     pub help: bool,
 }
 
@@ -81,6 +92,9 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--tag",
         "--source-node",
         "--source-kind",
+        "--source-project",
+        "--source-inbox-msg",
+        "--source-session-id",
         "--related",
     ];
     if long.contains(&arg) {
@@ -99,6 +113,8 @@ fn flag_name(arg: &str) -> Option<&str> {
 fn flag_bool(arg: &str) -> Option<&'static str> {
     match arg {
         "--blocks-everything" => Some("--blocks-everything"),
+        "--unscoped" => Some("--unscoped"),
+        "--force-domain" => Some("--force-domain"),
         _ => None,
     }
 }
@@ -120,6 +136,12 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
             "--help" | "-h" => return ParsedAdd::Help,
             "--blocks-everything" => {
                 args.blocks_everything = true;
+            }
+            "--unscoped" => {
+                args.unscoped = true;
+            }
+            "--force-domain" => {
+                args.force_domain = true;
             }
             _ if flag_bool(arg).is_some() => unreachable!(),
             _ if flag_name(arg).is_some() => {
@@ -164,6 +186,9 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--batch" => args.batch = Some(value),
                     "--source-node" => args.source_node = Some(value),
                     "--source-kind" => args.source_kind = value,
+                    "--source-project" => args.source_project = Some(value),
+                    "--source-inbox-msg" => args.source_inbox_msg = Some(value),
+                    "--source-session-id" => args.source_session_id = Some(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -870,27 +895,35 @@ pub(crate) fn create_node(
     // Store an absolute path so downstream detection finds matches. No
     // explicit --cwd: record the canonical main checkout, not os.getcwd().
     let cwd_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolved_cwd: String = match &args.cwd {
-        Some(cwd) => {
-            let p = Path::new(cwd);
-            let joined = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                cwd_root.join(p)
-            };
-            joined.to_string_lossy().into_owned()
-        }
-        None => match &args.project {
-            Some(project) => {
-                super::settings::project_root(project).unwrap_or_else(|| repo_root(&cwd_root))
+    // --unscoped is the `new` word's opt-out (node_builder.cmd_new's
+    // contract): the node records project=null and cwd=null, no auto-scope.
+    let (resolved_project, resolved_cwd): (Option<String>, Option<String>) = if args.unscoped {
+        (None, None)
+    } else {
+        let cwd: String = match &args.cwd {
+            Some(cwd) => {
+                let p = Path::new(cwd);
+                let joined = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    cwd_root.join(p)
+                };
+                joined.to_string_lossy().into_owned()
             }
-            None => repo_root(&cwd_root),
-        },
+            None => match &args.project {
+                Some(project) => {
+                    super::settings::project_root(project).unwrap_or_else(|| repo_root(&cwd_root))
+                }
+                None => repo_root(&cwd_root),
+            },
+        };
+        (
+            args.project
+                .clone()
+                .or_else(|| detect_project(&PathBuf::from(&cwd))),
+            Some(cwd),
+        )
     };
-    let resolved_project = args
-        .project
-        .clone()
-        .or_else(|| detect_project(&PathBuf::from(&resolved_cwd)));
 
     // One snapshot read feeds the fail-closed assertions, the mint, and the
     // mutation: an unresolvable assertion must leave the graph untouched. The
@@ -1006,13 +1039,21 @@ pub(crate) fn create_node(
             "pr_url": Value::Null,
             "merge_status": Value::Null,
             "created_at": now,
-            "source": Value::Null,
+            // The `new` word's birth mark (node_builder.cmd_new stamped
+            // source="fno-new"; plain add records null).
+            "source": if args.scoped_new {
+                Value::String("fno-new".to_string())
+            } else {
+                Value::Null
+            },
             "source_kind": args.source_kind,
-            "source_project": Value::Null,
-            "source_inbox_msg": Value::Null,
+            "source_project": args.source_project,
+            "source_inbox_msg": args.source_inbox_msg,
             "artifact_url": Value::Null,
             "completion_note": Value::Null,
-            "source_session_id": source_session_id,
+            // A --source-session-id flag (the `new` word's inbox provenance)
+            // outranks the ambient walk's value.
+            "source_session_id": args.source_session_id.clone().or(source_session_id),
             "source_harness": source_harness,
             "source_model": source_model,
             "source_effort": source_effort,
@@ -1417,6 +1458,41 @@ mod tests {
             ParsedAdd::Refusal { exit, .. } => assert_eq!(exit, 2),
             _ => panic!("refuses"),
         }
+    }
+
+    #[test]
+    fn the_new_word_flags_parse() {
+        // The scoped-create word's surface (node_builder.cmd_new's contract,
+        // which `fno inbox drain` files with): provenance flags parse, the
+        // two opt-outs are bare flags, and difficulty stays optional here
+        // (run_new injects the medium default).
+        let tail: Vec<String> = [
+            "T",
+            "--source-kind",
+            "from_inbox",
+            "--source-project",
+            "proj",
+            "--source-inbox-msg",
+            "msg-01",
+            "--source-session-id",
+            "sess-7",
+            "--unscoped",
+            "--force-domain",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let a = match parse(&tail) {
+            ParsedAdd::Args(a) => a,
+            _ => panic!("parses"),
+        };
+        assert_eq!(a.source_kind, "from_inbox");
+        assert_eq!(a.source_project.as_deref(), Some("proj"));
+        assert_eq!(a.source_inbox_msg.as_deref(), Some("msg-01"));
+        assert_eq!(a.source_session_id.as_deref(), Some("sess-7"));
+        assert!(a.unscoped);
+        assert!(a.force_domain);
+        assert_eq!(a.difficulty, None);
     }
 
     #[test]

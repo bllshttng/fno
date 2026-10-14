@@ -154,10 +154,9 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
     def fake_run(cmd, *args, **kwargs):
         if len(cmd) >= 2 and cmd[1] == "mail-envelope":
             return real_run(cmd, *args, **kwargs)
-        if cmd[:4] == ["fno-py", "backlog", "new", "--help"]:
-            return _FakeRun(stdout="--source-inbox-thread\n")
-        if cmd[:3] == ["fno-py", "backlog", "new"]:
-            return _FakeRun(stdout="created node ab-abc123\n")
+        # The mux binary: `fno backlog new` is the native create door.
+        if cmd[:3] == ["fno", "backlog", "new"]:
+            return _FakeRun(stdout='{"id": "ab-abc123", "title": "t"}\n')
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     monkeypatch.setattr(drain_mod, "triage_thread", fake_triage_thread)

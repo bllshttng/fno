@@ -516,10 +516,45 @@ pub fn run_discover(tail: &[String]) -> i32 {
 // ---------------------------------------------------------------------------
 
 pub fn run_new(tail: &[String]) -> i32 {
-    // `new` resolves to add/scoped in the catalog (commands.rs from_legacy);
-    // the create door already binds the project from the cwd, so the arm is
-    // a straight delegate with no separate surface.
-    super::create_cli::run(tail)
+    // `new` is the scoped-create word (node_builder.cmd_new's contract, now
+    // the create door's): difficulty defaults to medium where plain add
+    // demands one, the door carries the scoped opt-outs and inbox provenance
+    // flags (`fno inbox drain` files with them), and the birth stamps
+    // source="fno-new" - the receipt shape matches the add door's.
+    let has_difficulty = tail.windows(2).any(|w| w[0] == "--difficulty");
+    let mut args: Vec<String> = tail.to_vec();
+    if !has_difficulty {
+        args.push("--difficulty".to_string());
+        args.push("medium".to_string());
+    }
+    let mut parsed = match super::create_cli::parse(&args) {
+        super::create_cli::ParsedAdd::Help => {
+            print!("{}", super::create_cli::ADD_HELP);
+            return 0;
+        }
+        super::create_cli::ParsedAdd::Refusal { message, exit } => {
+            eprintln!("{message}");
+            return exit;
+        }
+        super::create_cli::ParsedAdd::Args(a) => a,
+    };
+    parsed.scoped_new = true;
+    match super::create_cli::create_node(&parsed, &|_| None) {
+        Ok(born) => {
+            println!(
+                "{}",
+                super::render::py_json_pretty(&serde_json::json!({
+                    "id": born.id,
+                    "title": parsed.title
+                }))
+            );
+            0
+        }
+        Err(r) => {
+            eprintln!("{}", r.message);
+            r.exit
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -950,18 +985,19 @@ fn uri_encode(text: &str, safe_slash: bool) -> String {
 }
 
 /// The global config's `[obsidian]` block: vault when enabled (the wheel's
-/// read_global_block shape).
+/// read_global_block shape). The global config is TOML; serde_json's
+/// `from_str` would refuse it and the opener would silently never arm.
 fn obsidian_vault() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let text =
         std::fs::read_to_string(std::path::Path::new(&home).join(".fno/config.toml")).ok()?;
-    let value: Value = text.parse().ok()?;
+    let value: toml::Value = toml::from_str(&text).ok()?;
     let obs = value.get("obsidian")?;
-    if obs.get("enabled").and_then(Value::as_bool) != Some(true) {
+    if obs.get("enabled").and_then(toml::Value::as_bool) != Some(true) {
         return None;
     }
     obs.get("vault")
-        .and_then(Value::as_str)
+        .and_then(toml::Value::as_str)
         .filter(|v| !v.is_empty())
         .map(String::from)
 }
@@ -1124,10 +1160,10 @@ pub fn run_pick(tail: &[String]) -> i32 {
         .filter_map(|e| text_at(e, "id").map(String::from))
         .collect();
     candidates.sort_by(|a, b| {
-        let aid = text_at(a, "id").unwrap_or("").to_string();
-        let bid = text_at(b, "id").unwrap_or("").to_string();
-        let qa = i64::from(currently_queued.contains(aid.as_str()));
-        let qb = i64::from(currently_queued.contains(bid.as_str()));
+        // Queued rows sort to the TOP (0 before 1): the wheel's picker kept
+        // the work being actively managed first, then priority, then age.
+        let qa = i64::from(!currently_queued.contains(text_at(a, "id").unwrap_or("")));
+        let qb = i64::from(!currently_queued.contains(text_at(b, "id").unwrap_or("")));
         qa.cmp(&qb)
             .then_with(|| {
                 priority_rank(a.get("priority").and_then(Value::as_str))
@@ -1201,7 +1237,8 @@ pub fn run_pick(tail: &[String]) -> i32 {
         }
         cands_tsv.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            url,
+            // The awk renderer's column contract: id first, url last (the
+            // wheel's cmd_pick wrote this exact order).
             id,
             tsv_safe(title),
             prio,
@@ -1209,7 +1246,8 @@ pub fn run_pick(tail: &[String]) -> i32 {
             status,
             queued,
             tsv_safe(plan_path),
-            blockers
+            blockers,
+            url
         ));
     }
     if std::fs::write(&cand_path, &cands_tsv).is_err() {
@@ -1306,13 +1344,15 @@ pub fn run_pick(tail: &[String]) -> i32 {
         }
     };
     let _ = &mut out;
-    cleanup();
     if out.status.code() == Some(130) {
+        // rc 130 = Ctrl-C / Esc: drop pending unread, exactly the wheel's.
+        cleanup();
         println!("Cancelled.");
         return 0;
     }
 
-    // Parse pending.txt preserving order so T flips the running state.
+    // Parse pending.txt BEFORE cleanup deletes it, preserving order so T
+    // flips the running state (matches what awk rendered to the screen).
     let mut ordered_intents: Vec<(String, char)> = Vec::new();
     if let Ok(pending) = std::fs::read_to_string(&pend_path) {
         for raw in pending.lines() {
@@ -1329,6 +1369,7 @@ pub fn run_pick(tail: &[String]) -> i32 {
             }
         }
     }
+    cleanup();
     if ordered_intents.is_empty() {
         println!("No changes.");
         return 0;

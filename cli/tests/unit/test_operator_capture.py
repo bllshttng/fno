@@ -177,13 +177,12 @@ def test_idea_rejects_unknown_source_kind(tmp_graph):
 
 
 def test_new_operator_request_via_shared_builder(tmp_graph):
-    """The collapsed `new` writer carries the field through the shared builder."""
-    result = runner.invoke(
-        app,
-        ["backlog", "new", "inbox-fed item", "--source-kind", "from_inbox",
-         "--source-inbox-msg", "msg-a4f1b2", "--force-domain"],
+    """The native create door carries the new word's provenance flags."""
+    result = run_native_create(
+        tmp_graph, "new", "inbox-fed item", "--source-kind", "from_inbox",
+        "--source-inbox-msg", "msg-a4f1b2", "--force-domain",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     (node,) = _entries(tmp_graph)
     assert node["source_kind"] == "from_inbox"
     assert node["source_inbox_msg"] == "msg-a4f1b2"

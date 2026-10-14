@@ -359,8 +359,10 @@ def _create_graph_node_from_plan(repo_root: Path, h: ThreadHandle, plan) -> str:
     (thread file path) when supported, so legacy graph queries that look up by
     msg-id keep working while new queries can resolve back to the full thread.
     """
+    # The mux binary: `fno backlog new` is the native create door (the scoped
+    # word rides it since the wheel's cmd_new retired).
     args = [
-        *_subprocess_util.fno_py_cmd(), "backlog", "new",
+        *_subprocess_util.fno_cmd(), "backlog", "new",
         plan.title,
         "--priority", plan.priority,
         "--difficulty", "medium",
@@ -373,7 +375,7 @@ def _create_graph_node_from_plan(repo_root: Path, h: ThreadHandle, plan) -> str:
     # `fno backlog new --help` is cheap; failing the probe only loses provenance breadth.
     try:
         help_out = subprocess.run(
-            [*_subprocess_util.fno_py_cmd(), "backlog", "new", "--help"],
+            [*_subprocess_util.fno_cmd(), "backlog", "new", "--help"],
             capture_output=True, text=True, check=False, cwd=repo_root,
             timeout=5,
         )

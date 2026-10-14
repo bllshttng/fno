@@ -11,6 +11,7 @@ similarity scan runs only on the append path.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.conftest import run_native_create
 
 import json
 import re
@@ -1869,26 +1870,21 @@ def test_warn_similar_nodes_includes_archived_nodes(monkeypatch, tmp_path, capsy
     assert "PR#99" in err
 
 
-def test_new_birth_path_warns_on_near_duplicate(tmp_path, monkeypatch):
-    # codex P2: `fno new` is a reachable plan-less birth path with its own
-    # mutator; it must run the same dedup net as idea/add/intake.
-    from typer.testing import CliRunner
-    from fno.graph.cli import cli
-    import fno.graph._constants as gc
-
+def test_new_birth_path_warns_on_near_duplicate(tmp_path):
+    # codex P2: `fno backlog new` is a reachable plan-less birth path on the
+    # create door; it must run the same dedup net as idea/add/intake.
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": [
             _node("ab-d0ne5678", title="Already shipped feature", status="done"),
         ]})
         + "\n")
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    result = CliRunner().invoke(
-        cli, ["new", "Already shipped feature refactor", "--unscoped", "--force-domain"],
+    result = run_native_create(
+        g, "new", "Already shipped feature refactor", "--unscoped", "--force-domain",
     )
-    assert result.exit_code == 0, result.output
-    # CliRunner mixes stderr into output; the receipt names the done candidate.
-    assert "dedup:" in result.output
-    assert "ab-d0ne5678" in result.output
+    assert result.exit_code == 0, result.stderr
+    # The receipt names the done candidate on stderr.
+    assert "dedup:" in result.stderr
+    assert "ab-d0ne5678" in result.stderr
 
 
 def test_safe_stderr_warn_swallows_broken_stream(monkeypatch):

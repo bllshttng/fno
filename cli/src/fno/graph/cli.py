@@ -41,7 +41,6 @@ from fno.graph.node_builder import (  # noqa: F401 - re-export for lazy importer
     _build_backlog_node,
     _session_provenance,
 )
-from fno.graph.node_builder import register as _register_node_builder
 # The roster renderer lives in its own module: this file is shrink-only and
 # the provenance change touches it. The alias keeps the historical name
 # importable.
@@ -67,7 +66,6 @@ cli = typer.Typer(
     ),
 )
 
-_register_node_builder(cli)
 from fno.graph.worked import cmd_worked as _cmd_worked  # noqa: E402
 
 from fno.graph.triage_forward import register_triage_forward  # noqa: E402
@@ -682,8 +680,8 @@ def _refuse_create_on_external_backend() -> None:
     On an external backend, item creation lives in the tracker (GitHub Issues,
     Linear, ...); minting an ab- entry in graph.json would create a phantom item
     the tracker has no record of. Called from EVERY Python creation entry
-    point (cmd_new, cmd_decompose, cmd_intake, and cmd_tree; add and idea answer
-    natively and carry their own guard) so the guard is not decorative. A guard on only some reachable
+    point (cmd_decompose, cmd_intake, and cmd_tree; add, idea and the new word
+    answer natively and carry their own guard) so the guard is not decorative. A guard on only some reachable
     paths is the pitfall this exists to prevent; the parametrized test exercises
     each path so a future creation verb that bypasses it fails loudly.
     """

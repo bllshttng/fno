@@ -1511,7 +1511,7 @@ def resolve_git_roots() -> tuple[str | None, str | None]:
     ``--cwd`` always wins at the call sites.
 
     Returns ``(None, None)`` when not in a git repo. Shared by
-    ``resolve_node_project_and_cwd`` (plan-path intake) and ``cmd_new``
+    ``resolve_node_project_and_cwd`` (plan-path intake) and the native create door
     (graph node creation without a plan).
     """
     main_root = _git_repo_root()
