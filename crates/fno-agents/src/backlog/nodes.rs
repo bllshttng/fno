@@ -2112,6 +2112,34 @@ fn do_quality(rows: &[(String, String)]) -> Option<(&'static str, String)> {
     unreadable.map(|h| ("unreadable", h))
 }
 
+/// A store-shaped archive db for a test outside this module: a real store
+/// carrying one typed nodes row and one parked nodes_raw row per named id.
+/// The archive-pool reader in create_cli reads both shapes, and the fixture
+/// has to come from here because both tables are owned by this module.
+#[cfg(test)]
+pub(crate) fn archive_pool_fixture(path: &std::path::Path, node_ids: &[&str], raw_ids: &[&str]) {
+    let graph = path.with_extension("json");
+    std::fs::write(&graph, b"{\"entries\": []}").unwrap();
+    let connection = crate::backlog::open(&graph).unwrap();
+    for id in node_ids {
+        let node = Node::from_json(&serde_json::json!({
+            "id": id, "slug": id, "title": "Archived", "type": "feature",
+            "status": "done", "priority": "p2", "domain": "code",
+            "created_at": "2026-08-01T00:00:00+00:00",
+        }))
+        .unwrap();
+        crate::backlog::save_aggregate(&connection, &node).unwrap();
+    }
+    for id in raw_ids {
+        connection
+            .execute(
+                "INSERT INTO nodes_raw (id, ordinal, body) VALUES (?1, 0, ?2)",
+                params![id, "{}"],
+            )
+            .unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1532,18 +1532,15 @@ mod tests {
         )
         .unwrap();
         // The store's own shape, which a store-spun archive db carries, at
-        // the legacy top-level spelling.
-        let conn = rusqlite::Connection::open(dir.path().join("graph-archive.db")).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE nodes (\
-                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, slug TEXT NOT NULL UNIQUE, \
-                 title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL);\n\
-             INSERT INTO nodes VALUES ('q-04fb', 0, 's', 't', 'done', 'p2');",
-        )
-        .unwrap();
-        drop(conn);
+        // the legacy top-level spelling: one typed nodes row and one parked
+        // nodes_raw row, built by the owning module.
+        crate::backlog::nodes::archive_pool_fixture(
+            dir.path().join("graph-archive.db").as_path(),
+            &["q-04fb"],
+            &["q-04aa"],
+        );
         let pool = archived_id_pool_in(dir.path());
-        for id in ["q-04fa", "q-04ff", "q-04fe", "q-04fc", "q-04fb"] {
+        for id in ["q-04fa", "q-04ff", "q-04fe", "q-04fc", "q-04fb", "q-04aa"] {
             assert!(pool.contains(id), "the pool holds {id}");
         }
     }
