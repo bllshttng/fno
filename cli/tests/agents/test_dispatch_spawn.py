@@ -321,7 +321,8 @@ def test_spawn_once_teardown_failure(workdir, fake_codex_create_once, monkeypatc
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "teardown-victim", "-H", "codex", "--once", "hello"],
+        ["spawn", "--name", "teardown-victim", "--once", "hello"],
+        env={"CODEX_THREAD_ID": "019f0000-0000-7000-8000-00000000000a"},
         catch_exceptions=False,
     )
 
