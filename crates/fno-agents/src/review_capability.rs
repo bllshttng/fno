@@ -780,7 +780,7 @@ pub(crate) fn render_self_review_invocation(
 /// suffixed typo can never be waved through.
 fn app_is_recognized(login: &str) -> bool {
     let lo = login.to_lowercase();
-    crate::loopcheck::bot_profile_logins().any(|k| lo.contains(k))
+    crate::loopcheck::bot_profile_logins().any(|k| k.contains(&lo))
 }
 
 /// True if `login` authored an issue/PR comment in this repo, False if a
@@ -885,7 +885,7 @@ fn resolve_github_apps(
         // Same directional rule as `app_is_recognized`: the configured login
         // must be a substring of a nudge key, never the reverse.
         let lo = login.to_lowercase();
-        if app_is_recognized(login) || nudge.iter().any(|nk| lo.contains(nk.as_str())) {
+        if app_is_recognized(login) || nudge.iter().any(|nk| nk.contains(&lo)) {
             out.push(AppVerdict {
                 login: login.to_string(),
                 status: "satisfiable",

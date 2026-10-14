@@ -1,0 +1,1 @@
+{"status": "unverifiable", "reason": "no skill root exists on this host (looked for <TMP>/skill_presence_no_roots/home/.claude/skills, <TMP>/skill_presence_no_roots/repo/.claude/skills), so availability cannot be verified. Proceeding - if the gate does go unmet, run the skill by hand"}
