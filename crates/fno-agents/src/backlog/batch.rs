@@ -288,16 +288,14 @@ fn join_batch(
         Ok((batch, true))
     })
     .map_err(|(m, code)| {
-        (
-            m,
-            if m.starts_with("no open batch") {
-                2
-            } else if m.contains("is full") {
-                4
-            } else {
-                code
-            },
-        )
+        let mapped = if m.starts_with("no open batch") {
+            2
+        } else if m.contains("is full") {
+            4
+        } else {
+            code
+        };
+        (m, mapped)
     })
     .map(|(batch, _)| batch)
 }
@@ -617,7 +615,7 @@ fn prepare_batch(node_id: &str, repo: &str, root: &Path) -> Value {
 /// The `start` leg: unique branch/worktree per batch, then open (a peer that
 /// opened between decide and open is joined instead - its recorded
 /// worktree/branch win).
-fn prepare_start(node_id: &str, domain: &str, repo: &str, root: &Path) -> Value {
+fn prepare_start(_node_id: &str, domain: &str, repo: &str, root: &Path) -> Value {
     let name = format!(
         "batch-{}.{}",
         safe_domain(domain).unwrap_or_else(|_| "code".into()),
@@ -798,7 +796,7 @@ fn extract_pr_number(url_or_output: &str) -> Option<i64> {
             return digits.parse().ok();
         }
     }
-    if text.chars().all(char::is_ascii_digit) && !text.is_empty() {
+    if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
         return text.parse().ok();
     }
     None
