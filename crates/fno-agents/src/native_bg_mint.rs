@@ -297,6 +297,7 @@ fn prepare_row(
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
         node,
+        pid: row.pid,
         transcript_path: transcript.map(|p| p.display().to_string()),
         start_source: Some(START_SOURCE.into()),
         cwd: cwd.clone(),
@@ -403,9 +404,13 @@ mod tests {
             let mixed = ClaudeAgentsSnapshot::known(vec![dead, listing_row("tui-live", "working")]);
             assert_eq!(mint_missing_native_bg(home, &mixed, &em), 1);
             // A failed root leaves the union Unknown but keeps every root
-            // that parsed; presence reads on those rows stay sound.
+            // that parsed; presence reads on those rows stay sound. Its row
+            // carries a distinct session: the dedup is per session, and the
+            // fixture uuid above is already held by tui-live.
+            let mut partial_row = listing_row("tui-partial", "working");
+            partial_row.session_id = Some("aaaaaaaa-0000-0000-0000-000000000001".into());
             let partial = ClaudeAgentsSnapshot::Unknown {
-                rows: vec![listing_row("tui-partial", "working")],
+                rows: vec![partial_row],
                 warnings: vec!["a root failed".into()],
             };
             assert_eq!(mint_missing_native_bg(home, &partial, &em), 1);
@@ -471,11 +476,12 @@ mod tests {
         sandbox(|home| {
             let em = emitter(home);
             // The account root, wired through the fno accounts config, holds
-            // the transcript; the ambient HOME has none.
+            // the transcript; the ambient HOME has none. A config dir
+            // mirrors ~/.claude, so the transcript sits under projects/.
             let root = tempfile::TempDir::new().unwrap();
             let uuid = "492ccda4-63ff-4736-a02a-8818f63c8b46";
             write_transcript(
-                root.path(),
+                &root.path().join("projects"),
                 uuid,
                 &[
                     json!({"type":"user","message":{"content":"/fno:target x-deadbeef"}})
