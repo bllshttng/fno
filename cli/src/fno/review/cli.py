@@ -1,8 +1,6 @@
 """``fno do review`` - the review family's CLI surface.
 
-The panel stays the default invocation (``fno do review`` with no
-subcommand runs it unchanged, via the callback registration in
-``fno.do_cli``); this module adds the subcommands the attestation record
+This module adds the subcommands the attestation record
 needs. ``classify`` is the one shell entry point producers use to turn a
 findings payload into the bounded record an event carries, so the rule is
 never reimplemented in bash.
@@ -28,7 +26,6 @@ from fno.review.findings import (
 
 review_app = typer.Typer(
     name="review",
-    invoke_without_command=True,
     add_completion=False,
 )
 

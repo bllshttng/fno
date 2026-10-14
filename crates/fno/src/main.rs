@@ -185,6 +185,17 @@ enum Role {
     /// the sibling fno-agents `review-level` door. The rest of the review
     /// tree stays Python until its port.
     ReviewLevel(Vec<OsString>),
+    /// `fno do review <tail>` with no leaf: the assurance root, exec'd
+    /// through the sibling fno-agents `review-policy assess` door. The
+    /// leaves keep their role: classify/post-dispositions/invocations stay
+    /// Python (resolve-level is native above), and --help forwards so typer
+    /// still lists them.
+    ReviewPolicyAssess(Vec<OsString>),
+    /// `fno review <tail>`: the deprecated root alias, its move notice
+    /// printed on stderr before the same exec. Byte-identical to the line
+    /// `verb_moves` printed; the stream it printed to (stderr) and the
+    /// composition with the record are golden-frozen.
+    ReviewPolicyAlias(Vec<OsString>),
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
@@ -360,6 +371,36 @@ fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do review <tail>` and the root alias `fno review <tail>`: the
+/// assurance root claims native when the tail names no leaf and no help
+/// request. Only the FIRST tail token names a leaf (a leaf spelled later is
+/// a flag value, exactly as typer reads it); --help/-h anywhere forwards so
+/// typer keeps rendering the leaf listing.
+fn classify_review_root(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
+    if args.is_empty() {
+        return None;
+    }
+    let (alias, tail): (bool, &[OsString]) =
+        match (args[0].to_str()?, args.get(1).and_then(|a| a.to_str())) {
+            ("do", Some("review")) => (false, args.get(2..)?),
+            ("review", _) => (true, args.get(1..)?),
+            _ => return None,
+        };
+    if matches!(
+        tail.first().and_then(|a| a.to_str()),
+        Some("classify" | "post-dispositions" | "invocations" | "resolve-level")
+    ) {
+        return None;
+    }
+    if tail
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+    {
+        return None;
+    }
+    Some((alias, tail.to_vec()))
+}
+
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     let (verb, tail): (&str, &[OsString]) = if args.len() >= 3
         && args[0].to_str() == Some("agents")
@@ -440,6 +481,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_level(args) {
         return Role::ReviewLevel(rest);
+    }
+    if let Some((alias, rest)) = classify_review_root(args) {
+        return if alias {
+            Role::ReviewPolicyAlias(rest)
+        } else {
+            Role::ReviewPolicyAssess(rest)
+        };
     }
     if let Some(rest) = classify_agents_verb(args, "top") {
         return Role::AgentsTop(rest);
@@ -743,6 +791,19 @@ fn main() {
             &["review-level"],
             &rest,
         )),
+        Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
+            "fno do review",
+            &["review-policy", "assess"],
+            &rest,
+        )),
+        Role::ReviewPolicyAlias(rest) => {
+            eprintln!("fno review is now fno do review");
+            std::process::exit(fno_agents_exec(
+                "fno do review",
+                &["review-policy", "assess"],
+                &rest,
+            ))
+        }
         Role::MailViewRenamed => {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
             std::process::exit(2);
@@ -1008,6 +1069,53 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "review", "classify"]), false),
             Role::Forward
+        );
+    }
+
+    #[test]
+    fn review_policy_root_claims_the_no_leaf_tail() {
+        // The no-leaf tail claims native; the root alias claims the same
+        // door under its notice-carrying variant.
+        assert_eq!(
+            decide_role(
+                &os(&["do", "review", "--assess-assurance", "--policy-size", "L"]),
+                false
+            ),
+            Role::ReviewPolicyAssess(os(&["--assess-assurance", "--policy-size", "L"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review"]), false),
+            Role::ReviewPolicyAssess(os(&[]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["review", "--assess-assurance", "--policy-size", "M"]),
+                false
+            ),
+            Role::ReviewPolicyAlias(os(&["--assess-assurance", "--policy-size", "M"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["review"]), false),
+            Role::ReviewPolicyAlias(os(&[]))
+        );
+        // Leaves keep their role: resolve-level is native above, the others
+        // forward, and --help forwards so typer keeps listing them.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
+            Role::ReviewLevel(os(&["high"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify", "--attest"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::Forward
+        );
+        // A leaf spelled later is a flag value, not a subcommand: claimed.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--risk-surface", "classify"]), false),
+            Role::ReviewPolicyAssess(os(&["--risk-surface", "classify"]))
         );
     }
 

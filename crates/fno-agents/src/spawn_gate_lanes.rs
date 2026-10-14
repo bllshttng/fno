@@ -1254,7 +1254,7 @@ fn runtime_state_payload(config_cwd: &Path) -> Value {
 /// The account's binding rate-limit deadline, when its health entry is fresh
 /// (the shared record-level TTL) and the lock is in the future. Reuses the
 /// fallback-chain's health parse instead of a second one.
-fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
+pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
     let health = crate::fallback_chain::parse_provider_health(raw).remove(account)?;
     let rlu = health.get("rate_limited_until").and_then(Value::as_f64)?;
     match health.get("last_error_at").and_then(Value::as_f64) {

@@ -126,7 +126,6 @@ research
 restart
 resume
 retro
-review
 roles
 route
 scoreboard
