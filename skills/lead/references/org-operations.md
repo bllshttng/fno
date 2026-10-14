@@ -23,7 +23,7 @@ the pane receipt before sending the next task.
 
 | Duty | Verb | Notes |
 |---|---|---|
-| **Spawn** a teammate | `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` | A thread worker has no placement; the graph and mail carry the mission. |
+| **Launch** a teammate | the native `claude --bg` line from [Control surfaces](#control-surfaces), or `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` | A paneless worker has no placement; the graph and mail carry the mission. |
 | **Inject** the next phase into a live session | `fno agents mail send <handle> "<ruling + /fno:verb>" --from-self` | A direct send to a live pane injects as a notification it acts on this turn. Receipt-gated - see delivery truth below. Auto-wrapped in the `<fno_mail>` envelope; a raw pane-layer prompt is not - see the envelope rule below. |
 | **Sweep** at a boundary (nonblocking) | `fno agents top` + `fno agents peek <handle>` | Push-first (the teammate's report mail); this is the backstop sweep, run at a named boundary while you are already awake, not on a repeating timer. `top` = who is alive; `peek` = is a quiet pane done/blocked/dead. Both return immediately and wake nobody. `fno-agents needs --json` is a separate loop-wedge signal, not pane completion. |
 | **Wait** on lifecycle (blocking) | ONE unreconciled teammate: `fno-agents wait --agent <name> --state done --timeout-ms <n>` · a fleet of them: `fno-agents subscribe` | The actual wake source, and the only duty here that is one. `wait` parses a single `--agent` and serves exactly one unreconciled teammate; with two or more in the wait set, arm one unfiltered `subscribe` instead - it streams registry state transitions and pane exits as NDJSON from EOF, so the first teammate to move wakes you whichever it is; on wake sweep, reconcile, re-arm. Launch each as its OWN harness-tracked task and never append `&` - a trailing `&` returns the call instantly, the harness marks it finished, and nothing is left waiting. Cover one wake per live teammate you have not yet reconciled - an expected report is not coverage, because the report is exactly what goes missing, but a reconciled row still reading `done` matches instantly and spins, so it leaves the set. Always `done`, never `idle`: `idle` is the default verdict (lapsed hook, unknown or absent screen state) so it can return instantly and spin the re-arm loop. No wake arm covers `blocked`: the inside-leg hook emits `working`/`done` only (`blocked` has no wired trigger), so a blocked teammate reaches you by its report mail or your sweep's `BlockedAnswerable` badge, never by this verb. On a hookless pane (gemini/opencode/agy) `done` is a death detector plus a timeout rather than a completion signal - bounded, which is the point. On timeout with the teammate still live, re-arm. |
@@ -43,18 +43,24 @@ Every agent-to-agent AUTHORED payload carries the `<fno_mail>` envelope - lead t
 
 ## Control surfaces
 
-Canonical implementation worker spawn. Rules: spawn teammates on the thread substrate, never panes; implementation runs on zai glm-5.3-flash[1m]; every agent launch goes through `fno agents spawn`, no second launcher.
+Canonical implementation worker launch. Rules: seat teammates paneless, never in panes; implementation runs on zai glm-5.3-flash[1m]; spawn stays the one fno launch verb. A claude worker launches by its own `claude --bg` line, and spawn prints that line for the lane.
 
 ```bash
 # Blueprints do NOT use this line; they run as native subagents on the planning session's own non-glm model.
-fno agents spawn --name <node-name> "$payload" --harness claude --substrate thread \
+# 1. Print the lane's native line. This writes the route settings file and launches nothing.
+fno agents spawn --name <node-name> "$payload" --harness claude \
   --provider zai --model 'glm-5.3-flash[1m]' --effort xhigh \
-  --permission-mode bypassPermissions --cwd <checkout> 2>&1
+  --permission-mode bypassPermissions --cwd <checkout> --print
+# 2. From <checkout>, run the line it printed:
+#    claude --bg --settings <file> --model 'glm-5.3-flash[1m]' --effort xhigh \
+#      --permission-mode bypassPermissions --name <node-name> '<payload>'
 ```
+
+Drop `--print` to have spawn run the same line. Do that when you hold the node's claim: a native line moves no claim, and spawn hands it to the child. Other harnesses and their pages: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 | Job | Verb |
 |---|---|
-| Spawn a teammate thread | `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` |
+| Launch a teammate | the printed native line above, or `fno agents spawn --name <n> "<payload>" --substrate thread --effort <e>` |
 | Move a running pane into another workspace | `fno mux layout apply` rebinds a bound live pane into a target tab, PTY intact, but needs a full template (or a spec file) plus its whole slot set - see mux-layout-templates. No `fno mux pane` verb does it (`break` only detaches to a new tab in place). A promotion-time move, not a mid-wave shuffle |
 | Arm a wake before you stop | ONE unreconciled teammate: `fno-agents wait --agent <name> --state done --timeout-ms <n>` · a fleet: `fno-agents subscribe` unfiltered, armed once (harness-tracked either way; never `idle`, never `&`) |
 | Anoint a sub-lead at spawn | `fno agents spawn --name <n> "<payload>" --substrate thread --promote <scope>` (a lead running an org belongs in its own mission workspace). Repeat `--promote`/`-k` for a portfolio; the rung is derived from what you name |
