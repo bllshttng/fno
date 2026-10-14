@@ -48,8 +48,9 @@ from fno._lazy_group import make_lazy_group_cls
 # curated menu; everything else is hidden (invocable, just not listed). The
 # advertised set is `help`, `backlog`, `agents`, `whoami`, `doctor`, `config`
 # (6; `setup` moved under `config` in unit 6 of the reorg, and moved
-# spellings are excluded from the count by _HonestMenuGroup). `help` /
-# `review` are eager inline commands above and carry `hidden=True` on `review`;
+# spellings are excluded from the count by _HonestMenuGroup). `help` is an
+# eager inline command above; the `review` root claim moved to the rust
+# front door and carries no python registration;
 # `cost` moved under `whoami` and is a hidden lazy entry like its siblings.
 # Everything hidden here is one `fno help --all` away. New verbs default to
 # hidden; promotion to the menu is a deliberate, lint-gated act (see fno doctor lint).
