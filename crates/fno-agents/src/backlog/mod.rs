@@ -35,6 +35,7 @@ pub mod edges;
 pub mod encounter_cli;
 pub mod encounters;
 pub mod entities;
+pub mod epic;
 pub mod epic_cap;
 pub mod fields;
 pub mod finale;

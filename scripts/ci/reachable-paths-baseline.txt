@@ -298,7 +298,6 @@ A	{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped	py=cli/sr
 A	{task_id} is already done	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	{ts} {kind} {sender} -> {recipient} rid={rid} caller={ck}	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	{} file(s) (footnote {}) -> {}	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
-R	status-derivation-helper:cli/src/fno/graph/cli.py::cmd_epic_status	# offender - carry a reason or fix in this PR
 A	--model must not be empty	py=cli/src/fno/dispatch_flags.py;rs=crates/fno-agents/src/backlog/advance_cli.rs	# Shared flag refusal on the retained Python dispatch-pin parser and native advance door.
 A	couldn't find remote ref	py=cli/src/fno/worktree_cli/cli.py;rs=crates/fno-agents/src/backlog/publish.rs	# CLASSIFY protocol|msg-twin|data each side matches git's own fetch-refusal wording independently; external tool error, not ported logic
 A	claude_code_session_attended	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/spawn_gate_admission.rs|crates/fno-agents/src/test_run.rs|crates/fno/src/process_admission.rs	# harness marker constant: hermetic.py classifies it, the Rust origin predicates read it; one protocol, two languages

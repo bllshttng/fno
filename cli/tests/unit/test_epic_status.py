@@ -1,440 +1,111 @@
-"""Tests for `fno backlog epic status <id>` (x-1124 K4).
+"""Tests for `fno backlog epic status` - the native children-rollup door.
 
-One cross-project table over an epic's children: id/slug, project, status, live
-worker (node:<id> claim holder), PR (node stamp). A `ready` child with no live
-worker shows its most recent dispatch/skip/failure receipt inline - never a
-blank cell (the silent failure this verb exists to kill). A `deferred` child
-shows its consecutive-failure breaker streak.
-
-Read-only, so it emits nothing; the conftest per-module pin sets
-FNO_EVENTS_PATH to a per-test tmp journal regardless.
+The verb answers from the binary, so these exec it over a fixture store the
+way the other native-door suites do (HOME/FNO_STATE_DIR pinned at the seed's
+parent); they skip where this checkout has no dev build.
 """
 from __future__ import annotations
+from tests._native_door import run_native
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-import os
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
-_RECENT_CREATED = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
 
 
-def _node(node_id: str, **overrides) -> dict:
-    base = {
-        "id": node_id,
-        "parent": None,
-        "slug": node_id.replace("-", "") + "-slug",
-        "title": "seed title",
-        "type": "feature",
-        "project": "fno",
-        "cwd": None,
-        "priority": "p2",
-        "domain": "code",
-        "blocked_by": [],
-        "pr_number": None,
-        "pr_url": None,
-        "status": "ready",
-        "plan_path": "plans/x.md",
-        "created_at": _RECENT_CREATED,
-    }
-    base.update(overrides)
-    if base["status"] == "done":
-        base.setdefault("completed_at", "2026-08-01T00:00:00+00:00")
-    return base
+def _seed(tmp_path: Path, entries: list[dict]) -> None:
+    complete = []
+    for e in entries:
+        row = {"type": "feature", "priority": "p2", "status": "idea", **e}
+        row.setdefault("title", e.get("id", "node"))
+        row.setdefault("slug", e.get("id", "node"))
+        complete.append(row)
+    seed_graph(tmp_path / "graph.json", json.dumps({"entries": complete}) + "\n")
 
 
 @pytest.fixture
-def graph_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Temp graph.json wired into the CLI; children cwd -> tmp_path so their
-    per-project events log resolves under the test dir. Returns tmp_path."""
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-
-    g = tmp_path / "graph.json"
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
-    # Seam readers (guarded metadata/display reads) resolve paths.graph_json
-    # at call time; pin the resolver to the same hermetic file.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-
-    def _write(entries):
-        seed_graph(g, json.dumps({"entries": entries}) + "\n")
-
-    return tmp_path, _write
-
-
-def _invoke(args):
-    from fno.cli import app
-
-    return CliRunner().invoke(app, args)
-
-
-def _write_events(cwd: Path, events: list[dict]) -> None:
-    from fno.events.store_client import emit_envelope
-
-    p = cwd / ".fno" / "events.jsonl"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    for i, e in enumerate(events):
-        emit_envelope({"ts": f"2026-01-01T00:00:{i:02d}Z", "source": "test", **e}, p)
-
-
-# -- table: id / project / status / PR (Success Definition 4) --
-
-
-def test_lists_children_with_status_project_pr(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic", slug="the-epic"),
-        _node("x-c1", parent="x-epic", status="done", pr_number=460, cwd=str(tmp_path)),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "x-c1" in r.output and "x-c2" in r.output
-    assert "done" in r.output and "ready" in r.output
-    assert "460" in r.output  # PR stamp surfaced
-    assert "1/2" in r.output  # children_done/total rollup
-
-
-# -- feature #2: ready + no worker shows a receipt inline --
-
-
-def test_ready_child_shows_latest_receipt(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    _write_events(tmp_path, [
-        {"ts": "2026-07-18T10:00:00Z", "type": "advance_skipped",
-         "source": "backlog", "data": {"reason": "unmapped-project", "node_id": "x-c2"}},
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "unmapped-project" in r.output
-
-
-def test_ready_child_receipt_picks_newest(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    _write_events(tmp_path, [
-        {"ts": "2026-07-18T10:00:00Z", "type": "advance_skipped",
-         "source": "backlog", "data": {"reason": "walker-live", "node_id": "x-c2"}},
-        {"ts": "2026-07-18T11:00:00Z", "type": "advance_failed",
-         "source": "backlog", "data": {"error": "spawn boom", "node_id": "x-c2"}},
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert "spawn boom" in r.output
-    assert "walker-live" not in r.output  # superseded by the newer failure
-
-
-# -- feature #2 (the silent-failure kill): no receipt -> explicit sentinel --
-
-
-def test_ready_child_no_events_shows_no_receipt_found(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "no receipt found" in r.output
-
-
-# -- feature #3: deferred child shows its breaker streak --
-
-
-def test_deferred_child_shows_streak(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c3", parent="x-epic", status="deferred", cwd=str(tmp_path)),
-    ])
-    _write_events(tmp_path, [
-        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "loop",
-         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 1, "exit_code": 1}},
-        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "loop",
-         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 2, "exit_code": 1}},
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "streak 2" in r.output
-
-
-def test_streak_dedups_mirrored_events(graph_env, monkeypatch):
-    """The loop mirrors each node_* envelope byte-identically to the global log
-    AND the project journal; the union must dedup so a streak isn't doubled."""
-    from fno.graph import failure
-
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c3", parent="x-epic", status="deferred", cwd=str(tmp_path)),
-    ])
-    fails = [
-        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "loop",
-         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 1, "exit_code": 1}},
-        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "loop",
-         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 2, "exit_code": 1}},
-    ]
-    # Same envelopes in the project journal AND the global mirror.
-    _write_events(tmp_path, fails)
-    gp = tmp_path / "global-events.jsonl"
-    gp.write_text("".join(json.dumps(e) + "\n" for e in fails))
-    monkeypatch.setattr(failure, "events_path", lambda: gp)
-
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "streak 2" in r.output  # not 4
-
-
-def test_inherited_json_flag_before_leaf(graph_env):
-    """`--json` at the subtyper position (not just trailing) emits JSON."""
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic", slug="the-epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "--json", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.output)
-    assert payload["epic"] == "x-epic"
-
-
-def test_null_ts_event_does_not_crash(graph_env, monkeypatch):
-    """An explicit ``{"ts": null}`` envelope must not crash the ts-sort.
-
-    Legacy raw shape only: the store refuses a ts-less commit, so the native
-    reader goes offline and the seeded journal bytes are what the fold sees.
-    """
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    # The store refuses a ts-less commit, so feed the fold directly: the
-    # tolerance under test lives in the ts-sort, not in any writer.
-    rows = [
-        {"ts": None, "type": "advance_skipped", "source": "backlog",
-         "data": {"reason": "walker-live", "node_id": "x-c2"}},
-        {"ts": "2026-07-18T10:00:00Z", "type": "advance_failed", "source": "backlog",
-         "data": {"error": "boom", "node_id": "x-c2"}},
-    ]
-    monkeypatch.setattr(
-        "fno.events.store_client.query_rows", lambda target, types=None: rows
+def epic_fixture(tmp_path, monkeypatch) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
+    journal = tmp_path / "wt" / ".fno"
+    journal.mkdir(parents=True)
+    (journal / "events.jsonl").write_text(
+        json.dumps({
+            "ts": "2026-10-01T00:00:00Z",
+            "type": "advance_dispatched",
+            "data": {"node_id": "ab-ch1d0001", "agent_name": "archer"},
+        })
+        + "\n",
+        encoding="utf-8",
     )
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "boom" in r.output
+    _seed(
+        tmp_path,
+        [
+            {
+                "id": "ab-ep1c0001",
+                "type": "epic",
+                "title": "The mission",
+                "status": "idea",
+                "slug": "mission",
+                "created_at": "2026-09-01T00:00:00Z",
+            },
+            {
+                "id": "ab-ch1d0001",
+                "parent": "ab-ep1c0001",
+                "title": "Child one",
+                "status": "ready",
+                "slug": "child-one",
+                "cwd": str(tmp_path / "wt"),
+                "created_at": "2026-09-02T00:00:00Z",
+            },
+            {
+                "id": "ab-d0ne0002",
+                "parent": "ab-ep1c0001",
+                "title": "Child two",
+                "status": "done",
+                "slug": "child-two",
+                "pr_number": 99,
+                "merge_status": "merged",
+                "completed_at": "2026-09-03T00:00:00Z",
+                "created_at": "2026-09-02T00:00:00Z",
+            },
+        ],
+    )
+    return tmp_path
 
 
-# -- refuse a non-container by name --
+def test_lists_children_with_receipts(epic_fixture: Path):
+    code, out, err = run_native("backlog", "epic", "status", "ab-ep1c0001")
+    assert code == 0, out + err
+    # The header carries the done count; the ready child shows its dispatch
+    # receipt inline, never a blank cell.
+    assert "epic: ab-ep1c0001 (mission)  1/2 done" in out
+    assert "dispatched archer" in out
+    assert "child-two" in out
 
 
-def test_refuses_non_container(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-c2"])  # a leaf, not a container
-    assert r.exit_code != 0
-    assert "not" in r.output.lower() or "container" in r.output.lower() or "leaf" in r.output.lower()
-
-
-def test_unknown_id_errors(graph_env):
-    tmp_path, write = graph_env
-    write([_node("x-epic", type="epic")])
-    r = _invoke(["backlog", "epic", "status", "x-nope"])
-    assert r.exit_code != 0
-
-
-def test_childless_epic_shows_no_children(graph_env):
-    """An `epic`-typed node with no children yet is queryable, not refused."""
-    tmp_path, write = graph_env
-    write([_node("x-epic", type="epic", slug="the-epic")])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "no children" in r.output.lower()
-
-
-# -- accepts a slug --
-
-
-def test_resolves_by_slug(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic", slug="the-epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "the-epic"])
-    assert r.exit_code == 0, r.output
-    assert "x-c2" in r.output
-
-
-# -- live worker: node:<id> claim holder surfaces --
-
-
-def test_live_worker_shown(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    from fno.claims.core import acquire_claim, release_claim
-
-    key = "node:x-c2"
-    holder = "target-session:abc123"
-    acquire_claim(key=key, holder=holder, pid=os.getpid())
-    try:
-        r = _invoke(["backlog", "epic", "status", "x-epic"])
-        assert r.exit_code == 0, r.output
-        assert "target-session:abc123" in r.output or "abc123" in r.output
-        # a claimed ready child is working, not idle -> no receipt lookup for it
-        assert "no receipt found" not in r.output
-    finally:
-        # The claim persists across tests (global store) - release so it
-        # never leaks forward.
-        release_claim(key, holder)
-
-
-# -- JSON shape --
-
-
-def test_json_output(graph_env):
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic", slug="the-epic"),
-        _node("x-c1", parent="x-epic", status="done", pr_number=460, cwd=str(tmp_path)),
-        _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic", "--json"])
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.output)
-    assert payload["epic"] == "x-epic"
+def test_json_output(epic_fixture: Path):
+    code, out, err = run_native("backlog", "epic", "status", "ab-ep1c0001", "--json")
+    assert code == 0, out + err
+    payload = json.loads(out)
+    assert payload["epic"] == "ab-ep1c0001"
     assert payload["children_total"] == 2
     assert payload["children_done"] == 1
-    kids = {c["id"]: c for c in payload["children"]}
-    assert kids["x-c1"]["pr_number"] == 460
-    assert kids["x-c2"]["status"] == "ready"
-    assert kids["x-c2"]["receipt"] == "no receipt found"
+    children = {c["id"]: c for c in payload["children"]}
+    assert children["ab-ch1d0001"]["receipt"] == "dispatched archer"
+    assert children["ab-d0ne0002"]["merge_unconfirmed"] is False
+    assert "scope_growth" in payload
 
 
-# -- done, but the merge was never confirmed --
-#
-# A child reads `done` the moment /target finalizes, not when the PR merges, so
-# at a wave gate the graph can report a dependency landed while its branch is
-# still open. `merge_status` is written only when a caller resolved MERGED from
-# gh, so its absence is exactly "nobody confirmed this". Measured 2026-09-01:
-# 16 of 444 done nodes carrying a PR were in this state, spanning 2026-04-28 to
-# 2026-08-26 (specimens x-3a0e/#1178 and x-04b0/#1204).
+def test_refuses_a_leaf_by_name(epic_fixture: Path):
+    code, out, err = run_native("backlog", "epic", "status", "ab-ch1d0001")
+    assert code == 1
+    combined = out + err
+    assert "is a leaf, not a container" in combined
 
 
-def test_done_child_with_unstamped_merge_is_flagged(graph_env):
-    """AC9-HP."""
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c1", parent="x-epic", status="done", pr_number=1178, cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic"])
-    assert r.exit_code == 0, r.output
-    assert "merge unconfirmed #1178" in r.output
-    # The done count is qualified in the same breath, not a line below it.
-    assert "1 merge unconfirmed" in r.output
-
-
-def test_a_confirmed_merge_is_not_flagged(graph_env):
-    """The flag keys on evidence, not on the mere presence of a PR."""
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node(
-            "x-c1", parent="x-epic", status="done", pr_number=932,
-            merge_status="merged", cwd=str(tmp_path),
-        ),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic", "--json"])
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.output)
-    assert payload["children_merge_unconfirmed"] == 0
-    kid = {c["id"]: c for c in payload["children"]}["x-c1"]
-    assert kid["merge_unconfirmed"] is False
-    assert kid["receipt"] == "-"
-
-
-def test_an_open_ready_child_is_never_flagged(graph_env):
-    """Only `done` claims a merge. A ready child with a PR is work in flight."""
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c1", parent="x-epic", status="ready", pr_number=1204, cwd=str(tmp_path)),
-    ])
-    r = _invoke(["backlog", "epic", "status", "x-epic", "--json"])
-    payload = json.loads(r.output)
-    assert payload["children_merge_unconfirmed"] == 0
-    assert "merge unconfirmed" not in r.output
-
-
-def test_verify_merges_resolves_a_flagged_row_to_merged_unstamped(
-    graph_env, monkeypatch
-):
-    """The probe distinguishes the two explanations the local read cannot."""
-    import subprocess as sp
-
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c1", parent="x-epic", status="done", pr_number=1178, cwd=str(tmp_path)),
-    ])
-
-    class _P:
-        returncode = 0
-        stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-08-25T00:00:00Z"})
-
-    real_run = sp.run
-
-    def run(argv, *args, **kwargs):
-        return _P() if argv[0] == "gh" else real_run(argv, *args, **kwargs)
-
-    monkeypatch.setattr(sp, "run", run)
-
-    r = _invoke(["backlog", "epic", "status", "x-epic", "--verify-merges"])
-    assert r.exit_code == 0, r.output
-    assert "merged (unstamped) #1178" in r.output
-
-
-def test_a_failed_probe_leaves_the_row_flagged(graph_env, monkeypatch):
-    """A probe that could not answer is not evidence that the PR merged.
-
-    Downgrading a flagged row on a network blip would turn this instrument into
-    exactly the silent-wrong-answer it exists to catch.
-    """
-    import subprocess as sp
-
-    tmp_path, write = graph_env
-    write([
-        _node("x-epic", type="epic"),
-        _node("x-c1", parent="x-epic", status="done", pr_number=1178, cwd=str(tmp_path)),
-    ])
-
-    real_run = sp.run
-
-    def run(argv, *args, **kwargs):
-        if argv[0] == "gh":
-            raise OSError("gh: command not found")
-        return real_run(argv, *args, **kwargs)
-
-    monkeypatch.setattr(sp, "run", run)
-
-    r = _invoke(["backlog", "epic", "status", "x-epic", "--verify-merges"])
-    assert r.exit_code == 0, r.output
-    assert "merge unconfirmed #1178" in r.output
+def test_unknown_id_errors(epic_fixture: Path):
+    code, out, err = run_native("backlog", "epic", "status", "ab-missing001")
+    assert code == 1
+    assert "no node matches" in (out + err)

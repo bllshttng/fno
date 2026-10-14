@@ -52,7 +52,6 @@ undispatched
 # completion works on any backend by design (task 4.1)
 done
 # footnote-owned sidecar files, no graph write
-epic status
 # capture-pile file machinery (no graph writes; promote is tracker-owned)
 capture add
 capture archive
