@@ -197,6 +197,8 @@ if [[ "$out" == "{}" ]]; then
 else
   fail "AC13: state-root mkdir under spaces blocked: $out"
 fi
+expect "AC13: mkdir in the Claude config dir stays lawful" approve \
+  "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $HOME/.claude/projects/newbot\"},\"session_id\":\"$SID\"}"
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp staged $STATEDIR/\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
   pass "AC13: cp into the state root itself is refused"
