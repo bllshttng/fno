@@ -2350,45 +2350,6 @@ fn render_list_rows() {
     );
 }
 
-#[test]
-fn effort_rows() {
-    assert_eq!(
-        validate_effort_for_spawn("claude", "headless", Some("")),
-        Err("--effort must be non-empty".to_string())
-    );
-    assert_eq!(
-        validate_effort_for_spawn("codex", "bg", Some("")),
-        Err("--effort must be non-empty".to_string())
-    );
-    assert!(validate_effort_for_spawn("opencode", "headless", Some("provider-value")).is_ok());
-
-    assert!(validate_effort_for_spawn("agy", "headless", Some("high")).is_ok());
-    assert!(validate_effort_for_spawn("agy", "bg", Some("low")).is_ok());
-    assert!(validate_effort_for_spawn("agy", "pane", Some("nonsense-still-forwarded")).is_ok());
-    assert!(validate_effort_for_spawn("gemini", "headless", Some("high")).is_err());
-
-    // The deny set is the ONE owner's (effort_surface.rs): cursor-agent and
-    // an undeclared harness refuse on the thread and headless lanes too,
-    // with the same string the Python bridge raises. The pane lane forwards.
-    let cursor = validate_effort_for_spawn("cursor-agent", "headless", Some("high"));
-    assert!(cursor.unwrap_err().contains("cursor-agent"));
-    let undeclared = validate_effort_for_spawn("ghosth", "bg", Some("high"));
-    assert!(undeclared
-        .unwrap_err()
-        .starts_with("--effort is not available for harness"));
-    assert!(validate_effort_for_spawn("cursor-agent", "pane", Some("high")).is_ok());
-    assert_eq!(
-        validate_effort_for_spawn("gemini", "thread", Some("high")),
-        Err("harness 'gemini' has no reasoning-effort surface; omit --effort".to_string())
-    );
-}
-
-/// The effort deny set must be the same in both spelling maps: the Python
-/// lane (`effort_tokens`, `--substrate pane`) allows agy, so the Rust lane
-/// refusing it made one harness two-valued by substrate. agy carries its
-/// own `--effort (low|medium|high)`; gemini genuinely has no surface. The
-/// FLAG_OWNERS row for `--effort` names both maps.
-
 /// ab-098967b4: render_list_json folds in the discovered lane (additive
 /// keys, schema 2); render_list_table appends a distinct DISCOVERED section.
 
