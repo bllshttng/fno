@@ -484,14 +484,14 @@ fn case_environ(case_dir: &Path, spec: &Case) -> Vec<(String, String)> {
     for (k, v) in spec.markers {
         env.push(((*k).into(), (*v).into()));
     }
-    if let Some(_total) = spec.gh_stub {
+    if spec.gh_stub.is_some() {
         let base_path = env.remove(0);
-        if let ("PATH", old) = &base_path {
+        if base_path.0 == "PATH" {
             env.insert(
                 0,
                 (
                     "PATH".into(),
-                    format!("{}:{}", case_dir.join("bin").display(), old),
+                    format!("{}:{}", case_dir.join("bin").display(), base_path.1),
                 ),
             );
         }
