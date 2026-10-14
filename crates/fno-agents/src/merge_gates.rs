@@ -303,6 +303,9 @@ fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
         return None;
     }
     let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    if rows.is_empty() {
+        return None;
+    }
     let origin = Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
         .current_dir(cwd)
