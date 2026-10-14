@@ -40,7 +40,7 @@ Every mux server that holds the name applies the edit and writes it to the store
 
 ## Moving a session
 
-The row menu has Move to workspace for every row when another workspace exists. A row with its own pane moves that pane. A paneless row, or a row that a portal seat shows, moves by pin. The server stores the pin on the destination's row in `squads.json`, keyed by harness and harness session id. It never keys a pin on the row name.
+When another workspace exists, the row menu has Move to workspace for every row. A row with its own pane moves that pane. A paneless row, or a row that a portal seat shows, moves by pin. The server stores the pin on the destination's row in `squads.json`, keyed by harness and harness session id. It never keys a pin on the row name.
 
 The store write comes first. If it fails, the live pins do not change and you see `workspace move was not stored: <error>`. A topology write keeps the pins of the row it rewrites. A row without a harness session id says `this row has no session id to pin`.
 
