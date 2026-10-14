@@ -127,6 +127,7 @@ pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub mod wizard;
 pub mod wordmark;
 pub mod yard_overlay;
 
