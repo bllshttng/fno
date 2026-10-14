@@ -346,6 +346,7 @@ pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
 pub(crate) mod owner_ladder;
+pub mod pane_claim;
 pub mod pane_keeper;
 pub mod pane_rebind;
 pub mod pane_relaunch;
