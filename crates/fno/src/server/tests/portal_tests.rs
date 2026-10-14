@@ -372,6 +372,61 @@ fn reaching_an_occupied_portal_repoints_only_that_index() {
 }
 
 #[test]
+fn portal_spawn_size_rows() {
+    // AC12: a repointed seat spawns at the size the seat holds, never the
+    // client terminal's; a fresh open spawns at the tab rect, and the client
+    // only stands in for an empty rect. The layout pass resizes a landed pane
+    // to its rect, so the decision is pinned here, where it is made.
+    use crate::server::portal_reach::portal_spawn_size;
+    let rows: [(
+        Option<(u16, u16)>,
+        (u16, u16),
+        Option<(u16, u16)>,
+        (u16, u16),
+        &str,
+    ); 5] = [
+        (
+            Some((40, 120)),
+            (30, 100),
+            Some((60, 200)),
+            (40, 120),
+            "repoint keeps the seat size",
+        ),
+        (
+            None,
+            (30, 100),
+            Some((60, 200)),
+            (30, 100),
+            "fresh open takes the tab rect",
+        ),
+        (
+            None,
+            (0, 0),
+            Some((60, 200)),
+            (60, 200),
+            "an empty rect falls back to the client",
+        ),
+        (
+            None,
+            (0, 0),
+            Some((0, 0)),
+            (0, 0),
+            "an observer sentinel never sizes a pane",
+        ),
+        (
+            None,
+            (0, 0),
+            None,
+            (0, 0),
+            "no client leaves the empty rect",
+        ),
+    ];
+    for (seat, rect, client, want, why) in rows {
+        assert_eq!(portal_spawn_size(seat, rect, client), want, "{why}");
+    }
+}
+
+#[test]
 fn every_viewer_death_parks_its_portal_on_no_signal() {
     // AC1-HP (x-3349, re-ruled as the TV model). A portal outlives its
     // viewer: whichever portal's viewer dies, its seat stays at the same

@@ -1,0 +1,2 @@
+merge-result: REFUSED - merge-tree conflict: fixture
+  remedy: rebase, fix, push, retry
