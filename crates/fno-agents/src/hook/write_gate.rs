@@ -807,39 +807,45 @@ fn config_bash_arm(
     }
     // sqlite3: the shell creates the file it opens unless -readonly is
     // given, so an open of a missing state-root path lands a new top-level
-    // entry. Judged on every invocation: the offending call was the second
-    // of two in one command. The config-dir arms do not apply: a sqlite3
-    // read of an existing file in the Claude config dir stays lawful.
-    let sqlite_arm = regex::Regex::new(&format!(
-        r"{lead}sqlite3((?:[[:space:]]+-[^[:space:]]+)*)[[:space:]]+({name_cls})"
-    ))
-    .unwrap();
+    // entry. The clause is captured whole and every operand is judged, not
+    // only the token after the flags: an option that consumes a value
+    // (-cmd X) must not leave the real filename unjudged. Judged on every
+    // invocation: the offending call was the second of two in one command.
+    // The config-dir arms do not apply: a sqlite3 read of an existing file
+    // in the Claude config dir stays lawful.
+    let sqlite_arm = regex::Regex::new(&format!(r"{lead}sqlite3([^;|&]*)")).unwrap();
     for caps in sqlite_arm.captures_iter(cmd) {
-        let flags = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        if flags.split_whitespace().any(|f| f == "-readonly") {
-            continue;
-        }
-        let token = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-        if token == ":memory:" || (token.starts_with("file:") && token.contains("mode=ro")) {
-            continue;
-        }
-        let Some(abs) = abs_of(token, payload_cwd) else {
+        let Some(clause) = caps.get(2).map(|m| m.as_str()) else {
             continue;
         };
-        if let Some(reason) = state_root_refusal(&abs, state, session_id) {
-            if abs == state.physical {
-                return Sec::Block(reason);
+        if clause.split_whitespace().any(|t| t == "-readonly") {
+            continue;
+        }
+        for tok in clause.split_whitespace() {
+            if tok.starts_with('-') {
+                continue;
             }
-            let sp = state
-                .physical
-                .to_string_lossy()
-                .trim_end_matches('/')
-                .to_string();
-            let shown = abs.display().to_string();
-            return Sec::Block(format!(
-                "{shown} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
-                state.spelled
-            ));
+            if tok == ":memory:" || (tok.starts_with("file:") && tok.contains("mode=ro")) {
+                continue;
+            }
+            let Some(abs) = abs_of(tok, payload_cwd) else {
+                continue;
+            };
+            if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+                if abs == state.physical {
+                    return Sec::Block(reason);
+                }
+                let sp = state
+                    .physical
+                    .to_string_lossy()
+                    .trim_end_matches('/')
+                    .to_string();
+                let shown = abs.display().to_string();
+                return Sec::Block(format!(
+                    "{shown} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
+                    state.spelled
+                ));
+            }
         }
     }
     // mkdir: the folder-creation family, scoped to the state root only.
@@ -1382,7 +1388,7 @@ mod tests {
     fn sqlite3_open_of_a_missing_state_root_entry_refuses() {
         static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "fno-write-gate-{}-{}",
+            "fno-write-gate-sql3-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
@@ -1426,6 +1432,15 @@ mod tests {
             Sec::Allow
         ));
         assert!(matches!(arm("sqlite3 :memory: 'select 1'"), Sec::Allow));
+        // An option that consumes a value does not hide the real filename:
+        // every operand of the invocation is judged.
+        assert!(matches!(
+            arm(&format!(
+                "sqlite3 -cmd '.tables' {}",
+                dir.join("events.db").display()
+            )),
+            Sec::Block(_)
+        ));
         assert!(
             matches!(
                 arm(&format!("sqlite3 {}", dir.join("ledger.json").display())),

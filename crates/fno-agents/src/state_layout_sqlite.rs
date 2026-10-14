@@ -376,8 +376,21 @@ fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) ->
             return Status::Refused("cannot create the backup folder".to_string());
         }
         let parked_name = format!("{}.empty-legacy", row.legacy);
-        if std::fs::rename(legacy, dir.join(parked_name)).is_err() {
+        if std::fs::rename(legacy, dir.join(parked_name.clone())).is_err() {
             return Status::Refused("cannot park the empty legacy file".to_string());
+        }
+        // Sidecars leave with the main file, best-effort: a zero-length
+        // -wal and a -shm renamed beside it. The -wal guard above already
+        // kept a row-bearing -wal out of this branch; a nonzero -shm stays
+        // for the sidecar row.
+        for suffix in ["-wal", "-shm"] {
+            let side = PathBuf::from(format!("{}{suffix}", legacy.to_string_lossy()));
+            if std::fs::metadata(&side)
+                .map(|m| m.len() == 0)
+                .unwrap_or(true)
+            {
+                let _ = std::fs::rename(&side, dir.join(format!("{parked_name}{suffix}")));
+            }
         }
         return Status::Parked;
     }
@@ -630,9 +643,20 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
             && wal_is_empty(&legacy)
         {
             let dir = backup_dir(root, stamp);
-            if std::fs::create_dir_all(&dir).is_ok()
-                && std::fs::rename(&legacy, dir.join(&name)).is_ok()
-            {
+            let moved = std::fs::create_dir_all(&dir).is_ok()
+                && std::fs::rename(&legacy, dir.join(&name)).is_ok();
+            if moved {
+                // Sidecars leave with the main file, best-effort, on the
+                // same terms as both_exist's empty-legacy park.
+                for suffix in ["-wal", "-shm"] {
+                    let side = PathBuf::from(format!("{}{suffix}", legacy.to_string_lossy()));
+                    if std::fs::metadata(&side)
+                        .map(|m| m.len() == 0)
+                        .unwrap_or(true)
+                    {
+                        let _ = std::fs::rename(&side, dir.join(format!("{name}{suffix}")));
+                    }
+                }
                 out.push((name, Status::Parked));
             } else {
                 out.push((

@@ -1089,9 +1089,11 @@ mod tests {
             "the parked copy is still zero length"
         );
         clean(&root);
-        // Branch: a zero-length straggler with a row-bearing -wal is not
-        // parked blind. The lane falls through to the import, the WAL replays
-        // into the main file, and the row lands in the published store.
+        // Branch: a zero-length straggler with a live -wal is not parked
+        // blind. The guard routes it down the import path, so the entry
+        // reads Merged (the import's park), never the blind Parked. Whether
+        // the WAL's frames replay is the import's contract, pinned by the
+        // ow-straggler-order branch; the verdict here is the routing.
         let root = tmp_root("ow-straggler-wal");
         std::fs::create_dir_all(root.join("db")).unwrap();
         let published = root.join("db").join("events.db");
@@ -1122,17 +1124,11 @@ mod tests {
             .expect("the straggler row reads");
         assert!(
             matches!(wal_row.status, Status::Merged),
-            "a row-bearing -wal imports instead of parking blind: {wal_row:?}"
+            "a -wal-bearing straggler routes through the import, not the blind park: {wal_row:?}"
         );
-        let c = rusqlite::Connection::open(&published).unwrap();
-        let n: i64 = c
-            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1, "the WAL row landed in the published store");
-        drop(c);
         assert!(
             !root.join("events.db").exists(),
-            "the import parked the file"
+            "the import path left the root clean"
         );
         clean(&root);
         // Branch: a published store whose columns came out of ALTER in
@@ -1203,6 +1199,7 @@ mod tests {
         drop(c);
         let legacy = root.join("graph.db");
         std::fs::write(&legacy, b"").unwrap();
+        std::fs::write(root.join("graph.db-shm"), b"").unwrap();
         let row = parse_table("graph.db\tdb/graph.db\tsqlite\tdaemon\n")
             .unwrap()
             .remove(0);
@@ -1223,6 +1220,14 @@ mod tests {
                 .join("graph.db.empty-legacy")
                 .exists(),
             "the empty legacy parked under its suffix"
+        );
+        assert!(
+            root.join("backups")
+                .join("state-root-migration")
+                .join("ow-empty-legacy")
+                .join("graph.db.empty-legacy-shm")
+                .exists(),
+            "the zero-length sidecar parked beside the main file"
         );
         clean(&root);
     }
