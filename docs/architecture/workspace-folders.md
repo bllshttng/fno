@@ -25,6 +25,10 @@ A new workspace takes the folder you pick. The `+` overlay lists the project roo
 
 A workspace made by recruiting rows takes the one project root those rows share. Rows from mixed roots make a workspace with no folder.
 
+A named workspace with no folder binds one on its own. Say a live row's project id or root folder name equals the workspace name. Then the server adds that root as the folder within one registry tick. Two matching roots bind nothing.
+
+A new tab opens in the workspace folder. With no folder, it opens in the cwd of the focused row, then in the project root of any live member row, then in HOME. A new tab never opens in the server's own directory.
+
 The section menu of a named workspace has Add folder. It opens a numbered list of the same live-row folders, and the digit adds one folder to the workspace. It is the same edit as `fno mux workspace origin add`. An older mux server shows `update the mux server to move a session` and receives nothing.
 
 To change the folder of an open workspace, run:

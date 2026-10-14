@@ -93,6 +93,7 @@ impl Core {
         // next session even before any recruit.
         self.squad_members.insert(sid, Vec::new());
         self.persist_squad(sid);
+        self.bind_named_folders();
         self.set_view(client_id, sid, tid);
         self.push_layout(true);
         Flow::Continue
@@ -165,6 +166,72 @@ impl Core {
         }
     }
 
+    /// Where a new shell in workspace `sid` opens: its folder, else the cwd of
+    /// its focused row, else the project root of any live member row, else
+    /// HOME. Never the empty string: an empty cwd lets the shell inherit the
+    /// server's own directory, which is TMPDIR when a service starts it.
+    pub(super) fn spawn_cwd(&self, sid: u64) -> String {
+        let Some(squad) = self.session.squad(sid) else {
+            return home_dir();
+        };
+        if !squad.canonical_cwd().is_empty() {
+            return squad.canonical_cwd().to_string();
+        }
+        let focus = squad.tabs.get(squad.active_tab).map(|t| t.focus);
+        let members: Vec<&RegistryAgent> = self
+            .agents
+            .iter()
+            .filter(|a| !a.exited && self.thread_workspace(a) == Some(sid))
+            .collect();
+        let is_dir = |cwd: &str| !cwd.is_empty() && Path::new(cwd).is_dir();
+        let focused = members
+            .iter()
+            .find(|a| a.mux.as_ref().map(|m| m.1) == focus)
+            .filter(|a| is_dir(&a.cwd));
+        if let Some(row) = focused {
+            return row.cwd.clone();
+        }
+        members
+            .iter()
+            .filter_map(|a| self.project_by_cwd.get(&a.cwd).map(|p| p.root.as_str()))
+            .find(|root| is_dir(root))
+            .map(str::to_string)
+            .unwrap_or_else(home_dir)
+    }
+
+    /// Give each named workspace with no folder the one project root its name
+    /// stands for: the root whose `[project].id` or folder name equals the
+    /// workspace name. Two roots claiming the name bind nothing.
+    pub(super) fn bind_named_folders(&mut self) {
+        let mut binds: Vec<(String, String)> = Vec::new();
+        for sq in &self.session.squads {
+            let Some(name) = sq.name.as_deref().filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            if !sq.origins.is_empty() {
+                continue;
+            }
+            let roots: HashSet<&str> = self
+                .agents
+                .iter()
+                .filter_map(|a| self.project_by_cwd.get(&a.cwd))
+                .filter(|p| {
+                    p.id.as_deref() == Some(name)
+                        || p.root.trim_end_matches('/').rsplit('/').next() == Some(name)
+                })
+                .map(|p| p.root.as_str())
+                .collect();
+            if roots.len() == 1 {
+                if let Some(root) = roots.into_iter().next() {
+                    binds.push((name.to_string(), root.to_string()));
+                }
+            }
+        }
+        for (name, root) in binds {
+            let _ = self.apply_origin_edit(&name, &root, false);
+        }
+    }
+
     fn apply_origin_edit(
         &mut self,
         workspace: &str,
@@ -232,4 +299,10 @@ impl Core {
         }
         Ok(())
     }
+}
+
+fn home_dir() -> String {
+    std::env::var_os("HOME")
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }

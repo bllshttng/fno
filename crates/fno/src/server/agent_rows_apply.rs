@@ -81,6 +81,7 @@ impl Core {
         // The debounce flush for topology captures: a drag's
         // events mark dirty without writing; the 1s registry tick is
         // the coalescing timer that turns them into one store write.
+        self.bind_named_folders();
         self.flush_topology();
         // The registry just refreshed: a queued template restore
         // whose fno bindings now resolve gets applied here, binding live

@@ -512,6 +512,10 @@ mod tests {
         assert_eq!(core.thread_workspace(&core.agents[1].clone()), Some(2));
         named_at(&mut core, 3, "fno-books", 7);
         assert_eq!(core.thread_workspace(&core.agents[0].clone()), None);
+        // The name also binds the folder, and a new tab opens there.
+        core.bind_named_folders();
+        assert_eq!(core.session.squad(2).unwrap().canonical_cwd(), "/code/fnh");
+        assert_eq!(core.spawn_cwd(2), "/code/fnh");
     }
 
     #[test]
