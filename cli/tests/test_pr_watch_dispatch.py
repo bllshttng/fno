@@ -3878,18 +3878,18 @@ class TestDurableGrantExecution:
         merge_calls: list[dict] = []
         self._merge_calls = merge_calls
 
-        def _merge(argv, cwd=None, *, authority="manifest", timeout_s=300.0):
-            assert authority == "durable_grant"
-            merge_calls.append({"pr": int(argv[0]), "timeout_s": timeout_s})
+        def _merge(verb, payload, timeout=None):
+            assert verb == "authorized-merge"
+            assert payload.get("authority") == "durable_grant"
+            merge_calls.append({"pr": int(payload["argv"][0]), "timeout": timeout})
             if isinstance(rc, BaseException):
                 raise rc
+            receipt = {"pr": int(payload["argv"][0]), "exit": rc}
             if reason is not None:
-                from fno.pr import _merge as merge_mod
+                receipt.update(reason=reason, observed_head="headsha")
+            return receipt
 
-                merge_mod.LAST_RECEIPT.update(reason=reason, observed_head="headsha")
-            return rc
-
-        monkeypatch.setattr("fno.pr._merge.run_merge", _merge)
+        monkeypatch.setattr("fno.rust_binary.verb_call", _merge)
         monkeypatch.setattr("fno.pr._merge._pr_head_oid", lambda _pr, _repo: "headsha")
         return merge_calls
 
@@ -3975,13 +3975,16 @@ class TestDurableGrantExecution:
         self._seed_entries(tmp_path, [1])
         merge_calls = self._fake_merge(monkeypatch, 2, reason=reason)
         if missing_head:
-            from fno.pr import _merge
-            original = _merge.run_merge
-            def no_head(*args, **kwargs):
-                rc = original(*args, **kwargs)
-                _merge.LAST_RECEIPT.pop("observed_head", None)
-                return rc
-            monkeypatch.setattr(_merge, "run_merge", no_head)
+            import fno.rust_binary
+
+            original = fno.rust_binary.verb_call
+
+            def no_head(verb, payload, timeout=None):
+                receipt = original(verb, payload, timeout=timeout)
+                receipt.pop("observed_head", None)
+                return receipt
+
+            monkeypatch.setattr(fno.rust_binary, "verb_call", no_head)
         counts = self._drain(self._queue(tmp_path), deps, monkeypatch, tmp_path)
 
         assert counts == {"executed": 0, "held": 1, "failed": 0, "skipped": 0, "budget": 0}
@@ -3998,7 +4001,7 @@ class TestDurableGrantExecution:
         next_deps = _make_tick_deps(tmp_path, candidates=[])
         counts = self._drain(self._queue(tmp_path), next_deps, monkeypatch, tmp_path)
         assert counts["skipped"] == 1
-        assert merge_calls == [{"pr": 1, "timeout_s": 135.0}]
+        assert merge_calls == [{"pr": 1, "timeout": 900}]
         assert any(
             event["type"] == "pr_watch_skipped" and event["data"]["reason"] == "parked"
             for event in next_deps["events"]
@@ -4235,7 +4238,9 @@ class TestDurableGrantExecution:
         from fno.pr_watch._dispatch import tick
 
         deps = _make_tick_deps(tmp_path, candidates=[])
-        monkeypatch.setattr("fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0)
+        monkeypatch.setattr(
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
+        )
         tick(
             graph_path=tmp_path / "graph.json",
             store_path=tmp_path / "state.json",
@@ -4345,7 +4350,7 @@ class TestScanResumesLeastRecentlyPolled:
         # The merge phase drains a granted row for PR 45 straight from the
         # Rust queue (the sweep no longer queues).
         monkeypatch.setattr(
-            "fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
         )
         from fno.pr_watch._dispatch import run_execute_queue
 
@@ -4399,7 +4404,7 @@ class TestScanResumesLeastRecentlyPolled:
         # The merge phase drains a granted row for PR 11 straight from the
         # Rust queue (the sweep no longer queues).
         monkeypatch.setattr(
-            "fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
         )
         from fno.pr_watch._dispatch import run_execute_queue
 

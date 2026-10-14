@@ -1366,6 +1366,20 @@ pub fn auto_merge_require_fresh_ci(cwd: &Path) -> bool {
     .unwrap_or(true)
 }
 
+/// Resolve `[auto_merge] require_checks_pass` (default ON). The native merge
+/// flow gates its flake-recovery probe on this switch; a malformed or absent
+/// value falls back to the safe default so a config typo cannot merge on a
+/// red run.
+pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("require_checks_pass")?
+            .as_bool()
+    })
+    .unwrap_or(true)
+}
+
 /// The normalized raw scalar for a direct child of `agents:`, so each caller
 /// applies its own coercion.
 pub(crate) fn resolve_agents_value(cwd: &Path, key: &str) -> Option<String> {
@@ -2803,6 +2817,34 @@ mod tests {
             "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
         );
         assert!(auto_merge_require_fresh_ci(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings("amrcp-absent", "schema_version = 1\n");
+        assert!(auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_honors_false() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd =
+            write_project_settings("amrcp-false", "[auto_merge]\nrequire_checks_pass = false\n");
+        assert!(!auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_invalid_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings(
+            "amrcp-invalid",
+            "[auto_merge]\nrequire_checks_pass = \"not-a-bool\"\n",
+        );
+        assert!(auto_merge_require_checks_pass(&cwd));
     }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL

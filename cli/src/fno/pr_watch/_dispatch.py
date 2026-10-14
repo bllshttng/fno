@@ -1371,9 +1371,19 @@ def run_execute_queue(
             started = time.monotonic()
             _merge.LAST_RECEIPT.clear()
             try:
-                rc = _merge.run_merge([str(pr)], cwd=str(cand.repo_dir),
-                                      authority="durable_grant",
-                                      timeout_s=_ritual_timeout())
+                # The operand door answers exit 0 with the flow receipt even
+                # when the merge held or failed; the flow's own exit rides the
+                # payload, and observed_head rides it for head-bound parking.
+                from fno.rust_binary import verb_call
+
+                receipt = verb_call(
+                    "authorized-merge",
+                    {"op": "merge", "argv": [str(pr)],
+                     "authority": "durable_grant", "cwd": str(cand.repo_dir)},
+                    timeout=900,
+                )
+                _merge.LAST_RECEIPT.update(receipt)
+                rc = int(receipt.get("exit") or 0)
             except Exception as exc:  # noqa: BLE001 - a crash is a failed attempt
                 log.warning("pr-watch: durable-grant merge for PR #%d crashed: %s", pr, exc)
                 rc, _merge.LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"

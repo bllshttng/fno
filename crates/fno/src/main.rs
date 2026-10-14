@@ -229,6 +229,10 @@ enum Role {
     /// pass through byte-verbatim to the native leaf, which vets the body
     /// and relays through `announce send`.
     MailTeam(Vec<OsString>),
+    /// `fno agents mail withdraw <msg-id>`: the withdrawal tombstone leaf.
+    /// The carried tail (msg id plus flags) passes through; the verb itself
+    /// is re-spelled by the exec action.
+    MailWithdraw(Vec<OsString>),
     /// `fno agents mail unread`: the native cursor-bounded unread listing.
     /// The verb and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
@@ -438,6 +442,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
                 .chain(tail.to_vec())
                 .collect(),
         )),
+        "withdraw" => Some(Role::MailWithdraw(tail.to_vec())),
         "unread" => Some(Role::MailUnread(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -779,6 +784,11 @@ fn main() {
         Role::MailTeam(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
         }
+        Role::MailWithdraw(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail withdraw",
+            &["mail", "withdraw"],
+            &rest,
+        )),
         Role::MailUnread(rest) => {
             std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
         }
