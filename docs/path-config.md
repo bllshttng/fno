@@ -88,7 +88,7 @@ enabled = false   # set true to use the {vault} template variable
 # node ID resolves regardless of the prefix/width it was minted under.
 # id_prefix = "fno-"   # e.g. fno-, xy-; lowercase, <=7 chars, not cv-/fu-/tgt-.
                        # Set at `fno config setup`. An absent key falls back to ab-.
-id_hex_width = 8       # hex chars in a minted id, 4-8. The setup wizard offers 4;
+id_hex_width = 8       # hex chars in a minted id, 4-8. `fno config setup` writes 4;
                        # an absent key resolves to 8.
 ```
 
