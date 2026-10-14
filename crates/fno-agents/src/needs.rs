@@ -1434,26 +1434,6 @@ fn open_question_rows(raw: &str) -> (HashMap<String, Value>, std::collections::H
     (asked, closed)
 }
 
-/// The open question ids carrying a user-only why_user: the fold closes
-/// these with reason "moot" (not "node-closed") when their subject
-/// resolves. Same journal fold as [settled_questions], pared to the
-/// why_user bit.
-pub(crate) fn user_only_question_ids(raw: &str) -> Vec<String> {
-    let (asked, closed) = open_question_rows(raw);
-    let mut ids: Vec<String> = asked
-        .into_iter()
-        .filter(|(qid, data)| {
-            !closed.contains(qid)
-                && crate::escalation::why_user_is_user_only(
-                    data.get("why_user").and_then(Value::as_str).unwrap_or(""),
-                )
-        })
-        .map(|(qid, _)| qid)
-        .collect();
-    ids.sort();
-    ids
-}
-
 /// Stamp each item's `live` bit from its node claim (x-aaaa 1.4): an item whose
 /// node holds a Live or Suspect claim (a suspect TTL-unexpired claim still
 /// protects the slot) renders even without a roster row; an unclaimed or
@@ -2817,7 +2797,6 @@ mod tests {
             settled_questions(&raw, &facts),
             vec![("q-user".to_string(), "moot: x-bbbb done".to_string())]
         );
-        assert_eq!(user_only_question_ids(&raw), vec!["q-user".to_string()]);
         let raw = operator_question_with_why_user(
             "2026-07-03T02:00:00Z",
             "q-mach",
@@ -2828,7 +2807,6 @@ mod tests {
             settled_questions(&raw, &facts),
             vec![("q-mach".to_string(), "node-closed: x-bbbb done".to_string())]
         );
-        assert!(user_only_question_ids(&raw).is_empty());
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-plain", "pick", &["x-bbbb"]);
         assert_eq!(
             settled_questions(&raw, &facts),
@@ -2837,7 +2815,6 @@ mod tests {
                 "node-closed: x-bbbb done".to_string()
             )]
         );
-        assert!(user_only_question_ids(&raw).is_empty());
         // Rule 1 ignores why_user, but only when the subject names the
         // thing that resolved: the merged PR or one of its heads. A taste
         // ask about rules on the same node names no PR and stays open -
