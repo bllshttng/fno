@@ -731,6 +731,31 @@ fn generation_key(name: &str, key: &str) -> Option<String> {
     }
 }
 
+/// The store's current generation counter for the identity `(name, key)`,
+/// keyed the way a server's baseline map is. `None` when the identity has no
+/// counter (never written, or no identity at all).
+pub fn current_generation(name: &str, key: &str) -> Option<(String, u64)> {
+    let id = generation_key(name, key)?;
+    let generation = load().generations.get(&id).copied()?;
+    Some((id, generation))
+}
+
+/// Replace the origins of the stored row named `name`, and nothing else on it:
+/// an origin edit must not carry a server's possibly stale members or layout
+/// over what another writer stored. The write is the operator's word, so it
+/// skips the baseline check. Returns whether the row exists, beside the
+/// batch whose generations the caller adopts.
+pub fn set_origins(name: &str, origins: &[String]) -> io::Result<(bool, SnapshotBatch)> {
+    let mut found = false;
+    let batch = mutate_generations(None, &[], false, |squads| {
+        if let Some(row) = squads.iter_mut().find(|s| s.name == name) {
+            row.origins = origins.to_vec();
+            found = true;
+        }
+    })?;
+    Ok((found, batch))
+}
+
 /// Insert-or-replace the entry with this identity (`name` if named, else the
 /// durable `key`), preserving its `created_at` if it already exists (else
 /// stamping now). Write-through for `NewSquad`, recruit, member close, tombstone,

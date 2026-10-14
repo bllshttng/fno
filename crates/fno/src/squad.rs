@@ -228,21 +228,25 @@ impl Session {
     /// squad. Named (empty-origin) squads own nothing, so they are bypassed
     /// here - explicit creation is the only way into them. The LONGEST owning
     /// origin wins, so a home-rooted squad never captures a repo cwd its
-    /// deeper origin describes better; on equal length the FIRST
-    /// squad keeps it, because two rows may share one origin by design and
-    /// the first is the established answer. An empty `cwd` owns nothing.
+    /// deeper origin describes better; on equal length a named workspace
+    /// beats an unnamed squad, and otherwise the FIRST squad keeps it,
+    /// because two rows may share one origin by design and the first is the
+    /// established answer. An empty `cwd` owns nothing.
     pub fn find_by_cwd(&self, cwd: &str) -> Option<u64> {
         if cwd.is_empty() {
             return None;
         }
-        let mut best: Option<(usize, u64)> = None;
+        let mut best: Option<((usize, bool), u64)> = None;
         for s in &self.squads {
             let Some(len) = s.owning_origin_len(cwd) else {
                 continue;
             };
-            // STRICTLY greater, so an equal-length origin keeps the incumbent.
-            if best.is_none_or(|(best_len, _)| len > best_len) {
-                best = Some((len, s.id));
+            // A named workspace is a deliberate claim on its folder, so it
+            // beats an unnamed squad of equal length. STRICTLY greater
+            // otherwise: an equal rank keeps the incumbent.
+            let rank = (len, s.name.is_some());
+            if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+                best = Some((rank, s.id));
             }
         }
         best.map(|(_, id)| id)
@@ -647,6 +651,10 @@ mod tests {
         s.add_squad(2, vec!["/home/u".into()], None, tab(&[20]));
         assert_eq!(s.find_by_cwd("/home/u"), Some(1));
         assert_eq!(s.find_by_cwd("/home/u/deep"), Some(1));
+        // A named workspace is a deliberate claim: it wins an equal-length tie
+        // over unnamed squads that were there first.
+        s.add_squad(3, vec!["/home/u".into()], Some("home".into()), tab(&[30]));
+        assert_eq!(s.find_by_cwd("/home/u/deep"), Some(3));
     }
 
     #[test]
