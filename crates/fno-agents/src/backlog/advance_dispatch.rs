@@ -563,8 +563,6 @@ pub fn launch_resolved(
                 "worker": {
                     "name": args.agent_name,
                     "harness": args.resolved_harness,
-                    "model": args.model.clone().unwrap_or_default(),
-                    "effort": pin,
                 },
             }
         });

@@ -874,26 +874,16 @@ fn grid_candidate(stage: &Stage) -> Option<Value> {
     Some(candidate.clone())
 }
 
-/// The resolved-target harness, lazily: explicit -H, then the merged config
-/// `provider`, then the ambient inference (builtin claude).
-fn resolved_harness(stage: &mut Stage) -> Option<String> {
-    if !stage.harness_done {
-        stage.harness_done = true;
-        let cfg = stage.fields().harness.0.clone();
-        stage.harness = if let Some(explicit) = stage
-            .scan
-            .explicit_harness
-            .clone()
-            .filter(|h| !h.trim().is_empty())
-        {
-            Some(explicit)
-        } else if !cfg.is_empty() {
-            Some(cfg)
-        } else {
-            Some(stage.inputs.ambient_harness.clone())
-        };
-    }
-    stage.harness.clone()
+/// The resolved-target harness: the explicit spelling, else the ambient
+/// inference (builtin claude). The config-provider rung died with the
+/// harness axis; the lane owns the choice now.
+fn resolved_harness(stage: &Stage) -> Option<String> {
+    stage
+        .scan
+        .explicit_harness
+        .clone()
+        .filter(|h| !h.trim().is_empty())
+        .or_else(|| Some(stage.inputs.ambient_harness.clone()))
 }
 
 fn fields_of<'a>(stage: &'a Stage<'a>) -> &'a Fields {
@@ -1182,12 +1172,9 @@ fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
             None => return,
         },
     };
+    // The retired axes (provider/model/effort/substrate/permission) left
+    // the receipt: the lane owns those choices and no flag can carry them.
     let axes = [
-        ("provider", stage.fields().harness.clone()),
-        ("model", stage.fields().model.clone()),
-        ("effort", stage.fields().effort.clone()),
-        ("substrate", stage.fields().substrate.clone()),
-        ("permission_mode", stage.fields().permission.clone()),
         ("route", stage.fields().route.clone()),
         ("account", stage.fields().account.clone()),
         ("pane_group", stage.fields().pane_group.clone()),
@@ -1222,15 +1209,6 @@ fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
 
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
-}
-
-/// Store the re-read fields back on the stage for the journal.
-fn set_fields(stage: &mut Stage, effort: Field, substrate: Field, permission: Field) {
-    if let Some(fields) = stage.fields.as_mut() {
-        fields.effort = effort;
-        fields.substrate = substrate;
-        fields.permission = permission;
-    }
 }
 
 /// One spawn-defaults block as the overlay verb's JSON view (Python
