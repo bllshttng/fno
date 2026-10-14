@@ -763,8 +763,41 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                     view.bell.size = Size::Full;
                 }
             }
+            b' ' => {
+                let selected = view.bell.selected;
+                if view.bell.tab == Tab::Questions {
+                    if let Some(Row::Question(id)) = rows(view).get(selected).cloned() {
+                        if !view.bell.marks.remove(&id) {
+                            view.bell.marks.insert(id);
+                        }
+                        // A mark advances the cursor, so space space space
+                        // marks three rows.
+                        view.bell.selected =
+                            (view.bell.selected + 1).min(rows(view).len().saturating_sub(1));
+                    }
+                }
+            }
             b'c' => {
-                if rows(view).iter().any(|r| matches!(r, Row::Clear(_))) && !view.question_acting {
+                let listed: Vec<String> = question_rows(view)
+                    .into_iter()
+                    .filter_map(|r| match r {
+                        Row::Question(id) => Some(id),
+                        _ => None,
+                    })
+                    .collect();
+                view.bell.marks.retain(|id| listed.contains(id));
+                if !view.bell.marks.is_empty() && !view.question_acting {
+                    let ids: Vec<String> = listed
+                        .iter()
+                        .filter(|id| view.bell.marks.contains(*id))
+                        .cloned()
+                        .collect();
+                    view.question_archive = Some(ids);
+                    view.question_acting = true;
+                    view.bell.marks.clear();
+                } else if rows(view).iter().any(|r| matches!(r, Row::Clear(_)))
+                    && !view.question_acting
+                {
                     view.question_clear_settled = true;
                     view.question_acting = true;
                 }
@@ -873,11 +906,14 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
         } else if let Some(row) = lines.get(start + r - 1) {
             let (label, color, bold) = match row {
                 Row::Header(s) => (s.clone(), view.theme.brand, true),
-                Row::Question(id) => (
-                    format!("? {}", question_title(view, id)),
-                    Color::Default,
-                    true,
-                ),
+                Row::Question(id) => {
+                    let (glyph, color) = if view.bell.marks.contains(id) {
+                        ("● ", view.theme.brand)
+                    } else {
+                        ("? ", Color::Default)
+                    };
+                    (format!("{glyph}{}", question_title(view, id)), color, true)
+                }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),
                 Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
@@ -1204,5 +1240,111 @@ mod tests {
             MouseKind::Release(MouseButton::Left)
         ));
         assert_eq!(v.bell.width, 70, "no movement, no change");
+    }
+
+    #[test]
+    fn questions_marks_clear_through_archive() {
+        let q = |id: &str| crate::needs_overlay::QuestionItem {
+            id: id.into(),
+            title: id.into(),
+            state: "open".into(),
+            ready: true,
+            ..Default::default()
+        };
+        let marks = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| id.to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        // AC8: space marks and advances, so three spaces mark the three open
+        // rows and the footer names the count.
+        let mut v = view_with_agents(vec![]);
+        v.term = (24, 100);
+        v.bell.open = true;
+        v.bell.tab = Tab::Questions;
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                q("q-a1"),
+                q("q-b2"),
+                q("q-c3"),
+                crate::needs_overlay::QuestionItem {
+                    settled: true,
+                    ..q("q-d4")
+                },
+            ],
+        });
+        keys(&mut v, b"   ");
+        assert_eq!(
+            v.bell.marks,
+            marks(&["q-a1", "q-b2", "q-c3"]),
+            "space toggles each open row in turn"
+        );
+        assert_eq!(v.bell.selected, 3, "each mark advanced the cursor");
+        let text = crate::vt::frame_text(&v.compose());
+        assert!(
+            text.contains("3 marked"),
+            "the footer names the count: {text:?}"
+        );
+        assert!(
+            text.contains("● q-a1"),
+            "marked rows paint the dot: {text:?}"
+        );
+        assert!(
+            !text.contains("? q-a1"),
+            "the unmarked glyph is gone: {text:?}"
+        );
+
+        // AC9: c archives the marked ids in row order and clears the marks.
+        keys(&mut v, b"c");
+        assert_eq!(
+            v.question_archive,
+            Some(vec![
+                "q-a1".to_string(),
+                "q-b2".to_string(),
+                "q-c3".to_string()
+            ]),
+            "c archives the marked ids in row order"
+        );
+        assert!(v.question_acting, "the archive rides the acting latch");
+        assert!(v.bell.marks.is_empty(), "the marks clear");
+        assert!(
+            !v.question_clear_settled,
+            "the clear-settled fallback did not fire beside it"
+        );
+
+        // AC10: no marks with an Answered section falls back to today's
+        // clear-settled; a mark on a question that left the list is not sent.
+        let mut v2 = view_with_agents(vec![]);
+        v2.term = (24, 100);
+        v2.bell.open = true;
+        v2.bell.tab = Tab::Questions;
+        v2.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                q("q-e5"),
+                crate::needs_overlay::QuestionItem {
+                    settled: true,
+                    ..q("q-f6")
+                },
+            ],
+        });
+        keys(&mut v2, b"c");
+        assert!(v2.question_clear_settled, "no marks: clear settled fires");
+        assert_eq!(v2.question_archive, None);
+
+        let mut v3 = view_with_agents(vec![]);
+        v3.term = (24, 100);
+        v3.bell.open = true;
+        v3.bell.tab = Tab::Questions;
+        v3.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![q("q-a1")],
+        });
+        v3.bell.marks = marks(&["q-a1", "q-gone"]);
+        keys(&mut v3, b"c");
+        assert_eq!(
+            v3.question_archive,
+            Some(vec!["q-a1".to_string()]),
+            "the vanished id is pruned, not sent"
+        );
     }
 }
