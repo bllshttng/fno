@@ -41,6 +41,6 @@ fno translates none of claude's flags. The flag tables below come from `claude -
 - A native launch moves no node claim. If you hold the node's claim, release it first, or use spawn, which hands it to the child.
 - A native launch sets no first-check deadline. Peek once after a few minutes.
 - A `--name` that a live row already holds takes a suffix: `<name>-2`.
-- Stop a worker with `fno agents stop <name>`. Never run a bare `claude rm <id>`: it deletes the session behind the fno row. `fno agents rm <name>` removes both in order.
+- Stop a worker with `fno agents stop <name>`. Remove it with `fno agents rm <name>`, which removes claude's record and then the fno row. `fno agents adopt <session-id>` reverses it.
 
 Back to [the harness choice table](../SKILL.md#launch-a-worker).
