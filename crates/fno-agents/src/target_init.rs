@@ -191,7 +191,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
     }
 
     // 3. Size validation.
-    let normalized_size = match &args.size {
+    let mut normalized_size = match &args.size {
         Some(raw) => {
             let upper = raw.trim().to_ascii_uppercase();
             if !matches!(upper.as_str(), "S" | "M" | "L") {
@@ -280,6 +280,49 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
                 message: String::new(),
                 code: receipt.exit_code(),
             });
+        }
+    }
+
+    // 8.5 Blast-radius modulation: a deterministic read of the plan's File
+    // Ownership Map floors the size profile at M (high blast) or downgrades
+    // an unpinned size to S (low) BEFORE the immutable manifest is written.
+    // Gated on config.target.blast.enabled first, so the disabled path does
+    // zero extra work (no classify, no scope read). Every failure degrades to
+    // "unknown" -> no change.
+    let blast_cfg = crate::target_blast::load_blast_cfg(&cwd);
+    if blast_cfg.enabled {
+        let blast_plan = crate::target_blast::resolve_plan_for_blast(
+            args.plan_path.as_deref(),
+            args.input.as_deref(),
+            entries.as_deref(),
+        );
+        if let Some(blast_plan) = blast_plan {
+            let repo_root = git_toplevel(&cwd);
+            let (verdict, matched) = crate::target_blast::classify_plan_file(
+                &blast_plan,
+                &blast_cfg,
+                repo_root.as_deref(),
+                crate::target_blast::control_plane_scope_path().as_deref(),
+            );
+            // An existing TARGET_SIZE in the env is an operator pin too, not
+            // only --size: a low-blast downgrade must never strip it.
+            let env_size = std::env::var("TARGET_SIZE")
+                .ok()
+                .map(|v| v.trim().to_ascii_uppercase())
+                .filter(|v| matches!(v.as_str(), "S" | "M" | "L"));
+            let (effective, announce) = crate::target_blast::modulate_size(
+                &verdict,
+                normalized_size.is_some() || env_size.is_some(),
+                normalized_size.as_deref().or(env_size.as_deref()),
+                blast_cfg.downgrade,
+                &matched,
+            );
+            if let Some(effective) = effective {
+                normalized_size = Some(effective);
+            }
+            if let Some(announce) = announce {
+                eprintln!("{announce}");
+            }
         }
     }
 
@@ -476,27 +519,76 @@ fn run_helper(
 /// operator-attendable one (`pane` is the only attended substrate) reads
 /// unattended; an UNKNOWN substrate on a spawned worker reads unattended
 /// too, the documented fail-toward-skip.
-fn substrate_marks_unattended() -> bool {
-    let spawned = !std::env::var("FNO_AGENT_SELF")
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
+fn substrate_verdict_reads_unattended(
+    agent_self: Option<&str>,
+    bg: Option<&str>,
+    substrate: Option<&str>,
+) -> bool {
+    let spawned = agent_self.map_or(false, |v| !v.trim().is_empty())
         || matches!(
-            std::env::var("FNO_BG")
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
-                .as_str(),
+            bg.unwrap_or_default().trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         );
     if !spawned {
         return false;
     }
-    let substrate = std::env::var("FNO_AGENT_SUBSTRATE")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    substrate != "pane"
+    substrate.map_or(true, |s| s.trim() != "pane")
+}
+
+fn substrate_marks_unattended() -> bool {
+    substrate_verdict_reads_unattended(
+        std::env::var("FNO_AGENT_SELF").ok().as_deref(),
+        std::env::var("FNO_BG").ok().as_deref(),
+        std::env::var("FNO_AGENT_SUBSTRATE").ok().as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod substrate_verdict_tests {
+    use super::substrate_verdict_reads_unattended as verdict;
+
+    #[test]
+    fn pane_is_the_only_attended_substrate() {
+        assert!(!verdict(Some("target-1"), None, Some("pane")));
+        assert!(verdict(Some("target-1"), None, Some("thread")));
+        assert!(verdict(Some("target-1"), None, Some("headless")));
+        assert!(verdict(Some("target-1"), None, None));
+        assert!(verdict(Some("target-1"), None, Some("  ")));
+    }
+
+    #[test]
+    fn unspawned_env_is_attended_regardless() {
+        assert!(!verdict(None, None, Some("thread")));
+        assert!(!verdict(None, Some("0"), Some("thread")));
+        assert!(!verdict(Some("  "), None, Some("headless")));
+    }
+
+    #[test]
+    fn bg_truthy_spawns_too() {
+        assert!(verdict(None, Some("1"), Some("thread")));
+        assert!(verdict(None, Some("yes"), None));
+        assert!(!verdict(None, Some("off"), Some("thread")));
+    }
+}
+
+/// The repo root the blast read anchors relative paths against; `None` when
+/// git cannot answer, which degrades the path normalization to its logical
+/// fallback instead of failing the run.
+fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(root))
+    }
 }
 
 /// Change A: print the resolved situation report as init's first orientation

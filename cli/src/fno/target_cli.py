@@ -212,46 +212,16 @@ def _refuse_unreachable_github_apps() -> None:
         raise typer.Exit(code=2)
 
 
-_SIZE_ORDER = {"S": 0, "M": 1, "L": 2}
 
 
-def _modulate_size(
-    verdict: str,
-    *,
-    size_explicit: bool,
-    operator_size: Optional[str],
-    downgrade: bool,
-    matched_paths: Optional[list] = None,
-) -> tuple[Optional[str], Optional[str]]:
-    """Pure blast -> effective-size decision (Locked Decision 1: floor up, cautious down).
 
-    Returns ``(effective_size, announce)``:
-      * ``effective_size`` is the token to FORCE into TARGET_SIZE, or ``None``
-        meaning "leave the operator/default size untouched".
-      * ``announce`` is a one-line human note, or ``None`` when nothing changed.
 
-    Rules:
-      high    -> floor at ``M``: max(base, M), even over an explicit ``S``
-                 (non-overridable downward). base is the operator size or the
-                 implicit ``M`` default. Always pins the floor (so a re-init
-                 reads the floored size, never regresses).
-      low     -> downgrade to ``S`` ONLY when ``downgrade`` and the size was
-                 NOT explicitly pinned. An explicit size is never downgraded.
-      unknown -> no change (fail-safe to today's behavior).
-    """
-    base = operator_size or "M"
-    if verdict == "high":
-        floor = "M"
-        effective = base if _SIZE_ORDER[base] >= _SIZE_ORDER[floor] else floor
-        hit = (matched_paths or ["control-plane"])[0]
-        if effective != base:
-            note = f"blast: high ({hit}) -> floor {effective} (operator size {base} raised)"
-        else:
-            note = f"blast: high ({hit}); ceremony already at/above floor M (size {base})"
-        return effective, note
-    if verdict == "low" and downgrade and not size_explicit:
-        return "S", "blast: low -> fast path S (no size pinned)"
-    return None, None
+
+
+
+
+
+
 
 
 def _load_blast_cfg():
@@ -277,94 +247,6 @@ def _repo_root_or_none() -> Optional[str]:
         from fno.paths import resolve_repo_root
 
         return str(resolve_repo_root())
-    except Exception:
-        return None
-
-
-def _resolve_plan_for_blast(plan_path: Optional[str], input_: Optional[str]) -> Optional[str]:
-    """Plan path the blast read should classify, or None to skip.
-
-    Honors Locked Decision 2 (plan AND node inputs covered): an explicit
-    ``--plan-path`` wins; otherwise the ``--input`` is tokenized and each token
-    is matched (exact, case-insensitive, format-agnostic) against a graph entry
-    id. This covers modifier-prefixed node inputs - the auto-continue path
-    builds ``/target --no-merge <id>`` and passes the original arg to
-    ``fno do target init`` - while a free-text feature description (no token equals
-    an id) simply skips. Exactly one distinct node match is required; zero or
-    ambiguous (>=2) -> skip. No fuzzy title guessing, so a description never
-    mis-resolves. Fail-safe to None on any error.
-    """
-    if plan_path:
-        return plan_path
-    tokens = (input_ or "").split()
-    if not tokens:
-        return None
-    try:
-        from fno.graph.load import load_graph
-        from fno.graph.store import read_nodes_by_ids
-        from fno.paths import graph_json
-
-        fast = read_nodes_by_ids(graph_json(), tokens)
-        graph_data = fast["entries"] if fast is not None else load_graph(graph_json())
-        if not isinstance(graph_data, list):
-            return None
-        by_id = {
-            entry["id"].lower(): entry
-            for entry in graph_data
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str) and not entry.get("archived_at")
-        }
-        matched = {tok.lower(): by_id[tok.lower()] for tok in tokens if tok.lower() in by_id}
-        if len(matched) == 1:
-            return next(iter(matched.values())).get("plan_path") or None
-    except Exception:
-        return None
-    return None
-
-
-def _resolve_plan_pointer(plan_path: str) -> Optional[str]:
-    """The plan pointer to bind, NORMALIZED, or None when it does not resolve.
-
-    Returns the resolved pointer rather than a bool because the value written to
-    the write-once manifest must be the one whose existence was proven. ``~`` is
-    expanded here but NOT by init-target-state.sh - bash does not tilde-expand a
-    variable's value - so admitting a ``~``-prefixed pointer and then storing the
-    raw string would pass this check and read as missing in every consumer, which
-    is the exact wedge this gate exists to prevent. A ``#group-N`` anchor is
-    stripped for the stat the way the shell does (``${INITIAL_PLAN_PATH%%#*}``)
-    and preserved on the way out. A RELATIVE pointer resolves against the repo
-    root, not the process cwd: the graph is global (one graph.json spans every
-    project), so a relative plan_path in it is repo-root-relative by convention
-    and is meaningless against a caller's cwd. Normalizing it to absolute here is
-    also what makes the shell safe, because init-target-state.sh does NOT anchor
-    relative paths - both of its plan stats are bare and cwd-relative - so
-    handing it a still-relative pointer is what would break it from a
-    subdirectory. Do not "simplify" this back to passing the raw string through.
-
-    A footnote plan can be a file or a directory whose entry point is
-    ``00-INDEX.md``. Resolve that entry point and read it before binding so an
-    existing but unreadable plan cannot start a planless worker.
-
-    Fail-CLOSED to None, the opposite of ``_resolve_plan_for_blast`` above and
-    deliberately so: an unresolved blast read only forgoes ceremony modulation,
-    while an unverified pointer here makes initialization refuse before the
-    write-once manifest is created.
-    """
-    try:
-        bare, sep, anchor = plan_path.partition("#")
-        bare = bare.strip()
-        if not bare:
-            return None
-        resolved = Path(bare).expanduser()
-        if not resolved.is_absolute():
-            root = _repo_root_or_none()
-            if root:
-                resolved = Path(root) / resolved
-        if not resolved.exists():
-            return None
-        from fno.target.blast import resolve_plan_index
-
-        resolve_plan_index(resolved).read_text(encoding="utf-8")
-        return f"{resolved}{sep}{anchor}"
     except Exception:
         return None
 

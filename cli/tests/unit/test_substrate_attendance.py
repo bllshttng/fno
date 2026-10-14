@@ -119,52 +119,6 @@ def test_detect_session_reports_the_stamp_or_says_unknown():
     assert (operator.substrate, operator.attended) == ("interactive", True)
 
 
-def test_init_hands_the_bootstrap_the_substrate_verdict(tmp_path, monkeypatch):
-    """The seam the manifest is written from: `fno do target init` folds the
-    verdict into TARGET_UNATTENDED, and `init-target-state.sh` turns that into
-    `attended:`. A pane must reach the writer with the variable UNSET."""
-    import subprocess
-
-    from typer.testing import CliRunner
-
-    from fno import target_cli
-    from fno.cli import app
-
-    seen: list[tuple[list, dict]] = []
-
-    def fake_run(argv, **kwargs):
-        # Stop before the bash writer runs: the env it would have been handed
-        # is the whole assertion, and a non-zero code skips init's own
-        # post-success side effects.
-        seen.append((list(argv), dict(kwargs.get("env") or {})))
-        return subprocess.CompletedProcess(argv, 1)
-
-    monkeypatch.setattr(target_cli.subprocess, "run", fake_run)
-
-    def _bootstrap_env(extra: dict) -> dict:
-        seen.clear()
-        for var in ("TARGET_UNATTENDED", "FNO_BG", "FNO_AGENT_SELF", FNO_AGENT_SUBSTRATE):
-            monkeypatch.delenv(var, raising=False)
-        for key, value in extra.items():
-            monkeypatch.setenv(key, value)
-        result = CliRunner().invoke(
-            app, ["do", "target", "init", "--input", "some-feature"]
-        )
-        # Name the call, never take the last one: this patch covers every
-        # subprocess in the run, and init shells out for other reasons too.
-        bootstraps = [env for argv, env in seen if argv and argv[0] == "bash"]
-        assert bootstraps, f"init never reached the bootstrap script: {result.output}"
-        return bootstraps[-1]
-
-    pane = _bootstrap_env({**SPAWNED, FNO_AGENT_SUBSTRATE: "pane"})
-    assert pane["TARGET_START"] == "1"
-    assert "TARGET_UNATTENDED" not in pane
-
-    thread = _bootstrap_env({**SPAWNED, FNO_AGENT_SUBSTRATE: "thread"})
-    assert thread["TARGET_UNATTENDED"] == "1"
-
-    unstamped = _bootstrap_env(SPAWNED)
-    assert unstamped["TARGET_UNATTENDED"] == "1"
 
 
 def test_think_presence_follows_the_same_rule(tmp_path):

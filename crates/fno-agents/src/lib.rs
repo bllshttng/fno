@@ -505,6 +505,7 @@ pub mod supervisor;
 pub mod surface_check;
 pub mod sync_canonical;
 pub mod system_sender;
+pub mod target_blast;
 pub mod target_denominator;
 pub mod target_init;
 pub mod target_orient;
