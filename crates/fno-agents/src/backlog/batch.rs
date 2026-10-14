@@ -404,3 +404,343 @@ fn batch_status(rest: &[String]) -> i32 {
     emit_json(&json!({ "batches": batches }));
     0
 }
+
+// The policy engine (the wheel's decide_batch_action + should_close): pure
+// over inputs so tests feed synthetic nodes and batches.
+
+/// A node ships alone (never batched) when it is large or drop-everything: a
+/// big or urgent change deserves its own reviewable PR.
+fn ships_alone(node: &Value) -> Option<&'static str> {
+    let size = node.get("size").and_then(Value::as_str).unwrap_or("");
+    if size.eq_ignore_ascii_case("L") {
+        return Some("size:L ships alone");
+    }
+    let prio = node.get("priority").and_then(Value::as_str).unwrap_or("");
+    if prio.eq_ignore_ascii_case("p0") {
+        return Some("p0 ships alone");
+    }
+    None
+}
+
+/// What to do with a candidate node at selection time.
+struct BatchDecision {
+    action: &'static str,
+    domain: String,
+    reason: String,
+}
+
+/// Decide whether a candidate node ships solo, joins, or starts a batch.
+/// `enabled=false` always answers ship_solo: byte-for-byte the one-PR-per-node
+/// behavior when config.batch.enabled is off.
+fn decide_batch_action(node: &Value, enabled: bool, root: &Path) -> BatchDecision {
+    let domain = node
+        .get("domain")
+        .and_then(Value::as_str)
+        .unwrap_or("code")
+        .to_string();
+    if !enabled {
+        return BatchDecision {
+            action: "ship_solo",
+            domain,
+            reason: "batching disabled".into(),
+        };
+    }
+    if let Some(solo) = ships_alone(node) {
+        return BatchDecision {
+            action: "ship_solo",
+            domain,
+            reason: solo.to_string(),
+        };
+    }
+    // A corrupt batch file must not crash the live selection loop; ship solo.
+    let batch = match read_batch(&domain, root) {
+        Ok(b) => b,
+        Err(e) => {
+            return BatchDecision {
+                action: "ship_solo",
+                domain,
+                reason: format!("error reading batch: {e}"),
+            }
+        }
+    };
+    let open_not_full = is_open(batch.as_ref()) && !is_full(batch.as_ref().unwrap());
+    if open_not_full {
+        let id = batch
+            .as_ref()
+            .unwrap()
+            .get("batch_id")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        return BatchDecision {
+            action: "join",
+            domain,
+            reason: format!("join open batch {id}"),
+        };
+    }
+    BatchDecision {
+        action: "start",
+        domain,
+        reason: "no joinable open batch".into(),
+    }
+}
+
+/// Close the open batch when the first close condition trips. The domain
+/// boundary is the important one: it caps blast radius and keeps the review
+/// panel looking at a coherent diff. (config.batch.max_loc stays inert in v1:
+/// the batch state tracks no cumulative diff size, so there is nothing to
+/// compare - the leg can never wrongly close.)
+fn should_close(batch: Option<&Value>, next_node: Option<&Value>) -> (bool, String) {
+    let Some(batch) = batch.filter(|b| b.get("status").and_then(Value::as_str) == Some("open"))
+    else {
+        return (false, "no open batch".into());
+    };
+    if is_full(batch) {
+        return (true, "max_nodes reached".into());
+    }
+    let Some(next) = next_node else {
+        return (true, "no more ready nodes (drain)".into());
+    };
+    let batch_domain = batch.get("domain").and_then(Value::as_str).unwrap_or("code");
+    let next_domain = next.get("domain").and_then(Value::as_str).unwrap_or("code");
+    if next_domain != batch_domain {
+        return (true, "next node is a different domain".into());
+    }
+    if let Some(solo) = ships_alone(next) {
+        return (true, format!("next node {solo}"));
+    }
+    (false, "batch stays open".into())
+}
+
+/// Fetch a node dict through the native get door, or None on any failure.
+fn get_node(node_id: &str) -> Option<Value> {
+    let out = std::process::Command::new(std::env::current_exe().ok()?)
+        .args(["backlog", "get", node_id])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice::<Value>(&out.stdout).ok()
+}
+
+/// The next ready node, or None on a genuine drain. ANY failure (nonzero exit,
+/// unparseable output) is Err: should_close treats None as "drain -> close
+/// every open batch", so a transient next hiccup mapped to None would ship
+/// every open batch on one bad tick. The caller skips the tick on Err.
+/// `mission` scopes the peek to the same candidate set the daemon dispatches.
+fn peek_next(
+    project: Option<&str>,
+    mission: Option<&str>,
+) -> Result<Option<Value>, String> {
+    let mut cmd = std::process::Command::new(std::env::current_exe().ok_or(
+        "fno backlog next failed: no current binary",
+    )?);
+    cmd.args(["backlog", "next"]);
+    if let Some(p) = project {
+        cmd.args(["--project", p]);
+    }
+    if let Some(m) = mission {
+        cmd.args(["--mission", m]);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("fno backlog next spawn failed: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!(
+            "fno backlog next exited {}: {}",
+            out.status.code().unwrap_or(-1),
+            err.trim().chars().take(160).collect::<String>()
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() || text == "null" {
+        return Ok(None);
+    }
+    let node: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("fno backlog next returned non-JSON: {e}"))?;
+    if node.is_object() {
+        Ok(Some(node))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Decide solo-vs-batched for a candidate node and (on batch) resolve the
+/// shared worktree, opening a new batch if needed. Fail-safe: ANY error
+/// degrades to solo, so a broken batch setup never blocks or mis-dispatches.
+/// Always exit 0; the daemon reads `mode`.
+fn prepare_batch(node_id: &str, repo: &str, root: &Path) -> Value {
+    let Some(node) = get_node(node_id) else {
+        return json!({"mode": "solo", "reason": "node lookup failed"});
+    };
+    let decision = decide_batch_action(&node, super::settings::batch_enabled(), root);
+    if decision.action == "ship_solo" {
+        return json!({"mode": "solo", "reason": decision.reason});
+    }
+    let domain = decision.domain;
+    if decision.action == "start" {
+        return prepare_start(&node_id.to_string(), &domain, repo, root);
+    }
+    // join: reuse the open batch's recorded worktree/branch.
+    match read_batch(&domain, root) {
+        Ok(b) if is_open(b.as_ref()) => {
+            let b = b.unwrap();
+            return json!({
+                "mode": "batched",
+                "domain": domain,
+                "worktree": b.get("worktree").cloned().unwrap_or(Value::Null),
+                "branch": b.get("branch").cloned().unwrap_or(Value::Null),
+                "batch_id": b.get("batch_id").cloned().unwrap_or(Value::Null),
+            });
+        }
+        _ => {
+            return json!({"mode": "solo", "reason": "no open batch to join"});
+        }
+    }
+}
+
+/// The `start` leg: unique branch/worktree per batch, then open (a peer that
+/// opened between decide and open is joined instead - its recorded
+/// worktree/branch win).
+fn prepare_start(node_id: &str, domain: &str, repo: &str, root: &Path) -> Value {
+    let name = format!(
+        "batch-{}.{}",
+        safe_domain(domain).unwrap_or_else(|_| "code".into()),
+        hex_token(3).unwrap_or_default()
+    );
+    let branch = format!("feature/{name}");
+    // The launcher's own command builder resolves the ensure door the same
+    // way every native caller does; the explicit --branch means a `never`
+    // project refuses and degrades to solo below, never launches on canonical.
+    let mut cmd = crate::org_board::budget::fno_py_cmd();
+    cmd.extend([
+        "workspace".to_string(),
+        "worktree".to_string(),
+        "ensure".to_string(),
+        "--repo".to_string(),
+        repo.to_string(),
+        "--name".to_string(),
+        name.clone(),
+        "--branch".to_string(),
+        branch.clone(),
+        "--harness".to_string(),
+        "claude".to_string(),
+    ]);
+    let we = crate::org_board::budget::run_with_timeout_full(
+        &cmd,
+        Path::new("."),
+        std::time::Duration::from_secs(120),
+    );
+    let we = match we {
+        Ok(w) => w,
+        Err(e) => {
+            return json!({"mode": "solo", "reason": format!("worktree ensure failed: {}", e.message())})
+        }
+    };
+    let worktree = String::from_utf8_lossy(&we.stdout).trim().to_string();
+    if !we.status.success() || worktree.is_empty() {
+        let err = String::from_utf8_lossy(&we.stderr);
+        return json!({
+            "mode": "solo",
+            "reason": format!(
+                "worktree ensure failed: {}",
+                err.trim().chars().take(160).collect::<String>()
+            )
+        });
+    }
+    let setup = Path::new(repo).join("scripts").join("setup").join("setup-worktree.sh");
+    if setup.exists() {
+        let sr = crate::org_board::budget::run_with_timeout_full(
+            &["bash".to_string(), setup.to_string_lossy().into_owned()],
+            Path::new(&worktree),
+            std::time::Duration::from_secs(300),
+        );
+        if let Ok(sr) = sr {
+            if !sr.status.success() {
+                let err = String::from_utf8_lossy(&sr.stderr);
+                return json!({
+                    "mode": "solo",
+                    "reason": format!(
+                        "setup-worktree failed: {}",
+                        err.trim().chars().take(160).collect::<String>()
+                    )
+                });
+            }
+        }
+    }
+    match open_batch(domain, &branch, &worktree, super::settings::batch_max_nodes(), root) {
+        Ok(b) => {
+            return json!({
+                "mode": "batched",
+                "domain": domain,
+                "worktree": b.get("worktree").cloned().unwrap_or(Value::Null),
+                "branch": b.get("branch").cloned().unwrap_or(Value::Null),
+                "batch_id": b.get("batch_id").cloned().unwrap_or(Value::Null),
+            });
+        }
+        Err((message, _code)) => {
+            if message.contains("already exists") {
+                // A peer opened the batch between decide and open; join it
+                // (its recorded worktree/branch win; this call's fresh
+                // worktree is left unused - a rare single-dispatcher race).
+                if let Ok(Some(b)) = read_batch(domain, root) {
+                    if is_open(Some(&b)) {
+                        return json!({
+                            "mode": "batched",
+                            "domain": domain,
+                            "worktree": b.get("worktree").cloned().unwrap_or(Value::Null),
+                            "branch": b.get("branch").cloned().unwrap_or(Value::Null),
+                            "batch_id": b.get("batch_id").cloned().unwrap_or(Value::Null),
+                        });
+                    }
+                }
+                return json!({"mode": "solo", "reason": "batch vanished after race"});
+            }
+            json!({"mode": "solo", "reason": message})
+        }
+    }
+}
+
+fn batch_prepare(rest: &[String]) -> i32 {
+    if has_flag(rest, "--help") || has_flag(rest, "-h") {
+        print!("{BATCH_HELP}");
+        return 0;
+    }
+    let Some(node) = flag_value(rest, "--node").or_else(|| flag_value(rest, "-n")) else {
+        eprintln!("error: the following required arguments were not provided: --node");
+        return 2;
+    };
+    let Some(repo) = flag_value(rest, "--repo") else {
+        eprintln!("error: the following required arguments were not provided: --repo");
+        return 2;
+    };
+    let root = state_root(flag_value(rest, "--root"));
+    emit_json(&prepare_batch(node, repo, &root));
+    0
+}
+
+/// Ship every open batch whose close condition tripped (the daemon calls this
+/// per tick). A peek FAILURE (distinct from a drain) skips the whole tick and
+/// ships nothing.
+fn ship_closeable(project: Option<&str>, mission: Option<&str>, root: &Path) -> Vec<Value> {
+    let next_node = match peek_next(project, mission) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("batch ship-closeable: peek failed, skipping tick: {e}");
+            return Vec::new();
+        }
+    };
+    let mut results = Vec::new();
+    for b in list_batches(root) {
+        if b.get("status").and_then(Value::as_str) != Some("open") {
+            continue;
+        }
+        let (close, _reason) = should_close(Some(&b), next_node.as_ref());
+        if close {
+            let domain = b.get("domain").and_then(Value::as_str).unwrap_or("code");
+            results.push(ship_result_value(&ship_batch(domain, "main", None, root)));
+        }
+    }
+    results
+}
