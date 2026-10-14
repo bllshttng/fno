@@ -1,0 +1,1 @@
+{"agents": ["pr-worktree", "pr-head", "status-rerun", "claim-acquire", "authorized-merge", "pr-head", "authorized-merge", "claim-release", "claim-session-pid", "read*", "claim-release"], "asked_keys": [], "events": [], "front": [], "gh": ["api", "view", "repo-view", "view*"], "worker": []}
