@@ -1920,8 +1920,8 @@ mod tests {
 
         // AC2: the witness decides before the vendor listing is consulted,
         // so a listing that would time out never blocks the attach.
-        let plan = revive_witnessed(ClaudeAgentsSnapshot::unknown("timed out"), |_| {}, live)
-            .unwrap();
+        let plan =
+            revive_witnessed(ClaudeAgentsSnapshot::unknown("timed out"), |_| {}, live).unwrap();
         assert_eq!(plan.transition, "attach");
 
         for running in ["working", "blocked", "idle"] {
