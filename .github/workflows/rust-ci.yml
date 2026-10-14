@@ -129,7 +129,7 @@ jobs:
     # gap is visible in the log rather than a silent empty picture.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -173,15 +173,20 @@ jobs:
               ;;
           esac
 
-      - name: Build the fno client binary
+      - name: Build the fno client and agents binaries
         if: env.shoot == '1'
         working-directory: crates/fno
-        run: cargo build --locked
+        run: |
+          cargo build --locked
+          cargo build --locked --manifest-path ../fno-agents/Cargo.toml
 
       - name: Shoot the three bell views
         if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+          # The demo root seeds claims, and the client routes those verbs to
+          # the fno-agents binary; a runner builds neither by default.
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
           # The bootstrap validates the pin at <source>/cli/pyproject.toml,
           # so the pin is the repo root, not the cli directory.
           FNO_DEMO_PY_SOURCE: ${{ github.workspace }}
