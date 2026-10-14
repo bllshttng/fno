@@ -6,7 +6,7 @@ use super::*;
 /// What a row's cwd says about its project: the canonical repo root, and the
 /// id its `.fno/config.toml` declares under `[project]` when it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProjectRef {
+pub(crate) struct ProjectRef {
     pub(super) root: String,
     pub(super) id: Option<String>,
 }
