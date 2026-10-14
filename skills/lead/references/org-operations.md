@@ -43,7 +43,7 @@ Every agent-to-agent AUTHORED payload carries the `<fno_mail>` envelope - lead t
 
 ## Control surfaces
 
-Canonical implementation worker launch. Rules: seat teammates paneless, never in panes; implementation runs on zai glm-5.3-flash[1m]; spawn stays the one fno launch verb. A claude worker launches by its own `claude --bg` line, and spawn prints that line for the lane.
+Canonical implementation worker launch. Seat teammates paneless, never in panes. Implementation runs on zai glm-5.3-flash[1m]. Spawn stays the one fno launch verb. A claude worker launches by its own `claude --bg` line, and spawn prints that line for the lane.
 
 ```bash
 # Blueprints do NOT use this line; they run as native subagents on the planning session's own non-glm model.
@@ -56,7 +56,7 @@ fno agents spawn --name <node-name> "$payload" --harness claude \
 #      --permission-mode bypassPermissions --name <node-name> '<payload>'
 ```
 
-Drop `--print` to have spawn run the same line. Do that when you hold the node's claim: a native line moves no claim, and spawn hands it to the child. Other harnesses and their pages: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+Drop `--print` to have spawn run the same line. If you hold the node's claim, do that: a native line moves no claim, and spawn hands it to the child. Other harnesses and their pages: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 | Job | Verb |
 |---|---|

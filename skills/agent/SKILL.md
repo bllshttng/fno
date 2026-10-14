@@ -82,7 +82,7 @@ Route on the verb, then run the matching section below.
 
 ## Launch a worker
 
-Read this table before you seat a worker on a node. Use the harness's own line where it runs without a pane. Use `fno agents spawn` where it does not, or when you need a spawn-only flag: `--promote`, `--hand-off`, or pane placement.
+Read this table before you seat a worker on a node. Use the harness's own line where it runs without a pane. Use `fno agents spawn` where it does not. If you need a spawn-only flag (`--promote`, `--hand-off`, or pane placement), use spawn too.
 
 | Harness | Unattended teammate | Watched in a pane | Page |
 |---|---|---|---|

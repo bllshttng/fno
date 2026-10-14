@@ -23,7 +23,7 @@ To pin an account, prefix the line with its config dir: `CLAUDE_CONFIG_DIR=<acco
 ## What fno does around the line
 
 - **Gate.** The PreToolUse Bash hook reads the line and asks the spawn gate. A refusal denies the Bash call and names the reason and the remedy.
-- **Record.** The same hook writes a launch record: your session as the parent, the node from the payload, the name from `--name`.
+- **Record.** The same hook writes a launch record. It names your session as parent, plus the node and the name.
 - **Adopt.** claude's SessionStart hook reports the new session. fno claims the record and mints a registry row with that name, parent and node.
 
 fno translates none of claude's flags. The flag tables below come from `claude --help` itself.
@@ -33,7 +33,7 @@ fno translates none of claude's flags. The flag tables below come from `claude -
 - `fno agents list` shows the row once SessionStart has fired, usually within seconds.
 - `fno agents peek <name>` reads its latest turn. `fno agents mail send <name> "<text>"` reaches it.
 - claude's own views work too: `claude agents --json`, `claude logs <id>`, `claude attach <id>`.
-- The worker's `/fno:target` loop opens the PR. The lead's settle arm mails you when a covered PR settles.
+- The worker's `/fno:target` loop opens the PR. If a covered PR settles, the lead's settle arm mails you.
 
 ## Pitfalls
 
