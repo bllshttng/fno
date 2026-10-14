@@ -8388,6 +8388,11 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: spawn_first_turn
+    description: "The first-turn watch saw a launched worker's first assistant line: latency_ms from the spawn call, row_ms to its registry row, with harness, substrate and machine."
+    sources: [daemon]
+    data:
+      required: [name, latency_ms]
   - name: gate_written
     description: "A target gate wrote its event: the legacy gates writer's counterpart of phase_init."
     sources: [target, hook, legacy]
