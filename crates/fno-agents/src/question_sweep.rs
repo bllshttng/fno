@@ -190,7 +190,9 @@ fn journals_raw(fno_dir: &Path, cwd: &Path) -> String {
 }
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
-pub fn question_sweep_in(
+/// `pub(crate)`: the reading type is crate-private, so the crate's public
+/// surface never names it.
+pub(crate) fn question_sweep_in(
     home: &AgentsHome,
     emitter: &crate::events::EventEmitter,
     now: i64,
