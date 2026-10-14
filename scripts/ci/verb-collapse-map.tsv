@@ -190,7 +190,6 @@ backlog demand	T1	backlog demand	0
 backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog done	KEEP	backlog done	42	deliberate readability slack for a high-traffic distinct operation
 backlog encounter	T1	backlog encounter	0
-backlog epic status	T1	backlog epic status	7
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
 backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
@@ -200,7 +199,6 @@ backlog maintain	T1	backlog maintain	7
 backlog migrate-difficulty	T1	backlog migrate-difficulty	0
 backlog migrate-priorities	T1	backlog migrate-priorities	0
 backlog migrate-updated-at	T1	backlog migrate-updated-at	0
-backlog new	T1	backlog new	38
 backlog next	KEEP	backlog next	54	deliberate readability slack for a high-traffic distinct operation
 backlog note	T1	backlog note	1
 backlog project-root	T1	backlog project-root	6
