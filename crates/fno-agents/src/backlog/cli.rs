@@ -331,6 +331,9 @@ pub fn run(args: &[String]) -> i32 {
         // The epic status table: children, receipts, streaks, verify-merges,
         // and the scope-growth metric over the archive-joined read.
         "epic" => super::epic::run_epic(resolved.tail),
+        // The task grain: claim-gated status transitions over the rows the
+        // bound plan's strategy declares.
+        "task" => super::task::run_task(resolved.tail),
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),

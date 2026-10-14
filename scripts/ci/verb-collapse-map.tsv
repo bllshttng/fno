@@ -225,8 +225,6 @@ backlog session open	T1	backlog session open	1
 backlog session reap-open	T1	backlog session reap-open	3
 backlog status	T1	backlog status	1
 backlog supersede	T1	backlog supersede	10
-backlog task list	T1	backlog task list	0
-backlog task update	T1	backlog task update	2
 backlog triage	T1	backlog triage	39	
 backlog unarchive	T1	backlog unarchive	2
 backlog unclaim	T1	backlog unclaim	8

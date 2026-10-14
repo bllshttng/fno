@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 #[derive(Clone, Debug)]
-struct Task {
-    id: String,
+pub(crate) struct Task {
+    pub(crate) id: String,
     surfaces: Vec<String>,
     blocked_by: Vec<String>,
     verify: String,
@@ -26,9 +26,9 @@ struct Wave {
 }
 
 #[derive(Clone, Debug)]
-struct Strategy {
+pub(crate) struct Strategy {
     waves: Vec<Wave>,
-    tasks: BTreeMap<String, Task>,
+    pub(crate) tasks: BTreeMap<String, Task>,
 }
 
 fn value_text(value: &Value) -> Option<String> {
@@ -51,7 +51,7 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn parse_strategy(path: &Path) -> Result<Strategy, String> {
+pub(crate) fn parse_strategy(path: &Path) -> Result<Strategy, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("plan could not be read: {e}"))?;
     let mut in_heading = false;
     let mut in_yaml = false;

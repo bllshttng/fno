@@ -36,8 +36,6 @@ batch prepare
 batch ship
 batch ship-closeable
 # task rows + task claims write graph state (list materializes rows)
-task list
-task update
 
 [footnote]
 # seam reads / renders
@@ -73,5 +71,3 @@ triage
 # Tracker-owned verbs whose refusal a caller must read as "no grain here",
 # not as a stop. Under a non-graph backend there are no task rows at all, so
 # a wave has nothing to guard and dispatches exactly as it did before.
-task list
-task update
