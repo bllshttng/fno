@@ -33,7 +33,7 @@ use crate::spawn_gate_lanes::{
 };
 use crate::spawn_gate_queue::slot_refusal_line;
 use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
-use crate::state::{load_registry, Registry, RegistryEntry};
+use crate::state::RegistryEntry;
 use crate::AgentStatus;
 use std::collections::HashSet;
 

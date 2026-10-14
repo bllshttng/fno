@@ -11,7 +11,6 @@ use crate::claude_roster::ClaudeRoster;
 use crate::daemon::pid_is_ours;
 use crate::spawn_gate::NOTE;
 use crate::state::{load_registry, Registry, RegistryEntry};
-use crate::{claims, AgentStatus};
 
 /// The liveness-filtered registry rows behind [`slot_count`], exposed so the
 /// per-territory cap can read the rows' worked NODES without a second
@@ -107,6 +106,9 @@ fn report_is_fresh(e: &RegistryEntry, now_secs: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::RegistryEntry;
+    use crate::{claims, AgentStatus};
 
     /// A pid-less session-report row: the native-adopt shape. `short_id` is
     /// set (every mint derives one) but absent from the pinned empty roster,
