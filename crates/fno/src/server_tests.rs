@@ -6518,11 +6518,9 @@ fn picker_attach_spawn_failure_persists_no_member() {
 }
 // ---- (x-d285) mux gestures through the canonical re-entry plan -------
 
-/// A verdict shaped like the resolver's machine output for a routed
-/// claude row: the account's env assignments prefix the provider argv.
-/// `FNO_ACCOUNT` is the positive marker - only the verdict's env prefix
-/// ever sets it on an attach pane (the reconstructed argv carries none
-/// for a catalog row with no recorded account).
+/// A verdict shaped like the resolver's output for a routed claude row.
+/// `FNO_ACCOUNT` is the positive marker: only the verdict's env prefix
+/// sets it on an attach pane.
 fn staged_reentry_verdict() -> ReentryVerdict {
     ReentryVerdict {
         argv: vec!["/bin/cat".into(), "deadbee1".into()],
@@ -6531,6 +6529,7 @@ fn staged_reentry_verdict() -> ReentryVerdict {
             "CLAUDE_CONFIG_DIR=/acct/makers/cfg".into(),
         ],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     }
 }
 
@@ -6677,6 +6676,7 @@ fn resume_agent_runs_the_staged_reentry_verdict() {
         ],
         env: vec!["FNO_ACCOUNT=makers".into()],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     });
 
     core.command(

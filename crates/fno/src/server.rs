@@ -69,6 +69,7 @@ use crate::vt::{self, frame_text, Modes};
 mod agent_actions;
 pub(crate) mod agent_launch;
 mod agent_rows_join;
+mod attach_argv;
 mod client_input;
 mod client_read;
 mod drift_retire;
@@ -7426,65 +7427,6 @@ impl Core {
                 cd.map(std::path::Path::to_path_buf),
             )),
         }
-    }
-
-    /// The registry row NAME behind an attach id when that row is a
-    /// claude row, from the live catalog (the sidepane's in-memory source).
-    /// This is the identifier the resolver requests plans by; the attach id
-    /// itself is transport-local and never a registry key. The resolver is
-    /// claude-only, so a non-claude or harness-less row answers None and its
-    /// attach keeps the legacy argv.
-    fn attach_claude_row(&self, attach_id: &str) -> Option<String> {
-        self.agents
-            .iter()
-            .find(|a| a.attach_id.as_deref() == Some(attach_id))
-            .filter(|a| a.harness.as_deref() == Some("claude"))
-            .map(|a| a.name.clone())
-    }
-
-    /// The harness behind an attach id, from the live catalog. The
-    /// argv builder needs it: each harness execs its own interface, and only
-    /// the row knows which one this id belongs to.
-    fn attach_row_harness(&self, attach_id: &str) -> Option<String> {
-        self.agents
-            .iter()
-            .find(|a| a.attach_id.as_deref() == Some(attach_id))
-            .and_then(|a| a.harness.clone())
-    }
-
-    /// One attach gesture's spawn argv. `None` means the canonical
-    /// resolution is now running off-loop and the caller must stop - the
-    /// verdict re-enters this gesture through `ReentryPlanReady`. A replayed
-    /// gesture holds the staged verdict (its argv IS the answer, config dir
-    /// included). Every non-claude row keeps the legacy argv unchanged - that
-    /// axis carries no route or account binding to preserve.
-    fn attach_gesture_argv(
-        &mut self,
-        client_id: u64,
-        id: &str,
-        placement: &crate::proto::PanePlacement,
-    ) -> Option<(Vec<String>, Option<std::path::PathBuf>)> {
-        if let Some(verdict) = self.reentry_verdict.take() {
-            return Some((verdict.prefixed_argv(), verdict.config_dir));
-        }
-        if let Some(name) = self.attach_claude_row(id) {
-            self.resolve_reentry(
-                client_id,
-                &name,
-                "revive",
-                ReentrySpawnRequest::Attach {
-                    attach_id: id.to_string(),
-                    placement: placement.clone(),
-                },
-            );
-            return None;
-        }
-        let (acct, cd) = self.attach_account_ctx(id);
-        let harness = self.attach_row_harness(id);
-        Some((
-            attach_argv_for(harness.as_deref(), id, acct.as_deref(), cd.as_deref()),
-            cd,
-        ))
     }
 
     /// A resume gesture's re-entry plan. A replayed gesture holds
