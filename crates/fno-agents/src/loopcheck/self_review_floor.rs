@@ -34,8 +34,9 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
 /// explicit choice, documented in docs/architecture/review-lanes.md.
 /// `sigma` is RETIRED: its invocation names the replacement (the default
 /// lane), never a hint that the panel runs, and a config still naming sigma
-/// is refused at init by the Python capability check with the same
-/// replacement in the refusal. No `--fix` in any hint: a fix pass moves HEAD
+/// is refused at init by the native capability door (`review-level
+/// capability`) with the same replacement in the refusal. No `--fix` in any
+/// hint: a fix pass moves HEAD
 /// and voids the attestation the round just earned. Kept honest against the
 /// Python descriptor table by check-reviewer-descriptor-parity.sh.
 pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[

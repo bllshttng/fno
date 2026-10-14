@@ -1430,7 +1430,7 @@ def resolve_dispatch(
         _av = cfg.get("allowed_verbs")
         allowed = list(_av) if isinstance(_av, list) else list(_DEFAULT_ALLOWED_VERBS)
         from fno.config import resolvable_verbs
-        from fno.review_capability import resolve_skill_presence
+        from fno.rust_binary import verb_call
 
         _vr = cfg.get("verb_registry")
         registry = resolvable_verbs(_vr if isinstance(_vr, Mapping) else None, allowed)
@@ -1448,11 +1448,22 @@ def resolve_dispatch(
                 # the reviewer probe); malformed falls back to the key.
                 head = descriptor.invocation.split()
                 skill_name = (head[0] if head else chosen_verb).lstrip("/").split(":")[-1]
-                status, reason = resolve_skill_presence(
-                    skill_name, chosen_harness, context="config.dispatch.verb_registry"
+                answer = verb_call(
+                    [
+                        "review-level",
+                        "capability",
+                        "skill-presence",
+                        "--name",
+                        skill_name,
+                        "--harness",
+                        chosen_harness,
+                        "--context",
+                        "config.dispatch.verb_registry",
+                    ],
+                    {},
                 )
-                if status == "unavailable":
-                    raise DispatchResolveError(reason)
+                if answer["status"] == "unavailable":
+                    raise DispatchResolveError(answer["reason"])
             if descriptor.invocations and chosen_harness not in descriptor.invocations:
                 raise DispatchResolveError(
                     f"dispatch verb {chosen_verb!r} is not declared on harness "

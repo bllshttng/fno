@@ -132,8 +132,8 @@ def test_the_pre_push_form_holds_the_local_branch(monkeypatch, capsys) -> None:
     }
     monkeypatch.setattr(target_cli, "_git_out", lambda cwd, *args: git.get(tuple(args), ""))
     monkeypatch.setattr(
-        "fno.review_capability.render_self_review_invocation",
-        lambda **kw: "/review high --comment",
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"invocation": "/review high --comment", "harness": "claude"},
     )
     monkeypatch.setattr(target_cli, "_resolve_self_review_identity", lambda: ("claude", "sess-1"))
     monkeypatch.setattr(
@@ -228,13 +228,11 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
     rendered: dict = {}
     held: list[dict] = []
 
-    def _render(**kwargs):
-        if kwargs.get("branch") is not None and kwargs.get("pr_number") is not None:
-            raise ValueError("explicit self-review target takes pr_number or branch, not both")
+    def _render(verb, payload, *args, **kwargs):
         rendered.update(kwargs)
-        return "/review high --comment"
+        return {"invocation": "/review high --comment", "harness": "claude"}
 
-    monkeypatch.setattr("fno.review_capability.render_self_review_invocation", _render)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _render)
     monkeypatch.setattr(target_cli, "_git_out", lambda cwd, *args: "deadbeef" * 5)
     monkeypatch.setattr(
         target_cli,
