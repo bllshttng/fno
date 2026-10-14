@@ -770,14 +770,20 @@ fn build_wait_path(canonical: &Path) -> PathBuf {
 }
 
 /// Minutes since the first wait for a CI build, stamping now when no wait is
-/// recorded. An unreadable stamp restarts the clock (the safe direction).
+/// recorded. An unreadable stamp restarts the clock (the safe direction), and
+/// so does one past twice the bound: a live wait clears its stamp at the
+/// bound, so an older one is left over from a sync that stopped before the
+/// gate (a divergence refusal) and must not cut a later wait short.
 fn build_waited_mins(canonical: &Path, now: DateTime<Utc>) -> i64 {
     let path = build_wait_path(canonical);
     if let Some(since) = std::fs::read_to_string(&path)
         .ok()
         .and_then(|raw| parse_iso(&raw))
     {
-        return (now - since).num_minutes();
+        let waited = (now - since).num_minutes();
+        if waited < 2 * BUILD_WAIT_MAX_MINS {
+            return waited;
+        }
     }
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -1731,12 +1737,14 @@ mod tests {
         };
         let pending = || Build::Pending("c".repeat(40));
 
-        // Merge time: no build yet, so nothing runs and the marker waits.
+        // Merge time: no build yet, so nothing runs and the marker waits. A
+        // stamp left over from a wait that never reached the gate is ignored.
+        std::fs::write(build_wait_path(tmp.path()), iso_at_hours_before(3)).unwrap();
         let deps = build_at(pending, 0);
         let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 0);
         assert!(
-            stdout.join("\n").contains("waiting for CI to publish"),
+            stdout.join("\n").contains("(waited 0m of 60m)"),
             "{stdout:?}"
         );
         assert!(ran.borrow().is_empty());
