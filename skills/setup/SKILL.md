@@ -58,3 +58,7 @@ The run writes `<state_dir>/sidecar/wizard-report.json` and prints `wizard-repor
 ## The keys the wizard does not ask
 
 For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the verbs.
+
+## Known Limitations and Deferred Work
+
+- The wizard needs a terminal on stdin, and an approve-kind step always waits for a person. See [LIMITATIONS.md](LIMITATIONS.md).
