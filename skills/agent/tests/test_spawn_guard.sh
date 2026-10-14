@@ -111,12 +111,11 @@ no  'codex wrapper does not print seam refusal' "$out" 'Pass -Y'
 has 'codex wrapper delegated to spawn seam' "$(calllog)" 'agents spawn'
 ok 'codex refusal is not duplicated in shell' "$(grep -c 'Codex code payloads require' "$SPAWN" || true)" '0'
 
-# --- codex permission-mode yolo -> equivalent unsandboxed launch ------------
-out="$(run --name codex-code-permission-yolo --provider codex \
-  --permission-mode yolo --payload-mode passthrough --message '$fno:target x-816b')"
-ok 'codex permission-mode yolo -> launched' "$(field "$out")" 'launched'
-no  'codex permission-mode yolo did not refuse' "$out" 'Pass -Y/--yolo'
-has 'codex permission-mode yolo spawned' "$(calllog)" 'agents spawn'
+# --- codex bypass posture rides the lane default (the permission axis retired)
+out="$(run --name codex-code-lane-posture --provider codex \
+  --payload-mode passthrough --message '$fno:target x-816b')"
+ok 'codex lane posture -> launched' "$(field "$out")" 'launched'
+has 'codex lane posture spawned' "$(calllog)" 'agents spawn'
 
 # --- dispatchable -> proceeds to spawn, honest launched receipt --------------
 out="$(STUB_VERDICT='{"verdict":"dispatchable","reservation_key":"dispatch:'"$NODE"'","reservation_holder":"dispatch-skill:1"}' \
@@ -130,7 +129,7 @@ out="$(STUB_VERDICT='{"verdict":"already-running","reason":"live-claim","holder"
   run --name w2 --provider claude --message '/target x' --node "$NODE")"
 ok 'live-claim -> already-running' "$(field "$out")" 'already-running'
 has 'live-claim holder text' "$out" 'live worker holds node:x-7777 (target-session:owner)'
-no  'live-claim did NOT spawn' "$(calllog)" 'agents spawn'
+no  'live-claim did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- self-handoff: live claim is the CALLER's own -> guide, do NOT spawn ------
 # --self matches .holder: distinct receipt routing to the sanctioned handoff.
@@ -140,14 +139,14 @@ out="$(STUB_VERDICT='{"verdict":"already-running","reason":"live-claim","holder"
   run --name w2h --provider claude --message '/target x' --node "$NODE" --self 'target-session:owner')"
 ok  'self-handoff -> self-handoff receipt' "$(field "$out")" 'self-handoff'
 has 'self-handoff routes to sanctioned path' "$out" 'fno backlog unclaim'
-no  'self-handoff did NOT spawn' "$(calllog)" 'agents spawn'
+no  'self-handoff did NOT spawn' "$(calllog)" 'agents spawn '
 no  'self-handoff did NOT release the node claim' "$(calllog)" 'claim release'
 
 # --- self-handoff with a DIFFERENT holder -> still refuse (foreign) -----------
 out="$(STUB_VERDICT='{"verdict":"already-running","reason":"live-claim","holder":"target-session:someone-else"}' \
   run --name w2f --provider claude --message '/target x' --node "$NODE" --self 'target-session:owner')"
 ok  'foreign holder + --self -> still already-running' "$(field "$out")" 'already-running'
-no  'foreign holder did NOT spawn' "$(calllog)" 'agents spawn'
+no  'foreign holder did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- unproven-claim -> already-running, and the receipt says what it MEASURED -
 # x-2fe6 AC8-HP. A held claim proves a holder, never a worker. The old receipt
@@ -159,7 +158,7 @@ ok  'unproven-claim -> already-running' "$(field "$out")" 'already-running'
 has 'unproven-claim names the untested condition' "$out" 'no worker has reached target init'
 has 'unproven-claim names the holder' "$out" 'spawn-handover:t-x-7777'
 no  'unproven-claim does NOT assert a live worker' "$out" 'live worker holds node'
-no  'unproven-claim did NOT spawn' "$(calllog)" 'agents spawn'
+no  'unproven-claim did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- an unproven claim that is the CALLER's own still routes to handoff -------
 # The self-handoff receipt must stay reachable: reading unproven-claim into the
@@ -167,7 +166,7 @@ no  'unproven-claim did NOT spawn' "$(calllog)" 'agents spawn'
 out="$(STUB_VERDICT='{"verdict":"already-running","reason":"unproven-claim","holder":"target-session:owner","init_reached":false}' \
   run --name w2uh --provider claude --message '/target x' --node "$NODE" --self 'target-session:owner')"
 ok  'unproven + --self -> self-handoff receipt' "$(field "$out")" 'self-handoff'
-no  'unproven self-handoff did NOT spawn' "$(calllog)" 'agents spawn'
+no  'unproven self-handoff did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- unproven-claim on the POST-SPAWN refusal, the path a real dispatch takes -
 # The probe above runs before the spawn. This block fires when the claim is
@@ -191,7 +190,7 @@ ok  'worker-row -> already-running' "$(field "$out")" 'already-running'
 has 'worker-row names the worker row' "$out" 'worker row lead-a792-control'
 has 'worker-row names the peek-and-stop way out' "$out" 'stop it if its run is finished'
 no  'worker-row does NOT print is-held-by' "$out" 'is held by'
-no  'worker-row did NOT spawn' "$(calllog)" 'agents spawn'
+no  'worker-row did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- worker-row on the POST-SPAWN refusal, the path a real dispatch takes -----
 out="$(STUB_VERDICT='{"verdict":"dispatchable"}' STUB_CLI_GUARD_REASON=worker-row STUB_CLI_GUARD_WORKER=lead-a792-control \
@@ -272,7 +271,7 @@ out="$(STUB_VERDICT='{"verdict":"corrupted","detail":"node:'"$NODE"' claim is co
   run --name w4 --provider claude --message '/target x' --node "$NODE")"
 ok 'corrupted -> failed' "$(field "$out")" 'failed'
 has 'corrupted reason' "$out" 'claim is corrupted; force-release or repair'
-no  'corrupted did NOT spawn' "$(calllog)" 'agents spawn'
+no  'corrupted did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- stale fno WITHOUT the verb -> fail CLOSED, NO spawn ----------------------
 # empty stdout + non-zero rc (Typer "No such command" goes to stderr, suppressed).
@@ -280,7 +279,7 @@ out="$(STUB_VERDICT='' STUB_VERDICT_RC=2 \
   run --name w5 --provider claude --message '/target x' --node "$NODE")"
 ok 'verb-absent -> failed (fail-closed)' "$(field "$out")" 'failed'
 has 'verb-absent reason' "$out" 'spawn-guard unavailable'
-no  'verb-absent did NOT spawn' "$(calllog)" 'agents spawn'
+no  'verb-absent did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- spawn-guard returns dispatchable but the launch FAILS -> failed -----------
 out="$(STUB_VERDICT='{"verdict":"dispatchable","reservation_key":"dispatch:'"$NODE"'","reservation_holder":"dispatch-skill:1"}' \
