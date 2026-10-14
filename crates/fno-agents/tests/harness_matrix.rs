@@ -53,7 +53,10 @@ fn a_claim_with_a_receipt_prints_its_state_and_date() {
     );
     assert!(cell.starts_with("`native` ("), "{cell}");
     assert!(cell.contains("2026-09-03"), "{cell}");
-    assert!(cell.contains("1.1.24"), "the cell names the version measured on: {cell}");
+    assert!(
+        cell.contains("1.1.24"),
+        "the cell names the version measured on: {cell}"
+    );
 }
 
 #[test]
