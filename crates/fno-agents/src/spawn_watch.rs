@@ -23,7 +23,22 @@ const DEADLINE_MS: i64 = 4 * 60_000;
 const HORIZON_MS: i64 = 2 * 60 * 60_000;
 /// A closed watch stays readable for a day, then prunes.
 const KEEP_MS: i64 = 24 * 60 * 60_000;
+/// The gate's 240s queue plus startup: a refused call's own record is
+/// written inside this.
+const GATE_WAIT_MS: i64 = 5 * 60_000;
 const SENDER: &str = "fno-spawn-watch";
+
+/// A launch the caller waits on in its own Bash call (`codex exec`,
+/// `pi -p`) already answers it, so only detached launches are watched: a
+/// `claude --bg` (the only claude line the hook records), a spawn verb, a
+/// pane run, or a dispatcher's record, which carries no command.
+fn detached(r: &Record) -> bool {
+    r.launch.harness == "claude"
+        || r.command.is_empty()
+        || ["agents spawn", "pane run"]
+            .iter()
+            .any(|w| r.command.contains(w))
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -111,17 +126,21 @@ pub(crate) fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str
         return;
     };
     let now = crate::claims::now_ms();
-    let pending: Vec<(PathBuf, Record)> = crate::launch_record::records(home.root())
+    let window = crate::launch_record::WINDOW_MS;
+    let pending: Vec<(PathBuf, Record)> = crate::launch_record::records(home.root(), now - window)
         .into_iter()
         .filter(|(_, r)| {
             r.child_session.is_none()
                 && r.launcher_session == caller
-                && now.saturating_sub(r.launched_at_ms) <= crate::launch_record::WINDOW_MS
+                && now.saturating_sub(r.launched_at_ms) <= window
         })
         .collect();
+    // An unnamed record is this call's only inside the gate's own wait.
     let unnamed: Vec<&(PathBuf, Record)> = pending
         .iter()
-        .filter(|(_, r)| r.launch.name.is_none())
+        .filter(|(_, r)| {
+            r.launch.name.is_none() && now.saturating_sub(r.launched_at_ms) <= GATE_WAIT_MS
+        })
         .collect();
     let pick = pending
         .iter()
@@ -156,8 +175,8 @@ pub(crate) fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str
 /// loses nothing, and carry a claim's child session onto the watch.
 fn adopt(home: &AgentsHome, now: i64) {
     let dir = watch_dir(home);
-    for (_, record) in crate::launch_record::records(home.root()) {
-        if now.saturating_sub(record.launched_at_ms) > HORIZON_MS {
+    for (_, record) in crate::launch_record::records(home.root(), now - HORIZON_MS) {
+        if !detached(&record) || now.saturating_sub(record.launched_at_ms) > HORIZON_MS {
             continue;
         }
         let path = dir.join(record_key(&record));

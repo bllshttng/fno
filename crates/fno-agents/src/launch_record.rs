@@ -678,14 +678,23 @@ pub fn claimed_edge(root: &Path, session_id: &str) -> Option<Record> {
     read_record(&claimed_dir(root).join(format!("{session_id}.json")))
 }
 
-/// Every pending and claimed record with its path, pending first. The
-/// first-turn watch reads both: a pending record is a launch no child has
-/// claimed yet, a claimed one names the child's session.
-pub(crate) fn records(root: &Path) -> Vec<(PathBuf, Record)> {
+/// Every pending and claimed record written since `since_ms`, with its path.
+/// The first-turn watch reads both: a pending record is a launch no child
+/// has claimed yet, a claimed one names the child's session. Claimed records
+/// are kept for good, so the file time bounds the read before any parse.
+pub(crate) fn records(root: &Path, since_ms: i64) -> Vec<(PathBuf, Record)> {
+    let recent = |e: &std::fs::DirEntry| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_none_or(|d| d.as_millis() as i64 >= since_ms)
+    };
     [pending_dir(root), claimed_dir(root)]
         .iter()
         .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flat_map(|entries| entries.flatten())
+        .filter(recent)
         .filter_map(|e| read_record(&e.path()).map(|r| (e.path(), r)))
         .collect()
 }

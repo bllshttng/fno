@@ -37,6 +37,9 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
         crate::launch_record::write_record(home.root(), launch, caller, Some("claude"), &cwd, t0)
             .unwrap();
     }
+    // A one-shot the caller waits on in its own Bash call is never watched.
+    crate::launch_record::record_command(home.root(), "pi -p hello", &cwd, Some(caller), None, t0)
+        .unwrap();
 
     // "quick" booted and answered 70s after the call.
     let transcript = temp.path().join("quick.jsonl");
@@ -67,7 +70,7 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
     // The caller already holds the refusal: its launch leaves the claim pool.
     settle_refused(&home, Some(caller), "refused", "no_wait");
     assert!(
-        !crate::launch_record::records(home.root())
+        !crate::launch_record::records(home.root(), 0)
             .iter()
             .any(|(_, r)| r.launch.name.as_deref() == Some("refused")),
         "a refused launch is no longer claimable"
