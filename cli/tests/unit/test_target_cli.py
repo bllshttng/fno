@@ -237,25 +237,22 @@ def test_target_init_help_documents_size():
 
 
 def test_target_init_missing_script_exits_2(monkeypatch, tmp_path):
-    """AC3-ERR: bare-install degrade is actionable - names the footnote plugin
-    and an install path, exits 2, no traceback. FNO_REPO_ROOT is authoritative."""
+    """AC3-ERR: bare-install degrade is actionable, exits 2, no traceback.
+    FNO_REPO_ROOT is authoritative. The refusal text is the native door's now
+    (the thin forward only propagates its exit code), so the wording is
+    characterized by the parity goldens, not re-asserted here."""
     fake_root = tmp_path / "empty"
     fake_root.mkdir()
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
     result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
     assert result.exit_code == 2
-    # Capability-accurate (not "is the plugin installed correctly?"): the
-    # message names the footnote plugin and the bare-install gap + install path.
-    assert "footnote plugin" in result.output
-    assert "pip install fno" in result.output
-    assert "--plugin-dir" in result.output
 
 
 def test_target_init_degrade_writes_no_state(monkeypatch, tmp_path):
     """AC3-FR / AC3-EDGE: when the init script is unresolvable (bare install or
-    binary-present-but-skills-absent), the degrade writes no partial
-    target-state.md / .fno do state and never shells out."""
+    binary-present-but-skills-absent), the run exits 2, writes no partial
+    target-state.md, and the bash writer never runs."""
     fake_root = tmp_path / "empty"
     fake_root.mkdir()
     proj = tmp_path / "proj"
@@ -264,13 +261,21 @@ def test_target_init_degrade_writes_no_state(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
 
-    def _no_run(*a, **k):
-        raise AssertionError("must not shell out when the init script is missing")
+    bash_calls = []
+    real_run = target_cli.subprocess.run
 
-    monkeypatch.setattr(target_cli.subprocess, "run", _no_run)
+    def _record_run(cmd, *a, **k):
+        # The forward may exec the native decision layer; the bash writer
+        # must never run when the init script is missing.
+        cmd = list(cmd)
+        if cmd and cmd[0] == "bash":
+            bash_calls.append(cmd)
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(target_cli.subprocess, "run", _record_run)
     result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
     assert result.exit_code == 2
-    assert "footnote plugin" in result.output
+    assert bash_calls == []
     assert not (proj / ".fno").exists()
 
 
