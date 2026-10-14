@@ -562,7 +562,7 @@ pub(crate) fn load_provider_records(cwd: &Path) -> Option<Vec<(String, String)>>
     }
     let mut out = Vec::with_capacity(merged.len());
     for record in &merged {
-        out.push(validate_record(record)?);
+        out.push(validate_record(record).ok()?);
     }
     Some(out)
 }
