@@ -624,12 +624,13 @@ supported = false
 rule_ids = []
 keys = []
 
-# Create and resume are the SAME launch once the id exists: the print-mode turn
-# mints it, every later process rejoins it. Bare `agy` would open a conversation
-# fno cannot name, which is the one thing a keeper thread may never do.
+# Create is a bare launch: agy mints its own conversation id, so a spawn
+# carries none and pays no launch-time mint turn. The session report promotes
+# the harness's own id onto the row (callee-minted-read-back); until it lands
+# the row's id is fno's provisional uuid. Resume rejoins by the row's id.
 [harness.agy.resume_strategy.forms.interactive_create]
-kind = "session_flag"
-tokens = ["agy", "--conversation", "{session_id}"]
+kind = "flag"
+tokens = ["agy"]
 
 # `--conversation <id>` resumes the conversation from any process state,
 # the same primitive the headless_resume row below records. Measured

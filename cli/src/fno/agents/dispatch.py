@@ -1013,17 +1013,16 @@ def _lane_b_thread_spawn(
                 exit_code=2,
             )
 
-        session_id = _mint_thread_session_id(
-            harness,
-            cwd,
-            requested=resume_session_id,
-            model=model,
-            effort=effort,
-            permission_mode=permission_mode,
-            yolo=yolo,
-        )
+        session_id = _mint_thread_session_id(harness, cwd, requested=resume_session_id)
         try:
-            argv = render_session_argv(harness, "interactive_create", session_id)
+            # A typed --resume id rides the resume form; a fresh spawn renders
+            # the create form. agy's create is a bare launch (the id binds at
+            # the session report), so the two forms differ now.
+            argv = render_session_argv(
+                harness,
+                "interactive_resume" if resume_session_id else "interactive_create",
+                session_id,
+            )
         except DispatchResolveError as exc:
             raise DispatchAskError(
                 f"harness {harness!r} cannot render an interactive_create "

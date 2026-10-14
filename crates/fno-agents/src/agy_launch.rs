@@ -1,5 +1,5 @@
-//! Owner of the agy launch posture: which permission tokens a launch carries
-//! and what the conversation mint launches with.
+//! Owner of the agy launch posture: which permission tokens a launch
+//! carries.
 //!
 //! The Python block this ports (`complete_launch_argv`'s bypass-then-mode
 //! region) appended the always-on bypass BEFORE any mode, so an explicit
@@ -12,12 +12,6 @@
 
 use crate::codex_posture::permission_pane_tokens;
 use crate::harness_capabilities::HarnessContract;
-
-/// The mint turn's prompt, moved from the Python adapter verbatim: a real
-/// turn is the only thing agy 1.1.27 offers that returns a conversation id
-/// (`--conversation` only resumes), and a no-op reply keeps the
-/// conversation's first message harmless.
-pub const MINT_PROMPT: &str = "Reply with exactly: OK";
 
 /// One launch posture: the argv tokens, a one-word posture name for a
 /// receipt line, what set it, and an operator-facing note when the posture
@@ -124,39 +118,6 @@ pub fn keeper_posture(
     }
 }
 
-/// The agy conversation-mint argv: the measured print turn carrying the
-/// spawn's selected posture, model and effort, so the first turn of a thread
-/// no longer runs on the harness default. The format is stream-json: on agy
-/// 1.3.3 the print turn answers but never exits (the harness Stop hook holds
-/// the process), so the exit envelope never arrives; stream-json prints
-/// `{"event":"init","conversation_id":...}` on line 1 within seconds and the
-/// mint reads the id from the stream, then terminates the process.
-pub fn agy_mint_argv(
-    model: Option<&str>,
-    effort: Option<&str>,
-    permission_mode: Option<&str>,
-    yolo: bool,
-) -> Result<Vec<String>, String> {
-    let posture = keeper_posture("agy", "thread", permission_mode, yolo)?;
-    let mut argv = vec![
-        "agy".to_string(),
-        "-p".to_string(),
-        MINT_PROMPT.to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-    ];
-    argv.extend(posture.tokens);
-    if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
-        argv.push("--model".to_string());
-        argv.push(m.to_string());
-    }
-    if let Some(e) = effort.map(str::trim).filter(|e| !e.is_empty()) {
-        argv.push("--effort".to_string());
-        argv.push(e.to_string());
-    }
-    Ok(argv)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,34 +160,6 @@ mod tests {
         // not a second knob.
         let p = keeper_posture("agy", "thread", Some("skip"), true).unwrap();
         assert_eq!(p.tokens, vec!["--dangerously-skip-permissions"]);
-    }
-
-    /// AC8-HP: the mint argv carries the selected model, effort and posture.
-    #[test]
-    fn ac8_mint_carries_axes() {
-        let argv = agy_mint_argv(Some("gemini-3-pro"), Some("high"), Some("plan"), false).unwrap();
-        let text = argv.join(" ");
-        assert!(text.contains("--model gemini-3-pro"), "got: {text}");
-        assert!(text.contains("--effort high"), "got: {text}");
-        assert!(text.contains("--mode plan"), "got: {text}");
-        assert!(!text.contains("dangerously"));
-    }
-
-    /// AC8 companion: the bare default mint keeps today's measured shape.
-    #[test]
-    fn mint_default_keeps_measured_shape() {
-        let argv = agy_mint_argv(None, None, None, false).unwrap();
-        assert_eq!(
-            argv,
-            vec![
-                "agy",
-                "-p",
-                "Reply with exactly: OK",
-                "--output-format",
-                "stream-json",
-                "--dangerously-skip-permissions",
-            ]
-        );
     }
 
     /// AC4-HP companion: the non-agy keeper shapes the Python block produced

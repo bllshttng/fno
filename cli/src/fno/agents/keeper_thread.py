@@ -70,37 +70,22 @@ def mint_session_id(
     harness: str,
     cwd: Path,
     requested: Optional[str],
-    *,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    permission_mode: Optional[str] = None,
-    yolo: bool = False,
 ) -> Optional[str]:
     """The harness-minted id for a keeper thread, or ``None`` for the
     caller-assigned default. The row's ``session_binding.strategy`` says
     whether a mint is REQUIRED and the mint itself is per-harness code. A
-    requested id is VALIDATED, never minted. The agy mint is a real turn,
-    so it carries the spawn's axes.
+    requested id is VALIDATED, never minted. agy runs no mint turn: its row
+    binds the conversation id at the session report, so a spawn pays no
+    launch-time model call.
     """
     if harness == "cursor-agent":
         from fno.agents.harnesses.cursor_agent import _require_chat_id, create_chat
 
         return _require_chat_id(requested) if requested is not None else create_chat(cwd)
     if harness == "agy":
-        from fno.agents.harnesses.agy import create_conversation, require_conversation_id
+        from fno.agents.harnesses.agy import require_conversation_id
 
-        if requested is not None:
-            return require_conversation_id(requested)
-        # The mint runs a real turn in the spawn's own cwd, so an untrusted
-        # folder would put a modal in front of the mint too.
-        _trust_agy_folder(Path(cwd))
-        return create_conversation(
-            cwd,
-            model=model,
-            effort=effort,
-            permission_mode=permission_mode,
-            yolo=yolo,
-        )
+        return require_conversation_id(requested) if requested is not None else None
     from fno.agents.harness_map import capabilities
 
     binding = capabilities(harness).get("session_binding") or {}
@@ -121,25 +106,10 @@ def _mint_thread_session_id(
     harness: str,
     cwd: Path,
     requested: Optional[str] = None,
-    *,
-    model: Optional[str] = None,
-    effort: Optional[str] = None,
-    permission_mode: Optional[str] = None,
-    yolo: bool = False,
 ) -> str:
     """The harness session id a keeper thread launches on, fixed BEFORE
-    launch: :func:`mint_session_id` plus the caller-assigned UUIDv4 default.
-    The launch axes ride along because a harness whose mint is a real model
-    turn (agy) launches it on the spawn's selected axes."""
-    minted = mint_session_id(
-        harness,
-        cwd,
-        requested,
-        model=model,
-        effort=effort,
-        permission_mode=permission_mode,
-        yolo=yolo,
-    )
+    launch: :func:`mint_session_id` plus the caller-assigned UUIDv4 default."""
+    minted = mint_session_id(harness, cwd, requested)
     return minted if minted is not None else str(uuid.uuid4())
 
 

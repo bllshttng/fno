@@ -718,28 +718,6 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
-    // An `agy_mint` field asks for the conversation-mint argv.
-    if let Some(ask) = parsed.get("agy_mint") {
-        let s = |k: &str| ask.get(k).and_then(Value::as_str).map(|v| v.to_string());
-        let answer = match crate::agy_launch::agy_mint_argv(
-            s("model").as_deref(),
-            s("effort").as_deref(),
-            s("permission_mode").as_deref(),
-            ask.get("yolo").and_then(Value::as_bool).unwrap_or(false),
-        ) {
-            Ok(argv) => serde_json::json!({"argv": argv}),
-            Err(reason) => serde_json::json!({"refused": reason}),
-        };
-        println!("{answer}");
-        return 0;
-    }
-    // An `agy_mint_run` field asks the runtime to EXECUTE the mint turn and
-    // answer the conversation id (the argv owner stays in agy_launch.rs; the
-    // process mechanics live in agy_mint.rs).
-    if let Some(ask) = parsed.get("agy_mint_run") {
-        println!("{}", crate::agy_mint::run(ask));
-        return 0;
-    }
     // A `resume_pin` field routes the same way: which model a resume comes
     // back on, answered by crates/fno-agents/src/resume_pin.rs.
     if let Some(pin) = parsed.get("resume_pin") {

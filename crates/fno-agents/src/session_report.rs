@@ -259,10 +259,23 @@ pub(crate) fn handle_session_report(
                 } else if related == session_id.as_str() {
                     // already held additively; the field stamps below still land
                 } else if related.is_empty() {
-                    r.entries[i].related_session_id = Some(session_id.clone());
-                    outcome = Outcome::Stored {
-                        related_filled: true,
-                    };
+                    // A callee-minted harness (agy) spawns on fno's provisional
+                    // uuid: the create form names no session, so the id the
+                    // report carries is the harness's own and promotes to
+                    // primary instead of holding both.
+                    let callee_minted = crate::harness_capabilities::HarnessContract::packaged()
+                        .ok()
+                        .and_then(|c| c.harness.get(entry.harness_name()).cloned())
+                        .map(|arm| arm.session_binding.strategy == "callee-minted-read-back")
+                        .unwrap_or(false);
+                    if callee_minted {
+                        r.entries[i].harness_session_id = Some(session_id.clone());
+                    } else {
+                        r.entries[i].related_session_id = Some(session_id.clone());
+                        outcome = Outcome::Stored {
+                            related_filled: true,
+                        };
+                    }
                 } else {
                     // A third distinct id: nothing written, both ids named -
                     // the same cap record_session_observation enforces.

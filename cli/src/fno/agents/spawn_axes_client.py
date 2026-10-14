@@ -59,22 +59,5 @@ def keeper_posture(
     return [str(t) for t in tokens]
 
 
-def agy_mint_argv(
-    model: str | None,
-    effort: str | None,
-    permission_mode: str | None,
-    yolo: bool,
-) -> list[str]:
-    """The agy conversation-mint argv, from the Rust owner."""
-    ask = {
-        "model": model or "",
-        "effort": effort or "",
-        "permission_mode": permission_mode or "",
-        "yolo": bool(yolo),
-    }
-    argv = _answer_or_raise(spawn_axes_call({"agy_mint": ask}), "argv")
-    return [str(t) for t in argv]
-
-
 
 
