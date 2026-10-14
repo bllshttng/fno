@@ -753,8 +753,8 @@ fn real_build(canonical: &Path, sha: &str) -> Build {
         "/dev/null",
         "-w",
         "%{http_code}",
-        &url,
-    ]);
+    ])
+    .arg(&url);
     let Some(out) = crate::bounded_cmd::output_with_timeout(curl, PROBE_TIMEOUT_SECS) else {
         return Build::Unknown("curl not found".to_string());
     };
@@ -1896,18 +1896,12 @@ mod tests {
                 Err("exit 1: merge conflict".to_string())
             }
         });
-        let deps = Deps {
-            gh: gh_stub(
-                view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-                ListStub::Rows("[]".to_string()),
-            ),
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
+        let mut deps = sync_deps(
+            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
             shell,
-            git_pull,
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-            build: Rc::new(|_, _| Build::Published),
-        };
+            Rc::new(|_| json!({})),
+        );
+        deps.git_pull = git_pull;
 
         // Phase 1: merge B lands mid-chain; the winner drains it.
         write_pending(tmp.path(), newer, &mut Vec::new());
@@ -2066,19 +2060,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
-        let gh = gh_stub(
+        let mut deps = sync_deps(
             view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            ListStub::Rows("[]".to_string()),
-        );
-        let deps = Deps {
-            git_origin: Rc::new(|_| None),
-            gh,
             shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-            build: Rc::new(|_, _| Build::Published),
-        };
+            Rc::new(|_| json!({})),
+        );
+        deps.git_origin = Rc::new(|_| None);
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 0);
         assert!(!*ran.borrow());
@@ -2091,15 +2078,7 @@ mod tests {
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
         let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Missing));
-        let deps = Deps {
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
-            gh,
-            shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-            build: Rc::new(|_, _| Build::Published),
-        };
+        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 0);
         assert!(!*ran.borrow());
@@ -2112,15 +2091,7 @@ mod tests {
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
         let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Failed("exit 1: boom".to_string())));
-        let deps = Deps {
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
-            gh,
-            shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-            build: Rc::new(|_, _| Build::Published),
-        };
+        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 1);
         assert!(!*ran.borrow());
