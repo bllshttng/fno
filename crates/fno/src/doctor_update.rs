@@ -379,6 +379,26 @@ fn install_newest_published_arm(
     "installed-newest-published".into()
 }
 
+/// The line naming the held half when the rust leg left fno-agents behind
+/// the source, or None when Python may move. A skipped leg on a machine with
+/// no cargo-installed bins (wheel-only) holds nothing: no rust to trail.
+pub(crate) fn python_hold_line(rust_outcome: Option<&str>) -> Option<String> {
+    let outcome = rust_outcome?;
+    matches!(
+        outcome,
+        "waiting-ci"
+            | "installed-newest-published"
+            | "skipped-no-origin"
+            | "skipped-no-cargo"
+            | "failed"
+    )
+    .then(|| {
+        format!(
+            "python held: the rust bins did not reach the source rev ({outcome}), so the wheel and plugin restage stay as installed; the next update moves both halves together"
+        )
+    })
+}
+
 fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
     let mut cmd = crate::process_admission::std_command(bin);
     cmd.args(args);
@@ -2040,12 +2060,27 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
                 "outcome",
                 if failed.is_empty() { "ok" } else { "failed" }.to_string(),
             ));
+            if let Some(held) = python_hold_line(rust_outcome.as_deref()) {
+                f.push(("reason", held));
+            }
             f
         };
         journal_call("built", &built_fields, None);
     }
 
-    let cmd: Vec<String> = if which_uv().is_some() {
+    // Python never moves ahead of the rust bins it talks to: a new wheel
+    // sends wire kinds an old fno-agents does not know, and every spawn
+    // fails until CI publishes. The wheel and the plugin restage wait for
+    // the update that installs both halves together.
+    let held = python_hold_line(rust_outcome.as_deref());
+    if let Some(line) = &held {
+        eprintln!("fno doctor update: {line}");
+        failed.push("python held behind rust".into());
+    }
+
+    let cmd: Vec<String> = if held.is_some() {
+        Vec::new()
+    } else if which_uv().is_some() {
         vec![
             "uv".into(),
             "tool".into(),
@@ -2074,7 +2109,9 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         return 1;
     };
 
-    let uv_ok = if cmd[0] == "uv" {
+    let uv_ok = if held.is_some() {
+        false
+    } else if cmd[0] == "uv" {
         uv_install(&cmd)
     } else {
         run_inherit(Path::new(&cmd[0]), &cmd[1..]) == 0
@@ -2120,7 +2157,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             failed.push("source-pin record".into());
         }
         post_install_steps(&resolved, &mut failed);
-    } else {
+    } else if held.is_none() {
         failed.push("uv install".into());
     }
 
@@ -2146,8 +2183,11 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("installed", &installed_fields, front_door.as_deref());
         0
     } else {
-        let rc = "1";
-        journal_call("failed", &[("rc", rc.to_string())], None);
+        let mut fields: Vec<(&str, String)> = vec![("rc", "1".to_string())];
+        if let Some(line) = &held {
+            fields.push(("reason", line.clone()));
+        }
+        journal_call("failed", &fields, None);
         1
     };
     // An update finishes in 60 seconds (user order 2026-10-09). One that runs
