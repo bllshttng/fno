@@ -19,6 +19,7 @@ pub mod backlog_model;
 pub mod backlog_snapshot;
 pub mod backlog_view;
 pub mod backlog_write;
+pub(crate) mod band_remap;
 pub mod board_reader;
 pub mod bootstrap;
 pub mod build_drift;

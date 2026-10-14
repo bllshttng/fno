@@ -67,7 +67,11 @@ impl View {
                         if c >= cols {
                             break;
                         }
-                        cells[r * cols + c] = f.cells[fr * f.cols as usize + fc];
+                        let cell = &mut cells[r * cols + c];
+                        *cell = f.cells[fr * f.cols as usize + fc];
+                        if !self.theme.inherit {
+                            crate::band_remap::remap(cell);
+                        }
                     }
                 }
             }
@@ -484,5 +488,54 @@ impl View {
             .panes
             .iter()
             .find_map(|(pid, rect)| crate::pane_border::on_border(*rect, cr, cc).then_some(*pid))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BAND: char = '\u{0243}';
+    const CODE: char = '\u{023B}';
+
+    fn composed_fg(theme: &str, band_bg: Color) -> (Color, Color) {
+        let mut view = super::super::tests::two_pane_view();
+        view.theme = crate::theme::Theme::from_name(theme).0;
+        let mut frame = view.frames.get(&10).cloned().unwrap();
+        let ink = Color::Rgb(0x70, 0x70, 0x70);
+        frame.cells[0] = Cell {
+            c: BAND,
+            fg: ink,
+            bg: band_bg,
+            flags: 0,
+        };
+        frame.cells[1] = Cell {
+            c: CODE,
+            fg: ink,
+            bg: Color::Rgb(0x20, 0x20, 0x20),
+            flags: 0,
+        };
+        view.frames.insert(10, frame);
+        let out = view.compose();
+        let fg_of = |ch| {
+            out.cells
+                .iter()
+                .find(|c| c.c == ch)
+                .expect("cell painted")
+                .fg
+        };
+        (fg_of(BAND), fg_of(CODE))
+    }
+
+    #[test]
+    fn the_pane_blit_remaps_band_text_and_spares_code() {
+        let (band, code) = composed_fg("footnote-paper", Color::Rgb(0x37, 0x37, 0x37));
+        assert_eq!(band, Color::Rgb(0xf7, 0xf7, 0xf7));
+        assert_eq!(code, Color::Rgb(0x70, 0x70, 0x70));
+        let (band, _) = composed_fg("footnote-superscript", Color::Rgb(0xff, 0xff, 0xff));
+        assert_eq!(band, Color::Rgb(0x14, 0x14, 0x14));
+        // `terminal` is the byte-identical no-op: the band stays as drawn.
+        let (band, _) = composed_fg("terminal", Color::Rgb(0x37, 0x37, 0x37));
+        assert_eq!(band, Color::Rgb(0x70, 0x70, 0x70));
     }
 }
