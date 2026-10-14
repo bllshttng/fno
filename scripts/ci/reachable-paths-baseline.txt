@@ -35,8 +35,6 @@ A	`launchctl kickstart -k {target}` failed (rc={rc})	py=cli/src/fno/pr_watch/_in
 A	`launchctl kickstart -k {target}` timed out after {timeout_s}s	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
 A	a model vendor is only routable at spawn	py=cli/src/fno/_flag_aliases.py;rs=crates/fno-agents/src/mail_inject.rs	# CLASSIFY protocol|msg-twin|data
 A	accepted forms: name, canonical handle, transport short id, or full session id	py=cli/src/fno/agents/registry.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
-A	active_backlog_batch_abandon	py=cli/src/fno/backlog/batch.py;rs=crates/fno-agents/src/backlog/triage_health.rs	# CLASSIFY protocol|msg-twin|data
-A	active_backlog_batch_ship	py=cli/src/fno/backlog/batch.py;rs=crates/fno-agents/src/backlog/triage_health.rs	# CLASSIFY protocol|msg-twin|data
 A	agent name must not be empty	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/claude_ask.rs|crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	agent_session_id_uncaptured	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/removals.rs	# CLASSIFY protocol|msg-twin|data
 A	agents.max_fleet_cpu_share	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/spawn_gate_verb.rs	# CLASSIFY protocol|msg-twin|data

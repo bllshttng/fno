@@ -80,12 +80,6 @@ from fno.backlog.capture import cli as _capture_cli  # noqa: E402
 
 cli.add_typer(_capture_cli, name="capture", hidden=True)
 
-# Nested batch sub-app: `fno backlog batch <verb>`. Batch-lane state
-# (.fno/batches/<domain>.json) — coalesce same-domain nodes into one PR.
-from fno.backlog.batch import cli as _batch_cli  # noqa: E402
-
-cli.add_typer(_batch_cli, name="batch", hidden=True)
-
 # Decision records are node/PR metadata; their backlog leaves (decide,
 # decisions, decide-retract, decide-reindex) are the grouped dispatcher's
 # native arms since the decide family ported. No Python mount remains.

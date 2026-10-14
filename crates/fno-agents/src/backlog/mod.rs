@@ -15,6 +15,7 @@ pub mod advance_settings;
 pub mod api;
 pub mod autobrief;
 pub mod autolink;
+pub mod batch;
 pub(crate) mod binding;
 pub mod birth;
 pub mod cli;

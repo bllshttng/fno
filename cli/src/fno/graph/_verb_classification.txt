@@ -31,10 +31,6 @@ lane-fill
 # footnote-owned DATA with a graph-resident write path (refused until the
 # write moves to the sidecar seam)
 capture promote
-batch join
-batch prepare
-batch ship
-batch ship-closeable
 # task rows + task claims write graph state (list materializes rows)
 
 [footnote]
@@ -59,10 +55,6 @@ capture empty-pass
 capture list
 capture scan
 capture tidy
-# batch read surfaces
-batch open
-batch status
-batch metrics
 # the triage route forwards at the native door; every action reads or
 # applies through the classified engine
 triage
