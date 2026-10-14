@@ -6,7 +6,7 @@ On 2026-10-13 one machine logged 54 spawn resolutions in 4 hours and 5 launches.
 
 ## What it watches
 
-When an agent types a spawn or a native launch line, the PreToolUse Bash hook writes a launch record. The record names the caller's session and the call time, and it lands before the spawn gate runs. The watch copies each record into `<agents home>/spawn-watch/<key>.json`, so the prune loses nothing. The pending copy and the claimed copy of one launch share one key.
+When an agent types a spawn or a native launch line, the PreToolUse Bash hook writes a launch record. The record names the caller's session and the call time, and it lands before the spawn gate runs. The watch copies each record into `<agents home>/spawn-watch/<key>.json`, so the prune loses nothing. The pending copy and the claimed copy of one launch share one key. The native lane writes a second record of the same call after the gate admits it. That record folds into the earlier watch from the same caller and harness, inside the gate's wait, so one launch keeps one watch.
 
 Only a detached launch is watched: a `claude --bg` line, a spawn verb, a pane run, or a dispatcher's record. A one-shot such as `codex exec` or `pi -p` is not watched. The caller's own Bash call waits for it and gets its answer there. A spawn with no launch record is not watched either. The mux composer has its own answer: its caller is the human, who sees Launched, Refused or Unknown. A daemon or advance dispatch that no agent typed writes no record either.
 
@@ -29,7 +29,7 @@ The gate answers inside the same bound. Its queue gives up after 240 seconds wit
 
 ## The measurement
 
-The first assistant line closes the watch. The watch records `first_turn_at_ms` and `latency_ms` from the call, and emits one `spawn_first_turn` event. The event carries the name, harness, substrate, the machine hash, `latency_ms`, and `row_ms`, the time from the call to the worker row. Read it per substrate:
+The first assistant line stamped at or after the call closes the watch. A resumed transcript's older turns do not count. The watch records `first_turn_at_ms` and `latency_ms` from the call, and emits one `spawn_first_turn` event. The event carries the name, harness, substrate, the machine hash, `latency_ms`, and `row_ms`, the time from the call to the worker row. Read it per substrate:
 
 ```bash
 fno doctor event find spawn_first_turn --field substrate=thread --since 7d

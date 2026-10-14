@@ -175,13 +175,31 @@ pub(crate) fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str
 /// loses nothing, and carry a claim's child session onto the watch.
 fn adopt(home: &AgentsHome, now: i64) {
     let dir = watch_dir(home);
-    for (_, record) in crate::launch_record::records(home.root(), now - HORIZON_MS) {
+    let mut records = crate::launch_record::records(home.root(), now - HORIZON_MS);
+    records.sort_by_key(|(_, r)| r.launched_at_ms);
+    let mut known: Vec<(PathBuf, Watch)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| Some((e.path(), read(&e.path()).ok()??)))
+        .collect();
+    for (_, record) in records {
         if !detached(&record) || now.saturating_sub(record.launched_at_ms) > HORIZON_MS {
             continue;
         }
-        let path = dir.join(record_key(&record));
+        let own = dir.join(record_key(&record));
+        let path = if known.iter().any(|(p, _)| *p == own) {
+            own
+        } else {
+            twin(&known, &record).unwrap_or(own)
+        };
         let watch = match read(&path) {
             Ok(None) => from_record(&record),
+            Ok(Some(w)) if w.name.is_none() && record.launch.name.is_some() => Watch {
+                name: record.launch.name.clone(),
+                child_session: w.child_session.or_else(|| record.child_session.clone()),
+                ..w
+            },
             Ok(Some(w)) if w.child_session.is_none() && record.child_session.is_some() => Watch {
                 child_session: record.child_session.clone(),
                 ..w
@@ -191,8 +209,34 @@ fn adopt(home: &AgentsHome, now: i64) {
         };
         if let Err(e) = state::write_json_atomic(&path, &watch) {
             eprintln!("spawn-watch: {}: {e}", path.display());
+            continue;
         }
+        known.retain(|(p, _)| *p != path);
+        known.push((path, watch));
     }
+}
+
+/// The native lane writes a second record after the gate admits a spawn,
+/// beside the hook's record of the same call. One launch keeps one watch:
+/// the later record folds into the earlier watch from that caller and
+/// harness, inside the gate's wait, whose name matches or is not yet known.
+fn twin(known: &[(PathBuf, Watch)], r: &Record) -> Option<PathBuf> {
+    let name = r.launch.name.as_deref()?;
+    let fits = |w: &Watch| {
+        w.caller == r.launcher_session
+            && w.harness == r.launch.harness
+            && w.called_at_ms < r.launched_at_ms
+            && r.launched_at_ms - w.called_at_ms <= GATE_WAIT_MS
+    };
+    let pick = |named: bool| {
+        known
+            .iter()
+            .filter(|(_, w)| fits(w) && (w.name.as_deref() == Some(name)) == named)
+            .filter(|(_, w)| named || w.name.is_none())
+            .min_by_key(|(_, w)| w.called_at_ms)
+            .map(|(p, _)| p.clone())
+    };
+    pick(true).or_else(|| pick(false))
 }
 
 pub(crate) fn run_pass(
@@ -316,7 +360,10 @@ fn judge(
         .or_else(|| row.map(|r| r.name.clone()))
         .unwrap_or_else(|| format!("(unnamed, in {})", watch.cwd));
     if watch.first_turn_at_ms.is_none() {
-        if let Some(at) = transcript.as_deref().and_then(|p| first_turn(p, now)) {
+        if let Some(at) = transcript
+            .as_deref()
+            .and_then(|p| first_turn(p, watch.called_at_ms, now))
+        {
             emitter
                 .emit(
                     "spawn_first_turn",
@@ -418,24 +465,28 @@ fn stage(
     )
 }
 
-/// The first assistant row's own timestamp, else now.
-fn first_turn(path: &Path, now: i64) -> Option<i64> {
-    let mut text = String::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(16 * 1024 * 1024)
-        .read_to_string(&mut text)
-        .ok()?;
-    let row = text
+/// The first assistant row stamped at or after the call; a row with no stamp
+/// reads as now. A resumed transcript holds the prior run's turns, and its
+/// new rows sit at the end, so the read takes the file's tail.
+fn first_turn(path: &Path, since: i64, now: i64) -> Option<i64> {
+    use std::io::{Seek, SeekFrom};
+    const TAIL: u64 = 16 * 1024 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut bytes = Vec::new();
+    file.take(TAIL).read_to_end(&mut bytes).ok()?;
+    String::from_utf8_lossy(&bytes)
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(crate::first_check::is_assistant)?;
-    Some(
-        row.get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(millis)
-            .unwrap_or(now),
-    )
+        .filter(crate::first_check::is_assistant)
+        .map(|row| {
+            row.get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(millis)
+                .unwrap_or(now)
+        })
+        .find(|at| *at >= since)
 }
 
 #[cfg(test)]

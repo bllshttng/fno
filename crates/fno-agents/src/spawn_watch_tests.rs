@@ -37,16 +37,30 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
         crate::launch_record::write_record(home.root(), launch, caller, Some("claude"), &cwd, t0)
             .unwrap();
     }
+    // The native lane writes its own record of "quick" after admission: one
+    // launch, one watch.
+    let twin = Launch {
+        harness: "claude".into(),
+        name: Some("quick".into()),
+        node: None,
+        slot: None,
+        provider: None,
+        cwd: cwd.clone(),
+    };
+    crate::launch_record::write_record(home.root(), twin, caller, Some("claude"), &cwd, t0 + 5_000)
+        .unwrap();
     // A one-shot the caller waits on in its own Bash call is never watched.
     crate::launch_record::record_command(home.root(), "pi -p hello", &cwd, Some(caller), None, t0)
         .unwrap();
 
-    // "quick" booted and answered 70s after the call.
+    // "quick" resumed a transcript with an old turn, booted, and answered
+    // 70s after the call.
     let transcript = temp.path().join("quick.jsonl");
     std::fs::write(
         &transcript,
         format!(
-            "{}\n{}\n",
+            "{}\n{}\n{}\n",
+            json!({"type": "assistant", "timestamp": stamp(t0 - 3_600_000)}),
             json!({"type": "user", "timestamp": stamp(t0 + 20_000)}),
             json!({"type": "assistant", "timestamp": stamp(t0 + 70_000)}),
         ),
