@@ -748,15 +748,21 @@ fn configured_claim_root() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Mirror of `claims.io.claims_dir(None)`: the env root wins and nests
-/// `.fno/claims` beneath it; without one the repo space holds the claims
-/// directory directly (no nested `.fno` segment).
+/// Mirror of `claims.io.claims_dir(None)` through the shared resolver: the
+/// env root wins and nests `.fno/claims` beneath it; without one the repo
+/// space holds the claims directory directly (no nested `.fno` segment).
+/// The merge-lock key carries no global-id prefix, so the resolver never
+/// routes it to the machine-wide root.
 fn claim_path(cwd: &Path, key: &str) -> PathBuf {
-    let base = match configured_claim_root() {
-        Some(root) => root.join(".fno").join("claims"),
-        None => crate::paths::space_dir(cwd).join("claims"),
-    };
-    base.join(format!("{}.lock", encode_key(key)))
+    crate::claims_root::claims_dir_in(
+        key,
+        None,
+        || Ok(cwd.to_path_buf()),
+        std::env::var_os("FNO_CLAIMS_ROOT"),
+        None,
+    )
+    .expect("cwd is in hand, the space fallback cannot fail")
+    .join(format!("{}.lock", encode_key(key)))
 }
 
 fn claim_root_flags() -> Vec<String> {
