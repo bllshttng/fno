@@ -583,7 +583,7 @@ already waits ({}). Answer it or clear it; do not ask twice.",
                 row.id
             ));
             answer.refusal = Some("dedup".to_string());
-            answer.open_id = Some(row.id);
+            answer.open_id = Some(row.id.clone());
             answer.exit_code = 2;
             return answer;
         }
