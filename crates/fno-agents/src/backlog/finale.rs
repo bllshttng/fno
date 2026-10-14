@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::node_ref::{find_node, has_node_id_prefix};
+use super::node_ref::{find_node, find_node_index, has_node_id_prefix};
 use super::settings;
 use super::workflows::{refuse_non_graph_backend, text_at};
 use crate::claims;
@@ -123,7 +123,7 @@ fn assess_one(
         let satisfied = node.get("status").and_then(Value::as_str) == Some("done")
             || node.get("completed_at").is_some()
             || node.get("merged_at").is_some()
-            || node.get("pr_merged") == Some(Value::Bool(true))
+            || node.get("pr_merged") == Some(&Value::Bool(true))
             || pr_merged(pr).unwrap_or(false);
         if satisfied {
             return Assessment {
@@ -304,7 +304,8 @@ pub fn run_discover(tail: &[String]) -> i32 {
                     (
                         substring_matches(&query, &pool),
                         Some(format!(
-                            "fts lane unavailable ({e}); substring fallback ranked the candidates"
+                            "fts lane unavailable ({}); substring fallback ranked the candidates",
+                            e.0
                         )),
                     )
                 }
@@ -781,7 +782,11 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
     if positional.len() > 2 {
         eprintln!(
             "Got unexpected extra arguments: {}",
-            positional[2..].join(" ")
+            positional[2..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<&str>>()
+                .join(" ")
         );
         return 2;
     }
@@ -1380,9 +1385,10 @@ pub fn run_pick(tail: &[String]) -> i32 {
                 // Silent skip when a node is missing or already in the
                 // target state: the snapshot-to-lock race loses one mark,
                 // never the user's other valid ones.
-                let Some(node) = find_node(working, tid) else {
+                let Some(idx) = find_node_index(working, tid) else {
                     continue;
                 };
+                let node = &mut working[idx];
                 if node.get("queued_at").is_some_and(|v| !v.is_null()) {
                     continue;
                 }
@@ -1396,9 +1402,10 @@ pub fn run_pick(tail: &[String]) -> i32 {
                 any = true;
             }
             for tid in &unqueue_ids {
-                let Some(node) = find_node(working, tid) else {
+                let Some(idx) = find_node_index(working, tid) else {
                     continue;
                 };
+                let node = &mut working[idx];
                 if !node.get("queued_at").is_some_and(|v| !v.is_null()) {
                     continue;
                 }
@@ -1475,7 +1482,7 @@ fn humanize_age(seconds: Option<i64>) -> String {
     } else {
         ("d", (seconds / 86400).min(999))
     };
-    format!("{n}{unit}").rjust(4).to_string()
+    format!("{:>4}", format!("{n}{unit}"))
 }
 
 /// Seconds since the row last showed life: its start, or a note its own
@@ -1846,7 +1853,7 @@ pub fn run_requeue(tail: &[String]) -> i32 {
         return 0;
     }
     println!("requeued {node_id} ({status_before} -> {status_after})");
-    for t in &pairs {
+    for (_, t) in &pairs {
         let samples = t
             .samples
             .map(|s| s.to_string())
