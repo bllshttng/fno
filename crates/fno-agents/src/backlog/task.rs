@@ -212,7 +212,7 @@ fn run_task_list(tail: &[String]) -> i32 {
     }
 
     // Materialize under the lock, then re-read and print.
-    let written = super::graph_store::mutate_rows(
+    let written = crate::graph_store::mutate_rows(
         &graph,
         std::time::Duration::from_secs(5),
         None,
@@ -327,7 +327,7 @@ fn run_task_update(tail: &[String]) -> i32 {
     };
     let (node_id, plan_path) = task_plan_or_exit(node);
     let ids = task_ids_or_exit(&plan_path);
-    if !ids.iter().any(|i| i == task_id) {
+    if !ids.iter().any(|i| i.as_str() == task_id) {
         eprintln!(
             "task '{task_id}' not in plan {}; plan tasks: {}",
             plan_path.display(),
@@ -425,7 +425,7 @@ fn run_task_update(tail: &[String]) -> i32 {
         }
         let (session_pid, _harness) =
             crate::spawn_context::session_identity_ambient(std::process::id());
-        if same_holder && pid_live != session_pid.map(|p| p as i64) {
+        if same_holder && pid_live != session_pid.map(|p| p as i32) {
             eprintln!(
                 "{key} is held LIVE by this holder identity under another live process (pid={pid_live:?}); the identity is shared, not owned. Re-run from the owning session, or spawn through fno agents spawn"
             );
@@ -444,7 +444,7 @@ fn run_task_update(tail: &[String]) -> i32 {
     ) -> Result<Value, String> {
         let graph = super::settings::graph_path();
         let mut found: Vec<Value> = Vec::new();
-        let written = super::graph_store::mutate_rows(
+        let written = crate::graph_store::mutate_rows(
             &graph,
             std::time::Duration::from_secs(5),
             None,
@@ -482,7 +482,9 @@ fn run_task_update(tail: &[String]) -> i32 {
     };
 
     if status == "in_progress" {
-        let (session_pid, harness) =
+        // The harness rides the ambient identity walk inside acquire; opts
+        // carries only the pid and the task provenance.
+        let (session_pid, _harness) =
             crate::spawn_context::session_identity_ambient(std::process::id());
         let mut opts = crate::claims::AcquireOpts::default();
         opts.pid = session_pid;
@@ -497,7 +499,6 @@ fn run_task_update(tail: &[String]) -> i32 {
         metadata.insert("node".into(), json!(node_id));
         metadata.insert("task".into(), json!(task_id));
         opts.metadata = Some(metadata);
-        opts.harness = harness.map(String::from);
         match crate::claims::acquire(&key, &holder, opts) {
             crate::claims::AcquireOutcome::Acquired(_) => {}
             crate::claims::AcquireOutcome::HeldByOther { holder, pid, .. } => {
@@ -572,7 +573,7 @@ fn run_task_update(tail: &[String]) -> i32 {
                 return 1;
             }
             Ok(_) => {
-                if let Some(owner_now) = refused_owner.get() {
+                if let Some(owner_now) = refused_owner.take() {
                     eprintln!(
                         "task {task_id} held by {owner_now}; only the holder can mark it done. If that holder is gone, re-run with --takeover"
                     );
@@ -622,7 +623,7 @@ fn run_task_update(tail: &[String]) -> i32 {
             3
         }
         Ok(_) => {
-            if let Some(owner_now) = refused_owner.get() {
+            if let Some(owner_now) = refused_owner.take() {
                 eprintln!(
                     "task {task_id} held by {owner_now}; only the holder can give it back. If that holder is gone, re-run with --takeover"
                 );
