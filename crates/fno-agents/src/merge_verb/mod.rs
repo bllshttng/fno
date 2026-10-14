@@ -3,11 +3,12 @@
 //!
 //! Staged port. The incarnation fence is a silent no-op at this stage (it
 //! lands with the fence stage; absence fails open exactly like a crashed
-//! check does on the Python leg). The coverage pre-read and the gh-backed
-//! status publish stay Python-side until the follow-ups stage, so the covered
-//! head this flow pins is the empty string end to end. The merged-branch
-//! cleanup (note fetch, confirmed-merge finish, graph sync) also stays
-//! Python-side; no captured golden at this stage reaches it.
+//! check does on the Python leg). The coverage head read carries the same
+//! pin Python pins (verb-door read, REST fallback through covered_pin), and
+//! the status publish posts the required + diagnostic contexts. The two
+//! REST reads behind the verdict itself and the merged-branch cleanup (note
+//! fetch, confirmed-merge finish, graph sync) still land with the
+//! follow-ups stage; no captured golden at this stage reaches either.
 //!
 //! The flow is transport-only: every merge-permission decision lives in
 //! `authorized_merge.rs`, reached through the same `authorized-merge` verb
@@ -275,19 +276,27 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
 
     let require_checks = crate::agents_config::auto_merge_require_checks_pass(&repo);
 
-    // (2a) Coverage read, staged port: the Python gate reads the PR head here
-    // (its own verb hop) plus two REST reads and returns the covered head.
-    // This stage keeps the verb hop and ignores the answer - under the test
-    // stub the answer never comes, which is the exact shape every captured
-    // golden already exercises - and the covered head is the empty string end
-    // to end. The REST reads and the coverage verdict land with the
-    // follow-ups stage.
-    let _ = verb_call(
+    // (2a) Coverage read, head fetch: the Python gate read resolves the PR
+    // head through this same verb hop and carries it as the pin; a failed
+    // hop leaves the pin empty, exactly as the gate's None does. covered_pin
+    // then restores the owner's fallback for an unpinned read. The two REST
+    // reads and the coverage verdict itself land with the follow-ups stage.
+    let gate_head = match verb_call(
         "authorized-merge",
         &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
         VERB_TIMEOUT,
-    );
-    let covered_head = "";
+    ) {
+        Ok(v) => v
+            .get("head")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        Err(_) => String::new(),
+    };
+    // The pin the ask carries (post-fallback), kept distinct from the gate
+    // head: the flake probe pins to the gate's own read, exactly as Python
+    // probes `covered_head or ""` before covered_pin applies.
+    let covered_head = covered_pin(pr, &repo, &gate_head);
 
     // (2b) The flake probe, pinned to the covered head (immutable history at
     // that SHA), outside the lock so the read never stretches the merge
@@ -296,7 +305,7 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
     let flake: Option<Value> = if require_checks {
         match verb_call(
             "authorized-merge",
-            &json!({"op": "status-rerun", "cwd": repo.to_string_lossy(), "pr": pr, "sha": covered_head}),
+            &json!({"op": "status-rerun", "cwd": repo.to_string_lossy(), "pr": pr, "sha": gate_head}),
             FLAKE_PROBE_TIMEOUT,
         ) {
             Ok(v) => Some(v),
@@ -346,7 +355,7 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         posture_approved,
         &posture_source,
         require_checks,
-        covered_head,
+        &covered_head,
     );
     drop(lock);
     flow.exit_code = code;
@@ -372,7 +381,7 @@ fn do_merge(
         approved: posture_approved,
         source: posture_source,
         require_checks,
-        covered_head: covered_pin(covered_head),
+        covered_head: covered_head.to_string(),
         authority,
         accept_flake,
     };
@@ -399,26 +408,37 @@ fn do_merge(
         // "flake override accepted: <checks>" stderr note.
     }
 
-    // Server-visible receipt of the verdict the gate acted on. Staged port:
-    // only the head resolution survives here (the same verb hop the captured
-    // goldens record); the gh status write itself lands with the follow-ups
-    // stage, so a resolvable head publishes nothing at this stage.
-    let publish_head = match verb_call(
-        "authorized-merge",
-        &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
-        VERB_TIMEOUT,
-    ) {
-        Ok(v) => v
-            .get("head")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
+    // Server-visible receipt of the verdict the gate acted on, posted from
+    // the same pin that satisfied the gate. When the pin is empty the
+    // publisher re-reads the head through its own verb-door fallback, the
+    // hop every captured golden records; when even that read is empty the
+    // post is refused with the note, the same fail-closed shape Python
+    // publishes.
+    let publish_head = if covered_head.is_empty() {
+        match verb_call(
+            "authorized-merge",
+            &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
+            VERB_TIMEOUT,
+        ) {
+            Ok(v) => v
+                .get("head")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            Err(_) => String::new(),
+        }
+    } else {
+        covered_head.to_string()
     };
     if publish_head.is_empty() {
         flow.lines.push((
             true,
             "pr-merge: coverage status not posted: no PR head to publish a status on\n".into(),
+        ));
+    } else if let Err(note) = publish_coverage_status(repo, &publish_head) {
+        flow.lines.push((
+            true,
+            format!("pr-merge: coverage status not posted: {note}\n"),
         ));
     }
 
@@ -435,12 +455,162 @@ fn do_merge(
     emit_authorized_outcome(flow, pr, &receipt, &strategy)
 }
 
-/// The head a COVERED gate pins its merge to. Staged port: the REST head read
-/// (and the gate's own fallback) land with the follow-ups stage, so an empty
-/// gate head stays empty - the owner reads that as unknown and holds, the
+/// The head a COVERED gate pins its merge to. A non-empty gate head is the
+/// pin. An empty one falls back to the PR's current head over the REST pulls
+/// endpoint - the fallback stock review opt-outs merge through, since a
+/// no-lane repo never produces a covered head of its own. Every step after
+/// the empty check fails silent: an unreadable head stays empty, the
 /// fail-closed answer every other unpinnable merge gets.
-fn covered_pin(covered_head: &str) -> String {
-    covered_head.to_string()
+fn covered_pin(pr: i64, repo: &Path, covered_head: &str) -> String {
+    if !covered_head.is_empty() {
+        return covered_head.to_string();
+    }
+    let slug = match origin_slug(repo) {
+        Some(slug) => slug,
+        None => return String::new(),
+    };
+    let out = match Command::new("gh")
+        .arg("api")
+        .arg(format!("repos/{slug}/pulls/{pr}"))
+        .current_dir(repo)
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => return String::new(),
+    };
+    if !out.status.success() {
+        return String::new();
+    }
+    let body: Value = match serde_json::from_slice(&out.stdout) {
+        Ok(body) => body,
+        Err(_) => return String::new(),
+    };
+    body.pointer("/head/sha")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// owner/repo from the checkout's origin remote, the same grammar the Python
+/// gate's parser applies: lowercase, optional scheme, optional user@, then
+/// the github.com host with an optional port and a `:` or `/` separator. The
+/// path drops trailing `/` and a trailing `.git` and must be exactly one
+/// non-empty segment over another. Anything else refuses.
+fn origin_slug(repo: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+    let mut rest = url.as_str();
+    if let Some(i) = rest.find("://") {
+        // scheme = ALPHA *( ALPHA / DIGIT / "+" / "." / "-" ); anything else
+        // leaves the URL unmatched, and the regex fails whole.
+        let scheme = &rest[..i];
+        let scheme_ok = !scheme.is_empty()
+            && scheme.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '.' | '-')
+            });
+        if !scheme_ok {
+            return None;
+        }
+        rest = &rest[i + 3..];
+    }
+    if let Some(i) = rest.find('@') {
+        // user@ may carry neither / nor @; a stray @ later in the URL does
+        // not satisfy the prefix, and the match fails whole.
+        let user = &rest[..i];
+        if user.contains('/') || user.contains('@') {
+            return None;
+        }
+        rest = &rest[i + 1..];
+    }
+    let after = rest.strip_prefix("github.com")?;
+    let after = match after.strip_prefix(':') {
+        Some(r) => match r.split_once('/') {
+            Some((port, path)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                path
+            }
+            _ => r,
+        },
+        None => after.strip_prefix('/')?,
+    };
+    let path = after.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    if owner.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
+}
+
+/// The commit-status POST pair, ported from the Python publisher: the
+/// required context greens the head for the web merge button, the
+/// diagnostic context records the read's health. gh resolves
+/// `:owner/:repo` from the checkout's remotes, so this spawn needs no slug
+/// of its own. Both POSTs are attempted even when the first fails: a
+/// failed required POST must not strand a stale diagnostic on a covered
+/// PR. Best-effort end to end - the Err carries the joined failure notes,
+/// never a raise.
+fn publish_coverage_status(repo: &Path, head: &str) -> Result<(), String> {
+    let short = &head[..head.len().min(8)];
+    let mut failures: Vec<String> = Vec::new();
+    for (context, description) in [
+        ("fno/review-coverage", format!("covered at {short}")),
+        (
+            "fno/review-coverage-unavailable",
+            format!("coverage read healthy at {short}"),
+        ),
+    ] {
+        let mut note = String::new();
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            let res = Command::new("gh")
+                .args(["api", "--method", "POST"])
+                .arg(format!("repos/:owner/:repo/statuses/{head}"))
+                .args(["-f", "state=success"])
+                .args(["-f", &format!("context={context}")])
+                .args(["-f", &format!("description={description}")])
+                .current_dir(repo)
+                .output();
+            match res {
+                Ok(out) if out.status.success() => {
+                    note.clear();
+                    break;
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let code = out.status.code().unwrap_or(-1);
+                    note = (if !stderr.trim().is_empty() {
+                        stderr.trim().to_string()
+                    } else if !stdout.trim().is_empty() {
+                        stdout.trim().to_string()
+                    } else {
+                        format!("gh exited {code}")
+                    })
+                    .chars()
+                    .take(200)
+                    .collect();
+                }
+                Err(exc) => note = format!("gh spawn failed: {exc}"),
+            }
+        }
+        if !note.is_empty() {
+            failures.push(format!("{context}: {note}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 /// Ask the one authorized-merge operation. The decision lives in
