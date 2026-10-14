@@ -1066,7 +1066,15 @@ def _retired_axis(flag: str):
     return _refuse
 
 
-@agents_app.command("spawn")
+@agents_app.command(
+    "spawn",
+    epilog=(
+        "The harness lane is chosen, not flagged: placement args imply the pane "
+        "lane, --once means headless, everything else seats a thread. Declared "
+        "harnesses: claude, codex, opencode, pi, agy, cursor-agent, grok "
+        "(docs/HARNESSES.md)."
+    ),
+)
 def cmd_spawn(
     ctx: typer.Context,
     message: str = typer.Argument("", help="The prompt to seed the worker with."),
@@ -1273,7 +1281,7 @@ def cmd_spawn(
         "-s",
         help=(
             "Pane placement: send the new pane to a workspace by its visible "
-            "name instead of the cwd-derived default. --substrate pane only."
+            "name instead of the cwd-derived default. Pane lane only."
         ),
     ),
     squad_compat: str | None = typer.Option(
@@ -1288,7 +1296,7 @@ def cmd_spawn(
         "-x",
         help=(
             "Pane placement: tile the new pane left|right|up|down of the "
-            "squad's focused pane instead of a new tab. --substrate pane only."
+            "squad's focused pane instead of a new tab. Pane lane only."
         ),
     ),
     at: str | None = typer.Option(
@@ -1571,7 +1579,7 @@ def cmd_spawn(
             print(conflict, file=sys.stderr)
             raise typer.Exit(code=2)
         if substrate != "pane" or once:
-            print("--pane applies only to --substrate pane (thread/headless have no existing mux pane target)", file=sys.stderr)
+            print("--pane applies only to the pane lane (thread/headless have no existing mux pane target)", file=sys.stderr)
             raise typer.Exit(code=2)
 
     refusal = placement_refusal(
@@ -1595,7 +1603,7 @@ def cmd_spawn(
             print(
                 "--promote needs a session that outlives the grant; headless is a "
                 "one-shot that exits after one answer, so its role would be "
-                "orphaned at birth. Use --substrate pane or --substrate thread.",
+                "orphaned at birth. Give the spawn a pane lane (placement) or let it seat a thread.",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
