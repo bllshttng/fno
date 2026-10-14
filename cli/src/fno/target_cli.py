@@ -224,31 +224,8 @@ def _refuse_unreachable_github_apps() -> None:
 
 
 
-def _load_blast_cfg():
-    """Load config.target.blast, fail-safe to a disabled default block.
-
-    A malformed settings file (or any load error) degrades to a default
-    ``BlastConfig`` (enabled=False) so a config typo can never make the blast
-    read raise. Mirrors the ``agents_headless_yolo`` try/except idiom.
-    """
-    from fno.config import BlastConfig
-
-    try:
-        from fno.config import load_settings
-
-        return load_settings().target.blast
-    except Exception:
-        return BlastConfig()
 
 
-def _repo_root_or_none() -> Optional[str]:
-    """Best-effort repo root for path normalization; None on any failure."""
-    try:
-        from fno.paths import resolve_repo_root
-
-        return str(resolve_repo_root())
-    except Exception:
-        return None
 
 
 _TARGET_NODE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$", re.IGNORECASE)
@@ -920,40 +897,25 @@ def blast_check(
 ) -> None:
     """Classify a plan's touched surface as high / low / unknown blast radius.
 
-    Prints JSON ``{verdict, matched_paths, reason}`` (``--quiet`` prints the
-    bare token). Always exits 0 and always returns a verdict, even on an
-    unreadable plan or a classifier error (-> ``unknown``): the caller treats a
-    non-``high``/``low`` verdict as "leave ceremony unchanged", so this verb can
-    never block a target init.
+    `fno do target blast-check` runs in the fno-agents binary now: this
+    command is a thin forward and the classifier is the native
+    `target_blast.rs` door, the same leg the init modulation reads.
     """
-    from fno.target.blast import (
-        UNKNOWN,
-        classify,
-        parse_ownership_map,
-        resolve_plan_index,
-    )
+    from fno.rust_binary import resolve_binary
 
-    try:
-        text = resolve_plan_index(plan).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        result = {
-            "verdict": UNKNOWN,
-            "matched_paths": [],
-            "reason": f"cannot read plan {plan!r}: {exc}",
-        }
-    else:
-        cfg = _load_blast_cfg()
-        paths = parse_ownership_map(text)
-        try:
-            result = classify(paths, cfg, repo_root=_repo_root_or_none())
-        except Exception as exc:  # noqa: BLE001 - fail-safe to unknown, never raise
-            result = {
-                "verdict": UNKNOWN,
-                "matched_paths": [],
-                "reason": f"classifier error: {exc}",
-            }
-
-    typer.echo(result["verdict"] if quiet else json.dumps(result))
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do target blast-check: the classifier is native, but no "
+            "fno-agents binary resolved (set FNO_AGENTS_BIN or install "
+            "fno-agents)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    cmd = [str(binary), "target-blast-check", plan]
+    if quiet:
+        cmd.append("--quiet")
+    raise typer.Exit(code=subprocess.run(cmd).returncode)
 
 
 # Exit code meaning "this gate refused", distinct from every code Click itself

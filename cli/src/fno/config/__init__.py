@@ -1879,7 +1879,7 @@ class TargetConfig(BaseModel):
         Mirrors ConfigBlock._coerce_cross_model so a scalar typo like
         `blast: true` cannot raise out of `load_settings`/`SettingsModel`
         construction (the disabled-by-default promise must hold for every
-        consumer, not only the local `_load_blast_cfg` catch). A dict passes
+        consumer, not only the native classifier's loader catch). A dict passes
         through so BlastConfig's own field coercion still runs.
         """
         if isinstance(v, (dict, BlastConfig)):

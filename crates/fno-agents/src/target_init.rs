@@ -298,7 +298,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         );
         if let Some(blast_plan) = blast_plan {
             let repo_root = git_toplevel(&cwd);
-            let (verdict, matched) = crate::target_blast::classify_plan_file(
+            let (verdict, matched, _reason) = crate::target_blast::classify_plan_file(
                 &blast_plan,
                 &blast_cfg,
                 repo_root.as_deref(),
@@ -574,7 +574,7 @@ mod substrate_verdict_tests {
 /// The repo root the blast read anchors relative paths against; `None` when
 /// git cannot answer, which degrades the path normalization to its logical
 /// fallback instead of failing the run.
-fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)

@@ -368,13 +368,14 @@ pub(crate) fn parse_ownership_map(plan_text: &str) -> Vec<String> {
 
 /// Classify a touched-surface path list. Any normalized path matching a blast
 /// glob is `high`; all paths known and none matching is `low`; no usable
-/// paths is `unknown`. Returns the verdict plus the matched original paths.
+/// paths is `unknown`. Returns the verdict, the matched original paths, and
+/// the reason string the blast-check JSON carries.
 pub(crate) fn classify(
     paths: &[String],
     cfg: &BlastCfg,
     repo_root: Option<&Path>,
     manifest_path: Option<&Path>,
-) -> (String, Vec<String>) {
+) -> (String, Vec<String>, String) {
     let pairs: Vec<(&String, String)> = paths
         .iter()
         .filter(|p| !p.trim().is_empty())
@@ -382,7 +383,11 @@ pub(crate) fn classify(
         .filter(|(_, norm)| !norm.is_empty())
         .collect();
     if pairs.is_empty() {
-        return (UNKNOWN.to_string(), Vec::new());
+        return (
+            UNKNOWN.to_string(),
+            Vec::new(),
+            "no usable paths in the File Ownership Map".to_string(),
+        );
     }
     let manifest_entries = if cfg.reuse_loc_manifest {
         match manifest_path {
@@ -397,35 +402,93 @@ pub(crate) fn classify(
     let mut recursive: Vec<&str> = GENERAL_HIGH_BLAST_GLOBS.to_vec();
     recursive.extend(cfg.high_blast_globs.iter().map(|g| g.as_str()));
     let mut matched = Vec::new();
+    let mut reasons = Vec::new();
     for (orig, norm) in &pairs {
         let hit = manifest_entries
             .iter()
             .find(|e| match_manifest_entry(norm, e))
             .or_else(|| recursive.iter().find(|g| match_recursive(norm, g)));
-        if hit.is_some() {
+        if let Some(hit) = hit {
             matched.push((*orig).clone());
+            reasons.push(format!("{orig} ~ {hit}"));
         }
     }
     if matched.is_empty() {
-        (LOW.to_string(), Vec::new())
+        (
+            LOW.to_string(),
+            Vec::new(),
+            format!("all {} path(s) outside the blast map", pairs.len()),
+        )
     } else {
-        (HIGH.to_string(), matched)
+        (
+            HIGH.to_string(),
+            matched,
+            format!("high-blast surface: {}", reasons.join("; ")),
+        )
     }
 }
 
-/// Read the resolved plan and classify its ownership map. Any read or parse
-/// problem degrades to `unknown`, the fail-safe verdict.
+/// Read the resolved plan and classify its ownership map. Any read problem
+/// degrades to `unknown`, the fail-safe verdict.
 pub(crate) fn classify_plan_file(
     plan_path: &str,
     cfg: &BlastCfg,
     repo_root: Option<&Path>,
     manifest_path: Option<&Path>,
-) -> (String, Vec<String>) {
+) -> (String, Vec<String>, String) {
     let index = resolve_plan_index(plan_path);
     match std::fs::read_to_string(&index) {
         Ok(text) => classify(&parse_ownership_map(&text), cfg, repo_root, manifest_path),
-        Err(_) => (UNKNOWN.to_string(), Vec::new()),
+        Err(_) => (UNKNOWN.to_string(), Vec::new(), String::new()),
     }
+}
+
+/// The `fno do target blast-check` door: classify one plan and print the
+/// verdict. Always exits 0 on a classification, even an `unknown` from an
+/// unreadable plan: the caller treats a non-high/low verdict as "leave
+/// ceremony unchanged", so this door can never block a target init.
+pub(crate) fn run_blast_check(rest: &[String]) -> i32 {
+    let mut quiet = false;
+    let mut plans: Vec<&String> = Vec::new();
+    for arg in rest {
+        if arg == "--quiet" {
+            quiet = true;
+        } else {
+            plans.push(arg);
+        }
+    }
+    let Some(plan) = plans.first() else {
+        eprintln!("fno do target blast-check: needs the plan path to classify");
+        return 2;
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let repo_root = crate::target_init::git_toplevel(&cwd);
+    let cfg = load_blast_cfg(repo_root.as_deref().unwrap_or(&cwd));
+    let index = resolve_plan_index(plan);
+    let (verdict, matched, reason) = match std::fs::read_to_string(&index) {
+        Ok(text) => classify(
+            &parse_ownership_map(&text),
+            &cfg,
+            repo_root.as_deref(),
+            control_plane_scope_path().as_deref(),
+        ),
+        Err(err) => (
+            UNKNOWN.to_string(),
+            Vec::new(),
+            format!("cannot read plan '{plan}': {err}"),
+        ),
+    };
+    if quiet {
+        println!("{verdict}");
+    } else {
+        let payload = serde_json::json!({
+            "verdict": verdict,
+            "matched_paths": matched,
+            "reason": reason,
+        });
+        println!("{payload}");
+    }
+    0
 }
 
 /// The plan the blast read should classify, or `None` to skip. An explicit
@@ -575,11 +638,15 @@ mod tests {
     #[test]
     fn classify_high_low_unknown() {
         let cfg = BlastCfg::default();
-        let (verdict, matched) =
+        let (verdict, matched, reason) =
             classify(&["db/migrations/2026.sql".to_string()], &cfg, None, None);
         assert_eq!(verdict, HIGH);
         assert_eq!(matched, vec!["db/migrations/2026.sql".to_string()]);
-        let (verdict, matched) = classify(
+        assert_eq!(
+            reason,
+            "high-blast surface: db/migrations/2026.sql ~ **/migrations/**"
+        );
+        let (verdict, matched, reason) = classify(
             &["src/widget.ts".to_string(), "docs/a.md".to_string()],
             &cfg,
             None,
@@ -587,8 +654,10 @@ mod tests {
         );
         assert_eq!(verdict, LOW);
         assert!(matched.is_empty());
-        let (verdict, _) = classify(&[], &cfg, None, None);
+        assert_eq!(reason, "all 2 path(s) outside the blast map");
+        let (verdict, _, reason) = classify(&[], &cfg, None, None);
         assert_eq!(verdict, UNKNOWN);
+        assert_eq!(reason, "no usable paths in the File Ownership Map");
     }
 
     #[test]

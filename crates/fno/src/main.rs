@@ -189,6 +189,9 @@ enum Role {
     /// sibling fno-agents `target-init` door. The bash helper stays; the
     /// parity goldens characterize the port.
     TargetInit(Vec<OsString>),
+    /// `fno do target blast-check <plan>`: the blast classifier is native
+    /// (target_blast.rs); the Python verb is a thin forward.
+    TargetBlastCheck(Vec<OsString>),
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
     /// leaves keep their role: classify/post-dispositions/invocations stay
@@ -389,6 +392,19 @@ fn classify_target_init(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target blast-check <plan> [--quiet]`: the same literal three-token
+/// prefix rule as init, so the Python verb only ever serves as the forward.
+fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "blast-check"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf and no help
 /// request. Only the FIRST tail token names a leaf (a leaf spelled later is
@@ -502,6 +518,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_target_init(args) {
         return Role::TargetInit(rest);
+    }
+    if let Some(rest) = classify_target_blast_check(args) {
+        return Role::TargetBlastCheck(rest);
     }
     if let Some((alias, rest)) = classify_review_root(args) {
         return if alias {
@@ -815,6 +834,11 @@ fn main() {
         Role::TargetInit(rest) => std::process::exit(fno_agents_exec(
             "fno do target init",
             &["target-init"],
+            &rest,
+        )),
+        Role::TargetBlastCheck(rest) => std::process::exit(fno_agents_exec(
+            "fno do target blast-check",
+            &["target-blast-check"],
             &rest,
         )),
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
