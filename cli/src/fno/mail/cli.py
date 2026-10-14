@@ -4176,92 +4176,13 @@ def cmd_withdraw(
     Refuses when the message is already past the recipient's cursor. They have
     read it; a tombstone then would only hide it from you.
     """
-    from fno.bus.cursor import read_cursor
-    from fno.bus.log import (
-        HOSTED_DELIVERY,
-        TYPED_DELIVERY,
-        WITHDRAW_KIND,
-        Envelope,
-        append,
-        iter_messages,
-        withdrawn_ids,
-    )
-    from fno.agents.self_stamp import stamp_from
-
-    # The ownership check is the ONLY authz gate on this verb, so it compares
-    # against the same resolver that stamped the envelope's `from`. The
-    # precedence-only resolver would answer differently for a session carrying
-    # an inherited marker: it would refuse that session's own mail (stamped
-    # "fno") and let it retract its spawner's. `--from-name` is passed through
-    # for the same reason `mail sent` takes it: `stamp_from` returns an explicit
-    # label verbatim, so mail sent under one could otherwise never be retracted
-    # by anyone. This widens no authority a sender did not already have - the
-    # label is unauthenticated on the send side too.
-    handle = stamp_from(from_name)
-
-    all_msgs = list(iter_messages())
-    target = next((m for m in all_msgs if m.id == msg_id), None)
-    if target is None:
-        print(f"no such message on the bus: {msg_id}", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.from_ != handle:
-        print(
-            f"{msg_id} was sent by {target.from_}, not you ({handle}); "
-            "only its sender can withdraw it",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    if msg_id in withdrawn_ids(all_msgs):
-        print(f"{msg_id} is already withdrawn")
-        raise typer.Exit(code=0)
-    if target.delivery == HOSTED_DELIVERY:
-        print(f"{msg_id} was already delivered (hosted); it cannot be withdrawn", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.delivery == TYPED_DELIVERY:
-        # A typed row is not a durable message with a tombstone to write, it is
-        # bytes already sitting at somebody's prompt. Withdrawing it wrote the
-        # tombstone and printed success while retracting nothing, which is the
-        # worst of the three outcomes: the sender believes the message is gone.
-        print(
-            f"{msg_id} was typed into a pane; the bytes are already at the "
-            f"recipient's prompt and cannot be recalled. Send a correction.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    cursor = read_cursor(target.to)
-    if cursor is not None:
-        pos = {m.id: i for i, m in enumerate(all_msgs)}
-        cursor_pos = pos.get(cursor)
-        if cursor_pos is not None and pos[msg_id] <= cursor_pos:
-            print(
-                f"{msg_id} was already claimed by {target.to}; "
-                "a withdrawal now would hide it from you, not from them",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=1)
-
-    append(
-        Envelope.new(
-            from_=handle,
-            to=target.to,
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {msg_id}",
-            thread=target.thread,
-            meta={"withdraws": msg_id},
-            to_kind=target.to_kind,
-        )
-    )
-    # Deliberately NOT "it will not be delivered". The cursor read above and
-    # this append are not one atomic step, and nothing locks the recipient out
-    # in between: a concurrent drain can print and flush the body and only then
-    # advance its cursor, so a withdrawal that observed an un-advanced cursor
-    # can still land after delivery. The honest receipt names the boundary the
-    # tombstone actually guarantees - no drain from here on - rather than
-    # claiming an outcome this command cannot verify.
-    print(
-        f"withdrew {msg_id} (to {target.to}); no drain will deliver it from now on. "
-        "A drain already in flight when this ran may have delivered it: "
-        f"`fno agents peek {target.to}` to check."
+    _forward_mail(
+        [
+            "withdraw",
+            msg_id,
+            *(["--from-name", from_name] if from_name is not None else []),
+        ],
+        label="fno mail withdraw",
     )
 
 
@@ -4288,7 +4209,8 @@ def cmd_bus_ack(
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, team, sent, ack, and drain-self verbs' bodies live in the Rust
+    The hold, team, sent, withdraw, ack, and drain-self verbs' bodies live in
+    the Rust
     mail front now; Python owns transport only, the same split as the claims
     forward.
     """
