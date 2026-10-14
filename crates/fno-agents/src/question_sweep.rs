@@ -52,6 +52,12 @@ pub fn question_sweep(home: &AgentsHome, emitter: &crate::events::EventEmitter, 
 pub(crate) fn head_scoped(subject: &str) -> Option<(&str, &str)> {
     let subject = subject.trim();
     let split = subject.rfind([' ', '@'])?;
+    // A separator at the front leaves no family text: `@abcdef1` names a
+    // head and nothing else, and an empty family would collide every such
+    // subject on a node into one family.
+    if split == 0 {
+        return None;
+    }
     let (family, head) = (&subject[..split], &subject[split + 1..]);
     let lowercase_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
     let ok = (7..=40).contains(&head.len())

@@ -95,7 +95,7 @@ The two trace keys name the hop the question answers. `answers_ask:` is the ask 
 
 When its subject resolves, an open question closes by itself. Three rules, first match wins.
 
-- `pr-merged`: a node the question points at reads `merge_status: merged` for PR P. The subject names P: head-scoped, or `PR P` or `#P` in the text. This rule ignores `why_user`. The reason reads `pr-merged: PR P merged (node N)`.
+- `pr-merged`: a node the question points at reads `merge_status: merged` for PR P. The subject names P: `PR P` or `#P` in the text, head-scoped spellings included. A head-scoped ask about another PR never closes. This rule ignores `why_user`. The reason reads `pr-merged: PR P merged (node N)`.
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed` / `moot`: a node the question points at reads done or superseded. A user-only `why_user` closes `moot`, every other question closes `node-closed`. The reason reads `node-closed: N done` or `moot: N done`.
 

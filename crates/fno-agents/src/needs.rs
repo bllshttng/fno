@@ -1256,7 +1256,9 @@ impl HeldFold {
 /// `blocks` entry, and the first rule that holds wins:
 ///
 /// 1. `pr-merged` - a node in the set reads `merge_status: merged` for PR
-///    P and the subject is head-scoped or names P. Ignores `why_user`.
+///    P and the subject names P (`PR P` or `#P` in the text, so a
+///    head-scoped subject about another PR never closes). Ignores
+///    `why_user`.
 /// 2. `superseded` - the subject is head-scoped and another open question
 ///    with the same `node` field and family re-asked at a different head
 ///    later (ties break on the larger id). Ignores `why_user`.
@@ -1319,10 +1321,13 @@ pub(crate) fn settled_questions(
             nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
         }
         let mut reason = None;
-        // 1. pr-merged: the subject names the thing that resolved.
+        // 1. pr-merged: the subject names the thing that resolved. The
+        // head-scoped shape alone is not enough: a multi-ship node carries
+        // merge_status merged from its last ship while the next head's
+        // question is already live, and a head token names no PR.
         for n in &nodes {
             if let Some(pr) = facts.merged_prs.get(n) {
-                if head.is_some() || subject_names_pr(subject, *pr) {
+                if subject_names_pr(subject, *pr) {
                     reason = Some(format!("pr-merged: PR {pr} merged (node {n})"));
                     break;
                 }
@@ -2858,6 +2863,14 @@ mod tests {
             settled_questions(rules, &merged).is_empty(),
             "a taste ask that names no PR stays open"
         );
+        // A multi-ship node carries merge_status merged from its last ship
+        // while the next head's question is live: a subject naming another
+        // PR never closes on that stamp.
+        let next_head = r#"{"ts":"2026-07-03T02:00:03Z","type":"operator_question","source":"target","data":{"question_id":"q-next","question":"approve?","node":"x-live","blocks":["x-live"],"subject":"visual approval PR 9 at cccccccd","why_user":"taste"}}"#;
+        assert!(
+            settled_questions(next_head, &merged).is_empty(),
+            "a head-scoped ask about another PR stays open on a stale merged stamp"
+        );
     }
 
     #[test]
@@ -2910,6 +2923,22 @@ mod tests {
         ]
         .join("\n");
         assert!(settled_questions(&raw, &fold_facts(&[("x-aaaa", "in_progress")], &[])).is_empty());
+        // head_scoped's shape: the split spellings, the hex gate, and the
+        // no-family guard.
+        assert_eq!(
+            crate::question_sweep::head_scoped("visual approval PR 7 at 05ea5bcc"),
+            Some(("visual approval PR 7 at", "05ea5bcc"))
+        );
+        assert_eq!(
+            crate::question_sweep::head_scoped("merge-grant:footnote#3354@d2ad514dabc"),
+            Some(("merge-grant:footnote#3354", "d2ad514dabc"))
+        );
+        assert_eq!(crate::question_sweep::head_scoped("lead-hold-cap"), None);
+        assert_eq!(
+            crate::question_sweep::head_scoped("visual approval PR 12 at defaced"),
+            None
+        );
+        assert_eq!(crate::question_sweep::head_scoped("@abcdef1"), None);
     }
 
     #[test]
