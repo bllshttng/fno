@@ -1,11 +1,13 @@
 //! The `mail` front verbs on the Rust leg: the do-not-disturb hold, its
-//! release timer, the session seed-provenance leaf, the `team` broadcast,
-//! the outbound sent view, the unread listing, the ack leaf, and the
-//! drain-self leaf. Dispatch only; the verbs live in [hold],
-//! [seed_provenance], [team], [sent], [unread], [ack], and [drain_self].
+//! release timer, the pane-send renderer, the session seed-provenance leaf,
+//! the `team` broadcast, the outbound sent view, the unread listing, the
+//! ack leaf, and the drain-self leaf. Dispatch only; the verbs live in
+//! [hold], [pane_prepare], [seed_provenance], [team], [sent], [unread],
+//! [ack], and [drain_self].
 pub mod ack;
 pub mod drain_self;
 pub mod hold;
+pub mod pane_prepare;
 pub mod seed_provenance;
 pub mod sent;
 pub mod team;
@@ -23,12 +25,13 @@ pub fn run(rest: &[String]) -> i32 {
         "seed-provenance" => seed_provenance::run(&rest[1..]),
         "team" => team::run_team(&rest[1..]),
         "sent" => sent::run_sent(&rest[1..]),
+        "pane-prepare" => pane_prepare::run(&rest[1..]),
         "unread" => unread::run(&rest[1..]),
         "ack" => ack::run_ack(&rest[1..]),
         "drain-self" => drain_self::run_drain_self(&rest[1..]),
         other => {
             eprintln!(
-                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | seed-provenance | team | sent | unread | ack | drain-self)"
+                "fno-agents mail: unknown verb {other:?} (hold | dnd | hold-release | pane-prepare | seed-provenance | team | sent | unread | ack | drain-self)"
             );
 
             2
@@ -43,6 +46,7 @@ fn print_help() {
     println!("  seed-provenance                                 payload from FNO_SEED_PROV_* env");
     println!("  team --scope <all|leads|<role>|project:<p>> <message>");
     println!("  sent [--unclaimed] [--json] [--from-name LABEL]");
+    println!("  pane-prepare --session-id S --pane N [--harness H] [--style-exception R]");
     println!("  unread [--name NAME | -n NAME] [--json | -J]");
     println!("  ack MSG_ID [--name NAME]                        alias front: fno mail ack");
     println!("  drain-self [--json]");
