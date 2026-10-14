@@ -8146,6 +8146,8 @@ pub(super) fn empty_core() -> Core {
         journal: crate::spawn_journal::JournalCache::default(),
         launch_desk: Default::default(),
         branch_by_cwd: HashMap::new(),
+        project_by_cwd: HashMap::new(),
+        thread_pins: Vec::new(),
         tail_by_session: HashMap::new(),
         ctx_by_session: HashMap::new(),
         truth_by_name: HashMap::new(),
