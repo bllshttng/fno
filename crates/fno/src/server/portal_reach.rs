@@ -144,9 +144,10 @@ pub(super) fn rearm_held_portal_seats(
         if let Some(sid) = recorded_sid {
             core.portal_session_guards.insert(index, sid);
         }
+        let label = core.portal_channel_label(&row);
         core.write_restore_message(
             seat,
-            &format!("portal {index} ({row}, held across restart) - reach the row, or focus this pane, to resume"),
+            &format!("portal {index} ({label}, held across restart) - reach the row, or focus this pane, to resume"),
         );
         held += 1;
     }
@@ -1765,10 +1766,27 @@ impl Core {
             "stty -echo 2>/dev/null; exec tail -f /dev/null".to_string(),
         ];
         let pid = self.spawn_pane_cmd(&argv, rows, cols, cwd)?;
+        let label = self.portal_channel_label(channel);
         if let Some(entry) = self.panes.get_mut(&pid) {
-            entry.name = Some(channel.to_string());
+            entry.name = Some(label);
         }
         Ok(pid)
+    }
+
+    /// What a parked seat wears: the registry name of the one row the
+    /// channel key (an attach id or a name) answers, exited rows included.
+    /// The key stays in the argv where restore reads it; the operator reads
+    /// the name, never an attach id. A key no single row answers is its own
+    /// label.
+    pub(crate) fn portal_channel_label(&self, key: &str) -> String {
+        let mut hits = self
+            .agents
+            .iter()
+            .filter(|a| a.attach_id.as_deref() == Some(key) || a.name == key);
+        match (hits.next(), hits.next()) {
+            (Some(row), None) if !row.name.is_empty() => row.name.clone(),
+            _ => key.to_string(),
+        }
     }
 
     /// Spawn `env <wrapper> <shell>` on the first shell candidate that

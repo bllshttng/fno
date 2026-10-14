@@ -233,14 +233,15 @@ impl Core {
                 }
             }
             if let Ok(screen_pid) = self.spawn_parked_screen(&channel, rows, cols, &cwd) {
+                let label = self.portal_channel_label(&channel);
                 if self.swap_dead_seat(
                     pid,
                     sid,
                     ti,
                     Some(idx),
                     screen_pid,
-                    &channel,
-                    &format!("portal {idx}: no signal - {channel} ended"),
+                    &label,
+                    &format!("portal {idx}: no signal - {label} ended"),
                     "seat parked",
                     reason,
                 ) {

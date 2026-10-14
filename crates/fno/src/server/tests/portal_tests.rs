@@ -1807,6 +1807,22 @@ async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
     core.reap_pane(seat);
 }
 
+#[test]
+fn portal_channel_label_names_the_row_never_a_short_id() {
+    // A parked seat keyed by an attach id wears the row's registry name,
+    // exited rows included; a key no single row answers is its own label.
+    let mut core = empty_core();
+    let mut row = bg_row("t-x-6746-p2-glm", "/tmp/seen", Some("deadbee1"));
+    row.exited = true;
+    core.agents = vec![row];
+    assert_eq!(core.portal_channel_label("deadbee1"), "t-x-6746-p2-glm");
+    assert_eq!(
+        core.portal_channel_label("t-x-6746-p2-glm"),
+        "t-x-6746-p2-glm"
+    );
+    assert_eq!(core.portal_channel_label("cafef00d"), "cafef00d");
+}
+
 // ---- (x-d545) the remembered tab outlives its viewer ----
 
 #[test]
