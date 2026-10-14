@@ -287,6 +287,8 @@ pub struct ClaudeHome {
     /// A fixed `claude agents --json --all` answer. `None` reads the real
     /// listing.
     listing: Option<crate::claude_roster::ClaudeAgentsSnapshot>,
+    /// Session ids a live process argv names. `None` reads the process table.
+    live_sessions: Option<Vec<String>>,
 }
 
 /// One job's line in `claude agents --json --all`.
@@ -331,6 +333,7 @@ impl ClaudeHome {
             home: home.into(),
             extra_roots: Vec::new(),
             listing: None,
+            live_sessions: None,
         }
     }
 
@@ -339,6 +342,22 @@ impl ClaudeHome {
     pub fn with_listing(mut self, listing: crate::claude_roster::ClaudeAgentsSnapshot) -> Self {
         self.listing = Some(listing);
         self
+    }
+
+    /// Pin which session ids a live process argv names, for a test that
+    /// stages one.
+    pub fn with_live_sessions(mut self, sessions: Vec<String>) -> Self {
+        self.live_sessions = Some(sessions);
+        self
+    }
+
+    /// True when a live process argv contains the full session id: the
+    /// witness a resumed job carries after its registry pid goes stale.
+    pub fn session_live(&self, session_id: &str) -> bool {
+        match &self.live_sessions {
+            Some(sessions) => sessions.iter().any(|s| s == session_id),
+            None => crate::census::live_argv_contains(session_id),
+        }
     }
 
     /// What `claude agents --json --all`, read under `config_dir`, says
