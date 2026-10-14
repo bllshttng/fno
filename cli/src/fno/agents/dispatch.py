@@ -6899,6 +6899,10 @@ def _deliver_live(
             origin=mail.origin,
             to_session=mail.to_session,
             subject=mail.subject,
+            # Header naming must not ride the renderer's registry lookup: when
+            # the lookup misses, a codex sender renders as its full session id.
+            # The row is already resolved here; feed the fallback tier.
+            from_name=sender_entry.name if sender_entry is not None else None,
         )
 
     # Dual-run dispatch on the row's live ref (4a-G2): a mux-hosted agent gets
@@ -7726,6 +7730,9 @@ def dispatch_send(
                             node=mail_ctx.node, to=mail_ctx.to, id=mail_ctx.id,
                             from_session=mail_ctx.from_session,
                             to_session=mail_ctx.to_session, subject=mail_ctx.subject,
+                            from_name=(
+                                sender_entry.name if sender_entry is not None else None
+                            ),
                         ),
                         from_harness=from_harness, to_harness=existing.harness,
                         to_session=mail_ctx.to_session, from_session=from_session,
