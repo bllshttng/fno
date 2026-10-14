@@ -557,17 +557,25 @@ fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&s
 }
 
 /// The newest `fno_update_*` row in the machine's event store, or None. The
-/// store answers the typed window; with no row (or no store yet) --check
-/// reads None, as it does behind an empty journal today.
+/// window is strict: corrupt and typeless rows stay out (`of_types` would
+/// admit them), so a stray row committed after the last update event can
+/// never read as the outcome. With no row (or no store yet) --check reads
+/// None, as it does behind an empty journal today.
 fn last_update_event() -> Option<Value> {
     let rows = crate::event_store::query_events(
         &events_journal(),
-        &crate::event_store::EventQuery::of_types(&[
-            "fno_update_started",
-            "fno_update_built",
-            "fno_update_installed",
-            "fno_update_failed",
-        ]),
+        &crate::event_store::EventQuery {
+            types: [
+                "fno_update_started",
+                "fno_update_built",
+                "fno_update_installed",
+                "fno_update_failed",
+            ]
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect(),
+            ..Default::default()
+        },
     )
     .ok()?;
     let row = rows.last()?;
