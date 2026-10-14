@@ -297,15 +297,15 @@ fn effective_field(
     None
 }
 
-/// The native launch line behind `spawn --print` and the exec path - one
-/// fill, two readers. The ask carries the RAW overlays and the print's own
-/// cwd; the lane resolves HERE beside the inventory fold (axes admit
-/// exactly one declared claude row; no match degrades to the harness
-/// default and the content-addressed file). A routed print writes the REAL
-/// settings file first: the print is the rehearsal of the launch, so the
-/// line it names must exist on disk. A row launch inherits the harness
-/// default's optional set, filtered to the holes the override still
-/// carries, so overriding the argv cannot strand an optional hole.
+/// The native launch line behind `spawn --print`. The ask carries the RAW
+/// overlays and the print's own cwd; the lane resolves HERE beside the
+/// inventory fold (axes admit exactly one declared claude row; no match
+/// degrades to the harness default and the content-addressed file). A
+/// routed print writes the REAL settings file first: the print is the
+/// rehearsal of the launch, so the line it names must exist on disk. A row
+/// launch inherits the harness default's optional set, filtered to the
+/// holes the override still carries, so overriding the argv cannot strand
+/// an optional hole.
 fn resolve_print(payload: &Value) -> Result<Value, String> {
     let harness = payload.get("harness").and_then(Value::as_str).unwrap_or("");
     if harness.is_empty() {
