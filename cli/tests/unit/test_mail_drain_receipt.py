@@ -6,8 +6,10 @@ W1.2 (here): post-mint ``agent_send_failed`` emissions carry the minted
 consumer joining on ``msg_id`` reads those as pre-mint failures rather than as
 unaccounted messages (AC2-HP, AC3-ERR).
 
-W1.1 (added alongside): ``cmd_drain_self`` emits ``agent_mail_drained`` at the
-ack point and the dead-letter sweep prefers that marker over cursor inference.
+W1.1 (added alongside): the drain-self leaf (the Rust mail front) emits
+``agent_mail_drained`` at the ack point and the dead-letter sweep prefers that
+marker over cursor inference. Its drain-verb tests live in the Rust parity
+suite now; these keep the manual-ack receipt and the sweep honest.
 
 Mocking strategy mirrors cli/tests/agents/test_send.py: ``use_tmpdir`` +
 ``write_registry`` for a deterministic registered peer, and the claude
@@ -25,7 +27,7 @@ from fno.paths_testing import use_tmpdir
 
 
 class _Msg:
-    """Minimal stand-in for a bus envelope, matching the attrs cmd_drain_self reads."""
+    """Minimal stand-in for a bus envelope, matching the attrs cmd_bus_ack reads."""
 
     def __init__(self, *, id, from_, to, kind, ts, body):  # noqa: A002 -- test fixture
         self.id = id
@@ -148,105 +150,8 @@ def test_send_failed_pre_mint_carries_no_msg_id(runner, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# W1.1: a positive drain marker at the ack point, and the sweep that prefers it
+# W1.1: the dead-letter sweep prefers a positive drain marker
 # ---------------------------------------------------------------------------
-
-
-def _drain_setup(monkeypatch, msg):
-    """Wire cmd_drain_self to see exactly one unread message for cl-abcd1234."""
-    from fno import harness_identity
-    from fno.bus import cursor as cursor_mod
-
-    class _Ident:
-        harness = "claude"
-        session_id = "abcd1234"
-        disposition = "single"
-
-    monkeypatch.setattr("fno.agents.self_stamp.resolve_self_identity", lambda: _Ident())
-    monkeypatch.setattr(harness_identity, "canonical_handle", lambda sid: "cl-abcd1234")
-    monkeypatch.setattr(
-        cursor_mod, "scan_unread", lambda h: [msg] if h == "cl-abcd1234" else []
-    )
-    return cursor_mod
-
-
-def test_drain_emits_marker_with_msg_id(monkeypatch):
-    """AC1-HP: draining one message emits agent_mail_drained at the ack point,
-    carrying the msg_id, recipient, and sender so a sender-side join lands."""
-    from fno.agents import events as events_mod
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-drain1", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="hello",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-    monkeypatch.setattr(cursor_mod, "advance_cursor", lambda h, mid: True)
-    captured = _capture_events(monkeypatch)
-
-    mail_cli.cmd_drain_self(json_out=False)
-
-    markers = [e for e in captured if e["kind"] == events_mod.KIND_AGENT_MAIL_DRAINED]
-    assert markers, "no agent_mail_drained marker was emitted at the ack point"
-    assert markers[0]["msg_id"] == "m-drain1"
-    assert markers[0]["recipient"] == "cl-abcd1234"
-    assert markers[0]["sender"] == "alice"
-
-
-def test_drain_marker_is_at_ack_not_print(monkeypatch):
-    """The W1 trap: a crash at the ack boundary (advance_cursor raises) must
-    leave NO marker. drain-self is inject-before-ack, so the message re-surfaces
-    next wake; a marker written at print would claim delivery for a message that
-    is about to be delivered again."""
-    from fno.agents import events as events_mod
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-trap", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="hello",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-
-    def _crash(_h, _mid):
-        raise OSError("crash at the ack boundary")
-
-    monkeypatch.setattr(cursor_mod, "advance_cursor", _crash)
-    captured = _capture_events(monkeypatch)
-
-    with pytest.raises(OSError):
-        mail_cli.cmd_drain_self(json_out=False)
-
-    markers = [e for e in captured if e["kind"] == events_mod.KIND_AGENT_MAIL_DRAINED]
-    assert not markers, (
-        "a marker was emitted before the ack committed; a crash between print "
-        "and ack would leave a false receipt for a message that re-surfaces"
-    )
-
-
-def test_drain_marker_emit_failure_does_not_fail_drain(monkeypatch):
-    """AC9-ERR: a failed marker write is swallowed; the message is still printed
-    and acked. The observability gap degrades to the cursor fallback, never to a
-    delivery failure."""
-    from fno.agents import events as events_mod
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-ac9", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="hello",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-    advances: list[tuple] = []
-    monkeypatch.setattr(
-        cursor_mod, "advance_cursor", lambda h, mid: advances.append((h, mid)) or True
-    )
-
-    def _boom(kind, *, path=None, **data):  # noqa: ARG001
-        raise OSError("disk full")
-
-    monkeypatch.setattr(events_mod, "emit", _boom)
-
-    mail_cli.cmd_drain_self(json_out=False)  # must not raise
-    assert advances, "the cursor never advanced because the marker emit crashed the drain"
 
 
 def test_sweep_prefers_drain_marker_over_cursor(tmp_path, monkeypatch):

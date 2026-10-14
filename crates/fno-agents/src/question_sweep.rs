@@ -83,6 +83,7 @@ pub(crate) fn close_questions(
     home: &AgentsHome,
     ids: &[String],
     now: i64,
+    reason: &str,
     closed_by: &str,
 ) -> (Vec<String>, Vec<String>) {
     let store = crate::provider_cap::questions_path(home);
@@ -98,7 +99,7 @@ pub(crate) fn close_questions(
                 "data": {
                     "question_id": qid,
                     "answer": "",
-                    "reason": "node-closed",
+                    "reason": reason,
                     "closed_by": closed_by,
                 },
             }),
@@ -157,7 +158,15 @@ pub fn question_sweep_in(
     let legacy_ids = crate::fleet_task::legacy_question_ids(&raw);
     let mut tasks_closed = Vec::new();
     let mut legacy_moved = Vec::new();
-    let (closed, mut errors) = close_questions(home, &ids, now, "question-sweep");
+    // The reason split: a machine question closes node-closed; a user-only
+    // one closes moot (its subject resolved while the user still owned the
+    // answer). One fold, two records.
+    let (machine, moot) = crate::needs::partition_by_user_only(&ids, &raw);
+    let (mut closed, mut errors) =
+        close_questions(home, &machine, now, "node-closed", "question-sweep");
+    let (moot_closed, moot_errors) = close_questions(home, &moot, now, "moot", "question-sweep");
+    closed.extend(moot_closed);
+    errors.extend(moot_errors);
     if ids.is_empty() && task_ids.is_empty() && legacy_ids.is_empty() {
         let _ = emitter.emit(
             "question_sweep",
@@ -379,9 +388,10 @@ mod tests {
     }
 
     #[test]
-    fn spares_a_user_only_question_and_still_closes_a_machine_one() {
-        // The sweep's node-closed close spares a user-only why_user; only an
-        // answer or a withdrawal closes such a question.
+    fn closes_a_user_only_question_as_moot_and_a_machine_one_as_node_closed() {
+        // A resolved subject closes both; the reason records which side
+        // owned the answer: a user-only why_user closes moot, a machine
+        // question node-closed.
         let home = tmp_home("user-only");
         let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
         let user_row = format!(
@@ -396,10 +406,13 @@ mod tests {
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
         );
-        assert!(questions.contains("q-mach"), "{questions}");
         assert!(
-            !questions.contains("q-user"),
-            "the user-only question survives: {questions}"
+            questions.contains("q-user") && questions.contains(r#""reason":"moot""#),
+            "{questions}"
+        );
+        assert!(
+            questions.contains("q-mach") && questions.contains(r#""reason":"node-closed""#),
+            "{questions}"
         );
     }
 
