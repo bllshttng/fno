@@ -3667,8 +3667,7 @@ fn row_menu_rows() {
     assert!(dead.actions.contains(&super::MenuAction::Remove));
     assert!(!dead.actions.contains(&super::MenuAction::Stop));
 
-    // A workspace header is always menu-bearing now (US3: it offers Rename),
-    // even in `unified_rows_view`, which has no dead rows to clear.
+    // A workspace header is always menu-bearing (Rename), even with no dead rows.
     let mut v = unified_rows_view();
     let hdr = squad_header_at(&v, 1);
     assert!(v.open_row_menu(hdr, Anchor::Center));

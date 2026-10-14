@@ -8119,8 +8119,6 @@ fn node_id_shape_check() {
     assert!(!node_id_shaped("-aff6"), "empty prefix");
 }
 
-// -- Observer attach (x-6a14 web read-only bridge) --------------------------
-
 pub(super) fn empty_core() -> Core {
     let (out_tx, _out_rx) = mpsc::channel::<(u64, PaneChunk)>(8);
     let (exit_tx, _exit_rx) = mpsc::channel::<u64>(8);
