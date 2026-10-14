@@ -6318,6 +6318,12 @@ pub(crate) fn run_reconcile_sweep(
     // unknown liveness, where we refuse to declare death.
     let witness = crate::liveness_sweep::BgRoster::load();
     let roster_readable = witness.readable();
+    // Native adopt (x-53a4): the listing is in memory now, so a `claude --bg`
+    // row no registry row holds is born here, one beat after its launch.
+    // Runs on BOTH sweep modes: a birth is not probe inference (the
+    // write-less serve-only tick's constraint), and the row must exist by the
+    // next serve.
+    crate::native_bg_mint::mint_missing_native_bg(home, witness.listing(), emitter);
     let codex_index = crate::client_verbs::codex_rollout_index(None);
     let rollout_exists = |e: &RegistryEntry| -> bool {
         crate::codex_store::codex_rollout_exists(

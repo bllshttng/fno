@@ -320,6 +320,7 @@ pub mod model_price;
 pub mod name_draw;
 pub mod naming;
 pub mod native_adopt;
+pub mod native_bg_mint;
 pub mod needs;
 pub mod node_branch;
 pub mod node_origin;
