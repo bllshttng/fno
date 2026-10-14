@@ -74,7 +74,12 @@ pub(crate) fn mint_missing_native_bg(
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(&row.short_id);
-        if crate::session_report::find_row(&entries, "claude", session, None).is_some() {
+        // Two-key dedup, the same shape liveness_sweep's find() runs: a row
+        // keyed only by its short id still holds this session.
+        let held_by_short = entries.iter().any(|e| e.short_id == session);
+        if held_by_short
+            || crate::session_report::find_row(&entries, "claude", session, None).is_some()
+        {
             continue;
         }
         let transcript = crate::claude_drive::find_transcript(session);
@@ -113,18 +118,21 @@ pub(crate) fn mint_missing_native_bg(
                 .clone()
                 .or_else(|| cand.claude_session_uuid.clone())
                 .unwrap_or_else(|| cand.short_id.clone());
-            if crate::session_report::find_row(&r.entries, "claude", &session, None).is_some() {
+            let held_by_short = r.entries.iter().any(|e| e.short_id == session);
+            if held_by_short
+                || crate::session_report::find_row(&r.entries, "claude", &session, None).is_some()
+            {
                 continue;
             }
             let mut entry = cand;
             entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
             born.push(json!({
-                "name": entry.name,
-                "harness_session_id": entry.harness_session_id,
-                "cwd": entry.cwd,
-                "node": entry.node,
+                "name": entry.name.clone(),
+                "harness_session_id": entry.harness_session_id.clone(),
+                "cwd": entry.cwd.clone(),
+                "node": entry.node.clone(),
                 "pid": entry.pid,
-                "model": entry.model,
+                "model": entry.model.clone(),
             }));
             r.entries.push(entry);
         }
@@ -139,11 +147,14 @@ pub(crate) fn mint_missing_native_bg(
             };
             if e.node.is_none() {
                 e.node = Some(node.clone());
-                filled.push(json!({"name": e.name, "node": node}));
+                filled.push(json!({"name": e.name.clone(), "node": node}));
             }
         }
     });
-    if write.is_err() {
+    if let Err(e) = write {
+        // A failed birth write surfaces as an event, never a silent zero:
+        // the sweep's own report does not name this pass.
+        let _ = emitter.emit("native_bg_mint_failed", &json!({"error": e.to_string()}));
         return 0;
     }
     for b in &born {
@@ -410,15 +421,15 @@ mod tests {
                 "492ccda4-63ff-4736-a02a-8818f63c8b46",
                 &[json!({"type":"user","message":{"content":"/fno:target x-53a4"}}).to_string()],
             );
-            let saved = std::env::var_os("CLAUDE_PROJECTS_DIR");
-            std::env::set_var("CLAUDE_PROJECTS_DIR", tmp.path());
+            let saved = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR");
+            std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", tmp.path());
             assert_eq!(mint_missing_native_bg(home, &snapshot, &em), 0);
-            std::env::remove_var("CLAUDE_PROJECTS_DIR");
+            std::env::remove_var("FNO_CLAUDE_PROJECTS_DIR");
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 1);
             assert_eq!(registry.entries[0].node.as_deref(), Some("x-53a4"));
             match saved {
-                Some(v) => std::env::set_var("CLAUDE_PROJECTS_DIR", v),
+                Some(v) => std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", v),
                 None => {}
             }
         });
