@@ -516,7 +516,7 @@ pub(crate) fn send_mail(
     }
 }
 
-type Pass = fn(&AgentsHome, i64, crate::burn_watch::Runner<'_>) -> Result<(), String>;
+pub(crate) type Pass = fn(&AgentsHome, i64, crate::burn_watch::Runner<'_>) -> Result<(), String>;
 
 /// A 60s daemon arm with one pass in flight. The first check and the
 /// first-turn watch (`spawn_watch`) both tick on it.
