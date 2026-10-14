@@ -827,10 +827,10 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         None,
         None,
         |working| {
-            let Some(node) = find_node(working, &id_value) else {
+            let Some(idx) = find_node_index(working, &id_value) else {
                 return Ok(false);
             };
-            let Some(obj) = node.as_object_mut() else {
+            let Some(obj) = working[idx].as_object_mut() else {
                 return Ok(false);
             };
             obj.insert("priority".into(), Value::String(priority_value.clone()));
