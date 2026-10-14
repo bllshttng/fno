@@ -32,12 +32,15 @@
 
 mod completion;
 mod harness_command;
+mod pane_prepare;
 mod pane_submit;
 mod restore;
+mod workspace_origin;
 
 pub use self::harness_command::command;
+use self::pane_prepare::prepare_pane_bytes;
 use self::pane_submit::{pane_text, send_pane_bytes, submit_pane};
-use self::restore::workspace_restore;
+pub use self::workspace_origin::workspace;
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -1521,30 +1524,6 @@ pub fn stats(json: bool) -> i32 {
 // ---------------------------------------------------------------------------
 // `fno mux workspace prune` - reap dead-origin residue
 // ---------------------------------------------------------------------------
-
-/// `fno mux workspace <verb> ...`: the workspace-store maintenance family.
-/// Only `prune` and `restore` exist; a bare or unknown verb is usage. Tokens
-/// after the family verb carry verbatim, like `pane`/`block`.
-///
-/// The retired `fno mux squad` spelling is GONE: an unadvertised alias named
-/// by nothing outside its own test. `--squad` stays a hidden-deprecated flag
-/// alias beside the canonical `--workspace`. The user-facing/internal
-/// vocabulary split that leaves behind - `workspace` where a person types,
-/// `squad` in this crate's identifiers - is a decision, not an unfinished
-/// rename: renaming ~2900 internal sites buys no user-visible change. The
-/// remaining user-adjacent `squad` spellings, the key in the `--json`
-/// placement receipt and `~/.fno/squads.json`, ride the next change that
-/// bumps `PROTO_VERSION` or migrates the store for a real reason.
-pub fn workspace(
-    op: crate::cli_args::WorkspaceOp,
-    args: &[OsString],
-    env_session: Option<&str>,
-) -> i32 {
-    match op {
-        crate::cli_args::WorkspaceOp::Prune(_) => squad_prune(args),
-        crate::cli_args::WorkspaceOp::Restore(_) => workspace_restore(args, env_session),
-    }
-}
 
 /// `fno mux workspace restore`: one verb brings the stored
 /// workspaces' worker members back. Every live, non-tombstoned member
@@ -4900,179 +4879,6 @@ pub(crate) fn control_roundtrip(
     verb: ControlVerb,
 ) -> Result<ServerMsg, ControlError> {
     control_roundtrip_with_timeouts(sock, session, verb, CONTROL_TIMEOUT, CONTROL_REPLY_DEADLINE)
-}
-
-/// How long the envelope renderer gets. It reads the pane frame and runs the
-/// manifest engine over it, so it is a couple of subprocess hops, not a network
-/// call; a renderer that has not answered by now is wedged, and a wedged
-/// renderer must fail the send rather than release a bare paste.
-///
-/// Strictly GREATER than the child's own worst case, which is what makes the
-/// diagnostic honest. The nested pane read is bounded at 30s
-/// (`_MUX_SUBPROCESS_TIMEOUT_S`) and manifest-eval adds 2s, plus interpreter
-/// startup. At exactly 30s this side killed the child first and reported a
-/// wedged renderer for a slow pane, sending the reader to the wrong component.
-/// The child hits its own bound first now and says which hop was slow.
-const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
-
-/// Gate and envelope `bytes` for `session:pane` by shelling to the Python renderer (`fno agents mail pane-prepare`).
-///
-/// Fails closed on every arm: a missing renderer, a non-zero exit (the pane is
-/// showing an option prompt, hosts no registered agent, or the body cannot be
-/// attributed) or a timeout. There is deliberately no
-/// bare-paste fallback -- an unattributed send is the defect this exists to
-/// close, so falling back to one when the renderer is unavailable would restore
-/// it exactly when something is already wrong.
-///
-/// Re-invokes this binary by `current_exe`, which forwards non-mux verbs to the
-/// Python wheel. `FNO_BIN` overrides it for a test or a split install.
-fn prepare_pane_bytes(
-    session: &str,
-    pane: u64,
-    bytes: &[u8],
-    style_exception: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    use std::io::Write;
-
-    let exe = match std::env::var_os("FNO_BIN") {
-        Some(v) => PathBuf::from(v),
-        None => std::env::current_exe()
-            .map_err(|e| format!("cannot locate the fno binary to render the envelope: {e}"))?,
-    };
-    let mut command = crate::process_admission::std_command(&exe);
-    command.args([
-        "agents",
-        "mail",
-        "pane-prepare",
-        "--session-id",
-        session,
-        "--pane",
-        &pane.to_string(),
-    ]);
-    if let Some(reason) = style_exception.filter(|r| !r.trim().is_empty()) {
-        // The mail verbs' reasoned one-send exception, same flag on this lane.
-        command.arg("--style-exception").arg(reason);
-    }
-    let child = command
-        // Hand the child the path we resolved. It runs a nested `mux pane read`
-        // for the prompt gate, and that hop resolves `FNO_BIN` or a bare `fno`
-        // on PATH. We are here via `current_exe` precisely because `fno` may not
-        // BE on PATH, so leaving this unset made the gate unable to read the
-        // frame on exactly those installs, and every non-raw send refused as
-        // "frame unreadable".
-        .env("FNO_BIN", &exe)
-        .env("FNO_MAIL_FENCE", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = crate::process_admission::std_spawn(child).map_err(|e| {
-        format!(
-            "envelope renderer ({}) could not start: {e}. Refusing to type an \
-                 unattributed payload; pass --raw for a genuine keystroke.",
-            exe.display()
-        )
-    })?;
-    // The write runs on its own thread, so it cannot deadlock against a child
-    // that starts answering before it has read everything. Dropping the handle
-    // at the end of the closure closes the pipe, which is the renderer's EOF.
-    // A renderer that refuses reads nothing and exits, closing the pipe first;
-    // that EPIPE is not the failure, the exit code below is, so it is swallowed
-    // here and left to the exit arm to explain.
-    let payload = bytes.to_vec();
-    let writer = child.stdin.take().map(|mut stdin| {
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(&payload);
-        })
-    });
-    let waited = wait_with_deadline(child, PANE_PREPARE_TIMEOUT);
-    if let Some(handle) = writer {
-        let _ = handle.join();
-    }
-    let (exit, rendered, diagnostics) = waited?;
-    if !exit.success() {
-        let detail = String::from_utf8_lossy(&diagnostics).trim().to_string();
-        let detail = if detail.is_empty() {
-            format!("renderer exited {exit}")
-        } else {
-            detail
-        };
-        return Err(format!("{detail} (pass --raw to type keystrokes instead)"));
-    }
-    Ok(rendered)
-}
-
-/// Wait for `child`, killing it once `budget` elapses. `Child::wait_with_output`
-/// has no timeout of its own, and a renderer that never exits hangs the send
-/// forever -- a hang is a worse failure than a refusal, because nothing surfaces
-/// it.
-///
-/// Both pipes are drained on their own threads FOR THE WHOLE WAIT, not after it.
-/// The renderer's stdout is the wrapped body, so it is as large as the payload,
-/// and `pane send --stdin` has no body cap of its own. A poll loop that only
-/// calls `try_wait` leaves stdout unread; once it fills the pipe buffer the child
-/// blocks on write, never exits, and every large payload fails at the deadline
-/// with a message blaming a renderer that was working fine.
-///
-/// Returns the exit result plus both drained streams, rather than
-/// `process::Output`: naming that struct's exit field would put a bare
-/// plan-frontmatter identifier in this file, which a repo ratchet counts to keep
-/// readiness classification out of Rust. The tuple is what the one caller wants
-/// anyway.
-fn wait_with_deadline(
-    mut child: std::process::Child,
-    budget: Duration,
-) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>), String> {
-    use std::io::Read;
-
-    let mut out_pipe = child
-        .stdout
-        .take()
-        .ok_or_else(|| "envelope renderer stdout unavailable".to_string())?;
-    let mut err_pipe = child
-        .stderr
-        .take()
-        .ok_or_else(|| "envelope renderer stderr unavailable".to_string())?;
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = out_pipe.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + budget;
-    let exit = loop {
-        match child.try_wait() {
-            Ok(Some(exit)) => break exit,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // The readers end when the killed child's pipes close, so
-                    // joining here cannot outlive the kill.
-                    let _ = out_reader.join();
-                    let _ = err_reader.join();
-                    return Err(format!(
-                        "envelope renderer did not answer within {}s; refusing to type \
-                         an unattributed payload (pass --raw for a genuine keystroke)",
-                        budget.as_secs()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(e) => return Err(format!("envelope renderer wait failed: {e}")),
-        }
-    };
-    let rendered = out_reader
-        .join()
-        .map_err(|_| "envelope renderer stdout reader panicked".to_string())?;
-    let diagnostics = err_reader
-        .join()
-        .map_err(|_| "envelope renderer stderr reader panicked".to_string())?;
-    Ok((exit, rendered, diagnostics))
 }
 
 /// `fno mux block pipe --from <pane> --to <pane> [--block last|<seq>] [--json]

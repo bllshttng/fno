@@ -493,8 +493,7 @@ pub(super) fn apply_same_model_guard(
 /// cli/tests/config/optional_apps_default.json). Without a shared default, this
 /// side resolved empty while `fno do pr status` matched two hardcoded logins,
 /// so a worker following the remedy one printed was refused by the other.
-pub(super) const DEFAULT_OPTIONAL_APPS: [&str; 2] =
-    ["gemini-code-assist", "chatgpt-codex-connector"];
+pub(super) const DEFAULT_OPTIONAL_APPS: [&str; 1] = ["chatgpt-codex-connector"];
 
 /// The OPTIONAL reviewer logins (config.review.optional_apps): honored-if-
 /// present but never required. Their blocking findings hold the gate, but their

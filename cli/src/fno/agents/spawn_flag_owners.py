@@ -70,7 +70,7 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
     "--recorded-provider": FlagOwner(FNO, "machine-recorded vendor for recovery; never routes"),
     "--once": FlagOwner(FNO, "selects the create+exchange+teardown lifecycle"),
     "--substrate": FlagOwner(FNO, "selects the argv builder itself"),
-    "--headless": FlagOwner(FNO, "substrate shortcut; wins over --substrate"),
+    "--print": FlagOwner(FNO, "renders the lane's native line; launches nothing"),
     "--sandbox-write-policy": FlagOwner(FNO, "composes the one settings file; refused on panes"),
     "--cwd": FlagOwner(FNO, "launch-dir policy; pairs with --fresh/--here"),
     "--timeout": FlagOwner(FNO, "per-spawn budget fno enforces"),
@@ -143,5 +143,5 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
 }
 
 #: Growth ratchet, measured at merge: 45 flags (44 + --mux-session, the
-#: dispatch-next lane pin).
+#: dispatch-next lane pin; change 6 trades --headless for --print).
 SPAWN_FLAG_CAP = 46

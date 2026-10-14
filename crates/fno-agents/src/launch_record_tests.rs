@@ -104,6 +104,7 @@ fn a_dispatcher_writes_a_record_the_child_claims() {
             name: Some("w9".into()),
             node: Some("x-ab12".into()),
             slot: Some("g2".into()),
+            provider: None,
             cwd: cwd.clone(),
         },
         "lead-9",

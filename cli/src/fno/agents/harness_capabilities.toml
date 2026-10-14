@@ -148,6 +148,16 @@ headless = "argv-add-dir"
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir", "launch_role", "agent", "tools", "deny_tools"]
 passthrough = ["*"]
 
+# THE NATIVE BG LINE. The lane's launch argv, filled by spawn-overlay's
+# `print` kind and by the exec path - one renderer, two readers. A `{hole}`
+# token takes the spawn's value; an `optional` hole whose value is empty
+# drops its hole token AND the flag before it, so a lane with no route,
+# model or effort still renders a legal argv. A `[[routing.models]]` row may
+# override the argv with its own `launch` list, validated by the same rules.
+[harness.claude.launch]
+argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
+optional = ["settings", "model", "effort", "permission_mode"]
+
 [harness.claude.permission_response.allow_once]
 supported = true
 rule_ids = ["permission_prompt"]
@@ -1950,15 +1960,26 @@ blocked = "none"
 state = "supported"
 via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 
-# agy, opencode and pi push presence only: one `fno-agents report --kind
-# session` at session start, so the registry knows the session id and
-# transcript. No per-turn push reaches `fno-agents hook session-state`
-# (hook/adapter/ has claude and codex only), so these rows read their turn
-# state from the screen scrape and never observe model, effort or posture.
+# agy pushes per-turn state, not only the session-start presence report:
+# hook/adapter/agy.rs normalizes agy's payloads and the two event-pinned
+# shims (agy-session-state-pre-invocation.sh, agy-session-state-stop.sh)
+# feed the entry, so the row reads inside-leg state instead of the screen
+# scrape. agy exposes no permission-prompt event, so blocked stays "none"
+# and the screen backstop keeps the row. opencode and pi push presence
+# only: one `fno-agents report --kind session` at session start, so the
+# registry knows the session id and transcript, and their rows still read
+# their turn state from the screen scrape.
 [harness.agy.hooks.session_state]
 state = "supported"
-via = ["hooks/agy-session-report.sh", "crates/fno-agents/src/agy_hooks.rs"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/adapter/agy.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# PreInvocation is agy's turn start (it fires before each model call), Stop
+# ends the execution loop. agy exposes no permission-prompt event, so
+# blocked stays "none"; the payload contract names no model or effort
+# field, so the row's served axes ride only when a payload carries them.
+[harness.agy.hooks.session_state.wiring]
+events = { PreInvocation = "working", Stop = "done" }
+blocked = "none"
 
 [harness.opencode.hooks.session_state]
 state = "supported"

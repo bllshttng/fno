@@ -128,7 +128,7 @@ enum Role {
     /// location instead. Same carry-verbatim shape; `mux_cli::view`
     /// parses.
     MuxView(Vec<OsString>),
-    /// `mux workspace prune|restore ...`: workspace-store maintenance.
+    /// `mux workspace prune|restore|origin ...`: workspace-store maintenance.
     MuxWorkspace(fno::cli_args::WorkspaceOp),
     /// `mux shell-init <zsh|bash> [--json]`: print the OSC 133 shell-integration
     /// snippet (v6). `None` / an unsupported shell is an error in the verb.
@@ -181,6 +181,21 @@ enum Role {
     /// `fno agents claim backlog|export ...`: the shared-store verbs, run
     /// by `fno-agents claim`.
     ClaimStore(Vec<OsString>),
+    /// `fno do review resolve-level ...`: the sizing leaf, exec'd through
+    /// the sibling fno-agents `review-level` door. The rest of the review
+    /// tree stays Python until its port.
+    ReviewLevel(Vec<OsString>),
+    /// `fno do review <tail>` with no leaf: the assurance root, exec'd
+    /// through the sibling fno-agents `review-policy assess` door. The
+    /// leaves keep their role: classify/post-dispositions/invocations stay
+    /// Python (resolve-level is native above), and --help forwards so typer
+    /// still lists them.
+    ReviewPolicyAssess(Vec<OsString>),
+    /// `fno review <tail>`: the deprecated root alias, its move notice
+    /// printed on stderr before the same exec. Byte-identical to the line
+    /// `verb_moves` printed; the stream it printed to (stderr) and the
+    /// composition with the record are golden-frozen.
+    ReviewPolicyAlias(Vec<OsString>),
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
@@ -200,6 +215,23 @@ enum Role {
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
+    /// `fno agents mail pane-prepare`: the pane-send renderer. No aliases,
+    /// so the carried tail is everything after the verb name.
+    MailPanePrepare(Vec<OsString>),
+    /// `fno agents mail seed-provenance`: the session seed sidecar,
+    /// re-wrapped for attribution. Hidden verb; the harness invokes it,
+    /// never a typist. The verb and its tail pass through byte-verbatim.
+    MailSeedProvenance(Vec<OsString>),
+    /// `fno agents mail drain-self`: the drain-self leaf. The verb and its
+    /// tail pass through byte-verbatim.
+    MailDrainSelf(Vec<OsString>),
+    /// `fno agents mail team`: the fleet broadcast. The verb and its tail
+    /// pass through byte-verbatim to the native leaf, which vets the body
+    /// and relays through `announce send`.
+    MailTeam(Vec<OsString>),
+    /// `fno agents mail unread`: the native cursor-bounded unread listing.
+    /// The verb and its tail pass through byte-verbatim.
+    MailUnread(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -328,6 +360,50 @@ fn classify_claim_store(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[2..].to_vec())
 }
 
+/// `fno do review resolve-level ...`: the sizing leaf. The literal
+/// three-token prefix claims it here so it never reaches the Python
+/// forward as a near-miss of `fno do review classify`.
+fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "resolve-level"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review <tail>` and the root alias `fno review <tail>`: the
+/// assurance root claims native when the tail names no leaf and no help
+/// request. Only the FIRST tail token names a leaf (a leaf spelled later is
+/// a flag value, exactly as typer reads it); --help/-h anywhere forwards so
+/// typer keeps rendering the leaf listing.
+fn classify_review_root(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
+    if args.is_empty() {
+        return None;
+    }
+    let (alias, tail): (bool, &[OsString]) =
+        match (args[0].to_str()?, args.get(1).and_then(|a| a.to_str())) {
+            ("do", Some("review")) => (false, args.get(2..)?),
+            ("review", _) => (true, args.get(1..)?),
+            _ => return None,
+        };
+    if matches!(
+        tail.first().and_then(|a| a.to_str()),
+        Some("classify" | "post-dispositions" | "invocations" | "resolve-level")
+    ) {
+        return None;
+    }
+    if tail
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+    {
+        return None;
+    }
+    Some((alias, tail.to_vec()))
+}
+
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     let (verb, tail): (&str, &[OsString]) = if args.len() >= 3
         && args[0].to_str() == Some("agents")
@@ -341,7 +417,28 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
-        "hold" | "dnd" | "hold-release" => Some(Role::MailHold(
+        "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "pane-prepare" => Some(Role::MailPanePrepare(tail.to_vec())),
+        "drain-self" => Some(Role::MailDrainSelf(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "seed-provenance" => Some(Role::MailSeedProvenance(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "team" => Some(Role::MailTeam(
+            std::iter::once(OsString::from(verb))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "unread" => Some(Role::MailUnread(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
                 .collect(),
@@ -385,6 +482,16 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_claim_store(args) {
         return Role::ClaimStore(rest);
+    }
+    if let Some(rest) = classify_review_level(args) {
+        return Role::ReviewLevel(rest);
+    }
+    if let Some((alias, rest)) = classify_review_root(args) {
+        return if alias {
+            Role::ReviewPolicyAlias(rest)
+        } else {
+            Role::ReviewPolicyAssess(rest)
+        };
     }
     if let Some(rest) = classify_agents_verb(args, "top") {
         return Role::AgentsTop(rest);
@@ -650,10 +757,31 @@ fn main() {
             &rest,
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail hold|dnd|hold-release",
+            "fno agents mail hold|dnd|hold-release|sent|ack",
             &["mail"],
             &rest,
         )),
+        Role::MailPanePrepare(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail pane-prepare",
+            &["mail"],
+            &rest,
+        )),
+        Role::MailDrainSelf(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail drain-self",
+            &["mail"],
+            &rest,
+        )),
+        Role::MailSeedProvenance(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail seed-provenance",
+            &["mail"],
+            &rest,
+        )),
+        Role::MailTeam(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
+        }
+        Role::MailUnread(rest) => {
+            std::process::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
+        }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
             &["census", "--workers"],
@@ -666,6 +794,24 @@ fn main() {
         )),
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
+        }
+        Role::ReviewLevel(rest) => std::process::exit(fno_agents_exec(
+            "fno do review resolve-level",
+            &["review-level"],
+            &rest,
+        )),
+        Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
+            "fno do review",
+            &["review-policy", "assess"],
+            &rest,
+        )),
+        Role::ReviewPolicyAlias(rest) => {
+            eprintln!("fno review is now fno do review");
+            std::process::exit(fno_agents_exec(
+                "fno do review",
+                &["review-policy", "assess"],
+                &rest,
+            ))
         }
         Role::MailViewRenamed => {
             eprintln!("fno agents mail view was renamed: use fno agents mail show");
@@ -855,6 +1001,35 @@ mod tests {
             decide_role(&os(&["mail", "view"]), false),
             Role::MailViewRenamed
         ));
+        // The team broadcast claims its verb on both mounts, tail included.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "team", "--scope", "all", "hi"]),
+                false
+            ),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "team", "--scope", "all", "hi"]), false),
+            Role::MailTeam(os(&["team", "--scope", "all", "hi"]))
+        );
+        // The sent view claims its verb on both mounts, routed through the
+        // native hold leaf's exec path.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "sent", "--unclaimed"]), false),
+            Role::MailHold(os(&["sent", "--unclaimed"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "sent", "--json"]), false),
+            Role::MailHold(os(&["sent", "--json"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "unread", "--name", "worker"]),
+                false
+            ),
+            Role::MailUnread(os(&["unread", "--name", "worker"]))
+        );
         assert_eq!(
             decide_role(&os(&["mail", "send", "a", "b"]), false),
             Role::Forward
@@ -862,6 +1037,94 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "mail", "send", "a", "b"]), false),
             Role::Forward
+        );
+        // The drain-self leaf rides the same byte-verbatim mount.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "drain-self", "--json"]), false),
+            Role::MailDrainSelf(os(&["drain-self", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "drain-self"]), false),
+            Role::MailDrainSelf(os(&["drain-self"]))
+        );
+        // The hidden seed verb claims on both mounts and carries its tail
+        // with the verb name re-attached, byte-verbatim.
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "seed-provenance"]), false),
+            Role::MailSeedProvenance(os(&["seed-provenance"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["mail", "seed-provenance", "--registry", "r.json"]),
+                false
+            ),
+            Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
+        );
+    }
+
+    #[test]
+    fn review_resolve_level_claims_the_leaf_prefix() {
+        // The `do` tree otherwise falls through to the Python forward; the
+        // sizing leaf is claimed by its literal three-token prefix.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
+            Role::ReviewLevel(os(&["high"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level"]), false),
+            Role::ReviewLevel(os(&[]))
+        );
+        // Sibling verbs under `fno do review` stay Python.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify"]), false),
+            Role::Forward
+        );
+    }
+
+    #[test]
+    fn review_policy_root_claims_the_no_leaf_tail() {
+        // The no-leaf tail claims native; the root alias claims the same
+        // door under its notice-carrying variant.
+        assert_eq!(
+            decide_role(
+                &os(&["do", "review", "--assess-assurance", "--policy-size", "L"]),
+                false
+            ),
+            Role::ReviewPolicyAssess(os(&["--assess-assurance", "--policy-size", "L"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review"]), false),
+            Role::ReviewPolicyAssess(os(&[]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["review", "--assess-assurance", "--policy-size", "M"]),
+                false
+            ),
+            Role::ReviewPolicyAlias(os(&["--assess-assurance", "--policy-size", "M"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["review"]), false),
+            Role::ReviewPolicyAlias(os(&[]))
+        );
+        // Leaves keep their role: resolve-level is native above, the others
+        // forward, and --help forwards so typer keeps listing them.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
+            Role::ReviewLevel(os(&["high"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify", "--attest"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--help"]), false),
+            Role::Forward
+        );
+        // A leaf spelled later is a flag value, not a subcommand: claimed.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "--risk-surface", "classify"]), false),
+            Role::ReviewPolicyAssess(os(&["--risk-surface", "classify"]))
         );
     }
 

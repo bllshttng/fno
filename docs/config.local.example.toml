@@ -42,7 +42,7 @@ enabled = true           # already the code default; shown for awareness
 # Per-project override of the completion review gate (falls back to global /
 # code default when absent). Only set what differs for THIS repo.
 # [review]
-# github_apps = ["gemini-code-assist"]        # App-bot logins that MUST review before 'done'
+# github_apps = ["chatgpt-codex-connector"]   # App-bot logins that MUST review before 'done'
 #                                             #   (empty list = no hard gate; PR + CI only)
 # optional_apps = ["chatgpt-codex-connector"] # honored-if-present: counted if it reviews, never waited on
 # peers = ["codex", "gemini"]                 # gate on one clean, head-pinned cross-model local verdict

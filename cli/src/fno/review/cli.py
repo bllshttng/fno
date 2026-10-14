@@ -1,8 +1,6 @@
 """``fno do review`` - the review family's CLI surface.
 
-The panel stays the default invocation (``fno do review`` with no
-subcommand runs it unchanged, via the callback registration in
-``fno.do_cli``); this module adds the subcommands the attestation record
+This module adds the subcommands the attestation record
 needs. ``classify`` is the one shell entry point producers use to turn a
 findings payload into the bounded record an event carries, so the rule is
 never reimplemented in bash.
@@ -28,7 +26,6 @@ from fno.review.findings import (
 
 review_app = typer.Typer(
     name="review",
-    invoke_without_command=True,
     add_completion=False,
 )
 
@@ -721,25 +718,3 @@ def invocations() -> None:
             typer.echo(f"  settled {row['invocation_id']} at {str(row.get('head'))[:9]}")
         else:
             typer.echo(f"  refused {row['invocation_id']}: {row.get('reason')}")
-
-
-@review_app.command("resolve-level", hidden=True)
-def resolve_level(
-    level: str = typer.Argument(
-        None,
-        help="Explicit level token (low medium high xhigh max); omit to size from the diff.",
-    ),
-    provider: str = typer.Option(
-        None, "--provider", help="Route provider scope; defaults to the session stamp."
-    ),
-) -> None:
-    """Resolve a review level to (band, effort, model); the seam the skill,
-    the tests and the invocation event all call."""
-    from fno.review_level import resolve_review_level
-
-    resolution = resolve_review_level(
-        level.strip().lower() if level else None,
-        provider=provider,
-        project_root=Path.cwd(),
-    )
-    sys.stdout.write(json.dumps(resolution.as_dict(), ensure_ascii=False) + "\n")

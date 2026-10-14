@@ -33,6 +33,11 @@ pub struct Launch {
     pub node: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// The lane this launch bills (a routing row's provider axis), carried
+    /// by a dispatcher that already resolved the lane. A typed native line
+    /// names none and holds no lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub cwd: String,
 }
 
@@ -386,6 +391,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(args, &["-n", "--name"]),
                 node: seed_node(pos.last()),
                 slot: None,
+                provider: None,
                 cwd: here.clone(),
             })
         }
@@ -426,6 +432,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         name: None,
                         node: seed_node(pos.last()),
                         slot: None,
+                        provider: None,
                         cwd,
                     })
                 }
@@ -446,6 +453,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                         name: None,
                         node: seed_node(pos_all.last()),
                         slot: None,
+                        provider: None,
                         cwd,
                     })
                 }
@@ -473,6 +481,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(rest, &["--name"]),
                 node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
                 slot: None,
+                provider: None,
                 cwd,
             })
         }
@@ -494,6 +503,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 name: flag_value(args, &["-n", "--name", "--title"]),
                 node: seed_node(seed.as_ref()),
                 slot: None,
+                provider: None,
                 cwd: here.clone(),
             })
         }
@@ -666,6 +676,28 @@ pub fn claimed_edge(root: &Path, session_id: &str) -> Option<Record> {
         return None;
     }
     read_record(&claimed_dir(root).join(format!("{session_id}.json")))
+}
+
+/// The names of pending records holding `provider`'s lane: a dispatcher's
+/// record stands between the gate pass and the session report, where no
+/// registry row exists to count, so the record itself is the seat. Records
+/// past the claim window have lapsed (the prune deletes them on the next
+/// write) and hold nothing; a record with no provider rides no lane.
+pub fn pending_for_provider(root: &Path, provider: &str, now_ms: i64) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(pending_dir(root)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| read_record(&entry.path()))
+        .filter(|record| {
+            record.launch.provider.as_deref() == Some(provider)
+                && now_ms - record.launched_at_ms <= WINDOW_MS
+        })
+        .filter_map(|record| record.launch.name)
+        .collect();
+    names.sort();
+    names
 }
 
 /// Claim the one pending record this child is the launch of. A record whose

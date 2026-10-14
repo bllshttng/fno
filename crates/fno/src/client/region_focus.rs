@@ -838,6 +838,7 @@ pub(super) async fn mouse_pre_pass(
                         row: prow,
                         col: pcol,
                         kind: rep.kind,
+                        alt: rep.alt,
                     },
                 },
             )

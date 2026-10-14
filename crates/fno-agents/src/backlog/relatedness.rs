@@ -3,7 +3,7 @@
 //! warning, the rollup candidate ladder, and the fold gate's candidate pool.
 //! Pure functions over row values; the sidecar read is the only I/O.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -254,6 +254,49 @@ pub fn similar_nodes(
     });
     scored.truncate(k);
     scored
+}
+
+/// The `relatedness build` fold over every live pair (graph/relatedness.py
+/// `build_map`): rollup scoring (epic bonus ON, the lower MIN_SCORE floor),
+/// zero-signal pairs absent, top-K per node best-first. Distinct from the
+/// filing-time `similar_nodes` net: the map is the recall surface readers
+/// replay, so it keeps the epic-sibling edges the dedup net drops.
+pub(crate) fn build_map(entries: &[Value], k: usize) -> BTreeMap<String, Vec<Value>> {
+    let nodes: Vec<(String, &Value, BTreeSet<String>)> = entries
+        .iter()
+        .filter_map(|e| id_of(e).map(|i| (i.to_string(), e, tokens(e))))
+        .collect();
+    let mut result: BTreeMap<String, Vec<Value>> = nodes
+        .iter()
+        .map(|(id, _, _)| (id.clone(), Vec::new()))
+        .collect();
+    for i in 0..nodes.len() {
+        for j in (i + 1)..nodes.len() {
+            let (id_a, a, ta) = &nodes[i];
+            let (id_b, b, tb) = &nodes[j];
+            let (s, reason) = score(a, b, ta, tb, true, MIN_SCORE);
+            if s <= 0.0 {
+                continue;
+            }
+            let entry = || json!({"id": id_b, "score": s, "reason": reason});
+            result.get_mut(id_a).expect("seeded").push(entry());
+            let mirror = || json!({"id": id_a, "score": s, "reason": reason});
+            result.get_mut(id_b).expect("seeded").push(mirror());
+        }
+    }
+    for list in result.values_mut() {
+        // Stable sort: ties keep pair-scan order, matching the wheel's
+        // score-only reverse sort.
+        list.sort_by(|a, b| {
+            let (sa, sb) = (
+                a.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+                b.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+            );
+            sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        list.truncate(k);
+    }
+    result
 }
 
 /// Live filing candidates from the last sidecar plus today's delta. A missing

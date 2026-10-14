@@ -144,9 +144,10 @@ pub(super) fn rearm_held_portal_seats(
         if let Some(sid) = recorded_sid {
             core.portal_session_guards.insert(index, sid);
         }
+        let label = core.portal_channel_label(&row);
         core.write_restore_message(
             seat,
-            &format!("portal {index} ({row}, held across restart) - reach the row, or focus this pane, to resume"),
+            &format!("portal {index} ({label}, held across restart) - reach the row, or focus this pane, to resume"),
         );
         held += 1;
     }
@@ -209,17 +210,32 @@ pub(super) fn fill_held_portal_at(
         }
     };
     // A recorded session id binds the seat to the row's incarnation at
-    // capture. A different full id under the same key is a DIFFERENT
-    // thread wearing a familiar label: refuse, keep the seat held, and
-    // name both ids - no pane ever renders B under A's label.
-    if let Some(recorded) = core.portal_session_guards.get(&idx) {
-        if row.harness_session_id.as_deref() != Some(recorded.as_str()) {
-            core.notice_all(format!(
-                "portal {idx} fill refused: stored session {} resolved to {} under the same key; seat stays held",
-                recorded,
-                row.harness_session_id.as_deref().unwrap_or("(unreadable)")
-            ));
-            return Some(Flow::Continue);
+    // capture. A resume mints a new id under the same row, and the row's own
+    // lineage names the old one: that is the same worker, so the fill
+    // follows the key. A different full id with no lineage to the recorded
+    // one (or a fork of it) is a DIFFERENT thread wearing a familiar label:
+    // refuse, keep the seat held, and name both ids - no pane ever renders
+    // B under A's label.
+    if let Some(recorded) = core.portal_session_guards.get(&idx).cloned() {
+        let current = row.harness_session_id.clone();
+        if current.as_deref() != Some(recorded.as_str()) {
+            // Only a predecessor is succession: `related_session_id` is a
+            // parked fork, a different thread.
+            let resumed = row.forked_from_session_id.as_deref() != Some(recorded.as_str())
+                && row.predecessor_session_ids.contains(&recorded);
+            let shown = current.as_deref().unwrap_or("(unreadable)");
+            if !resumed {
+                core.notice_all(format!(
+                    "portal {idx} fill refused: stored session {recorded} resolved to {shown} under the same key; reach the row again to retune this portal; seat stays held"
+                ));
+                return Some(Flow::Continue);
+            }
+            let note = format!(
+                "portal {idx}: {} resumed as {}; following",
+                row.name,
+                shown.get(..8).unwrap_or(shown)
+            );
+            core.notice_all(note);
         }
     }
     core.portal_session_guards.remove(&idx);
@@ -691,6 +707,9 @@ impl Core {
         } else {
             row.cwd.clone()
         };
+        // A staged verdict carries the plan's own time; no staged verdict
+        // on a Drive row means the argv needed no plan.
+        let staged_plan_ms = self.reentry_verdict.as_ref().map(|v| v.plan_ms);
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
         let argv = match tier {
@@ -713,16 +732,31 @@ impl Core {
             Reach::Follow => peek_argv(&row.name),
             Reach::Locate => locate_argv(&row),
         };
-        let (rows, cols) = self
-            .clients
-            .iter()
-            .find(|c| c.id == client_id)
-            .map(|c| c.dims)
-            // A passive observer's (0,0) sentinel must never size a pane -
-            // fall back to the view rect (the control-path reach rides an
-            // observer client).
-            .filter(|(r, c)| *r > 0 && *c > 0)
-            .unwrap_or((vp.rows, vp.cols));
+        let mechanism = match (&tier, staged_plan_ms) {
+            (Reach::Drive, None) => "attach-direct",
+            (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
+                "relaunch"
+            }
+            (Reach::Drive, Some(_)) => "attach-plan",
+            (Reach::Follow, _) => "follow",
+            (Reach::Locate, _) => "locate",
+        };
+        let plan_ms = staged_plan_ms.unwrap_or(0);
+        // The viewer spawns at the tab rect it will fill, so the harness
+        // draws its first frame at the final size; the client terminal is
+        // the fallback for an empty rect. A passive observer's (0,0)
+        // sentinel must never size a pane (the control-path reach rides an
+        // observer client).
+        let (rows, cols) = if vp.rows > 0 && vp.cols > 0 {
+            (vp.rows, vp.cols)
+        } else {
+            self.clients
+                .iter()
+                .find(|c| c.id == client_id)
+                .map(|c| c.dims)
+                .filter(|(r, c)| *r > 0 && *c > 0)
+                .unwrap_or((vp.rows, vp.cols))
+        };
         // Entry: take THIS portal, then verify against the live tree (the
         // diff-pane stale-id guard - a recorded pane closed by any other path
         // reads as closed and never wedges the portal). Only this index is
@@ -815,6 +849,13 @@ impl Core {
                             return Flow::Continue;
                         }
                     };
+                    // The seat is replaced in place, so the replacement
+                    // spawns at the size the seat already holds.
+                    let (rows, cols) = self
+                        .panes
+                        .get(&pid)
+                        .map(|e| e.vt.size())
+                        .unwrap_or((rows, cols));
                     let order = SpawnOrder {
                         argv,
                         rows,
@@ -826,6 +867,7 @@ impl Core {
                     let key = key.to_string();
                     self.claim_row_spawn(&row_gate);
                     self.claim_portal_spawn(portal_idx);
+                    let queued = std::time::Instant::now();
                     return self.spawn_then(order, Some(client_id), move |core, spawned| {
                         core.release_row_spawn(&row_gate);
                         core.release_portal_spawn(portal_idx);
@@ -890,6 +932,14 @@ impl Core {
                                 seat: new_pid,
                                 tab: tid,
                             },
+                        );
+                        core.journal_portal_reached(
+                            client_id,
+                            portal_idx,
+                            &row,
+                            &key,
+                            mechanism,
+                            (plan_ms, queued),
                         );
                         core.set_view(client_id, sid, tid);
                         if let Some(tab) = core.viewed_tab_mut((sid, tid)) {
@@ -1024,6 +1074,7 @@ impl Core {
         let key = key.to_string();
         self.claim_row_spawn(&row_gate);
         self.claim_portal_spawn(portal_idx);
+        let queued = std::time::Instant::now();
         self.spawn_then(order, Some(client_id), move |core, spawned| {
             core.release_row_spawn(&row_gate);
             core.release_portal_spawn(portal_idx);
@@ -1055,6 +1106,14 @@ impl Core {
                     seat: pid,
                     tab: tid,
                 },
+            );
+            core.journal_portal_reached(
+                client_id,
+                portal_idx,
+                &row,
+                &key,
+                mechanism,
+                (plan_ms, queued),
             );
             core.set_view(client_id, sid, tid);
             if fell_back {
@@ -1169,9 +1228,11 @@ impl Core {
         // the plan-pending return that emits nothing, and the harvest would
         // invent "no such agent: NAME" for a row the registry knows.
         let needs_plan = matches!(&live_row, Some(r)
-            if r.attach_id.is_some()
-                && r.harness.as_deref() == Some("claude")
-                && self.reentry_verdict.is_none());
+            if r.harness.as_deref() == Some("claude")
+                && self.reentry_verdict.is_none()
+                && r.attach_id
+                    .as_deref()
+                    .is_some_and(|id| self.live_attach_argv(id).is_none()));
         if self.pending_thread_reply.is_some() {
             // One park at a time: the observer client id is the constant
             // CONTROL_CLIENT, so a second reach would trample the parked
@@ -1749,10 +1810,27 @@ impl Core {
             "stty -echo 2>/dev/null; exec tail -f /dev/null".to_string(),
         ];
         let pid = self.spawn_pane_cmd(&argv, rows, cols, cwd)?;
+        let label = self.portal_channel_label(channel);
         if let Some(entry) = self.panes.get_mut(&pid) {
-            entry.name = Some(channel.to_string());
+            entry.name = Some(label);
         }
         Ok(pid)
+    }
+
+    /// What a parked seat wears: the registry name of the one row the
+    /// channel key (an attach id or a name) answers, exited rows included.
+    /// The key stays in the argv where restore reads it; the operator reads
+    /// the name, never an attach id. A key no single row answers is its own
+    /// label.
+    pub(crate) fn portal_channel_label(&self, key: &str) -> String {
+        let mut hits = self
+            .agents
+            .iter()
+            .filter(|a| a.attach_id.as_deref() == Some(key) || a.name == key);
+        match (hits.next(), hits.next()) {
+            (Some(row), None) if !row.name.is_empty() => row.name.clone(),
+            _ => key.to_string(),
+        }
     }
 
     /// Spawn `env <wrapper> <shell>` on the first shell candidate that

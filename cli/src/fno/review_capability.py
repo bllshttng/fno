@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -467,35 +466,10 @@ def resolve_reviewers(
 
 # The effort levels an autonomous agent may issue. `ultra` is billed
 # separately, so it is not merely discouraged here - it is absent from the
-# tuple, which makes `self_review_invocation` raise on it and `level_for_diff`
-# unable to produce it. Any surface that names a level goes through one of
-# those two functions (enforced by the single-source CI check in
-# scripts/ci/), so a prose edit cannot reintroduce it either.
+# tuple, which makes `self_review_invocation` raise on it. Any surface that
+# names a level goes through that builder (enforced by the single-source CI
+# check in scripts/ci/), so a prose edit cannot reintroduce it either.
 ALLOWED_REVIEW_LEVELS = ("low", "medium", "high", "xhigh", "max")
-
-# A tier holds only when BOTH dimensions sit inside its caps; either one alone
-# pushes the level up. Lines are additions plus deletions against the merge
-# base - the two dimensions are what a reviewer actually reads (breadth and
-# depth), which is why the node's --size (an intake-time guess) is not an
-# input here.
-_LEVEL_TIERS = (
-    ("low", 3, 150),
-    ("medium", 10, 600),
-    ("high", 25, 2500),
-    ("xhigh", 60, 8000),
-)
-
-
-def level_for_diff(changed_files: int, diff_lines: int) -> str:
-    """The review effort level for a diff of this shape. Pure and total.
-
-    Never returns `ultra`: the string does not exist in `_LEVEL_TIERS`, which
-    is the structural half of the billing guard."""
-    for level, cap_files, cap_lines in _LEVEL_TIERS:
-        if changed_files <= cap_files and diff_lines <= cap_lines:
-            return level
-    return "max"
-
 
 def self_review_invocation(
     harness: Optional[str], level: Optional[str] = "medium", comment: bool = True
@@ -575,59 +549,29 @@ def self_review_invocation(
     return f"{spelled} {level}{flag}"
 
 
-def _git_out(cwd: Path, *args: str) -> Optional[str]:
-    """Full stdout of a git call (stripped, may be multi-line), or None.
-
-    Never raises: sizing is advisory, the stop gate is the backstop. Multi-line
-    matters - the numstat read below parses every row, and a first-line-only
-    helper would size a 4-file diff as one file."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=15
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    return proc.stdout.strip()
-
-
 def diff_review_level(project_root: Optional[Path]) -> Optional[str]:
     """The sized review level for this branch's current diff, or None.
 
-    None means no measurable diff yet (init, or no merge base): the caller then
-    leaves the `<level>` placeholder in the invocation rather than guessing a
-    level the diff has not earned. Advisory only; never raises. Moved here from
-    `fno.target.orient._diff_review_level` so the renderer below and
-    the orienter share ONE sizing path."""
+    None means no measurable diff yet (init, no merge base) or the sizing
+    door is unavailable: the caller then leaves the `<level>` placeholder in
+    the invocation rather than guessing a level the diff has not earned.
+    Advisory only; never raises. One round-trip to the fno-agents
+    `review-level` binary door, which owns the tier table and the merge-base
+    discovery this module used to carry (ported to Rust 2026-10). Only a
+    `level_source == "diff-sized"` answer counts: an explicit level or a
+    static fallback is not a sizing of this branch's diff."""
     if project_root is None:
         return None
+    from fno.rust_binary import verb_call
+
     try:
-        base = None
-        for candidate in ("origin/main", "origin/master"):
-            # Only an absent ref advances the fallback: a resolvable ref with
-            # no merge-base (unrelated histories) means this branch cannot be
-            # sized, not that the other ref should answer instead.
-            if not _git_out(project_root, "rev-parse", "--verify", f"{candidate}^{{commit}}"):
-                continue
-            base = _git_out(project_root, "merge-base", "HEAD", candidate)
-            break
-        if not base:
-            return None
-        numstat = _git_out(project_root, "diff", "--numstat", base)
-        if not numstat:
-            return None
-        files = lines = 0
-        for row in numstat.splitlines():
-            parts = row.split("\t")
-            if len(parts) < 3:
-                continue
-            files += 1
-            for n in parts[:2]:
-                lines += 0 if n.strip() == "-" else int(n or 0)
-        return level_for_diff(files, lines) if files else None
+        record = verb_call(["review-level", "--root", str(project_root)], {})
     except Exception:  # noqa: BLE001 - advisory; the stop gate is the backstop
         return None
+    if not isinstance(record, dict) or record.get("level_source") != "diff-sized":
+        return None
+    level = record.get("level")
+    return level if isinstance(level, str) else None
 
 
 def render_self_review_invocation(
@@ -643,9 +587,9 @@ def render_self_review_invocation(
 
     The render every refusal site names : a worker held at the stop
     gate reads THIS string, not a `<level>` placeholder it has no renderer for.
-    Sizing always goes through `diff_review_level` (-> `level_for_diff`),
-    never the builder's `medium` default - the standing instruction is to size
-    from the diff. With no measurable diff the level is None and the
+    Sizing always goes through `diff_review_level` (the fno-agents
+    `review-level` door), never the builder's `medium` default - the standing
+    instruction is to size from the diff. With no measurable diff the level is None and the
     placeholder stays: an honest unsized render beats a fabricated one.
     Harness falls back to the ambient session when not given. Two explicit
     targets exist and are mutually exclusive: a PR (all of pr_number,
@@ -894,7 +838,7 @@ def refusal_message(
 # copy of the bot-login set across two languages; folding all three behind one
 # parity-checked source is a follow-up the plan explicitly deferred.
 _KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset(
-    {"chatgpt-codex-connector", "gemini-code-assist"}
+    {"chatgpt-codex-connector"}
 )
 
 

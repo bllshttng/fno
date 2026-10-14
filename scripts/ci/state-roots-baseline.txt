@@ -28,12 +28,12 @@ A	cli/src/fno/agents/context.py	target-state.md	unowned	target-state.md has NO r
 A	cli/src/fno/agents/truth_status.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/agents/whoami.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	crates/fno-agents/src/backlog/advance.rs	events.jsonl	unowned	The dead-dispatch streak's node-own-project journal leg (the held-root join its Python twin carries); the row drains with the closing ship's deletion of that twin.
+A	crates/fno-agents/src/backlog/cutover.rs	target-state.md	unowned	the unclaim arm's invoking-holder read; target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/backlog/batch.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/backlog/capture.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/backlog/capture.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/claims/incarnation.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/claims/self_identity.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
-A	cli/src/fno/cli.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/config_cli.py	ledger.json	unowned	call the resolver STATE_FILES names for this file.
 A	cli/src/fno/config_cli.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/cost/_register.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
@@ -104,3 +104,5 @@ A	crates/fno-agents/src/backlog/birth.rs	events.jsonl	unowned	the create port mo
 A	crates/fno-agents/src/backlog/drift_emit.rs	events.jsonl	unowned	the reconcile post-close emits stamp the record worktree's project journal (the Python twin's writer, ported); drains with the other backlog journal sites.
 A	crates/fno-agents/src/backlog/drift_emit.rs	target-state.md	unowned	read_state_frontmatter reads a plan's target-state.md for the session-satisfied emit (the Python twin's reader, ported). No resolver today; drains when a manifest resolver lands.
 A	crates/fno-agents/src/backlog/triage_health.rs	events.jsonl	unowned	The batch-lane verdict reads the scoped project root journal its Python twin named (a controller checkout must not report its own repo); the row drains with the batch metrics port.
+A	crates/fno-agents/src/mail_cli/drain_self.rs	target-state.md	unowned	the drain-self port's held-job scan reads the manifest at the session cwd (the parity golden seeds this exact path); the space-first resolver would move the read to another checkout, so the hand-built path stays a declared root until the golden moves with it.
+A	crates/fno-agents/src/review_policy.rs	target-state.md	unowned	the assurance port moved the deleted policy leg's default manifest read verbatim (the cwd join); the golden parity pins the fallback bytes, so this row drains when the capture re-freezes onto a Rust manifest resolver (the same gap the other target-state rows name).

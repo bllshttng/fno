@@ -110,6 +110,27 @@ impl Core {
         self.persist_result(result);
     }
 
+    /// Take the store's current generation for `(name, key)` as this server's
+    /// baseline. For a write that carries the operator's explicit word (a
+    /// dismissal): another writer outrunning the baseline must not turn that
+    /// word into a silent stale-conflict no-op.
+    pub(super) fn adopt_stored_generation(&mut self, name: &str, key: &str) {
+        if let Some((id, generation)) = crate::squad_store::current_generation(name, key) {
+            self.store_generations.insert(id, generation);
+        }
+    }
+
+    /// The operator dismissed this workspace: remove its row whatever the
+    /// baseline says. A topology-driven [`Self::persist_remove`] must lose to
+    /// a newer row, but a dismissal is an explicit word, not a guess. On the
+    /// stale baseline a prune or a second server left behind, the remove
+    /// conflicted and wrote nothing, so the deleted workspace kept its row
+    /// and its name.
+    pub(super) fn persist_dismiss(&mut self, name: &str, key: &str) {
+        self.adopt_stored_generation(name, key);
+        self.persist_remove(name, key);
+    }
+
     pub(super) fn persist_remove(&mut self, name: &str, key: &str) {
         let result =
             crate::squad_store::remove_with_generations(Some(&self.store_generations), name, key);

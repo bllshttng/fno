@@ -575,7 +575,6 @@ K4	cli/tests/unit/test_init_harness_space_stub.py	py	3
 K4	cli/tests/unit/test_managed_block.py	py	11
 K4	cli/tests/unit/test_orchestrator_harness.py	py	10
 K4	cli/tests/unit/test_provider_budget.py	py	23
-K4	cli/tests/unit/test_provider_resolution.py	py	17
 K4	cli/tests/unit/test_self_identity_stamp_sites.py	py	4
 K4	cli/tests/unit/test_sync_codex_agents.py	py	6
 K4	cli/tests/unit/test_triage_claude_invocation.py	py	5
@@ -956,10 +955,7 @@ K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
 K6	cli/tests/mcp/test_sidecar_lifecycle.py	py	15
-K6	cli/tests/relay/test_daemon.py	py	25
-K6	cli/tests/relay/test_envelope.py	py	16
 K6	cli/tests/relay/test_roundtrip.py	py	67
-K6	cli/tests/relay/test_router.py	py	9
 K6	cli/tests/test_post_merge_route.py	py	39
 K6	cli/tests/test_pr_read_budget.py	py	6
 K6	cli/tests/test_pr_watch_cli_adapters.py	py	36
@@ -1068,8 +1064,6 @@ K6	cli/tests/unit/test_review_findings.py	py	39
 K6	cli/tests/unit/test_review_hold_wiring.py	py	9
 K6	cli/tests/unit/test_review_invocation.py	py	21
 K6	cli/tests/unit/test_review_invocation_settle.py	py	5
-K6	cli/tests/unit/test_review_level_routing.py	py	12
-K6	cli/tests/unit/test_review_policy.py	py	34
 K6	cli/tests/unit/test_review_post_dispositions.py	py	6
 K6	cli/tests/unit/test_setup_post_merge_scaffold.py	py	7
 K6	cli/tests/unit/test_target_init_review_gate.py	py	51

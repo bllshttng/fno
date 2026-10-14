@@ -1812,6 +1812,7 @@ fn workspace_restore_portal_rows() {
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     )]
     .into();
@@ -2222,6 +2223,7 @@ fn focusing_a_held_claude_pane_runs_the_revive_plan_even_when_the_session_is_liv
         argv: vec!["/bin/cat".into()],
         env: vec![],
         config_dir: None,
+        plan_ms: 0,
     });
 
     core.command(1, Command::FocusPane(held));

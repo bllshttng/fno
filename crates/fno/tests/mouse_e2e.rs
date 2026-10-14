@@ -47,6 +47,7 @@ fn wheel_up() -> MouseEvent {
         row: 0,
         col: 0,
         kind: MouseKind::WheelUp,
+        alt: false,
     }
 }
 
@@ -128,7 +129,15 @@ fn click(c: &mut FakeClient, pane: u64, row: u16, col: u16) {
         MouseKind::Press(MouseButton::Left),
         MouseKind::Release(MouseButton::Left),
     ] {
-        c.mouse(pane, MouseEvent { row, col, kind });
+        c.mouse(
+            pane,
+            MouseEvent {
+                row,
+                col,
+                kind,
+                alt: false,
+            },
+        );
     }
 }
 
@@ -208,6 +217,7 @@ fn mouse_release_without_a_matching_press_never_opens_a_link() {
             row,
             col: 10,
             kind: MouseKind::Release(MouseButton::Left),
+            alt: false,
         },
     );
     // 2. Press on the URL, release on a DIFFERENT cell of it: a drag, not a click.
@@ -217,6 +227,7 @@ fn mouse_release_without_a_matching_press_never_opens_a_link() {
             row,
             col: 8,
             kind: MouseKind::Press(MouseButton::Left),
+            alt: false,
         },
     );
     a.mouse(
@@ -225,6 +236,7 @@ fn mouse_release_without_a_matching_press_never_opens_a_link() {
             row,
             col: 20,
             kind: MouseKind::Release(MouseButton::Left),
+            alt: false,
         },
     );
 
@@ -268,7 +280,15 @@ fn mouse_click_off_a_url_opens_nothing_and_a_drag_still_copies() {
         (30, MouseKind::Drag(MouseButton::Left)),
         (30, MouseKind::Release(MouseButton::Left)),
     ] {
-        a.mouse(pane, MouseEvent { row, col, kind });
+        a.mouse(
+            pane,
+            MouseEvent {
+                row,
+                col,
+                kind,
+                alt: false,
+            },
+        );
     }
     let copied = a.wait(10, "copy payload", |c| c.copies.first().cloned());
     assert_eq!(copied, "https://example.com/pr/700", "drag copies the URL");
@@ -404,6 +424,7 @@ fn mouse_drag_release_copies_selection_to_initiator_only() {
             row,
             col: 0,
             kind: MouseKind::Press(MouseButton::Left),
+            alt: false,
         },
     );
     a.mouse(
@@ -412,6 +433,7 @@ fn mouse_drag_release_copies_selection_to_initiator_only() {
             row,
             col: 14,
             kind: MouseKind::Drag(MouseButton::Left),
+            alt: false,
         },
     );
     a.mouse(
@@ -420,6 +442,7 @@ fn mouse_drag_release_copies_selection_to_initiator_only() {
             row,
             col: 14,
             kind: MouseKind::Release(MouseButton::Left),
+            alt: false,
         },
     );
     let copied = a.wait(10, "copy payload", |c| c.copies.first().cloned());

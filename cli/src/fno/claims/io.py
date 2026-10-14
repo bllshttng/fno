@@ -134,7 +134,7 @@ def dedup_claims_roots(roots: list[Path | None]) -> list[tuple[Path | None, Path
 
     Returns ``(raw_root, resolved_dir)`` pairs: the raw value (``None`` or
     ``Path``) so a caller can pass an entry straight back into ``root=`` on
-    ``list_claims_with_counts``/``reap_dead_claims``/etc, paired with the
+    ``list_claims_with_counts``/etc, paired with the
     already-resolved dir so nothing calls ``claims_dir()`` on the same root
     twice. A cwd whose canonical repo root IS the global root collapses to
     one scan, not two; dedup is by ``Path.resolve()`` on the resolved claims
@@ -242,6 +242,18 @@ def atomic_create_exclusive(path: Path, content: str) -> None:
         # INSIDE the mapper's reach because on a denied state root it is the
         # first call that fails, before any claim file is attempted.
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _attempt()
+        except OSError as exc:
+            raise _map(exc) from exc
+    except NotADirectoryError:
+        # The store migration publishes its tombstone AS the claims path: a
+        # marker file where the lock needs a directory. The backup the marker
+        # names was imported at publish, so the designed next step is a
+        # legacy writer recreating the directory; retire the marker and
+        # retry once, same as the missing-parent case above.
+        try:
+            path.parent.unlink()
             path.parent.mkdir(parents=True, exist_ok=True)
             _attempt()
         except OSError as exc:

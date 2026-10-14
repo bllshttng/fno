@@ -307,6 +307,12 @@ pub struct ReviewerVerdict {
     /// marker satisfies rung 4 - `other_session` or unknown never does).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reviewer_context: Option<String>,
+    /// The writing machine id stamped onto the row when it was pushed to the
+    /// shared primary (`data.attest_machine`): a primary row is a review SOME
+    /// machine wrote, and the coverage listing names which. None on rows that
+    /// never rode the primary or predate the stamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attest_machine: Option<String>,
     /// Whether a verdict from this reviewer was OWED: the login is in the
     /// resolved required set, or the verdict is a local-attestation lane the
     /// config floored. An optional GitHub App is honored if present and owed

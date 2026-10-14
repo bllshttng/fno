@@ -1,3 +1,4 @@
+use super::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
 use super::*;
 
 pub(super) async fn serve(
@@ -65,13 +66,13 @@ pub(super) async fn serve(
         backlog_lanes: Vec::new(),
         backlog_stale: false,
         backlog_holders: HashMap::new(),
-        backlog_pr: HashMap::new(),
-        backlog_driver: HashMap::new(),
+        backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
         fno_token_claims: HashMap::new(),
+        link_click_claims: HashMap::new(),
         touch_emit_failures: Arc::new(AtomicU64::new(0)),
         started_at: crate::server_stats::stamp_now(),
         client_count: client_count_tx,

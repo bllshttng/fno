@@ -1351,7 +1351,7 @@ pub fn deliver_via_keeper_socket_in(
 /// Trims surrounding whitespace because Python `int()` does (`int(" 4000 ")` ==
 /// 4000); without it, a value with stray whitespace would parse on one door and
 /// fall back to the default on the other, drifting the threshold.
-fn cap_env_int(name: &str, default: i64) -> i64 {
+pub(crate) fn cap_env_int(name: &str, default: i64) -> i64 {
     std::env::var(name)
         .ok()
         .and_then(|raw| raw.trim().parse().ok())
@@ -1366,7 +1366,7 @@ fn cap_env_int(name: &str, default: i64) -> i64 {
 /// Python. A tier <= 0 disables it (fail-open); both doors read the same knob, so
 /// disabling one disables both. Pure numeric core; [`body_cap_decision`] scopes
 /// it to unwrapped bodies so framed relay/mail traffic is never refused.
-fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
+pub(crate) fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
     if refuse > 0 && n > refuse as usize {
         eprintln!(
             "error: mail body is {n} bytes (cap {refuse}). Relay mail is re-read every turn; \
@@ -1421,7 +1421,7 @@ fn opens_envelope_tag(head: &str, tag: &str) -> bool {
 
 /// Case-insensitive `haystack.contains(needle)`. `needle` is always an ASCII
 /// literal already in canonical case.
-fn contains_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(needle)
 }
 
@@ -1830,9 +1830,9 @@ fn is_well_formed_paired_fno_mail(text: &str) -> bool {
 /// refuse, just arriving through the "already framed" branch instead of the
 /// unframed one. Validate the complete structure rather than trusting the
 /// prefix, BUT ONLY when the payload contains a `</fno_mail>` at all: the
-/// documented relay single-line variant (`frame()` in
-/// `cli/src/fno/relay/envelope.py`, delivered by
-/// `cli/src/fno/relay/roundtrip.py::deliver_attached`) has no close tag by
+/// documented relay single-line variant (once built by `frame()` in
+/// the retired Python relay envelope, delivered by
+/// `deliver_attached` from the same retired package) has no close tag by
 /// design - "no close tag, no trailer... out of scope" per the plan - so a
 /// close-tag-free payload is passed through unchanged, exactly as it was
 /// before this predicate existed. A payload that DOES carry a close tag is
@@ -1889,7 +1889,7 @@ fn forged_envelope_decision_at(text: &str, registry_path: Option<&Path>) -> Opti
             }
             if !contains_ci(text, "</fno_mail>") {
                 // Close-tag-free: the documented relay single-line variant. Its
-                // producer (`frame()` in `cli/src/fno/relay/envelope.py`) embeds
+                // producer (the retired Python relay envelope's `frame()`) embeds
                 // peer-controlled body text without validating it, so a second
                 // `<fno_mail` open smuggled in there would otherwise pass
                 // through unchecked. Still require exactly one open tag.
@@ -2977,7 +2977,7 @@ mod tests {
     #[test]
     fn forged_envelope_passes_the_documented_relay_single_line_variant() {
         // codex P1 (a real regression the earlier well-formed check
-        // introduced): `frame()` in cli/src/fno/relay/envelope.py produces
+        // introduced): the retired Python relay envelope produced
         // `<fno_mail from="..." harness="..."> body` with NO close tag, by
         // design - "no close tag, no trailer... out of scope" per the plan.
         // deliver_attached in cli/src/fno/relay/roundtrip.py pipes exactly

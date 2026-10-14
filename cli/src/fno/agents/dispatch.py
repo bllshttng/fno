@@ -1409,6 +1409,7 @@ def _claude_create_path(
     # the row this resume forks FROM (fork_lineage.lineage_row_for);
     # states every axis the caller left unstated.
     lineage_row: object | None = None,
+    carried: Optional[dict] = None,
     # The model token the ROUTE named (-P vendor/model or --route
     # vendor,model). Recorded on the row beside an explicit --model; never fed
     # to the child argv, so launch behavior is untouched.
@@ -1673,15 +1674,12 @@ def _claude_create_path(
     if revive and resume_session_id:
         print(
             f"fno agents spawn: forked {canonical_handle(resume_session_id)} into a "
-            f"new session (new id, new row, new fno binding): {short_id} continues "
-            f"the transcript; the source id is not preserved.\n"
-            f"Watch the new one: fno agents peek {short_id}",
+            f"new session: {short_id} keeps its name, id and spawner from the "
+            f"source row; watch it: fno agents peek {short_id}",
             file=sys.stderr,
         )
 
-    # Best-effort ambient capture; never raises. The
-    # spawn_trigger was already popped before bg_create above.
-    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, lineage_row)
+    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, carried or {})
     lineage_reason = _report_unlinked_parent(spawned_by_session)
 
     # Role stamp (US9), same contract as the pane path: the grantor is the
@@ -1721,6 +1719,7 @@ def _claude_create_path(
         # silent, byte-identical stamps where there is none.
         **fork_lineage.axis_overrides(
             src,
+            carried=carried,
             model=model,
             route_model=route_model,
             verified_model=verified_model,
@@ -2666,10 +2665,8 @@ def dispatch_spawn(
             row_launch_account_source = launch_account_source
             # the row this resume forks FROM, matched by uuid alone.
             lineage_row = fork_lineage.lineage_row_for(entries, resume_session_id)
-            if lineage_row is not None and node is None:
-                # A wake fork (new name, no caller node) carries the lineage
-                # row's node so the join survives the revive.
-                node = lineage_row.node
+            kept = fork_lineage.carried(resume_session_id)
+            node = node or kept.get("node")
             if resume_session_id and row_launch_account is None:
                 row_launch_account = getattr(lineage_row, "launch_account", None)
                 # A revive inherits the source row's provenance; None is honest.
@@ -2866,6 +2863,7 @@ def dispatch_spawn(
                         resume_session_id=resume_session_id,
                         revive=revive,
                         lineage_row=lineage_row,
+                        carried=kept,
                         add_dir=add_dir,
                         agent=agent,
                         tools=tools,
@@ -6479,12 +6477,14 @@ def wake_and_deliver(
     except (RegistryVersionError, ValueError):
         return False, "registry-incomplete"
 
-    spawn_name = fork_lineage.wake_spawn_name(session_uuid)
+    carried = fork_lineage.carried(session_uuid)
+    spawn_name = carried.get("name") or f"wake-{canonical_handle(session_uuid)}"
     route_provider, route_env = fork_lineage.wake_route(entry, session_uuid)
     from fno.agents.spawn_gate import GateRefused, run_gate
     from fno.agents.launch_provenance import launch_account_for_session
 
-    parent = tuple(getattr(entry, f"spawned_by_{k}", None) for k in ("session", "harness", "cwd"))
+    row = carried if entry is None else vars(entry)
+    parent = tuple(row.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
     gate = None
     revived_reservation = False
     if route_provider is not None:
@@ -6896,9 +6896,8 @@ def _deliver_live(
             to=mail.to,
             id=mail.id,
             from_session=mail.from_session,
-            origin=mail.origin,
-            to_session=mail.to_session,
-            subject=mail.subject,
+            origin=mail.origin, to_session=mail.to_session, subject=mail.subject,
+            from_name=sender_entry.name if sender_entry is not None else None,
         )
 
     # Dual-run dispatch on the row's live ref (4a-G2): a mux-hosted agent gets
@@ -7726,6 +7725,7 @@ def dispatch_send(
                             node=mail_ctx.node, to=mail_ctx.to, id=mail_ctx.id,
                             from_session=mail_ctx.from_session,
                             to_session=mail_ctx.to_session, subject=mail_ctx.subject,
+                            from_name=sender_entry.name if sender_entry is not None else None,
                         ),
                         from_harness=from_harness, to_harness=existing.harness,
                         to_session=mail_ctx.to_session, from_session=from_session,

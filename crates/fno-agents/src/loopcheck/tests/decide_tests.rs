@@ -360,6 +360,7 @@ fn awaiting_review_only_requires_every_other_conjunct() {
                 scope: None,
                 refusal_reason: None,
                 reviewer_context: None,
+                attest_machine: None,
                 required: true,
                 passed: false,
             }],
@@ -1630,6 +1631,7 @@ fn optional_only_refusal_is_not_awaiting_review() {
         scope: None,
         refusal_reason: None,
         reviewer_context: None,
+        attest_machine: None,
         required,
         passed: false,
     };

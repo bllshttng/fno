@@ -40,6 +40,9 @@ pub struct NodeSpawnArgs {
     pub verb_source: String,
     pub session_phase: Option<String>,
     pub grid_reason: Option<String>,
+    /// The grid pick's lane NAME - the dispatcher's spelling: the spawn door
+    /// resolves the row once, so the argv names the lane instead of its axes.
+    pub lane: Option<String>,
     pub decision: Vec<String>,
     pub is_reconcile: bool,
     /// The subprocess env: the resolver's answer plus the caller's extras,
@@ -282,13 +285,27 @@ pub fn node_spawn_argv(
     cwd: Option<&str>,
     extra: &[(&str, String)],
 ) -> Vec<String> {
-    let mut cmd = vec![
-        "--harness".to_string(),
-        args.harness.clone(),
-        "--substrate".to_string(),
-        args.substrate.clone(),
-    ];
-    if let Some(vendor) = &args.vendor {
+    // Claude lanes first: a named lane resolves its whole row at the spawn
+    // door, so the substrate drops for a named claude lane. Every other
+    // lane keeps today's spellings until wave 5 templates it.
+    let lane_pinned = args.lane.is_some() && args.resolved_harness == "claude";
+    let mut cmd: Vec<String> = Vec::new();
+    // The harness axis always emits: the door refuses --route on any other
+    // harness, and without the flag it infers the invoking session's, so a
+    // codex-originated dispatch of a claude lane would die at the door.
+    if lane_pinned {
+        cmd.extend(["--harness".to_string(), args.resolved_harness.clone()]);
+    } else {
+        cmd.extend([
+            "--harness".to_string(),
+            args.harness.clone(),
+            "--substrate".to_string(),
+            args.substrate.clone(),
+        ]);
+    }
+    if lane_pinned {
+        cmd.extend(["--route".to_string(), args.lane.clone().unwrap_or_default()]);
+    } else if let Some(vendor) = &args.vendor {
         cmd.extend(["--provider".to_string(), vendor.clone()]);
     } else if let Some(route) = &args.route {
         // The row's route owns vendor AND model as one fact; an explicit
@@ -315,13 +332,14 @@ pub fn node_spawn_argv(
     } else {
         cmd.push("--fresh".to_string());
     }
-    if let Some(model) = &args.model {
+    if let Some(model) = args.model.as_ref().filter(|_| !lane_pinned) {
         cmd.extend(["--model".to_string(), model.clone()]);
     }
     // CLAUDE-ONLY: gate on the RESOLVED harness, so a claude ACCOUNT record
     // (ccm/ccr) still gets the flag - without it the account-pinned worker
-    // hangs on a prompt.
-    if !args.permission_mode.is_empty() && args.resolved_harness == "claude" {
+    // hangs on a prompt. A lane pin resolves the row's own effort, and the
+    // template fills from the route, so the flag drops with the rest.
+    if !args.permission_mode.is_empty() && args.resolved_harness == "claude" && !lane_pinned {
         cmd.extend([
             "--permission-mode".to_string(),
             args.permission_mode.clone(),
@@ -848,20 +866,22 @@ fn resolve_node_spawn_inner(
     let mut harness_v: Option<String> = harness.map(str::to_string);
     let mut grid_route: Option<String> = None;
     let mut grid_account: Option<String> = None;
+    let mut grid_lane: Option<String> = None;
     let mut grid_why: Option<String> = None;
     if harness.is_none() {
-        let (gh, gm, gr, ga, decline) = grid_lane_for(
+        let pick = grid_lane_for(
             Some(node),
             model_v.as_deref(),
             provider,
             effective_verb.as_deref(),
         );
-        grid_why = decline;
-        if let Some(gh) = gh {
-            model_v = gm;
+        grid_why = pick.decline;
+        if let Some(gh) = pick.harness {
+            model_v = pick.model;
             harness_v = Some(gh);
-            grid_route = gr;
-            grid_account = ga;
+            grid_route = pick.route;
+            grid_account = pick.account;
+            grid_lane = pick.lane;
         }
     }
     // An unpinned spawn bills the account's default model - the silent
@@ -1008,6 +1028,7 @@ fn resolve_node_spawn_inner(
         verb_source: verb_source.to_string(),
         session_phase: descriptor_phase,
         grid_reason: grid_why,
+        lane: grid_lane,
         decision: resolved.decision,
         is_reconcile: command.is_some(),
         env: run_env,
