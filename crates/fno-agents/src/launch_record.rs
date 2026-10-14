@@ -473,7 +473,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
             }
             let rest = &rest[1..];
             let pos = positionals(rest);
-            let cwd = flag_value(rest, &["--cwd"])
+            let cwd = flag_value(rest, &["-c", "--cwd"])
                 .map(|d| join_cwd(here, &d))
                 .unwrap_or_else(|| here.clone());
             Some(Launch {
@@ -676,6 +676,18 @@ pub fn claimed_edge(root: &Path, session_id: &str) -> Option<Record> {
         return None;
     }
     read_record(&claimed_dir(root).join(format!("{session_id}.json")))
+}
+
+/// Every pending and claimed record with its path, pending first. The
+/// first-turn watch reads both: a pending record is a launch no child has
+/// claimed yet, a claimed one names the child's session.
+pub(crate) fn records(root: &Path) -> Vec<(PathBuf, Record)> {
+    [pending_dir(root), claimed_dir(root)]
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter_map(|e| read_record(&e.path()).map(|r| (e.path(), r)))
+        .collect()
 }
 
 /// The names of pending records holding `provider`'s lane: a dispatcher's

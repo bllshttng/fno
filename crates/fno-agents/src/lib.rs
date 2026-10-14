@@ -487,6 +487,7 @@ pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub(crate) mod spawn_watch;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;

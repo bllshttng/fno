@@ -455,7 +455,7 @@ pub(crate) fn run_pass(
     first_error.map_or(Ok(()), Err)
 }
 
-fn transcript(row: &RegistryEntry) -> Option<std::path::PathBuf> {
+pub(crate) fn transcript(row: &RegistryEntry) -> Option<std::path::PathBuf> {
     row.transcript_path
         .as_ref()
         .map(std::path::PathBuf::from)
@@ -484,18 +484,22 @@ fn transcript_activity(path: &Path, offset: u64) -> bool {
     }
     tail.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .any(|row| {
-            row["type"] == "assistant"
-                || row
-                    .pointer("/message/role")
-                    .is_some_and(|v| v == "assistant")
-                || row
-                    .pointer("/payload/role")
-                    .is_some_and(|v| v == "assistant")
-                || row
-                    .pointer("/payload/type")
-                    .is_some_and(|v| v == "agent_message")
-        })
+        .any(|row| is_assistant(&row))
+}
+
+/// One transcript row the agent wrote: a claude assistant row or a codex
+/// assistant payload.
+pub(crate) fn is_assistant(row: &Value) -> bool {
+    row["type"] == "assistant"
+        || row
+            .pointer("/message/role")
+            .is_some_and(|v| v == "assistant")
+        || row
+            .pointer("/payload/role")
+            .is_some_and(|v| v == "assistant")
+        || row
+            .pointer("/payload/type")
+            .is_some_and(|v| v == "agent_message")
 }
 
 pub(crate) struct Arm {
