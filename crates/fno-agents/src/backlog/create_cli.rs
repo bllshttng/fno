@@ -603,16 +603,23 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// One best-effort SQLite archive read, over both row shapes. The open is
-/// read-only: an ordinary open creates the file it opens, and a WAL-mode
-/// twin whose -shm is absent still fails read-only and degrades to nothing.
+/// One best-effort SQLite archive read, over every row shape the store has
+/// used: entries blob rows, the typed nodes table, and nodes_raw, which the
+/// working import parks an unrepresentable row in (both tables count as
+/// live, so all three feed the exclusion set). The open is read-only: an
+/// ordinary open creates the file it opens, and a WAL-mode twin whose -shm
+/// is absent still fails read-only and degrades to nothing.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
     let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
         return out;
     };
-    for sql in ["SELECT id FROM entries", "SELECT id FROM nodes"] {
+    for sql in [
+        "SELECT id FROM entries",
+        "SELECT id FROM nodes",
+        "SELECT id FROM nodes_raw",
+    ] {
         let Ok(mut stmt) = conn.prepare(sql) else {
             continue;
         };
