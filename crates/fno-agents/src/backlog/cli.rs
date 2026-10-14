@@ -323,6 +323,14 @@ pub fn run(args: &[String]) -> i32 {
         "ready" => super::cutover::run_ready(resolved.tail),
         "remove" => super::cutover::run_remove(resolved.tail),
         "project-root" => super::cutover::run_project_root(resolved.tail),
+        // The finale arms (this PR): the remaining heavy verbs, served with
+        // no compat forward. The catalog-vs-arms gate (check-backlog-native
+        // check 2) derives the unclaimed set mechanically and fails the tree
+        // while any verb still rides the catch-all.
+        "new" => super::finale::run_new(resolved.tail),
+        "lanes" => super::finale::run_lanes(resolved.tail),
+        "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
+        "reprioritize" => super::finale::run_reprioritize(resolved.tail),
         _ => forward_python(&resolved),
     }
 }
