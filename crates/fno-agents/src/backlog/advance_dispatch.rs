@@ -379,7 +379,6 @@ pub fn spawn_worker(
     .map_err(SpawnOutcome::Failed)?;
     launch_resolved(
         node_id,
-        node,
         args,
         dispatch_reservation,
         caller,
@@ -390,7 +389,6 @@ pub fn spawn_worker(
 
 pub fn launch_resolved(
     node_id: &str,
-    node: &Value,
     args: NodeSpawnArgs,
     dispatch_reservation: Option<(&str, &str)>,
     caller: &str,
