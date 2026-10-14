@@ -52,7 +52,76 @@ pub(super) fn portal_closed_row(
     })
 }
 
+/// The attach budget: an attach-mechanism open slower than this says so.
+const SLOW_OPEN_MS: u64 = 1_000;
+
+/// The `portal_reached` row: one open landed. `mechanism` names how the
+/// viewer came to be (`attach-direct`, `attach-plan`, `relaunch`, `follow`,
+/// `locate`); `plan_ms` is the re-entry plan's time and `spawn_ms` the
+/// viewer spawn's, so the click-to-pane time splits by stage.
+pub(super) fn portal_reached_row(
+    mux_session: &str,
+    portal: u8,
+    row_key: &str,
+    mechanism: &str,
+    plan_ms: u64,
+    spawn_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ts": crate::review_invocation::review_invocation_timestamp(),
+        "type": "portal_reached",
+        "source": "daemon",
+        "data": {
+            "mux_session": mux_session,
+            "portal": portal,
+            "row_key": row_key,
+            "mechanism": mechanism,
+            "plan_ms": plan_ms,
+            "spawn_ms": spawn_ms,
+        }
+    })
+}
+
+/// The notice an attach owes when it overran the budget; `None` inside it.
+pub(super) fn slow_open_notice(
+    portal: u8,
+    row_name: &str,
+    mechanism: &str,
+    plan_ms: u64,
+    spawn_ms: u64,
+) -> Option<String> {
+    let total = plan_ms + spawn_ms;
+    (mechanism.starts_with("attach") && total > SLOW_OPEN_MS).then(|| {
+        format!("portal {portal}: {row_name} took {total} ms to open (plan {plan_ms}, spawn {spawn_ms})")
+    })
+}
+
 impl Core {
+    /// Journal one landed open and flag a slow attach. The spawn time is
+    /// measured from the moment the viewer's spawn was queued.
+    pub(super) fn journal_portal_reached(
+        &mut self,
+        client_id: u64,
+        idx: u8,
+        row: &RegistryAgent,
+        key: &str,
+        mechanism: &str,
+        (plan_ms, queued): (u64, std::time::Instant),
+    ) {
+        let spawn_ms = u64::try_from(queued.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.append_portal_event(portal_reached_row(
+            &self.session_name,
+            idx,
+            key,
+            mechanism,
+            plan_ms,
+            spawn_ms,
+        ));
+        if let Some(text) = slow_open_notice(idx, &row.name, mechanism, plan_ms, spawn_ms) {
+            self.notice(client_id, text);
+        }
+    }
+
     /// Insert + journal: emits `portal_opened` only when the index was
     /// absent, so a fill or a reseat of a live portal stays silent.
     pub(super) fn journal_portal_open(&mut self, idx: u8, portal: Portal) {

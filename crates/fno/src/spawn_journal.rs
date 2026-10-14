@@ -132,6 +132,9 @@ pub(crate) struct ReentryVerdict {
     pub(crate) argv: Vec<String>,
     pub(crate) env: Vec<String>,
     pub(crate) config_dir: Option<std::path::PathBuf>,
+    /// How long the resolver subprocess took; 0 for a verdict built without
+    /// one. Read by the portal open's timing row.
+    pub(crate) plan_ms: u64,
 }
 
 impl ReentryVerdict {
@@ -180,6 +183,7 @@ impl ReentryVerdict {
             argv,
             env,
             config_dir,
+            plan_ms: 0,
         })
     }
 

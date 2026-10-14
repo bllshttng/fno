@@ -706,6 +706,9 @@ impl Core {
         } else {
             row.cwd.clone()
         };
+        // A staged verdict carries the plan's own time; no staged verdict
+        // on a Drive row means the argv needed no plan.
+        let staged_plan_ms = self.reentry_verdict.as_ref().map(|v| v.plan_ms);
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
         let argv = match tier {
@@ -728,16 +731,31 @@ impl Core {
             Reach::Follow => peek_argv(&row.name),
             Reach::Locate => locate_argv(&row),
         };
-        let (rows, cols) = self
-            .clients
-            .iter()
-            .find(|c| c.id == client_id)
-            .map(|c| c.dims)
-            // A passive observer's (0,0) sentinel must never size a pane -
-            // fall back to the view rect (the control-path reach rides an
-            // observer client).
-            .filter(|(r, c)| *r > 0 && *c > 0)
-            .unwrap_or((vp.rows, vp.cols));
+        let mechanism = match (&tier, staged_plan_ms) {
+            (Reach::Drive, None) => "attach-direct",
+            (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
+                "relaunch"
+            }
+            (Reach::Drive, Some(_)) => "attach-plan",
+            (Reach::Follow, _) => "follow",
+            (Reach::Locate, _) => "locate",
+        };
+        let plan_ms = staged_plan_ms.unwrap_or(0);
+        // The viewer spawns at the tab rect it will fill, so the harness
+        // draws its first frame at the final size; the client terminal is
+        // the fallback for an empty rect. A passive observer's (0,0)
+        // sentinel must never size a pane (the control-path reach rides an
+        // observer client).
+        let (rows, cols) = if vp.rows > 0 && vp.cols > 0 {
+            (vp.rows, vp.cols)
+        } else {
+            self.clients
+                .iter()
+                .find(|c| c.id == client_id)
+                .map(|c| c.dims)
+                .filter(|(r, c)| *r > 0 && *c > 0)
+                .unwrap_or((vp.rows, vp.cols))
+        };
         // Entry: take THIS portal, then verify against the live tree (the
         // diff-pane stale-id guard - a recorded pane closed by any other path
         // reads as closed and never wedges the portal). Only this index is
@@ -830,6 +848,13 @@ impl Core {
                             return Flow::Continue;
                         }
                     };
+                    // The seat is replaced in place, so the replacement
+                    // spawns at the size the seat already holds.
+                    let (rows, cols) = self
+                        .panes
+                        .get(&pid)
+                        .map(|e| e.vt.size())
+                        .unwrap_or((rows, cols));
                     let order = SpawnOrder {
                         argv,
                         rows,
@@ -841,6 +866,7 @@ impl Core {
                     let key = key.to_string();
                     self.claim_row_spawn(&row_gate);
                     self.claim_portal_spawn(portal_idx);
+                    let queued = std::time::Instant::now();
                     return self.spawn_then(order, Some(client_id), move |core, spawned| {
                         core.release_row_spawn(&row_gate);
                         core.release_portal_spawn(portal_idx);
@@ -905,6 +931,14 @@ impl Core {
                                 seat: new_pid,
                                 tab: tid,
                             },
+                        );
+                        core.journal_portal_reached(
+                            client_id,
+                            portal_idx,
+                            &row,
+                            &key,
+                            mechanism,
+                            (plan_ms, queued),
                         );
                         core.set_view(client_id, sid, tid);
                         if let Some(tab) = core.viewed_tab_mut((sid, tid)) {
@@ -1039,6 +1073,7 @@ impl Core {
         let key = key.to_string();
         self.claim_row_spawn(&row_gate);
         self.claim_portal_spawn(portal_idx);
+        let queued = std::time::Instant::now();
         self.spawn_then(order, Some(client_id), move |core, spawned| {
             core.release_row_spawn(&row_gate);
             core.release_portal_spawn(portal_idx);
@@ -1070,6 +1105,14 @@ impl Core {
                     seat: pid,
                     tab: tid,
                 },
+            );
+            core.journal_portal_reached(
+                client_id,
+                portal_idx,
+                &row,
+                &key,
+                mechanism,
+                (plan_ms, queued),
             );
             core.set_view(client_id, sid, tid);
             if fell_back {

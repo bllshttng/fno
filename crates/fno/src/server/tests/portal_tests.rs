@@ -1733,6 +1733,7 @@ async fn portal_new_split_on_a_claude_row_survives_the_reentry_replay() {
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 
@@ -1821,6 +1822,36 @@ fn portal_channel_label_names_the_row_never_a_short_id() {
         "t-x-6746-p2-glm"
     );
     assert_eq!(core.portal_channel_label("cafef00d"), "cafef00d");
+}
+
+#[test]
+fn portal_reached_row_and_slow_open_notice() {
+    // Every landed open journals its mechanism and the two stage times; an
+    // attach over the 1,000 ms budget says so, and a relaunch is not an
+    // attach so it never claims the budget.
+    let row = crate::server::portal_journal::portal_reached_row(
+        "s",
+        2,
+        "deadbee1",
+        "attach-plan",
+        900,
+        250,
+    );
+    assert_eq!(row["type"], "portal_reached");
+    assert_eq!(row["data"]["mechanism"], "attach-plan");
+    assert_eq!(row["data"]["plan_ms"], 900);
+    assert_eq!(row["data"]["spawn_ms"], 250);
+    let slow = crate::server::portal_journal::slow_open_notice(2, "w", "attach-plan", 900, 250);
+    assert_eq!(
+        slow.as_deref(),
+        Some("portal 2: w took 1150 ms to open (plan 900, spawn 250)")
+    );
+    assert!(
+        crate::server::portal_journal::slow_open_notice(2, "w", "attach-direct", 0, 40).is_none()
+    );
+    assert!(
+        crate::server::portal_journal::slow_open_notice(2, "w", "relaunch", 5000, 40).is_none()
+    );
 }
 
 // ---- (x-d545) the remembered tab outlives its viewer ----
@@ -2071,6 +2102,7 @@ async fn portal_ctl_claude_row_replies_the_landing_not_the_fallback() {
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 
@@ -2170,6 +2202,7 @@ async fn portal_ctl_reaches_a_paneless_row_whose_key_also_matches_a_hosted_row()
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 

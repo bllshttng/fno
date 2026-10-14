@@ -6531,6 +6531,7 @@ fn staged_reentry_verdict() -> ReentryVerdict {
             "CLAUDE_CONFIG_DIR=/acct/makers/cfg".into(),
         ],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     }
 }
 
@@ -6677,6 +6678,7 @@ fn resume_agent_runs_the_staged_reentry_verdict() {
         ],
         env: vec!["FNO_ACCOUNT=makers".into()],
         config_dir: Some("/acct/makers/cfg".into()),
+        plan_ms: 0,
     });
 
     core.command(
