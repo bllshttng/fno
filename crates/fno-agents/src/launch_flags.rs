@@ -165,6 +165,11 @@ fn render_page(harness: &str, prose: &str, snaps: &[Snapshot]) -> String {
             "\n### `{} --help`\n\nCaptured from `{}`.\n",
             snap.command, snap.version
         ));
+        // A help layout the parser does not know reads as an empty capture,
+        // never as a harness with no flags.
+        if snap.sections.is_empty() {
+            out.push_str("\nNo flag or command section was read from this capture.\n");
+        }
         for sec in &snap.sections {
             let head = match sec.kind {
                 SectionKind::Flags => "Flag",
@@ -259,19 +264,22 @@ mod tests {
                 row("-h, --help", "Display help"),
             ]
         );
-        assert_eq!(
-            s[1].entries,
-            vec![row("attach <id>", "Open a session")]
-        );
+        assert_eq!(s[1].entries, vec![row("attach <id>", "Open a session")]);
 
         let clap = "Usage: codex [OPTIONS]\n\nOptions:\n  -c, --config <key=value>\n          Override a value.\n\n          Examples: one\n\n      --oss\n          Use open-source provider\n\n  -a, --ask-for-approval <POLICY>\n          Possible values:\n          - never: Never ask\n";
         let s = parse_help(clap);
         assert_eq!(
             s[0].entries,
             vec![
-                row("-c, --config <key=value>", "Override a value. Examples: one"),
+                row(
+                    "-c, --config <key=value>",
+                    "Override a value. Examples: one"
+                ),
                 row("--oss", "Use open-source provider"),
-                row("-a, --ask-for-approval <POLICY>", "Possible values: - never: Never ask"),
+                row(
+                    "-a, --ask-for-approval <POLICY>",
+                    "Possible values: - never: Never ask"
+                ),
             ]
         );
 
@@ -279,10 +287,7 @@ mod tests {
         let s = parse_help(opencode);
         let titles: Vec<&str> = s.iter().map(|x| x.title.as_str()).collect();
         assert_eq!(titles, ["FLAGS", "GLOBAL FLAGS", "SUBCOMMANDS"]);
-        assert_eq!(
-            s[0].entries,
-            vec![row("--title string", "Session title")]
-        );
+        assert_eq!(s[0].entries, vec![row("--title string", "Session title")]);
     }
 
     /// A snapshot that lost its header names the file and the line it wants;

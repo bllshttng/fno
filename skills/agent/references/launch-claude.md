@@ -31,7 +31,7 @@ fno translates none of claude's flags. The flag tables below come from `claude -
 
 ## Get the result back
 
-- `fno agents list` shows the row once SessionStart has fired, usually within seconds.
+- `fno agents list` shows the row once SessionStart has fired.
 - `fno agents peek <name>` reads its latest turn. `fno agents mail send <name> "<text>"` reaches it.
 - claude's own views work too: `claude agents --json`, `claude logs <id>`, `claude attach <id>`.
 - The worker's `/fno:target` loop opens the PR. If a covered PR settles, the lead's settle arm mails you.

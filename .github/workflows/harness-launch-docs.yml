@@ -14,8 +14,12 @@ name: harness-launch-docs
 # secret starts CI on the bot PR: a push made with GITHUB_TOKEN triggers no
 # workflow.
 #
-# On a pull_request the job is a dry run. It recaptures and renders, prints
-# the diff, and opens nothing.
+# Two jobs, so third-party code never holds a write token. render installs
+# the published CLIs, captures and renders under a read-only token with no
+# persisted credentials, and uploads the change as a patch. publish runs no
+# npm code: it applies the patch and opens the PR.
+#
+# On a pull_request only render runs. It prints the diff and opens nothing.
 
 on:
   schedule:
@@ -30,21 +34,20 @@ on:
       - docs/harnesses/launch/**
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: harness-launch-docs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  regen:
+  render:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
-          token: ${{ secrets.HARNESS_DOCS_TOKEN || github.token }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -92,14 +95,39 @@ jobs:
         run: |
           cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
           crates/fno-agents/target/debug/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
-          git status --short
-          git diff -- docs/harnesses/help skills/agent/references
-      - name: Open a PR when a page changed
+          # Intent-to-add, so a first capture (a new snapshot file) enters the patch.
+          git add -N docs/harnesses/help skills/agent/references
+          git diff --binary -- docs/harnesses/help skills/agent/references > "$RUNNER_TEMP/launch-docs.patch"
+          git diff --stat -- docs/harnesses/help skills/agent/references
+      - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
+        with:
+          name: launch-docs-patch
+          path: ${{ runner.temp }}/launch-docs.patch
+          retention-days: 7
+
+  publish:
+    needs: render
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.HARNESS_DOCS_TOKEN || github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: launch-docs-patch
+          path: ${{ runner.temp }}
+      - name: Open a PR when a page changed
         env:
           GH_TOKEN: ${{ secrets.HARNESS_DOCS_TOKEN || github.token }}
         run: |
-          if [ -z "$(git status --porcelain -- docs/harnesses/help skills/agent/references)" ]; then
+          patch="$RUNNER_TEMP/launch-docs.patch"
+          if [ ! -s "$patch" ]; then
             echo "no harness --help changed"
             exit 0
           fi
@@ -107,7 +135,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git add docs/harnesses/help skills/agent/references
+          git apply --index "$patch"
           git commit -m "docs(agents): recapture harness --help and re-render the launch pages"
           git push --force origin "HEAD:refs/heads/$branch"
           if gh pr view "$branch" --json number >/dev/null 2>&1; then

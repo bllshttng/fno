@@ -25,7 +25,7 @@ The payload starts with `$fno:`, never `/`. Single-quote it. Inside double quote
 - **Record.** The hook writes a launch record with your session as the parent. For a pane run it parses the codex argv after `--`.
 - **Adopt.** codex's SessionStart hook (`hooks/codex-hooks.json`) reports the session, and fno mints its row.
 
-On spawn, `-Y` maps to codex `--dangerously-bypass-approvals-and-sandbox`. On the native line, write codex's own flag. Models fno has measured: `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`.
+On spawn, `-Y` maps to codex `--dangerously-bypass-approvals-and-sandbox`. On the native line, write codex's own flag. Models: `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`.
 
 ## Get the result back
 
