@@ -1541,7 +1541,7 @@ mod tests {
         );
         let pool = archived_id_pool_in(dir.path());
         for id in ["q-04fa", "q-04ff", "q-04fe", "q-04fc", "q-04fb", "q-04aa"] {
-            assert!(pool.contains(id), "the pool holds {id}");
+            assert!(pool.contains(id), "the pool holds {id}; pool = {pool:?}");
         }
     }
 
