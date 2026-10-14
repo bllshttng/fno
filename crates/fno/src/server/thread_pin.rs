@@ -40,14 +40,14 @@ impl Core {
             core.squad_identity(squad)
                 .map(|(name, key)| if name.is_empty() { key } else { name })
         };
-        let Some(mut identity) = identity_of(self) else {
+        let Some(mut identity) = identity_of(&*self) else {
             self.notice(client_id, "no such workspace");
             return Flow::Continue;
         };
         if identity.is_empty() {
             // An unnamed workspace gets its durable key at first persist.
             self.persist_squad(squad);
-            identity = identity_of(self).unwrap_or_default();
+            identity = identity_of(&*self).unwrap_or_default();
         }
         if identity.is_empty() {
             self.notice(
