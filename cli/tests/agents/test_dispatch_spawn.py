@@ -50,6 +50,15 @@ def _graphless_seed_resolver(monkeypatch):
     monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
 
 
+@pytest.fixture(autouse=True)
+def _python_door(monkeypatch):
+    """These tests pin the PYTHON door's receipts and refusals. The axis
+    flags that used to route their argvs to Python are retired, so an argv
+    with no Python-only marker would exec the Rust client instead; the
+    sanctioned fallback pins the door under test. The gate stays live."""
+    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -342,7 +351,7 @@ def test_spawn_claude_plain(workdir_claude) -> None:
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "myagent-c", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "myagent-c", "hello"],
         catch_exceptions=False,
     )
 
@@ -388,7 +397,7 @@ def test_spawn_claude_command_receipt_names_effective_message(workdir_claude) ->
         agents_app,
         [
             "spawn", "--name", "command-c", "-H", "claude",
-            "/fno:ship pr check 7", "--substrate", "thread",
+            "/fno:ship pr check 7",
         ],
         catch_exceptions=False,
     )
@@ -435,7 +444,7 @@ def test_spawn_claude_receipt_surfaces_moved_cwd(workdir_claude, monkeypatch) ->
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "moved-c", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "moved-c", "hello"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
@@ -461,7 +470,7 @@ def test_spawn_claude_receipt_cwd_json_encoded(workdir_claude, monkeypatch) -> N
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "bs-c", "-H", "claude", "hello", "--substrate", "thread"],
+        ["spawn", "--name", "bs-c", "hello"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
