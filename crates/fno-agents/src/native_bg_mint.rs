@@ -383,6 +383,10 @@ mod tests {
         path
     }
 
+    fn transcript_facts_from_path(path: &Path) -> (Option<String>, Option<String>) {
+        transcript_facts(Some(path))
+    }
+
     #[test]
     fn first_prompt_node_id_reads_the_launch_prompt() {
         let tmp = tempfile::TempDir::new().unwrap();
