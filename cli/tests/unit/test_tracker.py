@@ -313,20 +313,21 @@ def test_sidecar_external_mode_missing_file_is_empty(tmp_path, monkeypatch, exte
 def test_create_verbs_refuse_on_external_backend(
     verb, args, monkeypatch, tmp_path
 ):
-    # Every creation entry point must refuse on an external backend. The guard
-    # lives at the top of the native create path AND of cmd_new,
-    # cmd_decompose, cmd_intake, which write through their own mutators. A guard
-    # on only some reachable paths is decorative, so this exercises each path:
-    # if a future creation verb bypasses the helper, this fails loudly.
+    # Every creation entry point must refuse on an external backend. The
+    # guard lives at the top of the native create path (add, idea and the
+    # new word all ride it) AND of cmd_decompose, cmd_intake, which write
+    # through their own mutators. A guard on only some reachable paths is
+    # decorative, so this exercises each path: if a future creation verb
+    # bypasses the helper, this fails loudly.
     from typer.testing import CliRunner
 
     from fno.cli import app
 
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
-    if verb in {"add", "idea"}:
-        # add and idea answer natively now; their guard rides the binary
-        # under the same backend selection (the door pins graph, so the
-        # github selection merges over it).
+    if verb in {"add", "idea", "new"}:
+        # The create verbs answer natively now; their guard rides the
+        # binary under the same backend selection (the door pins graph, so
+        # the github selection merges over it).
         result = run_native_create(
             tmp_path / "graph.json",
             verb,

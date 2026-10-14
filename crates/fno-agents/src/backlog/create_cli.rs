@@ -866,6 +866,41 @@ pub(crate) fn create_node(
             1,
         ));
     }
+    // The `new` word's domain suggestion (the wheel's suggest_domain): a
+    // unique case-insensitive prefix match over the filed domains proposes
+    // the full name and refuses until --domain spells it out or
+    // --force-domain keeps the shorthand. Exact and unfamiliar pass through;
+    // plain add has never suggested.
+    if args.scoped_new && !args.force_domain {
+        let graph = super::settings::graph_path();
+        let domains: std::collections::BTreeSet<String> =
+            match crate::graph_store::read_rows(&graph) {
+                Ok(rows) => rows
+                    .iter()
+                    .filter_map(|r| r.get("domain").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect(),
+                Err(_) => Default::default(),
+            };
+        let q = args.domain.trim();
+        if !q.is_empty() && !domains.contains(q) {
+            let ql = q.to_lowercase();
+            let hits: Vec<&String> = domains
+                .iter()
+                .filter(|d| d.to_lowercase().starts_with(&ql))
+                .collect();
+            if hits.len() == 1 {
+                let m = hits[0];
+                return Err(refused(
+                    format!(
+                        "fno backlog new: did you mean --domain {m}? Pass --domain {m} or add --force-domain to keep {:?}.",
+                        args.domain
+                    ),
+                    2,
+                ));
+            }
+        }
+    }
     if args.details.is_some() && args.description.is_some() {
         return Err(refused(
             "Error: pass --details or --description, not both",
