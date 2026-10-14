@@ -463,10 +463,12 @@ struct Root {
     physical: PathBuf,
 }
 
-/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, quotes stripped, a RELATIVE token
-/// resolved against the payload cwd; then physicalized. A relative token with
-/// no payload cwd stays unresolved: guessing the hook's own cwd would
-/// misresolve.
+/// `~`, `$HOME`, `$CLAUDE_CONFIG_DIR`, `$FNO_STATE_DIR`, `$FNO_HOME`, quotes
+/// stripped, a RELATIVE token resolved against the payload cwd; then
+/// physicalized. A state-root variable the shell would expand empty (env
+/// unset) resolves to the bare remainder, the same path the command writes.
+/// A relative token with no payload cwd stays unresolved: guessing the
+/// hook's own cwd would misresolve.
 fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     let mut t = tok.replace('"', "").replace('`', "");
     if t.is_empty() {
@@ -482,6 +484,12 @@ fn abs_of(tok: &str, cwd: &str) -> Option<PathBuf> {
     } else if let Some(rest) = t.strip_prefix("$CLAUDE_CONFIG_DIR") {
         let cfg = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{home}/.claude"));
         t = format!("{cfg}{rest}");
+    } else if let Some(rest) = t.strip_prefix("$FNO_STATE_DIR") {
+        let dir = std::env::var("FNO_STATE_DIR").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
+    } else if let Some(rest) = t.strip_prefix("$FNO_HOME") {
+        let dir = std::env::var("FNO_HOME").unwrap_or_default();
+        t = format!("{}{}", dir.trim_end_matches('/'), rest);
     } else {
         let c = cwd.trim_end_matches('/');
         if c.is_empty() {
@@ -807,7 +815,9 @@ fn config_bash_arm(
         r"{lead}mkdir[[:space:]]+(-[^[:space:];|&]+[[:space:]]+)*([^;|&]+)"
     ))
     .unwrap();
-    if let Some(caps) = mkdir_clause.captures(cmd) {
+    // Every mkdir clause in the command, not only the first: `mkdir ok;
+    // mkdir ~/.fno/newdir` must refuse on the second clause.
+    for caps in mkdir_clause.captures_iter(cmd) {
         if let Some(clause) = caps.get(3).map(|m| m.as_str()) {
             for tok in clause.split_whitespace() {
                 if tok.starts_with('-') {

@@ -197,6 +197,18 @@ if printf '%s' "$out" | grep -q '"block"'; then
 else
   fail "AC13: second-operand state-root mkdir approved: $out"
 fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/x2; mkdir $STATEDIR/newdir3\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: a second mkdir clause is checked, not only the first"
+else
+  fail "AC13: second state-root mkdir clause approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir \\$FNO_STATE_DIR/newdir4\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir through a spelled state-root variable is refused"
+else
+  fail "AC13: spelled-variable state-root mkdir approved: $out"
+fi
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if [[ "$out" == "{}" ]]; then
   pass "AC13: mkdir under an existing folder stays allowed"
