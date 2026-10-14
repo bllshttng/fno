@@ -113,6 +113,9 @@ fn read_key_press() -> Option<Key> {
             KeyCode::Char(' ') => Key::Space,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
             KeyCode::Char(c) => Key::Char(c),
+            // Home, End, function and media keys: not part of the flow, so
+            // the read loop waits for the next press instead of mapping them.
+            _ => continue,
         };
         return Some(k);
     }

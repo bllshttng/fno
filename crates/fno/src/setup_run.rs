@@ -664,7 +664,7 @@ fn config_set_split(
         .stderr(std::process::Stdio::piped());
     let out = cmd
         .spawn()
-        .and_then(|mut c| c.wait_with_output())
+        .and_then(|c| c.wait_with_output())
         .map_err(|e| (format!("fno config set {keys}: {e}"), false))?;
     if !out.status.success() {
         let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -928,7 +928,8 @@ fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
             "backlog-prefix: backlog.id_prefix = {}, backlog.id_hex_width = 4",
             p.value
         ));
-        rep.paths.extend(paths);
+        rep.paths
+            .extend(paths.into_iter().map(|p| p.display().to_string()));
     }
     for e in errors {
         let message = format!("backlog-prefix: {e}");

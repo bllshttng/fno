@@ -162,7 +162,7 @@ fn probe_total_mem_gb() -> Option<f64> {
         t.lines().find_map(|l| {
             l.strip_prefix("MemTotal:")
                 .and_then(|r| r.trim().strip_suffix("kB"))
-                .and_then(|r| r.trim().parse().ok())
+                .and_then(|r| r.trim().parse::<u64>().ok())
                 .map(|kb| kb * 1024)
         })
     });
