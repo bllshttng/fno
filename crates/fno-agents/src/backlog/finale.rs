@@ -1444,3 +1444,425 @@ fn which(name: &str) -> Option<String> {
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// requeue - return a wedged in_progress node to the queue
+// ---------------------------------------------------------------------------
+
+const REQUEUE_HELP: &str = "Usage: fno backlog requeue NODE [--json|-J]
+
+Return a node wedged in_progress by a dead worker to the queue. The re-lock
+door retired with the graph claim mirror; re-acquisition is a claim store
+acquire, not a backlog verb.
+";
+
+/// The wheel's allowlist, fail closed: suspect is still owned, corrupted is
+/// unreadable, and a state added later must refuse.
+const REQUEUEABLE_CLAIM_STATES: [&str; 2] = ["free", "stale"];
+
+/// Fixed-width-4 humanized age (the wheel's `_humanize_age`): an unread
+/// probe renders `?`, never a zero.
+fn humanize_age(seconds: Option<i64>) -> String {
+    let Some(seconds) = seconds else {
+        return "   ?".to_string();
+    };
+    let (unit, n) = if seconds < 60 {
+        ("s", seconds)
+    } else if seconds < 3600 {
+        ("m", seconds / 60)
+    } else if seconds < 86400 {
+        ("h", seconds / 3600)
+    } else {
+        ("d", (seconds / 86400).min(999))
+    };
+    format!("{n}{unit}").rjust(4).to_string()
+}
+
+/// Seconds since the row last showed life: its start, or a note its own
+/// session wrote (the wheel's `_do_row_idle_s`).
+fn do_row_idle_s(entry: &Value, row: &Value, now_s: f64) -> Option<i64> {
+    let parse = |value: Option<&str>| -> Option<i64> {
+        super::maintenance_archive::parse_ts(Some(&Value::String(value?.to_string())))
+            .map(|dt| dt.timestamp())
+    };
+    let session = row.get("session_id").and_then(Value::as_str).unwrap_or("");
+    let mut stamps: Vec<i64> = Vec::new();
+    if let Some(started) = parse(row.get("started_at").and_then(Value::as_str)) {
+        stamps.push(started);
+    }
+    if let Some(notes) = entry.get("progress_notes").and_then(Value::as_array) {
+        for n in notes {
+            let same_session = n.get("source_session_id").and_then(Value::as_str) == Some(session);
+            if same_session {
+                if let Some(ts) = parse(n.get("ts").and_then(Value::as_str)) {
+                    stamps.push(ts);
+                }
+            }
+        }
+    }
+    stamps.iter().max().map(|max| (now_s as i64) - max)
+}
+
+/// Why the abandoned-do-row sweep holds this row, or None when it reads
+/// gone (the wheel's `_execute_row_hold_reason` order: the roster is read
+/// only once some open row is past the bound, a reachable worker outranks
+/// the idle clock, and an unread roster holds).
+fn execute_row_hold_reason(
+    entry: &Value,
+    row: &Value,
+    now_s: f64,
+    bound_s: i64,
+    workers: Option<&Vec<String>>,
+    roster_consulted: bool,
+    roster_reason: &str,
+) -> Option<String> {
+    let status = entry.get("status").and_then(Value::as_str).unwrap_or("");
+    if crate::graph_store::TERMINAL_RUNGS.contains(&status) || entry.get("superseded_by").is_some()
+    {
+        return None;
+    }
+    let idle = do_row_idle_s(entry, row, now_s);
+    let past_bound = idle.is_some_and(|i| i > bound_s);
+    let mut worker_names: Option<Vec<String>> = None;
+    if past_bound {
+        if !roster_consulted {
+            return Some(format!("roster unread ({roster_reason})"));
+        }
+        worker_names = workers.filter(|w| !w.is_empty()).cloned();
+    }
+    if let Some(names) = worker_names {
+        return Some(format!("reachable worker on node {}", names.join(", ")));
+    }
+    match idle {
+        Some(idle) if idle > bound_s => None,
+        _ => Some(format!(
+            "row idle {}, inside the {}h bound",
+            idle.map(|i| format!("{}h", i / 3600))
+                .unwrap_or_else(|| "?".to_string()),
+            bound_s / 3600
+        )),
+    }
+}
+
+/// The wheel's `reclaimable_note`: when the refused claim turns reclaimable.
+fn reclaimable_note(reclaimable_at_ms: Option<i64>, now_ms: i64) -> Option<String> {
+    let stamp = reclaimable_at_ms?;
+    let remaining_s = (stamp - now_ms) / 1000;
+    if remaining_s <= 0 {
+        return Some("reclaimable now".to_string());
+    }
+    let minutes = ((remaining_s as f64) / 60.0).round().max(1.0) as i64;
+    use chrono::TimeZone;
+    let utc = chrono::Utc::now();
+    let _ = utc;
+    let stamped = chrono::Utc
+        .timestamp_opt(stamp / 1000, ((stamp % 1000) * 1_000_000) as u32)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default();
+    Some(format!("reclaimable at {stamped} (in {minutes} min)"))
+}
+
+pub fn run_requeue(tail: &[String]) -> i32 {
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        print!("{REQUEUE_HELP}");
+        return 0;
+    }
+    let json_out = tail.iter().any(|a| a == "--json" || a == "-J");
+    let positional: Vec<&String> = tail.iter().filter(|a| !a.starts_with('-')).collect();
+    let Some(node) = positional.first() else {
+        eprintln!("Missing argument 'NODE'.");
+        return 2;
+    };
+    if let Some(code) = refuse_non_graph_backend("requeue") {
+        return code;
+    }
+    let graph = settings::graph_path();
+    let store = super::api::Store::new(&graph);
+    let rows = match super::api::rows(&store) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e.0);
+            return 1;
+        }
+    };
+    let Some(row) = find_node(&rows, node) else {
+        eprintln!("requeue: no exact node matches {node:?}.");
+        return 2;
+    };
+    let entry = row.clone();
+    let Some(node_id) = text_at(&entry, "id").map(String::from) else {
+        eprintln!("requeue: no exact node matches {node:?}.");
+        return 2;
+    };
+    let status_before = entry
+        .get("persisted_status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // has_pr outranks open_do in the derivation, so an in_review node never
+    // reaches the settle; refusing here also keeps requeue off any PR.
+    if status_before != "in_progress" {
+        eprintln!(
+            "requeue: {node_id} reads status {status_before:?}, not in_progress; only an in_progress node can be returned to the queue."
+        );
+        return 2;
+    }
+
+    // The claim reader wants the record, and the composite verdict still
+    // reads unknown when an unresolved roster row's worktree names this node.
+    let key = format!("node:{node_id}");
+    let (state, record) = claims::status(&key, None);
+    let state_str = state.as_str();
+    if !REQUEUEABLE_CLAIM_STATES.contains(&state_str) {
+        let claim_row = record
+            .as_ref()
+            .map(super::super::claim_verbs::claim_status_value)
+            .unwrap_or(Value::Null);
+        let holder = claim_row
+            .get("holder")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let holder_note = if holder.is_empty() {
+            String::new()
+        } else {
+            format!(", holder {holder:?}")
+        };
+        let basis = claim_row.get("basis").and_then(Value::as_str).unwrap_or("");
+        let basis_note = if basis.is_empty() {
+            String::new()
+        } else {
+            format!(" ({basis})")
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let note = reclaimable_note(
+            claim_row.get("reclaimable_at").and_then(Value::as_i64),
+            now_ms,
+        );
+        let grace_note = note
+            .map(|n| format!("; {n}: re-run fno backlog requeue {node_id} then"))
+            .unwrap_or_default();
+        eprintln!(
+            "requeue: claim {key} reads {state_str}{basis_note}{holder_note}; only {} may requeue{grace_note}.",
+            REQUEUEABLE_CLAIM_STATES.join(" or ")
+        );
+        return 3;
+    }
+
+    // Reachability over the open do rows: session truth per row. The wheel
+    // passed falsifier=None so a falsifier can never invent a refusal; the
+    // payload's verdict only ever lowers.
+    let open_rows: Vec<Value> = entry
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter(|r| graph_store::is_open_do_row(r))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let stores = crate::session_truth::Stores::ambient();
+    let mut cursors = crate::session_truth::cursor::TruthCursors::new();
+    struct RowTruth {
+        harness: String,
+        session_id: String,
+        state: String,
+        reachability: String,
+        samples: Option<i64>,
+        last_event_at: Value,
+        age: String,
+        row_idle_s: Option<i64>,
+    }
+    let mut pairs: Vec<(Value, RowTruth)> = Vec::new();
+    for r in &open_rows {
+        let sid = r.get("session_id").and_then(Value::as_str).unwrap_or("");
+        let payload =
+            crate::session_truth::resolve_payload(None, sid, now_s, &stores, &mut cursors);
+        let reachability = payload
+            .get("reachability")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let samples = payload
+            .get("observed_model")
+            .and_then(|o| o.get("kind"))
+            .and_then(Value::as_str)
+            .map(|kind| {
+                if kind == "no-model-yet" {
+                    Some(0i64)
+                } else if kind == "observed" {
+                    o_samples(&payload)
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        pairs.push((
+            r.clone(),
+            RowTruth {
+                harness: r
+                    .get("harness")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                session_id: sid.to_string(),
+                state: payload
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                reachability,
+                samples,
+                last_event_at: payload.get("last_event_at").cloned().unwrap_or(Value::Null),
+                age: humanize_age(payload.get("last_activity_age_s").and_then(Value::as_i64)),
+                row_idle_s: do_row_idle_s(&entry, r, now_s),
+            },
+        ));
+    }
+    let merged = super::advance_settings::load_merged(None);
+    let bound_hours = merged["backlog"]["maintain"]["abandoned_do_row_hours"]
+        .as_i64()
+        .filter(|n| *n > 0)
+        .unwrap_or(24);
+    let bound_s = bound_hours * 3600;
+    let mut reachable_workers: Option<Vec<String>> = None;
+    let mut roster_consulted = true;
+    let mut roster_reason = String::new();
+    let any_past_bound = pairs
+        .iter()
+        .any(|(r, _)| do_row_idle_s(&entry, r, now_s).unwrap_or(0) > bound_s);
+    if any_past_bound {
+        match super::worked::reachable_workers_by_node() {
+            Ok(map) => {
+                reachable_workers = map.get(&node_id).cloned();
+            }
+            Err(reason) => {
+                roster_consulted = false;
+                roster_reason = reason;
+            }
+        }
+    }
+    for (r, truth) in &pairs {
+        let reach = truth.reachability == "reachable";
+        if reach {
+            let why = execute_row_hold_reason(
+                &entry,
+                r,
+                now_s,
+                bound_s,
+                reachable_workers.as_ref(),
+                roster_consulted,
+                &roster_reason,
+            );
+            let Some(why) = why else { continue };
+            let now = graph_store::now_isoformat();
+            eprintln!(
+                "requeue: {}:{} reads reachable; a reachable worker still owns the execute window. If that session is yours and has stopped this node: fno backlog session add {node_id} --phase execute --ended-at {now}. The execute row stays: {why}.",
+                truth.harness, truth.session_id
+            );
+            return 3;
+        }
+    }
+
+    // Reap the open rows: every phase fills ended_at and keeps the row.
+    for r in &open_rows {
+        let harness = r.get("harness").and_then(Value::as_str).unwrap_or("");
+        let sid = r.get("session_id").and_then(Value::as_str).unwrap_or("");
+        let _ = super::api::session_end(
+            &store,
+            &node_id,
+            sid,
+            "reap",
+            Some("execute"),
+            Some(harness),
+            None,
+        );
+    }
+
+    let note = super::cutover::release_node_lockfile(&node_id);
+    if note.starts_with("lockfile") {
+        eprintln!("requeue: {node_id} claim was not released ({note}); the node stays claimed.");
+        return 3;
+    }
+    if note.starts_with("released") || note.starts_with("no lockfile") {
+        let _ = super::cutover::settle_released_node(&graph, &node_id);
+    }
+
+    let after = super::api::rows(&store).ok().and_then(|rows| {
+        rows.iter()
+            .find(|e| text_at(e, "id") == Some(node_id.as_str()))
+            .cloned()
+    });
+    let status_after = after
+        .as_ref()
+        .and_then(|a| a.get("persisted_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let remaining = after
+        .as_ref()
+        .and_then(|a| a.get("sessions"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter(|r| graph_store::is_open_do_row(r)).count())
+        .unwrap_or(0);
+    if after.is_none() || status_after == "in_progress" {
+        eprintln!("requeue: {node_id} still reads in_progress after settling ({remaining} open do row(s) remain).");
+        return 1;
+    }
+
+    let settled: Vec<Value> = pairs
+        .iter()
+        .map(|(_, t)| {
+            json!({
+                "harness": t.harness,
+                "session_id": t.session_id,
+                "state": t.state,
+                "samples": t.samples,
+                "last_event_at": t.last_event_at,
+                "age": t.age,
+                "row_idle_s": t.row_idle_s,
+            })
+        })
+        .collect();
+    if json_out {
+        println!(
+            "{}",
+            json!({
+                "node_id": node_id,
+                "status_before": status_before,
+                "status_after": status_after,
+                "settled": settled,
+            })
+        );
+        return 0;
+    }
+    println!("requeued {node_id} ({status_before} -> {status_after})");
+    for t in &pairs {
+        let samples = t
+            .samples
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "?".to_string());
+        println!(
+            "  {}:{} state={} samples={samples} last_event_at={} age={}",
+            t.harness, t.session_id, t.state, t.last_event_at, t.age
+        );
+    }
+    0
+}
+
+/// The observed-model sample count off a truth payload.
+fn o_samples(payload: &Value) -> Option<i64> {
+    payload
+        .get("observed_model")
+        .and_then(|o| o.get("samples"))
+        .and_then(Value::as_i64)
+}

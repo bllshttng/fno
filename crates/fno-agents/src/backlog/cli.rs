@@ -333,6 +333,7 @@ pub fn run(args: &[String]) -> i32 {
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),
         "discover" => super::finale::run_discover(resolved.tail),
         "pick" => super::finale::run_pick(resolved.tail),
+        "requeue" => super::finale::run_requeue(resolved.tail),
         _ => forward_python(&resolved),
     }
 }
