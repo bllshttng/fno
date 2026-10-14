@@ -65,7 +65,7 @@ claims:
   "pid": <PID>,
   "pid_unavailable": false,
   "host": "<HOST>",
-  "machine_id": "6219ED9C-AC92-542C-AE74-E95C55C08C1D",
+  "machine_id": "<MACHINE>",
   "acquired_at": <TS_MS>,
   "expires_at": <TS_MS>,
   "expired": false,

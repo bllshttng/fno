@@ -139,11 +139,13 @@ fn build_case(row: &serde_json::Value) -> Case {
         _ => Plugin::Stub,
     };
     let setup = match row["setup"].as_str().expect("setup") {
+        "normal" => Setup::Normal,
         "second-run" => Setup::SecondRun,
         "foreign-holder" => Setup::ForeignHolder,
         "linked-worktree" => Setup::LinkedWorktree,
         "ghost-worktree" => Setup::GhostWorktree,
-        _ => Setup::ManifestAnother,
+        "manifest-another" => Setup::ManifestAnother,
+        other => panic!("unknown setup {other}"),
     };
     let seed = row
         .get("seed")
@@ -472,9 +474,11 @@ fn hostname() -> String {
 }
 
 /// The shared normalization contract with the capture driver: named tokens
-/// for temp paths, minted node ids, session uuids, timestamps, dates, git
-/// SHAs, pids, the host name, and epoch-milli stamps. A value that differs
-/// between two machines must not reach the comparison.
+/// for temp paths, minted node ids, timestamps, dates, git SHAs, pids, the
+/// host name, the OS machine identity, and epoch-milli stamps. The pinned
+/// session UUID is NOT normalized: it is deterministic (all zeros), the
+/// goldens hold it literally, and a rewriter here would break them. A value
+/// that differs between two machines must not reach the comparison.
 pub fn normalize(text: &str, root: &Path, node: &str) -> String {
     let mut out = text.to_string();
     for (spelling, token) in path_tokens(root) {
@@ -494,8 +498,11 @@ pub fn normalize(text: &str, root: &Path, node: &str) -> String {
     out = date.to_string();
     let sha = RegexHolder::get().sha.replace_all(&out, "<SHA>");
     out = sha.to_string();
-    let uuid = RegexHolder::get().uuid.replace_all(&out, "<SESSION>");
-    out = uuid.to_string();
+    let machine = RegexHolder::get()
+        .machine_id
+        .replace_all(&out, "\"machine_id\": \"<MACHINE>\"")
+        .to_string();
+    out = machine;
     out = RegexHolder::get()
         .owner_pid
         .replace_all(&out, "owner_pid: <PID>")
@@ -535,7 +542,7 @@ struct RegexHolder {
     ts: regex::Regex,
     date: regex::Regex,
     sha: regex::Regex,
-    uuid: regex::Regex,
+    machine_id: regex::Regex,
     owner_pid: regex::Regex,
     env_pid: regex::Regex,
     json_pid: regex::Regex,
@@ -555,10 +562,7 @@ impl RegexHolder {
             ts: regex::Regex::new(r"\d{8}T\d{10,}").unwrap(),
             date: regex::Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap(),
             sha: regex::Regex::new(r"\b[0-9a-f]{40}\b").unwrap(),
-            uuid: regex::Regex::new(
-                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            )
-            .unwrap(),
+            machine_id: regex::Regex::new(r#""machine_id": "[^"]*""#).unwrap(),
             owner_pid: regex::Regex::new(r"owner_pid: \d+").unwrap(),
             env_pid: regex::Regex::new(r"FNO_SESSION_PID=\d+").unwrap(),
             json_pid: regex::Regex::new(r#""pid": \d+"#).unwrap(),
@@ -653,14 +657,13 @@ pub fn side_effects(root: &Path, env: &[(String, String)], cwd: &Path, node: &st
         }
     }
     lines.push("claims:".into());
-    let key = format!(
-        "node:{}",
-        if node.is_empty() {
-            "none"
-        } else {
-            node.split('+').next().unwrap_or(node)
-        }
-    );
+    // The claim key rides VERBATIM: a two-node case passes "<first>+<second>"
+    // and the capture queried that combined key, so the .fx records ITS state.
+    let key = if node.is_empty() {
+        "node:none".to_string()
+    } else {
+        format!("node:{node}")
+    };
     let bindir = shim_dir(cwd);
     let out = Command::new(bindir.join("fno"))
         .args(["agents", "claim", "status", &key, "--no-roster"])

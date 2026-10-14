@@ -645,6 +645,7 @@ def main():
     golden_dir.mkdir(parents=True, exist_ok=True)
     top = Path(tempfile.mkdtemp(prefix="target-capture-"))
     print(f"capture root: {top}")
+    failures: list[str] = []
     for case in cases:
         case_root = top / slug(case.label)
         case_root.mkdir(parents=True)
@@ -652,8 +653,12 @@ def main():
             play(case, case_root)
             print(f"[ok] {case.label}")
         except Exception as exc:  # noqa: BLE001 - one bad case must not stop the sweep
+            failures.append(case.label)
             print(f"[FAIL] {case.label}: {exc}")
     print("done")
+    if failures:
+        print(f"{len(failures)} case(s) failed: {', '.join(failures)}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
