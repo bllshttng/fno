@@ -191,6 +191,12 @@ if printf '%s' "$out" | grep -q '"block"'; then
 else
   fail "AC13: state-root mkdir approved: $out"
 fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep $STATEDIR/newdir2\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir refuses on any operand, not only the first"
+else
+  fail "AC13: second-operand state-root mkdir approved: $out"
+fi
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if [[ "$out" == "{}" ]]; then
   pass "AC13: mkdir under an existing folder stays allowed"

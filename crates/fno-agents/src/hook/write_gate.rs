@@ -798,26 +798,25 @@ fn config_bash_arm(
         }
     }
     // mkdir: the folder-creation family, scoped to the state root only.
-    // Ruled separate from the families above because a config-dir mkdir must
-    // stay lawful (jobs/, projects/ are made there); only a folder the state
-    // root does not already hold refuses, through the state-root half of
-    // refuse_for.
-    let mkdir_pp = regex::Regex::new(&format!(
-        r"{lead}mkdir[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{pp}"
+    // Every operand of a mkdir is a write destination, so unlike the
+    // first-match families above this arm captures the whole clause, splits
+    // it into tokens, and routes each operand through the state-root half of
+    // refuse_for. Ruled separate from the families because a config-dir mkdir
+    // must stay lawful (jobs/, projects/ are made there).
+    let mkdir_clause = regex::Regex::new(&format!(
+        r"{lead}mkdir[[:space:]]+(-[^[:space:];|&]+[[:space:]]+)*([^;|&]+)"
     ))
     .unwrap();
-    let mkdir_rpp = regex::Regex::new(&format!(
-        r"{lead}mkdir[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{rpp}"
-    ))
-    .unwrap();
-    // Group 3: 1 is the lead, 2 the flags group, 3 the path group - `mkdir`
-    // itself is a literal here, not a capture group like tee's `(tee|sponge)`.
-    for (re, grp) in [(mkdir_pp, 3usize), (mkdir_rpp, 3usize)] {
-        if let Some(caps) = re.captures(cmd) {
-            let token = caps.get(grp).map(|m| m.as_str()).unwrap_or("");
-            if let Some(abs) = abs_of(token, payload_cwd) {
-                if let Some(reason) = state_root_refusal(&abs, state, session_id) {
-                    return Sec::Block(reason);
+    if let Some(caps) = mkdir_clause.captures(cmd) {
+        if let Some(clause) = caps.get(3).map(|m| m.as_str()) {
+            for tok in clause.split_whitespace() {
+                if tok.starts_with('-') {
+                    continue;
+                }
+                if let Some(abs) = abs_of(tok, payload_cwd) {
+                    if let Some(reason) = state_root_refusal(&abs, state, session_id) {
+                        return Sec::Block(reason);
+                    }
                 }
             }
         }
