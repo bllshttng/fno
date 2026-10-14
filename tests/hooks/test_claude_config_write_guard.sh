@@ -209,7 +209,7 @@ if printf '%s' "$out" | grep -q '"block"'; then
 else
   fail "AC13: second state-root mkdir clause approved: $out"
 fi
-out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir \\$FNO_STATE_DIR/newdir4\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir \$FNO_STATE_DIR/newdir4\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
   pass "AC13: mkdir through a spelled state-root variable is refused"
 else
