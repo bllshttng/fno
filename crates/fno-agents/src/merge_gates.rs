@@ -295,17 +295,17 @@ pub(crate) fn plan_fidelity_blocker<P: Probes>(probes: &P, cwd: &Path, pr: u64) 
 fn ledger_plan_path(cwd: &Path, pr: u64) -> Option<String> {
     use std::process::Command;
 
-    // Read-only: the optional resolver skips the checkout migration
-    // `ledger_path` performs and answers `None` with no declared root (a
-    // hermetic test), the same no-signal shape as a missing ledger.
-    let path = crate::paths::worktree_space_dir_opt(cwd)?.join("ledger.json");
-    let text = std::fs::read_to_string(path).ok()?;
-    let data: Value = serde_json::from_str(&text).ok()?;
-    let rows = match data {
-        Value::Array(list) => list,
-        Value::Object(map) => map.get("entries")?.as_array()?.clone(),
-        _ => return None,
-    };
+    // Read-only: the ledger is global (the Python writer appends to the
+    // same file), so an undeclared test process answers None, the same
+    // no-signal shape as a missing ledger, instead of reading the
+    // operator's real history.
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
+    let rows = crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd));
+    if rows.is_empty() {
+        return None;
+    }
     let origin = Command::new("git")
         .args(["config", "--get", "remote.origin.url"])
         .current_dir(cwd)

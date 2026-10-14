@@ -1043,7 +1043,7 @@ fn sample_session(
     Sample {
         cost_usd: session_cost_exact(
             &home.otel_dir().join("otel.db"),
-            &crate::paths::ledger_path(Path::new(cwd)),
+            &crate::paths_cli::ledger_json(Path::new(cwd)),
             sid,
         ),
         head,
