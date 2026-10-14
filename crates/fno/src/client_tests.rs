@@ -3676,6 +3676,7 @@ fn row_menu_rows() {
         v.row_menu.as_ref().unwrap().actions,
         vec![
             super::MenuAction::Rename,
+            super::MenuAction::AddFolder,
             super::MenuAction::MoveSquad(-1),
             super::MenuAction::MoveSquad(1),
             super::MenuAction::RemoveSquad,
