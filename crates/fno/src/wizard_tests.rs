@@ -355,6 +355,45 @@ fn back_navigation_and_the_write_latch() {
 }
 
 #[test]
+fn a_declined_posture_on_back_clears_the_stale_answer() {
+    // Yes at review-merge seeds self_review, then Back from services
+    // re-asks the screen. A No there must clear the seeded answer, so no
+    // review.posture proposal is built and the note names the kept
+    // posture.
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut pr = Script::queued(vec![
+        Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
+        Que::P(Pick::Ok(2)),           // models: claude keeps its model
+        Que::P(Pick::Ok(2)),           // models: codex keeps its model
+        Que::C(Conf::Yes),             // budget: apply the band
+        Que::C(Conf::Yes),             // review-merge: keep the posture
+        Que::C(Conf::Yes),             // review-merge: merge
+        Que::T(Ticks::Back),           // services: back
+        Que::C(Conf::No),              // review-merge again: decline the posture
+        Que::C(Conf::No),              // review-merge again: no merge
+        Que::T(Ticks::Ok(vec![0, 2])), // services again
+        Que::C(Conf::Yes),             // projects: register
+        Que::C(Conf::No),              // projects: no scan
+        Que::C(Conf::Yes),             // review: write (the latch)
+    ]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    assert!(pr
+        .notes
+        .iter()
+        .any(|n| n.contains("the review posture stays as configured")));
+    assert!(
+        pending(&state).iter().all(|r| r.key != "review.posture"),
+        "the declined posture must not stay proposed"
+    );
+    assert!(pending(&state)
+        .iter()
+        .all(|r| !r.key.starts_with("auto_merge")));
+}
+
+#[test]
 fn the_harness_gate_loops_until_a_pass_or_the_skip() {
     // Both default ticks fail twice: retry once, then take Skip for now,
     // which lands on done with an empty proposal set and nothing written.

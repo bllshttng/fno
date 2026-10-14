@@ -326,6 +326,23 @@ fn once_needs_every_covered_layers_marker() {
     assert!(!all_markers_present_in(Scope::Both, true, false));
 }
 
+/// The workspace-list reader passes a missing key and a real array
+/// through and refuses every other hand-set shape, so setup never
+/// overwrites a hand-set value with its own array.
+#[test]
+fn projects_rows_refuses_a_hand_set_non_array() {
+    assert!(projects_rows(None).unwrap().is_empty());
+    let array = toml::Value::Array(vec![toml::Value::String("stale".into())]);
+    assert_eq!(projects_rows(Some(&array)).unwrap().len(), 1);
+    for bad in [
+        toml::Value::String("my-dir".into()),
+        toml::Value::Integer(3),
+        toml::Value::Table(toml::map::Map::new()),
+    ] {
+        assert!(projects_rows(Some(&bad)).is_err());
+    }
+}
+
 /// The join lane: one step, out of the default pool, selectable only by an
 /// explicit `--only join` on a `--join` run; the refusal names the missing
 /// flag, the report rows carry the three join codes, and `undo` rides the
