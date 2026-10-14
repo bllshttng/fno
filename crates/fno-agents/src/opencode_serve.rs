@@ -660,6 +660,16 @@ fn dispatch_opencode_serve_inner(
     if argv.is_empty() {
         return AskOutcome::err("the filled argv is empty".to_string(), 2);
     }
+    // {payload} expands through opencode_run_tail, not the plain hole fill: a
+    // footnote slash seed must ride --command with its args split, prose stays
+    // the message positional (/ codex P1). The fill's trailing run - the
+    // value, plus the "--" fence a flag-shaped payload got - gives way to it.
+    let mut cut = 1;
+    if argv.len() >= 2 && argv[argv.len() - 1] == full_prompt && argv[argv.len() - 2] == "--" {
+        cut = 2;
+    }
+    argv.truncate(argv.len() - cut);
+    argv.extend(crate::provider::opencode_run_tail(&full_prompt));
     argv[0] = opencode_bin.to_string();
 
     // The record first: the launch reservation and the parent edge the adopt
@@ -1713,6 +1723,19 @@ mod tests {
         assert!(
             !lines.iter().any(|t| *t == "--session"),
             "no pre-minted session rides the launch: {launched}"
+        );
+        assert!(
+            !lines.iter().any(|t| *t == "--command"),
+            "the payload rides the tail, never one --command blob (/ codex P1): {launched}"
+        );
+        assert_eq!(
+            lines[lines.len() - 2],
+            "--",
+            "prose stays the message positional behind the fence: {launched}"
+        );
+        assert!(
+            lines.last().unwrap().contains("hello there"),
+            "the payload fills the tail: {launched}"
         );
     }
 
