@@ -187,7 +187,6 @@ backlog cost	T1	backlog cost	1
 backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
-backlog discover	T1	backlog discover	0
 backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog done	KEEP	backlog done	42	deliberate readability slack for a high-traffic distinct operation
 backlog encounter	T1	backlog encounter	0
@@ -197,7 +196,6 @@ backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
 backlog intake	T1	backlog intake	32
 backlog lane-fill	T1	backlog lane-fill	2
-backlog lanes	T1	backlog lanes	2
 backlog maintain	T1	backlog maintain	7
 backlog migrate-difficulty	T1	backlog migrate-difficulty	0
 backlog migrate-priorities	T1	backlog migrate-priorities	0
@@ -205,7 +203,6 @@ backlog migrate-updated-at	T1	backlog migrate-updated-at	0
 backlog new	T1	backlog new	38
 backlog next	KEEP	backlog next	54	deliberate readability slack for a high-traffic distinct operation
 backlog note	T1	backlog note	1
-backlog pick	T1	backlog pick	2
 backlog project-root	T1	backlog project-root	6
 backlog provenance	T1	backlog provenance	7
 backlog queue	T1	backlog queue	1
@@ -218,13 +215,11 @@ backlog relatedness get	T1	backlog relatedness get	0
 backlog remove	T1	backlog remove	7
 backlog render-views	T1	backlog render-views	5
 backlog reopen	T1	backlog reopen	3
-backlog reprioritize	T1	backlog reprioritize	1
 backlog retract	T1	backlog retract	3
 backlog retro drain-postmortems	T1	backlog retro drain-postmortems	1
 backlog retro run	T1	backlog retro run	16
 backlog retro sweep-carveouts	T1	backlog retro sweep-carveouts	7
 backlog roadmap	T1	backlog roadmap	1
-backlog stuck-epics	T1	backlog stuck-epics	1
 backlog session add	T1	backlog session add	4
 backlog session backfill	T1	backlog session backfill	1
 backlog session close	T1	backlog session close	3
@@ -237,7 +232,6 @@ backlog task update	T1	backlog task update	2
 backlog triage	T1	backlog triage	39	
 backlog unarchive	T1	backlog unarchive	2
 backlog unclaim	T1	backlog unclaim	8
-backlog requeue	T1	backlog requeue	3
 backlog undefer	T1	backlog undefer	14
 backlog undispatched	T1	backlog undispatched	0
 backlog unqueue	T1	backlog unqueue	0
