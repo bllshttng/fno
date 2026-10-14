@@ -1281,6 +1281,7 @@ mod tests {
                     ..q("q-d4")
                 },
             ],
+            ..Default::default()
         });
         keys(&mut v, b"   ");
         assert_eq!(
@@ -1335,6 +1336,7 @@ mod tests {
                     ..q("q-f6")
                 },
             ],
+            ..Default::default()
         });
         keys(&mut v2, b"c");
         assert!(v2.question_clear_settled, "no marks: clear settled fires");
@@ -1346,6 +1348,7 @@ mod tests {
         v3.bell.tab = Tab::Questions;
         v3.questions_fold = Some(crate::needs_overlay::QuestionsFold {
             items: vec![q("q-a1")],
+            ..Default::default()
         });
         v3.bell.marks = marks(&["q-a1", "q-gone"]);
         keys(&mut v3, b"c");
