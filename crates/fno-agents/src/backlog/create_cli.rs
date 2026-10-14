@@ -545,24 +545,65 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The legacy graph-archive.json id pool, best-effort. The store snapshot
-/// already covers archived rows; this file only matters on installs that
-/// still keep the pre-store archive.
+/// The legacy archive id pool, best-effort. Archived rows stamped in the
+/// store are already in the snapshot; a pre-store archive the store never
+/// folded is not, and a mint over one of its ids revives a dead node. Both
+/// spellings of the JSON archive and both spellings of the SQLite archive
+/// db feed the excluded set; every read degrades to nothing.
 fn archived_id_pool() -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Some(dir) = super::settings::state_dir() else {
+    if let Some(dir) = super::settings::state_dir() {
+        out.extend(archived_id_pool_in(&dir));
+    }
+    out
+}
+
+/// One state-dir read set: the migrated db/ spelling of each archive file
+/// first, then the legacy top-level spelling a not-yet-migrated root holds.
+fn archived_id_pool_in(dir: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for name in ["graph-archive.json", "graph-archive.db"] {
+        if let Some(row) = crate::state_layout::find(name) {
+            let home = dir.join(&row.new);
+            out.extend(archive_file_ids(&home));
+        }
+        out.extend(archive_file_ids(&dir.join(name)));
+    }
+    out
+}
+
+/// One best-effort archive read: the JSON `entries` shape, or a SQLite
+/// archive db in either row shape the store has used (`entries` blob rows,
+/// or the store's own `nodes` table). A missing or unparsable file
+/// contributes nothing. The SQLite open is read-only: an ordinary open
+/// creates the file it opens.
+fn archive_file_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    if let Ok(text) = std::fs::read_to_string(path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            if let Some(entries) = value.get("entries").and_then(Value::as_array) {
+                for e in entries {
+                    if let Some(id) = e.get("id").and_then(Value::as_str) {
+                        out.insert(id.to_string());
+                    }
+                }
+            }
+            return out;
+        }
+    }
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
         return out;
     };
-    let Ok(text) = std::fs::read_to_string(dir.join("graph-archive.json")) else {
-        return out;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return out;
-    };
-    if let Some(entries) = value.get("entries").and_then(Value::as_array) {
-        for e in entries {
-            if let Some(id) = e.get("id").and_then(Value::as_str) {
-                out.insert(id.to_string());
+    for sql in ["SELECT id FROM entries", "SELECT id FROM nodes"] {
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            continue;
+        };
+        if let Ok(rows) = stmt.query([]) {
+            for row in rows.flatten() {
+                if let Ok(id) = row.get::<_, String>(0) {
+                    out.insert(id);
+                }
             }
         }
     }
@@ -1428,6 +1469,100 @@ mod tests {
         let all: std::collections::BTreeSet<String> =
             (0..=0xffff).map(|i| format!("x-{i:04x}")).collect();
         let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&all], "x", 4)
+            .unwrap_err();
+        assert!(err.contains("exhaustion"), "mint refused: {err}");
+    }
+
+    #[test]
+    fn archived_pool_reads_both_spellings_of_both_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let open_entries = |path: &Path, ids: &[&str]| {
+            let conn = rusqlite::Connection::open(path).unwrap();
+            let mut batch = String::from(
+                "CREATE TABLE entries (\
+                     id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\n",
+            );
+            for (i, id) in ids.iter().enumerate() {
+                batch.push_str(&format!(
+                    "INSERT INTO entries VALUES ('{id}', {i}, '{{}}');\n"
+                ));
+            }
+            conn.execute_batch(&batch).unwrap();
+        };
+        // The migrated db/ spellings, JSON archive and SQLite twin alike.
+        std::fs::write(
+            dir.path().join("db/graph-archive.json"),
+            b"{\"entries\": [{\"id\": \"x-04fa\"}]}",
+        )
+        .unwrap();
+        open_entries(
+            dir.path().join("db/graph-archive.db").as_path(),
+            &["x-04ff", "x-04fe"],
+        );
+        // The legacy top-level spellings a not-yet-migrated root holds.
+        std::fs::write(
+            dir.path().join("graph-archive.json"),
+            b"{\"entries\": [{\"id\": \"x-04fc\"}]}",
+        )
+        .unwrap();
+        // The store's own shape, which a store-spun archive db carries, at
+        // the legacy top-level spelling.
+        let conn = rusqlite::Connection::open(dir.path().join("graph-archive.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE nodes (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, slug TEXT NOT NULL UNIQUE, \
+                 title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL);\n\
+             INSERT INTO nodes VALUES ('x-04fb', 0, 's', 't', 'done', 'p2');",
+        )
+        .unwrap();
+        drop(conn);
+        let pool = archived_id_pool_in(dir.path());
+        for id in ["x-04fa", "x-04ff", "x-04fe", "x-04fc", "x-04fb"] {
+            assert!(pool.contains(id), "the pool holds {id}");
+        }
+    }
+
+    #[test]
+    fn archived_pool_degrades_to_empty_on_broken_or_foreign_files() {
+        let dir = tempfile::tempdir().unwrap();
+        // An unparsable JSON archive and a non-database file each contribute
+        // nothing; the reader must not create or repair what it reads.
+        std::fs::write(dir.path().join("graph-archive.json"), b"{broken").unwrap();
+        std::fs::write(
+            dir.path().join("graph-archive.db"),
+            b"not a database at all",
+        )
+        .unwrap();
+        assert!(archived_id_pool_in(dir.path()).is_empty());
+        assert!(dir.path().join("graph-archive.db").exists());
+        let bytes = std::fs::read(dir.path().join("graph-archive.db")).unwrap();
+        assert_eq!(bytes, b"not a database at all");
+    }
+
+    #[test]
+    fn mint_refuses_when_the_legacy_archive_db_holds_every_id() {
+        // The exclusion gate is deterministic only at saturation: with every
+        // id of the width held only in the archive db, the mint must refuse
+        // rather than emit an id a dead node already carries.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("db")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("db/graph-archive.db")).unwrap();
+        let mut batch = String::from(
+            "CREATE TABLE entries (\
+                 id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, row TEXT NOT NULL);\nBEGIN;\n",
+        );
+        for i in 0..=0xffff {
+            batch.push_str(&format!(
+                "INSERT INTO entries VALUES ('x-{i:04x}', {i}, '{{}}');\n"
+            ));
+        }
+        batch.push_str("COMMIT;");
+        conn.execute_batch(&batch).unwrap();
+        drop(conn);
+        let pool = archived_id_pool_in(dir.path());
+        assert_eq!(pool.len(), 0x1_0000);
+        let err = mint_node_id_with_prefix(&std::collections::BTreeSet::new(), &[&pool], "x", 4)
             .unwrap_err();
         assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
