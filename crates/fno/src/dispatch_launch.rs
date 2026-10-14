@@ -769,7 +769,7 @@ mod tests {
         assert!(row["data"]["reason"]
             .as_str()
             .unwrap()
-            .contains("--route owns the model"));
+            .contains("refusing; no worker launched"));
         // A gate refusal: the verdict marker is on the stderr and the gate
         // already wrote the row; a door row would double the feed.
         for suffix in ["db", "db-wal", "db-shm"] {
