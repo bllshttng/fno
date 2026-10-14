@@ -732,7 +732,8 @@ mod tests {
             }
         }
         let seen = top_level_destinations(&rows);
-        let closed: std::collections::BTreeSet<&str> = TOP_LEVEL_FOLDERS.iter().copied().collect();
+        let closed: std::collections::BTreeSet<String> =
+            TOP_LEVEL_FOLDERS.iter().map(|s| s.to_string()).collect();
         assert_eq!(
             seen, closed,
             "a layout row names a top-level folder outside the closed set; land the row under an existing folder. table destinations: {seen:?}, closed list: {closed:?}"
