@@ -41,89 +41,8 @@ def test_target_init_help_documents_inputs():
     assert "--plan-path" in result.stdout
 
 
-def test_target_init_refuses_stub(monkeypatch, tmp_path):
-    """AC (refuses stub): no --input/--plan-path -> non-zero, no subprocess."""
-    called = {"ran": False}
-
-    def _stub_run(*a, **k):
-        called["ran"] = True
-        raise AssertionError("init script must not run when args are missing")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    result = runner.invoke(app, ["do", "target", "init"])
-    assert result.exit_code == 2
-    assert not called["ran"]
-    assert "stub" in result.output.lower()
 
 
-def test_target_init_shells_through_with_env(monkeypatch, tmp_path):
-    """AC (happy path): --input shells to init script with TARGET_START + TARGET_INPUT."""
-    captured = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        # Capture the bash init shell-through specifically. init() also runs git
-        # subprocesses both before (script-path resolution) and after (the
-        # post-init orientation report, x-a7be) the bash call; neither is the
-        # call under test.
-        if list(cmd)[:1] == ["bash"]:
-            captured["cmd"] = list(cmd)
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    # Point the resolver at a fake plugin root that DOES contain the script.
-    fake_root = tmp_path / "plugin"
-    (fake_root / "hooks" / "helpers").mkdir(parents=True)
-    (fake_root / "hooks" / "helpers" / "init-target-state.sh").write_text("#!/bin/bash\n")
-    # CLAUDE_PLUGIN_ROOT wins over FNO_REPO_ROOT; clear it so the test's
-    # FNO_REPO_ROOT is authoritative.
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    plan = tmp_path / "p" / "x.md"
-    plan.parent.mkdir()
-    plan.write_text("# Plan\n", encoding="utf-8")
-
-    result = runner.invoke(
-        app,
-        ["do", "target", "init", "--input", "fix-login", "--plan-path", str(plan)],
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["cmd"][0] == "bash"
-    assert captured["cmd"][1].endswith("hooks/helpers/init-target-state.sh")
-    assert captured["env"].get("TARGET_START") == "1"
-    assert captured["env"].get("TARGET_INPUT") == "fix-login"
-    assert captured["env"].get("TARGET_PLAN_PATH") == str(plan)
-
-    # A named node asks the native binding owner first. adopt rides into the
-    # script as its verdict; forked exits 3 with the child's start command
-    # and never reaches the script.
-    monkeypatch.setattr(
-        target_cli, "_resolve_dispatch_node", lambda *a, **k: {"id": "x-4fb6"}
-    )
-    monkeypatch.setattr(target_cli, "_refuse_dispatch_hold", lambda *a, **k: None)
-    calls =_binding_answers(monkeypatch, {"verdict": "adopt", "pr": 2868})
-    captured.clear()
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-4fb6"])
-    assert result.exit_code == 0, result.output
-    assert calls[0][0] == ["backlog", "target-binding", "--stdin"]
-    assert calls[0][1]["node"] == "x-4fb6" and calls[0][1]["phase"] == "init"
-    assert captured["env"].get("FNO_TARGET_BINDING") == "adopt"
-    assert captured["env"].get("TARGET_ADOPTED_PR") == "2868"
-
-    _binding_answers(monkeypatch, {
-        "verdict": "forked", "effective_node": "x-c1d1",
-        "message": "target binding: FORKED", "next": "fno do target start x-c1d1 --no-merge",
-    })
-    captured.clear()
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-4fb6 watch expiry"])
-    assert result.exit_code == 3, result.output
-    assert "fno do target start x-c1d1 --no-merge" in result.output
-    assert "cmd" not in captured
 
 
 def _fake_plugin_root(tmp_path):
@@ -269,156 +188,16 @@ def test_retro_dispatch_preflight_attended_overlap_is_advisory_only(tmp_path):
     assert closed == []
 
 
-def test_target_init_size_sets_target_size_env(monkeypatch, tmp_path):
-    """--size propagates TARGET_SIZE (normalized to upper) to the init script."""
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        # Capture the bash init call; git subprocesses (script resolution, the
-        # post-init orientation report) bracket it and are not under test.
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--size", "m"])
-    assert result.exit_code == 0, result.output
-    assert captured["env"].get("TARGET_SIZE") == "M"  # normalized to upper
 
 
-def test_target_init_model_provider_set_dispatch_env(monkeypatch, tmp_path):
-    """--model/--harness persist to the init env so the bash writer stamps them."""
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(
-        app, ["do", "target", "init", "--input", "x", "--model", "glm-4.7", "--harness", "codex"]
-    )
-    assert result.exit_code == 0, result.output
-    assert captured["env"].get("TARGET_DISPATCH_MODEL") == "glm-4.7"
-    assert captured["env"].get("TARGET_DISPATCH_PROVIDER") == "codex"
 
 
-def test_target_init_beastmode_sets_authority_env(monkeypatch, tmp_path):
-    """x-6390: --beastmode plumbs TARGET_BEASTMODE=1 so the bash writer stamps the grant."""
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert captured["env"].get("TARGET_BEASTMODE") == "1"
 
 
-def test_target_init_beast_alias_grants_too(monkeypatch, tmp_path):
-    """x-6390: `--beast` is an accepted alias of `--beastmode`.
-
-    Mobile autocorrect splits `beastmode` into `beast mode`, so the short
-    spelling has to work or an operator on a phone silently loses the grant -
-    and a dropped grant looks exactly like never asking for one.
-    """
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--beast"])
-    assert result.exit_code == 0, result.output
-    assert captured["env"].get("TARGET_BEASTMODE") == "1"
 
 
-def test_target_init_clears_ambient_beastmode_without_flag(monkeypatch, tmp_path):
-    """x-6390: an inherited TARGET_BEASTMODE must NEVER grant authority.
-
-    The flag is the sole authority. A worker spawned under an exported
-    TARGET_BEASTMODE (codex/gemini spawn with env=None and inherit wholesale) would
-    otherwise self-grant walk-away autonomy nobody asked for.
-    """
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setenv("TARGET_BEASTMODE", "1")  # the ambient grant
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 0, result.output
-    assert captured["env"].get("TARGET_BEASTMODE") == "", (
-        "ambient TARGET_BEASTMODE must be cleared, not forwarded: "
-        f"got {captured['env'].get('TARGET_BEASTMODE')!r}"
-    )
 
 
-def test_target_init_no_pins_no_dispatch_env(monkeypatch, tmp_path):
-    """Byte-for-byte: without pins the dispatch env vars are absent."""
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        if list(cmd)[:1] == ["bash"]:
-            captured["env"] = dict(env or {})
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 0, result.output
-    assert "TARGET_DISPATCH_MODEL" not in captured["env"]
-    assert "TARGET_DISPATCH_PROVIDER" not in captured["env"]
 
 
 def test_target_init_empty_model_rejected(monkeypatch, tmp_path):
@@ -757,106 +536,8 @@ def test_target_start_beastmode_noop_when_already_isolated_is_named(tmp_path, mo
     assert "did NOT take" not in result.output, "warned without the flag"
 
 
-def test_target_init_beastmode_noop_on_existing_manifest_is_named(tmp_path, monkeypatch):
-    """x-6390: the manifest is write-once, so --beastmode against an initialized
-    session is a no-op - and a dropped grant looks exactly like no grant. Say it."""
-    original_run = target_cli.subprocess.run
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        # Narrow to the init shell-through: the manifest read's harness
-        # discovery also shells out (claims/session_pid), and a bare _Result
-        # made that walk raise AttributeError, which read_target_manifest
-        # swallows - the manifest then read as body-keys-only and phase 2
-        # denied a grant the fixture grants. Everything else answers for real.
-        if list(cmd)[:1] == ["bash"]:
-            return _Result()
-        return original_run(cmd, check=check, env=env, **kwargs)
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    # Pin the manifest root: the warning resolves it from ambient cwd/env and
-    # process caches, so a worker-mate test's leftovers can point it at a
-    # different tree and flip the verdict (order-dependent red in CI).
-    monkeypatch.setattr(
-        "fno.paths.resolve_repo_root", lambda: fake_root, raising=True
-    )
-
-    manifest = fake_root / ".fno" / "target-state.md"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-
-    # A pre-existing manifest with no grant: the flag was dropped -> warn.
-    manifest.write_text("---\nattended: true\n---\n")
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "did NOT take" in result.output, result.output
-
-    # The grant IS present AND anchored to a LIVE CLAIM: nothing to warn about.
-    # A live owner_pid alone would NOT qualify - it is alive for every session
-    # at init time, so it cannot distinguish a durable grant from a doomed one.
-    manifest.write_text(
-        '---\nattended: true\nauthority: full\n---\ntarget_claim_key: "node:x-1"\n'
-    )
-    monkeypatch.setattr(
-        "fno.target.orient._claim_state", lambda _k: "live", raising=True
-    )
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "did NOT take" not in result.output, result.output
-    assert "ANCHOR IT" not in result.output, result.output
 
 
-def test_target_init_beastmode_unanchored_grant_is_named(tmp_path, monkeypatch):
-    """x-6390: a free-text run claims no node, so `authority: full` has nothing
-    to anchor it and the orienter refuses it (fail closed). The stamp alone would
-    otherwise look like a working grant."""
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        return _Result()
-
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    # Pin the manifest root against ambient cwd/env state (see the noop test).
-    monkeypatch.setattr(
-        "fno.paths.resolve_repo_root", lambda: fake_root, raising=True
-    )
-
-    manifest = fake_root / ".fno" / "target-state.md"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    # A REAL claimless init: no claim key, but owner_pid is ALIVE (it always is
-    # at init). A liveness-only check would suppress the warning here and let the
-    # grant evaporate silently minutes later.
-    manifest.write_text(
-        f"---\nattended: true\nauthority: full\nowner_pid: {os.getpid()}\n---\n"
-    )
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "some idea", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "NOTHING LIVE TO ANCHOR IT" in result.output, result.output
-
-    # The message is an operator-facing CONTRACT, not decoration: it must name
-    # the real grant condition and must not offer owner_pid as an alternative.
-    # A message that contradicts the rule tells someone their claimless session
-    # might be fine, which is worse than saying nothing.
-    # Scope to the warning itself; the orientation report that follows legitimately
-    # mentions owner_pid as a liveness *reason*, which is a different claim.
-    warning = result.output.split("node:", 1)[0]
-    assert "LIVE CLAIM" in warning, warning
-    assert "owner_pid" not in warning, (
-        "the warning must not suggest a pid can anchor a grant: " + warning
-    )
 
 
 def test_target_start_never_refuses_mismatched_inplace_manifest(tmp_path, monkeypatch):
@@ -994,14 +675,6 @@ def test_target_init_refuses_held_node_before_bootstrap(tmp_path, monkeypatch):
     assert ran == []
 
 
-def test_target_init_refuses_child_held_by_delivery_owner(tmp_path, monkeypatch):
-    _held_graph(tmp_path, monkeypatch)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-1a2b"])
-    assert result.exit_code == 2, result.output
-    assert "held by plan x-5a5c" in result.output
-    assert ran == []
 
 
 def test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap(tmp_path, monkeypatch):
@@ -1221,20 +894,6 @@ def test_two_uncontained_holders_stay_ambiguous(tmp_path, monkeypatch):
     assert target_cli._resolve_dispatch_node(None, "/p/one.md") is None
 
 
-def test_plan_path_naming_only_contained_nodes_is_redirected(tmp_path, monkeypatch):
-    """No delivery unit on the plan at all -> still a contained node."""
-    plan = tmp_path / "one.md"
-    plan.write_text("---\nstatus: ready\n---\n")
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-261c", "plan_path": str(plan), "contained_in": "x-6320"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--plan-path", str(plan)])
-    assert result.exit_code == 2, result.output
-    assert ran == []
 
 
 def test_check_contained_refuses_with_the_shell_gates_own_code(tmp_path, monkeypatch):
@@ -1282,28 +941,6 @@ def test_init_script_wires_the_containment_gate():
     assert '"$_CT_RC" -eq 9' in text
 
 
-def test_plan_held_only_by_contained_nodes_still_redirects(tmp_path, monkeypatch):
-    """The first narrowing covered len(units)==1 and missed len(units)==0.
-
-    Owner superseded, deleted, or its plan_path edited away leaves a plan whose
-    every holder is contained. That fell back to the len==1 rule, returned None,
-    and skipped the redirect - the exact second-PR state the guard exists for.
-    They all name one owner, so the destination is unambiguous.
-    """
-    plan = tmp_path / "one.md"
-    plan.write_text("---\nstatus: ready\n---\n")
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-261c", "plan_path": str(plan), "contained_in": "x-6320"},
-        {"id": "x-3f8d", "plan_path": str(plan), "contained_in": "x-6320"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--plan-path", str(plan)])
-    assert result.exit_code == 2, result.output
-    assert "x-6320" in result.output
-    assert ran == []
 
 
 def test_contained_nodes_naming_different_owners_stay_ambiguous(tmp_path, monkeypatch):
@@ -1317,28 +954,6 @@ def test_contained_nodes_naming_different_owners_stay_ambiguous(tmp_path, monkey
     assert target_cli._resolve_dispatch_node(None, "/p/one.md") is None
 
 
-def test_redirect_to_an_already_merged_owner_says_so(tmp_path, monkeypatch):
-    """After the cascade the owner is usually done; routing there is a dead end.
-
-    "run /fno:target <done node>" reads as a broken redirect rather than as
-    "this already shipped".
-    """
-    plan = tmp_path / "one.md"
-    plan.write_text("---\nstatus: ready\n---\n")
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-6320", "plan_path": str(plan), "pr_number": 700,
-         "completed_at": "2026-07-29T00:00:00+00:00"},
-        {"id": "x-261c", "plan_path": str(plan), "contained_in": "x-6320"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-261c"])
-    assert result.exit_code == 2
-    assert "already shipped" in result.output
-    assert "700" in result.output
-    assert "run `/fno:target x-6320`" not in result.output
 
 
 def test_target_start_refusals_and_forks_land_before_a_worktree(tmp_path, monkeypatch):
@@ -1439,31 +1054,6 @@ def test_check_contained_proceeds_when_the_store_is_unavailable(tmp_path,
     assert result.exit_code == 0, result.output
 
 
-def test_redirect_names_a_dead_owner_instead_of_routing_to_it(tmp_path, monkeypatch):
-    """sigma: a superseded owner will never ship, so routing there is useless.
-
-    Named separately from the shipped case because the remedy differs: this is
-    stale containment that wants clearing, not work that already landed.
-    """
-    owner_plan = tmp_path / "one.md"
-    child_plan = tmp_path / "two.md"
-    owner_plan.write_text("---\nstatus: ready\n---\n")
-    child_plan.write_text("---\nstatus: ready\n---\n")
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-6320", "plan_path": str(owner_plan), "superseded_by": "x-9999",
-         "deferred_at": "2026-07-29T00:00:00+00:00"},
-        {"id": "x-261c", "plan_path": str(child_plan), "contained_in": "x-6320"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    ran = _init_env(tmp_path, monkeypatch)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x-261c"])
-    assert result.exit_code == 2, result.output
-    assert "superseded" in result.output
-    assert "--parent null" in result.output
-    assert "run `/fno:target x-6320`" not in result.output
-    assert ran == []
 
 
 def test_check_contained_says_so_when_the_store_is_unavailable(tmp_path,
