@@ -785,8 +785,10 @@ fn visual_question_markdown(
 /// itself materialized by the attention arm's next beat). Best-effort: the
 /// returned line appends to the hold detail, never softens the hold. The
 /// intake's dedup (same subject + node already open) refuses before a second
-/// page is written; any other non-zero exit is a real failure, surfaced with
-/// the ask's own stderr so a refused page is never mislabeled as filed.
+/// page is written; a re-ask at a new head closes the older head's question
+/// at the intake, so one paint question stays open per PR. Any other
+/// non-zero exit is a real failure, surfaced with the ask's own stderr so a
+/// refused page is never mislabeled as filed.
 fn file_visual_question(
     root: &Path,
     pr: u64,
@@ -879,7 +881,7 @@ fn answered_question_names_pr(root: &Path, pr: u64) -> bool {
 /// The page text names the PR: a word-start `pr` (any case), an optional
 /// `#`/`-`/`/`/`:`/space separator run, then the PR number, not followed by
 /// another digit. Prose like "the PR is 3058" or "PRs 3058" never matches.
-fn page_names_pr(text: &str, pr: u64) -> bool {
+pub(crate) fn page_names_pr(text: &str, pr: u64) -> bool {
     let needle = pr.to_string();
     let bytes = text.as_bytes();
     let mut i = 0usize;
