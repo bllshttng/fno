@@ -699,6 +699,19 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    /// The closed set of top-level folders a table row may land in. A new name
+    /// here is a new top-level folder in every state root: it needs the review a
+    /// new root row gets. Delete a name in the change that folds its folder.
+    const TOP_LEVEL_FOLDERS: &[&str] =
+        &["db", "history", "install", "logs", "mux", "pages", "state"];
+
+    fn top_level_destinations(rows: &[Row]) -> std::collections::BTreeSet<String> {
+        rows.iter()
+            .filter(|r| r.kind != Kind::Park)
+            .map(|r| r.new.split('/').next().unwrap_or(&r.new).to_string())
+            .collect()
+    }
+
     #[test]
     fn shipped_table_parses() {
         let rows = parse_table(LAYOUT_TSV).expect("shipped table must parse");
@@ -718,6 +731,18 @@ mod tests {
                 );
             }
         }
+        let seen = top_level_destinations(&rows);
+        let closed: std::collections::BTreeSet<&str> = TOP_LEVEL_FOLDERS.iter().copied().collect();
+        assert_eq!(
+            seen, closed,
+            "a layout row names a top-level folder outside the closed set; land the row under an existing folder. table destinations: {seen:?}, closed list: {closed:?}"
+        );
+        let probe = parse_table("a\tnewtop/a\tmarker\tdaemon\n").expect("probe table must parse");
+        let probe_set = top_level_destinations(&probe);
+        assert!(
+            probe_set.contains("newtop") && probe_set != closed,
+            "positive control failed: a row naming a new top-level folder must produce a destination set outside the closed list, got {probe_set:?}"
+        );
     }
 
     #[test]
