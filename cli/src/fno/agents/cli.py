@@ -1694,13 +1694,6 @@ def cmd_spawn(
         if monitor == "happy" and route_provider != "zai":
             print("--monitor happy currently supports only the zai provider", file=sys.stderr)
             raise typer.Exit(code=2)
-        if monitor == "happy" and model is not None:
-            print(
-                "--monitor happy refuses a separate --model override; put the "
-                "Z.ai model in --route or use --provider zai --model <model>",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
         notes: list[str] = []
         route_env = resolve_explicit_route(route_provider or "", route_model or "", notice=notes.append)
         if not route_env:
@@ -1712,13 +1705,6 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         route_env = bind_route_provider(route_env, route_provider or "")
-
-    if monitor == "happy" and route_provider != "zai":
-        print(
-            "--monitor happy currently requires --provider zai with --model",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
 
     # Resolve/validate the route once before pane/bg/headless fan out. The same
     # helper is called by the in-process spawn APIs, so bypassing the CLI cannot

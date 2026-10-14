@@ -1930,7 +1930,7 @@ def test_cmd_spawn_pane_uses_global_bounded_dispatch(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "ordinary", "--harness", "claude", "--substrate", "pane", "do work"],
+        ["spawn", "--name", "ordinary", "--split", "left", "do work"],
     )
 
     assert result.exit_code == 0, result.output
@@ -2238,7 +2238,7 @@ def test_cmd_spawn_rejects_blank_squad_before_dispatch(tmp_path: Path, monkeypat
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     res = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "peer", "--harness", "claude", "-s", ""],
+        ["spawn", "peer", "-s", ""],
     )
     assert res.exit_code == 2, res.output
     assert "--workspace/-s needs a nonblank workspace name" in res.output
