@@ -25,7 +25,11 @@ def _seed(tmp_path: Path, entries: list[dict]) -> None:
 
 
 @pytest.fixture
-def epic_fixture(tmp_path, monkeypatch) -> Path:
+def epic_fixture(tmp_path, monkeypatch, _plan_hermetic_events_journal) -> Path:
+    # Journal isolation is twofold: the conftest pin sets FNO_EVENTS_PATH to
+    # this test's tmp journal, and the binary's own reads sit under the tmp
+    # HOME this fixture exports (the global mirror is HOME/.fno/events.jsonl,
+    # absent here; child journals live under the seeded cwd).
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     journal = tmp_path / "wt" / ".fno"
