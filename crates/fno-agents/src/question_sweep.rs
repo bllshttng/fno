@@ -77,8 +77,9 @@ pub(crate) fn same_head(a: &str, b: &str) -> bool {
 #[derive(Default)]
 pub(crate) struct RungFacts {
     pub statuses: std::collections::BTreeMap<String, String>,
-    /// node id -> its PR number, only when the row reads merge_status merged.
-    pub merged_prs: std::collections::BTreeMap<String, u64>,
+    /// node id -> every merged PR number, primary and additional_prs alike,
+    /// only when its merge_status reads merged.
+    pub merged_prs: std::collections::BTreeMap<String, Vec<u64>>,
     pub raw: String,
 }
 
@@ -99,10 +100,16 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> RungFacts {
         &store.graph,
         &crate::backlog::RowQuery {
             fields: Some(
-                ["id", "status", "pr_number", "merge_status"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
+                [
+                    "id",
+                    "status",
+                    "pr_number",
+                    "merge_status",
+                    "additional_prs",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
             ),
             with_blockers: true,
             ..Default::default()
@@ -120,11 +127,31 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> RungFacts {
             facts.statuses.insert(id.to_string(), status.to_string());
             // The stamp is not a rung by itself (a multi-ship node can carry
             // one while work remains); it only feeds the pr-merged rule,
-            // which also demands the question name the PR.
+            // which also demands the question name the PR. Later ships ride
+            // additional_prs and feed the same rule.
+            let mut merged: Vec<u64> = Vec::new();
             if row.get("merge_status").and_then(serde_json::Value::as_str) == Some("merged") {
                 if let Some(pr) = row.get("pr_number").and_then(serde_json::Value::as_u64) {
-                    facts.merged_prs.insert(id.to_string(), pr);
+                    merged.push(pr);
                 }
+            }
+            if let Some(serde_json::Value::Array(items)) = row.get("additional_prs") {
+                for item in items {
+                    if item.get("merge_status").and_then(serde_json::Value::as_str)
+                        == Some("merged")
+                    {
+                        if let Some(pr) = item
+                            .get("number")
+                            .and_then(serde_json::Value::as_i64)
+                            .and_then(|p| u64::try_from(p).ok())
+                        {
+                            merged.push(pr);
+                        }
+                    }
+                }
+            }
+            if !merged.is_empty() {
+                facts.merged_prs.insert(id.to_string(), merged);
             }
         }
     }
@@ -326,11 +353,46 @@ mod tests {
         merged: Vec<(String, u64)>,
         raw: String,
     ) -> impl Fn(&Path, &AgentsHome) -> RungFacts {
-        move |_, _| RungFacts {
-            statuses: statuses.iter().cloned().collect(),
-            merged_prs: merged.iter().cloned().collect(),
-            raw: raw.clone(),
+        move |_, _| {
+            let mut merged_prs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+            for (node, pr) in &merged {
+                merged_prs.entry(node.clone()).or_default().push(*pr);
+            }
+            RungFacts {
+                statuses: statuses.iter().cloned().collect(),
+                merged_prs,
+                raw: raw.clone(),
+            }
         }
+    }
+
+    #[test]
+    fn statuses_of_reads_the_primary_and_every_merged_additional_pr() {
+        // A multi-ship node ships more than one PR: the primary rides
+        // pr_number, later ships ride additional_prs, and every merged one
+        // feeds the pr-merged rule.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({
+                "id": "x-multi", "slug": "multi", "type": "feature", "title": "multi",
+                "status": "in_progress", "priority": "p2",
+                "pr_number": 7, "merge_status": "merged",
+                "additional_prs": [
+                    {"number": 9, "merge_status": "merged"},
+                    {"number": 10, "merge_status": "open"}
+                ]
+            })],
+        )
+        .unwrap();
+        let store = crate::backlog::api::Store::new(&graph);
+        let facts = statuses_of(&store);
+        assert_eq!(facts.merged_prs.get("x-multi"), Some(&vec![7, 9]));
+        assert_eq!(
+            facts.statuses.get("x-multi"),
+            Some(&"in_progress".to_string())
+        );
     }
 
     fn open_row(qid: &str, node: &str) -> String {

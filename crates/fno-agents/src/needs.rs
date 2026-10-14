@@ -1324,13 +1324,15 @@ pub(crate) fn settled_questions(
         // 1. pr-merged: the subject names the thing that resolved. The
         // head-scoped shape alone is not enough: a multi-ship node carries
         // merge_status merged from its last ship while the next head's
-        // question is already live, and a head token names no PR.
+        // question is already live, and a head token names no PR. Every
+        // merged PR feeds the rule, primary and additional_prs alike.
         for n in &nodes {
-            if let Some(pr) = facts.merged_prs.get(n) {
-                if subject_names_pr(subject, *pr) {
-                    reason = Some(format!("pr-merged: PR {pr} merged (node {n})"));
-                    break;
-                }
+            let Some(prs) = facts.merged_prs.get(n) else {
+                continue;
+            };
+            if let Some(pr) = prs.iter().find(|pr| subject_names_pr(subject, **pr)) {
+                reason = Some(format!("pr-merged: PR {pr} merged (node {n})"));
+                break;
             }
         }
         // 2. superseded: a newer open ask in this head family on this
@@ -2727,12 +2729,16 @@ mod tests {
         statuses: &[(&str, &str)],
         merged: &[(&str, u64)],
     ) -> crate::question_sweep::RungFacts {
+        let mut merged_prs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+        for (n, p) in merged {
+            merged_prs.entry(n.to_string()).or_default().push(*p);
+        }
         crate::question_sweep::RungFacts {
             statuses: statuses
                 .iter()
                 .map(|(n, s)| (n.to_string(), s.to_string()))
                 .collect(),
-            merged_prs: merged.iter().map(|(n, p)| (n.to_string(), *p)).collect(),
+            merged_prs,
             raw: String::new(),
         }
     }
