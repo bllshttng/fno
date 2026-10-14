@@ -162,9 +162,25 @@ fn run_task_list(tail: &[String]) -> i32 {
 
     let print_rows = |rows: &[Value]| {
         if json_out {
+            // The keeper round-trip drops a null owner key; restore it so the
+            // JSON view always answers the owner question (the wheel's
+            // {**r, "owner": r.get("owner")}),
+            let restored: Vec<Value> = rows
+                .iter()
+                .map(|r| {
+                    let mut o = r.clone();
+                    if let Some(obj) = o.as_object_mut() {
+                        obj.insert(
+                            "owner".into(),
+                            r.get("owner").cloned().unwrap_or(Value::Null),
+                        );
+                    }
+                    o
+                })
+                .collect();
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json!({"node": node_id, "tasks": rows}))
+                serde_json::to_string_pretty(&json!({"node": node_id, "tasks": restored}))
                     .unwrap_or_else(|_| "{}".to_string())
             );
         } else {
