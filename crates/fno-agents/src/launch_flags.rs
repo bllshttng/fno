@@ -236,6 +236,10 @@ pub fn render_pages(root: &Path) -> Result<Vec<(String, String)>, String> {
 mod tests {
     use super::*;
 
+    fn row(spec: &str, desc: &str) -> (String, String) {
+        (spec.to_string(), desc.to_string())
+    }
+
     /// Three wire shapes: commander (claude) wraps descriptions far right and
     /// drops a long flag's description to the next line; clap (codex) puts
     /// every description on following lines with blank lines between; v2
@@ -250,14 +254,14 @@ mod tests {
         assert_eq!(
             s[0].entries,
             vec![
-                ("--add-dir <dirs...>".into(), "Extra dirs to allow".into()),
-                ("--allowedTools <tools...>".into(), "Tools to allow".into()),
-                ("-h, --help".into(), "Display help".into()),
+                row("--add-dir <dirs...>", "Extra dirs to allow"),
+                row("--allowedTools <tools...>", "Tools to allow"),
+                row("-h, --help", "Display help"),
             ]
         );
         assert_eq!(
             s[1].entries,
-            vec![("attach <id>".into(), "Open a session".into())]
+            vec![row("attach <id>", "Open a session")]
         );
 
         let clap = "Usage: codex [OPTIONS]\n\nOptions:\n  -c, --config <key=value>\n          Override a value.\n\n          Examples: one\n\n      --oss\n          Use open-source provider\n\n  -a, --ask-for-approval <POLICY>\n          Possible values:\n          - never: Never ask\n";
@@ -265,15 +269,9 @@ mod tests {
         assert_eq!(
             s[0].entries,
             vec![
-                (
-                    "-c, --config <key=value>".into(),
-                    "Override a value. Examples: one".into()
-                ),
-                ("--oss".into(), "Use open-source provider".into()),
-                (
-                    "-a, --ask-for-approval <POLICY>".into(),
-                    "Possible values: - never: Never ask".into()
-                ),
+                row("-c, --config <key=value>", "Override a value. Examples: one"),
+                row("--oss", "Use open-source provider"),
+                row("-a, --ask-for-approval <POLICY>", "Possible values: - never: Never ask"),
             ]
         );
 
@@ -283,7 +281,7 @@ mod tests {
         assert_eq!(titles, ["FLAGS", "GLOBAL FLAGS", "SUBCOMMANDS"]);
         assert_eq!(
             s[0].entries,
-            vec![("--title string".into(), "Session title".into())]
+            vec![row("--title string", "Session title")]
         );
     }
 
