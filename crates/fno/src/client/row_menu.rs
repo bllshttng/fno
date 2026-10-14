@@ -617,6 +617,8 @@ pub(super) fn build_section_menu(
         };
         rows.push(entry_acc("✎", "Rename", "rename-workspace"));
         actions.push(MenuAction::Rename);
+        rows.push(entry("▣", "Add folder"));
+        actions.push(MenuAction::AddFolder);
         rows.push(entry("▲", "Move up"));
         actions.push(MenuAction::MoveSquad(-1));
         rows.push(entry("▼", "Move down"));
@@ -670,6 +672,17 @@ pub(super) async fn execute_row_menu_action(
             MenuAction::Rename,
         ) => {
             view.open_rename(RenameTarget::Squad(id));
+            return Ok(());
+        }
+        // A workspace section's Add folder opens the picker of live-row
+        // folders; the digit sends `AddWorkspaceFolder`.
+        (
+            MenuTarget::Section {
+                squad: Some(id), ..
+            },
+            MenuAction::AddFolder,
+        ) => {
+            view.open_add_folder(id);
             return Ok(());
         }
         // A workspace section's Move up/down sends the same `MoveSquad` the
@@ -1019,19 +1032,32 @@ pub(super) async fn execute_row_menu_action(
                 PortalPickDecision::Refuse(text) => view.set_notice(text),
             }
         }
-        MenuAction::MoveToWorkspace => match a.pane_id {
-            Some(pid) => {
-                // Recomputed at execute (a workspace added or removed between
-                // open and pick is reflected); `move_pick_keys` re-validates.
-                let dsts = view.move_dst_squads(a.squad);
-                if dsts.is_empty() {
-                    view.set_notice("no other workspace to move into".into());
-                } else {
-                    view.open_move_pick(MoveSrc::Pane(pid), dsts);
+        MenuAction::MoveToWorkspace => {
+            // A pane the row owns moves with it. A row only SHOWN in a portal
+            // seat, or with no pane, moves by pin on its session id.
+            let src = match (a.pane_id, a.portal, &a.harness, &a.harness_session_id) {
+                (Some(pid), None, _, _) => Some(MoveSrc::Pane(pid)),
+                (_, _, Some(harness), Some(harness_session_id)) => Some(MoveSrc::Row {
+                    harness: harness.clone(),
+                    harness_session_id: harness_session_id.clone(),
+                }),
+                _ => None,
+            };
+            match src {
+                Some(src) => {
+                    // Recomputed at execute (a workspace added or removed
+                    // between open and pick is reflected); `move_pick_keys`
+                    // re-validates.
+                    let dsts = view.move_dst_squads(a.squad);
+                    if dsts.is_empty() {
+                        view.set_notice("no other workspace to move into".into());
+                    } else {
+                        view.open_move_pick(src, dsts);
+                    }
                 }
+                None => view.set_notice("this row has no session id to pin".into()),
             }
-            None => view.set_notice("agent has no pane here".into()),
-        },
+        }
         MenuAction::Focus => match a.pane_id {
             Some(pid) => write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pid)))
                 .await
@@ -1234,7 +1260,7 @@ pub(super) async fn execute_row_menu_action(
         // A Notice rather than `unreachable!` - a panic here would take the whole
         // multiplexer down over a menu-construction bug.
         MenuAction::ClearDead => view.set_notice("clear dead needs a section header".into()),
-        MenuAction::MoveSquad(_) | MenuAction::RemoveSquad => {
+        MenuAction::MoveSquad(_) | MenuAction::RemoveSquad | MenuAction::AddFolder => {
             view.set_notice("move and remove need a workspace section header".into())
         }
         // Unreachable: the tab actions all pair with `MenuTarget::Tab`, which
@@ -1504,25 +1530,23 @@ impl View {
             // span, so the menu opens from any line of the card.
             Some(DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)) => {
                 let mut menu = build_row_menu_with(a, anchor, self.split_opens);
-                // A pane-hosted row can relocate its live pane into another
-                // workspace; a paneless row already gets the `p` placement
-                // picker. Append the entry only when another
-                // workspace exists, so it never offers a move to nowhere. Built
-                // here (where the layout is) rather than in build_row_menu so
-                // the per-state builder stays layout-free and its direct tests
-                // stay untouched.
-                if a.pane_id.is_some() {
-                    let move_dsts = self.move_dst_squads(a.squad);
-                    if !move_dsts.is_empty() {
-                        menu.popup.rows.push(PopupRow::Rule);
-                        menu.popup.rows.push(PopupRow::Entry {
-                            glyph: "↪".into(),
-                            label: "Move to workspace".into(),
-                            hint: String::new(),
-                            enabled: true,
-                        });
-                        menu.actions.push(MenuAction::MoveToWorkspace);
-                    }
+                // A pane-hosted row relocates its live pane into another
+                // workspace; any other row (paneless, or only SHOWN through a
+                // portal seat) is pinned there by session id. Append the entry
+                // only when another workspace exists, so it never offers a move
+                // to nowhere. Built here (where the layout is) rather than in
+                // build_row_menu so the per-state builder stays layout-free and
+                // its direct tests stay untouched.
+                let move_dsts = self.move_dst_squads(a.squad);
+                if !move_dsts.is_empty() {
+                    menu.popup.rows.push(PopupRow::Rule);
+                    menu.popup.rows.push(PopupRow::Entry {
+                        glyph: "↪".into(),
+                        label: "Move to workspace".into(),
+                        hint: String::new(),
+                        enabled: true,
+                    });
+                    menu.actions.push(MenuAction::MoveToWorkspace);
                 }
                 Some(Pick::Menu(Box::new(menu)))
             }
