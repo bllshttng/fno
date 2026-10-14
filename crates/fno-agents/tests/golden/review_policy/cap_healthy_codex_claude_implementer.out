@@ -1,0 +1,1 @@
+{"policy": "high_assurance", "satisfied": true, "effective": "diverse", "reason": "different-family reviewer available", "implementer_provider": "claude", "identity_known": true, "effective_reviewer_kinds": ["claude", "codex"], "exhausted_kinds": [], "headroom_unknown": false}

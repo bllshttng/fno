@@ -1,14 +1,18 @@
-"""The Rust-to-Python renderer bridge, asserted as a contract.
+"""The mux verb's renderer bridge, asserted as a contract.
 
-`fno mux pane send` (Rust) shells to `fno agents mail pane-prepare` (Python) for every
-non-raw send, and FAILS CLOSED when that call cannot run. Fail-closed is right,
-and it is also why this needs a test: rename the command or the flag and every
-existing test still passes while non-raw pane sends refuse at runtime, quietly,
-because a refusal is what the design asks for when the hop is unavailable.
+`fno mux pane send` (Rust) shells to the paired fno-agents binary's `mail
+pane-prepare` renderer for every non-raw send, and FAILS CLOSED when that call
+cannot run. Fail-closed is right, and it is also why this needs a test: rename
+the command or the flag and every existing test still passes while non-raw pane
+sends refuse at runtime, quietly, because a refusal is what the design asks for
+when the hop is unavailable.
 
-So this reads the argv the Rust source actually builds and asserts the Python
-CLI accepts it. It is a positive marker on the exact tokens that cross the
-boundary, not a check that something somewhere still works.
+So this reads the argv the Rust source actually builds and asserts the renderer
+accepts it. The Python leaf of the same name is a forward to that same binary,
+so its declared options are the Python-side mirror of the same contract. The
+renderer's gate and refusal behavior itself is pinned in Rust (the
+mail_pane_prepare parity goldens); nothing here re-tests it through the
+forward.
 """
 from __future__ import annotations
 
@@ -21,12 +25,13 @@ from typer.testing import CliRunner
 from fno.mail.cli import mail_app
 
 REPO = Path(__file__).resolve().parents[3]
-MUX_CLI = REPO / "crates" / "fno" / "src" / "mux_cli.rs"
+# The bridge lives in its own module since the pane-prepare port; read it there.
+BRIDGE_SRC = REPO / "crates" / "fno" / "src" / "mux_cli" / "pane_prepare.rs"
 
 
 def _bridge_argv() -> list[str]:
     """The literal argv `prepare_pane_bytes` passes to the child."""
-    src = MUX_CLI.read_text(encoding="utf-8")
+    src = BRIDGE_SRC.read_text(encoding="utf-8")
     block = re.search(
         r"fn prepare_pane_bytes.*?\.args\(\[(.*?)\]\)", src, re.S
     )
@@ -50,13 +55,13 @@ def _declared_options() -> set[str]:
 
 def test_the_rust_bridge_names_a_command_this_cli_has():
     argv = _bridge_argv()
-    # The x-6233 fold shape: `agents mail pane-prepare` plus flags.
-    assert argv[:3] == ["agents", "mail", "pane-prepare"], argv
+    # The renderer dispatch shape: the paired binary takes `mail`, then the verb.
+    assert argv[:2] == ["mail", "pane-prepare"], argv
 
     result = CliRunner().invoke(mail_app, ["pane-prepare", "--help"])
     assert result.exit_code == 0, (
-        f"the Rust bridge shells to `agents mail pane-prepare`, which this "
-        f"CLI no longer accepts: {result.output}"
+        f"the Rust bridge renders through `fno-agents mail pane-prepare`, whose "
+        f"Python forward no longer accepts its own flags: {result.output}"
     )
 
 
@@ -75,7 +80,7 @@ def test_the_rust_bridge_flags_still_exist(flag):
     # The parameter list is what the command actually accepts, and it does not
     # depend on how wide the screen is.
     assert flag in _declared_options(), (
-        f"`agents mail pane-prepare` no longer accepts {flag}; the Rust bridge passes it"
+        f"the pane-prepare forward no longer accepts {flag}; the Rust bridge passes it"
     )
 
 
@@ -83,7 +88,7 @@ def test_the_rust_bridge_passes_style_exception_to_the_child():
     """The conditional bridge flag: present in `prepare_pane_bytes`, accepted
     by the child. It rides `.arg(...)` beside the literal `.args([...])`, so it
     needs its own source assertion rather than `_bridge_argv`."""
-    src = MUX_CLI.read_text(encoding="utf-8")
+    src = BRIDGE_SRC.read_text(encoding="utf-8")
     body = re.search(r"fn prepare_pane_bytes.*?\n\}", src, re.S)
     assert body, "prepare_pane_bytes no longer exists"
     assert 'arg("--style-exception")' in body.group(0), (
@@ -92,132 +97,3 @@ def test_the_rust_bridge_passes_style_exception_to_the_child():
     assert "--style-exception" in _declared_options(), (
         "`mail pane-prepare` no longer accepts --style-exception"
     )
-
-
-# -- the gates on the enveloped body (x-4268) + the empty-payload refusal ----
-
-@pytest.fixture(autouse=True)
-def _isolated_bus(tmp_path, monkeypatch):
-    monkeypatch.setenv("FNO_BUS_DIR", str(tmp_path / "bus"))
-    monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path / "inbox"))
-
-
-@pytest.fixture
-def stubbed_transport(monkeypatch):
-    """Pin the transport's environment probes so the CLI bridge runs clean.
-
-    Patched at their module attributes, not at the CLI's imports: the command
-    imports them at call time, so it picks up these stubs.
-    """
-    from fno.mail.pane_transport import PaneIdentity
-
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_harness", lambda s, p: "claude"
-    )
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_recipient",
-        lambda s, p: "recip-1111",
-    )
-    monkeypatch.setattr("fno.mail.pane_transport.prompt_refusal", lambda **_kw: None)
-    monkeypatch.setattr("fno.agents.self_stamp.stamp_from", lambda _n: "sender-2222")
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_identity",
-        lambda s, p: PaneIdentity(
-            name="worker",
-            fno_id="11111111-2222-3333-4444-555566667777",
-            session_id="11111111-2222-3333-4444-555566667777",
-            handle="recip-1111",
-        ),
-    )
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id",
-        lambda: "99999999-8888-7777-6666-555544443333",
-    )
-    return None
-
-
-def _prepare(body: str, *extra: str):
-    return CliRunner().invoke(
-        mail_app,
-        ["pane-prepare", "--session-id", "s", "--pane", "3", *extra],
-        input=body,
-    )
-
-
-def test_default_pane_body_violating_style_refuses_before_envelope(stubbed_transport):
-    """Pane sends ride the relay contract: the word cap is the gate."""
-    body = " ".join(["w"] * 81)
-    result = _prepare(body)
-    assert result.exit_code == 1, result.output
-    assert "style" in result.output.lower(), result.output
-    assert "81 words" in result.output and "80 words" in result.output, result.output
-    assert "</fno_mail>" not in result.output, "a refused body must not render"
-
-
-def test_style_exception_flag_lets_the_body_through_without_a_ledger(
-    stubbed_transport, monkeypatch
-):
-    """LD3: the exception permits the overage, and an ordinary pane send
-    charges no rolling ledger - the envelope id is minted here alone."""
-    from fno import paths
-
-    body = (
-        "the refusal says use --raw for a bare submit keystroke and the next "
-        "command rejects that form because the arity guard still demands a "
-        "text flag"
-    )
-    result = _prepare(body, "--style-exception", "quoted operator text")
-    assert result.exit_code == 0, result.output
-    header = result.output.strip().splitlines()[0]
-    assert header.startswith("`@") and " · fmail-" in header, result.output[:120]
-    envelope_id = re.search(r"fmail-[0-9a-f]{12}", header)
-    assert envelope_id, result.output
-    assert not (paths.bus_dir() / "word-budget").exists()
-
-
-def test_identity_capture_pins_the_gate_not_a_re_resolve(stubbed_transport, monkeypatch):
-    """A pane reassigned between resolve and gate must refuse, not render an
-    envelope addressed to the old occupant: the CLI threads its captured
-    name/fno_id into prepare as the gate's expected identity."""
-    seen: dict = {}
-    from fno.mail import pane_transport
-
-    real_prepare = pane_transport.prepare
-
-    def _capture(text, **kwargs):
-        seen.update(kwargs)
-        return real_prepare(text, **kwargs)
-
-    monkeypatch.setattr(pane_transport, "prepare", _capture)
-    result = _prepare("the build is green and the tests pass.")
-    assert result.exit_code == 0, result.output
-    assert seen["expected_name"] == "worker"
-    assert seen["expected_fno_id"] == "11111111-2222-3333-4444-555566667777"
-    assert seen["to"] == "recip-1111"
-
-
-def test_empty_enveloped_body_keeps_the_attribution_refusal(stubbed_transport):
-    """x-3081's boundary: the new Rust `--raw --submit` exception must not
-    relax the Python attribution refusal, which stays exit 3 with its marker
-    and now names the full working form."""
-    result = _prepare("  \n")
-    assert result.exit_code == 3, result.output
-    assert "empty payload: there is nothing to attribute" in result.output
-    assert "--raw --submit" in result.output
-    assert "</fno_mail>" not in result.output
-
-
-def test_undeclared_harness_empty_body_takes_the_normal_attribution_refusal(
-    stubbed_transport, monkeypatch
-):
-    """x-f579: the empty-payload gate reads the posture, not the table, so an
-    UNDECLARED harness pane gets the ordinary attribution refusal naming
-    --raw --submit - never a capability-table crash, which would make mail by
-    pane-send unreachable for exactly the lane that is supposed to give it."""
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_harness", lambda _s, _p: "nanoclaw"
-    )
-    result = _prepare("  \n")
-    assert result.exit_code == 3, result.output
-    assert "empty payload: there is nothing to attribute" in result.output
-    assert "--raw --submit" in result.output

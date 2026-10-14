@@ -569,9 +569,23 @@ fn archived_id_pool() -> std::collections::BTreeSet<String> {
     out
 }
 
-/// <state_dir>/id-tombstones.json: every id this binary ever minted. A node
+const ID_TOMBSTONES: &str = "id-tombstones.json";
+
+/// (home, legacy): the layout table's place for the pool, and the old
+/// top-level spelling a not-yet-migrated root still holds.
+fn id_tombstone_paths(dir: &Path) -> (PathBuf, PathBuf) {
+    let legacy = dir.join(ID_TOMBSTONES);
+    let home = crate::state_layout::find(ID_TOMBSTONES)
+        .map(|row| dir.join(&row.new))
+        .unwrap_or_else(|| legacy.clone());
+    (home, legacy)
+}
+
+/// <state_dir>/db/id-tombstones.json: every id this binary ever minted. A node
 /// removed from the store leaves its tombstone, so a removed node's id is
-/// never minted again while old plans may still name it.
+/// never minted again while old plans may still name it. A root still holding
+/// the legacy top-level file reads it as a fallback until the migrate pass
+/// moves it.
 fn load_id_tombstones() -> std::collections::BTreeSet<String> {
     match super::settings::state_dir() {
         Some(dir) => load_id_tombstones_in(&dir),
@@ -579,9 +593,10 @@ fn load_id_tombstones() -> std::collections::BTreeSet<String> {
     }
 }
 
-fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
+/// One best-effort read: a missing or unparsable file contributes nothing.
+fn parse_id_tombstones(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Ok(text) = std::fs::read_to_string(dir.join("id-tombstones.json")) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return out;
     };
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
@@ -597,7 +612,16 @@ fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// Append one id to the tombstone file, best-effort: a failed write is
+fn load_id_tombstones_in(dir: &Path) -> std::collections::BTreeSet<String> {
+    let (home, legacy) = id_tombstone_paths(dir);
+    let mut out = parse_id_tombstones(&home);
+    for id in parse_id_tombstones(&legacy) {
+        out.insert(id);
+    }
+    out
+}
+
+/// Append one id to the tombstone pool, best-effort: a failed write is
 /// reported on stderr and the mint proceeds, so an install with no
 /// writable state dir can still create nodes.
 fn record_id_tombstone(id: &str) {
@@ -608,25 +632,29 @@ fn record_id_tombstone(id: &str) {
 }
 
 fn record_id_tombstone_in(dir: &Path, id: &str) {
+    let (home, _legacy) = id_tombstone_paths(dir);
     let mut ids = load_id_tombstones_in(dir);
-    if !ids.insert(id.to_string()) {
+    let inserted = ids.insert(id.to_string());
+    if !inserted {
         return;
     }
     let Ok(body) = serde_json::to_string(&ids) else {
         eprintln!("fno-agents: id-tombstone serialize failed for {id}");
         return;
     };
-    if std::fs::create_dir_all(dir).is_err() {
+    let Some(parent) = home.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
         eprintln!("fno-agents: id-tombstone dir missing for {id}");
         return;
     }
-    let path = dir.join("id-tombstones.json");
     // Write-then-rename so a crash mid-write never truncates the pool.
-    let tmp = dir.join("id-tombstones.json.tmp");
-    if std::fs::write(&tmp, &body).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+    let tmp = PathBuf::from(format!("{}.tmp", home.display()));
+    if std::fs::write(&tmp, &body).is_ok() && std::fs::rename(&tmp, &home).is_ok() {
         return;
     }
-    let _ = std::fs::write(&path, &body);
+    let _ = std::fs::write(&home, &body);
 }
 
 /// Every id a plan frontmatter names in the configured plans dir:
@@ -1367,6 +1395,32 @@ mod tests {
         assert_eq!(
             loaded,
             std::collections::BTreeSet::from(["x-6666".to_string(), "x-7777".to_string()])
+        );
+        // The pool lives under db/ now: the legacy top-level spelling stays
+        // untouched and the db/ copy holds the pool.
+        assert!(dir.path().join("db/id-tombstones.json").exists());
+        assert!(!dir.path().join("id-tombstones.json").exists());
+        // A legacy file a not-yet-migrated root still holds reads as a
+        // fallback, and a record writes only the db/ copy.
+        std::fs::write(dir.path().join("id-tombstones.json"), b"[\"x-8888\"]").unwrap();
+        let loaded = load_id_tombstones_in(dir.path());
+        assert_eq!(
+            loaded,
+            std::collections::BTreeSet::from([
+                "x-6666".to_string(),
+                "x-7777".to_string(),
+                "x-8888".to_string()
+            ])
+        );
+        record_id_tombstone_in(dir.path(), "x-9999");
+        let db_copy = std::fs::read_to_string(dir.path().join("db/id-tombstones.json")).unwrap();
+        for id in ["x-6666", "x-7777", "x-8888", "x-9999"] {
+            assert!(db_copy.contains(id), "the db/ copy holds {id}");
+        }
+        let legacy_bytes = std::fs::read(dir.path().join("id-tombstones.json")).unwrap();
+        assert_eq!(
+            legacy_bytes, b"[\"x-8888\"]",
+            "the legacy bytes are unchanged"
         );
         // The exclusion gate is deterministic only at saturation: with every
         // id of the width excluded, the mint must refuse rather than emit a
