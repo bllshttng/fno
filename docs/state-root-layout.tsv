@@ -37,6 +37,7 @@ graph-archive.json.lock	db/graph-archive.json.lock	lock	daemon
 graph-archive.json.store.sock.lock	db/graph-archive.json.store.sock.lock	lock	daemon
 relatedness.json	db/relatedness.json	overwrite	daemon
 .plan-sync-watermark-v2	db/.plan-sync-watermark-v2	overwrite	daemon
+id-tombstones.json	db/id-tombstones.json	overwrite	daemon
 events.db	db/events.db	sqlite	daemon
 events.db-wal	db/events.db-wal	sqlite	daemon
 events.db-shm	db/events.db-shm	sqlite	daemon
@@ -121,6 +122,7 @@ MOVED-TO	-	park	daemon
 graph.json.fts5	-	park	daemon
 graph.json.history	-	park	daemon
 .plan-sync-watermark	-	park	daemon
+id-tombstones.json.tmp	-	park	daemon
 convo-signals.jsonl	-	park	daemon
 groom-*.md	-	park	daemon
 # The 2026-10-01 residue batch: an empty dir ensure-global-dir.sh created
