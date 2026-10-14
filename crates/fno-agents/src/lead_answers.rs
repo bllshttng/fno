@@ -569,7 +569,7 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
                 "  {n} on question {qid}; answer with: fno backlog decide {n} \"<ruling>\" --question-id {qid}"
             )),
             None => lines.push(format!(
-                "  question {qid}: the user answers it on the question board; if this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority team"
+                "  question {qid}: the user answers it on the question board; if this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role"
             )),
         }
     }
