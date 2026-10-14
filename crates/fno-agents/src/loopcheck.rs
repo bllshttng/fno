@@ -268,11 +268,13 @@ use settings::{
     fail_closed_settings, normalize_reviewer, parse_manifest, parse_settings_result, Manifest,
     PeerEntry,
 };
+pub(crate) use settings::{
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+};
 #[cfg(test)]
 pub(crate) use settings::{parse_settings, value_as_probe_list};
 #[cfg(test)]
 use settings::{scalar_as_singleton, MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
-pub(crate) use settings::{scan_manifest_field, session_cost_from_ledger, Settings};
 use watch_lease::{harness_can_idle, watch_target, watch_window_ms, CONTINUE_WORKING};
 use watch_lease::{CODEX_UNROUTABLE_REFUSAL, EMIT_FAILED_REFUSAL};
 
@@ -560,7 +562,7 @@ pub(crate) fn decide_with_payload(
     let ledger_path = parsed
         .ledger_path
         .clone()
-        .unwrap_or_else(|| crate::paths::ledger_path(&cwd));
+        .unwrap_or_else(|| crate::paths_cli::ledger_json(&cwd));
 
     // Now timestamp
     let now: DateTime<Utc> = if let Some(ref s) = parsed.now_override {

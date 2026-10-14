@@ -1,0 +1,2 @@
+blocked=True
+reason=incarnation-fence: session:uuid-fence held by target-session:other (pid=<ERR>); refusing outward action - another incarnation owns this lineage; if the holder is stale, release it with: fno agents claim release session:uuid-fence --force --reason "stale holder"

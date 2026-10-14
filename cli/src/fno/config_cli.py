@@ -250,22 +250,7 @@ def _repo_has_fno_activity(repo_root: Path, project_id: Optional[str]) -> bool:
     except OSError:
         pass
 
-    # 2. Repo-local ledger holds a session that shipped a PR.
-    try:
-        ledger = repo_root / ".fno" / "ledger.json"
-        if ledger.is_file():
-            data = json.loads(ledger.read_text(encoding="utf-8"))
-            entries = data.get("entries") if isinstance(data, dict) else data
-            if isinstance(entries, list):
-                for entry in entries:
-                    if isinstance(entry, dict) and (
-                        entry.get("pr_number") or entry.get("pr_url")
-                    ):
-                        return True
-    except (OSError, ValueError):
-        pass  # bias dormant
-
-    # 3. Global graph holds a node mapping this repo (by project.id or cwd).
+    # 2. Global graph holds a node mapping this repo (by project.id or cwd).
     try:
         from fno.graph.store import (
             GraphCorruptError,

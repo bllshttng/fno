@@ -784,19 +784,25 @@ pub(crate) fn parse_settings(content: &str) -> Settings {
 
 // ── ledger parsing ────────────────────────────────────────────────────────────
 
+/// The ledger's rows. Every writer writes `{"entries": [...]}`; a missing,
+/// unreadable or other-shaped file is an empty history.
+pub(crate) fn ledger_file_rows(ledger_path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(ledger_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|mut doc| doc.get_mut("entries").map(Value::take))
+        .and_then(|v| match v {
+            Value::Array(rows) => Some(rows),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 /// Sum cost_usd for entries matching session_id. Tolerate missing/malformed as 0.
 pub(crate) fn session_cost_from_ledger(ledger_path: &Path, session_id: &str) -> f64 {
-    let Ok(content) = std::fs::read_to_string(ledger_path) else {
-        return 0.0;
-    };
-    let Ok(arr) = serde_json::from_str::<Value>(&content) else {
-        return 0.0;
-    };
-    let Some(entries) = arr.as_array() else {
-        return 0.0;
-    };
+    let entries = ledger_file_rows(ledger_path);
     let mut total = 0.0_f64;
-    for entry in entries {
+    for entry in &entries {
         // Either key: new rows carry fno_id, pre-rename rows only session_id.
         let matches = entry.get("fno_id").and_then(|v| v.as_str()) == Some(session_id)
             || entry.get("session_id").and_then(|v| v.as_str()) == Some(session_id);
