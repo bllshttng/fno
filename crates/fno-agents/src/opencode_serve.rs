@@ -661,9 +661,8 @@ fn dispatch_opencode_serve_inner(
         return AskOutcome::err("the filled argv is empty".to_string(), 2);
     }
     // {payload} expands through opencode_run_tail, not the plain hole fill: a
-    // footnote slash seed must ride --command with its args split, prose stays
-    // the message positional (/ codex P1). The fill's trailing run - the
-    // value, plus the "--" fence a flag-shaped payload got - gives way to it.
+    // slash seed rides --command with args split, prose stays positional. The
+    // fill's trailing run - value, plus the "--" fence - gives way to it.
     let mut cut = 1;
     if argv.len() >= 2 && argv[argv.len() - 1] == full_prompt && argv[argv.len() - 2] == "--" {
         cut = 2;

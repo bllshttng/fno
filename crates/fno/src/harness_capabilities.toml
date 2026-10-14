@@ -794,10 +794,8 @@ passthrough = []
 # THE NATIVE BG LINE for the serve lane: opencode creates its own session
 # (the title names it), the turn runs on the shared serve, and the row binds
 # at the worker's session report - the same posture the claude native lane
-# holds. {serve_url} is the lane's shared serve; it never drops. The
-# {payload} hole marks the slot; the tail owns the tokens: dispatch expands
-# it through opencode_run_tail, so a footnote slash seed rides --command
-# with its args split and prose stays the message positional.
+# holds. The {payload} hole marks the slot; the tail owns the tokens
+# (opencode_run_tail at dispatch). {serve_url} never drops.
 [harness.opencode.launch]
 argv = ["opencode", "run", "--attach", "{serve_url}", "--title", "{name}", "--dangerously-skip-permissions", "-m", "{model}", "{payload}"]
 [harness.opencode.permission_response.allow_once]

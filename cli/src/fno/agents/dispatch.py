@@ -1077,6 +1077,9 @@ def _lane_b_thread_spawn(
         # global footnote extension gates only here and never hijacks a
         # native session that merely sits in a cwd with a stale manifest.
         env["FNO_AGENT_SESSION_ID"] = session_id
+        # The row name rides to the child (the keeper passes its env through):
+        # a callee-minted create form (agy) binds its report by name.
+        env["FNO_AGENT_SELF"] = name
         stderr_fh = open(log_path, "ab")
         try:
             proc = subprocess.Popen(
