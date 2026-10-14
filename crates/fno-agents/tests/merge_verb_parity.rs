@@ -123,6 +123,9 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     let label = case["label"].as_str().expect("case label");
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+    // The keeper-reap guard requires every triad-spawning test to declare
+    // its owner, so the spawned client is attributed to this test process.
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.args(["authorized-merge", "merge"]);
     if let Some(pr) = case["pr"].as_str().filter(|pr| !pr.is_empty()) {
         cmd.arg(pr);
