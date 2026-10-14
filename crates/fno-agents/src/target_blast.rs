@@ -147,7 +147,7 @@ fn resolve_lenient(p: &Path) -> Option<PathBuf> {
     }
     let mut ancestor = p.to_path_buf();
     let mut tail: Vec<PathBuf> = Vec::new();
-    while let Some(name) = ancestor.file_name().map(|f| f.to_path_buf()) {
+    while let Some(name) = ancestor.file_name().map(PathBuf::from) {
         let parent = ancestor.parent()?.to_path_buf();
         tail.push(name);
         ancestor = parent;
@@ -407,7 +407,8 @@ pub(crate) fn classify(
         let hit = manifest_entries
             .iter()
             .find(|e| match_manifest_entry(norm, e))
-            .or_else(|| recursive.iter().find(|g| match_recursive(norm, g)));
+            .map(|e| e.as_str())
+            .or_else(|| recursive.iter().find(|g| match_recursive(norm, g)).copied());
         if let Some(hit) = hit {
             matched.push((*orig).clone());
             reasons.push(format!("{orig} ~ {hit}"));
@@ -530,7 +531,7 @@ pub(crate) fn resolve_plan_for_blast(
         return None;
     }
     by_id
-        .get(matched.iter().next().unwrap())
+        .get(*matched.iter().next().unwrap())
         .and_then(|e| e.get("plan_path"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
@@ -693,9 +694,9 @@ mod tests {
     #[test]
     fn resolve_plan_for_blast_token_matrix() {
         let entries = serde_json::from_str::<Vec<serde_json::Value>>(
-            r#"[{"id": "x-518f", "plan_path": "/tmp/a.md"},
-                {"id": "ab-other", "plan_path": "/tmp/b.md"},
-                {"id": "x-gone", "plan_path": "/tmp/g.md", "archived_at": "2026-01-01"}]"#,
+            r#"[{"id": "feat-one", "plan_path": "/tmp/a.md"},
+                {"id": "feat-two", "plan_path": "/tmp/b.md"},
+                {"id": "arch-one", "plan_path": "/tmp/g.md", "archived_at": "2026-01-01"}]"#,
         )
         .unwrap();
         assert_eq!(
@@ -703,11 +704,11 @@ mod tests {
             Some("p.md".to_string())
         );
         assert_eq!(
-            resolve_plan_for_blast(None, Some("no-merge x-518f"), Some(&entries)),
+            resolve_plan_for_blast(None, Some("no-merge feat-one"), Some(&entries)),
             Some("/tmp/a.md".to_string())
         );
         assert_eq!(
-            resolve_plan_for_blast(None, Some("x-518f ab-other"), Some(&entries)),
+            resolve_plan_for_blast(None, Some("feat-one feat-two"), Some(&entries)),
             None
         );
         assert_eq!(
@@ -715,7 +716,7 @@ mod tests {
             None
         );
         assert_eq!(
-            resolve_plan_for_blast(None, Some("x-gone"), Some(&entries)),
+            resolve_plan_for_blast(None, Some("arch-one"), Some(&entries)),
             None
         );
     }
