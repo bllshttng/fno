@@ -857,7 +857,7 @@ mod tests {
         let ledger = home.root().join("ledger.json");
         std::fs::write(
             &ledger,
-            r#"[{"session_id": "sess-1", "cost_usd": 9.99}, {"session_id": "sess-4", "cost_usd": 3.5}]"#,
+            r#"{"entries": [{"session_id": "sess-1", "cost_usd": 9.99}, {"session_id": "sess-4", "cost_usd": 3.5}]}"#,
         )
         .unwrap();
         assert_eq!(
