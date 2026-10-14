@@ -720,7 +720,7 @@ mod tests {
             "expected the full table, got {}",
             rows.len()
         );
-        for row in rows {
+        for row in &rows {
             if row.kind == Kind::Park {
                 assert_eq!(row.new, "-");
             } else {
