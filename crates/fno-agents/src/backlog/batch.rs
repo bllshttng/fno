@@ -1584,7 +1584,7 @@ mod tests {
         let mut s = DomainStats::default();
         assert_eq!(verdict(&s), "no-data");
         s.runs_saved = 10;
-        s.runs_wasted = 8;
+        s.runs_wasted = 12;
         s.batches_abandoned = 6;
         s.batches_shipped = 2;
         assert_eq!(verdict(&s), "disable-batching", "net<0 and rate>0.5");
