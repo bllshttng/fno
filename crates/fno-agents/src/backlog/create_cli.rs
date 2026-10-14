@@ -1510,17 +1510,17 @@ mod tests {
         // The migrated db/ spellings, JSON archive and SQLite twin alike.
         std::fs::write(
             dir.path().join("db/graph-archive.json"),
-            b"{\"entries\": [{\"id\": \"x-04fa\"}]}",
+            b"{\"entries\": [{\"id\": \"q-04fa\"}]}",
         )
         .unwrap();
         open_entries(
             dir.path().join("db/graph-archive.db").as_path(),
-            &["x-04ff", "x-04fe"],
+            &["q-04ff", "q-04fe"],
         );
         // The legacy top-level spellings a not-yet-migrated root holds.
         std::fs::write(
             dir.path().join("graph-archive.json"),
-            b"{\"entries\": [{\"id\": \"x-04fc\"}]}",
+            b"{\"entries\": [{\"id\": \"q-04fc\"}]}",
         )
         .unwrap();
         // The store's own shape, which a store-spun archive db carries, at
@@ -1530,12 +1530,12 @@ mod tests {
             "CREATE TABLE nodes (\
                  id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, slug TEXT NOT NULL UNIQUE, \
                  title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL);\n\
-             INSERT INTO nodes VALUES ('x-04fb', 0, 's', 't', 'done', 'p2');",
+             INSERT INTO nodes VALUES ('q-04fb', 0, 's', 't', 'done', 'p2');",
         )
         .unwrap();
         drop(conn);
         let pool = archived_id_pool_in(dir.path());
-        for id in ["x-04fa", "x-04ff", "x-04fe", "x-04fc", "x-04fb"] {
+        for id in ["q-04fa", "q-04ff", "q-04fe", "q-04fc", "q-04fb"] {
             assert!(pool.contains(id), "the pool holds {id}");
         }
     }
