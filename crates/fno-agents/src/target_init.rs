@@ -567,7 +567,7 @@ fn record_denominator_choice(
             json!(crate::target_denominator::enumerated_scope(title, details)),
         );
     }
-    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let event = json!({
         "ts": ts,
         "type": "target_denominator",

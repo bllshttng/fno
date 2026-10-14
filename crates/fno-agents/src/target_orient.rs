@@ -107,7 +107,7 @@ fn claim_state(claim_key: &str) -> Option<&'static str> {
 /// init, so it can only ever PROVE life. DEAD is asserted solely from a claim
 /// confirmed absent/expired; every other shape biases live.
 fn manifest_liveness(raw: &Option<BTreeMap<String, String>>) -> (String, String) {
-    let Some(map) = raw else {
+    let Some(_) = raw else {
         return ("none".into(), "no manifest".into());
     };
     let claim_key = manifest_str(raw, "target_claim_key");
@@ -311,7 +311,7 @@ fn attended_line(manifest_raw: &Option<BTreeMap<String, String>>) -> String {
     if state == "dead" {
         return format!("true (dead manifest: {reason}; attended)");
     }
-    if let Some(map) = raw {
+    if let Some(map) = manifest_raw {
         if let Some(attended) = map.get("attended") {
             let val = attended.trim().to_ascii_lowercase();
             let mut line = format!("{val} (manifest, live: {reason})");
@@ -552,7 +552,7 @@ fn fresh_after(completed_at: &str, mtime: std::time::SystemTime) -> Option<bool>
             chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d").map(|d| {
                 chrono::FixedOffset::east_opt(0)
                     .unwrap()
-                    .from_utc_datetime(d.and_hms_opt(0, 0, 0).unwrap())
+                    .from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap())
             })
         })
         .ok()?;
@@ -949,7 +949,7 @@ fn local_review_gates(settings: &Settings) -> Vec<String> {
     for name in &settings.reviewers {
         match crate::loopcheck::self_review_floor::reviewer_entry(name) {
             None => gates.push(name.clone()),
-            Some((inv, self_cert)) => {
+            Some((inv, self_cert, _)) => {
                 let mut producer = inv.to_string();
                 if self_cert {
                     producer.push_str(" [self-cert: asserts no review evidence]");

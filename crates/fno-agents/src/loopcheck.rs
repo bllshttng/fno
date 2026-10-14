@@ -160,7 +160,7 @@ mod pr_read;
 mod review_coverage_verb;
 mod review_findings;
 mod review_inputs;
-mod self_review_floor;
+pub(crate) mod self_review_floor;
 pub(crate) mod settings;
 pub(crate) mod watch_lease;
 pub(crate) use args::{parse_args, try_flag_value, LoopCheckArgs};
