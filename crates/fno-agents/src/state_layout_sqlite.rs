@@ -622,9 +622,12 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
         // A zero-length straggler holds no rows: park it without opening it.
         // ensure_schema would write a full schema into the empty file and the
         // column check would then refuse it, stranding the file at the root.
+        // A live -wal disqualifies the empty verdict, as in both_exist: the
+        // WAL may be where the rows are.
         if std::fs::metadata(&legacy)
             .map(|m| m.len() == 0)
             .unwrap_or(false)
+            && wal_is_empty(&legacy)
         {
             let dir = backup_dir(root, stamp);
             if std::fs::create_dir_all(&dir).is_ok()

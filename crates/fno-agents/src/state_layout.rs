@@ -1089,6 +1089,52 @@ mod tests {
             "the parked copy is still zero length"
         );
         clean(&root);
+        // Branch: a zero-length straggler with a row-bearing -wal is not
+        // parked blind. The lane falls through to the import, the WAL replays
+        // into the main file, and the row lands in the published store.
+        let root = tmp_root("ow-straggler-wal");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        let published = root.join("db").join("events.db");
+        let mut c = rusqlite::Connection::open(&published).unwrap();
+        crate::event_store::ensure_schema(&mut c, &published).unwrap();
+        drop(c);
+        let full = root.join("events-full.db");
+        let mut conn = rusqlite::Connection::open(&full).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=0;",
+        )
+        .unwrap();
+        crate::event_store::ensure_schema(&mut conn, &full).unwrap();
+        conn.execute(
+            "INSERT INTO events (seq, event_id, row_hash, ts_ms, type, source, line) VALUES (1, 'e-9', x'09', 0, 'x', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        std::fs::copy(root.join("events-full.db-wal"), root.join("events.db-wal")).unwrap();
+        drop(conn);
+        std::fs::write(root.join("events.db"), b"").unwrap();
+        let receipt = migrate(&root, true);
+        let wal_row = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy.contains("straggler"))
+            .expect("the straggler row reads");
+        assert!(
+            matches!(wal_row.status, Status::Merged),
+            "a row-bearing -wal imports instead of parking blind: {wal_row:?}"
+        );
+        let c = rusqlite::Connection::open(&published).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "the WAL row landed in the published store");
+        drop(c);
+        assert!(
+            !root.join("events.db").exists(),
+            "the import parked the file"
+        );
+        clean(&root);
         // Branch: a published store whose columns came out of ALTER in
         // another order still imports: the compare is set-wise now.
         let root = tmp_root("ow-straggler-order");
