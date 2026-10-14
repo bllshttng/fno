@@ -155,7 +155,7 @@ fn terminal_evidence(f: &TerminalRouteFacts<'_>) -> String {
             parts.push(fact);
         }
         let spend = crate::loopcheck::session_cost_from_ledger(
-            &crate::paths::ledger_path(f.cwd),
+            &crate::paths_cli::ledger_json(f.cwd),
             f.session_id,
         );
         parts.push(format!("spend=${:.2}", spend));
@@ -231,10 +231,7 @@ fn ledger_priors(f: &TerminalRouteFacts<'_>, ledger: &[Value]) -> Vec<(String, S
 
 /// The ledger as JSON rows; unreadable is an empty history.
 fn read_ledger(cwd: &Path) -> Vec<Value> {
-    let Ok(content) = std::fs::read_to_string(crate::paths::ledger_path(cwd)) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<Value>>(&content).unwrap_or_default()
+    crate::loopcheck::ledger_file_rows(&crate::paths_cli::ledger_json(cwd))
 }
 
 /// Idempotency: a finalize retry after a partial failure must not re-route.

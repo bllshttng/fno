@@ -425,18 +425,10 @@ fn raw_row_sid(r: &Value) -> Option<String> {
 
 fn ledger_nodes_map() -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let Ok(text) = std::fs::read_to_string(crate::paths::ledger_path(
+    let path = crate::paths_cli::ledger_json(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    )) else {
-        return out;
-    };
-    let Ok(data) = serde_json::from_str::<Value>(&text) else {
-        return out;
-    };
-    let Some(entries) = data.get("entries").and_then(Value::as_array) else {
-        return out;
-    };
-    for e in entries {
+    );
+    for e in crate::loopcheck::ledger_file_rows(&path) {
         let Some(node) = e
             .get("graph_node_id")
             .and_then(Value::as_str)

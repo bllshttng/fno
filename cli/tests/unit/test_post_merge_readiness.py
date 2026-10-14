@@ -69,15 +69,15 @@ def test_active_unset_is_unconfigured(tmp_path: Path) -> None:
     assert verdict.parking_lot_path is None
 
 
-def test_activity_via_ledger_pr_number(tmp_path: Path) -> None:
+def test_repo_local_ledger_alone_is_dormant(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "config:\n  post_merge:\n    enabled: true\n")
     (repo / ".fno" / "ledger.json").write_text(
         json.dumps({"entries": [{"session_id": "s1", "pr_number": 123}]}),
         encoding="utf-8",
     )
     verdict = post_merge_readiness(repo)
-    assert verdict.activity is True
-    assert verdict.status == "unconfigured"
+    assert verdict.activity is False
+    assert verdict.status == "dormant"
 
 
 # --- AC1-EDGE / dormant: no activity is silent ------------------------------
