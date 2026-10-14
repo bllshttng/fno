@@ -8,7 +8,6 @@
 //! invalid; ship 2 abandoned / 3 noop / 0 shipped; prepare always 0
 //! (fail-safe solo); the rest 0 or 1.
 use serde_json::{json, Value};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 pub(crate) const BATCH_HELP: &str = include_str!("batch_help.txt");
@@ -129,7 +128,7 @@ where
     let batch = existing.unwrap_or_else(|| json!({}));
     let (next, wrote) = mutate(batch).map_err(|m| (m, 1))?;
     if wrote {
-        atomic_write(&path, &next)?;
+        atomic_write(&path, &next).map_err(|m| (m, 1))?;
     }
     Ok((next, wrote))
 }
@@ -234,7 +233,7 @@ fn open_batch(
         return Err((format!("max_nodes must be >= 1, got {max_nodes}"), 1));
     }
     let batch = json!({
-        "batch_id": format!("batch-{}", hex_token(4)?),
+        "batch_id": format!("batch-{}", hex_token(4).map_err(|m| (m, 1))?),
         "domain": domain,
         "branch": branch,
         "worktree": worktree,
@@ -300,6 +299,7 @@ fn join_batch(
             },
         )
     })
+    .map(|(batch, _)| batch)
 }
 
 fn close_batch(domain: &str, pr_url: Option<&str>, root: &Path) -> Result<Value, (String, i32)> {
@@ -316,6 +316,7 @@ fn close_batch(domain: &str, pr_url: Option<&str>, root: &Path) -> Result<Value,
         }
         Ok((batch, true))
     })
+    .map(|(batch, _)| batch)
 }
 
 fn abandon_batch(domain: &str, root: &Path) -> Result<Value, (String, i32)> {
@@ -329,6 +330,7 @@ fn abandon_batch(domain: &str, root: &Path) -> Result<Value, (String, i32)> {
         }
         Ok((batch, true))
     })
+    .map(|(batch, _)| batch)
 }
 
 fn emit_json(value: &Value) {
@@ -544,7 +546,8 @@ fn get_node(node_id: &str) -> Option<Value> {
 /// `mission` scopes the peek to the same candidate set the daemon dispatches.
 fn peek_next(project: Option<&str>, mission: Option<&str>) -> Result<Option<Value>, String> {
     let mut cmd = std::process::Command::new(
-        std::env::current_exe().ok_or("fno backlog next failed: no current binary")?,
+        std::env::current_exe()
+            .map_err(|_| "fno backlog next failed: no current binary".to_string())?,
     );
     cmd.args(["backlog", "next"]);
     if let Some(p) = project {
@@ -650,7 +653,7 @@ fn prepare_start(node_id: &str, domain: &str, repo: &str, root: &Path) -> Value 
         }
     };
     let worktree = String::from_utf8_lossy(&we.stdout).trim().to_string();
-    if !we.status.success() || worktree.is_empty() {
+    if worktree.is_empty() {
         let err = String::from_utf8_lossy(&we.stderr);
         return json!({
             "mode": "solo",
@@ -665,22 +668,18 @@ fn prepare_start(node_id: &str, domain: &str, repo: &str, root: &Path) -> Value 
         .join("setup")
         .join("setup-worktree.sh");
     if setup.exists() {
+        // Ok already means exit 0 (the full runner refuses nonzero); a setup
+        // failure lands in the Err arm and degrades to solo.
         let sr = crate::org_board::budget::run_with_timeout_full(
             &["bash".to_string(), setup.to_string_lossy().into_owned()],
             Path::new(&worktree),
             std::time::Duration::from_secs(300),
         );
-        if let Ok(sr) = sr {
-            if !sr.status.success() {
-                let err = String::from_utf8_lossy(&sr.stderr);
-                return json!({
-                    "mode": "solo",
-                    "reason": format!(
-                        "setup-worktree failed: {}",
-                        err.trim().chars().take(160).collect::<String>()
-                    )
-                });
-            }
+        if let Err(e) = sr {
+            return json!({
+                "mode": "solo",
+                "reason": format!("setup-worktree failed: {}", e.message())
+            });
         }
     }
     match open_batch(
@@ -794,7 +793,7 @@ fn extract_pr_number(url_or_output: &str) -> Option<i64> {
     let text = url_or_output.trim();
     if let Some(idx) = text.find("/pull/") {
         let rest = &text[idx + 6..];
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if !digits.is_empty() {
             return digits.parse().ok();
         }
@@ -867,6 +866,7 @@ fn set_member_pr_refs(
             Ok(true)
         },
     )
+    .map(|_| ())
     .map_err(|e| format!("member pr-ref write failed: {e}"))
 }
 
@@ -897,6 +897,7 @@ fn clear_member_batch_marks(members: &[String]) -> Result<(), String> {
             Ok(true)
         },
     )
+    .map(|_| ())
     .map_err(|e| format!("member batch-mark clear failed: {e}"))
 }
 
@@ -1549,8 +1550,7 @@ fn batch_ship_closeable(rest: &[String]) -> i32 {
     let root = state_root(flag_value(rest, "--root"));
     let project = flag_value(rest, "--project").or_else(|| flag_value(rest, "-p"));
     let mission = flag_value(rest, "--mission");
-    let results = ship_closeable(project, mission, &root);
-    let shipped: Vec<Value> = results.iter().map(ship_result_value).collect();
+    let shipped = ship_closeable(project, mission, &root);
     emit_json(&json!({ "shipped": shipped }));
     0
 }
@@ -1581,7 +1581,7 @@ mod tests {
             "type": "active_backlog_batch_abandon",
             "data": {"detail": "error", "domain": "code", "member_count": 3}
         });
-        let m = compute_metrics(&std::iter::once(&ev).collect::<Vec<_>>());
+        let m = compute_metrics(std::slice::from_ref(&ev));
         assert_eq!(
             m.get("verdict").and_then(Value::as_str),
             Some("no-data"),
