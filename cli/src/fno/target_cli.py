@@ -144,29 +144,34 @@ def _refuse_unsatisfiable_reviewers() -> None:
     if not reviewers and not peers:
         return
 
-    from fno.review_capability import (
-        detect_session,
-        local_peers_refusal_message,
-        refusal_message,
-        resolve_local_peers,
-        resolve_reviewers,
-    )
+    from dataclasses import asdict
 
-    session = detect_session()
-    verdicts = resolve_reviewers(reviewers, session, registry)
-    peer_verdicts = resolve_local_peers(peers, peer_identity, session)
+    from fno.config import resolvable_reviewers
+    from fno.rust_binary import verb_call
+
+    answer = verb_call(
+        ["review-level", "capability", "reviewers"],
+        {
+            "reviewers": reviewers,
+            "descriptors": {
+                name: asdict(d) for name, d in resolvable_reviewers(registry).items()
+            },
+            "peers": peers,
+            "peer_identity": peer_identity,
+        },
+    )
+    for row in [r for r in answer.get("reviewers", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
+    for row in [r for r in answer.get("local_peers", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
     messages = [
         message
         for message in (
-            refusal_message(verdicts, session),
-            local_peers_refusal_message(peer_verdicts, session),
+            answer.get("reviewers_refusal"),
+            answer.get("local_peers_refusal"),
         )
         if message
     ]
-    for reviewer_verdict in [v for v in verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {reviewer_verdict.line()}", err=True)
-    for peer_verdict in [v for v in peer_verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {peer_verdict.line()}", err=True)
     if messages:
         typer.echo("\n\n".join(messages), err=True)
         raise typer.Exit(code=2)
@@ -198,15 +203,16 @@ def _refuse_unreachable_github_apps() -> None:
     if not apps:
         return
 
-    from fno.review_capability import (
-        github_apps_refusal_message,
-        resolve_github_apps,
-    )
+    from fno.rust_binary import verb_call
 
-    verdicts = resolve_github_apps(apps, nudge_logins=nudge_logins)
-    for v in [v for v in verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {v.line()}", err=True)
-    message = github_apps_refusal_message(verdicts)
+    answer = verb_call(
+        ["review-level", "capability", "github-apps"],
+        {"apps": apps, "nudge_logins": list(nudge_logins)},
+        timeout=70,
+    )
+    for row in [r for r in answer.get("verdicts", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
+    message = answer.get("refusal")
     if message:
         typer.echo(message, err=True)
         raise typer.Exit(code=2)
@@ -1133,11 +1139,21 @@ def review_invocation_cmd(
     concrete level outside the builder. A worker or lead can also run this
     verb directly.
 
-    Read-only; writes no state. Always exits 0 - a render failure prints the
-    unsized placeholder form, it never refuses."""
-    from fno.review_capability import render_self_review_invocation
+    Read-only; writes no state. A named door refusal (the fno-agents binary
+    missing or failed) prints the refusal on stderr and exits 1: machinery
+    reading this output embeds it verbatim, so a fabricated placeholder would
+    lie about a gate that cannot answer."""
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    typer.echo(render_self_review_invocation(harness=harness, project_root=Path.cwd()))
+    argv = ["review-level", "capability", "invocation", "--root", str(Path.cwd())]
+    if harness:
+        argv += ["--harness", harness]
+    try:
+        answer = verb_call(argv, {})
+    except VerbUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(answer["invocation"])
 
 
 def _read_pr_metadata(pr_number: int, cwd: Path) -> dict[str, Any]:
@@ -1277,7 +1293,7 @@ def request_self_review_cmd(
     ),
 ) -> None:
     """Request one explicit final-head review through the raw self lane."""
-    from fno.review_capability import render_self_review_invocation
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     cwd = Path.cwd()
     head_sha = _git_out(cwd, "rev-parse", "HEAD") or ""
@@ -1329,14 +1345,20 @@ def request_self_review_cmd(
             if not base_branch:
                 raise RuntimeError("PR baseRefName is unresolved; refusing review")
         harness, session_id = _resolve_self_review_identity()
-        payload = render_self_review_invocation(
-            harness=harness,
-            project_root=cwd,
-            pr_number=pr_number,
-            branch=branch or None,
-            head_sha=head_sha,
-            base_branch=base_branch,
-        )
+        argv = ["review-level", "capability", "invocation", "--root", str(cwd)]
+        if harness:
+            argv += ["--harness", harness]
+        if pr_number is not None:
+            argv += ["--pr-number", str(pr_number)]
+        if branch:
+            argv += ["--branch", branch]
+        argv += ["--head-sha", head_sha, "--base-branch", base_branch]
+        try:
+            payload = verb_call(argv, {})["invocation"]
+        except VerbUnavailable as exc:
+            # A named refusal, never a fabricated string: the receipt keeps
+            # the door's full detail under a prefix that names the surface.
+            raise RuntimeError(f"review invocation door refused: {exc}") from None
         receipt = _send_self_review_payload(
             payload=payload, harness=harness, session_id=session_id
         )
@@ -1788,7 +1810,7 @@ def init(
         input_, _dispatch_node.get("id"), plan_path, "init", exit_on_fork=True
     ) if isinstance(_dispatch_node, dict) else {}
 
-    from fno.review_capability import env_marks_unattended
+    from fno.harness_identity import env_marks_unattended
 
     # Retro-triaged nodes get a dispatch-time dedup check before the shell
     # bootstrap acquires the node claim. Ordinary target inputs return early;

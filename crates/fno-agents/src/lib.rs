@@ -421,6 +421,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod review_capability;
 pub mod review_doors;
 pub mod review_freshness;
 pub mod review_level;

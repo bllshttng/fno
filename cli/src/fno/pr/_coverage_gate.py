@@ -777,10 +777,13 @@ def _ordinary_verdict(
     hint = None
     try:
 
-        from fno.review_capability import render_self_review_invocation
+        from fno.rust_binary import verb_call
 
         root = _repo_root(cwd)
-        rendered = render_self_review_invocation(project_root=root)
+        answer = verb_call(
+            ["review-level", "capability", "invocation", "--root", str(root)], {}
+        )
+        rendered = answer["invocation"]
         # An unsized render (no merge-base against main/master) keeps its
         # `<level>` placeholder - teachable on the orienter surface, but a
         # non-runnable string in a copy-me slot here. No hint, levelless line.
