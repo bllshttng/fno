@@ -118,7 +118,7 @@ name = \"Codex Alt\"
 harness = \"codex\"
 auth = \"managed\"
 ",
-        records_toml()
+        records_switch_toml()
     )
 }
 
@@ -130,6 +130,9 @@ id = \"other-main\"
 name = \"Other Main\"
 harness = \"{harness}\"
 auth = \"managed\"
+
+[review.cross_model]
+enabled = true
 "
     )
 }
@@ -141,6 +144,9 @@ id = \"codex-main\"
 name = \"Codex Main\"
 cli = \"codex\"
 auth = \"managed\"
+
+[review.cross_model]
+enabled = true
 "
     .to_string()
 }
@@ -152,6 +158,9 @@ id = \"bad-one\"
 name = \"Bad\"
 harness = \"nosuch\"
 auth = \"managed\"
+
+[review.cross_model]
+enabled = true
 "
     .to_string()
 }
