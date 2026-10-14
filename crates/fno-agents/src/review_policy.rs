@@ -250,20 +250,10 @@ fn resolve_repo_root(cwd: &Path) -> PathBuf {
     cwd.to_path_buf()
 }
 
-/// `loader._global_settings_path`: the config.toml sibling of
-/// `$FNO_GLOBAL_SETTINGS_PATH` when set non-empty, else `$HOME/.fno/config.toml`.
-fn global_settings_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
-        if !p.is_empty() {
-            return Some(PathBuf::from(p).with_file_name("config.toml"));
-        }
-    }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno/config.toml"))
-}
-
 /// `loader._provider_candidates` (first layer wins): the repo-root local,
 /// then a PWD-anchored local when it differs, then the global path; an
-/// explicit `$FNO_CONFIG` is the sole candidate.
+/// explicit `$FNO_CONFIG` is the sole candidate. The global tier is the
+/// shared `agents_config::global_config_path`, not a second copy.
 fn provider_config_candidates(cwd: &Path) -> Vec<PathBuf> {
     if let Some(explicit) = std::env::var_os("FNO_CONFIG") {
         if !explicit.is_empty() {
@@ -279,7 +269,7 @@ fn provider_config_candidates(cwd: &Path) -> Vec<PathBuf> {
     if !out.contains(&pwd_local) {
         out.push(pwd_local);
     }
-    if let Some(global) = global_settings_path() {
+    if let Some(global) = crate::agents_config::global_config_path() {
         if !out.contains(&global) {
             out.push(global);
         }
