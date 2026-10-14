@@ -565,19 +565,9 @@ pub(crate) use crate::cap_liveness::live_rows;
 /// already reflects every process the roster holds.
 ///
 /// The roster IS still read here, but only as a LIVENESS ORACLE, not as a
-/// population to count: a fno `claude --bg` row is minted with a jobId in
-/// `short_id` but NO local `pid` (its process lives in the claude daemon, so
-/// liveness is in the roster — see `claude_ask.rs`). Such a row's liveness is
-/// resolved by looking its `short_id` up in the roster. This counts real fno bg
-/// workers (which a pid-only filter would drop, letting the cap admit unbounded
-/// bg workers — Codex P1 on PR #235) WITHOUT counting non-fno sessions: a
-/// memory-plugin observer has no registry row, so it is never reached. A
-/// pid-less row the roster cannot answer (the user's own session, origin
-/// `operator`, or a non-claude native) counts while its `last_report_at` is
-/// inside `REPORT_FRESHNESS` (`crate::cap_liveness`): the session report is
-/// that row's only liveness source (d-d0c63de7). A claude fleet row (origin
-/// `spawn`) keeps the roster as its sole oracle - its negative stays
-/// definitive.
+/// population to count. The full filter, its freshness arm and its tests
+/// live on `crate::cap_liveness::live_rows` (moved under the file budget);
+/// read them there.
 ///
 /// Read-only; a registry read failure degrades to a 0 contribution with one
 /// warning line pushed to `warnings` (LD5, fail open).

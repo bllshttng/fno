@@ -827,14 +827,12 @@ pub struct RegistryEntry {
     pub liveness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_measured_at: Option<String>,
-    /// The LAST session report's arrival stamp (`now_rfc3339_like()`),
-    /// written by `handle_session_report` on every stored report and on the
-    /// native mint (the report that mints the row is its first report). The
-    /// capacity reader's freshness source for rows no probe can reach: a
-    /// pid-less row the claude roster cannot answer counts as an occupant
-    /// while this stamp is inside `cap_liveness::REPORT_FRESHNESS`
-    /// (d-d0c63de7). Absent or unparseable fails closed, the discipline of
-    /// `InsideLegReport::is_live_at`.
+    /// The LAST session report's arrival stamp, written by
+    /// `handle_session_report` on every stored report and on the native
+    /// mint. The capacity reader's freshness source for rows no probe can
+    /// reach: a pid-less row the claude roster cannot answer counts as an
+    /// occupant while this stamp is inside `cap_liveness::REPORT_FRESHNESS`
+    /// (d-d0c63de7). Unparseable fails closed (`InsideLegReport::is_live_at`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_report_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
