@@ -2912,13 +2912,19 @@ pub(crate) fn audit_load_snapshot(
     };
 
     // Spawn decision receipts: the newest fingerprint per spawn name inside
-    // the window. The store owns the rows; `journal_text` folds committed
-    // rows with any live tail and opens no file.
+    // the window. The store owns the rows; the window rides the query so the
+    // committed rows are filtered in SQL (durable rows never rotate), and
+    // `within` stays for the live tail the store does not hold yet.
     let mut receipts: BTreeMap<String, String> = BTreeMap::new();
-    let text = crate::event_store::journal_text(
+    let text = crate::event_store::journal_text_checked(
         &state_root.join("events.jsonl"),
-        &["spawn_defaults_applied"],
-    );
+        &crate::event_store::EventQuery {
+            types: vec!["spawn_defaults_applied".to_string()],
+            since_ms: Some(cutoff.timestamp_millis()),
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
     for line in text.lines() {
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
