@@ -393,34 +393,84 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
 /// FNO_REPO_ROOT, the persisted plugin-root pointer, then the running repo.
 /// Both hints are authoritative: when set, the script is expected there and
 /// we do NOT fall through.
-fn resolve_init_script() -> PathBuf {
+/// The init script's resolution order: an explicit plugin root, then an
+/// explicit repo root, then the install pointer beside HOME, then the cwd
+/// repo's toplevel, then the bare relative path (the helper-exists check in
+/// step 4 turns that into the plugin refusal).
+fn resolve_init_script_from(
+    plugin_root: Option<&str>,
+    repo_root: Option<&str>,
+    home: Option<&str>,
+    toplevel: Option<&str>,
+) -> PathBuf {
     const REL: &str = "hooks/helpers/init-target-state.sh";
-    if let Ok(root) = std::env::var("CLAUDE_PLUGIN_ROOT") {
+    if let Some(root) = plugin_root {
         return PathBuf::from(root).join(REL);
     }
-    if let Ok(root) = std::env::var("FNO_REPO_ROOT") {
+    if let Some(root) = repo_root {
         return PathBuf::from(root).join(REL);
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = home {
         let pointer = PathBuf::from(home).join(".fno/install/plugin-root");
         if let Ok(root) = std::fs::read_to_string(&pointer) {
             return PathBuf::from(root.trim()).join(REL);
         }
     }
-    match std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !root.is_empty() {
-                return PathBuf::from(root).join(REL);
-            }
+    if let Some(root) = toplevel {
+        if !root.is_empty() {
+            return PathBuf::from(root).join(REL);
         }
-        _ => {}
     }
     PathBuf::from(REL)
+}
+
+fn resolve_init_script() -> PathBuf {
+    let toplevel = || -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }();
+    resolve_init_script_from(
+        std::env::var("CLAUDE_PLUGIN_ROOT").ok().as_deref(),
+        std::env::var("FNO_REPO_ROOT").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        toplevel.as_deref(),
+    )
+}
+
+#[cfg(test)]
+mod init_script_tests {
+    use super::resolve_init_script_from;
+
+    #[test]
+    fn plugin_root_wins_over_every_other_hint() {
+        let p =
+            resolve_init_script_from(Some("/plugin"), Some("/repo"), Some("/home"), Some("/repo"));
+        assert!(p.starts_with("/plugin"));
+        assert!(p.ends_with("hooks/helpers/init-target-state.sh"));
+    }
+
+    #[test]
+    fn repo_root_beats_home_and_toplevel() {
+        let p = resolve_init_script_from(None, Some("/repo"), Some("/home"), Some("/other"));
+        assert!(p.starts_with("/repo"));
+    }
+
+    #[test]
+    fn toplevel_is_the_last_hint_before_the_bare_relative() {
+        let from_toplevel = resolve_init_script_from(None, None, None, Some("/repo"));
+        assert!(from_toplevel.starts_with("/repo"));
+        assert_eq!(
+            from_toplevel,
+            resolve_init_script_from(None, None, None, Some(""))
+        );
+    }
 }
 
 fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {

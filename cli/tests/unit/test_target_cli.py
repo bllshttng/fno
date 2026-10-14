@@ -495,38 +495,6 @@ def test_target_init_degrade_writes_no_state(monkeypatch, tmp_path):
     assert not (proj / ".fno").exists()
 
 
-def test_target_init_resolves_from_plugin_root(monkeypatch, tmp_path):
-    """Codex P1: init script resolves from CLAUDE_PLUGIN_ROOT, not the cwd repo.
-
-    Simulates running `fno do target init` inside a user project (cwd repo has no
-    hooks/) with CLAUDE_PLUGIN_ROOT pointing at the plugin install.
-    """
-    captured = {}
-
-    class _Result:
-        returncode = 0
-
-    def _stub_run(cmd, check=False, env=None, **kwargs):
-        # Capture the init invocation specifically; the post-init work-start
-        # dispatch (x-122a) may shell `git rev-parse` afterward, which must not
-        # clobber the assertion target.
-        if cmd and cmd[0] == "bash":
-            captured["cmd"] = list(cmd)
-        return _Result()
-
-    plugin_root = tmp_path / "plugin"
-    (plugin_root / "hooks" / "helpers").mkdir(parents=True)
-    (plugin_root / "hooks" / "helpers" / "init-target-state.sh").write_text("#!/bin/bash\n")
-    user_project = tmp_path / "user-proj"  # cwd repo without hooks/
-    user_project.mkdir()
-    monkeypatch.chdir(user_project)
-    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
-    monkeypatch.delenv("FNO_REPO_ROOT", raising=False)
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 0, result.output
-    assert str(plugin_root) in captured["cmd"][1]
 
 
 def test_state_init_redirects_target_bootstrap():
