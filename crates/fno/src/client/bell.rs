@@ -4,7 +4,19 @@
 use super::*;
 use serde_json::Value;
 
-const PANEL_W: usize = 48;
+/// The panel's width until the operator drags its border; persisted after.
+const DEFAULT_W: u16 = 48;
+/// The narrowest drag; the tab strip still reads at this width.
+const MIN_W: u16 = 32;
+
+/// The three widths the panel takes: the dragged width, the wide
+/// three-fifths toggle, and the whole terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Size {
+    Normal,
+    Wide,
+    Full,
+}
 
 pub(crate) struct Panel {
     pub(super) open: bool,
@@ -16,7 +28,18 @@ pub(crate) struct Panel {
     selected: usize,
     esc: Vec<u8>,
     unread: bool,
-    tab: Tab,
+    pub(super) tab: Tab,
+    /// The operator's dragged width inside the Normal size: loaded from
+    /// mux-view.json at startup, persisted after a drag.
+    width: u16,
+    /// Which of the three widths paints now; holds across open and close.
+    pub(super) size: Size,
+    /// The size `F` returns to.
+    restore: Size,
+    /// The width at grab while a border drag is live.
+    drag_from: Option<u16>,
+    /// The Questions tab's marked rows, sent by `c` and dropped on close.
+    pub(super) marks: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -61,6 +84,17 @@ impl Tab {
     }
 }
 
+/// Columns the panel covers on a `cols`-wide terminal. The clamp is
+/// transient: `width` keeps the operator's choice across a shrink and grow.
+fn panel_width(view: &View, cols: usize) -> usize {
+    let max = cols.saturating_sub(1).max(1);
+    match view.bell.size {
+        Size::Full => cols,
+        Size::Wide => (cols * 3 / 5).max(MIN_W as usize).min(max),
+        Size::Normal => (view.bell.width as usize).max(MIN_W as usize).min(max),
+    }
+}
+
 impl Panel {
     pub(crate) fn initial() -> Self {
         Self {
@@ -74,6 +108,11 @@ impl Panel {
             esc: Vec::new(),
             unread: false,
             tab: Tab::All,
+            width: crate::view_store::load_bell_width().unwrap_or(DEFAULT_W),
+            size: Size::Normal,
+            restore: Size::Normal,
+            drag_from: None,
+            marks: std::collections::BTreeSet::new(),
         }
     }
 }
@@ -102,6 +141,8 @@ pub(crate) fn close(view: &mut View) {
     if view.bell.open {
         view.bell.open = false;
         view.bell.generation = view.bell.generation.wrapping_add(1);
+        view.bell.drag_from = None;
+        view.bell.marks.clear();
     }
 }
 
@@ -403,7 +444,9 @@ fn push_announcement(view: &View, out: &mut Vec<Row>, item: &Value) {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        let width = PANEL_W.min(view.term.1 as usize).saturating_sub(4).max(1);
+        let width = panel_width(view, view.term.1 as usize)
+            .saturating_sub(4)
+            .max(1);
         out.extend(
             wrap_body(body, width)
                 .into_iter()
@@ -491,7 +534,7 @@ fn split_announcements(view: &View) -> Option<(usize, usize)> {
 /// the same labels the draw paints (pass the one `tab_counts` read), so the
 /// two never drift.
 fn tab_spans(view: &View, counts: &[String; 4]) -> Vec<(Tab, std::ops::Range<usize>)> {
-    let width = PANEL_W.min(view.term.1 as usize);
+    let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     let mut col = x0 + 4;
     TABS.iter()
@@ -510,7 +553,7 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     if !panel.open {
         return None;
     }
-    let width = PANEL_W.min(view.term.1 as usize);
+    let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     if (col as usize) < x0 || row as usize >= view.term.0 as usize {
         return None;
@@ -648,6 +691,21 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
             b'k' => {
                 view.bell.selected = view.bell.selected.saturating_sub(1);
             }
+            b'w' => {
+                view.bell.size = if view.bell.size == Size::Wide {
+                    Size::Normal
+                } else {
+                    Size::Wide
+                };
+            }
+            b'F' => {
+                if view.bell.size == Size::Full {
+                    view.bell.size = view.bell.restore;
+                } else {
+                    view.bell.restore = view.bell.size;
+                    view.bell.size = Size::Full;
+                }
+            }
             b'c' => {
                 if rows(view).iter().any(|r| matches!(r, Row::Clear(_))) && !view.question_acting {
                     view.question_clear_settled = true;
@@ -682,7 +740,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
     if rows_n == 0 || cols == 0 {
         return;
     }
-    let width = PANEL_W.min(cols);
+    let width = panel_width(view, cols);
     let x0 = cols - width;
     let mut lines = rows(view);
     if lines.is_empty() {
@@ -737,13 +795,21 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 );
             }
         } else if r == rows_n - 1 {
+            let footer = if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() {
+                format!(
+                    "{} marked · c clear marked · space mark · Esc close",
+                    view.bell.marks.len()
+                )
+            } else {
+                "1-4/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
+            };
             paint(
                 cells,
                 cols,
                 r,
                 x0 + 2,
                 width.saturating_sub(2),
-                "1-4/Tab tab · j/k move · Enter open · c clear · q close",
+                &footer,
                 Color::Default,
                 false,
             );
