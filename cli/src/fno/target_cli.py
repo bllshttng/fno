@@ -35,7 +35,7 @@ from typing import Any, Callable, NoReturn, Optional, Tuple
 
 import typer
 
-from fno._subprocess_util import propagate_returncode, run_bounded
+from fno._subprocess_util import run_bounded
 from fno.paths import git_common_dir, resolve_plugin_script
 from fno.tombstones import tombstone_group_cls
 
@@ -1673,13 +1673,6 @@ def init(
         "denominator). The cheap N=1 exit is deliberate; a stamped 1 is "
         "falsifiable where an absent denominator is not.",
     ),
-    steps: bool = typer.Option(
-        False,
-        "--steps",
-        hidden=True,
-        help="Forwarded to the native door: steps mode, a non-looping target "
-        "an outer skill advances one instructed step at a time.",
-    ),
 ) -> None:
     """Bootstrap a target session (native decision layer).
 
@@ -1719,8 +1712,6 @@ def init(
         cmd += ["--no-merge"]
     if deliverables is not None:
         cmd += ["--deliverables", str(deliverables)]
-    if steps:
-        cmd += ["--steps"]
     raise typer.Exit(code=subprocess.run(cmd).returncode)
 
 

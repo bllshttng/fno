@@ -1,5 +1,5 @@
 //! parity-stage: differential
-//! parity-oracle: file:cli/src/fno/target_cli.py
+//! parity-oracle: cli/src/fno/target_cli.py
 //!
 //! Golden parity for the `fno do target start` contract, captured from the
 //! live Python leg. `start` stays Python through this group (the init port is
