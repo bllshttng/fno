@@ -2157,7 +2157,7 @@ mod capture_tests {
     fn parse_items_filters_struck_and_accepts_both_separators() {
         let text = format!(
             "- [ ] fu-3a8c1f - First (p1)\n\
-             - [x] fu-3a8c1e - Promoted (p2) -> ab-12345678\n\
+             - [x] fu-3a8c1e - Promoted (p2) -> node-12345678\n\
              - [-] fu-3a8c1d - Gone (p3) (dismissed: nah)\n\
              - [ ] fu-3a8c1c {LEGACY_DASH} Legacy dash\n"
         );
@@ -2183,7 +2183,7 @@ mod capture_tests {
             "## Section A\n\
              - [ ] fu-abc123 - Followup (p1)\n\
              - [ ] cv-1a2b3c4d - Carveout\n\
-             - [x] ab-1234abcd - Node line (p2). post-merge prose here\n\
+             - [x] node-1234abcd - Node line (p2). post-merge prose here\n\
              - [ ] task with {marker} tag\n\
              - [ ] cv-abc12 - Malformed seven\n\
              prose mentioning fu-abc999 in a paragraph is not an item\n"
