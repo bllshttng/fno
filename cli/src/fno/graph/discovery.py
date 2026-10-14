@@ -71,9 +71,6 @@ class CandidateResults(list[Candidate]):
         self.warning = warning
 
 
-@dataclass(frozen=True)
-
-
 def _graph_path() -> Path:
     from fno.graph._constants import GRAPH_JSON
 
