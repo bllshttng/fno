@@ -101,7 +101,7 @@ impl BgRoster {
 
     /// The harness listing this witness already read, so the adopt pass does
     /// not shell `claude agents --json` a second time per beat.
-    pub(crate) fn listing(&self) -> &ClaudeAgentsSnapshot {
+    pub(crate) fn listing(&self) -> &crate::claude_roster::ClaudeAgentsSnapshot {
         &self.listing
     }
 

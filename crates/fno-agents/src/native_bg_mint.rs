@@ -111,7 +111,7 @@ pub(crate) fn mint_missing_native_bg(
 
     let mut born: Vec<Value> = Vec::new();
     let mut filled: Vec<Value> = Vec::new();
-    let write = state::update_registry(&home.registry_json(), |r| {
+    let write = crate::state::update_registry(&home.registry_json(), |r| {
         for cand in prepared {
             let session = cand
                 .harness_session_id
@@ -271,7 +271,7 @@ fn prepare_row(
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
         node,
-        transcript_path: transcript,
+        transcript_path: transcript.map(|p| p.display().to_string()),
         start_source: Some(START_SOURCE.into()),
         cwd: cwd.clone(),
         project_root: cwd,
@@ -390,12 +390,12 @@ mod tests {
             tmp.path(),
             "492ccda4-63ff-4736-a02a-8818f63c8b46",
             &[
-                json!({"type":"user","message":{"content":"/fno:target x-4854"}}).to_string(),
+                json!({"type":"user","message":{"content":"/fno:target x-deadbeef"}}).to_string(),
                 json!({"type":"assistant","message":{"model":"claude-opus-4-6"}}).to_string(),
             ],
         );
         let (node, model) = transcript_facts_from_path(&path);
-        assert_eq!(node.as_deref(), Some("x-4854"));
+        assert_eq!(node.as_deref(), Some("x-deadbeef"));
         assert_eq!(model.as_deref(), Some("claude-opus-4-6"));
         // No user entry: both stay absent, never guessed.
         let bare = write_transcript(
@@ -419,7 +419,10 @@ mod tests {
             write_transcript(
                 tmp.path(),
                 "492ccda4-63ff-4736-a02a-8818f63c8b46",
-                &[json!({"type":"user","message":{"content":"/fno:target x-53a4"}}).to_string()],
+                &[
+                    json!({"type":"user","message":{"content":"/fno:target x-feedface"}})
+                        .to_string(),
+                ],
             );
             let saved = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR");
             std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", tmp.path());
@@ -427,7 +430,7 @@ mod tests {
             std::env::remove_var("FNO_CLAUDE_PROJECTS_DIR");
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
             assert_eq!(registry.entries.len(), 1);
-            assert_eq!(registry.entries[0].node.as_deref(), Some("x-53a4"));
+            assert_eq!(registry.entries[0].node.as_deref(), Some("x-feedface"));
             match saved {
                 Some(v) => std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", v),
                 None => {}
