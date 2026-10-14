@@ -69,33 +69,39 @@ def test_backlog_new_writes_difficulty(tmp_graph):
 
 
 def test_capture_promote_requires_and_writes_difficulty(tmp_graph, tmp_path, monkeypatch):
-    from fno.backlog.capture import add_item
+    import json as _json
 
-    inbox = tmp_path / "inbox.md"
-    monkeypatch.setattr("fno.backlog.capture._inbox_path", lambda: inbox)
-    monkeypatch.setattr("fno.graph.cli._graph_path", lambda: tmp_graph)
-    item = add_item(
-        inbox,
-        title="promoted work",
-        source="PR#1",
-        why="a reason",
-        where="a file",
-        priority="p1",
+    seeded = run_native_create(
+        tmp_graph,
+
+        "capture",
+        "add",
+        "promoted work",
+        "--source", "PR#1",
+        "--why", "a reason",
+        "--where", "a file",
+        "--priority", "p1",
     )
-
-    refused = runner.invoke(app, ["backlog", "capture", "promote", item["id"]])
+    assert seeded.exit_code == 0, seeded.stderr
+    item = _json.loads(seeded.stdout)
+    refused = run_native_create(
+        tmp_graph,
+        "capture",
+        "promote",
+        item["id"],
+    )
     assert refused.exit_code == 2
-    assert "non-interactive filing requires --difficulty" in refused.output
-
-    accepted = runner.invoke(
-        app,
-        ["backlog", "capture", "promote", item["id"], "--difficulty", "medium"],
+    assert "non-interactive filing requires --difficulty" in refused.stderr + refused.stdout
+    accepted = run_native_create(
+        tmp_graph,
+        "capture",
+        "promote",
+        item["id"],
+        "--difficulty", "medium",
     )
-    assert accepted.exit_code == 0, accepted.output
+    assert accepted.exit_code == 0, accepted.stderr
     row = read_graph_strict(tmp_graph)[0]
     assert row["difficulty"] == "medium"
-
-
 def test_retro_severity_maps_to_difficulty():
     from fno.retro.classify import severity_to_difficulty
 

@@ -18,6 +18,7 @@ pub mod autolink;
 pub mod batch;
 pub(crate) mod binding;
 pub mod birth;
+pub mod capture;
 pub mod cli;
 pub(crate) mod closures;
 pub mod collision;

@@ -16,8 +16,8 @@ use super::{birth, node_ref};
 /// the cut-over wave prints this where the forward used to.
 pub(crate) const ADD_HELP: &str = include_str!("create_help.txt");
 
-const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
-const SOURCE_KINDS: [&str; 5] = [
+pub(crate) const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
+pub(crate) const SOURCE_KINDS: [&str; 5] = [
     "organic",
     "from_inbox",
     "from_observation",
@@ -313,7 +313,7 @@ fn expand_home(path: &str) -> PathBuf {
 
 /// The shared priority gate: PRIORITY_ORDER membership, then the write rule.
 /// Exit 1 is the membership miss, exit 2 the write rule.
-fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
+pub(crate) fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
     if !["p0", "p1", "p2", "p3"].contains(&priority) {
         return Err(refused(
             format!("Error: invalid priority '{priority}'. Must be: p0, p1, p2, p3"),
@@ -332,7 +332,7 @@ fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refu
     Ok(())
 }
 
-fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
+pub(crate) fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
     let band = value.trim().to_lowercase();
     if !["low", "medium", "high"].contains(&band.as_str()) {
         return Err(refused(
@@ -394,14 +394,15 @@ fn active_backend_name() -> String {
 /// One birth record through the native owner, in-process. Returns
 /// `(origin, evidence_ref, refused)`; the caller refuses operator_request
 /// births the origin did not grant.
-fn stamp_request_origin(
+pub(crate) fn stamp_request_origin(
     source_kind: &str,
+    birth_channel: &str,
     origin_evidence: Option<&str>,
 ) -> (String, Option<String>, Option<String>) {
     let record = crate::node_origin::BirthRecord {
         request_origin: None,
         source_kind: Some(source_kind.to_string()),
-        birth_channel: Some("idea".to_string()),
+        birth_channel: Some(birth_channel.to_string()),
         origin_evidence: origin_evidence.map(str::to_string),
     };
     let pending = if record.source_kind.as_deref() == Some("operator_request") {
@@ -531,7 +532,9 @@ pub(crate) fn session_provenance(
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
 /// legacy archive pool, the mint tombstones, and every id a plan
 /// frontmatter names. Must run inside the locked write.
-fn mint_node_id(existing: &std::collections::BTreeSet<String>) -> Result<String, String> {
+pub(crate) fn mint_node_id(
+    existing: &std::collections::BTreeSet<String>,
+) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
@@ -950,7 +953,7 @@ pub(crate) fn create_node(
         }
     }
     let (origin, origin_evidence_ref, refused_note) =
-        stamp_request_origin(&args.source_kind, args.origin_evidence.as_deref());
+        stamp_request_origin(&args.source_kind, "idea", args.origin_evidence.as_deref());
     if args.source_kind == "operator_request" && origin != "operator_request" {
         return Err(refused(
             format!("Error: {}", refused_note.unwrap_or_default()),

@@ -162,15 +162,6 @@ backlog archive	T1	backlog archive	2
 backlog bases	T1	backlog bases	0
 backlog backfill-deferred-kind	T1	backlog backfill-deferred-kind	1
 backlog board	T1	backlog board	0
-backlog capture add	T1	backlog capture add	6
-backlog capture archive	T1	backlog capture archive	1
-backlog capture capture-pass	T1	backlog capture capture-pass	1
-backlog capture dismiss	T1	backlog capture dismiss	1
-backlog capture empty-pass	T1	backlog capture empty-pass	2
-backlog capture list	T1	backlog capture list	3
-backlog capture promote	T1	backlog capture promote	1
-backlog capture scan	T1	backlog capture scan	1
-backlog capture tidy	T1	backlog capture tidy	3
 backlog carveout add	T1	backlog carveout add	22
 backlog carveout list	T1	backlog carveout list	2
 backlog carveout resolve	T1	backlog carveout resolve	1

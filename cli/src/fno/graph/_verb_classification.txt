@@ -30,7 +30,6 @@ lane-fill
 # write task rows ()
 # footnote-owned DATA with a graph-resident write path (refused until the
 # write moves to the sidecar seam)
-capture promote
 # task rows + task claims write graph state (list materializes rows)
 
 [footnote]
@@ -46,15 +45,6 @@ undispatched
 # completion works on any backend by design (task 4.1)
 done
 # footnote-owned sidecar files, no graph write
-# capture-pile file machinery (no graph writes; promote is tracker-owned)
-capture add
-capture archive
-capture capture-pass
-capture dismiss
-capture empty-pass
-capture list
-capture scan
-capture tidy
 # the triage route forwards at the native door; every action reads or
 # applies through the classified engine
 triage

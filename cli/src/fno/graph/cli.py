@@ -73,13 +73,6 @@ register_triage_forward(cli)
 cli.command("worked", hidden=True)(_cmd_worked)
 
 
-# Nested capture sub-app: `fno backlog capture <verb>`. The capture tier below
-# idea nodes (markdown fu-* items, NOT graph nodes). Distinct from
-# `fno agents mail`. The retired `inbox` spelling lives in fno.tombstones.
-from fno.backlog.capture import cli as _capture_cli  # noqa: E402
-
-cli.add_typer(_capture_cli, name="capture", hidden=True)
-
 # Decision records are node/PR metadata; their backlog leaves (decide,
 # decisions, decide-retract, decide-reindex) are the grouped dispatcher's
 # native arms since the decide family ported. No Python mount remains.
@@ -3898,7 +3891,6 @@ def iter_backlog_registry():
     """
     return [
         (None, cli),
-        ("capture", _capture_cli),
     ]
 
 

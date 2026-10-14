@@ -337,6 +337,7 @@ pub fn run(args: &[String]) -> i32 {
         // The batch lane: flock'd per-domain state, the daemon's prepare and
         // ship-closeable doors, and the one-PR ship orchestrator.
         "batch" => super::batch::run_batch(resolved.tail),
+        "capture" => super::capture::run_capture(resolved.tail),
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),
