@@ -89,8 +89,10 @@ READ_ALLOWLIST = (
 
 # Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the
 # stated class. Absence of either control fails the census - a green run over
-# a registry that silently lost its creation verb is not evidence.
-KNOWN_TRACKER_OWNED_VERB = "new"
+# a registry that silently lost its creation verb is not evidence. The
+# tracker-owned control moved from `new` (now the native create door) to
+# `contain` when the scoped-create word rode the door.
+KNOWN_TRACKER_OWNED_VERB = "contain"
 KNOWN_FOOTNOTE_OWNED_VERB = "get"
 
 SELF_TEST_OK_MARKER = "tracker-consumers: self-test OK"
