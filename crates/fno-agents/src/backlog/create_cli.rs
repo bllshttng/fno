@@ -572,25 +572,42 @@ fn archived_id_pool_in(dir: &Path) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// One best-effort archive read: the JSON `entries` shape, or a SQLite
-/// archive db in either row shape the store has used (`entries` blob rows,
-/// or the store's own `nodes` table). A missing or unparsable file
-/// contributes nothing. The SQLite open is read-only: an ordinary open
-/// creates the file it opens.
+/// One best-effort archive read, dispatched by suffix: the JSON `entries`
+/// shape, or the SQLite archive in either row shape the store has used
+/// (`entries` blob rows, or the store's own `nodes` table). A missing or
+/// unparsable file contributes nothing.
 fn archive_file_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("db") => archive_db_ids(path),
+        _ => archive_json_ids(path),
+    }
+}
+
+/// One best-effort JSON archive read. A missing or unparsable file
+/// contributes nothing.
+fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    if let Ok(text) = std::fs::read_to_string(path) {
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-            if let Some(entries) = value.get("entries").and_then(Value::as_array) {
-                for e in entries {
-                    if let Some(id) = e.get("id").and_then(Value::as_str) {
-                        out.insert(id.to_string());
-                    }
-                }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return out;
+    };
+    if let Some(entries) = value.get("entries").and_then(Value::as_array) {
+        for e in entries {
+            if let Some(id) = e.get("id").and_then(Value::as_str) {
+                out.insert(id.to_string());
             }
-            return out;
         }
     }
+    out
+}
+
+/// One best-effort SQLite archive read, over both row shapes. The open is
+/// read-only: an ordinary open creates the file it opens, and a WAL-mode
+/// twin whose -shm is absent still fails read-only and degrades to nothing.
+fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
     let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) else {
         return out;
