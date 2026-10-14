@@ -1454,7 +1454,7 @@ fn batch_metrics(rest: &[String]) -> i32 {
     }
     let root = state_root(flag_value(rest, "--root"));
     let since = flag_value(rest, "--since").map(String::from);
-    let events = read_batch_events(&root.join(".fno").join("events.jsonl"), since.as_deref());
+    let events = read_batch_events(&crate::paths::events_path(&root), since.as_deref());
     let m = compute_metrics(&events);
     if has_flag(rest, "--json") || has_flag(rest, "-J") {
         emit_json(&m);
