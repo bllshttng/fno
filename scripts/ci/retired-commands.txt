@@ -73,3 +73,18 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
+# The spawn axes retire (x-758b wave 6): the lane template owns the launch
+# line, native forms live in docs/HARNESSES.md. Compound forms so the native
+# launch lines (claude --bg --model ...) never match.
+spawn --harness|the lane resolves the harness; native form: docs/HARNESSES.md (launch each harness its own way)|x-758b wave 6
+spawn --provider|the route owns the vendor; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --substrate|the native lane resolves it; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --yolo|the lane's own bypass posture; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --model|the lane template and route own the model; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --permission-mode|the lane default posture; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --effort|the lane template owns it; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --resume|fno agents resume <name>|x-758b wave 6
+spawn --add-dir|the state grant rides the lane; native form: docs/HARNESSES.md|x-758b wave 6
+spawn --agent|pass it after the -- fence|x-758b wave 6
+spawn --tools|pass it after the -- fence|x-758b wave 6
+spawn --deny-tools|pass it after the -- fence|x-758b wave 6

@@ -140,13 +140,6 @@ pub fn decide(payload: &Value) -> Value {
         ));
         suppressed.push(json!(["route", route.value, route.rung, why,]));
     }
-    // route_present covers BOTH ways --route ends up in the final argv:
-    // injected from config, or already explicit on the caller's argv. An
-    // operator-typed `--route zai/...` with no `-m` must still suppress the
-    // config model below - the route+model collision (five-opus-workers
-    // defect) this exists to prevent.
-    let route_present = route_injected || explicit_route;
-
     // --- account -------------------------------------------------------- //
     let grid_account_injected = flag(payload, "grid_account_injected");
     let account_flag_present = flag(payload, "account_flag_present");

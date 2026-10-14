@@ -229,16 +229,13 @@ pub(crate) struct Axes {
     pub has_harness: bool,
     pub explicit_harness: Option<String>,
     pub has_model: bool,
-    pub has_effort: bool,
     pub explicit_vendor: Option<String>,
     pub explicit_vendor_present: bool,
     pub explicit_route: bool,
     pub route_value: Option<String>,
     pub model_value: Option<String>,
-    pub role: Option<String>,
     pub explicit_substrate: Option<String>,
     pub permission_value: Option<String>,
-    pub has_permission: bool,
     pub flag_node: Option<String>,
     pub seed: Option<String>,
     pub account_flag_present: bool,
@@ -259,7 +256,6 @@ fn scan_of(scan: &Value) -> Axes {
         has_harness: b("has_harness"),
         explicit_harness: s("explicit_harness"),
         has_model: b("has_model"),
-        has_effort: b("has_effort"),
         explicit_vendor_present: scan
             .get("explicit_vendor")
             .and_then(Value::as_str)
@@ -268,10 +264,8 @@ fn scan_of(scan: &Value) -> Axes {
         explicit_route: b("explicit_route"),
         route_value: s("route_value"),
         model_value: s("model_value"),
-        role: s("role"),
         explicit_substrate: s("explicit_substrate"),
         permission_value: s("permission_value"),
-        has_permission: b("has_permission"),
         flag_node: s("flag_node"),
         seed: s("seed"),
         account_flag_present: b("account_flag_present"),
@@ -808,25 +802,6 @@ fn read_fields(stage: &Stage) -> Fields {
     }
 }
 
-/// Whether the argv names a role (`-k` in all three Click spellings, or
-/// `--promote`) before the `--argv` boundary or a bare `--` fence (fenced
-/// tokens are prompt text) - the same boundary rule Python's
-/// `_has_permission_mode` applies, and the same short-form spellings the
-/// Python routing detector accepts.
-fn argv_has_team(argv: &[String]) -> bool {
-    argv.iter()
-        .skip(1)
-        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
-        .any(|t| {
-            // retired-ok: the daemon accepts the retired alias for one release
-            t == "--promote"
-                || t.starts_with("--promote=")
-                || t == "-k"
-                || t.starts_with("-k=")
-                || (t.starts_with("-k") && t.len() > 2 && !t.starts_with("--"))
-        })
-}
-
 /// An overlay table (or lane args) can carry the ONLY value this spawn
 /// injects, so an empty harness-blind read must not end composition early.
 fn overlays_present(stage: &Stage) -> bool {
@@ -888,38 +863,6 @@ fn resolved_harness(stage: &Stage) -> Option<String> {
 
 fn fields_of<'a>(stage: &'a Stage<'a>) -> &'a Fields {
     stage.fields()
-}
-
-/// Lane first (a lane is a complete coordinate), then the harness-keyed
-/// answer, then the harness-blind scalars: field()'s order with the two
-/// harness rungs spliced in above it.
-fn seamed_read(stage: &Stage, name: &str, blind: Field) -> Field {
-    if let (Some(lane), Some(index)) = (stage.lane.as_ref(), stage.lane_index) {
-        let value = lane_value(lane, name);
-        if !value.is_empty() {
-            return Field(
-                value,
-                Some(format!(
-                    "agents.profiles.{}.lanes[{index}]",
-                    stage.profile_verb
-                )),
-            );
-        }
-    }
-    if let Some(answer) = &stage.overlay_answer {
-        if let Some(entry) = answer
-            .get("effective")
-            .and_then(|e| e.get(name))
-            .filter(|e| !e.is_null())
-        {
-            let value = entry.get("value").and_then(Value::as_str).unwrap_or("");
-            let rung = entry.get("rung").and_then(Value::as_str).unwrap_or("");
-            if !value.is_empty() {
-                return Field(value.to_string(), Some(rung.to_string()));
-            }
-        }
-    }
-    blind
 }
 
 /// The grid triple's injections: the pin's model is already on the argv, so
@@ -1428,65 +1371,4 @@ pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String
         values.insert(hole.to_string(), value.to_string());
     }
     values
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    type Saved = Vec<(&'static str, Option<std::ffi::OsString>)>;
-
-    /// The per-process fake world the CLAIMS root pins to, for the whole
-    /// run. The claims pin is SET-FOREVER and the dir is never deleted:
-    /// restoring it reopens live-$HOME claims reads (28 CI failures), and
-    /// a deleted dir starves later readers of a readable-empty world (6).
-    /// The STATE pins are NOT set-forever: a persisting empty state world
-    /// shadows the tests that pin their own (5 CI failures), so those
-    /// snapshot-restore like the config path.
-    fn fake_root() -> &'static std::path::Path {
-        static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-        let root = ROOT.get_or_init(|| {
-            let dir = std::env::temp_dir().join(format!("fno-fake-world-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&dir);
-            dir
-        });
-        root.as_path()
-    }
-
-    fn hermetic() -> (
-        std::sync::MutexGuard<'static, ()>,
-        &'static std::path::Path,
-        Saved,
-    ) {
-        let guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let root = fake_root();
-        // Snapshot the config and state pins for restore; only the claims
-        // root is set-forever (see fake_root). FNO_TEST_HERMETIC is never
-        // touched, so CI's declared ambient ("0") survives the process.
-        let saved: Saved = vec![
-            ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
-            ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
-            ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
-        ];
-        // The consult arm reads the declared rows, the policy and the lanes
-        // from DISK (the gather's own read); pin an empty config or the
-        // test process's ambient config answers the walk.
-        std::fs::write(root.join("config.toml"), "").unwrap();
-        std::env::set_var("FNO_CONFIG", root.join("config.toml"));
-        std::env::set_var("FNO_CLAIMS_ROOT", root);
-        std::env::set_var("FNO_STATE_DIR", root.join("state"));
-        std::env::set_var("FNO_AGENTS_HOME", root.join("agents-home"));
-        (guard, root, saved)
-    }
-
-    fn clear_hermetic(_root: &std::path::Path, saved: Saved) {
-        for (key, value) in saved {
-            match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
 }
