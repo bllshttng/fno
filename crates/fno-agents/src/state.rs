@@ -832,7 +832,7 @@ pub struct RegistryEntry {
     /// native mint (the report that mints the row is its first report). The
     /// capacity reader's freshness source for rows no probe can reach: a
     /// pid-less row the claude roster cannot answer counts as an occupant
-    /// while this stamp is inside `spawn_gate::REPORT_FRESHNESS`
+    /// while this stamp is inside `cap_liveness::REPORT_FRESHNESS`
     /// (d-d0c63de7). Absent or unparseable fails closed, the discipline of
     /// `InsideLegReport::is_live_at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
