@@ -12,13 +12,17 @@
 //! Two mirrors are local because no Rust reader shared their shape:
 //!
 //! * the account-records read mirrors `loader.load_providers` — project-local
-//!   then PWD-local then global `config.toml` (NOT `agents_config::config_candidates`,
-//!   whose canonical tier the Python loader does not read), records overlaid by
+//!   then PWD-local then global `config.toml`, each candidate falling back to
+//!   its `settings.yaml` sibling when the toml file is absent
+//!   (`_read_candidates`; NOT `agents_config::config_candidates`, whose
+//!   canonical tier the Python loader does not read), records overlaid by
 //!   id, each record validated against the raise surface the pydantic model
 //!   enforced. The mirror covers the fields the capacity reads consume plus the
 //!   checks that make `load_providers` raise: required `id`/`name`/`harness`
 //!   (with the legacy `cli` alias) /`auth` literals, `priority >= 0`,
-//!   `model_name` non-empty, and the auth-strategy consistency rules. Pydantic
+//!   `model_name` non-empty, any duplicate id in the assembled list, a
+//!   `route` that fails the `provider/model` parse, and the auth-strategy
+//!   consistency rules. Pydantic
 //!   refusals on untouched metadata fields (`tags`, `reset_timezone`,
 //!   `window_minutes`, `account_id`, `description`) are not mirrored — a config
 //!   valid everywhere else but wrong only there reads as loadable here.
@@ -73,6 +77,27 @@ fn valid_record_id(s: &str) -> bool {
         && b[1..]
             .iter()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+}
+
+/// `model_routing._parse_target`: a `provider/model` (or legacy
+/// `provider,model`) target. A comma, when present, wins as the separator
+/// and must split into exactly two parts; otherwise the FIRST slash splits,
+/// keeping a namespaced model id intact. Both halves non-empty after trim.
+fn valid_route_target(raw: &str) -> bool {
+    let raw = raw.trim();
+    let (provider, model) = if raw.contains(',') {
+        let parts: Vec<&str> = raw.split(',').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        (parts[0].trim(), parts[1].trim())
+    } else {
+        match raw.split_once('/') {
+            Some((p, m)) => (p.trim(), m.trim()),
+            None => return false,
+        }
+    };
+    !provider.is_empty() && !model.is_empty()
 }
 
 /// Select the review policy from plan `size` and named `risk_surfaces`.
@@ -324,14 +349,19 @@ fn validate_record(row: &toml::Value) -> Result<(String, String), ()> {
             return Err(());
         }
     }
+    // `_validate_route`: a route PRESENT as a string must parse in the
+    // provider/model spelling, whatever its value; the empty string is
+    // falsy downstream but still fails this validator.
     let route = table
         .get("route")
         .and_then(toml::Value::as_str)
         .map(str::trim)
         .filter(|r| !r.is_empty());
-    if let Some(r) = route {
+    if let Some(route_raw) = table.get("route").and_then(toml::Value::as_str) {
+        if !valid_route_target(route_raw) {
+            return Err(());
+        }
         if auth != "api_key" {
-            let _ = r;
             return Err(());
         }
     }
@@ -393,19 +423,87 @@ fn validate_record(row: &toml::Value) -> Result<(String, String), ()> {
     Ok((id, harness.to_string()))
 }
 
+/// `loader._read_parsed` for one layer: the config.toml candidate first, its
+/// settings.yaml sibling second when the toml file is absent (the
+/// unmigrated-install fallback `_read_candidates` serves). The first existing
+/// file wins; an unreadable or unparseable layer reads as empty and stops,
+/// it never raises.
+fn read_layer(path: &Path) -> toml::Table {
+    let yaml_path = path.with_file_name("settings.yaml");
+    let candidates: [(&Path, bool); 2] = [(path, false), (yaml_path.as_path(), true)];
+    for (candidate, is_yaml) in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(candidate) else {
+            break;
+        };
+        if is_yaml {
+            let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
+                break;
+            };
+            return yaml_mapping_to_table(&doc);
+        }
+        return text.parse::<toml::Table>().unwrap_or_default();
+    }
+    toml::Table::new()
+}
+
+/// The YAML document as the loader sees it: a top-level mapping's string keys
+/// with scalar/sequence/nested-map values; a non-mapping document is no
+/// config at all (`safe_load` returns it and every `.get` misses).
+fn yaml_mapping_to_table(doc: &serde_yaml_ng::Value) -> toml::Table {
+    let mut out = toml::Table::new();
+    let Some(map) = doc.as_mapping() else {
+        return out;
+    };
+    for (key, value) in map {
+        let Some(key) = key.as_str() else {
+            continue;
+        };
+        out.insert(key.to_string(), yaml_value_to_toml(value));
+    }
+    out
+}
+
+fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> toml::Value {
+    if let Some(v) = value.as_bool() {
+        return toml::Value::Boolean(v);
+    }
+    if let Some(v) = value.as_i64() {
+        return toml::Value::Integer(v);
+    }
+    if let Some(v) = value.as_f64() {
+        return toml::Value::Float(v);
+    }
+    if let Some(v) = value.as_str() {
+        return toml::Value::String(v.to_string());
+    }
+    if let Some(seq) = value.as_sequence() {
+        return toml::Value::Array(seq.iter().map(yaml_value_to_toml).collect());
+    }
+    if let Some(map) = value.as_mapping() {
+        let mut out = toml::Table::new();
+        for (key, item) in map {
+            if let Some(key) = key.as_str() {
+                out.insert(key.to_string(), yaml_value_to_toml(item));
+            }
+        }
+        return toml::Value::Table(out);
+    }
+    // Null and any exotic tag degrade to an empty string: the reads this
+    // port feeds (accounts.records, the cross-model switch leaf) never
+    // consume either.
+    toml::Value::String(String::new())
+}
+
 /// `loader.load_providers` as the capacity reads consume it: the declared
 /// `(id, harness)` pairs in merge order, `None` when the load would raise
 /// (any record invalid — the caller fails closed, claude-only).
 pub(crate) fn load_provider_records(cwd: &Path) -> Option<Vec<(String, String)>> {
     let mut merged: Vec<toml::Value> = Vec::new();
     for path in provider_config_candidates(cwd).iter().rev() {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        // `_read_parsed`: an unparseable layer reads as empty, it never raises.
-        let Ok(data) = content.parse::<toml::Table>() else {
-            continue;
-        };
+        let data = read_layer(path);
         let Some(block) = extract_accounts_block(&data) else {
             continue;
         };
@@ -447,6 +545,21 @@ pub(crate) fn load_provider_records(cwd: &Path) -> Option<Vec<(String, String)>>
             }
         }
     }
+    // `_check_unique_record_ids`: the assembled load refuses ANY duplicate
+    // id, including the within-file duplicates the overlay preserved.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for record in &merged {
+        let Some(rid) = record
+            .as_table()
+            .and_then(|t| t.get("id"))
+            .and_then(toml::Value::as_str)
+        else {
+            continue;
+        };
+        if !seen.insert(rid) {
+            return None;
+        }
+    }
     let mut out = Vec::with_capacity(merged.len());
     for record in &merged {
         out.push(validate_record(record)?);
@@ -481,7 +594,7 @@ pub(crate) fn exhausted_provider_kinds(cwd: &Path, now: f64) -> Option<Vec<Strin
         if !DISPATCHABLE_PROVIDERS.contains(&harness.as_str()) {
             continue;
         }
-        match by_kind.iter_mut().find(|(k, _)| k == harness) {
+        match by_kind.iter_mut().find(|(k, _)| *k == *harness) {
             Some((_, ids)) => ids.push(id.clone()),
             None => by_kind.push((harness.clone(), vec![id.clone()])),
         }
@@ -932,6 +1045,77 @@ mod tests {
         assert!(has_diverse_capacity(&kinds(&["codex"]), ""));
         assert!(!has_diverse_capacity(&kinds(&["claude"]), ""));
         // Verdict correlation: unresolved iff not satisfied, on every input above.
+    }
+
+    #[test]
+    fn record_load_raise_surface() {
+        // `valid_route_target` is `model_routing._parse_target`: a comma
+        // wins as the separator and must split exactly two, else the FIRST
+        // slash splits; both halves non-empty after trim.
+        assert!(valid_route_target("zai/glm-5.3"));
+        assert!(valid_route_target("zai/deepseek-ai/DeepSeek-V3"));
+        assert!(valid_route_target(" zai , glm "));
+        assert!(!valid_route_target("zai"));
+        assert!(!valid_route_target("zai/"));
+        assert!(!valid_route_target("/glm"));
+        assert!(!valid_route_target("zai,glm,x"));
+        assert!(!valid_route_target(""));
+
+        let dir =
+            std::env::temp_dir().join(format!("review-policy-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("config.toml");
+        let prior = std::env::var("FNO_CONFIG").ok();
+        std::env::set_var("FNO_CONFIG", &config);
+        // (a) The settings.yaml sibling answers when the toml candidate is
+        // absent (`_read_candidates`' second leg).
+        std::fs::write(
+            dir.join("settings.yaml"),
+            "accounts:\n  records:\n    - id: yaml-a\n      name: Y\n      harness: claude\n      auth: managed\n",
+        )
+        .unwrap();
+        assert_eq!(
+            load_provider_records(&dir),
+            Some(vec![("yaml-a".to_string(), "claude".to_string())])
+        );
+        let _ = std::fs::remove_file(dir.join("settings.yaml"));
+        // (b) `_check_unique_record_ids`: ANY duplicate id in the assembled
+        // list refuses the whole load, within one file included.
+        std::fs::write(
+            &config,
+            "[[accounts.records]]\nid = \"dup\"\nname = \"A\"\nharness = \"claude\"\nauth = \"managed\"\n[[accounts.records]]\nid = \"dup\"\nname = \"B\"\nharness = \"codex\"\nauth = \"managed\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_provider_records(&dir), None);
+        // (c) `_validate_route`: a route must parse as provider/model and
+        // only an api_key record may carry one.
+        std::fs::write(
+            &config,
+            "[[accounts.records]]\nid = \"r1\"\nname = \"R\"\nharness = \"claude\"\nauth = \"api_key\"\nroute = \"nope\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_provider_records(&dir), None);
+        std::fs::write(
+            &config,
+            "[[accounts.records]]\nid = \"r1\"\nname = \"R\"\nharness = \"claude\"\nauth = \"api_key\"\nroute = \"zai/glm\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            load_provider_records(&dir),
+            Some(vec![("r1".to_string(), "claude".to_string())])
+        );
+        std::fs::write(
+            &config,
+            "[[accounts.records]]\nid = \"r1\"\nname = \"R\"\nharness = \"claude\"\nauth = \"managed\"\nroute = \"zai/glm\"\n",
+        )
+        .unwrap();
+        assert_eq!(load_provider_records(&dir), None);
+        match prior {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

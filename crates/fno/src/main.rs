@@ -374,6 +374,9 @@ fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
 /// a flag value, exactly as typer reads it); --help/-h anywhere forwards so
 /// typer keeps rendering the leaf listing.
 fn classify_review_root(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
+    if args.is_empty() {
+        return None;
+    }
     let (alias, tail): (bool, &[OsString]) =
         match (args[0].to_str()?, args.get(1).and_then(|a| a.to_str())) {
             ("do", Some("review")) => (false, args.get(2..)?),
