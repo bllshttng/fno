@@ -25,7 +25,7 @@ pub(crate) struct Panel {
     inflight: bool,
     last_read: Option<Instant>,
     generation: u64,
-    selected: usize,
+    pub(super) selected: usize,
     esc: Vec<u8>,
     unread: bool,
     pub(super) tab: Tab,
@@ -623,6 +623,14 @@ fn end_drag(view: &mut View) {
             crate::view_store::save_bell_width(view.bell.width);
         }
     }
+}
+
+/// The first question row's id, for the snapshot seam's marked-row shot.
+pub(super) fn first_question_id(view: &View) -> Option<String> {
+    question_rows(view).into_iter().find_map(|r| match r {
+        Row::Question(id) => Some(id),
+        _ => None,
+    })
 }
 
 /// The live drag owns every mouse event: Drag(Left) moves the border,

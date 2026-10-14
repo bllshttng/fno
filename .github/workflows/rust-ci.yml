@@ -119,6 +119,62 @@ jobs:
         working-directory: crates/fno
         run: cargo check --all-targets --locked
 
+  bell-shots:
+    name: bell panel snapshot shots
+    # The user reviews the resize and mark work through three PNGs before
+    # merge, and the build freeze rules out shooting them on a workstation,
+    # so the PR's own CI renders them: build the client once, drive
+    # scripts/ops/mux-demo-snapshot.sh for the three bell views, upload the
+    # PNGs as run artifacts. A shot that fails to render reds here, so the
+    # gap is visible in the log rather than a silent empty picture.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-bellshots-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bellshots-
+            ${{ runner.os }}-cargo-
+
+      - name: Find Chrome for the png raster
+        run: echo "FNO_CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
+
+      - name: Build the fno client binary
+        working-directory: crates/fno
+        run: cargo build --locked
+
+      - name: Shoot the three bell views
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+          FNO_DEMO_PY_SOURCE: ${{ github.workspace }}/cli
+        run: |
+          mkdir -p shots
+          for view in bell bell-wide bell-full; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
+          done
+
+      - name: Upload the shots
+        uses: actions/upload-artifact@v4
+        with:
+          name: bell-panel-shots
+          path: shots/*.png
+          if-no-files-found: error
+
   release-version-math:
     name: release version math (sync-version + release-version)
     # The nightly stamps a .devN version through these scripts; a PEP 440
