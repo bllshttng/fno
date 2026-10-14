@@ -333,7 +333,10 @@ pub fn verify_sweep(root: &Path, stamp: &str) -> Vec<(String, Status)> {
 }
 
 /// The both-exist rule: a fully empty new file is a race's fresh create;
-/// park it and migrate the legacy file. Rows on both sides stay for a human.
+/// park it and migrate the legacy file. An empty LEGACY file holds nothing
+/// to migrate either, and "both copies hold rows" would be false for it: it
+/// parks under a `.empty-legacy` suffix the same way. Rows on both sides
+/// stay for a human.
 fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) -> Status {
     let new_empty =
         match Connection::open_with_flags(new, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
@@ -351,7 +354,44 @@ fn both_exist(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) ->
         }
         return run_protocol(root, row, legacy, new, stamp);
     }
+    // Empty is a zero length, or a read-only open whose every table is
+    // empty - and never a live -wal carrying the rows. A legacy file that
+    // fails to open keeps today's refusal.
+    let zero_len = std::fs::metadata(legacy)
+        .map(|m| m.len() == 0)
+        .unwrap_or(false);
+    let legacy_empty = if !wal_is_empty(legacy) {
+        false
+    } else if zero_len {
+        true
+    } else {
+        match Connection::open_with_flags(legacy, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(c) => empty_store(&c).unwrap_or(false),
+            Err(_) => false,
+        }
+    };
+    if legacy_empty {
+        let dir = backup_dir(root, stamp);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return Status::Refused("cannot create the backup folder".to_string());
+        }
+        let parked_name = format!("{}.empty-legacy", row.legacy);
+        if std::fs::rename(legacy, dir.join(parked_name)).is_err() {
+            return Status::Refused("cannot park the empty legacy file".to_string());
+        }
+        return Status::Parked;
+    }
     Status::Refused("both copies hold rows".to_string())
+}
+
+/// True when the store's `-wal` sidecar is absent or zero length. A main
+/// file that reads empty can still hold every row in its WAL, so an empty
+/// verdict needs both reads.
+fn wal_is_empty(store: &Path) -> bool {
+    let wal = PathBuf::from(format!("{}-wal", store.to_string_lossy()));
+    std::fs::metadata(&wal)
+        .map(|m| m.len() == 0)
+        .unwrap_or(true)
 }
 
 /// Empty means: no user tables, or every user table holds zero rows.
@@ -579,6 +619,26 @@ pub fn straggler_import(root: &Path, stamp: &str, apply: bool) -> Vec<(String, S
         if !new.exists() {
             continue;
         }
+        // A zero-length straggler holds no rows: park it without opening it.
+        // ensure_schema would write a full schema into the empty file and the
+        // column check would then refuse it, stranding the file at the root.
+        if std::fs::metadata(&legacy)
+            .map(|m| m.len() == 0)
+            .unwrap_or(false)
+        {
+            let dir = backup_dir(root, stamp);
+            if std::fs::create_dir_all(&dir).is_ok()
+                && std::fs::rename(&legacy, dir.join(&name)).is_ok()
+            {
+                out.push((name, Status::Parked));
+            } else {
+                out.push((
+                    name,
+                    Status::Refused("cannot park the empty straggler".to_string()),
+                ));
+            }
+            continue;
+        }
         match import_straggler(&legacy, &new) {
             Ok(_) => {
                 let dir = backup_dir(root, stamp);
@@ -641,7 +701,14 @@ fn import_straggler(legacy: &Path, new: &Path) -> Result<usize, String> {
             .collect();
         names
     };
-    if src_columns != columns {
+    // Compare as sets: the live store gained `caused_by` through ALTER, so
+    // its column order differs from a fresh create. The insert names every
+    // column and the row read is by name; order never mattered.
+    let mut src_names = src_columns.clone();
+    let mut dst_names = columns.clone();
+    src_names.sort();
+    dst_names.sort();
+    if src_names != dst_names {
         return Err("the straggler's events columns diverge from the published store".to_string());
     }
     let columns: Vec<String> = columns.into_iter().filter(|name| name != "seq").collect();
