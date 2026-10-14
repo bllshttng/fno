@@ -538,6 +538,7 @@ fn run_child(root: &Path, spec: &Case) -> Golden {
         }
     }
     let env = case_environ(&case_dir, spec);
+    cmd.env_clear();
     for (k, v) in &env {
         cmd.env(k, v);
     }
