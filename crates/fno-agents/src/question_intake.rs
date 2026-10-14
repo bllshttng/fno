@@ -843,7 +843,11 @@ and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {
 {old_head}); one question stays open on this subject."
                         ));
                     } else {
-                        let error = errors.iter().find(|e| e.contains(id)).map(String::as_str);
+                        let error = errors
+                            .iter()
+                            .find(|e| e.contains(id))
+                            .map(String::as_str)
+                            .unwrap_or("index write failed");
                         answer.lines.push(format!(
                             "outstanding: {id} could not be superseded ({error}); the next \
 sweep closes it."

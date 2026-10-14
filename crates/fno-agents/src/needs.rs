@@ -1413,13 +1413,14 @@ fn open_question_rows(raw: &str) -> (HashMap<String, Value>, std::collections::H
         match kind {
             "operator_question" => {
                 if let Some(qid) = data.get("question_id").and_then(Value::as_str) {
-                    let mut data = data;
+                    let qid = qid.to_string();
+                    let mut row = data;
                     // The envelope ts rides beside the data: the supersede
                     // rule orders a family by it.
-                    if let Some(ts) = v.get("ts") {
-                        data.insert("ts".into(), ts.clone());
+                    if let (Some(obj), Some(ts)) = (row.as_object_mut(), v.get("ts")) {
+                        obj.insert("ts".into(), ts.clone());
                     }
-                    asked.insert(qid.to_string(), data);
+                    asked.insert(qid, row);
                 }
             }
             "operator_question_closed" => {
