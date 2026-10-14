@@ -602,7 +602,7 @@ fn approved_true(value: &str) -> bool {
 }
 
 fn manifest_field(repo: &Path, field: &str) -> Option<String> {
-    let path = crate::state_path::resolve("target-state", repo);
+    let path = crate::state_path::resolve("target-state", repo)?;
     let content = fs::read_to_string(path).ok()?;
     crate::loopcheck::scan_manifest_field(&content, field)
 }
