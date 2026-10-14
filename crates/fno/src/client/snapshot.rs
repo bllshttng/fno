@@ -518,6 +518,11 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                         .into(),
                 );
             }
+            // The Questions tab reads the fold the live loop kicks, and the
+            // snapshot has no loop: without this gather the tab paints its
+            // loading skeleton and the wide shot has no row to mark.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
             match kind {
                 Some(ViewKind::BellWide) => {
                     view.bell.size = super::bell::Size::Wide;
