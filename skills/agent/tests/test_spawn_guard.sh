@@ -334,12 +334,12 @@ ok 'thread slug -> failed'          "$(field "$out")" 'failed'
 # is the receipt handle and must be surfaced for logs/registry lookup.
 CODEX_THREAD_SESSION='019f0000-0000-7000-8000-000000000001'
 out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
-  run --name codex-thread --provider codex --yolo --message 'Implement x' --substrate thread)"
+  run --name codex-thread --provider codex --message 'Implement x' --substrate thread)"
 ok   'codex thread full session -> launched' "$(field "$out")" 'launched'
 has  'codex thread full session surfaced'     "$out" "short_id=$CODEX_THREAD_SESSION"
 has  'codex thread logs use full session'    "$out" "fno agents logs $CODEX_THREAD_SESSION"
 out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SHORT_ONLY=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
-  run --name codex-thread-short --provider codex --yolo --node "$NODE" --message 'Implement x' --substrate thread)"
+  run --name codex-thread-short --provider codex --node "$NODE" --message 'Implement x' --substrate thread)"
 ok   'codex short-only session -> launched'   "$(field "$out")" 'launched'
 has  'codex short-only session surfaced'      "$out" "short_id=$CODEX_THREAD_SESSION"
 
@@ -362,11 +362,11 @@ out="$(STUB_VERDICT="$DISP" STUB_OPENCODE_THREAD=1 STUB_OPENCODE_TORN=1 \
 ok   'opencode torn short_id -> failed'  "$(field "$out")" 'failed'
 
 out="$(STUB_VERDICT="$DISP" STUB_CAPABILITIES_FAIL=1 \
-  run --name thread-capabilities-fail --provider codex --yolo --message 'Implement x' --substrate thread)"
+  run --name thread-capabilities-fail --provider codex --message 'Implement x' --substrate thread)"
 ok 'capability read failure -> failed' "$(field "$out")" 'failed'
 no 'capability read failure did not spawn' "$(calllog)" 'agents spawn'
 out="$(FNO_AGENTS_RUNTIME=rust STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 \
-  run --name thread-rust-runtime --provider codex --yolo --message 'Implement x' --substrate thread)"
+  run --name thread-rust-runtime --provider codex --message 'Implement x' --substrate thread)"
 ok 'rust runtime capability read -> launched' "$(field "$out")" 'launched'
 has 'rust runtime capability read spawned' "$(calllog)" 'agents spawn'
 
@@ -378,7 +378,7 @@ has 'rust runtime capability read spawned' "$(calllog)" 'agents spawn'
 # AC-HP: pane launch -> launched, pane coords + mux-attach hint, NOT `agents logs`.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name paneW --provider codex --yolo --message 'Implement x')"
+  run --name paneW --provider codex --message 'Implement x')"
 ok  'pane launch -> launched'        "$(field "$out")" 'launched'
 has 'pane coords surfaced'           "$out" 'pane="main:1"'
 has 'pane hint is mux attach'        "$out" 'fno mux attach main'
@@ -386,42 +386,42 @@ no  'pane hint is NOT agents logs'   "$out" 'fno agents logs'
 
 # AC2-CON: a created Codex pane without a thread ID is pending, not launched.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneP STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \
-  STUB_MUX_SESSION=main run --name paneP --provider codex --yolo --message 'Implement x')"
+  STUB_MUX_SESSION=main run --name paneP --provider codex --message 'Implement x')"
 ok  'pane pending -> pending'         "$(field "$out")" 'pending'
 has 'pane pending coords surfaced'    "$out" 'pane="main:1"'
 no  'pane pending is not launched'    "$out" 'result=launched'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneI STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=live \
-  STUB_MUX_SESSION=main run --name paneI --provider codex --yolo --message 'Implement x')"
+  STUB_MUX_SESSION=main run --name paneI --provider codex --message 'Implement x')"
 ok  'pane idless live -> failed'       "$(field "$out")" 'failed'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneB STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=live \
   STUB_MUX_SESSION=main STUB_MUX_SHORT_ID=deadbeef \
-  run --name paneB --provider codex --yolo --message 'Implement x')"
+  run --name paneB --provider codex --message 'Implement x')"
 ok  'pane live partial identity -> failed' "$(field "$out")" 'failed'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneT STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \
   STUB_MUX_SESSION=main STUB_MUX_SHORT_ID=deadbeef \
-  run --name paneT --provider codex --yolo --message 'Implement x')"
+  run --name paneT --provider codex --message 'Implement x')"
 ok  'pane pending torn identity -> failed' "$(field "$out")" 'failed'
 
 # AC-EDGE: a session name with a space -> ref quoted so it can't split the line.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneS STUB_MUX_PROVIDER=codex STUB_MUX_SESSION='work 1' \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name paneS --provider codex --yolo --message 'Implement x')"
+  run --name paneS --provider codex --message 'Implement x')"
 ok  'pane spaced session -> launched' "$(field "$out")" 'launched'
 has 'pane spaced ref quoted'          "$out" 'pane="work 1:1"'
 
 # AC-ERR: identity mismatch (receipt name != launch name) -> failed, no fake handle.
 out="$(STUB_MUX=1 STUB_MUX_NAME=someone-else STUB_MUX_PROVIDER=codex \
-  run --name paneM --provider codex --yolo --message 'Implement x')"
+  run --name paneM --provider codex --message 'Implement x')"
 ok 'pane identity mismatch -> failed' "$(field "$out")" 'failed'
 
 # Regression: a long requested name must not replace the Codex thread handle.
 LONGNAME='spawn-x-7624-dedup-check-before-target-disp'
 out="$(STUB_MUX=1 STUB_MUX_NAME="$LONGNAME" STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name "$LONGNAME" --provider codex --yolo --message 'Implement x')"
+  run --name "$LONGNAME" --provider codex --message 'Implement x')"
 ok  'pane long name -> launched'      "$(field "$out")" 'launched'
 has 'pane long name short_id'         "$out" 'short_id=019fb024'
 
