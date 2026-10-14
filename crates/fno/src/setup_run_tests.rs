@@ -37,6 +37,7 @@ fn the_argv_surface_parses_and_refuses() {
             && !o.export
             && o.out.is_none()
             && o.join.is_none()
+            && !o.check
     );
     assert_eq!(o.scope, Scope::Both);
     // Every flag reads.
@@ -50,6 +51,7 @@ fn the_argv_surface_parses_and_refuses() {
         "--list",
         "--json",
         "--dry-run",
+        "--check",
         "--scan-repos",
         "--scan-dirs",
         "code,src",
@@ -60,7 +62,7 @@ fn the_argv_surface_parses_and_refuses() {
         "-",
     ]))
     .unwrap();
-    assert!(o.yes && o.once && o.list && o.json && o.dry_run && o.scan);
+    assert!(o.yes && o.once && o.list && o.json && o.dry_run && o.scan && o.check);
     assert!(o.export);
     assert_eq!(o.out.as_deref(), Some("profile.toml"));
     assert_eq!(o.join.as_deref(), Some("-"));
@@ -358,4 +360,42 @@ fn the_join_lane_selects_and_reports_codes() {
         rep.to_json()["undo"],
         "undo: cp /b/config.toml.x /g/config.toml"
     );
+}
+
+/// The check-side helpers hold without a platform: the step outcome reads
+/// from the slices this pass appended to, a proposal token parses bare or
+/// quoted, and the drift word spells strings bare.
+#[test]
+fn step_outcome_and_proposal_token_decide_drift_shapes() {
+    // An explicit skip beats done: the step's own words carry the reason.
+    let (kind, reason) = step_outcome(
+        "join",
+        &["join: restored".to_string()],
+        &["join: declined".to_string()],
+    );
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("declined"));
+    // Done without a skip is a done step; nothing at all is blocked.
+    let (kind, reason) = step_outcome("gh-auth", &["gh-auth: signed in".into()], &[]);
+    assert_eq!(kind, "done");
+    assert_eq!(reason, None);
+    let (kind, reason) = step_outcome("gh-auth", &[], &[]);
+    assert_eq!(kind, "blocked");
+    assert_eq!(reason, None);
+    // A skip line that never carried the prefix stays whole.
+    let (kind, reason) = step_outcome("x", &[], &["no prefix".to_string()]);
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("no prefix"));
+    // Numbers read bare; bare words read after the Rust quote fallback; a
+    // token neither form reads (a control char breaks bare text and the
+    // \u{7} debug spelling TOML never accepts alike) answers None.
+    assert_eq!(proposal_token("3"), Some(toml::Value::Integer(3)));
+    assert_eq!(
+        proposal_token("standard"),
+        Some(toml::Value::String("standard".into()))
+    );
+    assert_eq!(proposal_token("a\u{7}b"), None);
+    // The drift word spells strings bare and keeps TOML's other forms.
+    assert_eq!(value_word(&toml::Value::String("fn".into())), "fn");
+    assert_eq!(value_word(&toml::Value::Boolean(true)), "true");
 }

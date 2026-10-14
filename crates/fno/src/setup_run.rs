@@ -500,6 +500,7 @@ pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
                     .ok_or("--only needs a comma list of step ids")?;
                 o.only = v.split(',').map(|s| s.trim().to_string()).collect();
             }
+            "--check" => o.check = true,
             _ => return Err(format!("unknown flag {flag}; {USAGE}")),
         }
         i += 1;
@@ -564,6 +565,7 @@ pub struct Opts {
     list: bool,
     json: bool,
     dry_run: bool,
+    check: bool,
     scan: bool,
     scan_dirs: Vec<String>,
     export: bool,
@@ -572,7 +574,7 @@ pub struct Opts {
 }
 
 /// The argv tail `parse_opts` accepts, repeated for refusals.
-const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--scan-repos] [--scan-dirs <dir,...>] [--export] [--out <file>] [--join <file or -]";
+const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--check] [--scan-repos] [--scan-dirs <dir,...>] [--export] [--out <file>] [--join <file or -]";
 
 /// Every non-usage refusal exit: the same code the Python CLI uses for a
 /// bad flag or value.
@@ -1399,39 +1401,10 @@ fn dry_run(
         Some(opts.scan_dirs.iter().map(PathBuf::from).collect())
     };
     let detected = crate::setup_detect::detect(root, scan.as_deref());
-    let mut proposed: Vec<Proposal> = Vec::new();
     let mut skips: Vec<String> = Vec::new();
     let mut rows: Vec<Row> = pending.into_iter().collect();
     let mut needs_human: Vec<String> = Vec::new();
-    for step in steps {
-        match step.id {
-            "harness-wiring" => proposed.push(propose_harness_wiring()),
-            "concurrency-band" => {
-                if let Some(n) = propose_concurrency_band(&mut skips) {
-                    proposed.push(Proposal {
-                        id: "concurrency-band",
-                        key: "agents.max_live".into(),
-                        value: n.to_string(),
-                        scope: "global",
-                        reason: "the machine sample's measured band, so live agents stay inside it"
-                            .to_string(),
-                        source: "sample",
-                    });
-                }
-            }
-            "guardrails" => {
-                if let Some(p) = propose_guardrails(&mut skips) {
-                    proposed.push(p);
-                }
-            }
-            "backlog-prefix" => {
-                if let Some(p) = propose_backlog_prefix(root, &mut skips) {
-                    proposed.push(p);
-                }
-            }
-            _ => {}
-        }
-    }
+    let mut proposed = compute_proposals(steps, root, &mut skips);
     proposed.extend_from_slice(join_proposed);
     match detected
         .get("gh")
@@ -1471,6 +1444,284 @@ fn dry_run(
         serde_json::to_string_pretty(&crate::setup_profile::redact(&body)).unwrap_or_default()
     );
     0
+}
+
+/// The proposal half of a dry run, shared with `--check`: the same rows a
+/// dry run offers, computed with nothing printed. `skips` collects the
+/// "why not" lines `--dry-run` prints.
+fn compute_proposals(steps: &[&Step], root: &Path, skips: &mut Vec<String>) -> Vec<Proposal> {
+    let mut proposed: Vec<Proposal> = Vec::new();
+    for step in steps {
+        match step.id {
+            "harness-wiring" => proposed.push(propose_harness_wiring()),
+            "concurrency-band" => {
+                if let Some(n) = propose_concurrency_band(skips) {
+                    proposed.push(Proposal {
+                        id: "concurrency-band",
+                        key: "agents.max_live".into(),
+                        value: n.to_string(),
+                        scope: "global",
+                        reason: "the machine sample's measured band, so live agents stay inside it"
+                            .to_string(),
+                        source: "sample",
+                    });
+                }
+            }
+            "guardrails" => {
+                if let Some(p) = propose_guardrails(skips) {
+                    proposed.push(p);
+                }
+            }
+            "backlog-prefix" => {
+                if let Some(p) = propose_backlog_prefix(root, skips) {
+                    proposed.push(p);
+                }
+            }
+            _ => {}
+        }
+    }
+    proposed
+}
+
+/// One proposal value from its stored text. Some proposals hold bare words
+/// ("standard", "fn"), so the first read takes the token as TOML gives it
+/// and the second quotes it the way Rust spells a string. A token neither
+/// form reads is None, and the caller reports drift rather than guessing.
+fn proposal_token(token: &str) -> Option<toml::Value> {
+    if let Ok(v) = toml::from_str::<toml::Value>(&format!("v = {token}")) {
+        return v.get("v").cloned();
+    }
+    toml::from_str::<toml::Value>(&format!("v = {token:?}"))
+        .ok()
+        .and_then(|v| v.get("v").cloned())
+}
+
+/// A proposal value as the drift lines name it: strings bare, everything
+/// else its TOML form.
+fn value_word(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// The step event's outcome from the report slices this pass appended to:
+/// an explicit skip wins, then progress on done, else a step that ran
+/// nothing and blocked.
+fn step_outcome<'a>(
+    id: &str,
+    new_done: &[String],
+    new_skipped: &'a [String],
+) -> (&'static str, Option<&'a str>) {
+    if let Some(entry) = new_skipped.last() {
+        let prefix = format!("{id}: ");
+        (
+            "skipped",
+            Some(entry.strip_prefix(prefix.as_str()).unwrap_or(entry)),
+        )
+    } else if !new_done.is_empty() {
+        ("done", None)
+    } else {
+        ("blocked", None)
+    }
+}
+
+/// The first line's trailing 20-byte UTC stamp, the bytes `write_marker`
+/// keeps stable across rewrites. None when the marker is absent or its
+/// first line is too short or splits inside the stamp.
+fn marker_first_stamp(path: &Path) -> Option<String> {
+    let first = std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .next()?
+        .to_string();
+    let n = first.len();
+    if n < 20 || !first.is_char_boundary(n - 20) {
+        return None;
+    }
+    let stamp = &first[n - 20..];
+    stamp.ends_with('Z').then(|| stamp.to_string())
+}
+
+/// The first merge since the machine's first run, one bounded `gh` read.
+/// ISO stamps sort lexically, so the minimum mergedAt is the first. A
+/// missing marker, no repo, no gh auth, or a timeout all answer None.
+fn first_merged_pr_at(first_run_at: Option<&str>) -> Option<String> {
+    let first_run_at = first_run_at?;
+    let search = format!("merged:>={first_run_at}");
+    let argv: Vec<&str> = vec![
+        "gh",
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--author",
+        "@me",
+        "--search",
+        search.as_str(),
+        "--json",
+        "mergedAt",
+        "--limit",
+        "20",
+    ];
+    let out = crate::setup_detect::bounded_for(&argv, std::time::Duration::from_secs(5)).ok()?;
+    let rows: Vec<serde_json::Value> = serde_json::from_str(out.trim()).ok()?;
+    rows.iter()
+        .filter_map(|r| r.get("mergedAt").and_then(serde_json::Value::as_str))
+        .min()
+        .map(String::from)
+}
+
+/// Best-effort journal append for setup's own events: one stderr line on
+/// failure, never a failed setup. No config key and no value rides in
+/// `data`; callers pass ids, outcomes and durations only.
+fn append_setup_event(kind: &str, data: serde_json::Value) {
+    let envelope = json!({
+        "ts": utc_now(),
+        "type": kind,
+        "source": "cli",
+        "data": data,
+    });
+    let path = crate::review_invocation::review_events_path();
+    if let Err(e) = crate::event_store::append_envelope(&path, &envelope.to_string(), None) {
+        eprintln!("setup: event append failed: {e}");
+    }
+}
+
+/// `--check`: recompute the proposal `--dry-run` computes, diff every row
+/// against the live config, diff the sidecar profile when one exists, run
+/// the verify block, and print one fix line per drifted row. It writes
+/// nothing; its exit code is the verdict.
+fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposal]) -> i32 {
+    let mut skips: Vec<String> = Vec::new();
+    let mut proposed = compute_proposals(steps, root, &mut skips);
+    proposed.extend_from_slice(join_proposed);
+    let global = crate::config_defaults::global_config_path();
+    let project = root.join(".fno").join("config.toml");
+    let mut drift: Vec<String> = Vec::new();
+    for p in &proposed {
+        if p.key.is_empty() {
+            continue;
+        }
+        let Some(want) = proposal_token(&p.value) else {
+            drift.push(format!(
+                "drift: {} holds a value setup cannot parse - fix: fno config setup run --yes --only {}",
+                p.key, p.id
+            ));
+            continue;
+        };
+        let have = crate::config_defaults::lookup_value(Some(&global), Some(&project), &p.key);
+        if have.as_ref() != Some(&want) {
+            let have_word = have
+                .map(|v| value_word(&v))
+                .unwrap_or_else(|| "unset".into());
+            drift.push(format!(
+                "drift: {} is {} (proposed {}) - fix: fno config setup run --yes --only {}",
+                p.key,
+                have_word,
+                value_word(&want),
+                p.id
+            ));
+        }
+    }
+    if crate::setup_services::macos() {
+        let services = [
+            (
+                "pr-watcher",
+                "pr_watch.enabled",
+                crate::setup_services::PR_WATCHER_LABEL,
+            ),
+            (
+                "auto-heal",
+                "auto_heal.enabled",
+                crate::setup_services::PR_WATCHER_LABEL,
+            ),
+            ("groom-agent", "", crate::setup_services::GROOM_LABEL),
+        ];
+        for (id, key, label) in services {
+            if !steps.iter().any(|s| s.id == id) {
+                continue;
+            }
+            let configured = key.is_empty()
+                || crate::config_defaults::lookup_value(Some(&global), Some(&project), key)
+                    .as_ref()
+                    == Some(&toml::Value::Boolean(true));
+            if !configured {
+                drift.push(format!(
+                    "drift: {id} is not enabled - fix: fno config setup run --yes --only {id}"
+                ));
+            } else if !crate::setup_services::is_loaded(label) {
+                drift.push(format!(
+                    "drift: {label} is not loaded - fix: fno config setup run --yes --only {id}"
+                ));
+            }
+        }
+    }
+    let profile_path = crate::setup_profile::profile_path();
+    if profile_path.exists() {
+        match std::fs::read_to_string(&profile_path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| crate::setup_profile::parse_profile(&text))
+        {
+            Err(e) => drift.push(format!(
+                "drift: the sidecar profile at {} does not read ({e}) - fix: fno config setup run --yes --only join",
+                profile_path.display()
+            )),
+            Ok(profile) => {
+                for (key, value) in &profile.config {
+                    if proposed.iter().any(|p| p.key == key.as_str()) {
+                        continue;
+                    }
+                    if !matches!(
+                        crate::setup_profile::classify(key, &toml_as_json(value)),
+                        crate::setup_profile::Class::Portable
+                    ) {
+                        continue;
+                    }
+                    if crate::config_defaults::lookup_value(Some(&global), Some(&project), key)
+                        .as_ref()
+                        != Some(value)
+                    {
+                        drift.push(format!(
+                            "drift: {key} differs from the sidecar profile - fix: fno config setup run --yes --only join"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
+    let mut rep = Report::default();
+    run_verify(&exe, &[], &mut rep);
+    let red: Vec<&Row> = rep.rows.iter().filter(|r| r.code == "verify_red").collect();
+    let first_run_at =
+        marker_first_stamp(&global_marker()).or_else(|| marker_first_stamp(&project_marker(root)));
+    let first_merged = first_merged_pr_at(first_run_at.as_deref());
+    let key_gap = drift.len() + red.len();
+    if opts.json {
+        let body = json!({
+            "first_run_at": first_run_at,
+            "key_gap": key_gap,
+            "first_merged_pr_at": first_merged,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&crate::setup_profile::redact(&body)).unwrap_or_default()
+        );
+        return if key_gap == 0 { 0 } else { 1 };
+    }
+    for line in &drift {
+        println!("{line}");
+    }
+    for r in &red {
+        println!("{}", r.message);
+    }
+    if key_gap == 0 {
+        println!("setup: no drift");
+        0
+    } else {
+        1
+    }
 }
 
 /// `--list`: the step table the chat skill asks from. `--list --json` is
@@ -1548,11 +1799,18 @@ fn all_markers_present_in(scope: Scope, global_done: bool, project_done: bool) -
 }
 
 /// Write a layer's done marker (version + UTC stamp), parent dirs included.
+/// The first line is the original first-run stamp: a later write appends a
+/// fresh line and keeps it, so `--check`'s first_run_at stays the first run.
 fn write_marker(path: &Path) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, format!("{}\n", marker_line()));
+    let first = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_string))
+        .filter(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| marker_line());
+    let _ = std::fs::write(path, format!("{first}\n{}\n", marker_line()));
 }
 
 /// Ask one yes/no question on the terminal, recommended default yes. EOF
@@ -1708,6 +1966,11 @@ pub fn run(tail: &[OsString]) -> i32 {
         };
         return dry_run(&opts, &steps, &root, &join_proposed, pending);
     }
+    // `--check` runs past the --once gate on purpose: it reports drift on a
+    // marker-complete machine too, and writes nothing.
+    if opts.check {
+        return run_check(&opts, &steps, &root, &join_proposed);
+    }
     if opts.once && all_markers_present(opts.scope, &root) {
         let msg = format!("setup: already done ({})", global_marker().display());
         if opts.json {
@@ -1728,8 +1991,10 @@ pub fn run(tail: &[OsString]) -> i32 {
     // A JSON stdout must stay pure: an interactive TTY never prompts into it.
     let prompting = !opts.json && !no_prompt(opts.yes, std::io::stdin().is_terminal(), agent_env());
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
+    let run_started = std::time::Instant::now();
     let mut rep = Report::default();
     rep.run_id = run_id();
+    let rid = rep.run_id.clone();
     match healed {
         Some((true, msg)) => rep.done.push(format!("join: {msg}")),
         Some((false, msg)) => {
@@ -1751,7 +2016,21 @@ pub fn run(tail: &[OsString]) -> i32 {
     let mut declined = 0usize;
     let mut loaded: Vec<String> = Vec::new();
     for step in &steps {
+        let step_started = std::time::Instant::now();
+        let done_len = rep.done.len();
+        let skipped_len = rep.skipped.len();
+        let rows_len = rep.rows.len();
         if !in_repo && step.layer != Layer::Global {
+            append_setup_event(
+                "setup_step",
+                json!({
+                    "run_id": rid.as_str(),
+                    "step": step.id,
+                    "outcome": "skipped",
+                    "duration_ms": step_started.elapsed().as_millis() as u64,
+                    "skip_reason": "not a git repo",
+                }),
+            );
             continue;
         }
         // An approve step never runs bare: --yes leaves it in the report's
@@ -1767,6 +2046,16 @@ pub fn run(tail: &[OsString]) -> i32 {
                 reason: step.effect.to_string(),
                 source: "default",
             });
+            append_setup_event(
+                "setup_step",
+                json!({
+                    "run_id": rid.as_str(),
+                    "step": step.id,
+                    "outcome": "skipped",
+                    "duration_ms": step_started.elapsed().as_millis() as u64,
+                    "skip_reason": "awaits an explicit --only",
+                }),
+            );
             continue;
         }
         let go = match step.kind {
@@ -1780,6 +2069,16 @@ pub fn run(tail: &[OsString]) -> i32 {
         if !go {
             rep.skipped.push(format!("{}: declined", step.id));
             declined += 1;
+            append_setup_event(
+                "setup_step",
+                json!({
+                    "run_id": rid.as_str(),
+                    "step": step.id,
+                    "outcome": "skipped",
+                    "duration_ms": step_started.elapsed().as_millis() as u64,
+                    "skip_reason": "declined",
+                }),
+            );
             continue;
         }
         match (step.layer, step.id) {
@@ -1856,8 +2155,35 @@ pub fn run(tail: &[OsString]) -> i32 {
             }
             _ => rep.skipped.push(format!("{}: no runner", step.id)),
         }
+        let outcome = step_outcome(step.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
+        let mut data = json!({
+            "run_id": rid.as_str(),
+            "step": step.id,
+            "outcome": outcome.0,
+            "duration_ms": step_started.elapsed().as_millis() as u64,
+        });
+        if let Some(reason) = outcome.1 {
+            data["skip_reason"] = json!(reason);
+        }
+        if let Some(r) = rep.rows.get(rows_len) {
+            data["code"] = json!(r.code);
+        }
+        append_setup_event("setup_step", data);
     }
     run_verify(&exe, &loaded, &mut rep);
+    append_setup_event(
+        "setup_run",
+        json!({
+            "run_id": rid.as_str(),
+            "host": rep.host,
+            "outcome": if rep.needs_human.is_empty() && declined == 0 {
+                "finished"
+            } else {
+                "blocked"
+            },
+            "duration_ms": run_started.elapsed().as_millis() as u64,
+        }),
+    );
 
     let global_ran = steps.iter().any(|s| s.layer == Layer::Global);
     let project_ran = steps.iter().any(|s| s.layer != Layer::Global && in_repo);

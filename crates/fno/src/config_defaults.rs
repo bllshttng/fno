@@ -242,6 +242,28 @@ pub fn lookup_key(key: &str) -> Option<String> {
     )
 }
 
+/// The effective value of one dotted key as its raw TOML value, project
+/// beating global, an unreadable or absent file counting as unset (the
+/// fail-open shape [`lookup`] applies). [`lookup`] answers only for
+/// string-valued keys: a TOML integer or boolean reads back `None` there
+/// even when the key is set, which would flag a correctly configured
+/// machine as drifted on every check.
+pub fn lookup_value(
+    global: Option<&Path>,
+    project: Option<&Path>,
+    key: &str,
+) -> Option<toml::Value> {
+    fn file_value(path: &Path, key: &str) -> Option<toml::Value> {
+        match read_flat(path) {
+            Ok(Some(map)) => map.get(key).cloned(),
+            _ => None,
+        }
+    }
+    project
+        .and_then(|p| file_value(p, key))
+        .or_else(|| global.and_then(|g| file_value(g, key)))
+}
+
 /// The global config file, beside the state root's other durable files.
 pub(crate) fn global_config_path() -> PathBuf {
     crate::model_catalog::state_dir().join("config.toml")
