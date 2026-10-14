@@ -677,7 +677,9 @@ fn screen_harnesses(
         // A zero-tick screen is a valid answer: footnote stays read-only
         // and the flow advances.
         if names.is_empty() {
-            state.answers.insert("harnesses", Answer::Picked(Vec::new()));
+            state
+                .answers
+                .insert("harnesses", Answer::Picked(Vec::new()));
             pr.note(
                 "harnesses",
                 "no harness picked; footnote stays read-only until one is wired",
@@ -809,14 +811,20 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
     let mut stored: Vec<String> = Vec::new();
     for h in state.picked_harnesses() {
         let Some(env) = env_for(&state.detect, &h) else {
-            pr.note("keys", &format!("no key env found for {h}; add it before apply"));
+            pr.note(
+                "keys",
+                &format!("no key env found for {h}; add it before apply"),
+            );
             continue;
         };
         let keep = if !stops {
             true
         } else {
-            let default =
-                if committed.is_empty() { true } else { committed.iter().any(|e| e == env) };
+            let default = if committed.is_empty() {
+                true
+            } else {
+                committed.iter().any(|e| e == env)
+            };
             match confirm_flow(
                 state,
                 pr,
@@ -841,7 +849,10 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
 fn screen_budget(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     let Some(band) = state.detect.band else {
         state.answers.insert("budget", Answer::No);
-        pr.note("budget", "no worker band was measured; the current cap stays");
+        pr.note(
+            "budget",
+            "no worker band was measured; the current cap stays",
+        );
         return Outcome::Forward;
     };
     let default = match state.answers.get("budget") {
@@ -985,7 +996,13 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
     let register = if !stops {
         true
     } else {
-        match confirm_flow(state, pr, "projects", "Register this repo?", register_default) {
+        match confirm_flow(
+            state,
+            pr,
+            "projects",
+            "Register this repo?",
+            register_default,
+        ) {
             Flow::Answered(true) => true,
             Flow::Answered(false) => false,
             Flow::Back => return Outcome::Back,
@@ -1039,7 +1056,13 @@ fn screen_join(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
     let yes = if !stops {
         true
     } else {
-        match confirm_flow(state, pr, "join", "Proceed with these changes?", yes_default) {
+        match confirm_flow(
+            state,
+            pr,
+            "join",
+            "Proceed with these changes?",
+            yes_default,
+        ) {
             Flow::Answered(true) => true,
             Flow::Answered(false) => false,
             Flow::Back => return Outcome::Back,
@@ -1059,9 +1082,15 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
         pr.note("review", "nothing to write; the config stays as it is");
         return Outcome::Forward;
     }
-    pr.note("review", "one grouped write: every row below lands together");
+    pr.note(
+        "review",
+        "one grouped write: every row below lands together",
+    );
     for row in &rows {
-        pr.note("review", &format!("{}: {} = {}", row.id, row.key, row.value));
+        pr.note(
+            "review",
+            &format!("{}: {} = {}", row.id, row.key, row.value),
+        );
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
