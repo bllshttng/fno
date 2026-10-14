@@ -420,10 +420,10 @@ fn norm(s: &str) -> String {
     re.replace_all(s.trim(), " ").to_lowercase()
 }
 
-fn extract_where(block: &[&str]) -> Option<String> {
+fn extract_where<T: AsRef<str>>(block: &[T]) -> Option<String> {
     let re = compile(WHERE_SUBLINE_RE);
     for sub in block.iter().skip(1) {
-        if let Some(m) = re.captures(sub) {
+        if let Some(m) = re.captures(sub.as_ref()) {
             return Some(m[1].to_string());
         }
     }
@@ -1649,6 +1649,10 @@ fn cmd_add(rest: &[String]) -> i32 {
             eprintln!("error: {m}");
             return 2;
         }
+        Err(CaptureError::Refusal(m)) => {
+            eprintln!("{m}");
+            return 1;
+        }
         Err(CaptureError::Lock(m)) => {
             eprintln!("error: {m}");
             return 1;
@@ -1659,7 +1663,7 @@ fn cmd_add(rest: &[String]) -> i32 {
     // stays satisfied. The fu_id is the existing item's id on a dedup hit.
     emit(
         "capture_add",
-        Map::from([
+        std::iter::FromIterator::from_iter([
             ("session_id".into(), json!(detect_session_id())),
             (
                 "fu_id".into(),
@@ -1835,7 +1839,7 @@ fn cmd_scan(rest: &[String]) -> i32 {
     let candidates = scan_transcript(&text);
     emit(
         "capture_scan",
-        Map::from([
+        std::iter::FromIterator::from_iter([
             ("session_id".into(), json!(detect_session_id())),
             ("candidates".into(), json!(candidates.len() as i64)),
         ]),
@@ -1873,7 +1877,7 @@ fn cmd_empty_pass(rest: &[String]) -> i32 {
     };
     let emitted = emit(
         "capture_empty_pass",
-        Map::from([
+        std::iter::FromIterator::from_iter([
             ("session_id".into(), json!(sid)),
             ("reason".into(), json!(reason)),
             ("scan_candidates".into(), json!(scan_candidates)),
@@ -1990,6 +1994,10 @@ fn cmd_promote(rest: &[String]) -> i32 {
             eprintln!("error: {m}");
             return 2;
         }
+        Err(CaptureError::Refusal(m)) => {
+            eprintln!("{m}");
+            return 1;
+        }
         Err(CaptureError::Lock(m)) => {
             eprintln!("error: {m}");
             return 1;
@@ -1998,7 +2006,7 @@ fn cmd_promote(rest: &[String]) -> i32 {
     if result.get("status").and_then(Value::as_str) == Some("promoted") {
         emit(
             "capture_promote",
-            Map::from([
+            std::iter::FromIterator::from_iter([
                 ("fu_id".into(), json!(fu_id)),
                 (
                     "node_id".into(),
@@ -2047,6 +2055,10 @@ fn cmd_dismiss(rest: &[String]) -> i32 {
             eprintln!("error: {m}");
             return 2;
         }
+        Err(CaptureError::Refusal(m)) => {
+            eprintln!("{m}");
+            return 1;
+        }
         Err(CaptureError::Lock(m)) => {
             eprintln!("error: {m}");
             return 1;
@@ -2055,7 +2067,7 @@ fn cmd_dismiss(rest: &[String]) -> i32 {
     if result.get("status").and_then(Value::as_str) == Some("dismissed") {
         emit(
             "capture_dismiss",
-            Map::from([
+            std::iter::FromIterator::from_iter([
                 ("fu_id".into(), json!(fu_id)),
                 (
                     "reason".into(),
@@ -2074,7 +2086,11 @@ fn cmd_archive(_rest: &[String]) -> i32 {
             println!("{}", serde_json::to_string(&result).unwrap_or_default());
             0
         }
-        Err(CaptureError::Validation(m)) | Err(CaptureError::Lock(m)) => {
+        Err(CaptureError::Validation(m)) => {
+            eprintln!("error: {m}");
+            2
+        }
+        Err(CaptureError::Refusal(m)) | Err(CaptureError::Lock(m)) => {
             eprintln!("error: {m}");
             1
         }
@@ -2096,6 +2112,10 @@ fn cmd_tidy(rest: &[String]) -> i32 {
             eprintln!("error: {m}");
             return 2;
         }
+        Err(CaptureError::Refusal(m)) => {
+            eprintln!("{m}");
+            return 1;
+        }
         Err(CaptureError::Lock(m)) => {
             eprintln!("error: {m}");
             return 1;
@@ -2107,7 +2127,7 @@ fn cmd_tidy(rest: &[String]) -> i32 {
     let ejected = result.get("ejected").and_then(Value::as_i64).unwrap_or(0);
     emit(
         "capture_tidy",
-        Map::from([
+        std::iter::FromIterator::from_iter([
             ("session_id".into(), json!(detect_session_id())),
             ("ejected".into(), json!(ejected)),
         ]),
