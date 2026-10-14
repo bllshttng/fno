@@ -437,7 +437,6 @@ fn run_task_update(tail: &[String]) -> i32 {
     // way the caller decided and answers whether it refused by name.
     fn set_row(
         node_id: &str,
-        plan_path: &std::path::Path,
         ids: &[String],
         task_id: &str,
         apply: &dyn Fn(&mut Value) -> Result<(), String>,
@@ -529,7 +528,7 @@ fn run_task_update(tail: &[String]) -> i32 {
             }
             Ok(())
         };
-        match set_row(&node_id, &plan_path, &ids, task_id, &apply) {
+        match set_row(&node_id, &ids, task_id, &apply) {
             Err(message) => {
                 release_note(&node_id, task_id, &holder);
                 eprintln!("{message}");
@@ -569,7 +568,7 @@ fn run_task_update(tail: &[String]) -> i32 {
             }
             Ok(())
         };
-        match set_row(&node_id, &plan_path, &ids, task_id, &apply) {
+        match set_row(&node_id, &ids, task_id, &apply) {
             Err(message) => {
                 eprintln!("{message}");
                 return 1;
@@ -615,7 +614,7 @@ fn run_task_update(tail: &[String]) -> i32 {
         }
         Ok(())
     };
-    match set_row(&node_id, &plan_path, &ids, task_id, &apply) {
+    match set_row(&node_id, &ids, task_id, &apply) {
         Err(message) => {
             eprintln!("{message}");
             1
