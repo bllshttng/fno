@@ -15,9 +15,25 @@ Two modes:
 
 Every claim the verb takes in gate mode is stamped with the PYTHON caller's pid. The holder reads `spawn-gate:<holder_pid>:<name>`. The native claim verdict therefore judges the real holder. It never judges the verb process, which has already exited by the time dispatch returns. The verb hands the held keys back in the admitted answer. The Python `GateGuard` releases them with the ordinary release path.
 
-## Role succession reuses one verified slot
+## Leads take no worker slot
 
-When role settlement confirms the caller will vacate its sole live row for `succession_scope`, the gate subtracts one from the slot count. The exception ends on predecessor exit or failed live-row registration by the successor. While succession is pending, the fleet can sit at most one row above `max_live`.
+The slot count is the live worker rows plus the live `worker:<name>` reservations. A lead row takes no worker slot. A lead is a row with a role (`role_level`), the same test the lead-share axis counts teams by. On 2026-10-14, seven leads held seven of the 24 slots on one machine, so each new lead shrank the worker pool. The probe answer carries `leads`, and its `cap_clause` ends `; 7 leads take no slot`. The lead check-in capacity line shows that clause.
+
+## Role succession can sit one row over the cap
+
+A successor holds a worker slot until its role lands. Role settlement can confirm that the caller will vacate its sole live row for `succession_scope`. Then the gate lets the successor sit one row over the worker cap. The gate reads the caller's own lead row from the full live rows, because a lead row is not in the worker count. A second successor at the cap plus one still refuses.
+
+## The learned cap yields to the machine gates
+
+The learned cap is a lagging guess. The CPU and RAM gates read the machine now. The slot count can reach the learned cap while the CPU axis admits and the RAM floor reads room. Then the learned cap yields, and the user's `agents.max_live` binds. An unread RAM figure is no room. The admitted receipt reads `slots: "5/8 ok (learned cap 3 yields: CPU and RAM have room)"`. At `agents.max_live` the gate still holds, and the refusal names `agents.max_live` and `--force`. The probe applies the same rule after its RAM and CPU rows. Its `cap_clause` then ends `; the learned cap yields: CPU and RAM have room`.
+
+On 2026-10-14 the gate refused at a load of 8 on 16 cores with 90 percent of RAM free. The learned cap held, and nothing else did.
+
+## A waiting spawn names its place
+
+A spawn that waits holds one `gate-wait:<holder>` ticket in the gate's global claims root. Its place is one plus the live tickets that joined before it. On its first wait, and every 30 seconds after, it prints `spawn queued: place 2 of 3 waiting; waiting on the slot cap, 8 live of 8; waited 30s`. The reason is the slot cap, the fleet CPU hold, or the gate mutex. On 2026-10-14, 5 of 54 attempts launched in four hours, and no wait named its place or its reason. A spawn behind the gate mutex printed nothing at all.
+
+A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `queue_size` and `waiting_on`, where the place is the back of the queue. A queue timeout carries them too. A refused native launch line names the place: `spawn gate refused the native launch (no_wait, place 3 of 3 waiting on max_live): ...`. The ticket leaves the queue as the gate returns.
 
 ## The exit-code allocation table
 
@@ -38,6 +54,20 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 87 gate unavailable. The gate verb is missing, failed, or timed out. Fail closed: never admit on an unreadable gate.
 - 88 blueprint thread cap. More than `agents.profiles.blueprint.max_live` live `bp` threads, or more than one per territory, refuses the spawn and teaches the subagent path.
 - 89 review session. A seed or label that names review causes a permanent refusal. The refusal runs before `--force` and the `FNO_SPAWN_GATE=0` bypass. Run the inline fno review lane.
+
+## Overriding the learned cap
+
+`agents.max_live` is the ceiling. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
+
+Only a measured cut binds below the ceiling. An older first run stamped a cap it guessed from the machine budget (`seeded from machine budget`), and a cap can sit at an older and lower ceiling. The reader treats both as no measurement, so `agents.max_live = 32` with no floor reads an effective cap of 32 at once, not 24. The next tick writes the same answer to the file.
+
+`[agents.capacity] floor` is the lowest cap the loop can learn. The default is 1. Set it in `~/.fno/config.toml`. The gate also reads the project `.fno/config.toml` and the canonical checkout's copy, and `$FNO_CONFIG` replaces all of them. `fno config set` refuses this key today, so edit the file. The loop never cuts below the floor. The reader raises a lower stored cap to the floor at once, with no wait for the next tick. A floor above `agents.max_live` clamps to the ceiling. The cap line then reads `effective cap 8 of 24 (held at agents.capacity.floor 8, learned 5)`. Once a tick or a cut has stored the floor as the learned cap, the line reads `effective cap 8 of 24 (at agents.capacity.floor 8)`. The floor stays named.
+
+The gate reads the cap and the floor on every queue pass. A floor raised while a spawn waits releases that spawn on its next pass.
+
+Every refusal on a soft axis prints a hint line. The line names the learned cap, the user's `agents.max_live`, the config key and file for the floor, and `--force` for one spawn the user ordered. A native launch line has no `--force`, so its refusal names `fno agents spawn NAME PAYLOAD --force` instead. The slot receipt keeps `max_live`, `axis`, `held_on` and `reason`. It adds `learned_cap`, `ceiling` and a `remedy`. Below the ceiling the remedy names the floor key and file. At the ceiling the cap is the user's own `agents.max_live`, so the remedy and the hint name that key and `--force`. The memory refusal says the opposite: the floor does not lift it. The probe answer carries `cap_clause` and `floor`. The lead check-in capacity line ends with ` | <cap_clause>`.
+
+`--force` is the user's word for one spawn. It passes every soft limit: `agents.max_live`, the learned cap, the provider lane cap and the fleet CPU hold. It never passes the memory axis. A forced spawn still meets the RAM floor and the swap cap, because a spawn that ignores them slows every session on the machine. The refusal names `agents.min_free_gb` and `agents.max_swap_pct` as the keys to change. The incident brake and the process admission door sit ahead of `--force` and hold too. A forced spawn prints one line. The line names each soft limit it passed, then the cap the loop reads, then says the RAM floor still applies. The RAM readings line prints just before it.
 
 ## Reading a refusal
 

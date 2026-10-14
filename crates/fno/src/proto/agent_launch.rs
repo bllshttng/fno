@@ -84,8 +84,8 @@ pub struct AgentLaunchRequest {
     #[serde(default)]
     pub branch: Option<String>,
     /// (v100) The user pressed force (shift+enter or the `--force` row): the
-    /// launch rides `--force` to the door (cap, RAM floor and CPU ceiling
-    /// stand down). Journaled with the user as the actor.
+    /// launch rides `--force` to the door (the soft limits stand down; the
+    /// RAM floor holds). Journaled with the user as the actor.
     #[serde(default)]
     pub force: bool,
 }
