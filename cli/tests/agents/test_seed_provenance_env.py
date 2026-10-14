@@ -23,7 +23,6 @@ from fno.mail.seed_provenance import (
     ENV_SEED_B64,
     MAX_SEED_BYTES,
     build_env,
-    render_from_env,
 )
 
 SEED = "/fno:target x-1234"
@@ -78,20 +77,7 @@ def test_the_env_floor_clears_an_inherited_sidecar():
     assert not any(k in out for k in SEED_PROVENANCE_KEYS)
 
 
-def test_render_quotes_the_seed_verbatim_and_says_not_to_run_it():
-    """The quoted copy is a slash command, and a harness would happily run it a
-    second time. Saying so is not decoration."""
-    rendered = render_from_env(_sidecar())
-    assert rendered is not None
-    assert SEED in rendered
-    assert "do not execute this copy" in rendered
-    # The delivered header names the sender's short handle; the lookup attr
-    # is gone with the wire attrs.
-    assert rendered.splitlines()[0].startswith("`@119e3c52 · fmail-")
-    assert "from_session" not in rendered
-
-
-def test_build_env_stamps_the_raw_harness_and_renders_the_wire_vocabulary(monkeypatch):
+def test_build_env_stamps_the_raw_harness(monkeypatch):
     # D6: the sidecar carries the RAW harness from the whoami
     # resolver; the tag spells it through harness_for_provider.
     ident = SimpleNamespace(session_id=SENDER_SESSION, harness="claude")
@@ -103,11 +89,6 @@ def test_build_env_stamps_the_raw_harness_and_renders_the_wire_vocabulary(monkey
     )
     env = build_env(SEED)
     assert env[ENV_HARNESS] == "claude"
-    rendered = render_from_env(env)
-    assert rendered is not None
-    # The raw harness rides the sidecar env; the delivered header no longer
-    # spells a harness attr on the wire.
-    assert rendered.splitlines()[0].startswith("`@119e3c52 · fmail-")
 
 
 def test_an_unresolvable_harness_omits_the_attribute(monkeypatch):
@@ -121,19 +102,6 @@ def test_an_unresolvable_harness_omits_the_attribute(monkeypatch):
     )
     env = build_env(SEED)
     assert ENV_HARNESS not in env
-    rendered = render_from_env(env)
-    assert rendered is not None
-    assert "harness=" not in rendered
-
-
-def test_no_sidecar_renders_nothing():
-    """A hand-started session has no peer sender. Inventing one is the same lie
-    as omitting a real one."""
-    assert render_from_env({}) is None
-
-
-def test_a_corrupt_blob_renders_nothing():
-    assert render_from_env(_sidecar() | {ENV_SEED_B64: "not!base64"}) is None
 
 
 def test_an_operator_spawn_carries_no_sidecar(monkeypatch):

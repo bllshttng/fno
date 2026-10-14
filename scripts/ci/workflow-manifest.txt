@@ -15,6 +15,7 @@ guards.yml
 install-script-portability.yml
 internal-refs.yml
 main-binaries.yml
+multiplayer-attestation.yml
 release.yml
 pitfalls.yml
 pr-node-closure.yml

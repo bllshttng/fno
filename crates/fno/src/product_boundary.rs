@@ -213,7 +213,7 @@ pub fn python_cli_observation() -> Observation {
 pub(crate) fn python_cli_observation_at(now: u64) -> Observation {
     Observation {
         component: PYTHON_CLI,
-        requirement: "verbs the native mux forwards to the porcelain (delivery, backlog writes)",
+        requirement: "the non-backlog porcelain the mux still forwards (delivery, config, the do namespace); the backlog namespace is Rust-only",
         availability: Availability::Unmeasured,
         reason: "native workspace verbs never invoke it; not probed".into(),
         observed_at: now,

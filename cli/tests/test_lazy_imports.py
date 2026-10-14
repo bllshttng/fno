@@ -232,7 +232,7 @@ def test_help_group_all_lists_hidden_subverbs():
     from typer.testing import CliRunner
 
     runner = CliRunner()
-    for group, hidden_verb in (("agents", "ask"), ("backlog", "ready"), ("mail", "migrate-bus")):
+    for group, hidden_verb in (("agents", "ask"), ("backlog", "queued"), ("mail", "migrate-bus")):
         result = runner.invoke(app, ["help", group, "--all"])
         assert result.exit_code == 0, f"help {group} --all failed: {result.output}"
         plain = _strip_ansi(result.output)

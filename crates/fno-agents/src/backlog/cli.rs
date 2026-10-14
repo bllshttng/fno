@@ -304,6 +304,25 @@ pub fn run(args: &[String]) -> i32 {
         // dir, uploader command, GitHub Pages) are the verb's own. The
         // catalog row sits in the board group.
         "publish" => super::publish::run(resolved.tail),
+        // The wave-4 cutover arms: catalog commands whose Python bodies were
+        // thin clients of native machinery, served with no compat forward.
+        // The full list of dispositions lives on the cutover module doc.
+        "version" => super::cutover::run_version(resolved.tail),
+        "status" => super::cutover::run_status(resolved.tail),
+        "cost" => super::cutover::run_cost(resolved.tail),
+        "demand" => super::cutover::run_demand(resolved.tail),
+        "collisions" => super::cutover::run_collisions(resolved.tail),
+        "backfill-deferred-kind" => super::cutover::run_backfill_deferred_kind(resolved.tail),
+        "unclaim" => super::cutover::run_unclaim(resolved.tail),
+        "defer" => super::cutover::run_defer(resolved.tail),
+        "undefer" => super::cutover::run_undefer(resolved.tail),
+        "retract" => super::cutover::run_retract(resolved.tail),
+        "unsupersede" => super::cutover::run_unsupersede(resolved.tail),
+        "relatedness" => super::cutover::run_relatedness(resolved.tail),
+        "archive-dedupe-ids" => super::cutover::run_archive_dedupe_ids(resolved.tail),
+        "ready" => super::cutover::run_ready(resolved.tail),
+        "remove" => super::cutover::run_remove(resolved.tail),
+        "project-root" => super::cutover::run_project_root(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

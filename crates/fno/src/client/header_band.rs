@@ -109,6 +109,37 @@ fn section_rule(gap: usize) -> String {
 }
 
 pub(super) fn header_band_text(label: &str, rollup: &[(LatticeState, usize)], w: usize) -> String {
+    header_band_hinted(label, "", rollup, w)
+}
+
+/// What a workspace header says about its folder: the path with HOME
+/// abbreviated, or `(no folder)` for a workspace that owns no row.
+pub(super) fn folder_hint(canonical_cwd: &str) -> String {
+    if canonical_cwd.is_empty() {
+        "(no folder)".to_string()
+    } else {
+        abbrev_home(canonical_cwd)
+    }
+}
+
+/// The `gap` columns between a label and its counts: the `hint` after one
+/// space when it fits whole, else the rule. The hint never costs a count pair
+/// or clips the label; it takes only room the fit left over.
+fn gap_fill(gap: usize, hint: &str) -> String {
+    let hint_w: usize = hint.chars().map(glyph_cols).sum();
+    if hint.is_empty() || hint_w + 2 > gap {
+        return section_rule(gap);
+    }
+    format!(" {hint}{}", section_rule(gap - hint_w - 1))
+}
+
+/// [`header_band_text`] with a `hint` in the gap after the label.
+pub(super) fn header_band_hinted(
+    label: &str,
+    hint: &str,
+    rollup: &[(LatticeState, usize)],
+    w: usize,
+) -> String {
     let mut pairs: Vec<String> = rollup
         .iter()
         .map(|(s, n)| format!("{}{}", lattice_glyph(*s).0, n))
@@ -117,7 +148,7 @@ pub(super) fn header_band_text(label: &str, rollup: &[(LatticeState, usize)], w:
         if pairs.is_empty() {
             let label_w: usize = label.chars().map(glyph_cols).sum();
             return match w.checked_sub(label_w) {
-                Some(gap) => format!("{label}{}", section_rule(gap)),
+                Some(gap) => format!("{label}{}", gap_fill(gap, hint)),
                 None => crate::chrome::clip(label, w),
             };
         }
@@ -126,7 +157,7 @@ pub(super) fn header_band_text(label: &str, rollup: &[(LatticeState, usize)], w:
         let counts_w: usize = counts.chars().map(glyph_cols).sum();
         if label_w + 1 + counts_w <= w {
             let gap = w - label_w - counts_w;
-            return format!("{label}{}{counts}", section_rule(gap));
+            return format!("{label}{}{counts}", gap_fill(gap, hint));
         }
         pairs.pop(); // drop the least-severe pair and retry
     }

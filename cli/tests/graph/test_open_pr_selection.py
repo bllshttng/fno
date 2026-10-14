@@ -18,14 +18,11 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from typer.testing import CliRunner
 
 from tests.fixtures.graph_seed import seed_graph
-from fno.graph.cli import cli, _has_unmerged_open_pr
+from fno.graph.cli import _has_unmerged_open_pr
 from tests.goldens._door import door_graph
 
-
-runner = CliRunner()
 
 # Recent so the G1 stale-ready guard never quarantines these selection
 # fixtures (a hardcoded past date rots past the threshold as wall-clock moves).
@@ -172,23 +169,23 @@ def test_next_unaffected_when_no_open_prs(graph_file):
 
 def test_ready_omits_open_pr_node_lists_sibling(graph_file):
     """Verification #3: `ready` hides the open-PR'd node, lists the no-PR one."""
-    graph_file([
+    graph = graph_file([
         _node("ab-aaaa1111", pr_number=515),
         _node("ab-bbbb2222"),
     ])
-    result = runner.invoke(cli, ["ready", "--all"])
-    assert result.exit_code == 0
-    listed_ids = {e["id"] for e in json.loads(result.stdout)}
+    code, out, err = door_graph(graph, "ready", "--all")
+    assert code == 0, err
+    listed_ids = {e["id"] for e in json.loads(out)}
     assert "ab-aaaa1111" not in listed_ids
     assert "ab-bbbb2222" in listed_ids
 
 
 def test_ready_merged_pre_close_node_omitted(graph_file):
     """A merged-but-not-yet-closed node is also omitted from `ready`."""
-    graph_file([_node("ab-dddd4444", pr_number=515, merge_status="merged")])
-    result = runner.invoke(cli, ["ready", "--all"])
-    assert result.exit_code == 0
-    assert json.loads(result.stdout) == []
+    graph = graph_file([_node("ab-dddd4444", pr_number=515, merge_status="merged")])
+    code, out, err = door_graph(graph, "ready", "--all")
+    assert code == 0, err
+    assert json.loads(out) == []
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +198,7 @@ def test_ready_merged_pre_close_node_omitted(graph_file):
 
 def test_ready_include_deferred_keeps_pr_bearing_deferred_node(graph_file):
     """`ready --include-deferred` still lists a deferred node that has a PR."""
-    graph_file([
+    graph = graph_file([
         _node(
             "ab-eeee5555",
             pr_number=515,
@@ -210,9 +207,9 @@ def test_ready_include_deferred_keeps_pr_bearing_deferred_node(graph_file):
             deferred_reason="paused by operator",
         ),
     ])
-    result = runner.invoke(cli, ["ready", "--all", "--include-deferred"])
-    assert result.exit_code == 0
-    listed_ids = {e["id"] for e in json.loads(result.stdout)}
+    code, out, err = door_graph(graph, "ready", "--all", "--include-deferred")
+    assert code == 0, err
+    listed_ids = {e["id"] for e in json.loads(out)}
     assert "ab-eeee5555" in listed_ids
 
 
@@ -237,12 +234,12 @@ def test_next_include_deferred_keeps_pr_bearing_deferred_node(graph_file):
 def test_ready_default_still_omits_deferred_pr_node(graph_file):
     """Without --include-deferred, the deferred node is absent anyway (status
     filter), so the scoping change does not leak it into the normal listing."""
-    graph_file([
+    graph = graph_file([
         _node("ab-eeee5555", pr_number=515, status="deferred"),
         _node("ab-ffff6666", pr_number=515),  # ready + open PR -> excluded
         _node("ab-aaaa7777"),                  # ready, no PR -> listed
     ])
-    result = runner.invoke(cli, ["ready", "--all"])
-    assert result.exit_code == 0
-    listed_ids = {e["id"] for e in json.loads(result.stdout)}
+    code, out, err = door_graph(graph, "ready", "--all")
+    assert code == 0, err
+    listed_ids = {e["id"] for e in json.loads(out)}
     assert listed_ids == {"ab-aaaa7777"}

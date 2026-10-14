@@ -236,7 +236,7 @@ def test_pr_merge_help_renders():
 
 
 _HOOK_SOURCE = (
-    Path(__file__).resolve().parents[3] / "hooks" / "git-protection.py"
+    Path(__file__).resolve().parents[3] / "hooks" / "git_protection_impl.py"
 )
 _ROUTE_RE = re.compile(r"fno do pr ([a-z][a-z0-9-]*)")
 

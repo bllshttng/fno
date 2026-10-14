@@ -197,7 +197,16 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
 
 def test_contain_refuses_a_deferred_owner_and_stamps_nothing(tmp_graph):
     owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    _invoke("backlog", "defer", owner, "--reason", "parked")
+
+    def stamp(rows):
+        for e in rows:
+            if e["id"] == owner:
+                e["status"] = "deferred"
+                e["deferred_at"] = "2026-04-01T00:00:00+00:00"
+                e["deferred_reason"] = "parked"
+        return rows
+
+    commit_rows_via_store(tmp_graph, stamp)
     code, out = _native_contain(tmp_graph, owner, *kids)
     assert code == 2, out
     assert "is deferred" in out

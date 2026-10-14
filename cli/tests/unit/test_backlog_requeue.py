@@ -247,46 +247,6 @@ def test_requeue_unwedges_a_warm_spelling_past_the_freshness_bound(
 # -- AC4-HP / AC5-EDGE: unclaim earns its success line ------------------------
 
 
-def test_ac4_unclaim_refuses_wedge_it_did_not_clear(tmp_graph, claims_root):
-    _seed(tmp_graph, [_wedged_node()])
-    result = runner.invoke(app, ["backlog", "unclaim", NODE_ID])
-    assert result.exit_code != 0
-    assert "Unclaimed" not in _out(result)
-    assert "in_progress" in _out(result)
-    assert "fno backlog requeue" in _out(result)
-
-
-def test_ac5_unclaim_releases_stale_claim_and_derives_ready(tmp_graph, claims_root):
-    from fno.graph.store import read_graph
-
-    _seed(tmp_graph, [_wedged_node(status="in_progress", sessions=[])])
-    _acquire(f"node:{NODE_ID}", "target-session:gone", pid=_dead_pid(), root=claims_root)
-    result = runner.invoke(app, ["backlog", "unclaim", NODE_ID])
-    assert result.exit_code == 0, _out(result)
-    assert "Unclaimed" in result.output
-    node = read_graph(tmp_graph)[0]
-    assert node["status"] == "ready"
-    assert node["locked_by"] is None
-
-
-
-def test_unclaim_refuses_missing_node_without_releasing_orphan_claim(claims_root):
-    from fno.claims.core import claim_status
-
-    node_id = f"ab-{os.getpid():08x}"
-    key = f"node:{node_id}"
-    _acquire(key, "target-session:gone", pid=_dead_pid(), root=claims_root)
-
-    result = runner.invoke(app, ["backlog", "unclaim", node_id])
-
-    assert result.exit_code != 0, _out(result)
-    assert "not found" in _out(result)
-    assert claim_status(key, root=claims_root)["state"] != "free", "missing nodes cannot release claims"
-
-
-# -- AC6-EDGE: a node with a PR is in_review, not requeueable -----------------
-
-
 def test_ac6_requeue_never_clears_a_pr(tmp_graph, claims_root, monkeypatch):
     _seed(tmp_graph, [_wedged_node(status="in_review", pr_number=1547)])
     _dead_truth(monkeypatch)
