@@ -252,7 +252,8 @@ def test_spawn_once_receipt_format(workdir, fake_codex_create_once) -> None:
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "myagent", "-H", "codex", "--once", "do something"],
+        ["spawn", "--name", "myagent", "--once", "do something"],
+        env={"CODEX_THREAD_ID": "019f0000-0000-7000-8000-00000000000a"},
         catch_exceptions=False,
     )
 
