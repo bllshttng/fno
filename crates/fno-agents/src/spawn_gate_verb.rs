@@ -1443,7 +1443,7 @@ mod tests {
                 row("p1"),
                 row("p2"),
                 row("p2"), // duplicate name, still a distinct row the count sees
-                row("lead").replace('}', r#","role_level":1}"#)
+                row("lead").replacen(r#""status""#, r#""role_level":1,"status""#, 1)
             ),
         )
         .unwrap();

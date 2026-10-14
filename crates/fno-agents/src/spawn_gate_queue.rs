@@ -111,12 +111,12 @@ impl Drop for Queue {
 
 /// The live tickets as (joined_ms, key). Unreadable claims read as none.
 fn live_tickets(root: Option<&Path>) -> Vec<(i64, String)> {
-    let Some(root) = root else {
+    let Some(dir) = root.and_then(|r| crate::claims_root::claims_dir(TICKET_PREFIX, Some(r)).ok())
+    else {
         return Vec::new();
     };
     let records =
-        crate::claim_store::records_in(&root.join(".fno/claims"), Some(TICKET_PREFIX), true)
-            .unwrap_or_default();
+        crate::claim_store::records_in(&dir, Some(TICKET_PREFIX), true).unwrap_or_default();
     records
         .into_iter()
         .filter(|rec| {
