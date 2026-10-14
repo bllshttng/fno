@@ -315,12 +315,6 @@ def _enforce_body_cap(body: str, *, usage: bool = False) -> None:
         )
 
 
-#: Matches either end of the peer-follow-up container, case-insensitively, for
-#: the same reason `contains_fno_mail_tag` is case-insensitive: an exact-case
-#: check is bypassed by one capital letter.
-_CROSS_SESSION_TAG_RE = re.compile(r"</?cross-session-message", re.IGNORECASE)
-
-
 def _refuse_forged_envelope(body: str) -> None:
     """Refuse a body carrying an ``<fno_mail`` open tag or ``</fno_mail>`` close
     tag, before it reaches ``wrap_fno_mail``.
@@ -1316,7 +1310,7 @@ def cmd_status(
 
 
 @mail_app.command("pane-prepare", hidden=True)
-def cmd_pane_prepare(
+def cmd_pane_prepare_forward(
     session: Optional[str] = typer.Option(
         None, "--session-id", help="mux session name."
     ),
@@ -1334,127 +1328,25 @@ def cmd_pane_prepare(
         "prose (a --raw send never enters them).",
     ),
 ) -> None:
-    """Gate and envelope a pane payload read from stdin; print it on stdout.
+    """Forward the pane-send renderer to the bundled fno-agents binary.
 
-    The transport-agnostic half of an enveloped ``fno mux pane send``. The Rust
-    verb shells here rather than mirroring the renderer (node deleted the
-    Rust mirror; ``fno.mail.envelope`` is the sole renderer) and fails closed on
-    any non-zero exit.
-
-    Exit 0 prints the bytes to type. Exit 3 refuses and names why on stderr: the
-    pane is showing an option prompt, hosts no registered agent, or the body
-    cannot be attributed. Exit 1 refuses on the style or body-cap
-    gates the mail verbs enforce: this is the sole renderer every non-raw pane
-    send passes through, so a sender refused by mail must not deliver the
-    identical prose here instead.
+    The renderer's body lives in the Rust mail front now (``fno-agents mail
+    pane-prepare``); Python owns the command surface only, the same split as
+    the hold forward. The Rust ``fno mux pane send`` verb calls that binary
+    directly and never lands here.
     """
-    from fno._flag_aliases import merge_deprecated_alias
-    from fno.mail.pane_transport import PaneSendRefused, prepare, resolve_pane_identity
-
-    session = merge_deprecated_alias(
-        session, session_legacy, canonical_flag="--session-id", legacy_flag="--session"
-    )
-    if not session:
-        print("error: --session-id is required", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    # Read BYTES and decode once, explicitly. The Rust caller pipes a payload it
-    # never re-encodes, and text-mode stdin does two things to it: universal
-    # newlines rewrite a lone CR to LF, so a body carrying one is typed
-    # differently from the body that was sent, and a non-UTF-8 byte raises
-    # UnicodeDecodeError out of a read that has no handler, which the caller
-    # reports as a renderer fault rather than as the bad input it is.
-    raw = sys.stdin.buffer.read()
-    # The UNTRUSTED boundary. Internal callers import `prepare` directly, so
-    # everything arriving here came off a command line, and `wrap`'s
-    # already-wrapped passthrough is a PREFIX test: a body opening with a
-    # handcrafted `<fno_mail from="lead" ...>` is returned verbatim, typed at a
-    # pane, and read as peer mail from whoever it names. The audit row is
-    # skipped too, because that check uses the same prefix test. Every other
-    # producer refuses a body carrying the tag; this one has to as well.
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        print(
-            f"error: pane payload is not valid UTF-8 ({exc}); the envelope "
-            f"quotes text and cannot frame arbitrary bytes.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=3) from exc
-    _refuse_forged_envelope(body)
-    # BOTH attribution containers, because `_already_wrapped` passes both. The
-    # guard above knows only `<fno_mail`, so a handcrafted
-    # `<cross-session-message from-name="lead">` sailed through it, matched the
-    # passthrough, and was typed at a worker's pane as an attributed peer order
-    # with no envelope of ours and no audit row. Refusing one tag and not its
-    # sibling is not a boundary. `claude_ask.rs` already refuses both.
-    if _CROSS_SESSION_TAG_RE.search(body):
-        print(
-            "error: body carries a <cross-session-message> container. That tag "
-            "marks a peer's attributed turn, and a body cannot supply its own. "
-            "Send it as mail, or use --raw to type it as keystrokes.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-    # The relay contract's two gates, at the one choke point every non-raw pane
-    # send fails closed through. A `--raw` send never reaches this process, so
-    # its exemption is structural, and `--style-exception` keeps the mail
-    # verbs' one escape shape.
-    _enforce_body_cap(body)
-    _enforce_style(body, allow_reason=style_exception)
-    # ONE registry snapshot drives everything downstream: the envelope's `to`,
-    # the identity the prompt gate pins, and the budget key. Resolving the
-    # recipient here and letting `prepare` re-resolve it was a TOCTOU - a pane
-    # reassigned between the two reads rendered an envelope addressed to the
-    # old occupant while the gate validated the new one. The captured
-    # name/fno_id now pin the gate, so a reassigned pane refuses instead.
-    from fno.agents.self_stamp import resolve_self_session_id, stamp_from
-    from fno.inbox.store import generate_msg_id
-
-    sender = stamp_from(None)
-    identity = resolve_pane_identity(session, pane)
-    msg_id = generate_msg_id()
-    try:
-        rendered = prepare(
-            body,
-            session=session,
-            pane_id=pane,
-            harness=harness,
-            sender=sender,
-            to=identity.handle if identity else None,
-            msg_id=msg_id,
-            expected_name=identity.name if identity else None,
-            expected_fno_id=identity.fno_id if identity else None,
-        )
-    except PaneSendRefused as exc:
-        print(f"pane send refused: {exc}", file=sys.stderr)
-        raise typer.Exit(code=3) from exc
-    # Reserved only after attribution, prompt gating, and envelope construction
-    # succeeded, so a refused send charges nothing. A later Rust transport
-    # failure can leave a charge that expires with the window; that bounded
-    # overcharge is the safe direction, because this renderer cannot learn
-    # whether its parent delivered.
-    #
-    # The LEDGER keys on full session ids, both ends: an eight-hex handle
-    # collides for codex siblings spawned inside one ~65s bucket, which fused
-    # two distinct workers into one pair and refused normal parallel fanout.
-    # The inbound-reset lookup keeps the display handles (bus envelopes carry
-    # handles). A control body without a session id still reserves, keyed on
-    # the pane address rather than skipped.
-    pane_address = f"pane {session}:{pane}"
-    recipient = identity.handle if identity and identity.handle else pane_address
-    _reserve_budget(
-        sender=sender,
-        recipient=recipient,
-        body=body,
-        msg_id=msg_id,
-        allow_reason=style_exception,
-        sender_key=resolve_self_session_id() or sender,
-        recipient_key=(
-            identity.session_id if identity and identity.session_id else recipient
-        ),
-    )
-    print(rendered, end="")
+    argv = ["pane-prepare", "--pane", str(pane)]
+    # Both session spellings ride verbatim when given; the renderer owns the
+    # alias merge and its deprecation warning, so this leaf stays argument-silent.
+    if session is not None:
+        argv.extend(["--session-id", session])
+    if session_legacy is not None:
+        argv.extend(["--session", session_legacy])
+    if harness is not None:
+        argv.extend(["--harness", harness])
+    if style_exception is not None:
+        argv.extend(["--style-exception", style_exception])
+    _forward_mail_pane_prepare(argv)
 
 
 @mail_app.command("lint", hidden=True)
@@ -4284,92 +4176,13 @@ def cmd_withdraw(
     Refuses when the message is already past the recipient's cursor. They have
     read it; a tombstone then would only hide it from you.
     """
-    from fno.bus.cursor import read_cursor
-    from fno.bus.log import (
-        HOSTED_DELIVERY,
-        TYPED_DELIVERY,
-        WITHDRAW_KIND,
-        Envelope,
-        append,
-        iter_messages,
-        withdrawn_ids,
-    )
-    from fno.agents.self_stamp import stamp_from
-
-    # The ownership check is the ONLY authz gate on this verb, so it compares
-    # against the same resolver that stamped the envelope's `from`. The
-    # precedence-only resolver would answer differently for a session carrying
-    # an inherited marker: it would refuse that session's own mail (stamped
-    # "fno") and let it retract its spawner's. `--from-name` is passed through
-    # for the same reason `mail sent` takes it: `stamp_from` returns an explicit
-    # label verbatim, so mail sent under one could otherwise never be retracted
-    # by anyone. This widens no authority a sender did not already have - the
-    # label is unauthenticated on the send side too.
-    handle = stamp_from(from_name)
-
-    all_msgs = list(iter_messages())
-    target = next((m for m in all_msgs if m.id == msg_id), None)
-    if target is None:
-        print(f"no such message on the bus: {msg_id}", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.from_ != handle:
-        print(
-            f"{msg_id} was sent by {target.from_}, not you ({handle}); "
-            "only its sender can withdraw it",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    if msg_id in withdrawn_ids(all_msgs):
-        print(f"{msg_id} is already withdrawn")
-        raise typer.Exit(code=0)
-    if target.delivery == HOSTED_DELIVERY:
-        print(f"{msg_id} was already delivered (hosted); it cannot be withdrawn", file=sys.stderr)
-        raise typer.Exit(code=1)
-    if target.delivery == TYPED_DELIVERY:
-        # A typed row is not a durable message with a tombstone to write, it is
-        # bytes already sitting at somebody's prompt. Withdrawing it wrote the
-        # tombstone and printed success while retracting nothing, which is the
-        # worst of the three outcomes: the sender believes the message is gone.
-        print(
-            f"{msg_id} was typed into a pane; the bytes are already at the "
-            f"recipient's prompt and cannot be recalled. Send a correction.",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1)
-    cursor = read_cursor(target.to)
-    if cursor is not None:
-        pos = {m.id: i for i, m in enumerate(all_msgs)}
-        cursor_pos = pos.get(cursor)
-        if cursor_pos is not None and pos[msg_id] <= cursor_pos:
-            print(
-                f"{msg_id} was already claimed by {target.to}; "
-                "a withdrawal now would hide it from you, not from them",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=1)
-
-    append(
-        Envelope.new(
-            from_=handle,
-            to=target.to,
-            kind=WITHDRAW_KIND,
-            body=f"withdrawn: {msg_id}",
-            thread=target.thread,
-            meta={"withdraws": msg_id},
-            to_kind=target.to_kind,
-        )
-    )
-    # Deliberately NOT "it will not be delivered". The cursor read above and
-    # this append are not one atomic step, and nothing locks the recipient out
-    # in between: a concurrent drain can print and flush the body and only then
-    # advance its cursor, so a withdrawal that observed an un-advanced cursor
-    # can still land after delivery. The honest receipt names the boundary the
-    # tombstone actually guarantees - no drain from here on - rather than
-    # claiming an outcome this command cannot verify.
-    print(
-        f"withdrew {msg_id} (to {target.to}); no drain will deliver it from now on. "
-        "A drain already in flight when this ran may have delivered it: "
-        f"`fno agents peek {target.to}` to check."
+    _forward_mail(
+        [
+            "withdraw",
+            msg_id,
+            *(["--from-name", from_name] if from_name is not None else []),
+        ],
+        label="fno mail withdraw",
     )
 
 
@@ -4396,7 +4209,8 @@ def cmd_bus_ack(
 def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
     """Forward one mail-front verb to the bundled fno-agents binary.
 
-    The hold, team, sent, ack, and drain-self verbs' bodies live in the Rust
+    The hold, team, sent, withdraw, ack, and drain-self verbs' bodies live in
+    the Rust
     mail front now; Python owns transport only, the same split as the claims
     forward.
     """
@@ -4427,6 +4241,45 @@ def _forward_mail(argv: list[str], label: str = "fno mail hold") -> None:
         typer.echo(result.stdout.rstrip("\n"))
     if result.stderr:
         typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+def _forward_mail_pane_prepare(argv: list[str]) -> None:
+    """Forward the pane-send renderer to the bundled fno-agents binary.
+
+    Same split as the hold forward with one deliberate difference: stdout is
+    written byte-exact, because the ``fno mux pane send`` caller types these
+    bytes at the pane verbatim and an appended newline becomes a submitted
+    blank line. The hold verbs print for an operator, where the extra newline
+    is nothing.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno mail pane-prepare: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Byte mode on purpose: text=True enables universal newlines, which
+    # rewrites the envelope's CRLF line endings and breaks the byte-exact
+    # contract the docstring states.
+    result = subprocess.run(
+        [str(binary), "mail", *argv],
+        capture_output=True,
+        check=False,
+    )
+    if result.stdout:
+        sys.stdout.buffer.write(result.stdout)
+    if result.stderr:
+        typer.echo(result.stderr.decode(errors="replace").rstrip("\n"), err=True)
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 

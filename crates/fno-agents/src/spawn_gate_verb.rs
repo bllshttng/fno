@@ -356,8 +356,9 @@ mod probe {
             .unwrap_or(false);
 
         let ceiling = agents_config::max_live(&config_cwd) as usize;
-        let learned = crate::capacity::effective(&home, ceiling);
-        let cap = learned.cap;
+        let floor = crate::capacity::thresholds(&config_cwd).floor as usize;
+        let mut learned = crate::capacity::effective(&home, ceiling, floor);
+        let mut cap = learned.cap;
         let floor_gb = agents_config::min_free_gb(&config_cwd);
         let swap_cap = agents_config::max_swap_pct(&config_cwd);
 
@@ -465,9 +466,12 @@ mod probe {
         // named right away, so every verdict this answer can take (refused on
         // max_live, refused later, accepted) carries them. Reservations are
         // named beside the registry rows, each entry tagged with its kind.
-        let (slot_row_entries, slot_reservations) =
-            spawn_gate::slot_reading(&registry_path, &mut warnings);
+        // Leads take no worker slot; their count rides beside the slots.
+        let all_live = spawn_gate::live_rows(&registry_path, &mut warnings);
+        let (slot_row_entries, leads) = crate::spawn_gate_slots::split_leads(all_live.clone());
+        let slot_reservations = spawn_gate::live_worker_slot_claims(&mut warnings);
         let slots = slot_row_entries.len() + slot_reservations.len();
+        out.insert("leads".into(), json!(leads));
         // The user's own live sessions ride the same count; the gate shows
         // them apart (decision D3 revised).
         let yours = slot_row_entries
@@ -480,6 +484,16 @@ mod probe {
         // refusal returns, not only on the accepted tail.
         out.insert("effective".into(), json!(cap));
         out.insert("effective_ceiling".into(), json!(ceiling));
+        let lead_note = match leads {
+            0 => String::new(),
+            1 => "; 1 lead takes no slot".to_string(),
+            n => format!("; {n} leads take no slot"),
+        };
+        out.insert(
+            "cap_clause".into(),
+            json!(format!("{}{lead_note}", learned.clause())),
+        );
+        out.insert("floor".into(), json!(floor));
         if !learned.known {
             out.insert(
                 "effective_note".into(),
@@ -531,26 +545,28 @@ mod probe {
         let mut cpu: Option<spawn_gate::AdmissionPayload> = None;
 
         if !lanes_only {
-            // The slot cap is a probe refusal exactly as the gate refuses.
-            if slots >= cap {
+            // The slot cap is a probe refusal exactly as the gate refuses. The
+            // user's max_live refuses here; the learned cap waits for the
+            // machine gates below, and yields when they read room.
+            if slots >= learned.ceiling {
+                let top = crate::spawn_gate_slots::at_ceiling(&learned);
                 return refuse_with(
                     "max_live",
-                    format!("{slots} live worker slots >= {}", learned.clause()),
-                    json!({"count": slots, "max_live": cap}),
-                    &[fleet_row(slots, cap, yours)],
+                    format!("{slots} live worker slots >= {}", top.clause()),
+                    json!({"count": slots, "max_live": top.cap}),
+                    &[fleet_row(slots, top.cap, yours)],
                     out,
                 );
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
             let bp_name = opt_str_of(payload, "name").unwrap_or_default();
-            let bp_live = spawn_gate::live_rows(&registry_path, &mut warnings);
             if let Err(receipt) = spawn_gate::check_blueprint_cap(
                 &config_cwd,
                 &registry_path,
                 &bp_name,
                 spawn_gate::gate_node().as_deref(),
-                &bp_live,
+                &all_live,
             ) {
                 let parsed: Value = serde_json::from_str(&receipt).unwrap_or(Value::Null);
                 let reason = parsed
@@ -644,6 +660,27 @@ mod probe {
                 _ => {}
             }
             cpu = Some(admission.payload);
+            if slots >= cap {
+                if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap) {
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", learned.clause()),
+                        json!({"count": slots, "max_live": cap}),
+                        &[fleet_row(slots, cap, yours)],
+                        out,
+                    );
+                }
+                out.insert(
+                    "cap_clause".into(),
+                    json!(format!(
+                        "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                        learned.clause()
+                    )),
+                );
+                learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                cap = learned.cap;
+                out.insert("max_live".into(), json!(cap));
+            }
         }
 
         // Lead share: only a caller whose session resolved is checked.
@@ -1401,11 +1438,12 @@ mod tests {
         std::fs::write(
             home.join("registry.json"),
             format!(
-                r#"{{"schema_version":{},"entries":[{}, {}, {}]}}"#,
+                r#"{{"schema_version":{},"entries":[{}, {}, {}, {}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 row("p1"),
                 row("p2"),
-                row("p2") // duplicate name, still a distinct row the count sees
+                row("p2"), // duplicate name, still a distinct row the count sees
+                row("lead").replacen(r#""status""#, r#""role_level":1,"status""#, 1)
             ),
         )
         .unwrap();
@@ -1420,6 +1458,12 @@ mod tests {
             assert!(r.get("provider").is_some(), "{r:?}");
         }
         assert_eq!(answer["live_workers"], 3, "slots stay rows + reservations");
+        // A lead takes no worker slot; the clause names it apart.
+        assert_eq!(answer["leads"], 1);
+        assert!(answer["cap_clause"]
+            .as_str()
+            .unwrap()
+            .ends_with("; 1 lead takes no slot"));
         assert_eq!(answer["verdict"], "accepted");
         assert_ne!(answer["reason"], "fleet-stop");
 
@@ -1428,6 +1472,8 @@ mod tests {
         let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
         assert_eq!(answer["slots"], 3, "{answer:?}");
         assert_eq!(answer["max_live"], 28);
+        assert!(answer["cap_clause"].as_str().unwrap().contains("28"));
+        assert_eq!(answer["floor"], 1);
         let tests = answer["tests"]
             .as_object()
             .expect("tests object on request");
@@ -1871,7 +1917,7 @@ mod tests {
         std::fs::write(
             &registry,
             format!(
-                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
+                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}},{{"name":"worker-2","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
             ),
         )

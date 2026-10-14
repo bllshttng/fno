@@ -1,0 +1,9 @@
+merge-gating opt-out auto_merge.require_checks_pass revoked: claim instrument is unreadable; resolved default is True
+merge-gating opt-out auto_merge.require_checks_pass revoked: claim instrument is unreadable; resolved default is True
+pr-merge: rerun-recovery probe unavailable (fno-agents authorized-merge exited 3: stub fno-agents: no answer for op status-rerun (call 1)); merging without the flake hold
+pr-merge: coverage status not posted: no PR head to publish a status on
+fno do pr merge: post-merge node reconcile for PR #7 skipped (non-fatal)
+merge-gating opt-out auto_merge.require_checks_pass revoked: claim instrument is unreadable; resolved default is True
+fno agents: warning: daemon envelope merge_cleanup_requested: no native fno binary on PATH; the event store has no fallback writer
+pr-merge: no target manifest at /private<CASE>/.fno/target-state.md; recording the merge row as session unknown
+pr-merge: session_satisfied emit failed (no native fno binary on PATH; the event store has no fallback writer); merge outcome unaffected
