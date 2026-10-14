@@ -476,6 +476,7 @@ fn hostile_drops_rows() {
         version: STORE_VERSION,
         generations: Default::default(),
         squads: vec![StoredSquad {
+            thread_pins: Vec::new(),
             name: "w".into(),
             key: String::new(),
             origins: vec![],
@@ -745,6 +746,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: String::new(),
                 key: "c5bf8f5419a350e8".into(),
                 origins: vec!["/repo".into()],
@@ -755,6 +757,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "c5bf8f5419a350e8".into(),
                 origins: vec!["/repo".into()],
@@ -789,6 +792,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "c5bf8f5419a350e8".into(),
                 origins: vec!["/repo".into()],
@@ -799,6 +803,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: String::new(),
                 key: "c5bf8f5419a350e8".into(),
                 origins: vec!["/repo".into()],
@@ -827,6 +832,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: String::new(),
                 origins: vec!["/a".into()],
@@ -837,6 +843,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "leftover".into(),
                 origins: vec!["/a".into()],
@@ -1436,6 +1443,7 @@ fn collapse_rows() {
         next_pane_id: 0,
         squads: vec![
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "f[no]".into(),
                 key: legacy.into(),
                 origins: origins.clone(),
@@ -1446,6 +1454,7 @@ fn collapse_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "fno".into(),
                 key: legacy.into(),
                 origins,
@@ -1489,6 +1498,7 @@ fn collapse_rows() {
         next_pane_id: 0,
         squads: vec![
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "one".into(),
                 key: key.clone(),
                 origins: vec!["/repo".into()],
@@ -1499,6 +1509,7 @@ fn collapse_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                thread_pins: Vec::new(),
                 name: "two".into(),
                 key,
                 origins: vec!["/repo".into()],
@@ -1808,6 +1819,7 @@ fn prune_predicate_matrix() {
     let exists = |p: &str| p == "/alive";
 
     let squad = |name: &str, key: &str, origins: &[&str], members: &[&str]| StoredSquad {
+        thread_pins: Vec::new(),
         name: name.into(),
         key: key.into(),
         origins: origins.iter().map(|s| (*s).to_string()).collect(),
@@ -1965,6 +1977,43 @@ fn prune_predicate_matrix() {
     }
 }
 
+#[test]
+fn a_thread_pin_moves_between_rows_and_survives_an_upsert() {
+    let s = Scratch::new("thread-pin");
+    upsert("fnh", "", &["/fnh".into()], &[]).unwrap();
+    upsert("", "k1", &["/foot".into()], &[]).unwrap();
+    let pin = StoredThreadPin {
+        harness: "codex".into(),
+        harness_session_id: "sid-1".into(),
+    };
+    let (found, _) = pin_thread("fnh", &pin).unwrap();
+    assert!(found);
+    let (found, _) = pin_thread("k1", &pin).unwrap();
+    assert!(found, "an unnamed row is addressed by its key");
+    let (found, _) = pin_thread("ghost", &pin).unwrap();
+    assert!(!found, "a missing row changes nothing");
+
+    let pins_of = |name: &str| -> Vec<StoredThreadPin> {
+        load()
+            .squads
+            .into_iter()
+            .find(|q| q.name == name)
+            .map(|q| q.thread_pins)
+            .unwrap_or_default()
+    };
+    assert!(pins_of("fnh").is_empty(), "the pin left the first row");
+    // A topology upsert rebuilds the row; the pin rides across it.
+    upsert("", "k1", &["/foot".into()], &[m("c19cd2c3")]).unwrap();
+    let kept = load()
+        .squads
+        .into_iter()
+        .find(|q| q.key == "k1")
+        .map(|q| q.thread_pins)
+        .unwrap_or_default();
+    assert_eq!(kept, vec![pin]);
+    drop(s);
+}
+
 // -- The empty-member grace window --------------------------------------
 //
 // Nine of the fifteen squads measured on this machine have ZERO members. A
@@ -1975,6 +2024,7 @@ fn prune_predicate_matrix() {
 /// A member-less squad stamped `created_at`, for the grace tests.
 fn empty_squad(created_at: &str) -> StoredSquad {
     StoredSquad {
+        thread_pins: Vec::new(),
         name: String::new(),
         key: "k1".into(),
         origins: vec!["/alive".into()],

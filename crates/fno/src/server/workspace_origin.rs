@@ -93,6 +93,7 @@ impl Core {
         // next session even before any recruit.
         self.squad_members.insert(sid, Vec::new());
         self.persist_squad(sid);
+        self.bind_named_folders();
         self.set_view(client_id, sid, tid);
         self.push_layout(true);
         Flow::Continue
@@ -110,6 +111,133 @@ impl Core {
         remove: bool,
         reply: ControlReply,
     ) {
+        let _ = reply.send(match self.apply_origin_edit(workspace, path, remove) {
+            Ok(()) => ServerMsg::Ok,
+            Err((code, msg)) => ServerMsg::Err { code, msg },
+        });
+    }
+
+    /// `Command::AddWorkspaceFolder`: the section menu's Add folder. The same
+    /// edit as `fno mux workspace origin add`, so it shares the core below.
+    /// A refusal reaches the operator as a notice.
+    pub(super) fn handle_add_workspace_folder(
+        &mut self,
+        client_id: u64,
+        squad: u64,
+        path: &str,
+    ) -> Flow {
+        let named = self
+            .session
+            .squad(squad)
+            .and_then(|s| s.name.clone())
+            .filter(|n| !n.is_empty());
+        match named {
+            Some(workspace) => {
+                if let Err((_, msg)) = self.apply_origin_edit(&workspace, path, false) {
+                    self.notice(client_id, msg);
+                }
+            }
+            None => self.notice(client_id, "add folder needs a named workspace"),
+        }
+        Flow::Continue
+    }
+
+    /// The origin a workspace created by recruiting `ids` takes: the one
+    /// project root every recruited row shares. Rows from mixed roots, or a
+    /// row whose root is not yet resolved, give no origin, as before.
+    pub(super) fn recruit_origin(&self, ids: &[String]) -> Vec<String> {
+        let mut roots = HashSet::new();
+        for id in ids {
+            let root = self
+                .agents
+                .iter()
+                .find(|a| a.attach_id.as_deref() == Some(id.as_str()))
+                .and_then(|a| self.project_by_cwd.get(&a.cwd))
+                .map(|p| p.root.clone());
+            match root {
+                Some(root) => roots.insert(root),
+                None => return Vec::new(),
+            };
+        }
+        if roots.len() == 1 {
+            roots.into_iter().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Where a new shell in workspace `sid` opens: its folder, else the cwd of
+    /// its focused row, else the project root of any live member row, else
+    /// HOME. Never the empty string: an empty cwd lets the shell inherit the
+    /// server's own directory, which is TMPDIR when a service starts it.
+    pub(super) fn spawn_cwd(&self, sid: u64) -> String {
+        let Some(squad) = self.session.squad(sid) else {
+            return home_dir();
+        };
+        if !squad.canonical_cwd().is_empty() {
+            return squad.canonical_cwd().to_string();
+        }
+        let focus = squad.tabs.get(squad.active_tab).map(|t| t.focus);
+        let members: Vec<&RegistryAgent> = self
+            .agents
+            .iter()
+            .filter(|a| !a.exited && self.thread_workspace(a) == Some(sid))
+            .collect();
+        let is_dir = |cwd: &str| !cwd.is_empty() && Path::new(cwd).is_dir();
+        let focused = members
+            .iter()
+            .find(|a| a.mux.as_ref().map(|m| m.1) == focus)
+            .filter(|a| is_dir(&a.cwd));
+        if let Some(row) = focused {
+            return row.cwd.clone();
+        }
+        members
+            .iter()
+            .filter_map(|a| self.project_by_cwd.get(&a.cwd).map(|p| p.root.as_str()))
+            .find(|root| is_dir(root))
+            .map(str::to_string)
+            .unwrap_or_else(home_dir)
+    }
+
+    /// Give each named workspace with no folder the one project root its name
+    /// stands for: the root whose `[project].id` or folder name equals the
+    /// workspace name. Two roots claiming the name bind nothing.
+    pub(super) fn bind_named_folders(&mut self) {
+        let mut binds: Vec<(String, String)> = Vec::new();
+        for sq in &self.session.squads {
+            let Some(name) = sq.name.as_deref().filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            if !sq.origins.is_empty() {
+                continue;
+            }
+            let roots: HashSet<&str> = self
+                .agents
+                .iter()
+                .filter_map(|a| self.project_by_cwd.get(&a.cwd))
+                .filter(|p| {
+                    p.id.as_deref() == Some(name)
+                        || p.root.trim_end_matches('/').rsplit('/').next() == Some(name)
+                })
+                .map(|p| p.root.as_str())
+                .collect();
+            if roots.len() == 1 {
+                if let Some(root) = roots.into_iter().next() {
+                    binds.push((name.to_string(), root.to_string()));
+                }
+            }
+        }
+        for (name, root) in binds {
+            let _ = self.apply_origin_edit(&name, &root, false);
+        }
+    }
+
+    fn apply_origin_edit(
+        &mut self,
+        workspace: &str,
+        path: &str,
+        remove: bool,
+    ) -> Result<(), (u32, String)> {
         let Some(sid) = self
             .session
             .squads
@@ -117,18 +245,16 @@ impl Core {
             .find(|s| s.name.as_deref() == Some(workspace))
             .map(|s| s.id)
         else {
-            let _ = reply.send(ServerMsg::Err {
-                code: err_code::NOT_FOUND,
-                msg: format!("no open workspace named {workspace}"),
-            });
-            return;
+            return Err((
+                err_code::NOT_FOUND,
+                format!("no open workspace named {workspace}"),
+            ));
         };
         if !path.starts_with('/') {
-            let _ = reply.send(ServerMsg::Err {
-                code: err_code::BAD_REQUEST,
-                msg: format!("origin must be an absolute path: {path}"),
-            });
-            return;
+            return Err((
+                err_code::BAD_REQUEST,
+                format!("origin must be an absolute path: {path}"),
+            ));
         }
         let previous = self
             .session
@@ -164,14 +290,19 @@ impl Core {
                 if let Some(sq) = self.session.squad_mut(sid) {
                     sq.origins = previous;
                 }
-                let _ = reply.send(ServerMsg::Err {
-                    code: err_code::STORE_WRITE_FAILED,
-                    msg: format!("origin edit on {workspace} was not stored; nothing changed"),
-                });
-                return;
+                return Err((
+                    err_code::STORE_WRITE_FAILED,
+                    format!("origin edit on {workspace} was not stored; nothing changed"),
+                ));
             }
             self.push_layout(true);
         }
-        let _ = reply.send(ServerMsg::Ok);
+        Ok(())
     }
+}
+
+fn home_dir() -> String {
+    std::env::var_os("HOME")
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
