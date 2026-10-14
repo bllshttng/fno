@@ -145,7 +145,10 @@ fn build_case(row: &serde_json::Value) -> Case {
         "ghost-worktree" => Setup::GhostWorktree,
         _ => Setup::ManifestAnother,
     };
-    let seed = row.get("seed").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let seed = row
+        .get("seed")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let mut env_extra: Vec<(String, String)> = Vec::new();
     if let Some(pairs) = row["env_extra"].as_array() {
         for pair in pairs {
@@ -281,7 +284,9 @@ pub fn make_stub_plugin(root: &Path) -> PathBuf {
 pub fn make_shim(root: &Path) -> PathBuf {
     let bindir = root.join("bin");
     std::fs::create_dir_all(&bindir).unwrap();
-    let python = crate::common::python_executable().to_string_lossy().to_string();
+    let python = crate::common::python_executable()
+        .to_string_lossy()
+        .to_string();
     let src = cli_src().to_string_lossy().to_string();
     let agents = AGENTS_BIN;
     for name in ["fno", "fno-py"] {
@@ -322,6 +327,9 @@ pub fn base_env(root: &Path, bindir: &Path, session_pid: &str) -> Vec<(String, S
     ));
     env.push(("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()));
     env.push(("GIT_CONFIG_SYSTEM".into(), "/dev/null".into()));
+    // The Python leg's init forward (and any resolve_binary consumer) must
+    // resolve THIS test's binary, never whatever a host has installed.
+    env.push(("FNO_AGENTS_BIN".into(), AGENTS_BIN.to_string()));
     env.push(("FNO_SESSION_HARNESS".into(), "claude".into()));
     env.push(("FNO_SESSION_PID".into(), session_pid.into()));
     env.push(("TERM".into(), "dumb".into()));

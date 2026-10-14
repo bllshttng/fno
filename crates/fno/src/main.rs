@@ -185,6 +185,10 @@ enum Role {
     /// the sibling fno-agents `review-level` door. The rest of the review
     /// tree stays Python until its port.
     ReviewLevel(Vec<OsString>),
+    /// `fno do target init ...`: the init decision layer, exec'd through the
+    /// sibling fno-agents `target-init` door. The bash helper stays; the
+    /// parity goldens characterize the port.
+    TargetInit(Vec<OsString>),
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
     /// leaves keep their role: classify/post-dispositions/invocations stay
@@ -371,6 +375,20 @@ fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target init ...`: the init decision layer. The literal
+/// three-token prefix claims it so it never reaches the Python forward as a
+/// near-miss of `fno do target start`.
+fn classify_target_init(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "init"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf and no help
 /// request. Only the FIRST tail token names a leaf (a leaf spelled later is
@@ -481,6 +499,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_level(args) {
         return Role::ReviewLevel(rest);
+    }
+    if let Some(rest) = classify_target_init(args) {
+        return Role::TargetInit(rest);
     }
     if let Some((alias, rest)) = classify_review_root(args) {
         return if alias {
@@ -789,6 +810,11 @@ fn main() {
         Role::ReviewLevel(rest) => std::process::exit(fno_agents_exec(
             "fno do review resolve-level",
             &["review-level"],
+            &rest,
+        )),
+        Role::TargetInit(rest) => std::process::exit(fno_agents_exec(
+            "fno do target init",
+            &["target-init"],
             &rest,
         )),
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(

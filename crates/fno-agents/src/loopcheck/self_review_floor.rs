@@ -48,7 +48,7 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
 /// descriptor's `asserts` field: a surface that names `declare` without saying
 /// it asserts nothing invites an operator to clear the gate with no review
 /// behind it.
-pub(super) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
+pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
     REVIEWER_INVOCATIONS
         .iter()
         .find(|(n, _, _, _)| *n == name)

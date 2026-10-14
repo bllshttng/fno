@@ -161,7 +161,7 @@ mod review_coverage_verb;
 mod review_findings;
 mod review_inputs;
 mod self_review_floor;
-mod settings;
+pub(crate) mod settings;
 pub(crate) mod watch_lease;
 pub(crate) use args::{parse_args, try_flag_value, LoopCheckArgs};
 use async_wait::{arm_watch_hint, async_wait_class, conflicting_reason, merge_slot_reason};
