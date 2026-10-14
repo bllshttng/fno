@@ -154,11 +154,32 @@ jobs:
       - name: Find Chrome for the png raster
         run: echo "FNO_CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
 
+      - name: Shoot only when the bell surface changed
+        # A job-level paths gate needs a third-party action; this REST read
+        # keeps the fleet's other Rust PRs out of the build-and-seed cost
+        # while a bell, snapshot or demo-script change still shoots.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename' || true)"
+          case "$files" in
+            *client/bell.rs*|*client/snapshot.rs*|*mux-demo-snapshot.sh*)
+              echo "shoot=1" >> "$GITHUB_ENV"
+              echo "the bell surface changed: shooting"
+              ;;
+            *)
+              echo "shoot=" >> "$GITHUB_ENV"
+              echo "the bell surface is untouched: no shots this run"
+              ;;
+          esac
+
       - name: Build the fno client binary
+        if: env.shoot == '1'
         working-directory: crates/fno
         run: cargo build --locked
 
       - name: Shoot the three bell views
+        if: env.shoot == '1'
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
           FNO_DEMO_PY_SOURCE: ${{ github.workspace }}/cli
@@ -169,6 +190,7 @@ jobs:
           done
 
       - name: Upload the shots
+        if: env.shoot == '1'
         uses: actions/upload-artifact@v4
         with:
           name: bell-panel-shots
