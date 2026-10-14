@@ -186,7 +186,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PROCESS_ADMISSION` | rs | unclear: crates/fno/src/bootstrap.rs:1721 |
 | `FNO_PROCESS_ADMISSION_MAX` | py+rs | unclear: cli/src/fno/agents/mux_spawn.py:1914 |
 | `FNO_PR_BASE_LINEAGE_OK` | rs | Set to `stale-acknowledged` by an operator who has judged a stale-base lineage refusal: the base-lineage probe records a gate-escape event and clears instead of refusing. |
-| `FNO_PR_BASE_OK` | py+rs | Set to `stale-acknowledged` to ship past a stale-base refusal on a deliberately old base; both the preflight guard (py) and the batch-lane ship guard (crates/fno-agents/src/backlog/batch.rs) honor the same literal. |
+| `FNO_PR_BASE_OK` | rs | Set to `stale-acknowledged` to ship past a stale-base refusal on a deliberately old base; the batch-lane ship guard honors it (the preflight guard reaches it through its BYPASS_ENV constant, which the scanner does not see). |
 | `FNO_PR_STATUS_CACHE_DIR` | rs | unclear: crates/fno-agents/src/gc.rs:2231 |
 | `FNO_PR_STATUS_TTL` | rs | unclear: crates/fno-agents/src/pr_status/cache.rs:32 |
 | `FNO_PY` | rs | Overrides the resolved fno-py console script path (tests and nonstandard installs); empty falls through to the resolver legs. The Rust front door honors it ABOVE the cached sentinel, so a study venv can repoint `fno` at its own env (gap-audit 9); set but unusable refuses naming the var. `fno version` names the resolved target on its `python-cli:` line, and `fno version --json` carries it as `python_script`. |
