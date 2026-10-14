@@ -1329,14 +1329,6 @@ struct DomainStats {
 }
 
 impl DomainStats {
-    fn to_value(&self) -> Value {
-        json!({
-            "batches_shipped": self.batches_shipped,
-            "batches_abandoned": self.batches_abandoned,
-            "runs_saved": self.runs_saved,
-            "runs_wasted": self.runs_wasted,
-        })
-    }
     fn finish(&self) -> Value {
         let opened = self.batches_shipped + self.batches_abandoned;
         let net = self.runs_saved - self.runs_wasted;
@@ -1625,5 +1617,91 @@ mod tests {
         assert!(safe_domain("a/b").is_err());
         assert!(safe_domain("..").is_err());
         assert!(safe_domain("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod door_tests {
+    use super::*;
+
+    #[test]
+    fn open_refuses_a_second_open_batch_for_the_domain() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let first = open_batch("code", "feature/a", "/tmp/wt-a", 3, dir.path()).unwrap();
+        assert_eq!(first.get("status").and_then(Value::as_str), Some("open"));
+        let second = open_batch("code", "feature/b", "/tmp/wt-b", 3, dir.path());
+        let (message, code) = second.unwrap_err();
+        assert_eq!(code, 3, "the exists exit");
+        assert!(message.contains("already exists"), "{message}");
+    }
+
+    #[test]
+    fn join_is_idempotent_and_the_ceiling_refuses() {
+        let dir = tempfile::TempDir::new().unwrap();
+        open_batch("code", "feature/a", "/tmp/wt-a", 2, dir.path()).unwrap();
+        let once = join_batch("code", "x-node0001", "s", dir.path()).unwrap();
+        let twice = join_batch("code", "x-node0001", "s", dir.path()).unwrap();
+        assert_eq!(member_ids(&once).len(), 1);
+        assert_eq!(member_ids(&twice).len(), 1, "idempotent re-join");
+        join_batch("code", "x-node0002", "s", dir.path()).unwrap();
+        let (message, code) = join_batch("code", "x-node0003", "s", dir.path()).unwrap_err();
+        assert_eq!(code, 4, "the full exit");
+        assert!(message.contains("is full"), "{message}");
+    }
+
+    #[test]
+    fn the_close_words_are_retired_with_the_redirect() {
+        assert_eq!(batch_retired(&[], "close"), 1);
+        assert_eq!(batch_retired(&[], "abandon"), 1);
+    }
+
+    #[test]
+    fn should_close_follows_the_wheel_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Full (max_nodes 1, no members) trips before anything else.
+        let full = open_batch("code", "feature/a", "/tmp/wt-a", 1, dir.path()).unwrap();
+        assert_eq!(should_close(Some(&full), None).0, true);
+        // Not open: no close.
+        let mut closed = full.clone();
+        closed
+            .as_object_mut()
+            .unwrap()
+            .insert("status".into(), json!("closed"));
+        assert_eq!(
+            should_close(Some(&closed), None),
+            (false, "no open batch".into())
+        );
+        // Open with room: the drain and the domain boundary decide.
+        let open = open_batch("docs", "feature/b", "/tmp/wt-b", 3, dir.path()).unwrap();
+        assert_eq!(should_close(Some(&open), None).0, true, "drain closes");
+        let other = json!({"domain": "web"});
+        let (close, reason) = should_close(Some(&open), Some(&other));
+        assert!(close && reason.contains("different domain"), "{reason}");
+        let solo_next = json!({"domain": "docs", "priority": "p0"});
+        let (close, reason) = should_close(Some(&open), Some(&solo_next));
+        assert!(close && reason.contains("p0"), "{reason}");
+        let same = json!({"domain": "docs", "priority": "p2"});
+        assert_eq!(should_close(Some(&open), Some(&same)).0, false);
+    }
+
+    #[test]
+    fn shipping_an_empty_open_batch_abandons_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        open_batch("code", "feature/a", "/tmp/wt-a", 3, dir.path()).unwrap();
+        let result = ship_batch("code", "main", None, dir.path());
+        assert_eq!(result.action, "abandoned");
+        assert_eq!(result.reason, "empty batch");
+        let after = read_batch("code", dir.path()).unwrap().unwrap();
+        assert_eq!(
+            after.get("status").and_then(Value::as_str),
+            Some("abandoned")
+        );
+    }
+
+    #[test]
+    fn status_answers_the_no_batch_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(read_batch("code", dir.path()).unwrap().is_none());
+        assert!(list_batches(dir.path()).is_empty());
     }
 }

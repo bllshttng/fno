@@ -3899,7 +3899,6 @@ def iter_backlog_registry():
     return [
         (None, cli),
         ("capture", _capture_cli),
-        ("batch", _batch_cli),
     ]
 
 
