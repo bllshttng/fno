@@ -35,12 +35,14 @@ use tokio::sync::mpsc;
 use crate::agents_view::{lineage_layout, lineage_parent};
 use crate::chrome;
 
+mod move_pick;
 mod open_chooser;
 mod open_link;
 mod rename_overlay;
 mod row_menu;
 mod sweep_scope;
 mod wire_version;
+mod workspace_folder;
 use wire_version::{server_has_splitdir, split_skew_notice};
 
 use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
@@ -1128,6 +1130,9 @@ pub(crate) struct View {
     /// Backspace pops, Enter sends [`Command::NewSquad`] (empty keeps it open),
     /// Esc cancels. Client-local like `search`: opening reserves no row.
     create: Option<String>,
+    /// Which folder the create overlay will send: follows the typed name until
+    /// the operator cycles it with the arrow keys.
+    folder_pick: workspace_folder::FolderPick,
     /// Pending escape bytes in create-overlay mode (same split-arrow safety as
     /// [`View::search_esc`]).
     create_esc: Vec<u8>,
@@ -1624,6 +1629,8 @@ enum MenuAction {
     Resume,
     /// Reattach a live paneless row whose server-side session is still present.
     Reattach,
+    /// A workspace section's Add folder: opens the picker of live-row folders.
+    AddFolder,
     /// (6.2) Mail this agent - opens the SAME peek overlay and its
     /// free-text composer (`peek_input`) that peek `m` opens, never a second
     /// input surface.
@@ -1689,14 +1696,24 @@ impl MenuAction {
     }
 }
 
-/// What the numbered move picker is relocating: a whole tab (selector `m`) or a
-/// single pane-hosted row's live pane (the row menu's Move-to-workspace entry).
-/// Both list destination workspaces and resolve the same way; only the command
-/// the digit sends differs (`MoveTab` vs `MovePane`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the numbered move picker is relocating: a whole tab (selector `m`), a
+/// single pane-hosted row's live pane, or a session by hand (the row menu's
+/// Move-to-workspace entry). The first three list destination workspaces and
+/// resolve the same way; only the command the digit sends differs (`MoveTab`,
+/// `MovePane`, `PinThread`). `Folder` reuses the picker for a workspace
+/// section's Add folder: its `squads` hold indices into `folders`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum MoveSrc {
     Tab(TabId),
     Pane(u64),
+    Row {
+        harness: String,
+        harness_session_id: String,
+    },
+    Folder {
+        squad: u64,
+        folders: Vec<String>,
+    },
 }
 
 /// (US4/US5) The sideline MENU popup and the minimal settings modal share
@@ -2062,6 +2079,7 @@ impl View {
             modal_release_swallow: false,
             close_chips: Default::default(),
             create: None,
+            folder_pick: Default::default(),
             create_esc: Vec::new(),
             rename: None,
             rename_esc: Vec::new(),
@@ -2436,6 +2454,7 @@ impl View {
         self.recruit_esc.clear();
         self.clear_peek();
         self.create = Some(String::new());
+        self.folder_pick = Default::default();
         self.create_esc.clear();
     }
 
@@ -2933,7 +2952,11 @@ impl View {
             return Some(self.confirm_overlay_layout(rows, action));
         }
         if let Some(name) = &self.create {
-            return Some(self.name_modal_layout("new workspace", name, None));
+            return Some(self.name_modal_layout(
+                "new workspace",
+                name,
+                Some(&self.create_hint(name)),
+            ));
         }
         if let Some((target, name)) = &self.rename {
             let noun = match target {
@@ -5350,19 +5373,23 @@ impl View {
     /// refuses a stale id regardless.
     fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
         const W: usize = 40;
-        let verb = match picker.src {
+        let verb = match &picker.src {
             MoveSrc::Tab(_) => "move tab to:",
             MoveSrc::Pane(_) => "move pane to:",
+            MoveSrc::Row { .. } => "move session to:",
+            MoveSrc::Folder { .. } => "add folder:",
         };
         let mut lines = vec![pad_to(&format!(" {verb}"), W)];
         for (i, &sid) in picker.squads.iter().enumerate() {
-            let name = self
-                .layout
-                .squads
-                .iter()
-                .find(|s| s.id == sid)
-                .map(|s| s.name.as_str())
-                .unwrap_or("(gone)");
+            let folder = workspace_folder::folder_label(&picker.src, sid);
+            let name = folder.as_deref().unwrap_or_else(|| {
+                self.layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(gone)")
+            });
             let marker = if i == picker.cursor { '›' } else { ' ' };
             // Only the first nine are digit-addressable; the rest get a blank
             // gutter, so the drawn numbering never promises a key that does
@@ -10275,67 +10302,7 @@ async fn move_pick_keys(
             return Ok(StdinFlow::Continue);
         };
         let (src, squads) = (picker.src, picker.squads);
-        {
-            match squads.get(idx) {
-                // The captured id must still name a live squad; the server
-                // refuses a stale id regardless, but pre-validating saves a
-                // round-trip and keeps the BEL local.
-                Some(&sq) if view.layout.squads.iter().any(|s| s.id == sq) => match src {
-                    MoveSrc::Tab(tab) => {
-                        write_msg(
-                            sock_w,
-                            &ClientMsg::Command(Command::MoveTab { tab, squad: sq }),
-                        )
-                        .await
-                        .map_err(|e| format!("move-tab send failed: {e}"))?;
-                    }
-                    // A pane move needs an anchor pane in the destination: its
-                    // active tab's focus leaf (else the first leaf). MovePane
-                    // grafts the mover beside that anchor, de-recruiting it from
-                    // the source workspace (the `move_pane_cross_tab` path).
-                    // `target` is mandatory for a cross-tab move; without it the
-                    // server navigates from the mover, which lives in another
-                    // tab, and the move is refused.
-                    MoveSrc::Pane(pid) => {
-                        // Prefer the active tab's focus leaf; if that tab has no
-                        // panes (transient during a close, or an older server with
-                        // empty TabMeta.panes), fall back to the first leaf in any
-                        // tab so a valid anchor is not missed.
-                        let anchor = view
-                            .layout
-                            .squads
-                            .iter()
-                            .find(|s| s.id == sq)
-                            .and_then(|s| {
-                                s.tabs
-                                    .get(s.active_tab)
-                                    .and_then(|t| t.panes.first())
-                                    .or_else(|| s.tabs.iter().flat_map(|t| t.panes.first()).next())
-                                    .map(|p| p.id)
-                            });
-                        match anchor {
-                            Some(anchor) => {
-                                write_msg(
-                                    sock_w,
-                                    &ClientMsg::Command(Command::MovePane {
-                                        mover: Some(pid),
-                                        target: Some(anchor),
-                                        dir: Dir::Right,
-                                    }),
-                                )
-                                .await
-                                .map_err(|e| format!("move-pane send failed: {e}"))?;
-                            }
-                            None => view
-                                .set_notice("no pane in that workspace to anchor against".into()),
-                        }
-                    }
-                },
-                _ => {
-                    let _ = raw_out(b"\x07");
-                }
-            }
-        }
+        move_pick::commit(view, sock_w, src, &squads, idx).await?;
         return Ok(StdinFlow::Continue);
     }
     Ok(StdinFlow::Continue)

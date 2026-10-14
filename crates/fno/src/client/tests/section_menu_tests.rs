@@ -84,6 +84,7 @@ async fn workspace_section_menu_offers_rename() {
         v.row_menu.as_ref().unwrap().actions,
         vec![
             super::MenuAction::Rename,
+            super::MenuAction::AddFolder,
             super::MenuAction::MoveSquad(-1),
             super::MenuAction::MoveSquad(1),
             super::MenuAction::RemoveSquad
@@ -110,6 +111,7 @@ fn workspace_section_menu_offers_rename_then_clear_dead() {
         v.row_menu.as_ref().unwrap().actions,
         vec![
             super::MenuAction::Rename,
+            super::MenuAction::AddFolder,
             super::MenuAction::MoveSquad(-1),
             super::MenuAction::MoveSquad(1),
             super::MenuAction::RemoveSquad,
