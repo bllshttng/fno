@@ -711,6 +711,9 @@ fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value 
         }
         chain.push(json!(line));
         let mut out = Map::new();
+        // The lane's NAME rides the pick: a dispatcher names the lane, never
+        // a flag vocabulary, so the spawn door resolves the row once.
+        out.insert("lane".into(), json!(row.name.clone()));
         out.insert("harness".into(), json!(row.harness));
         out.insert("model".into(), json!(row.model));
         // Same shape as the lane leg's candidate (pick): route and account are

@@ -546,7 +546,7 @@ choice starts>'.",
                 };
                 answer.lines.push(format!(
                     "outstanding: refused: reversible with a recommendation is yours \
-to rule. Decide door first: {decide} (--authority team or agent) - record the \
+to rule. Decide door first: {decide} (--authority agent) - record the \
 ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
 credential, reaches outside the machine, or a product or taste call - name it \

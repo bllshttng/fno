@@ -1,0 +1,15 @@
+[fno agents mail] 4 message(s) for a1b2c3d4:
+
+--- from lead (2026-10-12T09:00:00Z)  id:f1 ---
+canonical form
+
+--- from lead (2026-10-12T09:01:00Z)  id:f2 ---
+identity key form
+
+--- from lead (2026-10-12T09:02:00Z)  id:f3 ---
+legacy suffix form
+
+--- from lead (2026-10-12T09:03:00Z)  id:dupe-id ---
+dup first form
+
+[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."

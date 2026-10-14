@@ -58,15 +58,16 @@ def test_picks_the_envelope_carrying_the_id_not_a_neighbor():
 
 
 def test_does_not_bind_resolve_harness_identity_at_module_scope():
-    # Regression: this module is imported lazily (from inside cmd_drain_self),
-    # so a module-level `from fno.harness_identity import resolve_harness_identity`
-    # binds whatever that name pointed to at THIS module's first import --
-    # permanently, since Python caches modules in sys.modules. A caller that
-    # monkeypatches harness_identity.resolve_harness_identity around that first
-    # import (e.g. cmd_drain_self via test_mail_drain_trailer.py) then poisons
-    # every later caller in the same worker process: monkeypatch's teardown
-    # only reverts the attribute on fno.harness_identity, never a separate name
-    # binding this module captured from it. Import it locally per call instead.
+    # Regression: this module is imported lazily (from inside the mail reply
+    # verb, cli.py), so a module-level `from fno.harness_identity import
+    # resolve_harness_identity` binds whatever that name pointed to at THIS
+    # module's first import -- permanently, since Python caches modules in
+    # sys.modules. A caller that monkeypatches
+    # harness_identity.resolve_harness_identity around that first import then
+    # poisons every later caller in the same worker process: monkeypatch's
+    # teardown only reverts the attribute on fno.harness_identity, never a
+    # separate name binding this module captured from it. Import it locally per
+    # call instead.
     import fno.mail.reply_resolve as reply_resolve
 
     assert not hasattr(reply_resolve, "resolve_harness_identity")

@@ -1,0 +1,11 @@
+[fno agents mail] 1 message(s) for a1b2c3d4:
+
+--- from lead (2026-10-12T10:01:00Z)  id:r1 ---
+regular mail body
+
+[fno agents mail] 1 job message(s) for node:goldenjob:
+
+--- from lead (2026-10-12T10:00:00Z)  id:j1 ---
+job mail body
+
+[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."

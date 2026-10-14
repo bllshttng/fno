@@ -145,6 +145,22 @@ pub const CONVERSION_STRATEGIES: [&str; 4] = [
     "unsupported",
 ];
 
+/// The closed hole vocabulary a launch template's argv may fill. `name` and
+/// `payload` always carry a spawn value; the rest drop with their flag when
+/// the lane has no value, so each must follow its own flag token.
+pub const LAUNCH_HOLES: [&str; 7] = [
+    "name",
+    "payload",
+    "cwd",
+    "settings",
+    "model",
+    "effort",
+    "permission_mode",
+];
+/// The holes every spawn supplies by construction; a template missing one
+/// cannot launch a named worker with a prompt.
+const LAUNCH_REQUIRED_HOLES: [&str; 2] = ["name", "payload"];
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("harness capability contract: {0}")]
 pub struct ContractError(String);
@@ -343,6 +359,11 @@ pub struct HarnessCapabilities {
     /// argv lane; a flag outside both demotes the spawn to the pane.
     #[serde(default)]
     pub thread: Option<ThreadArm>,
+    /// The harness's native paneless launch argv ([`LaunchTemplate`]), absent
+    /// on a harness whose lane fno has not templated yet - absence refuses at
+    /// the fill with that named, never another harness's line.
+    #[serde(default)]
+    pub launch: Option<LaunchTemplate>,
     /// What this harness can DO, keyed by [`FEATURE_KEYS`] - a second
     /// dimension beside the pane mechanics, not a rewrite of them. A key
     /// ABSENT here reads `unmeasured`, which is legal and renders as a
@@ -501,6 +522,115 @@ pub struct ThreadArm {
     /// every token to its argv.
     #[serde(default)]
     pub passthrough: Vec<String>,
+}
+
+/// One harness's native launch argv (`[harness.<name>.launch]`), and the
+/// shape a `[[routing.models]]` row's own `launch` override assembles to.
+/// A hole is a WHOLE token (`{settings}`, never `--x{settings}`): the drop
+/// rule needs clean token boundaries. An `optional` hole with an empty value
+/// drops its hole token and the flag token before it, so a lane with no
+/// route, model or effort still renders a legal argv.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchTemplate {
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub optional: Vec<String>,
+}
+
+impl LaunchTemplate {
+    /// The contract one template must hold, packaged row or config override
+    /// alike: holes come from the closed vocabulary, `name` and `payload`
+    /// appear exactly once, and every optional hole follows its own flag so
+    /// the pair can drop as a unit.
+    pub fn validate(&self, harness: &str) -> Result<(), ContractError> {
+        if self.argv.is_empty() {
+            return Err(field_error(
+                harness,
+                "launch",
+                "an empty argv launches nothing",
+            ));
+        }
+        let placeholder_re = Regex::new(r"\{([^{}]+)\}").expect("static placeholder regex");
+        let mut holes: Vec<String> = Vec::new();
+        for token in &self.argv {
+            let captures: Vec<_> = placeholder_re.captures_iter(token).collect();
+            if captures.is_empty() {
+                if token.contains('{') || token.contains('}') {
+                    return Err(field_error(harness, "launch", "malformed placeholder"));
+                }
+                continue;
+            }
+            if captures.len() > 1 || captures[0][0].len() != token.len() {
+                return Err(field_error(
+                    harness,
+                    "launch",
+                    "a hole must be the whole token",
+                ));
+            }
+            let hole = captures[0]
+                .get(1)
+                .map(|matched| matched.as_str().to_string())
+                .unwrap_or_default();
+            if !LAUNCH_HOLES.contains(&hole.as_str()) {
+                return Err(field_error(
+                    harness,
+                    "launch",
+                    &format!("unknown hole {hole:?}"),
+                ));
+            }
+            holes.push(hole);
+        }
+        for required in LAUNCH_REQUIRED_HOLES {
+            if holes
+                .iter()
+                .filter(|hole| hole.as_str() == required)
+                .count()
+                != 1
+            {
+                return Err(field_error(
+                    harness,
+                    "launch",
+                    &format!("needs exactly one {{{required}}} hole"),
+                ));
+            }
+        }
+        for optional in &self.optional {
+            if !holes.contains(optional) {
+                return Err(field_error(
+                    harness,
+                    "launch",
+                    &format!("optional {optional:?} names no hole in argv"),
+                ));
+            }
+            if LAUNCH_REQUIRED_HOLES.contains(&optional.as_str()) {
+                return Err(field_error(
+                    harness,
+                    "launch",
+                    &format!("{optional:?} always carries a value and cannot be optional"),
+                ));
+            }
+            let marker = format!("{{{optional}}}");
+            for (index, token) in self.argv.iter().enumerate() {
+                if token != &marker {
+                    continue;
+                }
+                let flagged = index
+                    .checked_sub(1)
+                    .and_then(|prior| self.argv.get(prior))
+                    .map(|flag| flag.starts_with('-'))
+                    .unwrap_or(false);
+                if !flagged {
+                    return Err(field_error(
+                        harness,
+                        "launch",
+                        &format!("optional hole {marker} must follow its own flag"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One feature claim: `state` is the claim, and `verbs` names the
@@ -1561,6 +1691,9 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
             ));
         }
     }
+    if let Some(template) = &caps.launch {
+        template.validate(harness)?;
+    }
     Ok(())
 }
 
@@ -2162,6 +2295,55 @@ mod tests {
         let error = HarnessContract::parse(&bad).unwrap_err().to_string();
         assert!(error.contains("ready_marker"), "{error}");
         assert!(error.contains("invented_ready"), "{error}");
+    }
+
+    /// The claude launch template parses and obeys its own contract: the
+    /// packaged row is green, and a malformed variant (unknown hole, an
+    /// optional hole with no flag before it, an embedded hole) refuses at
+    /// parse time naming `launch` - the packaged table is a parsed contract,
+    /// not prose.
+    #[test]
+    fn launch_template_rows() {
+        let contract = HarnessContract::packaged().unwrap();
+        let launch = contract
+            .capabilities("claude")
+            .unwrap()
+            .launch
+            .as_ref()
+            .expect("claude declares its native bg line");
+        assert_eq!(launch.argv.first().map(String::as_str), Some("claude"));
+        assert_eq!(
+            launch.optional,
+            ["settings", "model", "effort", "permission_mode"]
+        );
+
+        for (needle, replacement, detail) in [
+            (
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude\", \"--bg\", \"--x\", \"{bogus}\", \"{name}\", \"{payload}\"]",
+                "bogus",
+            ),
+            (
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude\", \"{settings}\", \"{name}\", \"{payload}\"]",
+                "must follow its own flag",
+            ),
+            (
+                "argv = [\"claude\", \"--bg\", \"--settings\", \"{settings}\", \"--model\", \"{model}\", \"--effort\", \"{effort}\", \"--permission-mode\", \"{permission_mode}\", \"--name\", \"{name}\", \"{payload}\"]",
+                "argv = [\"claude --bg --model={model} {name} {payload}\"]",
+                "whole token",
+            ),
+            (
+                "optional = [\"settings\", \"model\", \"effort\", \"permission_mode\"]",
+                "optional = [\"settings\", \"model\", \"effort\", \"permission_mode\", \"bogus\"]",
+                "names no hole",
+            ),
+        ] {
+            let bad = CAPABILITY_TOML.replacen(needle, replacement, 1);
+            let error = HarnessContract::parse(&bad).unwrap_err().to_string();
+            assert!(error.contains("launch"), "{detail}: {error}");
+            assert!(error.contains(detail), "{detail}: {error}");
+        }
     }
 
     fn form_with_pre_exec() -> (ResumeForm, Vec<String>) {

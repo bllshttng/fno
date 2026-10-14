@@ -878,16 +878,22 @@ fn mark_settled(
 
 /// The `--clear-settled` door: close every still-open question whose node or
 /// blocks entry reads done/superseded, right now, through the same close
-/// rows the daemon sweep writes (`reason: node-closed`), so the attention
-/// arm's vault-page write picks them up on its next beat. The bell's
-/// Clear all calls this; a graph it cannot read closes nothing.
+/// rows the daemon sweep writes (`reason: node-closed`, or `moot` for a
+/// user-only why_user), so the attention arm's vault-page write picks them
+/// up on its next beat. The bell's Clear all calls this; a graph it cannot
+/// read closes nothing.
 fn run_clear_settled(home: &AgentsHome, cwd: &Path) -> i32 {
     let (statuses, raw) = crate::question_sweep::read_closed_rung_facts(cwd, home);
     let statuses: std::collections::BTreeMap<String, String> = statuses.into_iter().collect();
     let ids = node_closed_question_ids(&raw, &statuses);
+    let (machine, moot) = partition_by_user_only(&ids, &raw);
     let now = crate::claims::now_ms() / 1000;
-    let (cleared, errors) =
-        crate::question_sweep::close_questions(home, &ids, now, "clear-settled");
+    let (mut cleared, mut errors) =
+        crate::question_sweep::close_questions(home, &machine, now, "node-closed", "clear-settled");
+    let (moot_cleared, moot_errors) =
+        crate::question_sweep::close_questions(home, &moot, now, "moot", "clear-settled");
+    cleared.extend(moot_cleared);
+    errors.extend(moot_errors);
     let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
     let _ = emitter.emit(
         "question_sweep",
@@ -1249,13 +1255,48 @@ impl HeldFold {
 
 /// The open question ids whose node reads a terminal rung: a
 /// question's node is the `node` field plus every `blocks` entry, and a rung
-/// is `done` or `superseded`. Pure over journal contents; the caller
+/// is `done` or `superseded`. Every open question folds, user-only
+/// why_user included: a resolved subject closes the question as moot. A
+/// merged PR moots through the node it closed (reconcile), never through a
+/// merge_status stamp, which a multi-ship node or a reopened node can
+/// carry while work remains. Pure over journal contents; the caller
 /// supplies the graph statuses and does the writing.
 pub(crate) fn node_closed_question_ids(
     raw: &str,
     statuses: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
     const CLOSED_RUNGS: [&str; 2] = ["done", "superseded"];
+    let (asked, closed) = open_question_rows(raw);
+    let mut ids: Vec<String> = asked
+        .into_iter()
+        .filter(|(qid, data)| {
+            if closed.contains(qid) {
+                return false;
+            }
+            let mut nodes: Vec<String> = data
+                .get("node")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .into_iter()
+                .collect();
+            if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
+                nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+            nodes.iter().any(|n| {
+                statuses
+                    .get(n)
+                    .is_some_and(|s| CLOSED_RUNGS.contains(&s.as_str()))
+            })
+        })
+        .map(|(qid, _)| qid)
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The open (asked, never closed) question rows: the journal fold the
+/// closed-rung consumers share.
+fn open_question_rows(raw: &str) -> (HashMap<String, Value>, std::collections::HashSet<String>) {
     let mut asked: HashMap<String, Value> = HashMap::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in raw.lines() {
@@ -1284,38 +1325,46 @@ pub(crate) fn node_closed_question_ids(
             _ => {}
         }
     }
+    (asked, closed)
+}
+
+/// The open question ids carrying a user-only why_user: the sweep closes
+/// these with reason "moot" (not "node-closed") when their subject
+/// resolves. Same journal fold as [node_closed_question_ids], pared to the
+/// why_user bit.
+pub(crate) fn user_only_question_ids(raw: &str) -> Vec<String> {
+    let (asked, closed) = open_question_rows(raw);
     let mut ids: Vec<String> = asked
         .into_iter()
         .filter(|(qid, data)| {
-            if closed.contains(qid) {
-                return false;
-            }
-            // A user-only why_user survives the node: the user answers or
-            // withdraws, the sweep never closes it.
-            if crate::escalation::why_user_is_user_only(
-                data.get("why_user").and_then(Value::as_str).unwrap_or(""),
-            ) {
-                return false;
-            }
-            let mut nodes: Vec<String> = data
-                .get("node")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .into_iter()
-                .collect();
-            if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
-                nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
-            }
-            nodes.iter().any(|n| {
-                statuses
-                    .get(n)
-                    .is_some_and(|s| CLOSED_RUNGS.contains(&s.as_str()))
-            })
+            !closed.contains(qid)
+                && crate::escalation::why_user_is_user_only(
+                    data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+                )
         })
         .map(|(qid, _)| qid)
         .collect();
     ids.sort();
     ids
+}
+
+/// Split closed-rung ids into (machine, user-only): the close reason
+/// differs (`node-closed` vs `moot`). One partition, so the sweep and the
+/// clear-settled door can never disagree on which question closed how.
+pub(crate) fn partition_by_user_only(ids: &[String], raw: &str) -> (Vec<String>, Vec<String>) {
+    let user_only: std::collections::HashSet<String> =
+        user_only_question_ids(raw).into_iter().collect();
+    let machine = ids
+        .iter()
+        .filter(|qid| !user_only.contains(*qid))
+        .cloned()
+        .collect();
+    let moot = ids
+        .iter()
+        .filter(|qid| user_only.contains(*qid))
+        .cloned()
+        .collect();
+    (machine, moot)
 }
 
 /// Stamp each item's `live` bit from its node claim (x-aaaa 1.4): an item whose
@@ -2649,10 +2698,11 @@ mod tests {
     }
 
     #[test]
-    fn sweep_spares_a_user_only_question_whose_node_closed() {
-        // A user-only why_user survives its node closing; only an answer or
-        // a withdrawal closes it. A machine-side reason, or no why_user at
-        // all, still closes with the node.
+    fn sweep_closes_a_user_only_question_whose_subject_resolved() {
+        // A resolved subject closes the question, user-only why_user
+        // included: a merged PR or a done node left its question open
+        // forever under the old spare. The fold carries the id; the
+        // reason split is the partition's.
         let statuses: std::collections::BTreeMap<String, String> =
             [("x-bbbb".to_string(), "done".to_string())]
                 .into_iter()
@@ -2663,7 +2713,11 @@ mod tests {
             "a product or taste call",
             &["x-bbbb"],
         );
-        assert!(node_closed_question_ids(&raw, &statuses).is_empty());
+        assert_eq!(
+            node_closed_question_ids(&raw, &statuses),
+            vec!["q-user".to_string()]
+        );
+        assert_eq!(user_only_question_ids(&raw), vec!["q-user".to_string()]);
         let raw = operator_question_with_why_user(
             "2026-07-03T02:00:00Z",
             "q-mach",
@@ -2674,11 +2728,13 @@ mod tests {
             node_closed_question_ids(&raw, &statuses),
             vec!["q-mach".to_string()]
         );
+        assert!(user_only_question_ids(&raw).is_empty());
         let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-plain", "pick", &["x-bbbb"]);
         assert_eq!(
             node_closed_question_ids(&raw, &statuses),
             vec!["q-plain".to_string()]
         );
+        assert!(user_only_question_ids(&raw).is_empty());
     }
 
     #[test]
