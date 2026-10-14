@@ -258,13 +258,12 @@ def test_ac8_ui_heads_up_on_bus_triaged_with_provenance(inbox_and_bus, tmp_path,
             self.stdout = stdout
             self.stderr = stderr
 
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # the stub patches the shared module attr
-
     def fake_run(cmd, *args, **kwargs):
-        if len(cmd) >= 2 and cmd[1] == "mail-envelope":
-            return real_run(cmd, *args, **kwargs)
+        # The dedupe classifier resolves the same stubbed binary; answer its
+        # shape classify locally (one tagless body) so the stub never
+        # reaches a real exec.
+        if cmd[1:3] == ["mail-envelope", "--classify"]:
+            return _FakeRun(stdout='[{"ids": []}]')
         # The native create door: argv[0] is the resolved fno-agents path,
         # so the fake matches on the verb words, not the binary.
         if cmd[1:3] == ["backlog", "new"]:

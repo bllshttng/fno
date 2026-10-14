@@ -54,6 +54,7 @@ pub struct AddArgs {
     // `fno inbox drain` files with): scoped opt-outs and inbox provenance.
     pub source_project: Option<String>,
     pub source_inbox_msg: Option<String>,
+    pub source_inbox_thread: Option<String>,
     pub source_session_id: Option<String>,
     pub unscoped: bool,
     pub force_domain: bool,
@@ -94,6 +95,7 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--source-kind",
         "--source-project",
         "--source-inbox-msg",
+        "--source-inbox-thread",
         "--source-session-id",
         "--related",
     ];
@@ -188,6 +190,7 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--source-kind" => args.source_kind = value,
                     "--source-project" => args.source_project = Some(value),
                     "--source-inbox-msg" => args.source_inbox_msg = Some(value),
+                    "--source-inbox-thread" => args.source_inbox_thread = Some(value),
                     "--source-session-id" => args.source_session_id = Some(value),
                     _ => unreachable!("long flags covered"),
                 }
@@ -958,35 +961,37 @@ pub(crate) fn create_node(
     // Store an absolute path so downstream detection finds matches. No
     // explicit --cwd: record the canonical main checkout, not os.getcwd().
     let cwd_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    // --unscoped is the `new` word's opt-out (node_builder.cmd_new's
-    // contract): the node records project=null and cwd=null, no auto-scope.
-    let (resolved_project, resolved_cwd): (Option<String>, Option<String>) = if args.unscoped {
-        (None, None)
-    } else {
-        let cwd: String = match &args.cwd {
-            Some(cwd) => {
-                let p = Path::new(cwd);
-                let joined = if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    cwd_root.join(p)
-                };
-                joined.to_string_lossy().into_owned()
-            }
-            None => match &args.project {
-                Some(project) => {
-                    super::settings::project_root(project).unwrap_or_else(|| repo_root(&cwd_root))
+    // The scope ladder: an explicit --project derives cwd from the work map
+    // REGARDLESS of --unscoped (a named project is a stronger signal than the
+    // auto-scope opt-out); --unscoped otherwise skips the git-root auto-scope.
+    let mapped = args
+        .project
+        .as_deref()
+        .and_then(super::settings::project_root);
+    let (resolved_project, resolved_cwd): (Option<String>, Option<String>) =
+        if args.unscoped && mapped.is_none() {
+            (None, None)
+        } else {
+            let cwd: String = match (mapped, &args.cwd) {
+                (Some(root), _) => root,
+                (None, Some(cwd)) => {
+                    let p = Path::new(cwd);
+                    let joined = if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd_root.join(p)
+                    };
+                    joined.to_string_lossy().into_owned()
                 }
-                None => repo_root(&cwd_root),
-            },
+                (None, None) => repo_root(&cwd_root),
+            };
+            (
+                args.project
+                    .clone()
+                    .or_else(|| detect_project(&PathBuf::from(&cwd))),
+                Some(cwd),
+            )
         };
-        (
-            args.project
-                .clone()
-                .or_else(|| detect_project(&PathBuf::from(&cwd))),
-            Some(cwd),
-        )
-    };
 
     // One snapshot read feeds the fail-closed assertions, the mint, and the
     // mutation: an unresolvable assertion must leave the graph untouched. The
@@ -1112,6 +1117,7 @@ pub(crate) fn create_node(
             "source_kind": args.source_kind,
             "source_project": args.source_project,
             "source_inbox_msg": args.source_inbox_msg,
+            "source_inbox_thread": args.source_inbox_thread,
             "artifact_url": Value::Null,
             "completion_note": Value::Null,
             // A --source-session-id flag (the `new` word's inbox provenance)

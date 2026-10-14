@@ -40,6 +40,9 @@ Options:
                           [default: organic]
   --source-project TEXT   Source project name (the new word's provenance).
   --source-inbox-msg TEXT Source inbox message ID (the new word's provenance).
+  --source-inbox-thread TEXT
+                          Source inbox thread file path (the new word's
+                          provenance; `fno inbox drain` probes --help for it).
   --source-session-id TEXT Source session ID override (the new word).
   --unscoped              Create with project=null and cwd=null; skips the
                           auto-scope to the current git repo (the new word).
