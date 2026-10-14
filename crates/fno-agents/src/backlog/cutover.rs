@@ -655,6 +655,12 @@ pub fn run_collisions(tail: &[String]) -> i32 {
     let mut plan_path: Option<String> = None;
     let mut self_id: Option<String> = None;
     let mut json_out = false;
+    // The help names the `check` action word; without this it parsed as
+    // the plan path and the real path read as an extra argument.
+    let tail = match tail.split_first() {
+        Some((action, rest)) if action == "check" => rest,
+        _ => tail,
+    };
     let mut it = tail.iter();
     while let Some(arg) = it.next() {
         let (flag, inline) = match arg.split_once('=') {
