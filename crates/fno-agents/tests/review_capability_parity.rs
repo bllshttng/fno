@@ -542,8 +542,23 @@ fn run_child(root: &Path, spec: &Case) -> Golden {
     for (k, v) in &env {
         cmd.env(k, v);
     }
+    // The triad-spawning guard's law: a test that spawns the client names its
+    // owner, so a daemon it reaches cannot outlive the run. The pins stay
+    // authoritative for detect_session; FNO_TEST_OWNER_* is not an identity
+    // marker.
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.current_dir(&repo);
-    let output = cmd.output().expect("fno-agents binary spawns");
+    let mut child = cmd.spawn().expect("fno-agents binary spawns");
+    if !stdin_payload.is_empty() {
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .expect("stdin was piped for a payload action")
+            .write_all(stdin_payload.as_bytes())
+            .expect("payload writes to the door's stdin");
+    }
+    let output = child.wait_with_output().expect("fno-agents binary runs");
     let norm = |text: String| -> String {
         // The driver normalizes its temp ROOT (the case dir lives one level
         // under it), so the test must replace the same span or the `<TMP>`
