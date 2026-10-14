@@ -263,10 +263,13 @@ def test_every_moved_spelling_is_hidden():
         # owned by VERB_MOVES, not by the registry. `decide` joined it when
         # the family ported native: every destination the move names is a
         # native verb now, so a python registration would forward into
-        # nothing. Every OTHER moved spelling keeps a one-release
-        # registration, and any registration that exists must be hidden: an
-        # advertised moved name teaches a doomed spelling.
-        if name in ("decide", "yard"):
+        # nothing. `review` joined the same way when its ROOT claim moved to
+        # the rust front door, which prints the move notice and execs
+        # `do review` itself; a python registration would sit behind an
+        # intercept that never reaches it. Every OTHER moved spelling keeps a
+        # one-release registration, and any registration that exists must be
+        # hidden: an advertised moved name teaches a doomed spelling.
+        if name in ("decide", "yard", "review"):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"

@@ -1,0 +1,1 @@
+{"policy": "high_assurance", "satisfied": false, "effective": "unresolved", "reason": "high-assurance requires different-family capacity; none available", "implementer_provider": "claude", "identity_known": true, "effective_reviewer_kinds": ["claude"], "exhausted_kinds": [], "headroom_unknown": true}

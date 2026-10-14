@@ -505,7 +505,6 @@ resume receipt write	T1	resume receipt write	2
 retro drain-postmortems	T1	retro drain-postmortems	2
 retro run	T1	retro run	23
 retro sweep-carveouts	T1	retro sweep-carveouts	3
-review	KEEP	review	27	single-leaf group
 roles context	T1	roles context	2
 roles ls	T1	roles ls	1
 roles resolve	T1	roles resolve	2

@@ -22,7 +22,7 @@ An empty file exits 0. That is correct and stays correct.
 
 `check_unknown_keys` walks each candidate layer SEPARATELY rather than the merged result, so every message names the file that actually holds the key. It reads `_aliased_layers`, the loader's own per-file collector, so a legacy spelling the loader accepts is never called a typo. `extra="ignore"` is forward compatibility. It also means a typo'd section or leaf is accepted in silence. `warn_unknown_keys` already found them and, without `FNO_DEBUG`, said nothing.
 
-`check_enabled_with_empty_population` reports a switch that is on with nothing that can satisfy it. `review.cross_model` is the one pair here, and it is here because its consumer was read. `review_assurance` widens the reviewer set from `available_provider_kinds()`. With no dispatchable non-claude provider the diversity requirement can never be met.
+`check_enabled_with_empty_population` reports a switch that is on with nothing that can satisfy it. `review.cross_model` is the one pair here, and it is here because its consumer was read. The assurance verdict widens the reviewer set from the review-policy kinds door (`fno-agents review-policy kinds`), whose `available` list is the populated read. With no dispatchable non-claude provider the diversity requirement can never be met.
 
 `check_wip_caps` reads the `config.toml` sibling as well as the legacy `settings.yaml`. It read only the yaml name before, so it had been a no-op on every machine since the yaml-to-toml migration.
 

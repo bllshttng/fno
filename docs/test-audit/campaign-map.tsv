@@ -575,7 +575,6 @@ K4	cli/tests/unit/test_init_harness_space_stub.py	py	3
 K4	cli/tests/unit/test_managed_block.py	py	11
 K4	cli/tests/unit/test_orchestrator_harness.py	py	10
 K4	cli/tests/unit/test_provider_budget.py	py	23
-K4	cli/tests/unit/test_provider_resolution.py	py	17
 K4	cli/tests/unit/test_self_identity_stamp_sites.py	py	4
 K4	cli/tests/unit/test_sync_codex_agents.py	py	6
 K4	cli/tests/unit/test_triage_claude_invocation.py	py	5
@@ -1065,7 +1064,6 @@ K6	cli/tests/unit/test_review_findings.py	py	39
 K6	cli/tests/unit/test_review_hold_wiring.py	py	9
 K6	cli/tests/unit/test_review_invocation.py	py	21
 K6	cli/tests/unit/test_review_invocation_settle.py	py	5
-K6	cli/tests/unit/test_review_policy.py	py	34
 K6	cli/tests/unit/test_review_post_dispositions.py	py	6
 K6	cli/tests/unit/test_setup_post_merge_scaffold.py	py	7
 K6	cli/tests/unit/test_target_init_review_gate.py	py	51
