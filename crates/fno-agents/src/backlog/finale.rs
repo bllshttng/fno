@@ -798,7 +798,7 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         eprintln!("Missing argument 'PRIORITY'.");
         return 2;
     };
-    if !has_node_id_prefix(task_id) {
+    if !has_node_id_prefix(&task_id) {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
         return 1;
     }
@@ -815,7 +815,7 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         eprintln!("Error: the backlog graph could not be read");
         return 1;
     };
-    let old = find_node(&rows, task_id)
+    let old = find_node(&rows, &task_id)
         .and_then(|n| text_at(n, "priority"))
         .unwrap_or("p2")
         .to_string();
