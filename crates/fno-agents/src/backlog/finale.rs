@@ -790,11 +790,11 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         );
         return 2;
     }
-    let Some(task_id) = positional.first() else {
+    let Some(task_id) = positional.first().map(|s| s.to_string()) else {
         eprintln!("Missing argument 'TASK_ID'.");
         return 2;
     };
-    let Some(priority) = positional.get(1) else {
+    let Some(priority) = positional.get(1).map(|s| s.to_string()) else {
         eprintln!("Missing argument 'PRIORITY'.");
         return 2;
     };
