@@ -154,13 +154,17 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
     def fake_run(cmd, *args, **kwargs):
         if len(cmd) >= 2 and cmd[1] == "mail-envelope":
             return real_run(cmd, *args, **kwargs)
-        # The mux binary: `fno backlog new` is the native create door.
-        if cmd[:3] == ["fno", "backlog", "new"]:
+        # The native create door: drain resolves fno-agents and argv[0] is
+        # its path, so the fake matches on the verb words, not the binary.
+        if cmd[1:3] == ["backlog", "new"]:
             return _FakeRun(stdout='{"id": "ab-abc123", "title": "t"}\n')
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     monkeypatch.setattr(drain_mod, "triage_thread", fake_triage_thread)
     monkeypatch.setattr(drain_mod.subprocess, "run", fake_run)
+    # The door resolver: a stubbed path keeps the fake subprocess matching
+    # (argv[0] is the resolved binary) without a filesystem probe.
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/fake/fno-agents"))
 
     results = drain_mod.drain_inbox(repo_root, "alice")
     assert len(results) == 1
