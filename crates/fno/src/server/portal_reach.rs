@@ -1169,9 +1169,11 @@ impl Core {
         // the plan-pending return that emits nothing, and the harvest would
         // invent "no such agent: NAME" for a row the registry knows.
         let needs_plan = matches!(&live_row, Some(r)
-            if r.attach_id.is_some()
-                && r.harness.as_deref() == Some("claude")
-                && self.reentry_verdict.is_none());
+            if r.harness.as_deref() == Some("claude")
+                && self.reentry_verdict.is_none()
+                && r.attach_id
+                    .as_deref()
+                    .is_some_and(|id| self.live_attach_argv(id).is_none()));
         if self.pending_thread_reply.is_some() {
             // One park at a time: the observer client id is the constant
             // CONTROL_CLIENT, so a second reach would trample the parked

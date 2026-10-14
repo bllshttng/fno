@@ -1772,6 +1772,37 @@ async fn portal_new_split_on_a_claude_row_survives_the_reentry_replay() {
     core.reap_pane(seat); // don't leak the stand-in child
 }
 
+#[tokio::test]
+async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
+    // A claude row whose session uuid a live process argv names is only
+    // ever attached: the reach lands in the same command, with no
+    // re-entry plan requested and no staged verdict consumed. The registry
+    // pid is stale after a resume, so the argv is the witness.
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, _rx) = thread_core();
+    let uuid = "5d5a0000-1111-2222-3333-444455556666";
+    let witness = crate::pty::ChildGuard::spawn(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("sleep 25; : # {uuid}")),
+    );
+    let pid_before = witness.id();
+    let mut row = claude_row("claude-row", "deadbee1");
+    row.claude_session_uuid = Some(uuid.into());
+    core.agents = vec![row];
+
+    assert!(
+        core.live_attach_argv("deadbee1").is_some(),
+        "the live argv witnesses the row"
+    );
+    core.command(client_id, thread_reach_cmd("deadbee1"));
+
+    let seat = core.portals.get(&0).expect("the reach lands without a plan").seat;
+    assert!(core.reentry_verdict.is_none(), "no plan was staged or used");
+    assert_eq!(witness.id(), pid_before, "the session process is untouched");
+    core.reap_pane(seat);
+}
+
 // ---- (x-d545) the remembered tab outlives its viewer ----
 
 #[test]

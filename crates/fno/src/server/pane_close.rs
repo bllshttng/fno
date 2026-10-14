@@ -397,7 +397,7 @@ impl Core {
     /// uuid, and the live-argv witness. A uuid no live process argv names is
     /// a genuinely ended session and reads `None`, so the plain close
     /// stands.
-    fn attach_replay_argv(
+    pub(super) fn attach_replay_argv(
         &self,
         id: &str,
         row: &crate::agents_view::RegistryAgent,
