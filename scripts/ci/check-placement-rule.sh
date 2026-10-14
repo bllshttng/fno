@@ -174,6 +174,11 @@
 #      crates/fno-agents/src/eval_part4.rs answers over the plans-dir
 #      chain and its inline test writes the same tempdir fixture copy of
 #      Claude Code's own settings.local.json. Nothing accumulates there.
+#      crates/fno-agents/src/review_capability.rs probes skill presence
+#      through dispatch_resolve's root set, and its inline test builds a
+#      tempdir .claude/skills fixture root so the absent/unverifiable
+#      boundary is hermetic. Read-only against real roots; nothing
+#      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
 #      removes the hook entry cli_hooks.py merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
@@ -305,6 +310,7 @@ crates/fno-agents/src/backlog/autobrief.rs
 crates/fno-agents/src/backlog/advance_join.rs
 crates/fno-agents/src/backlog/maintenance.rs
 crates/fno-agents/src/backlog/maintenance_tests.rs
+crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py
