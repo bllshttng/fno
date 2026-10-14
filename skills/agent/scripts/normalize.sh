@@ -69,6 +69,10 @@ PROJECT=""         # cross-project target: a registry project name/short_name to
 PROJECT_SET=0      # 1 = -C/--project was passed (empty value -> loud error, never
                    # a silent caller-cwd launch when a cross-project hop was asked)
 FORCE=0            # 1 = -f/--force: let --project win over a node's own cwd
+MODEL=""           # exact model name; the spawn door refuses it (axis retired),
+                   # normalize still reports what the caller asked for
+EFFORT=""          # reasoning-effort pin; the spawn door refuses it (axis retired),
+                   # normalize still reports what the caller asked for
 PERMISSION_MODE="" # forwarded to spawn.sh --permission-mode (provider-native, CLI fails closed)
 ROLE=""            # per-spawn model-routing role; forwarded to spawn.sh --role
 TIMEOUT=""         # per-spawn timeout seconds; forwarded to spawn.sh --timeout
