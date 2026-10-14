@@ -2063,6 +2063,11 @@ pub fn run(tail: &[OsString]) -> i32 {
             Ok(Some(map)) => map,
         };
         let exported = crate::setup_profile::export(&flat);
+        eprintln!(
+            "export: {} machine-local key(s) stay local, {} secret(s) stay behind",
+            exported.kept_local.len(),
+            exported.secrets
+        );
         match &opts.out {
             Some(path) => match std::fs::write(path, &exported.text) {
                 Ok(()) => println!("export: wrote {path}"),
