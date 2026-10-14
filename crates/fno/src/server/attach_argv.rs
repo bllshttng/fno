@@ -4,6 +4,28 @@
 
 use super::*;
 
+/// Does the registry row record a route settings file? An unreadable
+/// registry reads false: the sideline rows come from the same registry, and
+/// the plan would refuse on it anyway.
+fn row_records_route(name: &str) -> bool {
+    let Ok(raw) = crate::agents_view::registry_text() else {
+        return false;
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    doc.get("agents")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            rows.iter().any(|r| {
+                r.get("name").and_then(serde_json::Value::as_str) == Some(name)
+                    && r.get("route_settings_path")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|p| !p.is_empty())
+            })
+        })
+}
+
 impl Core {
     /// The registry row NAME behind an attach id when that row is a
     /// claude row, from the live catalog (the sidepane's in-memory source).
@@ -43,6 +65,11 @@ impl Core {
             .iter()
             .find(|a| a.attach_id.as_deref() == Some(attach_id))?;
         let (_, argv, _) = self.attach_replay_argv(attach_id, row)?;
+        // A recorded route rides `--settings` on the canonical attach plan,
+        // and only the plan builds it, so a routed row keeps the plan.
+        if row_records_route(&row.name) {
+            return None;
+        }
         let (_, config_dir) = self.attach_account_ctx(attach_id);
         Some((argv, config_dir))
     }

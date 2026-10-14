@@ -219,9 +219,10 @@ pub(super) fn fill_held_portal_at(
     if let Some(recorded) = core.portal_session_guards.get(&idx).cloned() {
         let current = row.harness_session_id.clone();
         if current.as_deref() != Some(recorded.as_str()) {
+            // Only a predecessor is succession: `related_session_id` is a
+            // parked fork, a different thread.
             let resumed = row.forked_from_session_id.as_deref() != Some(recorded.as_str())
-                && (row.predecessor_session_ids.contains(&recorded)
-                    || row.related_session_id.as_deref() == Some(recorded.as_str()));
+                && row.predecessor_session_ids.contains(&recorded);
             let shown = current.as_deref().unwrap_or("(unreadable)");
             if !resumed {
                 core.notice_all(format!(
