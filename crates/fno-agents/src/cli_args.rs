@@ -195,16 +195,34 @@ impl SpawnAxes {
         let mut pairs: Vec<String> = Vec::new();
         let mut i = 0;
         while i < head.len() {
-            if Self::AXIS_FLAGS.contains(&head[i].as_str()) {
-                if matches!(head[i].as_str(), "--route" | "--account") {
-                    if i + 1 >= head.len() || Self::looks_like_flag(&head[i + 1]) {
-                        return Err(format!("{} needs a value", head[i]));
+            let tok = head[i].as_str();
+            // Equals-form is a live spelling of the value axes (`--account=x`);
+            // split it here so the strict clap parse sees flag and value.
+            let (long, inline) = match tok.split_once('=') {
+                Some((f, v)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f) => {
+                    (f, Some(v.to_string()))
+                }
+                _ => (tok, None),
+            };
+            if Self::AXIS_FLAGS.contains(&long) {
+                if matches!(long, "--route" | "--account") {
+                    match inline {
+                        Some(v) => {
+                            pairs.push(long.to_string());
+                            pairs.push(v);
+                            i += 1;
+                        }
+                        None => {
+                            if i + 1 >= head.len() || Self::looks_like_flag(&head[i + 1]) {
+                                return Err(format!("{long} needs a value"));
+                            }
+                            pairs.push(long.to_string());
+                            pairs.push(head[i + 1].clone());
+                            i += 2;
+                        }
                     }
-                    pairs.push(head[i].clone());
-                    pairs.push(head[i + 1].clone());
-                    i += 2;
                 } else {
-                    return Err(Self::refused_axis(&head[i]));
+                    return Err(Self::refused_axis(&long));
                 }
             } else {
                 i += 1;
