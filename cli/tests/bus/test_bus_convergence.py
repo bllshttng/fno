@@ -278,7 +278,7 @@ def test_ac8_ui_heads_up_on_bus_triaged_with_provenance(inbox_and_bus, tmp_path,
     monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/fake/fno-agents"))
 
     results = drain_mod.drain_inbox(tmp_path, "alice")
-    assert results[0].action == "created_node"
+    assert results[0].action == "created_node", results[0].error
     assert results[0].node_id == "ab-abc123"
     # Provenance fields unchanged: source-kind/project/inbox-msg still passed.
     argv = captured["argv"]
