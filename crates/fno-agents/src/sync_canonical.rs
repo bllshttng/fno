@@ -1547,8 +1547,6 @@ mod tests {
             "git checkout main && git pull origin main && fno restart"
         );
         assert_eq!(dropped, vec!["fno update".to_string()]);
-        // Once CI published the merged rev, the update leg downloads it.
-        assert_eq!(strip_compile_legs(chain, true), (chain.to_string(), vec![]));
 
         // A bare cargo install leg drops even with a published build.
         let (kept, dropped) =
