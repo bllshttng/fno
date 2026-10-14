@@ -1293,7 +1293,7 @@ def request_self_review_cmd(
     ),
 ) -> None:
     """Request one explicit final-head review through the raw self lane."""
-    from fno.rust_binary import verb_call
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     cwd = Path.cwd()
     head_sha = _git_out(cwd, "rev-parse", "HEAD") or ""
@@ -1353,7 +1353,12 @@ def request_self_review_cmd(
         if branch:
             argv += ["--branch", branch]
         argv += ["--head-sha", head_sha, "--base-branch", base_branch]
-        payload = verb_call(argv, {})["invocation"]
+        try:
+            payload = verb_call(argv, {})["invocation"]
+        except VerbUnavailable as exc:
+            # A named refusal, never a fabricated string: the receipt keeps
+            # the door's full detail under a prefix that names the surface.
+            raise RuntimeError(f"review invocation door refused: {exc}") from None
         receipt = _send_self_review_payload(
             payload=payload, harness=harness, session_id=session_id
         )
