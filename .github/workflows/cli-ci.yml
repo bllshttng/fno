@@ -1003,6 +1003,21 @@ jobs:
           FNO_TEST_HERMETIC: "0"
         run: cargo test --lib --bins --no-fail-fast
 
+      - name: Write-gate shell test (relay + state-root policy)
+        # The Rust unit tests cover refuse_for's verdicts; this runs the real
+        # relay, hooks/write-gate.sh, against the built binary so the bash
+        # families and the fallback posture are exercised end to end. The dev
+        # profile is already warm from the --lib --bins run above, so the
+        # bin link here is incremental.
+        env:
+          HOME: ${{ runner.temp }}/fno-test-home
+          CARGO_HOME: /home/runner/.cargo
+          RUSTUP_HOME: /home/runner/.rustup
+        run: |
+          cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
+          FNO_AGENTS_BIN="$PWD/crates/fno-agents/target/debug/fno-agents" \
+            bash tests/hooks/test_claude_config_write_guard.sh
+
   test-agents-integration:
     needs: [pr-affected]
     if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}

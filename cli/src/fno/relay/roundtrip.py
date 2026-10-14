@@ -21,11 +21,6 @@ that uuid back over the spawn RPC); the relay is reduced to two relay-local jobs
    spawn). Faithful text -- no TUI space-collapse. There is NO pane fallback: the
    `peer.buf` master-fd buffer moved to the daemon, so the transcript is the sole
    capture source (E4.3 / AC-E4-4).
-
-The single-writer `session:<uuid>` claim (Locked Decision #1) is enforced by the
-ROUTING vehicle (`fno.relay.daemon.daemon_deliver`), which finds the claim
-daemon-held before calling `deliver_session` -- so this module never spawns a
-second `--session-id X` writer.
 """
 from __future__ import annotations
 

@@ -956,10 +956,7 @@ K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
 K6	cli/tests/mcp/test_sidecar_lifecycle.py	py	15
-K6	cli/tests/relay/test_daemon.py	py	25
-K6	cli/tests/relay/test_envelope.py	py	16
 K6	cli/tests/relay/test_roundtrip.py	py	67
-K6	cli/tests/relay/test_router.py	py	9
 K6	cli/tests/test_post_merge_route.py	py	39
 K6	cli/tests/test_pr_read_budget.py	py	6
 K6	cli/tests/test_pr_watch_cli_adapters.py	py	36
