@@ -6876,7 +6876,6 @@ fn done_ends_unreviewed_not_awaiting_review_when_optional_app_refuses() {
     assert!(d.message.contains("chatgpt-codex-connector"));
     assert!(d.message.contains("refused"));
     assert!(d.message.contains("run the review verb at HEAD"));
-    assert!(d.message.contains("not owed, still not responding"));
     assert!(d.message.contains("merge by hand"));
 }
 

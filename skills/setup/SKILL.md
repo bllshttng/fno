@@ -120,7 +120,7 @@ fno config set config.auto_merge.enabled false
 `fno config setup plan` asks about `config.review.external_reviewers` (which logins to *request* and *recognize*). The GATE - what `fno-agents loop-check` REQUIRES before `/target` promises - lives in three `advanced`-tier keys the default plan does not surface. Most users never learn the bot-less options exist. Offer the choice explicitly. Default = none / PR + CI only. These are additive - a repo can require both a bot AND a local review-lane pass:
 
 > "How does review gate a PR before `/target` considers it done?
->  1. **GitHub App bots** - a bot login (e.g. `chatgpt-codex-connector`, `gemini-code-assist`) must post a review. Needs the bot installed on the repo.
+>  1. **GitHub App bots** - a bot login (e.g. `chatgpt-codex-connector`) must post a review. Needs the bot installed on the repo.
 >  2. **Local attestation** - `/target` runs the owned `/fno:review` lane in-session and attests on a clean pass; no GitHub bot needed. Best for a solo / claude-only harness. (`declare` is a bare 'I looked' self-cert, not a review - offer it only as an escape hatch.)
 >  3. **CLI peers** - a codex/gemini CLI posts a real PR review under a distinct machine account.
 >  4. **None** - PR + CI only (default)."
@@ -129,7 +129,7 @@ Map the answer to keys and write them (use `--local` for a per-repo gate; global
 
 ```bash
 # 1. GitHub bots (the gate list, distinct from external_reviewers)
-fno config set config.review.github_apps chatgpt-codex-connector,gemini-code-assist --local
+fno config set config.review.github_apps chatgpt-codex-connector --local
 # 2. Local attestation (code-review = the owned fno review lane; declare = self-cert escape hatch)
 fno config set config.review.reviewers code-review --local      # or: declare
 # 3. CLI peers (also set the identity the review posts under + its PAT env var)
