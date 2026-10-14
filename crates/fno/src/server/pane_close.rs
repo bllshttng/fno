@@ -233,14 +233,15 @@ impl Core {
                 }
             }
             if let Ok(screen_pid) = self.spawn_parked_screen(&channel, rows, cols, &cwd) {
+                let label = self.portal_channel_label(&channel);
                 if self.swap_dead_seat(
                     pid,
                     sid,
                     ti,
                     Some(idx),
                     screen_pid,
-                    &channel,
-                    &format!("portal {idx}: no signal - {channel} ended"),
+                    &label,
+                    &format!("portal {idx}: no signal - {label} ended"),
                     "seat parked",
                     reason,
                 ) {
@@ -397,7 +398,7 @@ impl Core {
     /// uuid, and the live-argv witness. A uuid no live process argv names is
     /// a genuinely ended session and reads `None`, so the plain close
     /// stands.
-    fn attach_replay_argv(
+    pub(super) fn attach_replay_argv(
         &self,
         id: &str,
         row: &crate::agents_view::RegistryAgent,

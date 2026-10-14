@@ -259,13 +259,19 @@ def check_values() -> list[str]:
 
 
 def check_enabled_with_empty_population() -> list[str]:
-    """A switch on with nothing that can satisfy it. Read the consumer first."""
-    try:
-        from fno.review.provider_resolution import available_provider_kinds
+    """A switch on with nothing that can satisfy it. Read the consumer first.
 
+    The kinds read rides the native review-policy door; a door error keeps
+    the report-nothing posture (the same `[]` the except arm returns)."""
+    try:
         if not bool(_cfg().load_settings().review.cross_model.enabled):
             return []
-        kinds = [str(k).strip().lower() for k in available_provider_kinds()]
+        from fno.rust_binary import call_binary_json
+
+        _err, row = call_binary_json("review-policy", ["kinds"])
+        if _err is not None or not isinstance(row, dict):
+            return []
+        kinds = [str(k).strip().lower() for k in row.get("available") or []]
     except Exception:  # noqa: BLE001 - a report, not the loader
         return []
     if any(kind != "claude" for kind in kinds):

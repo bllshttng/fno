@@ -1,0 +1,1 @@
+{"policy": "high_assurance", "satisfied": false, "effective": "unresolved", "reason": "high-assurance requires a known implementer family; identity unknown", "implementer_provider": "claude", "identity_known": false, "effective_reviewer_kinds": ["claude"], "exhausted_kinds": [], "headroom_unknown": false}

@@ -414,8 +414,8 @@ fn every_viewer_death_parks_its_portal_on_no_signal() {
     );
     assert_eq!(
         core.panes.get(&seat).and_then(|e| e.name.as_deref()),
-        Some("deadbee2"),
-        "a parked screen's pane name is its channel"
+        Some("target-b"),
+        "a parked screen wears its row's registry name, never the attach id"
     );
     let (sid, ti) = core.session.find_pane(seat).expect("kept seat in tree");
     let tab = &core.session.squad(sid).unwrap().tabs[ti];
@@ -439,8 +439,8 @@ fn every_viewer_death_parks_its_portal_on_no_signal() {
     assert!(
         notices
             .iter()
-            .any(|t| t.contains("portal 1") && t.contains("no signal") && t.contains("deadbee2")),
-        "the notice names the portal and the channel that ended: {notices:?}"
+            .any(|t| t.contains("portal 1") && t.contains("no signal") && t.contains("target-b")),
+        "the notice names the portal and the row that ended: {notices:?}"
     );
 }
 
@@ -1733,6 +1733,7 @@ async fn portal_new_split_on_a_claude_row_survives_the_reentry_replay() {
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 
@@ -1770,6 +1771,87 @@ async fn portal_new_split_on_a_claude_row_survives_the_reentry_replay() {
         "the replayed split lands beside the shell"
     );
     core.reap_pane(seat); // don't leak the stand-in child
+}
+
+#[tokio::test]
+async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
+    // A claude row whose session uuid a live process argv names is only
+    // ever attached: the reach lands in the same command, with no
+    // re-entry plan requested and no staged verdict consumed. The registry
+    // pid is stale after a resume, so the argv is the witness.
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, _rx) = thread_core();
+    let uuid = "5d5a0000-1111-2222-3333-444455556666";
+    let witness = crate::pty::ChildGuard::spawn(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("sleep 25; : # {uuid}")),
+    );
+    let pid_before = witness.id();
+    let mut row = claude_row("claude-row", "deadbee1");
+    row.claude_session_uuid = Some(uuid.into());
+    core.agents = vec![row];
+
+    assert!(
+        core.live_attach_argv("deadbee1").is_some(),
+        "the live argv witnesses the row"
+    );
+    core.command(client_id, thread_reach_cmd("deadbee1"));
+
+    let seat = core
+        .portals
+        .get(&0)
+        .expect("the reach lands without a plan")
+        .seat;
+    assert!(core.reentry_verdict.is_none(), "no plan was staged or used");
+    assert_eq!(witness.id(), pid_before, "the session process is untouched");
+    core.reap_pane(seat);
+}
+
+#[test]
+fn portal_channel_label_names_the_row_never_a_short_id() {
+    // A parked seat keyed by an attach id wears the row's registry name,
+    // exited rows included; a key no single row answers is its own label.
+    let mut core = empty_core();
+    let mut row = bg_row("t-x-6746-p2-glm", "/tmp/seen", Some("deadbee1"));
+    row.exited = true;
+    core.agents = vec![row];
+    assert_eq!(core.portal_channel_label("deadbee1"), "t-x-6746-p2-glm");
+    assert_eq!(
+        core.portal_channel_label("t-x-6746-p2-glm"),
+        "t-x-6746-p2-glm"
+    );
+    assert_eq!(core.portal_channel_label("cafef00d"), "cafef00d");
+}
+
+#[test]
+fn portal_reached_row_and_slow_open_notice() {
+    // Every landed open journals its mechanism and the two stage times; an
+    // attach over the 1,000 ms budget says so, and a relaunch is not an
+    // attach so it never claims the budget.
+    let row = crate::server::portal_journal::portal_reached_row(
+        "s",
+        2,
+        "deadbee1",
+        "attach-plan",
+        900,
+        250,
+    );
+    assert_eq!(row["type"], "portal_reached");
+    assert_eq!(row["data"]["mechanism"], "attach-plan");
+    assert_eq!(row["data"]["plan_ms"], 900);
+    assert_eq!(row["data"]["spawn_ms"], 250);
+    let slow = crate::server::portal_journal::slow_open_notice(2, "w", "attach-plan", 900, 250);
+    assert_eq!(
+        slow.as_deref(),
+        Some("portal 2: w took 1150 ms to open (plan 900, spawn 250)")
+    );
+    assert!(
+        crate::server::portal_journal::slow_open_notice(2, "w", "attach-direct", 0, 40).is_none()
+    );
+    assert!(
+        crate::server::portal_journal::slow_open_notice(2, "w", "relaunch", 5000, 40).is_none()
+    );
 }
 
 // ---- (x-d545) the remembered tab outlives its viewer ----
@@ -2020,6 +2102,7 @@ async fn portal_ctl_claude_row_replies_the_landing_not_the_fallback() {
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 
@@ -2119,6 +2202,7 @@ async fn portal_ctl_reaches_a_paneless_row_whose_key_also_matches_a_hosted_row()
             argv: vec!["/bin/cat".into()],
             env: vec![],
             config_dir: None,
+            plan_ms: 0,
         }),
     });
 
@@ -2492,6 +2576,7 @@ fn held_fill_refusal_rows() {
     // incarnation at capture. A different full id under the same key is a
     // different thread wearing a familiar label: the fill refuses, names
     // both ids, and the seat stays held.
+    set_attach_program(&["/bin/cat"]);
     let _s = hold_fixture("portal-guard");
     let mut core = empty_core();
     core.shells = vec!["/bin/cat".into()];
@@ -2510,10 +2595,10 @@ fn held_fill_refusal_rows() {
 
     let notices = drain_notices(&mut rx);
     assert!(
-        notices
-            .iter()
-            .any(|t| t.contains("sid-recorded") && t.contains("sid-arrived")),
-        "the refusal names both ids: {notices:?}"
+        notices.iter().any(|t| t.contains("sid-recorded")
+            && t.contains("sid-arrived")
+            && t.contains("retune this portal")),
+        "the refusal names both ids and the retune action: {notices:?}"
     );
     assert_eq!(core.panes.len(), panes_before, "nothing spawned");
     assert_eq!(
@@ -2524,6 +2609,49 @@ fn held_fill_refusal_rows() {
     assert!(
         core.portal_session_guards.contains_key(&1),
         "the guard stays armed"
+    );
+
+    // A fork of the recorded session is a different thread: it refuses even
+    // though the row names the recorded id in its lineage.
+    core.agents[0].predecessor_session_ids = vec!["sid-recorded".to_string()];
+    core.agents[0].forked_from_session_id = Some("sid-recorded".to_string());
+    core.command(1, Command::FocusPane(seat));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("fill refused")),
+        "a fork refuses"
+    );
+    assert!(
+        core.portal_session_guards.contains_key(&1),
+        "the fork keeps the guard"
+    );
+
+    // AC7: the row's lineage names the recorded id, so the same worker
+    // resumed: the fill follows the key, says so once, and drops the guard.
+    core.agents[0].forked_from_session_id = None;
+    core.command(1, Command::FocusPane(seat));
+    let notices = drain_notices(&mut rx);
+    assert!(
+        notices
+            .iter()
+            .any(|t| t.contains("target-a resumed as") && t.contains("following")),
+        "the fill follows the resumed row: {notices:?}"
+    );
+    assert!(
+        !core.portal_session_guards.contains_key(&1),
+        "the followed guard is gone"
+    );
+
+    // AC9: a guard dies when its portal index changes hands, so a later
+    // park of a different row never refuses with the old recorded id.
+    core.portal_session_guards
+        .insert(1, "sid-stale".to_string());
+    let gone = core.journal_portal_take(1, "retune");
+    assert!(gone.is_some(), "fixture: portal 1 was open");
+    assert!(
+        !core.portal_session_guards.contains_key(&1),
+        "a retune drops the old row's guard"
     );
 
     // AC3-ERR/EDGE: a held seat whose row is gone keeps the shell and
@@ -2819,7 +2947,7 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     core.close_viewer_died(a_seat, "child exited");
     let kept = collect_until_portal_closed(&mut rx, "portal 0").expect("the kept notice arrived");
     assert!(
-        kept.contains("deadbee1") && kept.contains("no signal"),
+        kept.contains("target-a") && kept.contains("no signal"),
         "the death notice reads as no signal, not lost: {kept:?}"
     );
 }

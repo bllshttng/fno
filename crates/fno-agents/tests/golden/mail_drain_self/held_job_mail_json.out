@@ -1,0 +1,1 @@
+[{"id": "r1", "from": "lead", "to": "a1b2c3d4", "kind": "send", "ts": "2026-10-12T10:01:00Z", "body": "regular mail body"}, {"id": "j1", "from": "lead", "to": "node:goldenjob", "kind": "send", "ts": "2026-10-12T10:00:00Z", "body": "job mail body", "job": "node:goldenjob"}]
