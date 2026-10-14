@@ -1279,4 +1279,22 @@ mod process_table_tests {
         );
         child.wait().unwrap();
     }
+
+    #[test]
+    fn live_argv_contains_finds_a_running_argv_and_nothing_else() {
+        let needle = "census-witness-needle-4f1c";
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("sleep 20; : # {needle}"))
+            .spawn()
+            .unwrap();
+        let found = live_argv_contains(needle);
+        let absent = live_argv_contains("census-witness-never-run-9b2e");
+        let empty = live_argv_contains("");
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(found, "a live argv naming the needle is a witness");
+        assert!(!absent, "a needle no process names is no witness");
+        assert!(!empty, "an empty needle names nothing");
+    }
 }
