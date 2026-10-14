@@ -909,7 +909,9 @@ fn candidate_projects(view: &View) -> Vec<String> {
         projects.push(own);
     }
     for s in &view.layout.squads {
-        if !projects.contains(&s.canonical_cwd) {
+        // A workspace with no folder offers no project: its empty path painted
+        // a blank row and, picked, launched into the server's own cwd.
+        if !s.canonical_cwd.is_empty() && !projects.contains(&s.canonical_cwd) {
             projects.push(s.canonical_cwd.clone());
         }
     }
