@@ -1051,6 +1051,185 @@ mod tests {
             "a distinct event is retained on an integrity conflict"
         );
         clean(&root);
+        // Branch: a zero-length straggler beside a published store parks
+        // without a schema write and reads Parked.
+        let root = tmp_root("ow-straggler-empty");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        let published = root.join("db").join("events.db");
+        let mut c = rusqlite::Connection::open(&published).unwrap();
+        crate::event_store::ensure_schema(&mut c, &published).unwrap();
+        c.execute(
+            "INSERT INTO events (seq, event_id, row_hash, ts_ms, type, source, line) VALUES (1, 'e-1', x'01', 0, 'x', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        std::fs::write(root.join("events.db"), b"").unwrap();
+        let receipt = migrate(&root, true);
+        let parked: Vec<_> = receipt
+            .entries
+            .iter()
+            .filter(|e| e.legacy.contains("straggler"))
+            .collect();
+        assert_eq!(parked.len(), 1, "{parked:?}");
+        assert!(matches!(parked[0].status, Status::Parked), "{parked:?}");
+        assert!(
+            !root.join("events.db").exists(),
+            "the empty straggler left the root"
+        );
+        let parked_copy = std::fs::read_dir(root.join("backups").join("state-root-migration"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path().join("events.db"))
+            .find(|p| p.exists())
+            .expect("the empty straggler parked in a stamp folder");
+        assert_eq!(
+            std::fs::metadata(&parked_copy).unwrap().len(),
+            0,
+            "the parked copy is still zero length"
+        );
+        clean(&root);
+        // Branch: a zero-length straggler with a live -wal is not parked
+        // blind. The guard routes it down the import path, so the entry
+        // reads Merged (the import's park), never the blind Parked. Whether
+        // the WAL's frames replay is the import's contract, pinned by the
+        // ow-straggler-order branch; the verdict here is the routing.
+        let root = tmp_root("ow-straggler-wal");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        let published = root.join("db").join("events.db");
+        let mut c = rusqlite::Connection::open(&published).unwrap();
+        crate::event_store::ensure_schema(&mut c, &published).unwrap();
+        drop(c);
+        let full = root.join("events-full.db");
+        let mut conn = rusqlite::Connection::open(&full).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=0;",
+        )
+        .unwrap();
+        crate::event_store::ensure_schema(&mut conn, &full).unwrap();
+        conn.execute(
+            "INSERT INTO events (seq, event_id, row_hash, ts_ms, type, source, line) VALUES (1, 'e-9', x'09', 0, 'x', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        std::fs::copy(root.join("events-full.db-wal"), root.join("events.db-wal")).unwrap();
+        drop(conn);
+        std::fs::write(root.join("events.db"), b"").unwrap();
+        let receipt = migrate(&root, true);
+        let wal_row = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy.contains("straggler"))
+            .expect("the straggler row reads");
+        assert!(
+            matches!(wal_row.status, Status::Merged),
+            "a -wal-bearing straggler routes through the import, not the blind park: {wal_row:?}"
+        );
+        assert!(
+            !root.join("events.db").exists(),
+            "the import path left the root clean"
+        );
+        clean(&root);
+        // Branch: a published store whose columns came out of ALTER in
+        // another order still imports: the compare is set-wise now.
+        let root = tmp_root("ow-straggler-order");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        let published = root.join("db").join("events.db");
+        let c = rusqlite::Connection::open(&published).unwrap();
+        c.execute_batch(
+            "CREATE TABLE events (\
+                 seq INTEGER PRIMARY KEY, \
+                 event_id TEXT UNIQUE NOT NULL, \
+                 row_hash BLOB UNIQUE NOT NULL, \
+                 ts_ms INTEGER NOT NULL, \
+                 type TEXT NOT NULL, \
+                 source TEXT NOT NULL, \
+                 scope TEXT, \
+                 retention_class TEXT NOT NULL DEFAULT 'durable', \
+                 session_id TEXT, \
+                 node_id TEXT, \
+                 pr_number INTEGER, \
+                 head_sha TEXT, \
+                 repo TEXT, \
+                 reject_reason TEXT, \
+                 line TEXT NOT NULL, \
+                 caused_by TEXT);",
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO events (seq, event_id, row_hash, ts_ms, type, source, line) VALUES (1, 'dst-1', x'01', 0, 'x', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        let straggler = root.join("events.db");
+        let mut c = rusqlite::Connection::open(&straggler).unwrap();
+        crate::event_store::ensure_schema(&mut c, &straggler).unwrap();
+        c.execute(
+            "INSERT INTO events (seq, event_id, row_hash, ts_ms, type, source, line) VALUES (1, 'src-1', x'02', 0, 'x', 't', '{}')",
+            [],
+        )
+        .unwrap();
+        drop(c);
+        let receipt = migrate(&root, true);
+        let merged: Vec<_> = receipt
+            .entries
+            .iter()
+            .filter(|e| e.legacy.contains("straggler"))
+            .collect();
+        assert_eq!(merged.len(), 1, "{merged:?}");
+        assert!(matches!(merged[0].status, Status::Merged), "{merged:?}");
+        let c = rusqlite::Connection::open(&published).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "the straggler row landed beside the published one");
+        drop(c);
+        assert!(!straggler.exists(), "the imported straggler parked");
+        clean(&root);
+        // Branch: a zero-length legacy beside a populated published graph
+        // parks as .empty-legacy and reads Parked, not refused.
+        let root = tmp_root("ow-empty-legacy");
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        let new_db = root.join("db").join("graph.db");
+        let c = rusqlite::Connection::open(&new_db).unwrap();
+        c.execute_batch("CREATE TABLE t (a); INSERT INTO t VALUES (1);")
+            .unwrap();
+        drop(c);
+        let legacy = root.join("graph.db");
+        std::fs::write(&legacy, b"").unwrap();
+        std::fs::write(root.join("graph.db-shm"), b"").unwrap();
+        let row = parse_table("graph.db\tdb/graph.db\tsqlite\tdaemon\n")
+            .unwrap()
+            .remove(0);
+        let status =
+            crate::state_layout_sqlite::migrate_sqlite_row(&root, &row, true, "ow-empty-legacy");
+        assert!(matches!(status, Status::Parked), "{status:?}");
+        let c = rusqlite::Connection::open(&new_db).unwrap();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "the published rows are untouched");
+        drop(c);
+        assert!(!legacy.exists(), "the empty legacy left the root");
+        assert!(
+            root.join("backups")
+                .join("state-root-migration")
+                .join("ow-empty-legacy")
+                .join("graph.db.empty-legacy")
+                .exists(),
+            "the empty legacy parked under its suffix"
+        );
+        assert!(
+            root.join("backups")
+                .join("state-root-migration")
+                .join("ow-empty-legacy")
+                .join("graph.db.empty-legacy-shm")
+                .exists(),
+            "the zero-length sidecar parked beside the main file"
+        );
+        clean(&root);
     }
 
     fn set_mtime(p: &Path, t: std::time::SystemTime) {
