@@ -673,7 +673,10 @@ def _is_bounded_codex_code_spawn(args: Sequence[str]) -> bool:
         longs=("--yolo", "--dangerously-bypass-approvals-and-sandbox"),
     ):
         return False
-    if _has_flag(args, longs=("--once", "--headless")):
+    headless_spawn = _has_flag(args, longs=("--once",)) or (
+        (_spawn_flag_value(args, "--substrate") or "").strip().lower() == "headless"
+    )
+    if headless_spawn:
         # The codex headless one-shot lane hardcodes its own bypass, so no
         # bounded sandbox stands between the worker and .git; spawn_defaults
         # skips permission-mode mapping on this lane for the same reason.
@@ -966,11 +969,12 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     for a in it:
         if a == "--argv" or a == "--":
             break
-        if a in ("--once", "-o", "--headless", "-p"):
-            # The headless spellings (--once/-o and --headless/-p): a one-shot,
-            # never a pane. Must be honored here or a headless spawn would route
-            # to the pane back half. `-H` (harness) and `-P` (vendor) are NOT
-            # here: they are value flags that do not pick the lane.
+        if a in ("--once", "-o"):
+            # The headless spellings (--once/-o; `--substrate headless` is the
+            # long form): a one-shot, never a pane. Must be honored here or a
+            # headless spawn would route to the pane back half. `-H` (harness)
+            # and `-P` (vendor) are NOT here: they are value flags that do not
+            # pick the lane.
             return False
         if a == "--substrate":
             substrate = next(it, "")
@@ -1001,7 +1005,7 @@ def _is_keeper_thread_spawn(verb: str, args: Sequence[str]) -> bool:
     it = iter(_args_before_argv(args))
     substrate = "pane"
     for a in it:
-        if a in ("--once", "-o", "--headless", "-p"):
+        if a in ("--once", "-o"):
             return False
         if a == "--substrate":
             substrate = next(it, "")

@@ -1518,9 +1518,10 @@ fn substrate_flag_rows() {
     let (_m, params) = build_request("spawn", &args).unwrap();
     assert_eq!(params["substrate"], "thread");
 
-    // x-c772: --headless is the front for --substrate headless (identical to
-    // --once), for every provider. `-H` was reassigned to --harness (x-6de8).
-    for flag in ["--headless", "--once", "-o"] {
+    // x-c772: the one-shot spellings alias --substrate headless for every
+    // provider. `-H` was reassigned to --harness (x-6de8). `--headless`/`-p`
+    // retired with change 6; `--substrate headless` is the spelling.
+    for flag in ["--once", "-o"] {
         for provider in ["claude", "codex", "gemini", "agy"] {
             let args = vec![
                 "wk".to_string(),
@@ -1538,31 +1539,17 @@ fn substrate_flag_rows() {
         }
     }
 
-    // An explicit --substrate is not clobbered by a trailing --headless.
+    // An explicit --substrate is not clobbered by a trailing one-shot alias.
     let args = vec![
         "wk".to_string(),
         "--harness".to_string(),
         "claude".to_string(),
         "--substrate".to_string(),
         "thread".to_string(),
-        "--headless".to_string(),
+        "--once".to_string(),
     ];
     let (_m, params) = build_request("spawn", &args).unwrap();
     assert_eq!(params["substrate"], "thread");
-
-    // x-6de8: -p mirrors the harnesses' own one-shot short. It takes NO value,
-    // so a stray `-p codex` must leave `codex` a positional rather than
-    // silently selecting a harness.
-    let args = vec!["wk".to_string(), "-p".to_string()];
-    let (_m, params) = build_request("spawn", &args).unwrap();
-    assert_eq!(
-        params.get("substrate").and_then(|v| v.as_str()),
-        Some("headless")
-    );
-    assert!(
-        params.get("provider").is_none(),
-        "-p must not set a harness"
-    );
 
     // Off `spawn`, -p is no longer the provider short (the harness axis is
     // --harness/-H); it is a loud tombstone, never silently bound to a harness.

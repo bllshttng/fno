@@ -469,21 +469,35 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
     let mut lanes = serde_json::Map::new();
     for (name, band) in names.iter().zip(&worker_bands) {
         let lane = json!({"difficulty":band,"plan_path":plan,"priority":priority});
-        let (mut h, mut m, mut route, mut account, mut why) = if band.is_empty() {
-            (None, None, None, None, None)
+        let mut pick = if band.is_empty() {
+            super::dispatch_resolve::LanePick {
+                harness: None,
+                model: None,
+                route: None,
+                account: None,
+                lane: None,
+                decline: None,
+            }
         } else {
             super::dispatch_resolve::grid_lane_for(Some(&lane), model, None, None)
         };
-        if h.as_deref().is_some_and(|h| h != "claude") {
-            why = Some(format!(
+        if pick.harness.as_deref().is_some_and(|h| h != "claude") {
+            pick.decline = Some(format!(
                 "grid=harness-not-claude ({})",
-                h.as_deref().unwrap_or("")
+                pick.harness.as_deref().unwrap_or("")
             ));
-            h = None;
-            m = None;
-            route = None;
-            account = None;
+            pick.harness = None;
+            pick.model = None;
+            pick.route = None;
+            pick.account = None;
+            pick.lane = None;
         }
+        let h = pick.harness.take();
+        let m = pick.model.take();
+        let route = pick.route.take();
+        let account = pick.account.take();
+        let why = pick.decline.take();
+        let lane_name = pick.lane.take();
         let mut argv = [
             "agents",
             "spawn",
@@ -498,9 +512,15 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
         ]
         .map(str::to_string)
         .to_vec();
+        // The lane pin spelling: a named lane resolves its own axes at the
+        // spawn door, so the model and route pair collapse into the name.
+        let lane_route = lane_name.as_deref().or(route.as_deref());
         for (flag, value) in [
-            ("--model", m.as_deref().or(model)),
-            ("--route", route.as_deref()),
+            (
+                "--model",
+                m.as_deref().or(model).filter(|_| lane_name.is_none()),
+            ),
+            ("--route", lane_route),
             ("--account", account.as_deref()),
         ] {
             if let Some(v) = value {

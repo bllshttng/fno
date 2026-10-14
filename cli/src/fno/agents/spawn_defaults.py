@@ -139,9 +139,11 @@ def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]
     return list(args), None
 
 # Tokens that pin the substrate explicitly (a positional substrate word conflicts
-# with any of these -> exit 2). `--headless`/`-p` and `-o/--once` mean headless;
-# `-H` selects the harness and `-P` the vendor, so both are value flags here.
-_EXPLICIT_SUBSTRATE_BOOLS = ("--headless", "-p", "-o", "--once")
+# with any of these -> exit 2). `-o/--once` means headless; `--substrate
+# headless` is the long form. `-H` selects the harness and `-P` the vendor, so
+# both are value flags here. `--headless`/`-p` retired with change 6 (--print
+# took the flag budget; `--substrate headless` is the spelling).
+_EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
 #: A claude thread spawned with no message starts with no prompt: claude's job
 #: state reads `needs: send a prompt to start` and the row holds a worker slot
