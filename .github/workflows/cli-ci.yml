@@ -31,6 +31,8 @@ on:
       # The cargo tests include fixtures from this tree at compile time.
       # A schema-only change must schedule the cargo test + schema parity job.
       - schemas/**
+      # The cargo tests read the shipped Claude Code theme files.
+      - themes/**
       # The cargo job diffs this generated document against its source.
       - docs/harnesses/capability-matrix.md
       # The cargo job diffs this generated page against its renderer.

@@ -14,7 +14,9 @@
 //! text colors on those cells.
 //!
 //! `terminal` keeps every pane cell byte-identical (it paints nothing the
-//! emulator does not), so the caller skips the remap under an `inherit` theme.
+//! emulator does not), so the native client skips the remap under an `inherit`
+//! theme. The browser viewer remaps every forwarded frame: it paints raw cell
+//! colors and has no mux theme to ask.
 
 use crate::proto::{cell_flags, Cell, Color};
 
@@ -101,12 +103,12 @@ mod tests {
     /// color edited in one place alone leaves the band unreadable.
     #[test]
     fn the_table_matches_the_shipped_theme_files() {
-        let themes = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         for (file, band) in [
-            ("footnote-paper.json", &BANDS[0]),
-            ("footnote-superscript.json", &BANDS[1]),
+            ("../../themes/footnote-paper.json", &BANDS[0]),
+            ("../../themes/footnote-superscript.json", &BANDS[1]),
         ] {
-            let text = std::fs::read_to_string(themes.join(file)).expect("shipped theme file");
+            let text = std::fs::read_to_string(root.join(file)).expect("shipped theme file");
             let json: serde_json::Value = serde_json::from_str(&text).expect("valid json");
             let hex = |key: &str| {
                 let v = json["overrides"][key].as_str().expect("band key");
@@ -124,25 +126,13 @@ mod tests {
 
     #[test]
     fn cells_outside_the_band_are_untouched() {
-        let code = cell(
-            Color::Rgb(0x14, 0x14, 0x14),
-            Color::Rgb(0xf0, 0xf0, 0xf0),
-            0,
-        );
-        let diff = cell(
-            Color::Rgb(0xe8, 0xe8, 0xe8),
-            Color::Rgb(0x22, 0x44, 0x22),
-            0,
-        );
+        let rgb = |v: u8| Color::Rgb(v, v, v);
+        let code = cell(rgb(0x14), rgb(0xf0), 0);
         let plain = cell(Color::Default, Color::Default, 0);
         let indexed = cell(Color::Indexed(7), Color::Indexed(0), 0);
         // INVERSE swaps the pair at paint time: the band color is the text.
-        let inverse = cell(
-            Color::Rgb(0xe8, 0xe8, 0xe8),
-            Color::Rgb(0x37, 0x37, 0x37),
-            cell_flags::INVERSE,
-        );
-        for original in [code, diff, plain, indexed, inverse] {
+        let inverse = cell(rgb(0xe8), rgb(0x37), cell_flags::INVERSE);
+        for original in [code, plain, indexed, inverse] {
             let mut c = original;
             remap(&mut c);
             assert_eq!(c, original);

@@ -924,12 +924,15 @@ async fn read_stream(
 
 /// Serialize one `ServerMsg` to its wire JSON, update the replay snapshot, and
 /// broadcast it. A `Frame` failing `geometry_ok` at this trust boundary is
-/// dropped (AC5-FR): the previous good frame stays drawn.
-fn forward(msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<Snapshot>>) {
-    if let ServerMsg::Frame { frame, .. } = &msg {
+/// dropped (AC5-FR): the previous good frame stays drawn. A good frame gets
+/// the same user-message band text fix the native client applies, because the
+/// browser paints the raw cell colors.
+fn forward(mut msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<Snapshot>>) {
+    if let ServerMsg::Frame { frame, .. } = &mut msg {
         if !frame.geometry_ok() {
             return;
         }
+        frame.cells.iter_mut().for_each(crate::band_remap::remap);
     }
     let json = match serde_json::to_string(&msg) {
         Ok(j) => j,
@@ -2984,6 +2987,28 @@ console.log("recent searches: 12 cases ok");
             },
             &tx,
             snap,
+        );
+    }
+
+    #[test]
+    fn forward_repaints_band_text_for_the_browser() {
+        let (tx, mut rx) = broadcast::channel::<String>(16);
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let mut frame = tiny_frame();
+        frame.cells[0].bg = proto::Color::Rgb(0xff, 0xff, 0xff);
+        frame.cells[0].fg = proto::Color::Rgb(0xe8, 0xe8, 0xe8);
+        forward(ServerMsg::Frame { pane_id: 1, frame }, &tx, &snap);
+        let fg_of = |json: &str| match serde_json::from_str::<ServerMsg>(json) {
+            Ok(ServerMsg::Frame { frame, .. }) => frame.cells[0].fg,
+            other => panic!("a frame was expected: {other:?}"),
+        };
+        let want = proto::Color::Rgb(0x14, 0x14, 0x14);
+        assert_eq!(fg_of(&rx.try_recv().unwrap()), want);
+        let stored = snap.lock().unwrap().frames[&1].1.clone();
+        assert_eq!(
+            fg_of(&stored),
+            want,
+            "the replay snapshot holds the repaint"
         );
     }
 
