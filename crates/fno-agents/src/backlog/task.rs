@@ -327,7 +327,7 @@ fn run_task_update(tail: &[String]) -> i32 {
     };
     let (node_id, plan_path) = task_plan_or_exit(node);
     let ids = task_ids_or_exit(&plan_path);
-    if !ids.iter().any(|i| i.as_str() == task_id) {
+    if !ids.iter().any(|i| i.as_str() == *task_id) {
         eprintln!(
             "task '{task_id}' not in plan {}; plan tasks: {}",
             plan_path.display(),
@@ -459,7 +459,9 @@ fn run_task_update(tail: &[String]) -> i32 {
                 };
                 for row in rows.iter_mut() {
                     if row.get("id").and_then(Value::as_str) == Some(task_id) {
-                        apply(row)?;
+                        // The apply contract speaks String refusals; the store
+                        // closure speaks StoreError. Corrupt carries the text.
+                        apply(row).map_err(crate::graph_store::StoreError::Corrupt)?;
                         found.push(row.clone());
                         break;
                     }
