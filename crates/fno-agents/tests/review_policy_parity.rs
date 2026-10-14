@@ -381,13 +381,13 @@ fn cases(now: f64) -> Vec<Case> {
     });
     v.push(Case {
         label: "cap-gemini-record",
-        files: cap_files(other_record_toml("gemini"), "{}"),
+        files: cap_files(other_record_toml("gemini"), "{}".to_string()),
         markers: &["CLAUDE_CODE_SESSION_ID"],
         kind: assess(Some("L"), vec!["auth".to_string()], None, false),
     });
     v.push(Case {
         label: "cap-opencode-record-ignored",
-        files: cap_files(other_record_toml("opencode"), "{}"),
+        files: cap_files(other_record_toml("opencode"), "{}".to_string()),
         markers: &["CLAUDE_CODE_SESSION_ID"],
         kind: assess(Some("L"), vec!["auth".to_string()], None, false),
     });
