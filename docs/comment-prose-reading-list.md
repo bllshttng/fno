@@ -453,7 +453,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.18x | 26 | 22 | `cli/src/fno/backlog/advance.py:1287` | `_ensure_lane_worktree` |
 | 1.18x | 13 | 11 | `cli/src/fno/config_io.py:30` | `_deep_merge` |
 | 1.18x | 13 | 11 | `cli/src/fno/paths.py:721` | `handoffs_dir` |
-| 1.18x | 13 | 11 | `cli/src/fno/relay/daemon.py:210` | `_tail_after_cursor` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/providers/staging.py:44` | `_symlink_path` |
 | 1.17x | 7 | 6 | `cli/src/fno/adapters/test_hermes.py:112` | `test_spawn_worker_empty_string_session_var_still_in_session` |
 | 1.17x | 7 | 6 | `cli/src/fno/agents/discover.py:219` | `_codex_started_ms` |
@@ -534,7 +533,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.09x | 12 | 11 | `cli/src/fno/mail/envelope.py:67` | `wrap_fno_mail` |
 | 1.09x | 12 | 11 | `cli/src/fno/post_merge_route.py:37` | `_live_codex_registry_entry` |
 | 1.09x | 12 | 11 | `cli/src/fno/provenance/spawn_think.py:186` | `think_spawn_enabled` |
-| 1.09x | 12 | 11 | `cli/src/fno/relay/daemon.py:409` | `_main` |
 | 1.09x | 12 | 11 | `cli/src/fno/target_cli.py:2258` | `_holder_is_ours` |
 | 1.08x | 14 | 13 | `cli/src/fno/agents/model_routing.py:635` | `resolve_explicit_route` |
 | 1.08x | 13 | 12 | `cli/src/fno/agents/self_stamp.py:161` | `resolve_own_transcript` |
