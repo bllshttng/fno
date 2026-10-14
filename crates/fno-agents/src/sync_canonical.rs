@@ -1714,15 +1714,10 @@ mod tests {
             &CFG_BODY.replace("'echo hi'", "'git pull && fno update && fno restart'"),
         );
         let ran: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-        let seen = Rc::clone(&ran);
-        let shell: ShellRun = Rc::new(move |c, _d| {
+        let (seen, ok) = (Rc::clone(&ran), ok_shell());
+        let shell: ShellRun = Rc::new(move |c, d| {
             seen.borrow_mut().push(c.to_string());
-            ShellOutcome {
-                code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                timed_out: false,
-            }
+            ok(c, d)
         });
         let build_at = |build: fn() -> Build, mins: i64| {
             let mut deps = sync_deps(
