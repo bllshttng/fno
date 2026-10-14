@@ -47,8 +47,9 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
 /// `(invocation, is_self_cert, per_harness)`. The flag mirrors the Python
 /// descriptor's `asserts` field: a surface that names `declare` without saying
 /// it asserts nothing invites an operator to clear the gate with no review
-/// behind it.
-pub(super) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
+/// behind it. `pub(crate)`: the review-capability renderer reads the same
+/// row for the `code-review` base spelling.
+pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
     REVIEWER_INVOCATIONS
         .iter()
         .find(|(n, _, _, _)| *n == name)

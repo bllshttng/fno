@@ -2,52 +2,39 @@
 
 use super::*;
 
-/// The sized self-review invocation for this worker, via `fno do target
-/// review-invocation`. The single construction site stays Python
-/// (`self_review_invocation` + `diff_review_level`); Rust is a dumb pipe for its
-/// stdout, so the invocation a held worker is told to run cannot drift from
-/// the builder the parity and single-source gates police. `--harness` is
-/// passed from the SAME `resolve_harness` the gate uses, so the render names
-/// the verb for the harness that will actually run it.
+/// The sized self-review invocation for this worker, rendered IN PROCESS by
+/// the native `review_capability` module - the same builder the parity
+/// goldens freeze and the single-source gate polices, so the invocation a
+/// held worker is told to run cannot drift from it. `--harness` rides from
+/// the SAME `resolve_harness` the gate uses, so the render names the verb
+/// for the harness that will actually run it.
 ///
-/// Fail-open on every error path (no fno, non-zero exit, empty or multi-line
-/// stdout, timeout): the hint is advisory text appended to refusal reasons,
-/// and a missing hint must never change a gate verdict - callers fall back to
-/// the levelless "run the review verb at HEAD" line. `fno_bin` resolved by the
-/// caller (from `FNO_LOOPCHECK_FNO_BIN`, default `fno`) so this is hermetically
-/// testable with a stub script, same as `evaluate_plan_fidelity`.
-pub(super) fn sized_self_review_hint(
-    fno_bin: &str,
-    cwd: &Path,
-    harness: Option<&str>,
-) -> Option<String> {
-    let mut args: Vec<&str> = vec!["do", "target", "review-invocation"];
-    if let Some(h) = harness {
-        args.push("--harness");
-        args.push(h);
-    }
-    match run_bounded(
-        std::ffi::OsStr::new(fno_bin),
-        &args,
-        cwd,
-        std::time::Duration::from_secs(10),
-    ) {
-        BoundedRun::Completed(out) => {
-            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            // One sane line only: a wrapper's chatter or an error page must
-            // never end up embedded in a held reason as if it were an
-            // invocation. Empty means the render itself gave up. An unsized
-            // render (a repo whose default branch is neither main nor master)
-            // returns the `<level>` placeholder form - a non-runnable string
-            // in a copy-me slot, so it reads as no hint and the levelless
-            // line stands.
-            if s.is_empty() || s.contains('\n') || s.len() > 80 || s.contains("<level>") {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        _ => None,
+/// Fail-open on every error path: the hint is advisory text appended to
+/// refusal reasons, and a missing hint must never change a gate verdict -
+/// callers fall back to the levelless "run the review verb at HEAD" line.
+pub(super) fn sized_self_review_hint(cwd: &Path, harness: Option<&str>) -> Option<String> {
+    let (rendered, _) = crate::review_capability::render_self_review_invocation(
+        harness,
+        Some(cwd),
+        None,
+        None,
+        None,
+        None,
+    );
+    let Ok(s) = rendered else {
+        return None;
+    };
+    let s = s.trim().to_string();
+    // One sane line only: a wrapper's chatter or an error page must never
+    // end up embedded in a held reason as if it were an invocation. Empty
+    // means the render itself gave up. An unsized render (a repo whose
+    // default branch is neither main nor master) returns the `<level>`
+    // placeholder form - a non-runnable string in a copy-me slot, so it
+    // reads as no hint and the levelless line stands.
+    if s.is_empty() || s.contains('\n') || s.len() > 80 || s.contains("<level>") {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -237,7 +224,6 @@ pub(super) fn build_block_reason(
             // diff-sized level. None keeps the placeholder form (fail-open,
             // same as every other hint consumer).
             let sized = sized_self_review_hint(
-                &super::loopcheck_fno_bin(),
                 &std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf()),
                 author_harness.as_deref(),
             );
