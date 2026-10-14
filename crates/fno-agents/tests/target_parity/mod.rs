@@ -941,8 +941,10 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
     assert_eq!(
         frozen.exit,
         Some(code),
-        "[{}] exit differs from golden",
-        case.label
+        "[{}] exit differs from golden\n--- run stderr ---\n{}\n--- run stdout ---\n{}",
+        case.label,
+        stderr,
+        stdout
     );
     assert_eq!(
         frozen.out, stdout,
