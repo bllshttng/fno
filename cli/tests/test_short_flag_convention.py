@@ -50,12 +50,14 @@ GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()
 #: Lowercase letters are per-command under the convention, so each pair is
 #: pinned to its HOME declaration site (file suffix); another command may
 #: legally reuse the letter for a different long (e.g. ``-b --body`` on
-#: ``inbox send`` vs ``-b --blocked`` on ``backlog pick``). The uppercase
-#: pair (``-I``) stays codebase-exclusive like the global register.
+#: ``inbox send``, while the native ``backlog pick`` arm keeps ``-b
+#: --blocked``). The uppercase pair (``-I``) stays codebase-exclusive like
+#: the global register.
 PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
     "-A": ("--all", ""),  # exclusivity enforced by the global-register tests
     "-I": ("--ideas", "graph/cli.py"),
-    "-b": ("--blocked", "graph/cli.py"),
+    # The -b --blocked row moved with the pick port: the native arm owns the
+    # surface now, and the wheel-side scan can no longer see a Rust flag decl.
     "-n": ("--tail", "agents/cli.py"),
     "-f": ("--follow", "agents/cli.py"),
     "-m": ("--note", "done/cli.py"),

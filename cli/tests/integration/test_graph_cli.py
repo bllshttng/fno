@@ -559,12 +559,12 @@ class _SnapshotFakeTracker:
 
 @pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_graph_reprioritize(tmp_graph):
-    """AC1-HP: fno graph reprioritize changes priority."""
+    """AC1-HP: fno backlog reprioritize changes priority (the native arm)."""
     r = _native_verb("add", "ToRepri")
     node_id = json.loads(r.output)["id"]
 
-    r = _invoke("backlog", "reprioritize", node_id, "p1")
-    assert r.exit_code == 0
+    r = _native_verb("reprioritize", node_id, "p1")
+    assert r.exit_code == 0, r.err
 
     data = json.loads(_native_get(node_id))
     assert data["priority"] == "p1"
