@@ -393,7 +393,7 @@ fn cases(now: f64) -> Vec<Case> {
     });
     v.push(Case {
         label: "cap-legacy-providers-block",
-        files: cap_files(legacy_record_toml(), "{}"),
+        files: cap_files(legacy_record_toml(), "{}".to_string()),
         markers: &["CLAUDE_CODE_SESSION_ID"],
         kind: assess(Some("L"), vec!["auth".to_string()], None, false),
     });
@@ -412,7 +412,7 @@ fn cases(now: f64) -> Vec<Case> {
     // Read failures.
     v.push(Case {
         label: "fail-invalid-record",
-        files: cap_files(bad_record_toml(), "{}"),
+        files: cap_files(bad_record_toml(), "{}".to_string()),
         markers: &["CLAUDE_CODE_SESSION_ID"],
         kind: assess(Some("L"), vec!["auth".to_string()], None, false),
     });
