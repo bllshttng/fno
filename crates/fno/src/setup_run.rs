@@ -68,11 +68,12 @@ pub enum Scope {
 }
 
 /// One proposed write: what a step would set if accepted. `key` empty
-/// means a command proposal - the exact command rides in `reason`.
-#[derive(Debug)]
+/// means a command proposal - the exact command rides in `reason`. Join
+/// rows carry profile keys, so `key` is owned text, not a table literal.
+#[derive(Debug, Clone)]
 pub struct Proposal {
     pub id: &'static str,
-    pub key: &'static str,
+    pub key: String,
     pub value: String,
     pub scope: &'static str,
     pub reason: String,
@@ -131,6 +132,18 @@ const CODES: &[(&str, &str)] = &[
         "no_source",
         "answer the wizard prompt or put the keys in a profile, then rerun `fno config setup run`",
     ),
+    (
+        "join_backup_failed",
+        "copy the global config file somewhere safe by hand, then rerun `fno config setup run --join <file>`",
+    ),
+    (
+        "join_restored",
+        "read the failing `fno config set` line above, fix it, rerun `fno config setup run --join <file>`",
+    ),
+    (
+        "join_pending",
+        "inspect the backup named in the message, restore the global config by hand if it is wrong, then remove the in-progress flag",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -171,7 +184,7 @@ fn row(list: &'static str, code: &'static str, message: String) -> Row {
 }
 
 /// One run's outcome entries. The JSON report carries exactly these
-/// thirteen fields, so an agent reads the same facts the human lines
+/// fourteen fields, so an agent reads the same facts the human lines
 /// print; `proposed`, `verified`, `rows` and `next_action` carry the
 /// dry-run contract.
 pub struct Report {
@@ -180,6 +193,7 @@ pub struct Report {
     needs_human: Vec<String>,
     paths: Vec<String>,
     restart_needed: bool,
+    undo: Option<String>,
     proposed: Vec<Proposal>,
     verified: Vec<String>,
     rows: Vec<Row>,
@@ -198,6 +212,7 @@ impl Default for Report {
             needs_human: Vec::new(),
             paths: Vec::new(),
             restart_needed: false,
+            undo: None,
             proposed: Vec::new(),
             verified: Vec::new(),
             rows: Vec::new(),
@@ -222,6 +237,7 @@ impl Report {
             "needs_human": self.needs_human,
             "paths": self.paths,
             "restart_needed": self.restart_needed,
+            "undo": self.undo,
             "proposed": self.proposed.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
             "verified": self.verified,
             "rows": self.rows.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
@@ -397,6 +413,13 @@ pub const STEPS: &[Step] = &[
         question: "Put ~/.cargo/bin on PATH?",
         effect: "add ~/.cargo/bin to PATH so the built binaries resolve; setup names the line, never edits the rc",
     },
+    Step {
+        id: "join",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Apply the exported profile to this machine's global config?",
+        effect: "backs up the global config, then applies the profile's portable keys",
+    },
 ];
 
 /// This verb's argv, claimed lexically before clap: exactly
@@ -414,9 +437,10 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// `--yes` / `--once` / `--scope` / `--only` / `--list` / `--json` /
-/// `--dry-run` / `--scan-repos` / `--scan-dirs`, hand parsed: the verb is
-/// claimed before clap, so the flags are ours. An unknown flag or value
-/// refuses with the usage line and exit 2.
+/// `--dry-run` / `--scan-repos` / `--scan-dirs` / `--export` / `--out` /
+/// `--join`, hand parsed: the verb is claimed before clap, so the flags
+/// are ours. An unknown flag or value refuses with the usage line and
+/// exit 2.
 pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
     let mut o = Opts::default();
     let mut i = 0;
@@ -437,6 +461,23 @@ pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
                     .ok_or("--scan-dirs needs a comma list of directories")?;
                 o.scan_dirs = v.split(',').map(|s| s.trim().to_string()).collect();
                 o.scan = true;
+            }
+            "--export" => o.export = true,
+            "--out" => {
+                i += 1;
+                let v = tail
+                    .get(i)
+                    .and_then(|a| a.to_str())
+                    .ok_or("--out needs a file path")?;
+                o.out = Some(v.to_string());
+            }
+            "--join" => {
+                i += 1;
+                let v = tail
+                    .get(i)
+                    .and_then(|a| a.to_str())
+                    .ok_or("--join needs a profile file or - for stdin")?;
+                o.join = Some(v.to_string());
             }
             "--scope" => {
                 i += 1;
@@ -525,10 +566,13 @@ pub struct Opts {
     dry_run: bool,
     scan: bool,
     scan_dirs: Vec<String>,
+    export: bool,
+    out: Option<String>,
+    join: Option<String>,
 }
 
 /// The argv tail `parse_opts` accepts, repeated for refusals.
-const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--scan-repos] [--scan-dirs <dir,...>]";
+const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--scan-repos] [--scan-dirs <dir,...>] [--export] [--out <file>] [--join <file or -]";
 
 /// Every non-usage refusal exit: the same code the Python CLI uses for a
 /// bad flag or value.
@@ -586,6 +630,19 @@ fn in_source_checkout(cwd: &Path) -> bool {
 /// unchanged. Global scope by default, `--local` for the project layer.
 /// Returns the config file written, so the report's paths stay absolute.
 fn config_set(exe: &Path, pairs: &[(&str, &str)], local: bool) -> Result<PathBuf, String> {
+    config_set_split(exe, pairs, local).map_err(|(message, _refused)| message)
+}
+
+/// [`config_set`] split by failure shape, which only the join step cares
+/// about: a refusal is the writer's validator saying no (non-zero exit,
+/// the file untouched, the remaining keys can still land), while a spawn
+/// or io failure may have half-landed, so the caller must restore from
+/// its backup. The bool is `true` exactly when the error is a refusal.
+fn config_set_split(
+    exe: &Path,
+    pairs: &[(&str, &str)],
+    local: bool,
+) -> Result<PathBuf, (String, bool)> {
     let mut argv: Vec<OsString> = vec![exe.to_path_buf().into(), "config".into(), "set".into()];
     for (key, value) in pairs {
         argv.push(format!("{key}={value}").into());
@@ -601,14 +658,16 @@ fn config_set(exe: &Path, pairs: &[(&str, &str)], local: bool) -> Result<PathBuf
         .stderr(std::process::Stdio::piped());
     let out = cmd
         .spawn()
-        .map_err(|e| format!("fno config set {keys}: {e}"))?
-        .wait_with_output()
-        .map_err(|e| format!("fno config set {keys}: {e}"))?;
+        .and_then(|mut c| c.wait_with_output())
+        .map_err(|e| (format!("fno config set {keys}: {e}"), false))?;
     if !out.status.success() {
         let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(format!(
-            "`fno config set {keys}` exited {}: {detail}",
-            out.status.code().unwrap_or(-1)
+        return Err((
+            format!(
+                "`fno config set {keys}` exited {}: {detail}",
+                out.status.code().unwrap_or(-1)
+            ),
+            true,
         ));
     }
     if local {
@@ -689,7 +748,7 @@ fn step_gh_auth(rep: &mut Report) {
 fn propose_harness_wiring() -> Proposal {
     Proposal {
         id: "harness-wiring",
-        key: "",
+        key: "".into(),
         value: String::new(),
         scope: "global",
         reason:
@@ -762,7 +821,7 @@ fn propose_guardrails(skips: &mut Vec<String>) -> Option<Proposal> {
     }
     Some(Proposal {
         id: "guardrails",
-        key: "guards.preset",
+        key: "guards.preset".into(),
         value: "standard".to_string(),
         scope: "global",
         reason: "the standard guard preset turns on the refusal gates a fresh machine wants"
@@ -779,7 +838,7 @@ fn step_guardrails(exe: &Path, rep: &mut Report) {
         rep.skipped.extend(skips);
         return;
     };
-    match config_set(exe, &[(p.key, &p.value)], false) {
+    match config_set(exe, &[(p.key.as_str(), p.value.as_str())], false) {
         Ok(path) => {
             rep.done
                 .push(format!("guardrails: {} = {}", p.key, p.value));
@@ -809,7 +868,7 @@ fn propose_backlog_prefix(root: &Path, skips: &mut Vec<String>) -> Option<Propos
     }
     Some(Proposal {
         id: "backlog-prefix",
-        key: "backlog.id_prefix",
+        key: "backlog.id_prefix".into(),
         value: "fn".into(),
         scope: "project",
         reason: "the fixed scheme: nodes mint as fn-<4 hex>; the width rides the same write".into(),
@@ -871,6 +930,101 @@ fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
             .push(row("needs_human", "config_set_refused", message.clone()));
         rep.needs_human.push(message);
     }
+}
+
+/// The join step: back up the global config, stamp the in-progress flag,
+/// then apply the profile's portable keys one `fno config set` call at a
+/// time, in diff order. A refused key is reported and the rest continue
+/// (a refusal means the validator rejected the write and the file is
+/// untouched); a failed call restores the backup and ends the run, and a
+/// failed restore keeps the flag so the next start heals. Success removes
+/// the flag, saves the profile, and stamps the report's one-line undo.
+fn step_join(
+    exe: &Path,
+    profile: &crate::setup_profile::Profile,
+    rows: &[crate::setup_profile::DiffRow],
+    rep: &mut Report,
+) {
+    let apply: Vec<&crate::setup_profile::DiffRow> = rows.iter().filter(|r| r.applies()).collect();
+    if apply.is_empty() {
+        rep.skipped
+            .push("join: nothing to apply; every key is present or machine-local".into());
+        crate::setup_profile::save_profile(&profile.text);
+        rep.paths
+            .push(crate::setup_profile::profile_path().display().to_string());
+        return;
+    }
+    let global = crate::config_defaults::global_config_path();
+    let backup = match crate::setup_profile::backup(&global) {
+        Ok(b) => b,
+        Err(e) => {
+            let message =
+                format!("join: the global config could not be backed up ({e}); nothing applied");
+            rep.rows
+                .push(row("needs_human", "join_backup_failed", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
+    if let Err(e) = crate::setup_profile::mark_in_progress() {
+        let message = format!(
+            "join: the backup is taken but the in-progress flag could not be written ({e}); nothing applied"
+        );
+        rep.rows
+            .push(row("needs_human", "join_backup_failed", message.clone()));
+        rep.needs_human.push(message);
+        return;
+    }
+    let mut applied = 0usize;
+    for r in &apply {
+        let value =
+            crate::setup_profile::toml_inline(r.apply.as_ref().expect("apply rows carry a value"));
+        match config_set_split(exe, &[(r.key.as_str(), value.as_str())], false) {
+            Ok(path) => {
+                applied += 1;
+                rep.done.push(format!("join: {} = {value}", r.key));
+                rep.paths.push(path.display().to_string());
+            }
+            Err((message, true)) => {
+                let message = format!("join: {message}");
+                rep.rows
+                    .push(row("needs_human", "config_set_refused", message.clone()));
+                rep.needs_human.push(message);
+            }
+            Err((message, false)) => match crate::setup_profile::restore(&global, &backup) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
+                    let message =
+                        format!("join: {message}; the global config was restored from its backup");
+                    rep.rows
+                        .push(row("needs_human", "join_restored", message.clone()));
+                    rep.needs_human.push(message);
+                }
+                Err(e) => {
+                    let message = format!(
+                        "join: {message}; the restore also failed ({e}); the in-progress flag is kept so the next start heals"
+                    );
+                    rep.rows
+                        .push(row("needs_human", "join_pending", message.clone()));
+                    rep.needs_human.push(message);
+                }
+            },
+        }
+    }
+    if applied == 0 {
+        let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
+        return;
+    }
+    let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
+    crate::setup_profile::save_profile(&profile.text);
+    rep.paths
+        .push(crate::setup_profile::profile_path().display().to_string());
+    if let Some(b) = &backup {
+        rep.undo = Some(format!("undo: cp {} {}", b.display(), global.display()));
+    }
+    rep.restart_needed = true;
+    rep.done
+        .push(format!("join: {applied} keys applied from the profile"));
 }
 
 /// The shared fold for a service step's config key: `config_set` is the
@@ -998,8 +1152,9 @@ fn step_groom_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
 
 /// A TOML value as JSON for the workspace rows: scalars pass through, a
 /// datetime reads as its string, arrays and tables recurse. Rows carry
-/// only plain shapes, so this is the whole conversion.
-fn toml_as_json(value: &toml::Value) -> serde_json::Value {
+/// only plain shapes, so this is the whole conversion. `pub(crate)`: the
+/// profile diff converts TOML values through it for `classify`.
+pub(crate) fn toml_as_json(value: &toml::Value) -> serde_json::Value {
     match value {
         toml::Value::String(s) => serde_json::Value::String(s.clone()),
         toml::Value::Integer(i) => json!(i),
@@ -1160,8 +1315,13 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
 /// rows when the repo root is a footnote source checkout (the root, not
 /// the cwd: setup launched from a subdirectory still sees the crates),
 /// filtered by `--only`. An `--only` id that names no selected step
-/// refuses with the valid ids.
+/// refuses with the valid ids. The join step rides only a `--join` run:
+/// it is out of the default pool, so a plain `--yes` never applies a
+/// profile, and `--only join` without a file refuses here.
 fn select_steps<'a>(opts: &'a Opts, root: &Path) -> Result<Vec<&'a Step>, String> {
+    if opts.only.iter().any(|id| id == "join") && opts.join.is_none() {
+        return Err("join needs --join <file or ->; export writes a profile".to_string());
+    }
     let layers = |l: Layer| match opts.scope {
         Scope::Global => l == Layer::Global,
         Scope::Project => l == Layer::Project,
@@ -1175,6 +1335,7 @@ fn select_steps<'a>(opts: &'a Opts, root: &Path) -> Result<Vec<&'a Step>, String
                     && s.layer == Layer::Contributor
                     && in_source_checkout(root))
         })
+        .filter(|s| s.id != "join" || opts.join.is_some())
         .collect();
     if !opts.only.is_empty() {
         for id in &opts.only {
@@ -1222,8 +1383,16 @@ fn dry_run_json(
 /// runs once; the gh rows fold off what detection already found, so a
 /// dry-run never re-probes. It prints one JSON object through `redact`
 /// whether or not `--json` passed, writes nothing, takes no marker, and
-/// has no in-repo gate, so a fresh HOME answers too.
-fn dry_run(opts: &Opts, steps: &[&Step], root: &Path) -> i32 {
+/// has no in-repo gate, so a fresh HOME answers too. `join_proposed`
+/// carries the proposals run() built from the loaded profile, `pending`
+/// the died-mid-join row when the in-progress flag is present.
+fn dry_run(
+    opts: &Opts,
+    steps: &[&Step],
+    root: &Path,
+    join_proposed: &[Proposal],
+    pending: Option<Row>,
+) -> i32 {
     let scan: Option<Vec<PathBuf>> = if !opts.scan {
         None
     } else {
@@ -1232,7 +1401,7 @@ fn dry_run(opts: &Opts, steps: &[&Step], root: &Path) -> i32 {
     let detected = crate::setup_detect::detect(root, scan.as_deref());
     let mut proposed: Vec<Proposal> = Vec::new();
     let mut skips: Vec<String> = Vec::new();
-    let mut rows: Vec<Row> = Vec::new();
+    let mut rows: Vec<Row> = pending.into_iter().collect();
     let mut needs_human: Vec<String> = Vec::new();
     for step in steps {
         match step.id {
@@ -1241,7 +1410,7 @@ fn dry_run(opts: &Opts, steps: &[&Step], root: &Path) -> i32 {
                 if let Some(n) = propose_concurrency_band(&mut skips) {
                     proposed.push(Proposal {
                         id: "concurrency-band",
-                        key: "agents.max_live",
+                        key: "agents.max_live".into(),
                         value: n.to_string(),
                         scope: "global",
                         reason: "the machine sample's measured band, so live agents stay inside it"
@@ -1263,6 +1432,7 @@ fn dry_run(opts: &Opts, steps: &[&Step], root: &Path) -> i32 {
             _ => {}
         }
     }
+    proposed.extend_from_slice(join_proposed);
     match detected
         .get("gh")
         .and_then(|g| g.get("status"))
@@ -1431,8 +1601,48 @@ pub fn run(tail: &[OsString]) -> i32 {
         Ok(o) => o,
         Err(e) => return refuse(e),
     };
+    if opts.export && opts.join.is_some() {
+        return refuse(
+            "--export and --join are exclusive: export writes a profile, join reads one".into(),
+        );
+    }
+    if opts.out.is_some() && !opts.export {
+        return refuse("--out only matters with --export".into());
+    }
     if opts.list {
         print_list(&opts);
+        return 0;
+    }
+    // A previous join that died mid-write heals before anything reads the
+    // global config, export included: restore its backup, then report.
+    // A dry run never mutates, so it skips the heal and reports the
+    // in-progress flag as a pending row instead.
+    let healed = if opts.dry_run {
+        None
+    } else {
+        crate::setup_profile::heal()
+    };
+    // Export is a flag-level mode, not a step: it reads only the global
+    // file and exits. `--only` and `--dry-run` do not reach it, so a
+    // profile can be cut on a fully-set-up machine and piped anywhere.
+    if opts.export {
+        if let Some((_, msg)) = &healed {
+            eprintln!("join: {msg}");
+        }
+        let global = crate::config_defaults::global_config_path();
+        let flat = match crate::config_defaults::read_flat(&global) {
+            Err(e) => return refuse(format!("--export: the global config does not parse: {e}")),
+            Ok(None) => std::collections::BTreeMap::new(),
+            Ok(Some(map)) => map,
+        };
+        let exported = crate::setup_profile::export(&flat);
+        match &opts.out {
+            Some(path) => match std::fs::write(path, &exported.text) {
+                Ok(()) => println!("export: wrote {path}"),
+                Err(e) => return refuse(format!("--out {path}: cannot write: {e}")),
+            },
+            None => print!("{}", exported.text),
+        }
         return 0;
     }
     let root = repo_root();
@@ -1441,10 +1651,62 @@ pub fn run(tail: &[OsString]) -> i32 {
         Ok(s) => s,
         Err(e) => return refuse(e),
     };
+    // The join lane: the profile is validated up front, so a bad file
+    // refuses before anything prints or writes. The diff banner always
+    // prints, even on a full run where join only rides in `proposed`:
+    // the operator sees what a join would change before approving it.
+    let profile = match &opts.join {
+        None => None,
+        Some(path) => match crate::setup_profile::load_profile(path) {
+            Ok(p) => Some(p),
+            Err(e) => return refuse(format!("--join {path}: {e}")),
+        },
+    };
+    let (diff_rows, join_proposed) = match &profile {
+        None => (Vec::new(), Vec::new()),
+        Some(p) => {
+            let here = match crate::setup_profile::here_config() {
+                Ok(h) => h,
+                Err(e) => return refuse(format!("--join: the global config does not parse: {e}")),
+            };
+            let (rows, secrets) = crate::setup_profile::diff(p, &here);
+            println!(
+                "{}",
+                crate::setup_profile::format_diff(&rows, secrets, &p.host, &p.exported_at)
+            );
+            let proposed: Vec<Proposal> = rows
+                .iter()
+                .filter(|r| r.applies())
+                .map(|r| Proposal {
+                    id: "join",
+                    key: r.key.clone(),
+                    value: crate::setup_profile::toml_inline(
+                        r.apply.as_ref().expect("apply rows carry a value"),
+                    ),
+                    scope: "global",
+                    reason: format!("join: {}", r.kind),
+                    source: "profile",
+                })
+                .collect();
+            (rows, proposed)
+        }
+    };
     // The read-only preview runs before any --once gate: a dry run reports
     // even on an already-set-up machine, and writes nothing, marker included.
     if opts.dry_run {
-        return dry_run(&opts, &steps, &root);
+        let pending = if crate::setup_profile::in_progress_flag().exists() {
+            Some(row(
+                "needs_human",
+                "join_pending",
+                format!(
+                    "a previous join died mid-write; inspect {} before joining again",
+                    crate::setup_profile::backup_dir().display()
+                ),
+            ))
+        } else {
+            None
+        };
+        return dry_run(&opts, &steps, &root, &join_proposed, pending);
     }
     if opts.once && all_markers_present(opts.scope, &root) {
         let msg = format!("setup: already done ({})", global_marker().display());
@@ -1468,6 +1730,16 @@ pub fn run(tail: &[OsString]) -> i32 {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
     let mut rep = Report::default();
     rep.run_id = run_id();
+    match healed {
+        Some((true, msg)) => rep.done.push(format!("join: {msg}")),
+        Some((false, msg)) => {
+            let message = format!("join: {msg}");
+            rep.rows
+                .push(row("needs_human", "join_pending", message.clone()));
+            rep.needs_human.push(message);
+        }
+        None => {}
+    }
     if !in_repo && opts.scope != Scope::Global {
         rep.skipped.push(
             "project layer: not a git repo; the project and contributor steps need one".into(),
@@ -1489,7 +1761,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         if step.kind == Kind::Approve && !opts.only.iter().any(|id| id == step.id) {
             rep.proposed.push(Proposal {
                 id: step.id,
-                key: "",
+                key: "".into(),
                 value: String::new(),
                 scope: layer_name(step.layer),
                 reason: step.effect.to_string(),
@@ -1540,6 +1812,11 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
+            (Layer::Global, "join") => {
+                if let Some(p) = &profile {
+                    step_join(&exe, p, &diff_rows, &mut rep);
+                }
+            }
             (Layer::Project, "worktree-policy") => rep
                 .skipped
                 .push("worktree-policy: left unset (harness-native default)".into()),
@@ -1625,6 +1902,9 @@ pub fn run(tail: &[OsString]) -> i32 {
         for p in &rep.paths {
             println!("  {p}");
         }
+    }
+    if let Some(undo) = &rep.undo {
+        println!("{undo}");
     }
     let markers = global_ran
         .then(|| global_marker().display().to_string())

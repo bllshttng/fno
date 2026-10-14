@@ -34,6 +34,9 @@ fn the_argv_surface_parses_and_refuses() {
             && !o.scan
             && o.scan_dirs.is_empty()
             && o.only.is_empty()
+            && !o.export
+            && o.out.is_none()
+            && o.join.is_none()
     );
     assert_eq!(o.scope, Scope::Both);
     // Every flag reads.
@@ -50,9 +53,17 @@ fn the_argv_surface_parses_and_refuses() {
         "--scan-repos",
         "--scan-dirs",
         "code,src",
+        "--export",
+        "--out",
+        "profile.toml",
+        "--join",
+        "-",
     ]))
     .unwrap();
     assert!(o.yes && o.once && o.list && o.json && o.dry_run && o.scan);
+    assert!(o.export);
+    assert_eq!(o.out.as_deref(), Some("profile.toml"));
+    assert_eq!(o.join.as_deref(), Some("-"));
     assert_eq!(o.scan_dirs, vec!["code".to_string(), "src".to_string()]);
     assert_eq!(o.scope, Scope::Global);
     assert_eq!(o.only, vec!["gh-auth", "backlog-prefix"]);
@@ -61,6 +72,8 @@ fn the_argv_surface_parses_and_refuses() {
     assert!(parse_opts(&oss(&["--scope", "side"])).is_err());
     assert!(parse_opts(&oss(&["--scope"])).is_err());
     assert!(parse_opts(&oss(&["--only"])).is_err());
+    assert!(parse_opts(&oss(&["--join"])).is_err());
+    assert!(parse_opts(&oss(&["--out"])).is_err());
 }
 
 #[test]
@@ -133,7 +146,7 @@ fn step_selection_offers_both_layers_and_filters() {
 
 #[test]
 fn the_report_shape_and_wire_fold_hold() {
-    // The JSON report carries exactly the thirteen fields an agent parses.
+    // The JSON report carries exactly the fourteen fields an agent parses.
     let mut rep = Report::default();
     rep.done
         .push("harness-wiring: Claude Code: installed".into());
@@ -144,7 +157,7 @@ fn the_report_shape_and_wire_fold_hold() {
     rep.restart_needed = true;
     let v = rep.to_json();
     let keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
-    assert_eq!(keys.len(), 13);
+    assert_eq!(keys.len(), 14);
     for k in [
         "schema",
         "run_id",
@@ -155,6 +168,7 @@ fn the_report_shape_and_wire_fold_hold() {
         "needs_human",
         "paths",
         "restart_needed",
+        "undo",
         "proposed",
         "verified",
         "rows",
@@ -208,7 +222,7 @@ fn the_report_shape_and_wire_fold_hold() {
     assert_eq!(next_action(&[], "fallback"), "fallback");
     let proposed = vec![Proposal {
         id: "concurrency-band",
-        key: "agents.max_live",
+        key: "agents.max_live".into(),
         value: "4".into(),
         scope: "global",
         reason: "the measured band".into(),
@@ -308,4 +322,40 @@ fn once_needs_every_covered_layers_marker() {
     assert!(!all_markers_present_in(Scope::Project, true, false));
     assert!(all_markers_present_in(Scope::Both, true, true));
     assert!(!all_markers_present_in(Scope::Both, true, false));
+}
+
+/// The join lane: one step, out of the default pool, selectable only by an
+/// explicit `--only join` on a `--join` run; the refusal names the missing
+/// flag, the report rows carry the three join codes, and `undo` rides the
+/// report: null until a join sets it, then the restore hint round-trips.
+#[test]
+fn the_join_lane_selects_and_reports_codes() {
+    // Out of the default pool: a plain --yes never sees the lane.
+    let mut opts = Opts::default();
+    let base = select_steps(&opts, Path::new(".")).unwrap();
+    assert!(base.iter().all(|s| s.id != "join"));
+    // `--only join` without --join refuses, naming the flag.
+    opts.only = vec!["join".into()];
+    assert!(select_steps(&opts, Path::new("."))
+        .unwrap_err()
+        .contains("--join"));
+    // With the file, the lane selects alone, as an approve-kind global.
+    opts.join = Some("-".into());
+    let selected = select_steps(&opts, Path::new(".")).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, "join");
+    assert_eq!(selected[0].kind, Kind::Approve);
+    assert_eq!(selected[0].layer, Layer::Global);
+    // The three join codes are reportable.
+    for code in ["join_backup_failed", "join_restored", "join_pending"] {
+        assert!(CODES.iter().any(|(c, _)| *c == code), "missing {code}");
+        assert_eq!(row("needs_human", code, "fix".into()).code, code);
+    }
+    assert!(Report::default().to_json()["undo"].is_null());
+    let mut rep = Report::default();
+    rep.undo = Some("undo: cp /b/config.toml.x /g/config.toml".into());
+    assert_eq!(
+        rep.to_json()["undo"],
+        "undo: cp /b/config.toml.x /g/config.toml"
+    );
 }
