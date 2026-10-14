@@ -130,13 +130,10 @@ fn resolved_optional_is_separate_from_required() {
         "optional must not be required"
     );
     // A non-empty configured list EXTENDS the built-ins, so this config
-    // (built-in named explicitly) resolves to both built-ins.
+    // (built-in named explicitly) still resolves to the built-in list.
     assert_eq!(
         resolved_optional_bots(&s),
-        vec![
-            "gemini-code-assist".to_string(),
-            "chatgpt-codex-connector".to_string()
-        ]
+        vec!["chatgpt-codex-connector".to_string()]
     );
 }
 

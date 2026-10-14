@@ -315,3 +315,99 @@ fn daemon_fold_reaps_absent_spawned_names_only_on_a_good_read() {
     );
     assert!(core.activity_of(&uncounted).is_none());
 }
+
+/// A dismissed workspace's stored row leaves the store even when another
+/// writer moved its generation under the server. The remove used to ride the
+/// same baseline check as a topology write, so it came back as a stale
+/// conflict, wrote nothing, and the name stayed taken after the operator
+/// deleted the workspace.
+#[test]
+fn removing_a_workspace_frees_its_name_when_the_store_baseline_is_stale() {
+    let _s = StoreScratch::new("squad-remove-stale-baseline");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("footnote".into()), leaf_tab(5, 1));
+    core.session
+        .add_squad(2, vec!["/b".into()], Some("other".into()), leaf_tab(6, 2));
+    core.persist_squad(1);
+    crate::squad_store::upsert("footnote", "", &["/moved".to_string()], &[]).unwrap();
+    core.clients.push(client(1, 5, (24, 80), false));
+    let flow = core.command(1, Command::RemoveSquad(1));
+    assert!(matches!(flow, Flow::Continue), "squad 2 keeps the session");
+    assert!(
+        !crate::squad_store::load()
+            .squads
+            .iter()
+            .any(|s| s.name == "footnote"),
+        "the removed workspace's row left the store"
+    );
+    assert!(
+        !core.named_squad_taken("footnote"),
+        "the name is free again"
+    );
+}
+
+/// The refusal for a taken name says what holds it. A stored row with no open
+/// workspace read as a bare "name taken" over a sideline that showed no such
+/// workspace.
+#[test]
+fn name_holder_says_whether_the_row_is_open_or_stored_and_where() {
+    let _s = StoreScratch::new("name-holder");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("bare".into()), leaf_tab(5, 1));
+    core.session
+        .add_squad(2, vec!["/a".into()], Some("rooted".into()), leaf_tab(6, 2));
+    crate::squad_store::upsert("kept", "", &[], &[]).unwrap();
+    assert_eq!(core.name_holder("bare").as_deref(), Some("open, no folder"));
+    assert_eq!(
+        core.name_holder("rooted").as_deref(),
+        Some("open, folder /a")
+    );
+    assert_eq!(
+        core.name_holder("kept").as_deref(),
+        Some("stored, no folder")
+    );
+    assert_eq!(core.name_holder("free"), None);
+}
+
+/// The origin verb edits the open workspace and its stored row together, is
+/// idempotent both ways, and refuses an unknown name or a relative path.
+#[test]
+fn workspace_origin_edits_the_open_workspace_and_its_stored_row() {
+    let _s = StoreScratch::new("workspace-origin");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("w".into()), leaf_tab(5, 1));
+    core.persist_squad(1);
+    let ask = |core: &mut Core, workspace: &str, path: &str, remove: bool| {
+        let (tx, mut rx) = oneshot::channel();
+        core.handle_workspace_origin(workspace, path, remove, tx);
+        rx.try_recv().expect("the handler replies once")
+    };
+    let stored = || {
+        crate::squad_store::load()
+            .squads
+            .iter()
+            .find(|s| s.name == "w")
+            .map(|s| s.origins.clone())
+    };
+
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert_eq!(core.session.squad(1).unwrap().origins, ["/a"]);
+    assert_eq!(stored(), Some(vec!["/a".to_string()]));
+
+    assert!(matches!(ask(&mut core, "w", "/a", true), ServerMsg::Ok));
+    assert!(core.session.squad(1).unwrap().origins.is_empty());
+    assert_eq!(stored(), Some(Vec::new()));
+
+    assert!(matches!(
+        ask(&mut core, "nope", "/a", false),
+        ServerMsg::Err { code, .. } if code == err_code::NOT_FOUND
+    ));
+    assert!(matches!(
+        ask(&mut core, "w", "relative", false),
+        ServerMsg::Err { code, .. } if code == err_code::BAD_REQUEST
+    ));
+}

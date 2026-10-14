@@ -35,11 +35,12 @@ mod harness_command;
 mod pane_prepare;
 mod pane_submit;
 mod restore;
+mod workspace_origin;
 
 pub use self::harness_command::command;
 use self::pane_prepare::prepare_pane_bytes;
 use self::pane_submit::{pane_text, send_pane_bytes, submit_pane};
-use self::restore::workspace_restore;
+pub use self::workspace_origin::workspace;
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -1523,30 +1524,6 @@ pub fn stats(json: bool) -> i32 {
 // ---------------------------------------------------------------------------
 // `fno mux workspace prune` - reap dead-origin residue
 // ---------------------------------------------------------------------------
-
-/// `fno mux workspace <verb> ...`: the workspace-store maintenance family.
-/// Only `prune` and `restore` exist; a bare or unknown verb is usage. Tokens
-/// after the family verb carry verbatim, like `pane`/`block`.
-///
-/// The retired `fno mux squad` spelling is GONE: an unadvertised alias named
-/// by nothing outside its own test. `--squad` stays a hidden-deprecated flag
-/// alias beside the canonical `--workspace`. The user-facing/internal
-/// vocabulary split that leaves behind - `workspace` where a person types,
-/// `squad` in this crate's identifiers - is a decision, not an unfinished
-/// rename: renaming ~2900 internal sites buys no user-visible change. The
-/// remaining user-adjacent `squad` spellings, the key in the `--json`
-/// placement receipt and `~/.fno/squads.json`, ride the next change that
-/// bumps `PROTO_VERSION` or migrates the store for a real reason.
-pub fn workspace(
-    op: crate::cli_args::WorkspaceOp,
-    args: &[OsString],
-    env_session: Option<&str>,
-) -> i32 {
-    match op {
-        crate::cli_args::WorkspaceOp::Prune(_) => squad_prune(args),
-        crate::cli_args::WorkspaceOp::Restore(_) => workspace_restore(args, env_session),
-    }
-}
 
 /// `fno mux workspace restore`: one verb brings the stored
 /// workspaces' worker members back. Every live, non-tombstoned member

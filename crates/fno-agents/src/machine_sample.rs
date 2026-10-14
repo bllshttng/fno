@@ -172,6 +172,31 @@ pub fn parse_meminfo_memory(text: &str) -> Option<(f64, f64, Option<f64>)> {
     Some((total - free, total, zswapped))
 }
 
+/// Linux pressure stall information folded onto the macOS kernel scale
+/// (1 normal, 2 warning, 4 critical). `full avg60` is the share of the last
+/// minute in which every task stalled on memory, `some` the share in which
+/// at least one did.
+pub fn parse_psi_memory_level(text: &str) -> Option<u64> {
+    let avg60 = |kind: &str| {
+        text.lines()
+            .find(|line| line.starts_with(kind))?
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("avg60="))?
+            .parse::<f64>()
+            .ok()
+    };
+    let full = avg60("full")?;
+    Some(if full >= PSI_STALL_PERCENT {
+        4
+    } else if avg60("some").is_some_and(|some| some >= PSI_STALL_PERCENT) {
+        2
+    } else {
+        1
+    })
+}
+
+const PSI_STALL_PERCENT: f64 = 10.0;
+
 fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -199,6 +224,7 @@ pub struct MachineSample {
     pub swap_used_gb: Option<f64>,
     pub swap_total_gb: Option<f64>,
     pub total_mem_gb: Option<f64>,
+    pub memory_pressure_level: Option<u64>,
     pub live_rows: Option<u64>,
     pub leads: Option<u64>,
     pub workers: Option<u64>,
@@ -278,6 +304,7 @@ pub fn read(
         swap_used_gb: None,
         swap_total_gb: None,
         total_mem_gb: None,
+        memory_pressure_level: None,
         live_rows: None,
         leads: None,
         workers: None,
@@ -342,6 +369,14 @@ pub fn read(
                 sample.total_mem_gb = Some(bytes / 1024.0 / 1024.0 / 1024.0);
             }
         }
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-n", "kern.memorystatus_vm_pressure_level"])
+            .output()
+        {
+            if let Ok(level) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                sample.memory_pressure_level = Some(level);
+            }
+        }
     }
     #[cfg(target_os = "linux")]
     if let Ok(text) = std::fs::read_to_string("/proc/meminfo") {
@@ -358,6 +393,10 @@ pub fn read(
         {
             sample.total_mem_gb = Some(kb / 1024.0 / 1024.0);
         }
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = std::fs::read_to_string("/proc/pressure/memory") {
+        sample.memory_pressure_level = parse_psi_memory_level(&text);
     }
     sample.took_ms = Some(started.elapsed().as_millis() as u64);
     (sample, current)
@@ -727,7 +766,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_ticks_parse_busy_and_system() {
+    fn linux_ticks_and_pressure_stall_parse() {
+        let psi = |some: &str, full: &str| {
+            format!("some avg10=0.00 avg60={some} avg300=0.00 total=1\nfull avg10=0.00 avg60={full} avg300=0.00 total=1\n")
+        };
+        assert_eq!(parse_psi_memory_level(&psi("0.50", "0.00")), Some(1));
+        assert_eq!(parse_psi_memory_level(&psi("25.00", "3.00")), Some(2));
+        assert_eq!(parse_psi_memory_level(&psi("60.00", "12.50")), Some(4));
+        assert_eq!(parse_psi_memory_level("not psi"), None);
         let ticks = parse_proc_stat_cpu("cpu  10 2 3 20 4 5 6 7\ncpu0 1 1 1 1").unwrap();
         assert_eq!(ticks.busy, 33);
         assert_eq!(ticks.system, 14);

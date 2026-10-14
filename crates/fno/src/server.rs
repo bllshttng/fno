@@ -104,6 +104,7 @@ mod squad_sync;
 mod thread_workspace;
 mod truth_probe;
 mod visible_panes;
+mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
 
@@ -665,6 +666,14 @@ pub(crate) enum CoreMsg {
     /// `squad_members` on the core loop, so an external prune survives the
     /// next `persist_squad`.
     SquadReload {
+        reply: ControlReply,
+    },
+    /// (v113) `ControlVerb::WorkspaceOrigin`: add or drop one folder on an
+    /// open named workspace, then persist.
+    WorkspaceOrigin {
+        workspace: String,
+        path: String,
+        remove: bool,
         reply: ControlReply,
     },
     /// (v75) `ControlVerb::RetireSession`: tombstone one (harness,
@@ -10128,67 +10137,7 @@ impl Core {
                 self.dispatch_card(client_id, node, account, true)
             }
             Command::NewSquad { name, origin } => {
-                // Explicit named-workspace creation (Unit 2). A blank/whitespace
-                // name is refused fail-closed - nothing is created (AC1-ERR,
-                // epic Boundaries), same shape as the other catalog commands.
-                let name = name.trim();
-                if name.is_empty() {
-                    self.notice(client_id, "name required");
-                    return Flow::Continue;
-                }
-                // Name is the durable identity (Locked Decision 4): a duplicate
-                // of a live OR persisted named squad is refused fail-closed,
-                // same shape as the blank refusal.
-                if self.named_squad_taken(name) {
-                    self.notice(client_id, "name taken");
-                    return Flow::Continue;
-                }
-                // Seed the shell at the given origin, else the sender's current
-                // squad cwd (a new workspace opens where you are). PTY-first
-                // ordering (Locked 7): a spawn failure mutates no model. Consume
-                // `origin` into the origins vec once, then seed the shell at
-                // origins[0] (else the sender's current squad cwd).
-                let origins: Vec<String> = origin.into_iter().collect();
-                let cwd = origins.first().cloned().unwrap_or_else(|| {
-                    self.session
-                        .squad(view.0)
-                        .map(|s| s.canonical_cwd().to_string())
-                        .unwrap_or_default()
-                });
-                let (rows, cols) = self
-                    .clients
-                    .iter()
-                    .find(|c| c.id == client_id)
-                    .map(|c| c.dims)
-                    .unwrap_or((vp.rows, vp.cols));
-                let pid = match self.spawn_pane(rows, cols, &cwd) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        self.notice(client_id, format!("new workspace failed: {e}"));
-                        return Flow::Continue;
-                    }
-                };
-                let sid = self.next_squad_id;
-                self.next_squad_id += 1;
-                let tid = self.session.mint_tab_id();
-                self.session.add_squad(
-                    sid,
-                    origins,
-                    Some(name.to_string()),
-                    Tab {
-                        name: None,
-                        id: tid,
-                        root: Node::Leaf(pid),
-                        focus: pid,
-                    },
-                );
-                // Track + persist the new (empty-membership) workspace so it
-                // restores next session even before any recruit (AC1-EDGE).
-                self.squad_members.insert(sid, Vec::new());
-                self.persist_squad(sid);
-                self.set_view(client_id, sid, tid);
-                self.push_layout(true);
-                Flow::Continue
+                self.handle_new_squad(client_id, view, vp, &name, origin)
             }
             Command::RenameTab { tab, name } => {
                 // Explicit tab rename. A stale/unknown id (the tab
@@ -10336,7 +10285,7 @@ impl Core {
                 // the false branch and its row survived the dismiss.
                 self.squad_members.remove(&id);
                 if let Some((name, key)) = self.squad_identity(id) {
-                    self.persist_remove(&name, &key);
+                    self.persist_dismiss(&name, &key);
                 }
                 let pids: Vec<u64> = self.session.squads[pos]
                     .tabs
@@ -11279,6 +11228,15 @@ impl Core {
             }
             CoreMsg::SquadReload { reply } => {
                 self.handle_squad_reload(reply);
+                Flow::Continue
+            }
+            CoreMsg::WorkspaceOrigin {
+                workspace,
+                path,
+                remove,
+                reply,
+            } => {
+                self.handle_workspace_origin(&workspace, &path, remove, reply);
                 Flow::Continue
             }
             CoreMsg::RetireSession {
@@ -12487,6 +12445,20 @@ async fn handle_control(
                 .await
         }
         ControlVerb::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
+        ControlVerb::WorkspaceOrigin {
+            workspace,
+            path,
+            remove,
+        } => {
+            core_tx
+                .send(CoreMsg::WorkspaceOrigin {
+                    workspace,
+                    path,
+                    remove,
+                    reply: reply_tx,
+                })
+                .await
+        }
         ControlVerb::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
         ControlVerb::Notify { title, body } => {
             core_tx

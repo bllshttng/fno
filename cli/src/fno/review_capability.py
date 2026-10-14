@@ -838,7 +838,7 @@ def refusal_message(
 # copy of the bot-login set across two languages; folding all three behind one
 # parity-checked source is a follow-up the plan explicitly deferred.
 _KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset(
-    {"chatgpt-codex-connector", "gemini-code-assist"}
+    {"chatgpt-codex-connector"}
 )
 
 

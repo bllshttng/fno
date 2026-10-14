@@ -166,7 +166,7 @@ pub enum MuxCmd {
     /// required; `-h` inside the tail stays the family's.
     #[command(disable_help_flag = true)]
     View(MuxTailReq),
-    /// `mux workspace prune|restore ...`: workspace-store maintenance
+    /// `mux workspace prune|restore|origin ...`: workspace-store maintenance
     /// A bare `mux workspace` refuses: clap requires the
     /// operation word.
     Workspace {
@@ -285,6 +285,9 @@ pub enum WorkspaceOp {
     /// Bring the stored workspaces' worker members back
     #[command(disable_help_flag = true)]
     Restore(MuxTail),
+    /// Add or drop a workspace's folder: `origin add|remove <name> <path>`
+    #[command(disable_help_flag = true)]
+    Origin(MuxTailReq),
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
@@ -429,6 +432,7 @@ impl WorkspaceOp {
     pub fn tail(&self) -> Vec<OsString> {
         match self {
             WorkspaceOp::Prune(t) | WorkspaceOp::Restore(t) => t.tail.clone(),
+            WorkspaceOp::Origin(t) => t.tail.clone(),
         }
     }
 
@@ -436,6 +440,7 @@ impl WorkspaceOp {
         match self {
             WorkspaceOp::Prune(_) => WorkspaceOp::Prune(t),
             WorkspaceOp::Restore(_) => WorkspaceOp::Restore(t),
+            WorkspaceOp::Origin(_) => WorkspaceOp::Origin(MuxTailReq { tail: t.tail }),
         }
     }
 }
