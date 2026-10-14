@@ -41,9 +41,13 @@ pub(crate) fn mint_missing_native_bg(
     listing: &ClaudeAgentsSnapshot,
     emitter: &EventEmitter,
 ) -> usize {
+    // An Unknown union still carries every root that parsed (a partial
+    // read). Minting from present rows is a presence read, which stays
+    // sound there; only absence checks need a full Known.
     let rows = match listing {
-        ClaudeAgentsSnapshot::Known { rows, .. } => rows,
-        ClaudeAgentsSnapshot::Unknown { .. } => return 0,
+        ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. } => {
+            rows
+        }
     };
     if rows.is_empty() {
         return 0;
@@ -60,11 +64,11 @@ pub(crate) fn mint_missing_native_bg(
     // re-decides both under the lock.
     let mut prepared = Vec::new();
     let mut deferred = false;
-    for row in rows.iter().filter(|r| {
-        !r.state
-            .as_deref()
-            .is_some_and(crate::claude_roster::is_terminal_roster_state)
-    }) {
+    // State alone lies: a died session keeps its last `working`/`blocked`
+    // row with no pid. A listing that carries pids makes the missing pid a
+    // death witness, so liveness runs through `has_live_process`.
+    let carries_pids = listing.carries_pids();
+    for row in rows.iter().filter(|r| r.has_live_process(carries_pids)) {
         if prepared.len() >= BUDGET_PER_BEAT {
             deferred = true;
             break;
@@ -82,7 +86,7 @@ pub(crate) fn mint_missing_native_bg(
         {
             continue;
         }
-        let transcript = crate::claude_drive::find_transcript(session);
+        let transcript = find_transcript_for(row, session);
         let (node, model) = transcript_facts(transcript.as_deref());
         prepared.push(prepare_row(row, session, transcript, node, model));
     }
@@ -102,8 +106,14 @@ pub(crate) fn mint_missing_native_bg(
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(&e.short_id);
-        if let Some(node) =
-            transcript_facts(crate::claude_drive::find_transcript(session).as_deref()).0
+        if let Some(node) = (match e.transcript_path.as_deref() {
+            // A row minted with a transcript path re-reads that file
+            // directly; the ambient re-scan is for rows without one (it
+            // also misses account roots).
+            Some(path) => transcript_facts(Some(Path::new(path))),
+            None => transcript_facts(crate::claude_drive::find_transcript(session).as_deref()),
+        })
+        .0
         {
             backfills.push((session.to_string(), node));
         }
@@ -190,6 +200,17 @@ pub(crate) fn mint_missing_native_bg(
     born.len()
 }
 
+/// Transcript discovery that honors the listing row's account: a row read
+/// from an isolated account's config dir keeps its transcript under that
+/// root, so the ambient scan alone would miss it.
+fn find_transcript_for(
+    row: &crate::claude_roster::ClaudeAgentRow,
+    session: &str,
+) -> Option<PathBuf> {
+    crate::claude_drive::find_transcript_for_account(session, row.account.as_deref())
+        .or_else(|| crate::claude_drive::find_transcript(session))
+}
+
 /// One transcript walk, two birth facts: the first user entry's node id and
 /// the running model (the last real `message.model`). Both are
 /// absence-honest: a missing or unreadable transcript yields `(None, None)`
@@ -203,11 +224,16 @@ fn transcript_facts(path: Option<&Path>) -> (Option<String>, Option<String>) {
     };
     let mut node: Option<String> = None;
     let mut model: Option<String> = None;
+    let mut seen_user = false;
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if node.is_none() && v.get("type").and_then(Value::as_str) == Some("user") {
+        // The launch prompt is the FIRST user entry only: later user turns
+        // mention node ids in conversation, and attributing one of those
+        // would pin the wrong node on the row.
+        if !seen_user && v.get("type").and_then(Value::as_str) == Some("user") {
+            seen_user = true;
             node = user_text(&v).and_then(|text| {
                 text.split_whitespace()
                     .find(|t| crate::backlog::node_ref::is_wellformed_node_id(t))
@@ -362,15 +388,31 @@ mod tests {
     }
 
     #[test]
-    fn mint_skips_terminal_and_unknown() {
+    fn degraded_listings_mint_only_sound_rows() {
         sandbox(|home| {
             let em = emitter(home);
             let done = ClaudeAgentsSnapshot::known(vec![listing_row("tui-build", "done")]);
             assert_eq!(mint_missing_native_bg(home, &done, &em), 0);
             let unknown = ClaudeAgentsSnapshot::unknown("unreadable");
             assert_eq!(mint_missing_native_bg(home, &unknown, &em), 0);
+            // A died session keeps its last `working` row with no pid; in a
+            // listing that carries pids that row is a death witness, and the
+            // live row beside it still mints.
+            let mut dead = listing_row("tui-dead", "working");
+            dead.pid = None;
+            let mixed = ClaudeAgentsSnapshot::known(vec![dead, listing_row("tui-live", "working")]);
+            assert_eq!(mint_missing_native_bg(home, &mixed, &em), 1);
+            // A failed root leaves the union Unknown but keeps every root
+            // that parsed; presence reads on those rows stay sound.
+            let partial = ClaudeAgentsSnapshot::Unknown {
+                rows: vec![listing_row("tui-partial", "working")],
+                warnings: vec!["a root failed".into()],
+            };
+            assert_eq!(mint_missing_native_bg(home, &partial, &em), 1);
             let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
-            assert!(registry.entries.is_empty());
+            assert_eq!(registry.entries.len(), 2);
+            let names: Vec<&str> = registry.entries.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, ["tui-live", "tui-partial"]);
         });
     }
 
@@ -400,7 +442,20 @@ mod tests {
         );
         let (node, model) = transcript_facts_from_path(&path);
         assert_eq!(node.as_deref(), Some("x-deadbeef"));
-        assert_eq!(model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(model, Some("claude-opus-4-6".to_string()));
+        // A LATER user turn naming another node is conversation, not the
+        // launch prompt: the first entry owns the attribution.
+        let two = write_transcript(
+            tmp.path(),
+            "eeeeeeee-63ff-4736-a02a-8818f63c8b46",
+            &[
+                json!({"type":"user","message":{"content":"look at x-feedface later"}}).to_string(),
+                json!({"type":"assistant","message":{"model":"m"}}).to_string(),
+                json!({"type":"user","message":{"content":"now do x-deadbeef"}}).to_string(),
+            ],
+        );
+        let (node, _) = transcript_facts_from_path(&two);
+        assert_eq!(node, Some("x-feedface".to_string()));
         // No user entry: both stay absent, never guessed.
         let bare = write_transcript(
             tmp.path(),
@@ -409,6 +464,46 @@ mod tests {
         );
         let (node, _) = transcript_facts_from_path(&bare);
         assert_eq!(node, None);
+    }
+
+    #[test]
+    fn account_row_transcript_reads_the_account_root() {
+        sandbox(|home| {
+            let em = emitter(home);
+            // The account root, wired through the fno accounts config, holds
+            // the transcript; the ambient HOME has none.
+            let root = tempfile::TempDir::new().unwrap();
+            let uuid = "492ccda4-63ff-4736-a02a-8818f63c8b46";
+            write_transcript(
+                root.path(),
+                uuid,
+                &[
+                    json!({"type":"user","message":{"content":"/fno:target x-deadbeef"}})
+                        .to_string(),
+                ],
+            );
+            let accounts_dir = home
+                .registry_json()
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap()
+                .join(".fno");
+            std::fs::create_dir_all(&accounts_dir).unwrap();
+            std::fs::write(
+                accounts_dir.join("config.toml"),
+                format!(
+                    "[[accounts.records]]\nid = \"test-acct-x53a4\"\nconfig_dir = \"{}\"\n",
+                    root.path().display()
+                ),
+            )
+            .unwrap();
+            let mut row = listing_row("acct-build", "working");
+            row.account = Some("test-acct-x53a4".into());
+            let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
+            assert_eq!(mint_missing_native_bg(home, &snapshot, &em), 1);
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
+            assert_eq!(registry.entries[0].node.as_deref(), Some("x-deadbeef"));
+        });
     }
 
     #[test]
