@@ -835,8 +835,9 @@ fn config_bash_arm(
                 .to_string_lossy()
                 .trim_end_matches('/')
                 .to_string();
+            let shown = abs.display().to_string();
             return Sec::Block(format!(
-                "{abs} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
+                "{shown} does not exist, and sqlite3 creates the file it opens: that lands a new top-level entry in the fno state root ({}). The stores live under {sp}/db/ (events.db, graph.db, decisions.db, questions.db). Read one with: sqlite3 -readonly {sp}/db/<name>.db",
                 state.spelled
             ));
         }
