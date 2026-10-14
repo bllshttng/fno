@@ -57,7 +57,6 @@ use crate::claude_ask::{emit_event, validate_spawn_inputs};
 use crate::opencode_ask::{apply_opencode_variant, AskOutcome, OPENCODE_DEFAULT_MODEL};
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
-use crate::AgentStatus;
 
 /// Everything the spawn needs from a live serve: the loopback base URL, the
 /// auth token the serve was booted with, and the pid (with its start time, so
@@ -629,6 +628,11 @@ fn dispatch_opencode_serve_inner(
     // The row binds at the worker's session report, the same posture the
     // claude native lane holds, so the launch record goes first and the
     // spawn-side registry write and birth emit stay gone.
+    let effective_message = crate::provider::render_verb_seed(
+        if message.is_empty() { "hello" } else { message },
+        "opencode",
+    );
+    let full_prompt = crate::opencode_ask::opencode_envelope(&effective_message, from_name);
     let template = match crate::spawn_compose::resolve_template("opencode", None, None) {
         Ok(template) => template,
         Err(error) => return AskOutcome::err(error, 2),
