@@ -1,3 +1,4 @@
+use super::super::block_reason::unattested_reviewers_reason;
 use super::super::self_review_floor::{classify_payload, payload_is_code, REVIEWER_INVOCATIONS};
 use super::*;
 
