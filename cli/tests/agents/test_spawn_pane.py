@@ -1657,8 +1657,8 @@ def test_cmd_spawn_parses_pr_watch_headless_json_argv(
     result = CliRunner().invoke(
         agents_cli.agents_app,
         [
-            "spawn", "--name", "pr-check-7", "--substrate", "headless",
-            "--harness", "claude", "--output-format", "json",
+            "spawn", "--name", "pr-check-7", "--once",
+            "--output-format", "json",
             "/fno:ship pr check 7",
         ],
     )
@@ -1900,7 +1900,7 @@ def test_cmd_spawn_threads_stable_tab_id_to_dispatch(tmp_path: Path, monkeypatch
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     result = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "--name", "peer", "--harness", "claude", "--tab", "id:12"],
+        ["spawn", "--name", "peer", "--tab", "id:12"],
     )
     assert result.exit_code == 0, result.output
     assert captured["tab"] == "id:12"
@@ -2224,7 +2224,7 @@ def test_cmd_spawn_rejects_bad_split_value(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
     res = CliRunner().invoke(
         agents_cli.agents_app,
-        ["spawn", "peer", "--harness", "claude", "-x", "diagonal"],
+        ["spawn", "peer", "-x", "diagonal"],
     )
     assert res.exit_code == 2, res.output
     assert "left, right, up, or down" in res.output
@@ -2824,12 +2824,8 @@ def test_cmd_spawn_explicit_happy_monitor_routes_zai_pane(
             "spawn",
             "--name",
             "peer",
-            "--harness",
-            "claude",
-            "--provider",
-            "zai",
-            "--model",
-            "glm-5.2",
+            "--route",
+            "zai,glm-5.2",
             "--monitor",
             "happy",
             "hello",
