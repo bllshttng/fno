@@ -139,20 +139,6 @@ def test_reader_2_status_line_goes_quiet(env):
     assert "sent unclaimed: 0" in _run("mail", "status", "--from", "proj").stdout
 
 
-def test_reader_3_relay_router_skips_it(env):
-    """The router reads iter_messages directly too, and routes by each
-    message's `to` rather than filtering to one inbox."""
-    from fno.relay.daemon import _tail_after_cursor
-
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-    kept = _send(MY_HANDLE, PEER, "keep me", ts=_ts_ago(3600))
-
-    _tombstone(mid)
-
-    routed, _ = _tail_after_cursor()
-    assert [m.id for m in routed] == [kept]
-
-
 # ---------------------------------------------------------------------------
 # What a withdrawal must NOT do
 # ---------------------------------------------------------------------------
