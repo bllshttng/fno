@@ -331,7 +331,9 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
             flow.exit_code = 2;
             return flow;
         }
-        LockOutcome::Acquired(_) => {}
+        // Binding the guard counts as the field's read; its Drop in `lock`
+        // releases the claim only after the merge below finishes.
+        LockOutcome::Acquired(_guard) => {}
     }
     let code = do_merge(
         &mut flow,
