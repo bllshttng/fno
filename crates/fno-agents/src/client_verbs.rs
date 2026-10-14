@@ -1187,6 +1187,12 @@ pub(crate) fn find_agent_entry<'a>(
             .and_then(Value::as_array)
             .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|s| s == token))
     }));
+    // Python's resolver unions an exact fno_id hit with no shape gate; the
+    // id is a primary key, so equality alone cannot over-match.
+    short_namespace.extend(
+        rows.iter()
+            .filter(|e| e.get("fno_id").and_then(Value::as_str) == Some(token)),
+    );
     short_namespace.extend(rows
         .iter()
         .filter(|e| matches!(e.get("short_id").and_then(Value::as_str), Some(s) if !s.is_empty() && s == token))

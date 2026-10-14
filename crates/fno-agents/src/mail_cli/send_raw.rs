@@ -571,7 +571,6 @@ fn raw_send(
         delivered,
         failure_reasons.last().map(String::as_str),
         entry_mux,
-        str_field(&entry, "harness"),
         transport_sender.as_deref(),
         &session_id,
         self_ok,
@@ -601,7 +600,7 @@ fn raw_send(
 }
 
 fn keystroke_lane(entry: &Value) -> (String, bool) {
-    if entry.get("mux").and_then(Value::as_bool).unwrap_or(false) {
+    if entry.get("mux").is_some_and(Value::is_object) {
         return ("mux-pane".to_string(), true);
     }
     let harness = str_field(entry, "harness");
@@ -719,7 +718,6 @@ fn emit_review_sent(
     delivered: bool,
     receipt: Option<&str>,
     submit_required: bool,
-    entry_harness: &str,
     initiator_session_id: Option<&str>,
     target_session_id: &str,
     self_ok: bool,
@@ -753,15 +751,9 @@ fn emit_review_sent(
         }
     };
     // Two-character literal "\r" (a keystroke name), not a carriage return.
-    let submit_key = if submit_required {
-        Some(if entry_harness == "codex" {
-            "tab"
-        } else {
-            "\\r"
-        })
-    } else {
-        None
-    };
+    // Every Rust submit path presses enter (submit_pane sends b"\r"); the
+    // transport carries no Tab press to name.
+    let submit_key = if submit_required { Some("\\r") } else { None };
     let pr = explicit_review_pr_number(&review.args_raw);
     let mut fields = serde_json::Map::new();
     fields.insert("invocation_id".to_string(), json!(invocation_id));
@@ -1551,4 +1543,66 @@ fn codex_review_subject_nonempty(cwd: &str, base_ref: &str) -> (bool, String) {
         true,
         format!("{count} changed files against {base_ref} at HEAD {head8}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Payloads go through the full verb+args shape the leaf receives: verb,
+    /// one whitespace, then args. `main` as the default base keeps the
+    /// explicit-target arm distinguishable from the fallback.
+    fn target(payload: &str) -> Option<String> {
+        resolve_codex_review_target(payload, Some("main"))
+    }
+
+    #[test]
+    fn explicit_pr_receipt_resolves_to_its_base_branch() {
+        let payload = "/fno:review high HEAD 1ed3352 of PR 42 against origin/next";
+        assert_eq!(target(payload).as_deref(), Some("baseBranch:origin/next"));
+        assert_eq!(explicit_review_pr_number(payload), Some(42));
+    }
+
+    #[test]
+    fn malformed_explicit_target_refuses_rather_than_falling_through() {
+        let payload = "/fno:review HEAD 0xzz of PR 42 against origin/main";
+        assert_eq!(target(payload), None);
+        // No `pr` capture survives a malformed receipt.
+        assert_eq!(explicit_review_pr_number(payload), None);
+    }
+
+    #[test]
+    fn wrong_arity_base_flag_refuses() {
+        assert_eq!(target("/fno:review --base"), None);
+        // A `--base` value that is itself a flag must refuse, not resolve.
+        assert_eq!(target("/fno:review --base --uncommitted"), None);
+    }
+
+    #[test]
+    fn loose_arms_resolve_uncommitted_sha_and_custom() {
+        assert_eq!(
+            target("/fno:review --uncommitted").as_deref(),
+            Some("uncommittedChanges")
+        );
+        assert_eq!(
+            target("/fno:review abc1234").as_deref(),
+            Some("commit:abc1234")
+        );
+        assert_eq!(
+            target("/fno:review custom:diff://HEAD~1").as_deref(),
+            Some("custom:diff://HEAD~1")
+        );
+        // Bare `custom:` carries no target.
+        assert_eq!(target("/fno:review custom:"), None);
+    }
+
+    #[test]
+    fn comment_pr_flag_yields_the_review_number() {
+        assert_eq!(
+            explicit_review_pr_number(
+                "high --comment 3419 HEAD 1ed335280631e8e57dc78d8e576cfff6c8869d5e against origin/main"
+            ),
+            Some(3419)
+        );
+    }
 }
