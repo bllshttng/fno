@@ -2950,17 +2950,17 @@ mod tests {
     fn filename_node_id_matches_the_suffix_shape() {
         let prefixes = vec!["ab".to_string(), "x".to_string()];
         assert_eq!(
-            plan_filename_node_id("/tmp/20260917-removal-x7758-abc12345.md", &prefixes),
-            Some("x7758-abc12345".to_string())
+            plan_filename_node_id("/tmp/20260917-removal-x-abc12345.md", &prefixes),
+            Some("x-abc12345".to_string())
         );
         assert_eq!(plan_filename_node_id("/tmp/plan.md", &prefixes), None);
         assert_eq!(
-            plan_filename_node_id("/tmp/plan-x7758-ABC12345.md", &prefixes),
+            plan_filename_node_id("/tmp/plan-x-ABC12345.md", &prefixes),
             None
         );
         let scoped = vec!["ab".to_string()];
         assert_eq!(
-            plan_filename_node_id("/tmp/plan-x7758-abc12345.md", &scoped),
+            plan_filename_node_id("/tmp/plan-x-abc12345.md", &scoped),
             None
         );
     }
