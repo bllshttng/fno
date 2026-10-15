@@ -1817,7 +1817,8 @@ impl Notice {
                     && matches!(cmd.parse::<u8>(), Ok(1..=12));
                 if cmd == "2" {
                     // ConEmu `9;2;<text>` is a message box: keep its text.
-                    text.split_once(';').map_or(String::new(), |(_, t)| t.to_string())
+                    text.split_once(';')
+                        .map_or(String::new(), |(_, t)| t.to_string())
                 } else if conemu {
                     String::new()
                 } else {
