@@ -177,7 +177,7 @@ pub fn run_flight_acquire(args: &[String]) -> i32 {
     let root = arg_value(args, "--claims-root").map(PathBuf::from);
     let events_dir = arg_value(args, "--events-dir").map(PathBuf::from);
     let scope = arg_value(args, "--scope").unwrap_or_else(|| "backlog single-flight".into());
-    let root_ref = root.as_deref();
+    let receipt_root = root.clone();
     // The claim is held in the name of the CALLING process (the Python verb
     // that will do the work), never this short-lived binary: the lock must
     // die with the work, not with the messenger.
@@ -188,7 +188,7 @@ pub fn run_flight_acquire(args: &[String]) -> i32 {
             print_receipt(&json!({"acquired": true, "holder": holder}));
             0
         }
-        FlightGate::Held => held_receipt(&key, root_ref),
+        FlightGate::Held => held_receipt(&key, receipt_root.as_deref()),
         FlightGate::Unavailable(e) => {
             eprintln!("flight-acquire: {e}");
             3
