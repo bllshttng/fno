@@ -437,9 +437,9 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
 , so it is only a fallback when the owned values are absent.
 
     Two reachable acquire paths both call this: the CLI ``claim acquire`` verb
-    (the init-script cold start) and ``_reacquire_node_claim`` (a target-start
-    takeover that calls ``acquire_claim`` in-process and bypasses this Typer
-    command). Both must stamp, or a killed session on either path loses its row.
+    (the init-script cold start) and the native target-start takeover, whose
+    in-process ``claims::acquire`` emits its own audit event. Both must stamp,
+    or a killed session on either path loses its row.
 
     A caller that acquires the claim as a serialization step and may still be
     refused by a post-acquire re-check owns the rollback: see ``release
