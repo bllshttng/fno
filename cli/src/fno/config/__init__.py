@@ -58,6 +58,7 @@ from fno.config._loader import _settings_key as _settings_key
 from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
 from fno.config._guards import GuardsBlock
 from fno.config._store import StoreBlock
+from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
@@ -476,32 +477,6 @@ class BacklogBlock(BaseModel):
                 f"config.backlog.id_hex_width must be an integer in [4, 8], got: {v!r}"
             )
         return v
-
-
-class TelemetryOtlpBlock(BaseModel):
-    """OTLP log export (nested under 'config.telemetry.otlp').
-
-    The Rust daemon reads these keys; the schema exists so `fno config set`
-    accepts them. Export stays off until `enabled` is set and `endpoint` names
-    a collector. `headers_env` names the env var holding the auth headers,
-    never the headers themselves.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = False
-    endpoint: str = ""
-    headers_env: str = "FNO_OTLP_HEADERS"
-    log_content: bool = False
-
-
-class TelemetryBlock(BaseModel):
-    """Telemetry settings (nested under 'config.telemetry')."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    claude_otel: bool = True
-    otlp: TelemetryOtlpBlock = Field(default_factory=TelemetryOtlpBlock)
 
 
 class PostMergeBlock(BaseModel):
@@ -4381,9 +4356,6 @@ class SettingsModel(ConfigBlock):
 # config.local.toml is flat, so no `config.` prefix.
 WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
     {
-        # post_merge.parking_lot_path was removed: the ritual is a
-        # serial one-shot durable write, already safe on the shared canonical
-        # file; a per-lane redirect only orphaned the prose.
         "project.id",
     }
 )
