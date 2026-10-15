@@ -2516,57 +2516,6 @@ def restamp_harness_session_id(
     return restamped[0] if restamped else None
 
 
-def heal_mux_ref(
-    *,
-    name: str,
-    harness: str,
-    mux_session: str,
-    pane_id: int,
-    session_id: Optional[str] = None,
-    registry_path: Optional[Path] = None,
-) -> Optional[tuple[Optional[dict], dict]]:
-    """Re-point a spawned worker's row at the pane it actually runs in.
-
-    Target prefers ``session_id`` so a branched session heals its own row.
-    ``mux`` is written and ``short_id`` cleared in ONE transaction (mux XOR
-    worker XOR bg; the clear is what makes the write land inside the
-    fail-open hook). Returns ``(old_mux, new_mux)`` when the row moved,
-    else ``None`` (the idempotent no-op never rewrites the file); the write
-    is verified against what persisted before the caller emits the event.
-    """
-    if not name or not harness or not mux_session or type(pane_id) is not int or pane_id < 0:
-        return None
-
-    new_mux = {"session": mux_session, "pane_id": pane_id}
-
-    def _find(entries: list[AgentEntry]) -> Optional[AgentEntry]:
-        for e in entries:
-            if session_id and e.harness == harness and e.harness_session_id == session_id:
-                return e
-        for e in entries:
-            if e.harness == harness and (e.name == name or name in e.aliases):
-                return e
-        return None
-
-    # Pre-read so the idempotent no-op never rewrites the file; the updater
-    # re-decides under the lock so a racing writer cannot double-write.
-    row = _find(load_registry(path=registry_path))
-    if row is None or row.mux == new_mux:
-        return None  # no such row, or already on the pair: no write, no event
-    before = dict(row.mux) if row.mux else None
-
-    def _updater(entries: list[AgentEntry]) -> list[AgentEntry]:
-        target = _find(entries)
-        if target is not None and target.mux != new_mux:
-            target.mux = dict(new_mux)
-            target.short_id = ""
-        return entries
-
-    persisted = update_registry(_updater, path=registry_path)
-    healed = _find(persisted)
-    if healed is None or healed.mux != new_mux:
-        return None  # write did not land, or a racing writer replaced the row
-    return before, new_mux
 
 
 def heal_own_cwd(
