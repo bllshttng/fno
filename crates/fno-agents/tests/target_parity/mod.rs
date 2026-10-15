@@ -997,8 +997,11 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
     );
     assert_eq!(
         frozen.out, stdout,
-        "[{}] stdout differs from golden:\n--- golden ---\n{}\n--- run ---\n{}",
-        case.label, frozen.out, stdout
+        "[{}] stdout differs from golden\n--- graph state ---\n{}\n--- golden ---\n{}\n--- run ---\n{}",
+        case.label,
+        graph_state_probe(root),
+        frozen.out,
+        stdout
     );
     let golden_err = frozen.err.unwrap_or_default();
     assert_eq!(
