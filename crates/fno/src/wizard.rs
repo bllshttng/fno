@@ -992,6 +992,19 @@ fn screen_services(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
 }
 
 fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
+    // The project layer answers only inside a git repo: repo_root()
+    // falls back to the cwd, and setup must not litter an arbitrary
+    // directory with .fno/ - the same gate the batch path applies.
+    let in_repo = crate::setup_run::repo_root().join(".git").exists();
+    if !in_repo {
+        state.answers.insert("projects", Answer::No);
+        state.answers.insert("scan", Answer::No);
+        pr.note(
+            "projects",
+            "not a git repo; the project layer needs one - registration skipped",
+        );
+        return Outcome::Forward;
+    }
     let register_default = match state.answers.get("projects") {
         Some(Answer::No) => false,
         _ => true,
@@ -1171,23 +1184,38 @@ pub fn pending(state: &State) -> Vec<Proposal> {
             });
         }
     }
-    if let Some(Answer::Yes) = state.answers.get("merge") {
-        rows.push(Proposal {
-            id: "review-merge",
-            key: "auto_merge.enabled".into(),
-            value: "true".into(),
-            scope: "global",
-            reason: "merge on green review and CI".into(),
-            source: "wizard",
-        });
-        rows.push(Proposal {
-            id: "review-merge",
-            key: "auto_merge.grant".into(),
-            value: "dispatch".into(),
-            scope: "global",
-            reason: "the dispatch grant behind auto-merge".into(),
-            source: "wizard",
-        });
+    match state.answers.get("merge") {
+        Some(Answer::Yes) => {
+            rows.push(Proposal {
+                id: "review-merge",
+                key: "auto_merge.enabled".into(),
+                value: "true".into(),
+                scope: "global",
+                reason: "merge on green review and CI".into(),
+                source: "wizard",
+            });
+            rows.push(Proposal {
+                id: "review-merge",
+                key: "auto_merge.grant".into(),
+                value: "dispatch".into(),
+                scope: "global",
+                reason: "the dispatch grant behind auto-merge".into(),
+                source: "wizard",
+            });
+        }
+        Some(Answer::No) => {
+            // An explicit No must undo an existing auto-merge grant from
+            // config or a joined profile: enabled=false gates the grant.
+            rows.push(Proposal {
+                id: "review-merge",
+                key: "auto_merge.enabled".into(),
+                value: "false".into(),
+                scope: "global",
+                reason: "the merge refusal this run recorded".into(),
+                source: "wizard",
+            });
+        }
+        _ => {}
     }
     if let Some(Answer::Picked(picked)) = state.answers.get("services") {
         for id in picked {

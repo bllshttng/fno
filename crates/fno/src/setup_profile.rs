@@ -642,27 +642,27 @@ mod tests {
         assert!(banner.contains("add     auto_merge.enabled = true"));
         assert!(banner.contains("change  review.posture = \"standard\" (was \"strict\")"));
         assert!(!banner.contains("token"));
-    }
 
-    // The header gates the join: no `[profile]`, no join; a future schema
-    // names itself and the one this fno reads. A hand-written profile's
-    // secrets count without printing, and its machine-local keys report
-    // as kept.
-    {
-        let err = parse_profile("[config]\nreview.posture = \"standard\"\n").unwrap_err();
-        assert!(err.contains("[profile]"));
-        let err = parse_profile("[profile]\nschema = 9\n").unwrap_err();
-        assert!(err.contains("9"));
-        let text =
+        // The header gates the join: no `[profile]`, no join; a future
+        // schema names itself and the one this fno reads. A hand-written
+        // profile's secrets count without printing, and its machine-local
+        // keys report as kept.
+        {
+            let err = parse_profile("[config]\nreview.posture = \"standard\"\n").unwrap_err();
+            assert!(err.contains("[profile]"));
+            let err = parse_profile("[profile]\nschema = 9\n").unwrap_err();
+            assert!(err.contains("9"));
+            let text =
             "[config]\nauth.oauth_token = \"t0k\"\nagents.max_live = 3\n\n[profile]\nschema = 1\n";
-        let profile = parse_profile(text).unwrap();
-        let here = BTreeMap::new();
-        let (rows, secrets) = diff(&profile, &here);
-        assert_eq!(secrets, 1);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].kind, "kept_local");
-        assert_eq!(rows[0].key, "agents.max_live");
-        let banner = format_diff(&rows, secrets, &profile.host, &profile.exported_at);
-        assert!(!banner.contains("t0k"));
+            let profile = parse_profile(text).unwrap();
+            let here = BTreeMap::new();
+            let (rows, secrets) = diff(&profile, &here);
+            assert_eq!(secrets, 1);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].kind, "kept_local");
+            assert_eq!(rows[0].key, "agents.max_live");
+            let banner = format_diff(&rows, secrets, &profile.host, &profile.exported_at);
+            assert!(!banner.contains("t0k"));
+        }
     }
 }

@@ -224,6 +224,16 @@ impl Prompter for TermPrompter {
 }
 
 impl TermPrompter {
+    /// Line-mode echo: stdout normally, stderr in json mode so stdout
+    /// carries one JSON value per the json-output contract.
+    fn say(&self, text: &str) {
+        if self.json {
+            eprintln!("{text}");
+        } else {
+            println!("{text}");
+        }
+    }
+
     fn confirm_raw(&mut self, prompt: &str, default: bool) -> Conf {
         let d = if default { "Y/n" } else { "y/N" };
         let mut hint = String::from("enter = default, esc = cancel");
@@ -246,7 +256,7 @@ impl TermPrompter {
     fn confirm_line(&mut self, prompt: &str, default: bool) -> Conf {
         let d = if default { "Y/n" } else { "y/N" };
         loop {
-            println!("{prompt} ({d})");
+            self.say(&format!("{prompt} ({d})"));
             let answer = match read_line() {
                 Some(a) => a,
                 None => return Conf::Cancel,
@@ -263,7 +273,7 @@ impl TermPrompter {
                     } else {
                         "y, n or cancel"
                     };
-                    println!("  answer {words}.");
+                    self.say(&format!("  answer {words}."));
                 }
             }
         }
@@ -337,9 +347,9 @@ impl TermPrompter {
     }
 
     fn select_line(&mut self, prompt: &str, options: &[&str], default: usize) -> Pick {
-        println!("{prompt}");
+        self.say(prompt);
         for (i, o) in options.iter().enumerate() {
-            println!("  {}) {o}", i + 1);
+            self.say(&format!("  {}) {o}", i + 1));
         }
         loop {
             print!(
@@ -371,7 +381,7 @@ impl TermPrompter {
             } else {
                 "a number or cancel"
             };
-            println!("  answer {words}.");
+            self.say(&format!("  answer {words}."));
         }
     }
 
@@ -434,11 +444,11 @@ impl TermPrompter {
 
     fn checklist_line(&mut self, prompt: &str, options: &[&str], defaults: &[usize]) -> Ticks {
         let mut ticks: Vec<bool> = (0..options.len()).map(|i| defaults.contains(&i)).collect();
-        println!("{prompt}");
+        self.say(prompt);
         loop {
             for (i, o) in options.iter().enumerate() {
                 let t = if ticks[i] { "x" } else { " " };
-                println!("  {}) [{t}] {o}", i + 1);
+                self.say(&format!("  {}) [{t}] {o}", i + 1));
             }
             print!("  numbers to toggle, space-separated; enter = done; b = back; cancel = quit: ");
             let _ = io::stdout().flush();
@@ -465,7 +475,7 @@ impl TermPrompter {
                         ticks[n - 1] = !ticks[n - 1];
                     }
                     _ => {
-                        println!("  no option {tok}.");
+                        self.say(&format!("  no option {tok}."));
                         ok = false;
                     }
                 }
@@ -476,7 +486,7 @@ impl TermPrompter {
                 } else {
                     "numbers or cancel"
                 };
-                println!("  answer {words}.");
+                self.say(&format!("  answer {words}."));
             }
         }
     }
@@ -516,7 +526,7 @@ impl TermPrompter {
     }
 
     fn secret_line(&mut self, prompt: &str) -> Hidden {
-        println!("{prompt}");
+        self.say(prompt);
         match read_line() {
             None => Hidden::Cancel,
             Some(w) if w == "cancel" || w == "q" || w == "quit" => Hidden::Cancel,
@@ -841,8 +851,8 @@ fn refuse_word(message: &str) -> i32 {
 
 /// The entry point behind `fno do wizard`. Exit codes: 0 finished, 130 the
 /// person cancelled, 2 refused (bad flag, no terminal, stale lock, bad
-/// profile). The `wizard-report: ` sentinel is always the last line on
-/// stdout, in every mode, so a pane host can wait for one pattern.
+/// profile). Plain mode ends with the `wizard-report: ` sentinel so a pane
+/// host can wait for one pattern; `--json` ends with one JSON report.
 pub fn run(tail: &[OsString]) -> i32 {
     let mut preset_text: Option<String> = None;
     let mut join_file: Option<String> = None;
@@ -931,10 +941,14 @@ pub fn run(tail: &[OsString]) -> i32 {
                 }
             };
             let (rows, secrets) = setup_profile::diff(&profile, &here);
-            println!(
-                "{}",
-                setup_profile::format_diff(&rows, secrets, &profile.host, &profile.exported_at)
-            );
+            // JSON stdout stays parseable: the join preview rides stderr.
+            let banner =
+                setup_profile::format_diff(&rows, secrets, &profile.host, &profile.exported_at);
+            if json {
+                eprintln!("{banner}");
+            } else {
+                println!("{banner}");
+            }
             Some((profile, rows))
         }
     };
@@ -948,7 +962,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         Err(()) => return 2,
     };
 
-    let raw = io::stdout().is_terminal() && std::env::var_os("CI").is_none();
+    let raw = io::stdout().is_terminal() && std::env::var_os("CI").is_none() && !json;
     let _raw_guard = RawGuard::enable_if(raw);
     let rid = setup_run::run_id();
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
@@ -987,7 +1001,7 @@ pub fn run(tail: &[OsString]) -> i32 {
     };
 
     if cancelled {
-        write_report(&json!({
+        let cancelled_report = json!({
             "status": "cancelled",
             "run_id": rid,
             "host": "wizard",
@@ -999,7 +1013,8 @@ pub fn run(tail: &[OsString]) -> i32 {
             "next_action": serde_json::Value::Null,
             "files_written": [],
             "apply": serde_json::Value::Null,
-        }));
+        });
+        write_report(&cancelled_report);
         setup_run::append_setup_event(
             "wizard",
             json!({
@@ -1016,7 +1031,14 @@ pub fn run(tail: &[OsString]) -> i32 {
             println!();
             println!("Cancelled. The config is untouched.");
         }
-        println!("wizard-report: {}", report_path().display());
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&cancelled_report).unwrap_or_default()
+            );
+        } else {
+            println!("wizard-report: {}", report_path().display());
+        }
         return 130;
     }
 
@@ -1108,6 +1130,13 @@ pub fn run(tail: &[OsString]) -> i32 {
         println!("Report:  {}", report_file.display());
         println!("Answers: {}", answers_file.display());
     }
-    println!("wizard-report: {}", report_file.display());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+    } else {
+        println!("wizard-report: {}", report_file.display());
+    }
     0
 }

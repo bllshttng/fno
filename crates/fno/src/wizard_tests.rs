@@ -232,7 +232,11 @@ fn screen_order_and_skips_follow_the_presets() {
         .iter()
         .any(|r| r.id == "pr-watcher" && r.key == "pr_watch.enabled"));
     assert!(rows.iter().any(|r| r.id == "groom-agent"));
-    assert!(rows.iter().all(|r| !r.key.starts_with("auto_merge")));
+    // The default merge refusal still persists its answer: enabled=false
+    // rides the proposal so a later run cannot read a stale true.
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
     // The preset pick offers three postures with balanced defaulted; the
     // model pick appends Leave unchanged last and defaults to it.
     let preset_offer = pr
@@ -267,7 +271,9 @@ fn screen_order_and_skips_follow_the_presets() {
     assert!(rows
         .iter()
         .all(|r| r.id != "pr-watcher" && r.id != "auto-heal" && r.id != "groom-agent"));
-    assert!(rows.iter().all(|r| !r.key.starts_with("auto_merge")));
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
     assert!(rows.iter().any(|r| r.key == "review.posture"));
 
     // Aggressive: the flow runs to done with zero asks and the full
@@ -388,7 +394,7 @@ fn back_navigation_and_the_write_latch() {
     );
     assert!(pending(&state)
         .iter()
-        .all(|r| !r.key.starts_with("auto_merge")));
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
 }
 
 #[test]

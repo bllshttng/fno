@@ -998,24 +998,30 @@ fn step_join(
                     .push(row("needs_human", "config_set_refused", message.clone()));
                 rep.needs_human.push(message);
             }
-            Err((message, false)) => match crate::setup_profile::restore(&global, &backup) {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
-                    let message =
-                        format!("join: {message}; the global config was restored from its backup");
-                    rep.rows
-                        .push(row("needs_human", "join_restored", message.clone()));
-                    rep.needs_human.push(message);
+            Err((message, false)) => {
+                match crate::setup_profile::restore(&global, &backup) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(crate::setup_profile::in_progress_flag());
+                        let message = format!(
+                            "join: {message}; the global config was restored from its backup"
+                        );
+                        rep.rows
+                            .push(row("needs_human", "join_restored", message.clone()));
+                        rep.needs_human.push(message);
+                    }
+                    Err(e) => {
+                        let message = format!(
+                            "join: {message}; the restore also failed ({e}); the in-progress flag is kept so the next start heals"
+                        );
+                        rep.rows
+                            .push(row("needs_human", "join_pending", message.clone()));
+                        rep.needs_human.push(message);
+                    }
                 }
-                Err(e) => {
-                    let message = format!(
-                        "join: {message}; the restore also failed ({e}); the in-progress flag is kept so the next start heals"
-                    );
-                    rep.rows
-                        .push(row("needs_human", "join_pending", message.clone()));
-                    rep.needs_human.push(message);
-                }
-            },
+                // The config just went back to its original bytes: nothing
+                // later may apply on top of the restored state.
+                return;
+            }
         }
     }
     if applied == 0 {
@@ -1732,6 +1738,8 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
             "first_run_at": first_run_at,
             "key_gap": key_gap,
             "first_merged_pr_at": first_merged,
+            "drift": drift,
+            "rows": red,
         });
         println!(
             "{}",
@@ -2102,10 +2110,13 @@ pub fn run(tail: &[OsString]) -> i32 {
                 Err(e) => return refuse(format!("--join: the global config does not parse: {e}")),
             };
             let (rows, secrets) = crate::setup_profile::diff(p, &here);
-            println!(
-                "{}",
-                crate::setup_profile::format_diff(&rows, secrets, &p.host, &p.exported_at)
-            );
+            // JSON stdout stays parseable: the human preview rides stderr.
+            let banner = crate::setup_profile::format_diff(&rows, secrets, &p.host, &p.exported_at);
+            if opts.json {
+                eprintln!("{banner}");
+            } else {
+                println!("{banner}");
+            }
             let proposed: Vec<Proposal> = rows
                 .iter()
                 .filter(|r| r.applies())
