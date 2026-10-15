@@ -198,14 +198,19 @@ enum Role {
     TargetBlastCheck(Vec<OsString>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
     /// exec'd through the sibling fno-agents `review-level findings post`
-    /// door. --help forwards so the flag surface keeps its owner; the rest
-    /// of the tail passes through byte-verbatim.
+    /// door. The tail passes through byte-verbatim, --help included: the
+    /// findings door prints the usage.
     ReviewPostDispositions(Vec<OsString>),
+    /// `fno do review classify ...`: the findings-classifier leaf, exec'd
+    /// through the sibling fno-agents `review-level findings classify`
+    /// door. The tail passes through byte-verbatim, --help included: the
+    /// findings door prints the usage.
+    ReviewClassify(Vec<OsString>),
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
-    /// leaves keep their role: classify/invocations stay Python
-    /// (resolve-level and post-dispositions are native above), and --help
-    /// forwards so typer still lists them.
+    /// leaves keep their role: invocations stays Python
+    /// (resolve-level, post-dispositions and classify are native above),
+    /// and --help forwards so typer still lists them.
     ReviewPolicyAssess(Vec<OsString>),
     /// `fno review <tail>`: the deprecated root alias, its move notice
     /// printed on stderr before the same exec. Byte-identical to the line
@@ -422,9 +427,9 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// `fno do review post-dispositions ...`: the disposition-comment leaf,
-/// claimed by the same literal three-token prefix. --help/-h anywhere in
-/// the tail refuses the claim so the flag surface keeps forwarding to the
-/// harness that owns it.
+/// claimed by the same literal three-token prefix. The Python leaf is gone,
+/// so the door's help is the only help: --help/-h no longer refuses the
+/// claim, it rides the tail to the findings door's usage.
 fn classify_review_post_dispositions(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3
         || args[0].to_str()? != "do"
@@ -433,9 +438,18 @@ fn classify_review_post_dispositions(args: &[OsString]) -> Option<Vec<OsString>>
     {
         return None;
     }
-    if args[3..]
-        .iter()
-        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review classify ...`: the findings-classifier leaf, claimed by
+/// the same literal three-token prefix. The Python leaf is gone, so the
+/// door's help is the only help: --help/-h rides the tail to the findings
+/// door's usage.
+fn classify_review_classify(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "classify"
     {
         return None;
     }
@@ -578,6 +592,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_post_dispositions(args) {
         return Role::ReviewPostDispositions(rest);
+    }
+    if let Some(rest) = classify_review_classify(args) {
+        return Role::ReviewClassify(rest);
     }
     if let Some((alias, rest)) = classify_review_root(args) {
         return if alias {
@@ -962,6 +979,11 @@ fn main() {
             &["review-level", "findings", "post"],
             &rest,
         )),
+        Role::ReviewClassify(rest) => std::process::exit(fno_agents_exec(
+            "fno do review classify",
+            &["review-level", "findings", "classify"],
+            &rest,
+        )),
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
             "fno do review",
             &["review-policy", "assess"],
@@ -1254,10 +1276,11 @@ mod tests {
             decide_role(&os(&["do", "review", "resolve-level"]), false),
             Role::ReviewLevel(os(&[]))
         );
-        // Sibling verbs under `fno do review` stay Python.
+        // Classify is native now; the remaining sibling verb under
+        // `fno do review` stays Python.
         assert_eq!(
             decide_role(&os(&["do", "review", "classify"]), false),
-            Role::Forward
+            Role::ReviewClassify(os(&[]))
         );
         // The wizard claims its leaf the same literal way.
         assert_eq!(
@@ -1285,15 +1308,20 @@ mod tests {
             ),
             Role::ReviewPostDispositions(os(&["--findings-file", "f.json", "--head", "abc"]))
         );
-        // --help keeps its old role (the Python forward), and the sibling
-        // leaves keep theirs.
+        // --help rides the tail now (the Python leaf is gone; the findings
+        // door prints the usage), and the sibling leaf keeps its native role.
         assert_eq!(
             decide_role(&os(&["do", "review", "post-dispositions", "--help"]), false),
-            Role::Forward
+            Role::ReviewPostDispositions(os(&["--help"]))
         );
         assert_eq!(
             decide_role(&os(&["do", "review", "classify"]), false),
-            Role::Forward
+            Role::ReviewClassify(os(&[]))
+        );
+        // Both leaves' help cases, native: the tail rides to the door.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify", "--help"]), false),
+            Role::ReviewClassify(os(&["--help"]))
         );
         // The bare group keeps its native assess role.
         assert_eq!(
