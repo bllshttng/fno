@@ -473,6 +473,9 @@ if [[ -z "$CLASSIFY_BIN" ]]; then
   echo "  tried crates/fno-agents/target/{release,debug}/fno-agents." >&2
   exit 77
 fi
+# The helper script reads the binary path in its own process, deep under the
+# emitter's child chain; a shell variable stops at the first exec boundary.
+export CLASSIFY_BIN
 cat > "$TMP/classify-real.sh" <<'CREAL'
 #!/usr/bin/env bash
 f="$1"
