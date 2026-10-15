@@ -671,11 +671,6 @@ def _unreadable_graph(tmp_path, monkeypatch):
     return gp
 
 
-@pytest.mark.parametrize("node", ["x-5a5c", "x47d8"])
-
-
-
-
 def test_check_dispatch_hold_refuses_named_node_when_graph_unreadable(tmp_path, monkeypatch):
     _unreadable_graph(tmp_path, monkeypatch)
     monkeypatch.setenv("TARGET_INPUT", "x-5a5c")
