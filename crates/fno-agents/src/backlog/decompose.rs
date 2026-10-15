@@ -7,6 +7,7 @@
 //! fallbacks). The whole decomposition lands in one locked graph mutation, so
 //! a bad spec leaves the graph exactly as it was.
 
+use super::workflows::text_at;
 use crate::plans_path::PinnedTimestamp;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -430,8 +431,8 @@ fn first_cycle(groups: &[NormalizedGroup]) -> Option<Vec<String>> {
 
     fn visit<'a>(
         node: &'a str,
-        adj: &std::collections::HashMap<&str, &Vec<String>>,
-        color: &mut std::collections::HashMap<&str, Color>,
+        adj: &std::collections::HashMap<&'a str, &Vec<String>>,
+        color: &mut std::collections::HashMap<&'a str, Color>,
         stack: &mut Vec<&'a str>,
     ) -> Option<Vec<String>> {
         color.insert(node, Color::Gray);
@@ -1162,12 +1163,12 @@ fn canonical_child_plan_path(
             }
         }
     }
-    crate::plans_path::plan_doc_path(Path::new(child_root), slug, child_id, at).unwrap_or_else(
-        |e| {
+    crate::plans_path::plan_doc_path(Path::new(child_root), slug, child_id, at)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|e| {
             eprintln!("warning: could not resolve the plans dir for {child_root}: {e}");
             String::new()
-        },
-    )
+        })
 }
 
 /// The seed the scaffold leaves in `## Why (from epic)` when the epic doc
@@ -1219,8 +1220,9 @@ fn scaffold_separate_plan(
     let (slice_yaml, slice_why) = epic_wave_slice(epic_strategy, &group.waves);
     let strategy_block = if slice_yaml.is_empty() {
         format!(
-            "\n<!-- No execution strategy carried from the epic: {slice_why}. Write one \
-             here, or this child measures no width and join refuses it. -->\n"
+            "\n<!-- No execution strategy carried from the epic: {}. Write one \
+             here, or this child measures no width and join refuses it. -->\n",
+            slice_why.unwrap_or_default()
         )
     } else {
         format!("\n## Execution Strategy\n\n{slice_yaml}\n")
@@ -1622,7 +1624,7 @@ pub fn run_decompose(tail: &[String]) -> i32 {
     if matches!(max_children, MaxChildren::Unset) && max_prs.is_none() {
         match crate::agents_config::config_lookup(&cwd, &["blueprint", "max_prs_per_epic"]) {
             Some(v) => match v.as_integer() {
-                Some(n) if *n >= 1 => config_default = Some(*n),
+                Some(n) if n >= 1 => config_default = Some(n),
                 _ => {
                     eprintln!("Error: could not read config.blueprint.max_prs_per_epic: it must be an integer >= 1");
                     return 1;
@@ -1918,6 +1920,18 @@ fn decompose_mutate(
                     .map(String::from)
                     .collect();
                 let now = crate::graph_store::now_isoformat();
+                // Built before the big json! literal: a closure returning an
+                // array of json objects inside a json! value position is
+                // handed back as raw Rust tokens, and `{ "value": ... }`
+                // there is a block, not a json object.
+                let difficulty_history: Value = difficulty
+                    .as_ref()
+                    .map(|d| {
+                        serde_json::json!([
+                            {"value": d, "source": "filed", "ts": now.clone()}
+                        ])
+                    })
+                    .unwrap_or_else(|| Value::Array(vec![]));
                 let (origin, origin_evidence_ref, _refused) =
                     super::create_cli::stamp_request_origin(
                         "organic",
@@ -1951,11 +1965,7 @@ fn decompose_mutate(
                     "priority": priority,
                     "blocks_everything": blocks,
                     "difficulty": difficulty,
-                    "difficulty_history": difficulty.as_ref().map(|d| [{
-                        "value": d,
-                        "source": "filed",
-                        "ts": now,
-                    }]).unwrap_or_default(),
+                    "difficulty_history": difficulty_history,
                     "domain": domain,
                     "blocked_by": [],
                     "session_id": null,
