@@ -2451,9 +2451,19 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
             String::new(),
         );
     }
-    // The hold ops are merge-authority writes riding this verb's payload, not
-    // a new top-level root: `{"op": "hold-set"|"freeze-set"|..., ...}` answers
-    // with one receipt instead of a merge verdict.
+    // The check-stage door: `{"op": "hold-check", "pr": ..., "cwd": ...}`
+    // answers the plan-hold read in process, the transport the status
+    // cache-key op and the seams probe ride instead of spawning the Python
+    // leaf.
+    if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
+        return match crate::merge_verb::run_op("hold-check", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    // The hold ops are merge-authority writes and reads riding this verb's
+    // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
+    // ...}` answers with one receipt instead of a merge verdict.
     if payload
         .get("op")
         .and_then(Value::as_str)

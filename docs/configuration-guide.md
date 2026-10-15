@@ -66,6 +66,11 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `post_merge.catchup_window_days` | int | `3` | advanced | How far back the canonical-sync catch-up sweep looks for merges with no sync marker (default 3 days). Bounds the sweep so a fresh clone never re-syncs all history. |
 | `post_merge.sync_stale_hours` | int | `24` | advanced | How long the newest merge may sit unsynced before `fno doctor` reports the canonical checkout stale (default 24h). |
 | `post_merge.model` | str | `claude-opus-5` | advanced | Model for post-merge ritual workers (default claude-opus-5). Routing wins when a secondary provider is keyed. |
+| `telemetry.claude_otel` | bool | `true` | advanced | Bind the daemon's local OTLP receiver for Claude Code usage (default on). |
+| `telemetry.otlp.enabled` | bool | `false` | advanced | Export feed events to an OTLP collector (default off). |
+| `telemetry.otlp.endpoint` | str | `` | advanced | OTLP collector URL, http(s); `/v1/logs` is appended when absent. |
+| `telemetry.otlp.headers_env` | str | `FNO_OTLP_HEADERS` | advanced | Env var holding the export auth headers as `name=value,...`. |
+| `telemetry.otlp.log_content` | bool | `false` | advanced | Export event titles as log text (default off: only the event kind). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |
 | `review.posture` | str (optional) | _(none)_ | always | How much review a code PR must have before it can merge, as one rung of a nine-step ladder (no_review \| tests_pass \| self_review \| independent_review \| github_review \| peer_review \| self_and_github \| self_and_peer \| self_github_and_peer). Default self_review: one real final-head review, author context allowed. Auto-merge (config grants, env grants, finalize, GitHub-native arming) refuses below self_review and names the remedy. Unset infers one visible posture from the legacy settings and prints the exact `fno config set review.posture <rung>` command that makes it permanent. |
 | `review.github_apps` | list[str] (optional) | _(none)_ | advanced | GitHub App bot logins that must have reviewed before the ship gate goes green (the GATE). Legacy alias: required_bots. |

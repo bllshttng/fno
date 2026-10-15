@@ -2588,8 +2588,6 @@ class TestTickRecordsAndDeadline:
         """AC3-HP: notify_watch, heal and stranded share the tick's one
         sidecar scan - three consumers, one call, the same list. The catchup
         leg is gone from the tick; its sync must never be called."""
-        from types import SimpleNamespace as _NS
-
         from fno.pr_watch import cli as prcli
 
         calls = []
@@ -2621,12 +2619,6 @@ class TestTickRecordsAndDeadline:
         )
         monkeypatch.setattr(
             "fno.branch_provenance_cache.write_cache", lambda root, rows: False,
-            raising=True,
-        )
-        monkeypatch.setattr(
-            "fno.pr._sync_canonical.run_sync_catchup",
-            lambda settings, canonical_root: catchup_seen.append(canonical_root)
-            or _NS(outcome="disabled", stale=False, detail=""),
             raising=True,
         )
         monkeypatch.setattr(

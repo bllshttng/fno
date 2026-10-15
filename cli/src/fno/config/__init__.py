@@ -58,6 +58,7 @@ from fno.config._loader import _settings_key as _settings_key
 from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
 from fno.config._guards import GuardsBlock
 from fno.config._store import StoreBlock
+from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
@@ -3922,6 +3923,7 @@ class ConfigBlock(BaseModel):
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
+    telemetry: TelemetryBlock = Field(default_factory=TelemetryBlock)
     research: ResearchBlock = Field(default_factory=ResearchBlock)
     review: ReviewBlock = Field(default_factory=ReviewBlock)
     style: StyleBlock = Field(default_factory=StyleBlock)
@@ -4354,9 +4356,6 @@ class SettingsModel(ConfigBlock):
 # config.local.toml is flat, so no `config.` prefix.
 WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
     {
-        # post_merge.parking_lot_path was removed: the ritual is a
-        # serial one-shot durable write, already safe on the shared canonical
-        # file; a per-lane redirect only orphaned the prose.
         "project.id",
     }
 )
