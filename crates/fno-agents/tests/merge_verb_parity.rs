@@ -123,6 +123,18 @@ fn merge_verb_matches_python_goldens() {
     }
 }
 
+/// The case's pr argument in the corpus's two spellings: the merge family
+/// froze strings, the hold and result families froze ints. The Python
+/// driver int()s either, so the harness mirrors that instead of assuming
+/// one JSON type.
+fn case_pr(case: &Value) -> Option<String> {
+    case["pr"]
+        .as_str()
+        .filter(|pr| !pr.is_empty())
+        .map(str::to_string)
+        .or_else(|| case["pr"].as_i64().map(|pr| pr.to_string()))
+}
+
 /// Run one case's operand child on the fixture and compare streams + folds.
 fn run_case(case_dir: &Path, stubbin: &Path) {
     let case: Value = serde_json::from_str(
@@ -143,13 +155,13 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     match case["entry"].as_str().unwrap_or("merge") {
         "hold" => {
             cmd.arg("hold-check");
-            if let Some(pr) = case["pr"].as_str().filter(|pr| !pr.is_empty()) {
+            if let Some(pr) = case_pr(case) {
                 cmd.arg(pr);
             }
         }
         _ => {
             cmd.arg("merge");
-            if let Some(pr) = case["pr"].as_str().filter(|pr| !pr.is_empty()) {
+            if let Some(pr) = case_pr(case) {
                 cmd.arg(pr);
             }
             if let Some(argv) = case["argv"].as_array() {
