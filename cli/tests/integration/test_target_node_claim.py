@@ -53,6 +53,19 @@ if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
     "${MOCK_ABI_FRONT:?no fno front}" "$@" > "$MOCK_ABI_LOG.front-out" 2> "$MOCK_ABI_LOG.front-err"
     rc=$?
     echo "FRONT_RC:$rc" >> "$MOCK_ABI_LOG"
+    # A silent front refusal is not decidable from its streams alone: record
+    # WHICH binaries answered, the FNO env they saw, and run the native
+    # directly on the same argv so a front-side death separates from a
+    # native-side one.
+    if [[ "$rc" != "0" ]]; then
+      echo "FRONT_BIN: $MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG"
+      ls -la "$MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG" 2>&1
+      echo "NATIVE_BIN: $MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG"
+      ls -la "$MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG" 2>&1
+      env | grep -E "^(FNO_|HOME=|TARGET_|PYTHON)" | sort >> "$MOCK_ABI_LOG"
+      "${MOCK_ABI_NATIVE:?no native}" "$@" > "$MOCK_ABI_LOG.native-out" 2> "$MOCK_ABI_LOG.native-err"
+      echo "NATIVE_RC:$?" >> "$MOCK_ABI_LOG"
+    fi
     exit "$rc"
   fi
   exit "$MOCK_ABI_ACQUIRE_RC"
@@ -275,12 +288,20 @@ def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
             f"--- front stdout ---\n{front_out.read_text() if front_out.exists() else ''}"
             f"--- front stderr ---\n{front_err.read_text() if front_err.exists() else ''}"
         )
+    native_out = Path(f"{log}.native-out")
+    native_err = Path(f"{log}.native-err")
+    native_text = ""
+    if native_out.exists() or native_err.exists():
+        native_text = (
+            f"--- native stdout ---\n{native_out.read_text() if native_out.exists() else ''}"
+            f"--- native stderr ---\n{native_err.read_text() if native_err.exists() else ''}"
+        )
     home_walk = sorted(
         str(p2.relative_to(home)) for p2 in home.rglob("*") if p2.is_file()
     )
     assert f'target_claim_key: "node:{node_id}"' in state, (
         f"{state}\n--- init stderr ---\n{r.stderr}\n"
-        f"--- .claim-err ---\n{err_text}\n{front_text}"
+        f"--- .claim-err ---\n{err_text}\n{front_text}{native_text}"
         f"--- sandbox home files ---\n{chr(10).join(home_walk)}\n"
         f"--- mock log ---\n{log.read_text() if log.exists() else '(absent)'}"
     )
