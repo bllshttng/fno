@@ -775,6 +775,35 @@ def test_admit_refuses_on_shell_sigkill_137(monkeypatch):
     assert "137" in refusal
 
 
+def test_admit_fails_open_for_a_user_when_the_reader_was_signalled(monkeypatch):
+    # The distress refusal holds agent fan-out only. A user at the terminal
+    # is never held, even by a dead budget.
+    monkeypatch.delenv("FNO_AGENT_SELF", raising=False)
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ATTENDED", raising=False)
+    _budget_raising(
+        monkeypatch,
+        {"message": "fno-agents fleet-incident exited -9: ", "returncode": -9},
+    )
+    assert _quota.admit(["pr", "view", "1"]) is None
+
+
+def test_admit_holds_an_unattended_claude_thread_on_a_signalled_reader(monkeypatch):
+    # The degrade twin reads the same markers the Rust op reads: a claude
+    # thread worker carries no FNO_AGENT_SELF, so the thread markers hold it
+    # even where the old FNO_AGENT_SELF-only check would have failed open.
+    monkeypatch.delenv("FNO_AGENT_SELF", raising=False)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "0")
+    _budget_raising(
+        monkeypatch,
+        {"message": "fno-agents fleet-incident exited 137: ", "returncode": 137},
+    )
+    refusal = _quota.admit(["pr", "view", "1"])
+    assert refusal is not None
+    assert "137" in refusal
+
+
 def test_admit_admits_on_clean_reader_exit_and_names_the_code(monkeypatch, capsys):
     monkeypatch.setenv("FNO_AGENT_SELF", "quota-test-worker")
     _budget_raising(

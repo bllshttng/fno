@@ -360,6 +360,21 @@ def _reader_signalled(exc: VerbUnavailable) -> bool:
     return rc is not None and (rc < 0 or rc == 137)
 
 
+def _agent_origin_env() -> bool:
+    """Degrade-path twin of gate_agent_origin (crates/fno-agents/src/
+    spawn_gate_admission.rs), consulted ONLY when the Rust op could not
+    answer (the reader was signalled). The op stays the one origin
+    authority whenever it is alive; this twin only keeps a dead budget
+    from holding the user's own typed gh.
+    """
+    if (os.environ.get("FNO_AGENT_SELF") or "").strip():
+        return True
+    return (
+        os.environ.get("CLAUDECODE") == "1"
+        and os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "0"
+    )
+
+
 def admit(argv: Sequence[str]) -> Optional[str]:
     """Ask the machine-wide budget before one real gh call leaves.
 
@@ -369,12 +384,22 @@ def admit(argv: Sequence[str]) -> Optional[str]:
     The one exception is a reader the kernel signalled (exit -9, 137): the
     machine is in distress, so refuse instead of admitting a gh-call flood,
     and name the exit code - "ledger unavailable" alone reads as a missing
-    ledger when the real story is the OOM killer.
+    ledger when the real story is the OOM killer. The distress refusal holds
+    agent fan-out only: a user at the terminal is never held, even by a
+    dead budget.
     """
     try:
         answer = _gh_budget({"op": "admit", "argv": [str(a) for a in argv]})
     except VerbUnavailable as exc:
         if _reader_signalled(exc):
+            if not _agent_origin_env():
+                print(
+                    f"gh budget: budget reader exited {exc.returncode} (signalled); "
+                    "admitting a user call - the reserve never holds the human "
+                    "at the terminal",
+                    file=sys.stderr,
+                )
+                return None
             rc = exc.returncode
             return (
                 f"gh budget: budget reader exited {rc} (signalled); refusing while "
