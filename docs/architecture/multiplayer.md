@@ -36,6 +36,8 @@ A build from before the shared backlog writes with no outbox, and the primary ne
 
 A row that a peer changed first refuses the whole batch, and the primary writes nothing. The replica then takes the primary's rows back for every row the batch touched, and the refusal names the table. A write through `mutate_rows` syncs and retries by itself.
 
+The take-back is not silent. It keeps the refused batch in the replica's `backlog_refused` table, exactly as the flush sent it, so a retry or an inspection can read what this machine tried to write. It also prints one notice naming each node and the columns the take-back reverted, and records the same facts as a `backlog_refused_flush` event in the space's `events.jsonl`. A refusal that lands while the writer is between turns still reaches an operator who reads the journal: without it, an update that printed `Updated` can revert minutes later, and nothing says so until a human notices the node back at `idea`.
+
 If the primary cannot be reached, backlog writes still land in the replica and wait in the outbox. The next flush that reaches the primary sends them, and a peer's newer change refuses them then. Reads keep working from the replica. To work alone for good, unset `store.share_backlog`.
 
 ## Start sharing

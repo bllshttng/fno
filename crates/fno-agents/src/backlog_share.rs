@@ -12,8 +12,11 @@
 //! collide. The statements run parent table first, so a parent row exists
 //! before the update that names it. A row a peer changed first refuses the
 //! whole batch, and the replica takes the primary's rows back for every row
-//! the batch touched. So the primary decides, and no machine overwrites a
-//! peer's change it never saw.
+//! the batch touched. The take-back keeps the refused statements in
+//! `backlog_refused`, and an operator notice (stderr plus a
+//! `backlog_refused_flush` journal event) names the nodes and columns it
+//! reverted. So the primary decides, and no machine overwrites a peer's
+//! change it never saw.
 //!
 //! Read: reads stay local. One daemon arm per machine runs [`flush`] and then
 //! [`sync`], which applies the primary's change log to the replica.
@@ -32,7 +35,7 @@ use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -77,6 +80,7 @@ fn rank(table: &str) -> usize {
 const LOCAL_TABLES: &[&str] = &[
     "graph_meta",
     "backlog_outbox",
+    "backlog_refused",
     "nodes_fts",
     "nodes_fts_data",
     "nodes_fts_idx",
@@ -105,6 +109,17 @@ const FLUSH_WAIT: Duration = Duration::from_secs(30);
 const OUTBOX_DDL: &str = "CREATE TABLE IF NOT EXISTS main.backlog_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   change TEXT NOT NULL
+);";
+
+/// The dead-letter side of the outbox: a refused batch's statements land
+/// here, exactly as [`publish`] sent them, so a take-back never destroys the
+/// only record of what this machine tried to write.
+const REFUSED_DDL: &str = "CREATE TABLE IF NOT EXISTS main.backlog_refused (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  error TEXT NOT NULL,
+  ops TEXT NOT NULL
 );";
 
 /// The primary-side bookkeeping. `backlog_cas.n` takes only 1, so a
@@ -608,7 +623,9 @@ fn replica(graph: &Path) -> Result<Connection, String> {
         .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .map_err(|e| e.to_string())?;
     connection
-        .execute_batch(&format!("PRAGMA foreign_keys=OFF;\n{OUTBOX_DDL}"))
+        .execute_batch(&format!(
+            "PRAGMA foreign_keys=OFF;\n{OUTBOX_DDL}\n{REFUSED_DDL}"
+        ))
         .map_err(|e| e.to_string())?;
     Ok(connection)
 }
@@ -616,7 +633,9 @@ fn replica(graph: &Path) -> Result<Connection, String> {
 /// Send this machine's outbox to the primary. Runs under its own lock file,
 /// never the graph lock, so a slow primary holds up no writer. `Ok(n)` is the
 /// number of row changes the primary took. A refusal takes the primary's
-/// rows back for every row the batch touched, clears the batch, and returns
+/// rows back for every row the batch touched, keeps the refused statements
+/// in `backlog_refused`, names the revert in an operator notice (stderr plus
+/// a `backlog_refused_flush` journal event), clears the batch, and returns
 /// the refusal. An unreachable or unseeded primary keeps the outbox for the
 /// next flush.
 pub fn flush(graph: &Path) -> Result<usize, String> {
@@ -700,7 +719,7 @@ pub fn flush(graph: &Path) -> Result<usize, String> {
         }
         Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => Err(error),
         Err(error) => {
-            repair(&remote, &mut connection, &changes, last)?;
+            repair(&remote, &mut connection, &changes, last, &batch, &error)?;
             Err(error)
         }
     }
@@ -713,14 +732,18 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Take the primary's rows back for every row a refused batch touched, and
-/// clear the batch from the outbox, in one local transaction. The primary
-/// reads run first, outside the transaction.
+/// Take the primary's rows back for every row a refused batch touched, keep
+/// the refused statements for retry or inspection, and clear the batch from
+/// the outbox, in one local transaction. The primary reads run first,
+/// outside the transaction. After the commit, the operator notice (stderr
+/// plus a `backlog_refused_flush` journal event) names what was reverted.
 fn repair(
     remote: &Remote,
     connection: &mut Connection,
     changes: &[Change],
     last: i64,
+    batch: &str,
+    error: &str,
 ) -> Result<(), String> {
     let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>)> = Vec::new();
     for change in changes {
@@ -791,6 +814,17 @@ fn repair(
         nodes_moved |= table == "nodes";
     }
     transaction
+        .execute(
+            "INSERT INTO backlog_refused (batch, at, error, ops) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                batch,
+                crate::backlog::now_ms() as i64,
+                error,
+                ops_json(changes)
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    transaction
         .execute_batch(&format!(
             "DELETE FROM backlog_outbox WHERE id <= {last};
              DELETE FROM graph_meta WHERE key = '{SENDING}';"
@@ -800,7 +834,114 @@ fn repair(
         rebuild_search(&transaction)?;
     }
     stamp_fresh(&transaction, "repair")?;
-    transaction.commit().map_err(|e| e.to_string())
+    transaction.commit().map_err(|e| e.to_string())?;
+    notice_refusal(changes, batch, error);
+    Ok(())
+}
+
+/// The refused flush's operator notice: stderr, then a best-effort
+/// `backlog_refused_flush` journal event in the space this process resolves.
+/// Both name the nodes and columns the take-back reverted. A notice failure
+/// never fails the repair that already committed.
+fn notice_refusal(changes: &[Change], batch: &str, error: &str) {
+    eprintln!("backlog-share: {}", refusal_notice(changes));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let Some(space) = crate::paths::space_dir_opt(&cwd) else {
+        return;
+    };
+    let path = space.join("events.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let emitter = crate::events::EventEmitter::new(path, "backlog");
+    let _ = emitter.emit(
+        "backlog_refused_flush",
+        &refused_flush_data(changes, batch, error),
+    );
+}
+
+/// The operator notice for one refused flush: the nodes and columns the
+/// take-back reverted, then the other tables' row counts.
+fn refusal_notice(changes: &[Change]) -> String {
+    let mut nodes: Vec<String> = Vec::new();
+    let mut others: BTreeMap<&str, usize> = BTreeMap::new();
+    for change in changes {
+        if change.table == "nodes" {
+            let id = id_of(change);
+            if let Some(id) = id {
+                let line = format!("node {id} ({})", change.columns.join(", "));
+                if !nodes.contains(&line) {
+                    nodes.push(line);
+                }
+            }
+        } else {
+            *others.entry(change.table.as_str()).or_insert(0) += 1;
+        }
+    }
+    let others_part = if others.is_empty() {
+        String::new()
+    } else {
+        let pairs: Vec<String> = others
+            .iter()
+            .map(|(table, count)| format!("{count} row(s) in {table}"))
+            .collect();
+        format!(", plus {}", pairs.join(", "))
+    };
+    if nodes.is_empty() {
+        format!(
+            "the primary refused a batch and took this machine's rows back{}. The refused statements are kept in backlog_refused for retry or inspection.",
+            others_part
+        )
+    } else {
+        format!(
+            "the primary refused a batch and took this machine's rows back: {}{}. The refused statements are kept in backlog_refused for retry or inspection.",
+            nodes.join("; "),
+            others_part
+        )
+    }
+}
+
+/// The `backlog_refused_flush` event body: the facts the notice names, structured for audit.
+fn refused_flush_data(changes: &[Change], batch: &str, error: &str) -> Value {
+    let mut nodes: Vec<Value> = Vec::new();
+    for change in changes {
+        if change.table != "nodes" {
+            continue;
+        }
+        if let Some(id) = id_of(change) {
+            nodes.push(json!({
+                "id": id,
+                "columns": change.columns,
+            }));
+        }
+    }
+    let mut tables: BTreeMap<&str, usize> = BTreeMap::new();
+    for change in changes {
+        if change.table != "nodes" {
+            *tables.entry(change.table.as_str()).or_insert(0) += 1;
+        }
+    }
+    json!({
+        "batch": batch,
+        "error": error,
+        "nodes": nodes,
+        "tables": tables
+            .iter()
+            .map(|(table, rows)| json!({"table": table, "rows": rows}))
+            .collect::<Vec<Value>>(),
+    })
+}
+
+/// The node id a change names: the `id` column's old value, else its new
+/// one. `None` when the change carries no id column value.
+fn id_of(change: &Change) -> Option<String> {
+    let i = change.columns.iter().position(|c| c == "id")?;
+    change
+        .old
+        .get(i)
+        .or_else(|| change.new.get(i))
+        .and_then(SqlValue::text)
+        .map(str::to_string)
 }
 
 /// After a write through `mutate_rows`, once the graph lock is gone: flush
@@ -1596,5 +1737,46 @@ mod tests {
                 .any(|c| c.table == NODES && c.columns.iter().any(|name| name == "plan_path")),
             "{ops}"
         );
+        assert!(refusal_notice(&parsed).contains("fb-4908"), "{ops}");
+    }
+
+    /// The notice and the event name the nodes and the columns the take-back
+    /// reverted; the other tables appear only as counts.
+    #[test]
+    fn the_refusal_notice_names_the_nodes_and_their_columns() {
+        // Built through parse_ops, so the fixture doubles as a from_json check.
+        let changes = parse_ops(
+            &json!([
+                {"op": "u", "t": "nodes", "c": ["id", "title", "plan_path", "status"],
+                 "o": ["fb-4908", "shared", null, "idea"], "n": ["fb-4908", "shared", "p.md", "ready"]},
+                {"op": "i", "t": "comments", "c": ["id", "body"], "o": [], "n": ["c-1", "hello"]},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let notice = refusal_notice(&changes);
+        assert!(notice.contains("fb-4908"), "{notice}");
+        assert!(
+            notice.contains("plan_path") && notice.contains("status"),
+            "{notice}"
+        );
+        assert!(notice.contains("comments"), "{notice}");
+        assert!(
+            !notice.contains("c-1"),
+            "other tables stay counts: {notice}"
+        );
+        assert!(notice.contains("backlog_refused"), "{notice}");
+
+        let data = refused_flush_data(&changes, "batch-1", "boom");
+        assert_eq!(data["batch"], "batch-1");
+        assert_eq!(data["error"], "boom");
+        let nodes = data["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["id"], "fb-4908");
+        let columns = nodes[0]["columns"].as_array().unwrap();
+        assert!(columns.contains(&json!("plan_path")));
+        let tables = data["tables"].as_array().unwrap();
+        assert_eq!(tables[0]["table"], "comments");
+        assert_eq!(tables[0]["rows"], 1);
     }
 }
