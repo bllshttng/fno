@@ -81,7 +81,13 @@ fn write_case(root: &Path, case: &Case) -> PathBuf {
 
     let mut events = String::new();
     if case.fresh_tick {
-        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ");
+        // Five seconds in the future: the verdict's pending guard reads
+        // plist mtime against the tick ts, and a same-instant fixture write
+        // on a coarse-mtime filesystem can order them wrong. A future tick
+        // is always newer than the plist, so the cure cases read healthy
+        // deterministically.
+        let ts =
+            (chrono::Utc::now() + chrono::Duration::seconds(5)).format("%Y-%m-%dT%H:%M:%S%.6fZ");
         events.push_str(&format!(
             "{{\"ts\":\"{ts}\",\"type\":\"pr_watch_tick\",\"data\":{{}}}}\n"
         ));
