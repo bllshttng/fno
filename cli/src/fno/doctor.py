@@ -3676,7 +3676,7 @@ def _stale_dead_letters(
             meta = getattr(m, "meta", None) or {}
             if meta.get("owner") or _a2a_handle_re().match(to):
                 recips.add(to)
-    except Exception:  # noqa: BLE001 — a torn bus contributes no findings
+    except Exception:  # noqa: BLE001 - a torn bus contributes no findings
         return []
 
     # Positive drain marker (W1.1): a message whose id has an agent_mail_drained

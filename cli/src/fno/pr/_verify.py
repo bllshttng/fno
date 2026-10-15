@@ -327,7 +327,7 @@ def run_verify_merged(
         )
         sys.stdout.write(
             f"pr_closed_without_merge: PR #{pr_number} is CLOSED (not merged) "
-            "— investigate before re-promising\n"
+            "- investigate before re-promising\n"
         )
         return 1
     if state != "OPEN":
@@ -423,7 +423,7 @@ def run_verify_merged(
         )
         sys.stdout.write(
             f"remediation_disabled: PR #{pr_number} is mergeable but "
-            "config.auto_merge.remediation: verify_only — merge manually or flip the setting\n"
+            "config.auto_merge.remediation: verify_only - merge manually or flip the setting\n"
         )
         return 1
 
@@ -756,6 +756,6 @@ def run_verify_reviews(pr_number: str, state_file: str, cwd: Optional[str] = Non
 
     sys.stdout.write(
         "verify-review-replies: external_review_passed flipped back to false "
-        f"— missing replies to: {' '.join(missing)}\n"
+        f"- missing replies to: {' '.join(missing)}\n"
     )
     return 1

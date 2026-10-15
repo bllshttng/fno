@@ -20,7 +20,7 @@
 use super::*;
 use crate::authorized_merge::Probes;
 use crate::pr_status::reviews::{read_review_coverage, review_lane};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Read;
 
 /// Exit polarity of the three-state answer, kept from the verb's own
@@ -100,10 +100,7 @@ fn waiver_note(description: &str) -> String {
 /// failure. Only read when an override label is held (the one consumer), so
 /// a healthy PR never pays for it.
 fn pr_author_login<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Option<String> {
-    let args = vec![
-        "api".to_string(),
-        format!("repos/:owner/:repo/pulls/{pr}"),
-    ];
+    let args = vec!["api".to_string(), format!("repos/:owner/:repo/pulls/{pr}")];
     let (ok, output) = probes.run_gh(cwd, &args).ok()?;
     if !ok {
         return None;
@@ -168,11 +165,7 @@ fn override_label_actor<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Option<St
 /// reject-and-attest wearing a label. An unreadable actor or author refuses
 /// fail-closed. Who applied the label is named in every arm: the receipt
 /// survives both verdicts.
-fn override_valve<P: Probes>(
-    probes: &P,
-    cwd: &Path,
-    pr: u64,
-) -> (bool, String, String) {
+fn override_valve<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> (bool, String, String) {
     if !pr_has_override_label(probes, cwd, pr) {
         return (false, String::new(), String::new());
     }
@@ -210,9 +203,7 @@ refused (an author cannot override its own review gate)"
     }
     (
         true,
-        format!(
-            "{OVERRIDE_NOTE_PREFIX}coverage-override label applied by {actor}"
-        ),
+        format!("{OVERRIDE_NOTE_PREFIX}coverage-override label applied by {actor}"),
         String::new(),
     )
 }
@@ -250,8 +241,7 @@ fn coverage_has_local_pass(row: &Value, reviewer: &str) -> bool {
         .is_some_and(|verdicts| {
             verdicts.iter().any(|v| {
                 v.get("verdict").and_then(Value::as_str) == Some("reviewed")
-                    && v.get("producer").and_then(Value::as_str)
-                        == Some("local_attestation")
+                    && v.get("producer").and_then(Value::as_str) == Some("local_attestation")
                     && v.get("name")
                         .and_then(Value::as_str)
                         .map(|n| n.trim().trim_start_matches('/'))
@@ -300,7 +290,10 @@ merge"
         })
         .unwrap_or_else(|| "the rung's evidence is not at this head".to_string());
     let posture_word = posture.get("posture").and_then(Value::as_str).unwrap_or("");
-    let rank = posture.get("rank").map(|r| r.to_string()).unwrap_or_default();
+    let rank = posture
+        .get("rank")
+        .map(|r| r.to_string())
+        .unwrap_or_default();
     Some(format!(
         "review posture '{posture_word}' (rank {rank}) is unsatisfied: {gaps}"
     ))
@@ -413,9 +406,8 @@ head-pinned by design - re-run the review verb at HEAD",
             .iter()
             .filter_map(|v| {
                 let name = v.get("name").and_then(Value::as_str)?;
-                (v.get("verdict").and_then(Value::as_str) == Some(verdict_word)
-                    && !name.is_empty())
-                .then(|| name.to_string())
+                (v.get("verdict").and_then(Value::as_str) == Some(verdict_word) && !name.is_empty())
+                    .then(|| name.to_string())
             })
             .collect()
     };
@@ -499,11 +491,7 @@ fn git_toplevel(cwd: &Path) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// `owner/repo` from the checkout's origin remote, for the waiver subject.
@@ -561,14 +549,14 @@ fn ordinary_verdict<P: Probes>(
     // The valve, checked before the events read so an overridden PR skips
     // the recompute entirely. A label held but REFUSED (author-applied, or
     // an unreadable actor) keeps its refusal for the uncovered answer below.
-    let (override_valid, override, override_refusal) = override_valve(probes, cwd, pr);
+    let (override_valid, override_note, override_refusal) = override_valve(probes, cwd, pr);
     if override_valid {
         return (
             GateVerdict {
                 state: GateState::Covered,
                 refusal: String::new(),
                 covered_head: head.clone(),
-                note: override,
+                note: override_note,
             },
             None,
         );
@@ -590,8 +578,7 @@ fn ordinary_verdict<P: Probes>(
             && crate::pr_status::reviews::payload_is_code(cwd, pr));
     let row_value = read_review_coverage(cwd, pr, Some(&head), recompute, recompute);
     let (covered, failed) = covered_conjuncts(&row_value, &head, code_review_required);
-    let recomputed =
-        row_value.get("recompute").and_then(Value::as_str) == Some("recomputed");
+    let recomputed = row_value.get("recompute").and_then(Value::as_str) == Some("recomputed");
     let posture = posture_refusal(&row_value, recomputed);
     let recompute_note = row_value
         .get("recompute")
@@ -615,16 +602,11 @@ fn ordinary_verdict<P: Probes>(
     // Python's disposition refusal, rebuilt from the blocker rows: a
     // truncated chain keeps its own sentence and names the remainder; open
     // findings name their keys and teach the fix-delta remedy.
-    let truncated = blockers
-        .iter()
-        .any(|b| b.axis == "truncated-remainder");
+    let truncated = blockers.iter().any(|b| b.axis == "truncated-remainder");
     let disposition_named: Vec<String> = if truncated {
         vec![TRUNCATED_KEY.to_string()]
     } else {
-        let mut keys: Vec<String> = blockers
-            .iter()
-            .map(|b| b.finding_key.clone())
-            .collect();
+        let mut keys: Vec<String> = blockers.iter().map(|b| b.finding_key.clone()).collect();
         keys.sort();
         keys
     };
@@ -665,8 +647,7 @@ fn ordinary_verdict<P: Probes>(
     // counter, and a refusal past its spent budget would be unsatisfiable by
     // construction); its rounds_used lifts the printed count when the
     // re-derivation landed under the cap.
-    let row_spent =
-        row_value.get("rounds_exhausted").and_then(Value::as_bool) == Some(true);
+    let row_spent = row_value.get("rounds_exhausted").and_then(Value::as_bool) == Some(true);
     if row_spent {
         let row_rounds = row_value
             .get("rounds_used")
@@ -696,8 +677,7 @@ fn ordinary_verdict<P: Probes>(
             unsatisfied_parts.push(failed.to_string());
         }
         if code_review_required {
-            unsatisfied_parts
-                .push("code-review attestation required by config".to_string());
+            unsatisfied_parts.push("code-review attestation required by config".to_string());
         }
         let unsatisfied = unsatisfied_parts.join("; ");
         let waiver = format!(
@@ -724,18 +704,18 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
     // The Rust posture verdict, read below the cap only: a budget ruling
     // waives rounds while a posture names what satisfied review must already
     // contain.
-    if covered && posture.is_some() {
-        return (
-            GateVerdict {
-                state: GateState::Refused,
-                refusal: posture.unwrap(),
-                covered_head: String::new(),
-                note: join_notes(None),
-            },
-            Some((head, waiver_hard)),
-        );
-    }
     if covered {
+        if let Some(posture_text) = posture {
+            return (
+                GateVerdict {
+                    state: GateState::Refused,
+                    refusal: posture_text,
+                    covered_head: String::new(),
+                    note: join_notes(None),
+                },
+                Some((head, waiver_hard)),
+            );
+        }
         if !disposition_text.is_empty() {
             // Rounds remain, so the refusal teaches the fix-delta remedy AND
             // shows the budget the next round spends.
@@ -774,14 +754,8 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
         && events_text
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|val| {
-                val.get("type").and_then(Value::as_str)
-                    == Some("review_attestation")
-            })
-            .any(|val| {
-                val.pointer("/data/verdict").and_then(Value::as_str)
-                    != Some("pass")
-            })
+            .filter(|val| val.get("type").and_then(Value::as_str) == Some("review_attestation"))
+            .any(|val| val.pointer("/data/verdict").and_then(Value::as_str) != Some("pass"))
     {
         let remaining = rounds_remaining_note(rounds, max_rounds);
         let note = join_notes(Some(&remaining));
@@ -796,8 +770,8 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
         );
     }
     let hint = sized_self_review_hint(cwd);
-    let (mut refusal, stale_caused_it) =
-        if code_review_required && !coverage_has_local_pass(&row_value, "code-review")
+    let (mut refusal, stale_caused_it) = if code_review_required
+        && !coverage_has_local_pass(&row_value, "code-review")
     {
         let sized = match &hint {
             Some(h) => format!(" - `{h}`"),
@@ -809,8 +783,7 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
 attestation; run the harness review verb at HEAD{sized}, then emit the \
 code-review attestation"
             ),
-            failed != "reviewer_refused"
-                && has_stale_verdict(&row_value, Some("code-review")),
+            failed != "reviewer_refused" && has_stale_verdict(&row_value, Some("code-review")),
         )
     } else {
         let sources = if row_value.get("coverage").is_none() {
@@ -818,12 +791,8 @@ code-review attestation"
         } else {
             None
         };
-        let reason = coverage_refused_reason(
-            Some(&row_value),
-            &head,
-            sources.as_deref(),
-            hint.as_deref(),
-        );
+        let reason =
+            coverage_refused_reason(Some(&row_value), &head, sources.as_deref(), hint.as_deref());
         (
             reason,
             failed != "reviewer_refused" && has_stale_verdict(&row_value, None),
@@ -865,11 +834,7 @@ fn coverage_sources(cwd: &Path) -> Vec<String> {
 /// The paginated REST reviews read the round budget pays for, mapped into
 /// the `{state, commit.oid}` shape the counter reads. Bounded per call; a
 /// failed read answers the reason.
-fn read_reviews_payload<P: Probes>(
-    probes: &P,
-    cwd: &Path,
-    pr: u64,
-) -> Result<Vec<Value>, String> {
+fn read_reviews_payload<P: Probes>(probes: &P, cwd: &Path, pr: u64) -> Result<Vec<Value>, String> {
     let slug = git_origin_slug(cwd).ok_or_else(|| "repo slug unreadable".to_string())?;
     let mut rows: Vec<Value> = Vec::new();
     for page in 1..=100u32 {
@@ -919,11 +884,12 @@ pub(crate) fn verdict<P: Probes>(probes: &P, cwd: &Path, pr: u64, recompute: boo
         return verdict;
     }
     let fno_bin = loopcheck_fno_bin();
-    let Some(slug) = git_origin_slug(cwd) else {
-        return verdict;
-    };
-    let (waiver, authority_unknown) =
-        operator_waiver(&fno_bin, cwd, &slug, pr as i64, &head, hard);
+    // An unreadable slug scopes OUT the per-head subject only; the standing
+    // ruling is consulted either way, exactly as the overlay's own contract
+    // reads (an empty slug is NoLaw for the scoped probe, never a skip of
+    // the standing one).
+    let slug = git_origin_slug(cwd).unwrap_or_default();
+    let (waiver, authority_unknown) = operator_waiver(&fno_bin, cwd, &slug, pr as i64, &head, hard);
     if let Some(description) = waiver {
         // The live head is the pin: a waiver covers exactly the head its
         // subject names, so the merge still refuses a push that races it.
@@ -968,7 +934,12 @@ fn run_check_operand(args: &[String]) -> i32 {
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut i = 0;
     while i < args.len() {
-        if let Some(val) = try_flag_value(&args[i], "--recompute", args, &mut i) {
+        if args[i] == "--recompute" {
+            // The valueless spelling is the common one and sits LAST in the
+            // forwarded argv, where try_flag_value would read past the end
+            // and silently drop the flag.
+            recompute = true;
+        } else if let Some(val) = try_flag_value(&args[i], "--recompute", args, &mut i) {
             recompute = matches!(val.as_str(), "" | "true" | "1");
         } else if let Some(val) = try_flag_value(&args[i], "--cwd", args, &mut i) {
             cwd = PathBuf::from(val);
@@ -1029,8 +1000,10 @@ fn run_op_door() -> i32 {
                 eprintln!("review-coverage op: verdict needs a numeric pr");
                 return 2;
             };
-            let recompute =
-                parsed.get("recompute").and_then(Value::as_bool).unwrap_or(false);
+            let recompute = parsed
+                .get("recompute")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let v = verdict(&crate::authorized_merge::RealProbes, &cwd, pr, recompute);
             json!({
                 "state": v.state.code(),
