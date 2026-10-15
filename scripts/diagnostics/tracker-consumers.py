@@ -71,6 +71,10 @@ READ_ALLOWLIST = (
     # The claims store's db-path builder (the layout place of the graph
     # anchor, swapped to its db sibling), never a read.
     "crates/fno-agents/src/claim_store.rs",
+    # The merge verb's store-path builder (the hold-verdict flow hands the
+    # resolved anchor to its worker rows read: the FNO_STATE_DIR layout
+    # place, else the scope default), never a read.
+    "crates/fno-agents/src/merge_verb/mod.rs",
     # The refresh verb's plist template names the polled store in its
     # launchd comment; the verb itself reads no graph.
     "crates/fno-agents/src/pr_watch/refresh.rs",
