@@ -36,7 +36,6 @@ export PATH
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${GEMINI_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI_DIR="$(cd "$HOOK_DIR/.." && pwd)/cli"
 
 # The report RPC reaches a daemon socket that can stall; bounded with the
 # shared wall-clock helper rather than the harness's hook timeout. Sourcing
@@ -97,8 +96,9 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
         PY_ARGS=(--harness "$HARNESS" --agent-self "$FNO_AGENT_SELF" --cwd "$REPO_ROOT")
         [[ -n "$SESSION_ID" ]] && PY_ARGS+=(--session-id "$SESSION_ID")
         cd "$REPO_ROOT" 2>/dev/null || true
-        with_timeout 12 uv run --project "$CLI_DIR" \
-            python3 -m fno.agents.register_session "${PY_ARGS[@]}" >/dev/null 2>&1 </dev/null || true
+        source "$HOOK_DIR/../scripts/lib/fno-python.sh"
+        fno_python_init "$HOOK_DIR/.."
+        with_timeout 12 "$FNO_PYTHON" -B -m fno.agents.register_session "${PY_ARGS[@]}" >/dev/null 2>&1 </dev/null || true
     fi
     exit 0
 fi

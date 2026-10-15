@@ -385,6 +385,10 @@ row_codex_plugin_session() {
   # no `fno` front door. The channel math must target a real release.
   local tree="$BASE/codex-tree"
   copy_tree_to_scratch "$tree"
+  # Exercise this candidate, as developer staging and generated trees do.
+  jq '.plugins |= map(if .name == "fno" then .source = {source:"local",path:"."} else . end)' \
+    "$tree/.agents/plugins/marketplace.json" > "$tree/.agents/plugins/marketplace.json.new"
+  mv "$tree/.agents/plugins/marketplace.json.new" "$tree/.agents/plugins/marketplace.json"
   local version
   version="$(newest_pypi_version)" || { miss "pypi" "could not read the newest PyPI version"; return 0; }
   awk -v v="$version" '{

@@ -6,6 +6,7 @@
       "event": "SessionStart",
       "producers": [
         {"id": "using-fno", "argv": ["${PLUGIN_ROOT}/hooks/session-start-using-fno.sh"], "deliver": false},
+        {"id": "plugin-source-session-start", "argv": ["${PLUGIN_ROOT}/hooks/plugin-source-session-start.sh"]},
         {"id": "inject-project-vision", "argv": ["${PLUGIN_ROOT}/hooks/inject-project-vision.sh"]},
         {"id": "setup-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/setup-nudge-session-start.sh"]},
         {"id": "frontdoor-nudge-session-start", "argv": ["${PLUGIN_ROOT}/hooks/frontdoor-nudge-session-start.sh"]},
