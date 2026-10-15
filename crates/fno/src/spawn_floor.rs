@@ -132,7 +132,7 @@ impl std::fmt::Display for FloorReceipt {
             self.target.display()
         )?;
         if let Some(ceiling) = self.max_live {
-            if usize::from(self.new) > ceiling {
+            if usize::try_from(self.new).map_or(false, |n| n > ceiling) {
                 write!(
                     f,
                     "\nagents.max_live is {ceiling}, so the cap holds at {ceiling}. \
@@ -163,7 +163,7 @@ pub fn set_floor(floor: u32, cwd: &Path) -> Result<FloorReceipt, FloorError> {
             // the receipt lies about. Anchored on cwd, like the fno-agents
             // reader.
             let mut shadows: Vec<PathBuf> = Vec::new();
-            let mut push = |p: PathBuf, out: &mut Vec<PathBuf>| {
+            let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
                 if !out.contains(&p) {
                     out.push(p);
                 }
@@ -308,7 +308,10 @@ fn ensure_table<'a>(
         }
         _ => Err(FloorError::refuse(
             2,
-            format!("{target}: {place} exists as a non-table value; nothing written."),
+            format!(
+                "{}: {place} exists as a non-table value; nothing written.",
+                target.display()
+            ),
         )),
     }
 }
