@@ -492,6 +492,7 @@ pub(super) async fn run_reentry_plan(
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
+    let started = std::time::Instant::now();
     match tokio::time::timeout(PLAN_TIMEOUT, fut).await {
         Err(_) => Err(format!("re-entry plan for {name}: timed out")),
         Ok(Err(e)) => Err(spawn_failure(
@@ -499,9 +500,12 @@ pub(super) async fn run_reentry_plan(
             &bin,
             &e,
         )),
-        Ok(Ok(o)) if o.status.success() => {
-            ReentryVerdict::from_plan_json(&o.stdout).map_err(|e| format!("{name}: {e}"))
-        }
+        Ok(Ok(o)) if o.status.success() => ReentryVerdict::from_plan_json(&o.stdout)
+            .map(|verdict| ReentryVerdict {
+                plan_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                ..verdict
+            })
+            .map_err(|e| format!("{name}: {e}")),
         Ok(Ok(o)) => Err(first_line_or(
             &String::from_utf8_lossy(&o.stderr),
             &format!("re-entry plan for {name}: refused"),

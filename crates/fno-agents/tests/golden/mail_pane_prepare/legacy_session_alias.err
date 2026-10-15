@@ -1,0 +1,2 @@
+warning: --session is deprecated; use --session-id instead. The alias will be removed in a future release.
+pane send refused: pane 3 hosts no registered agent, so there is no peer to attribute this to. Use --raw to type keystrokes at it.

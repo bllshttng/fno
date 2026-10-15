@@ -1210,11 +1210,11 @@ fn affirmative(value: &toml::Value) -> bool {
 /// to a review posture below the self_review floor (rank 3), so GitHub-native
 /// auto-merge must NOT be armed.
 ///
-/// This is the GitHub-native arm of the floor the Python merge verb enforces
-/// on every granted merge (`automerge_floor_refusal` in
-/// `fno/review_capability.py`, applied by the manifest arm and the
-/// durable-grant resolver). Without it a below-floor repo that can never pass
-/// the merge verb could still hand the merge to GitHub at the green terminal.
+/// This is now the ONE enforcement arm of that floor: the Python twin
+/// (`automerge_floor_refusal` in `fno/review_capability.py`) deleted with the
+/// module, which had no production caller left. Without this arm a
+/// below-floor repo that can never pass the merge verb could still hand the
+/// merge to GitHub at the green terminal.
 ///
 /// The below-floor set is derived from the legacy-inference mirror in
 /// `loopcheck::resolve_posture_config`: only three cells resolve below rank 3
@@ -1361,6 +1361,20 @@ pub fn auto_merge_require_fresh_ci(cwd: &Path) -> bool {
         t.get("auto_merge")?
             .as_table()?
             .get("require_fresh_ci")?
+            .as_bool()
+    })
+    .unwrap_or(true)
+}
+
+/// Resolve `[auto_merge] require_checks_pass` (default ON). The native merge
+/// flow gates its flake-recovery probe on this switch; a malformed or absent
+/// value falls back to the safe default so a config typo cannot merge on a
+/// red run.
+pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("require_checks_pass")?
             .as_bool()
     })
     .unwrap_or(true)
@@ -2803,6 +2817,34 @@ mod tests {
             "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
         );
         assert!(auto_merge_require_fresh_ci(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings("amrcp-absent", "schema_version = 1\n");
+        assert!(auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_honors_false() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd =
+            write_project_settings("amrcp-false", "[auto_merge]\nrequire_checks_pass = false\n");
+        assert!(!auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_invalid_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings(
+            "amrcp-invalid",
+            "[auto_merge]\nrequire_checks_pass = \"not-a-bool\"\n",
+        );
+        assert!(auto_merge_require_checks_pass(&cwd));
     }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL

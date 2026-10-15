@@ -55,7 +55,6 @@ crossing	crates/fno-agents/src/loopcheck.rs	let fno_bin = loopcheck_fno_bin();
 crossing	crates/fno-agents/src/loopcheck.rs	let fno_bin = std::ffi::OsString::from(loopcheck_fno_bin());
 crossing	crates/fno-agents/src/loopcheck.rs	&loopcheck_fno_bin(),
 crossing	crates/fno-agents/src/loopcheck/args.rs	let mut fno_bin = super::loopcheck_fno_bin();
-crossing	crates/fno-agents/src/loopcheck/block_reason.rs	&super::loopcheck_fno_bin(),
 crossing	crates/fno-agents/src/loopcheck/review_coverage_verb.rs	let fno_bin = loopcheck_fno_bin();
 crossing	crates/fno-agents/src/machine_load.rs	let bin = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/machine_mail.rs	let mut command = Command::new(crate::scrape::fno_bin());
@@ -127,6 +126,7 @@ resolver	crates/fno-agents/src/loop_dispatch.rs	pub(crate) fn fno_cmd(fno_bin: &
 resolver	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
 resolver	crates/fno-agents/src/loopcheck.rs	fn best_effort_notify(title: &str, body: &str) {
 resolver	crates/fno-agents/src/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
+resolver	crates/fno-agents/src/mail_cli/pane_prepare.rs	fn run_mux_captured(args: &[String], timeout_s: u64) -> Result<Output, String> {
 resolver	crates/fno-agents/src/opencode_install.rs	fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator(title: &str, body: &str, pointer: Option<&str>) -> bool {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator_confirmed(title: &str, body: &str, pointer: Option<&str>) -> bool {
@@ -143,6 +143,6 @@ resolver	crates/fno/src/doctor_update.rs	fn verify_uv_install() -> bool {
 resolver	crates/fno/src/doctor_update.rs	fn has_shipped_pyc(td: &Path) -> bool {
 resolver	crates/fno/src/doctor_update.rs	fn live_tool_env_processes() -> Vec<String> {
 resolver	crates/fno/src/doctor_update.rs	fn read_source_wire(source: &Path) -> Option<u32> {
-resolver	crates/fno/src/mux_cli.rs	fn prepare_pane_bytes(
+resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
 resolver	crates/fno/src/squad_store_tests.rs	fn build_tree_marker_detection_is_pure_over_path() {

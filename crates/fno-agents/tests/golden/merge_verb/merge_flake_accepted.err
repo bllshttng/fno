@@ -1,0 +1,7 @@
+pr-merge: merge_flake_accepted emit failed (no native fno binary on PATH; the event store has no fallback writer); merge outcome unaffected
+flake override accepted: ci/unit, ci/lint
+pr-merge: coverage status not posted: no PR head to publish a status on
+fno do pr merge: could not resolve a repo for PR #7 - refusing to reconcile without repo scoping (post-merge node close skipped; the daemon's merge_close arm closes it within 15 minutes)
+fno agents: warning: daemon envelope merge_cleanup_skipped: no native fno binary on PATH; the event store has no fallback writer
+pr-merge: no target manifest at /private<CASE>/.fno/target-state.md; recording the merge row as session unknown
+pr-merge: session_satisfied emit failed (no native fno binary on PATH; the event store has no fallback writer); merge outcome unaffected

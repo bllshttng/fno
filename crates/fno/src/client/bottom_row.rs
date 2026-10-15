@@ -50,7 +50,8 @@ impl View {
         // The new-workspace name input is a centered modal; the operator
         // is mid-entry, so it sits above search/hint/status.
         if let Some(name) = &self.create {
-            self.draw_name_modal(cells, rows, cols, "new workspace", name, None);
+            let hint = self.create_hint(name);
+            self.draw_name_modal(cells, rows, cols, "new workspace", name, Some(&hint));
             return;
         }
         // The rename input (tab; widened to squads): the noun tracks

@@ -310,6 +310,7 @@ pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
 pub mod merge_reap;
+pub mod merge_verb;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
@@ -420,6 +421,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod review_capability;
 pub mod review_doors;
 pub mod review_freshness;
 pub mod review_level;
@@ -476,14 +478,18 @@ pub mod spawn_cwd;
 pub mod spawn_edge;
 pub mod spawn_gate;
 pub mod spawn_gate_admission;
+pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
+pub(crate) mod spawn_gate_slots;
 pub mod spawn_gate_verb;
 pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub(crate) mod spawn_watch;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -1558,6 +1564,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A launch the spawn gate or the dispatch door refused before any
     // worker existed; the feed projects it so a refused launch shows.
     "agent_spawn_refused",
+    // The first-turn watch saw a launch's first assistant line; carries the
+    // latency from the call per harness, substrate and machine.
+    "spawn_first_turn",
     // A reaped session came back (client-emitted): one event per revive
     // naming the verb, the actor session, the prior name and the session id.
     "agent_revived",

@@ -20,22 +20,11 @@ from fno.config import (
     assert_subagent_budget,
     provider_subagent_budget,
 )
-from fno.review_capability import (
-    SessionCapability,
-    detect_session,
-    resolve_reviewers,
-)
 
 
 def _budget(**kwargs) -> tuple[int | None, int | None]:
     b = AgentsBlock(**kwargs).provider_limits.get("zai")
     return (None, None) if b is None else (b.lanes, b.subagents)
-
-
-def _session(**kwargs) -> SessionCapability:
-    base: dict[str, Any] = {"harness": "claude", "substrate": "interactive", "attended": True}
-    base.update(kwargs)
-    return SessionCapability(**base)
 
 
 
@@ -97,8 +86,8 @@ def test_subagent_budget_fails_open_on_every_unknown():
 
 # --- assert_subagent_budget: the relocated refusing consumer (x-25a7 w5) ---
 #
-# The panel-width branch in review_capability.py refused and died with the
-# panel. The refusal lives again here, fan-out-neutral: any site that DECLARES
+# The panel-width refusal outlived the module that hosted it: the gate lives
+# again here, fan-out-neutral: any site that DECLARES
 # a width in skill text calls this before dispatching (Locked Decision 7).
 
 
@@ -166,54 +155,14 @@ def test_bound_route_stamps_the_provider_into_the_env():
     assert env.provider == "zai"
 
 
-def test_detect_session_reads_the_stamp_and_describes_it():
-    session = detect_session(env={"FNO_ROUTE_PROVIDER": "zai"})
-    assert session.provider == "zai"
-    assert "provider=zai" in session.describe()
-
-
-def test_an_unstamped_session_resolves_unknown_and_never_guesses():
-    # AC1-EDGE, first half. The stamp is written by the same code that CHOOSES
-    # a provider, so no stamp means no fno route, not an unreadable one.
-    assert detect_session(env={}).provider == "unknown"
-
-
 # --- route resolution -------------------------------------------------------
 #
-# The panel whose width this section measured is retired. What stays pinned:
-# the budget-1 provider resolves the DEFAULT reviewer (the fno lane) to a
-# literal `satisfiable` with no substitution branch in between, and the retired
-# sigma name refuses naming the replacement.
-
-
-def test_the_default_reviewer_is_satisfiable_on_a_budget_of_one():
-    # The fno lane runs inline, so a shared account with a subagent budget of 1
-    # still gets a real reviewer with a real attestation path.
-    verdict = resolve_reviewers(["code-review"], _session(provider="zai"))[0]
-    assert verdict.status == "satisfiable"
-    assert verdict.blocks_autonomy is False
-    assert "/fno:review" in verdict.reason
-
-
-def test_a_provider_with_no_budget_resolves_the_same_way():
-    verdict = resolve_reviewers(["code-review"], _session(provider="anthropic"))[0]
-    assert verdict.status == "satisfiable"
-
-
-def test_an_unstamped_session_resolves_the_default_reviewer_too():
-    verdict = resolve_reviewers(["code-review"], _session(provider="unknown"))[0]
-    assert verdict.status == "satisfiable"
-
-
-def test_retired_sigma_refuses_and_names_the_replacement():
-    # No budget reading rescues or worsens a retired name: the refusal is the
-    # same on every provider, and it names the default lane.
-    for provider in ("zai", "anthropic", "unknown"):
-        verdict = resolve_reviewers(["sigma"], _session(provider=provider))[0]
-        assert verdict.status == "unavailable", provider
-        assert verdict.blocks_autonomy is True, provider
-        assert "retired" in verdict.reason
-        assert "/fno:review" in verdict.reason
+# The panel whose width this section measured is retired, and the resolver
+# verdicts it pinned (the budget-1 provider resolving the default reviewer to a
+# literal `satisfiable`, retired sigma refusing with the replacement named)
+# are golden-covered in crates/fno-agents/tests/golden/review_capability/.
+# The provider-stamp tests above delete with their module: the env read they
+# pinned now lives in the native detect_session, golden-covered.
 
 
 # --- the stamp is set or cleared, never inherited ---------------------------
