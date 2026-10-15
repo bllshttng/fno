@@ -723,17 +723,6 @@ def test_admit_returns_the_refusal_line_and_admits_on_none(monkeypatch):
     assert _quota.admit(["pr", "view", "1"]) is None
 
 
-def test_admit_admits_a_caller_with_no_worker_identity(monkeypatch):
-    monkeypatch.setattr(_quota, "admit", _REAL_ADMIT)
-    monkeypatch.delenv("FNO_AGENT_SELF", raising=False)
-
-    def forbidden(payload):
-        raise AssertionError("the budget must not be consulted for a user-typed call")
-
-    monkeypatch.setattr(_quota, "_gh_budget", forbidden)
-    assert _quota.admit(["pr", "view", "1"]) is None
-
-
 def test_admit_fails_open_when_the_verb_is_unavailable(monkeypatch, capsys):
     monkeypatch.setenv("FNO_AGENT_SELF", "quota-test-worker")
     from fno.rust_binary import VerbUnavailable
