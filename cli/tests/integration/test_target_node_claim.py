@@ -255,7 +255,14 @@ def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
     state = _state(repo)
     assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
 
-    assert f'target_claim_key: "node:{node_id}"' in state, state
+    # The state names only the blocked class; init also writes the acquire's
+    # stderr to .claim-err and its own stderr, and the refusal lives there.
+    claim_err = repo.parent / "space" / ".claim-err"
+    err_text = claim_err.read_text() if claim_err.exists() else ""
+    assert f'target_claim_key: "node:{node_id}"' in state, (
+        f"{state}\n--- init stderr ---\n{r.stderr}\n"
+        f"--- .claim-err ---\n{err_text}"
+    )
     assert "target_claim_holder:" in state
     assert 'target_claim_ttl: "2h"' in state
     assert not (repo / ".fno" / ".target-cancelled").exists()
