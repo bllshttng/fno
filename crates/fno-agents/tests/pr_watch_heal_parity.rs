@@ -146,7 +146,10 @@ fn pin_env(dir: &Path, case: &Case) -> Vec<(String, String)> {
 }
 
 /// Seed the held flight through the binary's own gate, so the heal verb's
-/// in-process acquire meets the same claim layout the CLI verb writes.
+/// in-process acquire meets the same claim layout the CLI verb writes. The
+/// seed carries the test process's pid: the gate stamps a pid-less acquire
+/// with the seeder's own pid, and a dead holder is reclaimed on the pid
+/// probe before the verb ever sees it held.
 fn seed_flight(dir: &Path) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .args([
@@ -161,6 +164,8 @@ fn seed_flight(dir: &Path) {
             "300000",
             "--claims-root",
             &dir.join("claims").display().to_string(),
+            "--pid",
+            &std::process::id().to_string(),
         ])
         .envs(fno_agents::test_run::self_owner_env())
         .output()
