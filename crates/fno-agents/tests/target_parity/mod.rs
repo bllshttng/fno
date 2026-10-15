@@ -399,8 +399,18 @@ pub fn run_verb(
             spawn_cmd(&mut cmd)
         }
         Leg::NativeDoor(door) => {
+            // The case tables carry the python-CLI argv (`do target <word>
+            // ...`); the door takes the rest after its own name. An argv that
+            // does not open with the prefix passes through untouched.
+            let word = door.strip_prefix("target-").unwrap_or(door);
+            let rest: &[String] =
+                if argv.len() >= 3 && argv[0] == "do" && argv[1] == "target" && argv[2] == word {
+                    &argv[3..]
+                } else {
+                    argv
+                };
             let mut cmd = Command::new(AGENTS_BIN);
-            cmd.arg(door).args(argv).current_dir(cwd);
+            cmd.arg(door).args(rest).current_dir(cwd);
             cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             spawn_cmd(&mut cmd)
         }
