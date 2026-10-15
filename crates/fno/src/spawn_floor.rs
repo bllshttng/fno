@@ -16,9 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use toml_edit::{value, DocumentMut, Item, Table};
 
-use crate::digest_overlay::{
-    config_roots, config_str, global_config_toml, non_empty_env_os, read_nested_file,
-};
+use crate::digest_overlay::{config_roots, config_str, non_empty_env_os, read_nested_file};
 
 /// The flags this front door owns. `fno agents spawn --floor N` is peeled
 /// here, before any forwarding, so the Python Typer command never declares
@@ -164,7 +162,7 @@ pub fn set_floor(floor: u32, cwd: &Path) -> Result<FloorReceipt, FloorError> {
     let (target, shadows) = match pinned {
         Some(path) => (path, Vec::new()),
         None => {
-            let target = global_config_toml().ok_or_else(|| {
+            let target = gate_global_config().ok_or_else(|| {
                 FloorError::refuse(1, "no user config.toml to write (set FNO_CONFIG or HOME)")
             })?;
             // The gate reads the project ladder before the global file, so a
@@ -226,7 +224,18 @@ pub fn set_floor_at(
         FloorError::refuse(1, format!("{} cannot be created: {e}", parent.display()))
     })?;
     let _lock = ConfigLock::acquire(&target)?;
-    let text = fs::read_to_string(&target).unwrap_or_default();
+    let text = match fs::read_to_string(&target) {
+        Ok(text) => text,
+        // A missing target is an empty config. Any other read failure is a
+        // refusal, because writing would replace a config we never saw.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(FloorError::refuse(
+                1,
+                format!("{} cannot be read: {e}", target.display()),
+            ))
+        }
+    };
     let mut doc: DocumentMut = text.parse().map_err(|e| {
         FloorError::refuse(
             2,
@@ -236,7 +245,7 @@ pub fn set_floor_at(
             ),
         )
     })?;
-    let old = doc["agents"]["capacity"]["floor"].as_integer();
+    let old = read_floor_int(&doc);
     if old == Some(i64::from(floor)) {
         return Ok(FloorReceipt {
             old,
@@ -297,6 +306,29 @@ pub fn set_floor_at(
 /// the receipt's clamp line.
 fn max_live(cwd: &Path) -> Option<usize> {
     config_str(cwd, "agents", "max_live").and_then(|s| s.trim().parse::<usize>().ok())
+}
+
+/// The floor as the gate reads it: a safe walk, because `Index` panics on a
+/// non-table item partway down the path (`agents = 4` above the key).
+fn read_floor_int(doc: &DocumentMut) -> Option<i64> {
+    doc.get("agents")?
+        .as_table()?
+        .get("capacity")?
+        .as_table()?
+        .get("floor")?
+        .as_integer()
+}
+
+/// The gate's global rung: the config.toml SIBLING of
+/// `$FNO_GLOBAL_SETTINGS_PATH` when set, else `$HOME/.fno/config.toml`.
+/// Mirrored from `fno_agents::agents_config::global_config_path`, which this
+/// crate cannot call (fno-agents depends on fno). Writing the pinned file
+/// itself would land the floor where the gate never reads.
+fn gate_global_config() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(p).with_file_name("config.toml"));
+    }
+    std::env::var_os("HOME").map(|h| Path::new(&h).join(".fno/config.toml"))
 }
 
 /// Take `&mut Item` to a real table: existing tables pass through, missing
@@ -527,6 +559,14 @@ mod tests {
         assert_eq!(err.code, 2);
         assert!(err.message.contains("non-table"), "{err}");
         assert_eq!(fs::read_to_string(&scalar).unwrap(), "agents = 4\n");
+        // A target that cannot be read (invalid UTF-8 here) refuses instead
+        // of being replaced as an empty config.
+        let unreadable = dir.join("binary.toml");
+        fs::write(&unreadable, [0xff_u8, 0xfe, 0x01]).unwrap();
+        let err = set_floor_at(8, &unreadable, &[], &dir).unwrap_err();
+        assert_eq!(err.code, 1);
+        assert!(err.message.contains("cannot be read"), "{err}");
+        assert_eq!(fs::read(&unreadable).unwrap(), [0xff_u8, 0xfe, 0x01]);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&shadow_dir);
     }
@@ -586,6 +626,13 @@ mod tests {
             include_str!("../../fno-agents/src/capacity.rs")
                 .contains("pub const DEFAULT_FLOOR: u32 = 1;"),
             "the gate's DEFAULT_FLOOR moved; GATE_DEFAULT_FLOOR here must move with it"
+        );
+        // The setter's global target mirrors the gate's sibling rule; this
+        // crate cannot call it (fno-agents depends on fno).
+        assert!(
+            include_str!("../../fno-agents/src/agents_config.rs")
+                .contains("with_file_name(\"config.toml\")"),
+            "the gate's global path rule moved; gate_global_config here must move with it"
         );
     }
 }
