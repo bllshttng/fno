@@ -100,8 +100,8 @@ enum VaultCwd {
     /// Inside `internal/<project>/`, or `internal/agents/<project>/`, so the
     /// folder names the project that owns it.
     Owned(String),
-    /// Inside the vault but under no project folder: the vault root,
-    /// `internal/`, `internal/agents` itself, or an agent session dir.
+    /// Inside `internal/` but under no project folder: `internal/` itself,
+    /// `internal/agents`, or an agent session dir.
     Unowned,
 }
 
@@ -118,8 +118,10 @@ fn classify_vault_cwd(vroot: &Path, cwd: &Path) -> VaultCwd {
     let mut parts = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned());
+    // Only the `internal/` tree is project-folder space. A repo cloned
+    // elsewhere in the vault keeps resolving through its own id or remote.
     if parts.next().as_deref() != Some("internal") {
-        return VaultCwd::Unowned;
+        return VaultCwd::Outside;
     }
     let owner = match parts.next() {
         Some(seg) if seg == "agents" => parts
@@ -728,12 +730,11 @@ The lead waits. A force push cannot be undone.
         assert_eq!(questions(&vault.join("internal/fno")), fno_dir);
         assert_eq!(questions(&vault.join("internal/footnote")), fno_dir);
         assert_eq!(questions(&vault.join("internal/agents/fno")), fno_dir);
-        // Agent session dirs, `internal/agents` itself and the vault root own
-        // no project: with no vault-level id the write leaves the vault.
+        // Agent session dirs and `internal/agents` itself own no project:
+        // with no vault-level id the write leaves the vault.
         for cwd in [
             vault.join("internal/agents"),
             vault.join("internal/agents/0a1b2c3d"),
-            vault.clone(),
         ] {
             let got = questions(&cwd);
             assert!(
