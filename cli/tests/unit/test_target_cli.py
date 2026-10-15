@@ -438,6 +438,25 @@ def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
     return gp
 
 
+def _held_graph(tmp_path, monkeypatch):
+    plan = tmp_path / "held.md"
+    plan.write_text(
+        "---\nstatus: ready\ndispatch_hold:\n"
+        "  reason: Blocking review finding is unresolved\n"
+        "  release_when: The finding is fixed and re-reviewed\n"
+        "  review_on: 2099-08-20\n"
+        "  set_by: lead:119e3c52\n---\n",
+        encoding="utf-8",
+    )
+    gp = tmp_path / "graph-held.json"
+    seed_graph(gp, {"entries": [
+        {"id": "x-5a5c", "status": "ready", "plan_path": str(plan)},
+        {"id": "x-1a2b", "status": "ready", "contained_in": "x-5a5c"},
+    ]})
+    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
+    return gp
+
+
 def test_shared_plan_path_resolves_to_the_delivery_unit(tmp_path, monkeypatch):
     """A plan held by a unit and its contained children is legal, not ambiguous.
 
