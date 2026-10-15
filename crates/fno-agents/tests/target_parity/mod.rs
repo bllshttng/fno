@@ -813,22 +813,19 @@ pub fn side_effects(root: &Path, env: &[(String, String)], cwd: &Path, node: &st
         }
     }
     let mut worktrees: Vec<String> = Vec::new();
-    for pattern in [
-        root.join("repo/.claude/worktrees"),
-        root.join("home/.fno/worktrees"),
-    ] {
-        if let Ok(entries) = std::fs::read_dir(&pattern) {
-            for wt in entries.flatten() {
-                worktrees.push(normalize(&wt.path().to_string_lossy(), root, node));
-            }
-            // The external base nests one level deeper (base/<repo-slug>/<name>).
-            for slug_dir in std::fs::read_dir(&pattern).into_iter().flatten().flatten() {
-                if let Ok(inner) = std::fs::read_dir(slug_dir.path()) {
-                    for leaf in inner.flatten() {
-                        if leaf.path().is_dir() {
-                            worktrees.push(normalize(&leaf.path().to_string_lossy(), root, node));
-                        }
-                    }
+    // The capture walk, as globs: the in-repo base nests one level
+    // (base/<name>), the external base two (base/<repo-slug>/<name>). No
+    // recursive walk, so a slug container never lists as a worktree.
+    if let Ok(entries) = std::fs::read_dir(root.join("repo/.claude/worktrees")) {
+        for wt in entries.flatten() {
+            worktrees.push(normalize(&wt.path().to_string_lossy(), root, node));
+        }
+    }
+    if let Ok(slugs) = std::fs::read_dir(root.join("home/.fno/worktrees")) {
+        for slug_dir in slugs.flatten() {
+            if let Ok(leaves) = std::fs::read_dir(slug_dir.path()) {
+                for leaf in leaves.flatten() {
+                    worktrees.push(normalize(&leaf.path().to_string_lossy(), root, node));
                 }
             }
         }
