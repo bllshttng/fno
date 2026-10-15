@@ -193,6 +193,11 @@ FIELD_META: dict[str, Meta] = {
         "Model for post-merge ritual workers (default claude-opus-5). Routing "
         "wins when a secondary provider is keyed.",
     ),
+    "telemetry.claude_otel": Meta("advanced", "Bind the daemon's local OTLP receiver for Claude Code usage (default on)."),
+    "telemetry.otlp.enabled": Meta("advanced", "Export feed events to an OTLP collector (default off)."),
+    "telemetry.otlp.endpoint": Meta("advanced", "OTLP collector URL, http(s); `/v1/logs` is appended when absent."),
+    "telemetry.otlp.headers_env": Meta("advanced", "Env var holding the export auth headers as `name=value,...`."),
+    "telemetry.otlp.log_content": Meta("advanced", "Export event titles as log text (default off: only the event kind)."),
     # --- config.research.* ---
     "research.output_dir": Meta(
         "advanced",
