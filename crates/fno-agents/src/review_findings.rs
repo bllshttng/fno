@@ -706,7 +706,7 @@ fn resolve_branch_pr(
 
 // --- The door ---------------------------------------------------------------
 
-const USAGE: &str = "usage: fno-agents review-level findings <record|categories|post>";
+const USAGE: &str = "usage: fno-agents review-level findings <record|categories|post|classify>";
 
 /// The flags the door's actions accept, in either spelling the typer door
 /// read: `--flag value` and `--flag=value`.
@@ -846,6 +846,164 @@ fn run_record(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+/// The flags that existed only to parameterize the Python `--attest` body
+/// this port deleted. One writer of the attestation row remains
+/// (skills/review/scripts/emit-attestation.sh), so the flags refuse by name.
+fn retired_flag_message(flag: &str) -> String {
+    format!(
+        "classify: {flag} is retired; write the attestation with \
+         skills/review/scripts/emit-attestation.sh <reviewer> [verdict] \
+         [reviewer_context] [execution_context] [output_contract] --findings-file F"
+    )
+}
+
+#[derive(Default)]
+struct ClassifyArgs {
+    findings_file: Option<String>,
+    emit_record: bool,
+    /// Parse result deferred, not refused at parse time: the Python leaf
+    /// checked the round AFTER the record built, so an unreadable file must
+    /// refuse before the round does.
+    review_round: Option<Result<i64, ()>>,
+}
+
+/// Why `parse_classify_args` refuses: a flag-surface refusal prints its own
+/// full line, a usage error rides the door's usage posture.
+enum ClassifyReject {
+    Refuse(String),
+    Usage(String),
+}
+
+/// The classify leaf's argv: `--findings-file F` / `--findings-file=F`, the
+/// boolean `--emit-record`, `--review-round N`. The retired flags refuse at
+/// parse, before any file read; anything else is the door's usage refusal.
+fn parse_classify_args(args: &[String]) -> Result<ClassifyArgs, ClassifyReject> {
+    let mut out = ClassifyArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i].as_str();
+        let (name, inline): (&str, Option<&str>) = match token.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (token, None),
+        };
+        match name {
+            "--findings-file" => {
+                let value = match inline {
+                    Some(v) => v,
+                    None => {
+                        i += 1;
+                        match args.get(i) {
+                            Some(v) => v.as_str(),
+                            None => {
+                                return Err(ClassifyReject::Usage(
+                                    "--findings-file needs a value".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                };
+                out.findings_file = Some(value.to_string());
+            }
+            "--emit-record" => {
+                if inline.is_some() {
+                    return Err(ClassifyReject::Usage(format!("unknown flag: {token}")));
+                }
+                out.emit_record = true;
+            }
+            "--review-round" => {
+                let value = match inline {
+                    Some(v) => v,
+                    None => {
+                        i += 1;
+                        match args.get(i) {
+                            Some(v) => v.as_str(),
+                            None => {
+                                return Err(ClassifyReject::Usage(
+                                    "--review-round needs a value".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                };
+                out.review_round = Some(value.parse::<i64>().map_err(|_| ()));
+            }
+            "--attest" | "--reviewer-context" | "--execution-context" | "--output-contract" => {
+                return Err(ClassifyReject::Refuse(retired_flag_message(name)));
+            }
+            _ => {
+                return Err(ClassifyReject::Usage(format!("unknown flag: {token}")));
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
+/// The `findings classify` action: the ported `fno do review classify`
+/// leaf. Refusal order is Python's: read the file, parse JSON, build the
+/// record, then the round check; each carries the `classify: ` prefix and
+/// exits 2. `--emit-record` prints the bounded record, the bare call the
+/// counts line the producers parse.
+fn run_classify(args: &[String]) -> i32 {
+    let parsed = match parse_classify_args(args) {
+        Ok(p) => p,
+        Err(ClassifyReject::Refuse(msg)) => {
+            eprintln!("{msg}");
+            return 2;
+        }
+        Err(ClassifyReject::Usage(msg)) => {
+            eprintln!("{USAGE} ({msg})");
+            return 2;
+        }
+    };
+    let Some(file) = parsed.findings_file else {
+        eprintln!("{USAGE} (--findings-file is required)");
+        return 2;
+    };
+    let path = PathBuf::from(&file);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("classify: cannot read {}: {e}", path.display());
+            return 2;
+        }
+    };
+    let payload: Value = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("classify: {} is not valid JSON: {e}", path.display());
+            return 2;
+        }
+    };
+    let allow =
+        resolved_categories(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let mut record = match build_record(&payload, &allow) {
+        Ok(r) => r,
+        Err(reason) => {
+            eprintln!("classify: {}: {reason}", path.display());
+            return 2;
+        }
+    };
+    if let Some(round) = parsed.review_round {
+        match round {
+            Ok(n) if n >= 0 => record.review_round = Some(n),
+            _ => {
+                eprintln!("classify: --review-round must be a non-negative integer");
+                return 2;
+            }
+        }
+    }
+    if parsed.emit_record {
+        println!("{}", record.record_json());
+        return 0;
+    }
+    println!(
+        "classified: {} blocking, {} nonblocking",
+        record.blocking, record.nonblocking
+    );
+    0
 }
 
 /// The `findings categories` action: the resolved allowlist, sorted, for
@@ -1074,12 +1232,17 @@ pub fn run_findings_door(rest: &[String]) -> i32 {
             "  post --findings-file F --head SHA [--reviewer R] [--pr-number N] [--review-round N]"
         );
         println!("                                       post ONE per-round disposition comment");
+        println!("  classify --findings-file F [--emit-record] [--review-round N]");
+        println!(
+            "                                       classify a findings payload: the bounded record, or the counts"
+        );
         return 0;
     }
     match action {
         "record" => run_record(tail),
         "categories" => run_categories(tail),
         "post" => run_post(tail),
+        "classify" => run_classify(tail),
         other => {
             eprintln!("{USAGE} (unknown action: {other})");
             2
@@ -1201,4 +1364,59 @@ mod tests {
         assert!(shrunk.ends_with("..."));
         assert_eq!(shrink_summary(Some("abc".to_string()), 0), None);
     }
-}
+
+    /// The classify argv: both flag spellings, the boolean, the deferred
+    /// round parse, the retired-flag refusals, and the usage posture.
+    #[test]
+    fn classify_argv_parse_and_retired_flags() {
+        let args = |rows: &[&str]| -> Vec<String> { rows.iter().map(|s| s.to_string()).collect() };
+        let parsed = parse_classify_args(&args(&[
+            "--findings-file",
+            "f.json",
+            "--emit-record",
+            "--review-round",
+            "2",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.findings_file.as_deref(), Some("f.json"));
+        assert!(parsed.emit_record);
+        assert_eq!(parsed.review_round, Some(Ok(2)));
+        let eq = parse_classify_args(&args(&["--findings-file=f.json", "--review-round=2"]))
+            .unwrap();
+        assert_eq!(eq.findings_file.as_deref(), Some("f.json"));
+        assert_eq!(eq.review_round, Some(Ok(2)));
+        // A junk round is a DEFERRED failure: the record build and the file
+        // refusals outrank it, Python's order.
+        let junk = parse_classify_args(&args(&["--review-round", "x"])).unwrap();
+        assert!(junk.review_round.is_some_and(|r| r.is_err()));
+        for flag in [
+            "--attest",
+            "--reviewer-context",
+            "--execution-context",
+            "--output-contract",
+        ] {
+            let err = parse_classify_args(&args(&[flag, "v"])).unwrap_err();
+            match err {
+                ClassifyReject::Refuse(msg) => {
+                    assert!(msg.starts_with(&format!("classify: {flag} is retired; ")));
+                    assert!(msg.contains("skills/review/scripts/emit-attestation.sh"));
+                }
+                ClassifyReject::Usage(_) => panic!("{flag} must refuse, not usage-error"),
+            }
+        }
+        // The = spelling refuses with the bare flag name in the message.
+        let err = parse_classify_args(&args(&["--attest=code-review"])).unwrap_err();
+        assert!(matches!(
+            err,
+            ClassifyReject::Refuse(msg) if msg.starts_with("classify: --attest is retired; ")
+        ));
+        // Unknown flags and missing values keep the door's usage posture.
+        assert!(matches!(
+            parse_classify_args(&args(&["--bogus"])).unwrap_err(),
+            ClassifyReject::Usage(_)
+        ));
+        assert!(matches!(
+            parse_classify_args(&args(&["--findings-file"])).unwrap_err(),
+            ClassifyReject::Usage(_)
+        ));
+    }
