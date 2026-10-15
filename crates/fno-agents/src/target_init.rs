@@ -196,7 +196,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
             let upper = raw.trim().to_ascii_uppercase();
             if !matches!(upper.as_str(), "S" | "M" | "L") {
                 return Err(refuse(format!(
-                    "fno do target init: invalid --size {raw:?}; expected S, M, or L."
+                    "fno do target init: invalid --size '{raw}'; expected S, M, or L."
                 )));
             }
             Some(upper)
