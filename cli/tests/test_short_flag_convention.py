@@ -81,8 +81,8 @@ PHASE2_LOWERCASE_MAP: dict[tuple[str, str], dict[str, str]] = {
     # cmd_add's and cmd_idea's rows moved with the create port: the native
     # binary owns the surface now, and their -p/-c/-d/-t pins ride the
     # committed ADD_HELP/IDEA_HELP goldens, the only scan that can see a Rust
-    # flag decl.
-    ("graph/cli.py", "cmd_intake"): {"--title": "-t", "--priority": "-p"},
+    # flag decl. cmd_intake's row (-t/-p) moved with the intake port; its
+    # pins ride the committed intake_help.txt usage text the same way.
     # cmd_update's row moved with the update port: the native binary owns
     # the surface now, and its short pins ride the committed UPDATE_HELP
     # golden, the only scan that can see a Rust flag decl.
