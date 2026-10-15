@@ -1381,8 +1381,8 @@ mod tests {
         assert_eq!(parsed.findings_file.as_deref(), Some("f.json"));
         assert!(parsed.emit_record);
         assert_eq!(parsed.review_round, Some(Ok(2)));
-        let eq = parse_classify_args(&args(&["--findings-file=f.json", "--review-round=2"]))
-            .unwrap();
+        let eq =
+            parse_classify_args(&args(&["--findings-file=f.json", "--review-round=2"])).unwrap();
         assert_eq!(eq.findings_file.as_deref(), Some("f.json"));
         assert_eq!(eq.review_round, Some(Ok(2)));
         // A junk round is a DEFERRED failure: the record build and the file
@@ -1420,3 +1420,4 @@ mod tests {
             ClassifyReject::Usage(_)
         ));
     }
+}
