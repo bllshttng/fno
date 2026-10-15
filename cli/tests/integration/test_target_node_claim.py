@@ -275,9 +275,14 @@ def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
             f"--- front stdout ---\n{front_out.read_text() if front_out.exists() else ''}"
             f"--- front stderr ---\n{front_err.read_text() if front_err.exists() else ''}"
         )
+    home_walk = sorted(
+        str(p2.relative_to(home)) for p2 in home.rglob("*") if p2.is_file()
+    )
     assert f'target_claim_key: "node:{node_id}"' in state, (
         f"{state}\n--- init stderr ---\n{r.stderr}\n"
         f"--- .claim-err ---\n{err_text}\n{front_text}"
+        f"--- sandbox home files ---\n{chr(10).join(home_walk)}\n"
+        f"--- mock log ---\n{log.read_text() if log.exists() else '(absent)'}"
     )
     assert "target_claim_holder:" in state
     assert 'target_claim_ttl: "2h"' in state
