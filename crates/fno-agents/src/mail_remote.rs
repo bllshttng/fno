@@ -1215,7 +1215,7 @@ mod tests {
             "a Python-only flag rides to the route decision"
         );
         let dup = ReplyTail {
-            body_sources: 1,
+            body_sources: 2,
             ..flagged
         };
         assert!(
@@ -1235,7 +1235,7 @@ mod tests {
         assert_eq!(parsed.body_sources, 1);
         assert!(parsed.extra.is_empty());
         assert!(parsed.routable());
-        let starved = parse_reply_tail(&["--to".to_string(), "fmail-x".to_string()]);
+        let starved = parse_reply_tail(&["--to".to_string()]);
         assert!(!starved.routable(), "a --to with no value forwards");
         assert_eq!(starved.extra, vec!["--to".to_string()]);
     }
