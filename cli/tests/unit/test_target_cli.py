@@ -33,16 +33,10 @@ def _binding_answers(monkeypatch, receipt):
     return calls
 
 
-def test_target_init_help_documents_inputs():
+def test_target_init_left_the_python_registry():
+    """The verb resolves through the native front door now (main.rs)."""
     result = runner.invoke(app, ["do", "target", "init", "--help"])
-    assert result.exit_code == 0
-    assert "--input" in result.stdout
-    assert "--plan-path" in result.stdout
-
-
-
-
-
+    assert result.exit_code != 0
 
 def _fake_plugin_root(tmp_path):
     fake_root = tmp_path / "plugin"
@@ -196,77 +190,6 @@ def test_retro_dispatch_preflight_attended_overlap_is_advisory_only(tmp_path):
 
 
 
-
-
-
-def test_target_init_empty_model_rejected(monkeypatch, tmp_path):
-    """AC2-ERR: an empty --model exits 2. The usage refusal is the native
-    door's wording (the parity goldens characterize it); the forward's
-    observable surface is the propagated exit code."""
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--model", "  "])
-    assert result.exit_code == 2
-
-
-def test_target_init_rejects_invalid_size(monkeypatch, tmp_path):
-    """Invalid --size exits 2. Same shape as the empty-model test: the wording
-    is the native door's, the propagated code is the seam's contract."""
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--size", "XL"])
-    assert result.exit_code == 2
-
-
-def test_target_init_help_documents_size():
-    result = runner.invoke(app, ["do", "target", "init", "--help"])
-    assert result.exit_code == 0
-    assert "--size" in result.stdout
-
-
-def test_target_init_missing_script_exits_2(monkeypatch, tmp_path):
-    """AC3-ERR: bare-install degrade is actionable, exits 2, no traceback.
-    FNO_REPO_ROOT is authoritative. The refusal text is the native door's now
-    (the thin forward only propagates its exit code), so the wording is
-    characterized by the parity goldens, not re-asserted here."""
-    fake_root = tmp_path / "empty"
-    fake_root.mkdir()
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 2
-
-
-def test_target_init_degrade_writes_no_state(monkeypatch, tmp_path):
-    """AC3-FR / AC3-EDGE: when the init script is unresolvable (bare install or
-    binary-present-but-skills-absent), the run exits 2, writes no partial
-    target-state.md, and the bash writer never runs."""
-    fake_root = tmp_path / "empty"
-    fake_root.mkdir()
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    monkeypatch.chdir(proj)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-
-    bash_calls = []
-    real_run = target_cli.subprocess.run
-
-    def _record_run(cmd, *a, **k):
-        # The forward may exec the native decision layer; the bash writer
-        # must never run when the init script is missing.
-        cmd = list(cmd)
-        if cmd and cmd[0] == "bash":
-            bash_calls.append(cmd)
-        return real_run(cmd, *a, **k)
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _record_run)
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 2
-    assert bash_calls == []
-    assert not (proj / ".fno").exists()
 
 
 
