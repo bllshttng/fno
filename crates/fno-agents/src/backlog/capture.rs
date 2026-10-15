@@ -17,8 +17,6 @@ use serde_json::{json, Map, Value};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use crate::graph_store::BoundedLock;
-
 const MAX_WHY_LEN: usize = 120;
 const SOFT_CEILING: usize = 100;
 const VALID_PRIORITIES: [&str; 4] = ["p0", "p1", "p2", "p3"];
@@ -27,7 +25,6 @@ const VALID_PRIORITIES: [&str; 4] = ["p0", "p1", "p2", "p3"];
 /// (hand-authored slug ids like fu-cwd339 parse on read) while minting stays
 /// strictly 6-hex.
 const FU_MINTED_RE: &str = r"fu-[0-9a-f]{6}";
-const FU_TOKEN: &str = r"fu-[a-z0-9][a-z0-9-]*";
 /// Item line: `- [<mark>] fu-token <sep> <title-with-optional-(pN)-suffix>`.
 /// Accepts BOTH separators (legacy em-dash and the target hyphen).
 const ITEM_RE: &str = r#"^- \[([ x\-])\]\s+(fu-[a-z0-9][a-z0-9-]*)\s+(?:\u{2014}|-)\s+(.*?)\s*$"#;
@@ -56,6 +53,7 @@ const DIGEST_END: &str = "<!-- inbox-digest:end -->";
 const BUCKET_ORDER: [&str; 4] = ["your_actions", "followups", "carveouts", "filed_nodes"];
 
 /// Errors the inbox write paths surface to the CLI layer.
+#[derive(Debug)]
 enum CaptureError {
     /// An inbox write violated a field rule (exit code 2).
     Validation(String),
@@ -786,7 +784,6 @@ fn create_graph_node(
             difficulty,
             blocks_everything,
             source_kind,
-            origin_evidence,
             &cwd_string,
             now.clone(),
             source_session_id.clone(),
@@ -830,7 +827,6 @@ fn build_capture_node(
     difficulty: &str,
     blocks_everything: bool,
     source_kind: &str,
-    origin_evidence: &str,
     cwd_string: &str,
     now: String,
     source_session_id: Option<String>,
@@ -1021,7 +1017,6 @@ fn archive_struck(path: &Path) -> Result<Value, CaptureError> {
         let mut moved: Vec<String> = Vec::new();
         let mut archived = 0usize;
         let lines: Vec<&str> = text.lines().collect();
-        let n = lines.len();
         block_walk(&lines, &item_re, &mut |is_struck, block: Vec<String>| {
             if is_struck {
                 moved.extend(block);
