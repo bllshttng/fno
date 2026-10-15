@@ -381,6 +381,39 @@ pub fn prewarm(leg: &Leg, env: &[(String, String)], cwd: &Path) {
     let _ = run_verb(leg, &argv, cwd, env);
 }
 
+/// One-line-per-file inventory of every graph-shaped file under the case
+/// HOME, for the exit-mismatch diagnostic: a refusal that names an unreadable
+/// graph is a guess until the probe says which file exists and how big it is.
+fn graph_state_probe(root: &Path) -> String {
+    let mut lines = Vec::new();
+    let home = root.join("home").join(".fno");
+    let mut stack = vec![home.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let graphish =
+                name.contains("graph") || name.contains("backlog") || name.ends_with(".db");
+            if graphish {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                lines.push(format!("{} ({} bytes)", path.display(), size));
+            }
+        }
+    }
+    if lines.is_empty() {
+        format!("no graph-shaped file under {}", home.display())
+    } else {
+        lines.join("\n")
+    }
+}
+
 /// Play the verb under test. The Python leg runs through the shim (so nested
 /// `fno` calls resolve to the same source); the native door execs the sibling
 /// binary directly.
@@ -951,10 +984,11 @@ pub fn play(subject: &str, case: &Case, root: &Path, leg: &Leg) {
     assert_eq!(
         frozen.exit,
         Some(code),
-        "[{}] exit differs from golden\n--- run stderr ---\n{}\n--- run stdout ---\n{}",
+        "[{}] exit differs from golden\n--- run stderr ---\n{}\n--- run stdout ---\n{}\n--- graph state ---\n{}",
         case.label,
         stderr,
-        stdout
+        stdout,
+        graph_state_probe(root)
     );
     assert_eq!(
         frozen.out, stdout,
