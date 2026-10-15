@@ -28,6 +28,10 @@ const SCRATCH_MINUTES: u64 = 24 * 60;
 const UV_PRUNE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Age at which the daemon's daily gate re-runs the sweep.
 const DAILY_SECS: u64 = 24 * 3600;
+/// Age at which the daemon re-runs the cargo build-base lane alone. A fleet
+/// of builds once grew the base from 4 GB to 144 GB between two daily sweeps,
+/// so the cap must hold on the scale of hours, not days.
+const CARGO_LANE_SECS: u64 = 3600;
 /// Dated stamp dirs under `<state-root>/backups` are report-only by
 /// default: the state-root inventory holds migration and recovery stamps to
 /// the operator's yes, never the janitor's clock. Setting the retention
@@ -775,6 +779,32 @@ pub fn maybe_run_daily(home: &AgentsHome) {
         let (_rc, summary) = run_reclaim_lanes(home, true, false, false);
         emit_sweep_event(home, &summary);
     }
+}
+
+/// The daemon's hourly gate for the cargo build-base lane alone, apply. The
+/// stamp is written before the run, so a sweep that crashes waits out the
+/// hour instead of re-running every tick; an unwritable stamp skips the run
+/// and leaves the base to the daily gate.
+pub fn maybe_run_cargo_hourly(home: &AgentsHome) {
+    let stamp = reclaim_state_root(home)
+        .join("reclaim")
+        .join("cargo-last-run");
+    let stale = std::fs::metadata(&stamp)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|m| m.elapsed().ok())
+        .map(|age| age.as_secs() > CARGO_LANE_SECS)
+        .unwrap_or(true);
+    if !stale {
+        return;
+    }
+    if let Some(dir) = stamp.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(&stamp, b"").is_err() {
+        return;
+    }
+    let _ = cargo_build_dirs_lane(home, true, false);
 }
 
 /// What one sweep did, carried from the lane run to the daemon's event.
