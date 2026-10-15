@@ -798,7 +798,8 @@ fn main() {
                  so the list below does not show it."
             );
         }
-        if let Some(floor) = peeled.floor {
+        // Help forwards with no write, even when a floor came with it.
+        if let Some(floor) = peeled.floor.filter(|_| !peeled.help) {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             match fno::spawn_floor::set_floor(floor, &cwd) {
                 Ok(receipt) => {
