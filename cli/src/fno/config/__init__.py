@@ -478,6 +478,32 @@ class BacklogBlock(BaseModel):
         return v
 
 
+class TelemetryOtlpBlock(BaseModel):
+    """OTLP log export (nested under 'config.telemetry.otlp').
+
+    The Rust daemon reads these keys; the schema exists so `fno config set`
+    accepts them. Export stays off until `enabled` is set and `endpoint` names
+    a collector. `headers_env` names the env var holding the auth headers,
+    never the headers themselves.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    endpoint: str = ""
+    headers_env: str = "FNO_OTLP_HEADERS"
+    log_content: bool = False
+
+
+class TelemetryBlock(BaseModel):
+    """Telemetry settings (nested under 'config.telemetry')."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    claude_otel: bool = True
+    otlp: TelemetryOtlpBlock = Field(default_factory=TelemetryOtlpBlock)
+
+
 class PostMergeBlock(BaseModel):
     """Post-merge ritual settings (nested under 'config.post_merge').
 
@@ -3922,6 +3948,7 @@ class ConfigBlock(BaseModel):
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
+    telemetry: TelemetryBlock = Field(default_factory=TelemetryBlock)
     research: ResearchBlock = Field(default_factory=ResearchBlock)
     review: ReviewBlock = Field(default_factory=ReviewBlock)
     style: StyleBlock = Field(default_factory=StyleBlock)
