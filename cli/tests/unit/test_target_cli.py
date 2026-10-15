@@ -418,6 +418,26 @@ def test_dispatch_node_resolves_dashless_literal_id():
     assert target_cli._resolve_dispatch_node("x4d12", None, entries=[entry]) == entry
 
 
+def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
+    """A graph with one delivery unit and one node contained in it.
+
+    The owner binds a real plan file. A bound, resolving plan is one of the two
+    scope denominators, so the denominator gate at init must see it resolve; a
+    placeholder path gets emptied at back-fill and the node reads as plan-less.
+    """
+    plan = tmp_path / "one.md"
+    plan.write_text("# plan\n", encoding="utf-8")
+    plan_path = str(plan)
+    gp = tmp_path / "graph.json"
+    seed_graph(gp, {"entries": [
+        {"id": owner, "plan_path": plan_path, "status": "ready"},
+        {"id": "x-261c", "plan_path": plan_path, "status": "ready",
+         "contained_in": owner},
+    ]})
+    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
+    return gp
+
+
 def test_shared_plan_path_resolves_to_the_delivery_unit(tmp_path, monkeypatch):
     """A plan held by a unit and its contained children is legal, not ambiguous.
 
