@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 /// The validated group spec. All fields are guaranteed present; `project` and
 /// `cwd` are None when the group inherits the epic's repo.
+#[derive(Debug)]
 pub(crate) struct NormalizedGroup {
     pub slug: String,
     pub title: String,
@@ -29,6 +30,7 @@ pub(crate) struct NormalizedGroup {
 
 /// Any invalid decomposition request; `exit_code` maps the class to the
 /// documented codes (1 user error, 2 bad state/cycle, 3 not found).
+#[derive(Debug)]
 pub(crate) struct DecomposeErr {
     pub message: String,
     pub exit_code: i32,
