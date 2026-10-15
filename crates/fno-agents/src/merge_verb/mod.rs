@@ -284,7 +284,15 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
     }
     let root = hold_repo_root(&base);
     let root_prefix = format!("{}/", root.trim_end_matches('/'));
-    if !rows.iter().any(|row| cwd_in_repo(row, &root, &root_prefix)) {
+    // The live work-map answers before a stored cwd: a moved or repointed
+    // checkout leaves graph rows carrying the old path while their project
+    // name resolves to the current root, and matching only the stale
+    // snapshot silently reads a genuinely-held node as not-this-repo's.
+    let workmap = crate::territory::workspace_paths(&base);
+    if !rows
+        .iter()
+        .any(|row| cwd_in_repo(row, &root, &root_prefix, &workmap))
+    {
         hold_clear(&mut flow, pr);
         return flow;
     }
@@ -380,7 +388,7 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
         hold_clear(&mut flow, pr);
         return flow;
     }
-    let graph_path = crate::org_board::scope::graph_json_path(&base);
+    let graph_path = hold_graph_path(&base);
     for id in &candidates {
         if !by_id.contains_key(id.as_str()) {
             if stamped && candidates.first() == Some(id) {
@@ -539,11 +547,22 @@ fn disarm_queued_auto_merge(flow: &mut FlowResult, pr: i64, cwd: &Path, why: &st
     ));
 }
 
+/// The graph store path the deleted leg read (`fno.paths.graph_json()`): a
+/// pinned `FNO_STATE_DIR` relocates the state root, so it wins before the
+/// configured/default home resolver - otherwise a relocated state dir leaves
+/// this door reading a graph nobody wrote.
+fn hold_graph_path(cwd: &Path) -> PathBuf {
+    if let Some(pinned) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
+        return crate::state_layout::place(&PathBuf::from(pinned), "graph.json");
+    }
+    crate::org_board::scope::graph_json_path(cwd)
+}
+
 /// One graph rows read through the same worker door the Python leg used:
 /// `fno-agents-worker --store-exec --graph <path>`, the api rows request on
 /// stdin, the `{ok, result|error}` envelope on stdout.
 fn worker_rows(cwd: &Path) -> Result<Vec<Value>, String> {
-    let graph = crate::org_board::scope::graph_json_path(cwd);
+    let graph = hold_graph_path(cwd);
     let bin = std::env::var_os("FNO_AGENTS_WORKER")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -611,11 +630,29 @@ fn worker_rows(cwd: &Path) -> Result<Vec<Value>, String> {
 
 /// The bounded one-command wait shared by the flow's subprocess hops: the
 /// exit status plus whatever the pipes captured, or None on a timeout (the
-/// child is killed, the partial pipes dropped).
+/// child is killed, the partial pipes dropped). A drainer thread reads both
+/// pipes for the whole wait, so a child whose output outgrows the OS pipe
+/// buffer can always write and exit - a wait-for-exit-then-read order would
+/// deadlock exactly there, at the pipe capacity.
 fn wait_output_with_timeout(
     mut child: std::process::Child,
     timeout: Duration,
 ) -> Option<std::process::Output> {
+    use std::io::Read;
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let drainer = std::thread::spawn(move || {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if let Some(mut pipe) = stdout_pipe {
+            let _ = pipe.read_to_string(&mut stdout);
+        }
+        if let Some(mut pipe) = stderr_pipe {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        let _ = tx.send((stdout, stderr));
+    });
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -631,16 +668,9 @@ fn wait_output_with_timeout(
             Err(_) => return None,
         }
     };
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        use std::io::Read;
-        let _ = pipe.read_to_string(&mut stdout);
-    }
-    if let Some(mut pipe) = child.stderr.take() {
-        use std::io::Read;
-        let _ = pipe.read_to_string(&mut stderr);
-    }
+    // The child has exited, so both pipes are at EOF and the drainer's send
+    // has already landed (or the child held no pipes at all).
+    let (stdout, stderr) = rx.recv().unwrap_or((String::new(), String::new()));
     Some(std::process::Output {
         status,
         stdout: stdout.into_bytes(),
@@ -658,13 +688,28 @@ fn hold_repo_root(base: &Path) -> String {
     }
 }
 
-/// The leaf's in-repo gate: is this entry plausibly THIS repo's node? An
-/// entry with no usable cwd cannot be proven foreign and is included - only
-/// binding-key matches can ever trigger a gh call.
-fn cwd_in_repo(entry: &Value, root: &str, root_prefix: &str) -> bool {
-    let raw = match entry.get("cwd").and_then(Value::as_str) {
-        Some(raw) if !raw.is_empty() => raw,
-        _ => return true,
+/// The leaf's in-repo gate: is this entry plausibly THIS repo's node? The
+/// live work-map root for the entry's project answers over its stored cwd
+/// (an intake-time snapshot); with neither, the entry cannot be proven
+/// foreign and is included - only binding-key matches can ever trigger a
+/// gh call.
+fn cwd_in_repo(
+    entry: &Value,
+    root: &str,
+    root_prefix: &str,
+    workmap: &std::collections::HashMap<String, String>,
+) -> bool {
+    let project = entry
+        .get("project")
+        .and_then(Value::as_str)
+        .filter(|p| !p.is_empty());
+    let resolved = project.and_then(|p| workmap.get(p)).map(String::as_str);
+    let raw = match resolved {
+        Some(path) if !path.is_empty() => path,
+        _ => match entry.get("cwd").and_then(Value::as_str) {
+            Some(raw) if !raw.is_empty() => raw,
+            _ => return true,
+        },
     };
     let norm = normalize_path(raw);
     norm == root || norm.starts_with(root_prefix)

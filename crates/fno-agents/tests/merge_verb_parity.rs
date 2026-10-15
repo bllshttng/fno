@@ -135,6 +135,9 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     // The keeper-reap guard requires every triad-spawning test to declare
     // its owner, so the spawned client is attributed to this test process.
     cmd.envs(fno_agents::test_run::self_owner_env());
+    // `authorized-merge` is the registered top-level verb; the entry word
+    // below is its operand door, never a verb of its own.
+    cmd.arg("authorized-merge");
     // The door word follows the case's entry: the hold cases drive the
     // check-stage door the deleted Python leaf answered.
     match case["entry"].as_str().unwrap_or("merge") {
