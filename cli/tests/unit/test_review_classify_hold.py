@@ -90,7 +90,10 @@ def test_no_pr_review_holds_findings_on_branch_and_head(
         lambda findings_file: {
             "findings_blocking": 2,
             "findings_nonblocking": 0,
-            "findings": [],
+            "findings": [
+                {"finding_key": "b0.py:1:correctness"},
+                {"finding_key": "b1.py:2:correctness"},
+            ],
         },
     )
     findings = tmp_path / "findings.json"
