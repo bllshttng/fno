@@ -81,7 +81,7 @@ fn strip_bom_first_line(line: &str) -> String {
 /// every failure mode (missing file, malformed YAML, no frontmatter); a
 /// malformed block emits one stderr warning so a broken file is visible
 /// instead of silently routing on stale data.
-fn read_plan_frontmatter(plan_path: &Path) -> Map<String, Value> {
+pub(crate) fn read_plan_frontmatter(plan_path: &Path) -> Map<String, Value> {
     let text = match std::fs::read_to_string(plan_path) {
         Ok(text) => text,
         Err(_) => return Map::new(),
@@ -587,7 +587,7 @@ fn normpath(p: &str) -> String {
 }
 
 /// Lexical abspath against `cwd`.
-fn abspath_cwd(p: &str, cwd: &Path) -> String {
+pub(crate) fn abspath_cwd(p: &str, cwd: &Path) -> String {
     if p.starts_with('/') {
         normpath(p)
     } else {
@@ -1106,7 +1106,7 @@ fn detect_project_entries(entries: &[Value], canonical_root: &str) -> Option<Str
 
 /// The work-map path declared for `project` (explicit sources only: this is
 /// where an explicitly named project's cwd comes from).
-fn project_root_from_settings(project: &str) -> Option<String> {
+pub(crate) fn project_root_from_settings(project: &str) -> Option<String> {
     for doc in super::settings::config_candidates() {
         for (name, raw) in super::create_cli::work_pairs(&doc) {
             if name == project {
@@ -2181,7 +2181,7 @@ fn refuse_create_on_external_backend() -> bool {
 /// `~` expansion for CLI-given plan paths: intake reads the CLI spelling, but
 /// a quoted tilde path must still resolve (the collision resolver expands it
 /// at dispatch, so refusing it here would break a working plan).
-fn expand_user(p: &str) -> String {
+pub(crate) fn expand_user(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             return Path::new(&home).join(rest).to_string_lossy().into_owned();

@@ -339,6 +339,7 @@ pub fn run(args: &[String]) -> i32 {
         "batch" => super::batch::run_batch(resolved.tail),
         "capture" => super::capture::run_capture(resolved.tail),
         "intake" => super::intake::run_intake(resolved.tail),
+        "decompose" => super::decompose::run_decompose(resolved.tail),
         "lanes" => super::finale::run_lanes(resolved.tail),
         "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
         "reprioritize" => super::finale::run_reprioritize(resolved.tail),

@@ -29,6 +29,7 @@ pub mod create_cli;
 pub mod cutover;
 pub mod decisions;
 pub mod decisions_cli;
+pub mod decompose;
 pub mod dispatch_resolve;
 pub mod done_evidence;
 pub(crate) mod drift_emit;

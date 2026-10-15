@@ -183,7 +183,6 @@ cli/tests/unit/test_backlog_reopen.py::_native_update::pytest.skip  # native upd
 cli/tests/unit/test_backlog_intake_door.py::_intake::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/unit/test_backlog_intake_door.py::_add::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/unit/test_contain.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_decompose.py::test_contained_in_survives_a_later_unrelated_mutation::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_external_backend_refusals.py::test_tracker_owned_verbs_refuse_under_external::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_graph_provenance.py::test_origin_ac2_edge_update_never_rewrites_birth::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_strand.py::test_canonical_done_force_reparents_to_nearest_live_ancestor::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
@@ -199,10 +198,11 @@ cli/tests/unit/test_strand.py::_seed_idea::pytest.skip  # native create door: th
 cli/tests/goldens/_door.py::door::pytest.skip  # native door: the golden receipts drive the fno-agents binary; without a dev build there is no door to pin
 cli/tests/integration/test_collision.py::_native_supersede::pytest.skip  # native supersede door: the guard ladder is the Rust leg's; no dev build means no door to pin
 cli/tests/unit/test_contain.py::_native_contain::pytest.skip  # native contain door: the guard ladder is the Rust leg's; no dev build means no door to pin
-cli/tests/unit/test_decompose.py::_native_supersede::pytest.skip  # native supersede door: the release contract is the Rust leg's; no dev build means no door to pin
 cli/tests/unit/test_reconcile_supersession.py::_native_supersede::pytest.skip  # native supersede door: the supersede leaf is the Rust leg's; no dev build means no door to pin
 cli/tests/agents/test_rust_runtime.py::test_spawn_seam_injects_config_defaults::pytest.skip  # native door: the compose reads the config FILE through the fno-agents binary; without a dev build there is no door to pin
 cli/tests/agents/test_spawn_defaults.py::_pin_world::pytest.skip  # native door: the compose parity drives the fno-agents binary; without a dev build there is no door to pin
 cli/tests/agents/test_dispatch_harness_stage_table.py::test_spawn_door_answers_the_same_harness::pytest.skip  # native door: both doors drive the fno-agents binary; without a dev build there is no door to pin
 cli/tests/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_verbs_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
 cli/tests/unit/test_tracker.py::test_create_verbs_refuse_on_external_backend::pytest.skip  # the decompose/intake refusal rows drive the native fno-agents binary, and the smoke shard deletes that target on purpose
+cli/tests/integration/test_birth_hook_wiring.py::test_decompose_never_fires_birth_hook::pytest.skip  # the door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
+cli/tests/unit/test_backlog_decompose_door.py::_door::pytest.skip  # the decompose door drives the native fno-agents binary, and the smoke shard deletes that target on purpose

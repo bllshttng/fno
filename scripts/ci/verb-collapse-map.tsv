@@ -168,7 +168,6 @@ backlog carveout resolve	T1	backlog carveout resolve	1
 backlog carveout update	T1	backlog carveout update	1
 backlog collisions check	T1	backlog collisions check	11
 backlog cost	T1	backlog cost	1
-backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
 backlog dispatch-lanes	T1	backlog dispatch-lanes	1

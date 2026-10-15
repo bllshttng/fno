@@ -339,37 +339,26 @@ def test_create_verbs_refuse_on_external_backend(
         assert "tracker" in (result.output + result.stderr).lower()
         return
     # decompose and intake answer at the native door now; the same guard
-    # rides the binary under the same backend selection. decompose rides
-    # here only until its port lands in this same PR, then both rows go
-    # through the door below.
-    if verb == "decompose":
-        from typer.testing import CliRunner
+    # rides the binary under the same backend selection.
+    from fno.rust_binary import find_dev_binary
 
-        from fno.cli import app
-
-        result = CliRunner().invoke(app, ["backlog", *args])
-        out = result.output
-        code = result.exit_code
-    else:
-        from fno.rust_binary import find_dev_binary
-
-        binary = find_dev_binary()
-        if binary is None:
-            pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
-        env = dict(os.environ)
-        env["HOME"] = str(tmp_path)
-        env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
-        env["FNO_TRACKER_BACKEND"] = "github"
-        proc = subprocess.run(
-            [str(binary), "backlog", *args],
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=tmp_path,
-            timeout=60,
-        )
-        out = proc.stdout + proc.stderr
-        code = proc.returncode
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path)
+    env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
+    env["FNO_TRACKER_BACKEND"] = "github"
+    proc = subprocess.run(
+        [str(binary), "backlog", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    out = proc.stdout + proc.stderr
+    code = proc.returncode
     assert code == 1, f"{verb} did not refuse: {out}"
     assert "github" in out
     assert "tracker" in out.lower()
