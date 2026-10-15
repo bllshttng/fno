@@ -91,8 +91,20 @@ def test_no_pr_review_holds_findings_on_branch_and_head(
             "findings_blocking": 2,
             "findings_nonblocking": 0,
             "findings": [
-                {"finding_key": "b0.py:1:correctness"},
-                {"finding_key": "b1.py:2:correctness"},
+                {
+                    "category": "correctness",
+                    "verdict": None,
+                    "blocking": True,
+                    "has_required_fields": True,
+                    "finding_key": "b0.py:1:correctness",
+                },
+                {
+                    "category": "correctness",
+                    "verdict": None,
+                    "blocking": True,
+                    "has_required_fields": True,
+                    "finding_key": "b1.py:2:correctness",
+                },
             ],
         },
     )
