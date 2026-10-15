@@ -178,6 +178,12 @@ fn pinned_command(
             cmd.arg(arg.as_str().unwrap());
         }
     }
+    if action == "record" {
+        // The capture driver appended the fixture path itself (Python's
+        // classify takes only --findings-file), so record cases record
+        // empty argv; the native door takes the same implicit file.
+        cmd.arg("--findings-file").arg("findings.json");
+    }
     for (k, _) in std::env::vars_os() {
         let text = k.to_string_lossy().to_string();
         if SCRUB_PREFIXES.iter().any(|p| text.starts_with(p)) {
@@ -214,7 +220,7 @@ fn pinned_command(
     cmd
 }
 
-fn compare_case(bin: &Path, base: &Path, case: &Value) {
+fn compare_case(bin: &Path, base: &Path, case: &Value, problems: &mut Vec<String>) {
     let label = case["label"].as_str().unwrap();
     let key = slug(label);
     let action = case["action"].as_str().unwrap();
@@ -233,66 +239,90 @@ fn compare_case(bin: &Path, base: &Path, case: &Value) {
     let stdout = strip_wrapper_noise(&String::from_utf8_lossy(&out.stdout));
     let stderr = strip_wrapper_noise(&String::from_utf8_lossy(&out.stderr));
 
-    let assert_file = |suffix: &str, got: &str| {
-        let path = golden.join(format!("{key}.{suffix}"));
-        let want = fs_read(&path).unwrap_or_else(|| panic!("[{label}] missing golden {path:?}"));
-        assert_eq!(
-            got, want,
-            "[{label}] {suffix} differs\ngolden={want:?}\nrust  ={got:?}"
-        );
-    };
+    // Every diff this case shows is COLLECTED, not panicked: one CI round
+    // reports the whole table, not its first row.
+    let mut bad = |msg: String| problems.push(format!("[{label}] {msg}"));
 
     // exit
     let exit_path = golden.join(format!("{key}.exit"));
-    let want_exit: i32 = fs_read(&exit_path)
-        .unwrap_or_else(|| panic!("[{label}] missing golden {exit_path:?}"))
-        .trim()
-        .parse()
-        .expect("golden exit parses");
-    assert_eq!(
-        out.status.code(),
-        Some(want_exit),
-        "[{label}] exit differs: golden {want_exit}, rust {:?}",
-        out.status.code()
-    );
+    let want_exit: i32 = match fs_read(&exit_path) {
+        Some(text) => match text.trim().parse() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                bad(format!("golden exit does not parse: {text:?}"));
+                return;
+            }
+        },
+        None => {
+            bad(format!("missing golden {}", exit_path.display()));
+            return;
+        }
+    };
+    if out.status.code() != Some(want_exit) {
+        bad(format!(
+            "exit differs: golden {want_exit}, rust {:?}",
+            out.status.code()
+        ));
+    }
     // stdout
-    assert_file("out", &stdout);
+    let out_path = golden.join(format!("{key}.out"));
+    match fs_read(&out_path) {
+        Some(want) => {
+            if stdout != want {
+                bad(format!(
+                    "stdout differs\ngolden={want:?}\nrust  ={stdout:?}"
+                ));
+            }
+        }
+        None => bad(format!("missing golden {}", out_path.display())),
+    }
     // stderr: exact when frozen, prefix when the table says so, else free.
-    if let Some(want) = read_optional(&golden.join(format!("{key}.err"))) {
-        assert_eq!(
-            stderr, want,
-            "[{label}] stderr differs\ngolden={want:?}\nrust  ={stderr:?}"
-        );
+    let err_path = golden.join(format!("{key}.err"));
+    if let Some(want) = fs_read(&err_path) {
+        if stderr != want {
+            bad(format!(
+                "stderr differs\ngolden={want:?}\nrust  ={stderr:?}"
+            ));
+        }
     } else if let Some(prefix) = case["err_prefix"].as_str() {
-        assert!(
-            stderr.starts_with(prefix),
-            "[{label}] stderr lacks the frozen prefix\nprefix={prefix:?}\nrust={stderr:?}"
-        );
+        if !stderr.starts_with(prefix) {
+            bad(format!(
+                "stderr lacks the frozen prefix\nprefix={prefix:?}\nrust={stderr:?}"
+            ));
+        }
     }
     // argv log: compared with the paginate token dropped; a case with no
     // golden log must produce none.
     let own_log = fs_read(&runtime.log).map(|t| strip_paginate(&strip_wrapper_noise(&t)));
-    match fs_read(&golden.join(format!("{key}.log"))) {
-        Some(_) => assert_file("log", &own_log.unwrap_or_default()),
-        None => assert!(
-            own_log.is_none(),
-            "[{label}] no golden log but the leg ran gh: {:?}",
-            own_log
-        ),
+    let log_golden = fs_read(&golden.join(format!("{key}.log")));
+    match (log_golden, own_log) {
+        (Some(want), Some(got)) => {
+            if want != got {
+                bad(format!("log differs\ngolden={want:?}\nrust  ={got:?}"));
+            }
+        }
+        (Some(want), None) => bad(format!(
+            "a golden log exists but the leg ran no gh: golden={want:?}"
+        )),
+        (None, Some(got)) => bad(format!("no golden log but the leg ran gh: {got:?}")),
+        (None, None) => {}
     }
     // POST body
     let own_body = fs_read(&runtime.body);
-    match fs_read(&golden.join(format!("{key}.body"))) {
-        Some(want) => assert_eq!(
-            own_body.unwrap_or_default(),
-            want,
-            "[{label}] POST body differs"
-        ),
-        None => assert!(
-            own_body.is_none(),
-            "[{label}] no golden body but the leg posted: {:?}",
-            own_body
-        ),
+    let body_golden = fs_read(&golden.join(format!("{key}.body")));
+    match (body_golden, own_body) {
+        (Some(want), Some(got)) => {
+            if want != got {
+                bad(format!(
+                    "POST body differs\ngolden={want:?}\nrust  ={got:?}"
+                ));
+            }
+        }
+        (Some(want), None) => bad(format!(
+            "a golden body exists but the leg posted nothing: golden={want:?}"
+        )),
+        (None, Some(got)) => bad(format!("no golden body but the leg posted: {got:?}")),
+        (None, None) => {}
     }
 }
 
@@ -312,13 +342,20 @@ fn review_findings_record_golden_parity() {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
     let mut ran = 0;
+    let mut problems: Vec<String> = Vec::new();
     for case in cases() {
         if case["action"].as_str() == Some("record") {
-            compare_case(&bin, &base, &case);
+            compare_case(&bin, &base, &case, &mut problems);
             ran += 1;
         }
     }
     assert!(ran > 0, "the record table ran no case: cases.json lost it");
+    assert!(
+        problems.is_empty(),
+        "{} record case(s) differ from the goldens:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
 }
 
 /// The comment golden table, page walk included.
@@ -329,11 +366,18 @@ fn review_findings_post_golden_parity() {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
     let mut ran = 0;
+    let mut problems: Vec<String> = Vec::new();
     for case in cases() {
         if case["action"].as_str() == Some("post") {
-            compare_case(&bin, &base, &case);
+            compare_case(&bin, &base, &case, &mut problems);
             ran += 1;
         }
     }
     assert!(ran > 0, "the post table ran no case: cases.json lost it");
+    assert!(
+        problems.is_empty(),
+        "{} post case(s) differ from the goldens:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
 }
