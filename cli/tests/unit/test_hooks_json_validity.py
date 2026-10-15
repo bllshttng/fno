@@ -553,10 +553,15 @@ def test_context_hooks_declaration() -> None:
     groups = _declaration_groups()
     named = set()
     for path in (HOOKS_JSON, CODEX_HOOKS_JSON):
-        for match in re.finditer(
-            r"context-run\.sh\s+([\w-]+)", path.read_text(encoding="utf-8")
-        ):
-            named.add(match.group(1))
+        manifest_named = set()
+        for registrations in json.loads(path.read_text(encoding="utf-8"))["hooks"].values():
+            for registration in registrations:
+                for hook in registration.get("hooks", []):
+                    match = re.search(r"context-run\.sh\s+([\w-]+)", _command(hook["command"]))
+                    if match:
+                        manifest_named.add(match.group(1))
+        assert manifest_named, f"{path.name} has no context runner registration"
+        named.update(manifest_named)
     assert named <= set(groups), f"manifest names unknown groups: {sorted(named - set(groups))}"
     for name, group in groups.items():
         ids = [producer["id"] for producer in group["producers"]]

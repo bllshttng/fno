@@ -13,3 +13,5 @@ The postinstall smoke drops its exact unquoted-command substring check. The cont
 Local validation covers the existing join-policy suite, Rust formatting, standalone builder compilation and shell syntax. The generic `fno doctor test` runner treats a Rust source path as a pytest argument and exits 4. Rust execution and all package/publication acceptance run in CI.
 
 The real Codex 0.145 tests use a staged local-source fixture. They retain canonical identity and rollback checks against the actual CLI. Passing the public repository directly now selects the release branch and cannot exercise developer-stage convergence. Both focused tests pass with Codex 0.145.0.
+
+[CI artifact proof](https://github.com/bllshttng/footnote/actions/runs/38817006606/job/116704103132) passed with 771 files. It accepted 5000 files and refused 5001. Claude strict validation and Codex installation passed. Both generated channels advanced twice through ordinary pushes. The legacy clone pulled with `--ff-only`, and a stale competing publication was refused. The preamble carrier test now parses shell quoting. The declaration test requires a positive runner registration in each manifest.
