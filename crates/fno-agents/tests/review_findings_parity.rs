@@ -88,10 +88,6 @@ fn strip_wrapper_noise(text: &str) -> String {
     out
 }
 
-fn read_optional(path: &Path) -> Option<String> {
-    fs_read(path)
-}
-
 fn fs_read(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
