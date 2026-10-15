@@ -201,33 +201,24 @@ def test_retro_dispatch_preflight_attended_overlap_is_advisory_only(tmp_path):
 
 
 def test_target_init_empty_model_rejected(monkeypatch, tmp_path):
-    """AC2-ERR: an empty --model exits 2 with a usage error, no shell-out."""
+    """AC2-ERR: an empty --model exits 2. The usage refusal is the native
+    door's wording (the parity goldens characterize it); the forward's
+    observable surface is the propagated exit code."""
     fake_root = _fake_plugin_root(tmp_path)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-
-    def _no_run(*a, **k):
-        raise AssertionError("must not shell out on an empty --model")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _no_run)
     result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--model", "  "])
     assert result.exit_code == 2
-    assert "--model must not be empty" in result.output
 
 
 def test_target_init_rejects_invalid_size(monkeypatch, tmp_path):
-    """Invalid --size exits 2 with a clear message (script resolves fine)."""
+    """Invalid --size exits 2. Same shape as the empty-model test: the wording
+    is the native door's, the propagated code is the seam's contract."""
     fake_root = _fake_plugin_root(tmp_path)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-
-    def _no_run(*a, **k):
-        raise AssertionError("must not shell out on invalid --size")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _no_run)
     result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--size", "XL"])
     assert result.exit_code == 2
-    assert "invalid --size" in result.output
 
 
 def test_target_init_help_documents_size():
