@@ -355,7 +355,12 @@ pub fn spawn_cmd(cmd: &mut Command) -> std::process::Output {
 
 /// The seeded backlog node's id, minted by the native create.
 pub fn seed_node(env: &[(String, String)], cwd: &Path, title: &str) -> String {
-    let out = Command::new(AGENTS_BIN)
+    // Seed through the python CLI, not AGENTS_BIN: the rust writer lives on
+    // the db backend alone, while the python readers this fixture feeds
+    // (`load_graph(graph_json())`) still walk the flat-file tiers. The
+    // captured world wrote and read the same tier; the fixture keeps that
+    // shape until the reader tiers converge.
+    let out = Command::new(shim_dir(cwd).join("fno"))
         .args(["backlog", "idea", title, "--difficulty", "medium"])
         .current_dir(cwd)
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
