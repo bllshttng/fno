@@ -346,7 +346,7 @@ A stacked PR names another feature branch as its base, and when that base lands 
 Specimen: PR #800 merged into `feature/bg-role` at 2026-08-10T19:42:32Z, an hour after PR #789 landed that same branch on main; its merge commit `9b665db4` is the tip of `origin/feature/bg-role` and is not an ancestor of `origin/main`.
 Why the base was never retargeted is unexplained, so the guard asserts nothing about GitHub's retarget behavior and reads observable facts instead.
 
-`crates/fno-agents/src/gate_probes.rs` `lineage` is the one predicate: for a base that is not the default branch, it refuses if a MERGED PR already carried that base, or if the base tip is already an ancestor of the default branch.
+If a base is not the default branch, the predicate refuses a MERGED PR that already carried that base, or a base tip already an ancestor of the default branch.
 Both checks are kept because they go blind in opposite directions - under `merge_strategy = "squash"` a landed base is not an ancestor of main, and a base that landed leaving no merged PR is invisible to the first check.
 A third check covers where both go blind at once: `delete_branch_on_merge` removes the base as it lands, and a confirmed deletion is the verdict on its own, because a branch that does not exist carries nothing onward.
 It has to be, since a fresh clone (every CI runner) has no `origin/<base>` to compare a tip against or resolve ancestry from, and a stale one is no better - under squash the landed base is no ancestor of the default branch, and a local ref left behind the merged head fails the first check's equality test too.
