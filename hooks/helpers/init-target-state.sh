@@ -41,11 +41,13 @@ if [[ -z "$_git_toplevel" ]] \
 fi
 
 # Project state files resolve through the owning verb (the repo's space under
-# ~/.fno/spaces/, keyed on the canonical root). Degraded fallback for an fno
-# predating the verb: the legacy checkout path, spelled with its real filename.
+# ~/.fno/spaces/, keyed on the canonical root). FNO_AGENTS_BIN wins when set:
+# a parity or supervisor env pins the exact binary, and PATH may not carry
+# `fno-agents` at all. Degraded fallback for an fno predating the verb: the
+# legacy checkout path, spelled with its real filename.
 _space_state_path() {
   local p
-  p=$(fno-agents state path "$1" 2>/dev/null || true)
+  p=$("${FNO_AGENTS_BIN:-fno-agents}" state path "$1" 2>/dev/null || true)
   if [[ -z "$p" ]]; then
     case "$1" in
       target-state) p="$REPO_ROOT/.fno/target-state.md" ;;

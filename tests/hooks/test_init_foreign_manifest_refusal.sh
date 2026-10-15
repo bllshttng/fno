@@ -83,6 +83,7 @@ run_init() { # $1 repo dir, $2 stdout capture file, rest: K=V env for this run
   (cd "$dir" && \
     HOME="$dir/home" \
     PATH="$dir/bin:$PATH" \
+    FNO_AGENTS_BIN="$dir/bin/fno-agents" \
     FNO_TEST_SPACE="$dir/space" \
     TARGET_START=1 \
     TARGET_INPUT="x-7040-foreign-manifest" \

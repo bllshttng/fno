@@ -1,0 +1,5 @@
+fno do target start: node <NODE> is held by a live session
+  target-session:00000000-0000-0000-0000-000000000000 (pid=<PID>, host=<HOST>).
+  Refusing to share its worktree at <TMP>/home/.fno/worktrees/repo/<NODE> (would corrupt a shared git index).
+  If this is your session, cd <TMP>/home/.fno/worktrees/repo/<NODE> to continue it;
+  otherwise wait for it to release the claim, or pick another node.

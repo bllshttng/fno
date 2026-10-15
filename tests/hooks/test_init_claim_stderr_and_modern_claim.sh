@@ -96,6 +96,7 @@ JSON
 (cd "$TMP_A" && \
   HOME="${TMP_A}/home" \
   PATH="${TMP_A}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_A}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_A}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
@@ -131,6 +132,7 @@ rm -f "${TMP_B}/home/.fno/graph.json"
 (cd "$TMP_B" && \
   HOME="${TMP_B}/home" \
   PATH="${TMP_B}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_B}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_B}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
@@ -174,6 +176,7 @@ JSON
 (cd "$TMP_C" && \
   HOME="${TMP_C}/home" \
   PATH="${TMP_C}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_C}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_C}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
@@ -220,6 +223,7 @@ HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
 (cd "$TMP_E" && \
   HOME="${TMP_E}/home" \
   PATH="${TMP_E}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_E}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_E}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
@@ -262,6 +266,7 @@ HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
 (cd "$TMP_G" && \
   HOME="${TMP_G}/home" \
   PATH="${TMP_G}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_G}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_G}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
@@ -297,6 +302,7 @@ HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
 (cd "$TMP_F" && \
   HOME="${TMP_F}/home" \
   PATH="${TMP_F}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_F}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_F}/space" \
   FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   FNO_TARGET_INIT_GATED=1 \
