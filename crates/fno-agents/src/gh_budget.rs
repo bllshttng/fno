@@ -946,4 +946,260 @@ mod tests {
         assert!(admit_spawn_at(&path, now, 450, gh, &["--version".to_string()]).is_none());
         assert_eq!(std::fs::read(&path).unwrap(), before, "no stamp for either");
     }
+
+    // --- the guard against a new bare gh spawn ------------------------------
+
+    /// One production line carrying a bare gh constructor:
+    /// `Command::new("gh")`, `Command::new(&gh)`, `Command::new(gh)`, or
+    /// `Command::new("fno-gh-<lowercase>")`. Hand-rolled over the line text
+    /// so the gate needs no regex dependency.
+    fn bare_gh_constructor(line: &str) -> bool {
+        let Some(pos) = line.find("Command::new(") else {
+            return false;
+        };
+        let rest = line[pos + "Command::new(".len()..].trim_start();
+        let rest = match rest.strip_prefix('&') {
+            Some(r) => r.trim_start(),
+            None => rest,
+        };
+        let after = if let Some(quoted) = rest.strip_prefix('"') {
+            let Some(end) = quoted.find('"') else {
+                return false;
+            };
+            let name = &quoted[..end];
+            let named = name == "gh"
+                || (name.starts_with("fno-gh-")
+                    && name["fno-gh-".len()..]
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase()));
+            if !named {
+                return false;
+            }
+            &quoted[end + 1..]
+        } else {
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if ident != "gh" {
+                return false;
+            }
+            &rest[ident.len()..]
+        };
+        after.trim_start().starts_with(')')
+    }
+
+    /// The cfg(test) items cut out by brace depth, the skipper
+    /// scripts/ci/check-mux-process-admission.sh uses. Returns (number,
+    /// line) so hits keep their on-disk line numbers.
+    fn production_lines(source: &str) -> Vec<(usize, String)> {
+        let mut kept = Vec::new();
+        let mut pending_test_item = false;
+        let mut skip_depth: i64 = 0;
+        for (idx, line) in source.lines().enumerate() {
+            let stripped = line.trim();
+            if skip_depth > 0 {
+                skip_depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if skip_depth <= 0 {
+                    skip_depth = 0;
+                }
+                continue;
+            }
+            if pending_test_item {
+                if stripped.is_empty() || stripped.starts_with("//") {
+                    continue;
+                }
+                pending_test_item = false;
+                let depth = line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if depth > 0 {
+                    skip_depth = depth;
+                }
+                continue;
+            }
+            if stripped == "#[cfg(test)]" {
+                pending_test_item = true;
+                continue;
+            }
+            kept.push((idx + 1, line.to_string()));
+        }
+        kept
+    }
+
+    fn fn_name_of(line: &str) -> Option<String> {
+        let pos = line.find("fn ")?;
+        let rest = &line[pos + 3..];
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if ident.is_empty() {
+            None
+        } else {
+            Some(ident)
+        }
+    }
+
+    /// Every production `Command::new(gh...)` whose enclosing fn reaches no
+    /// admitting sink (`gh_budget::output(` or `bounded_cmd::output_with_timeout`),
+    /// minus the allowlist. Pure over the source so a mutated fixture can
+    /// drive it, in the shape `direct_wait_bypasses` established.
+    fn bare_gh_spawns(rel_path: &str, source: &str) -> Vec<String> {
+        // Test files carry gh-named stubs by design; the walk skips them.
+        if rel_path.contains("/tests/")
+            || rel_path.ends_with("tests.rs")
+            || rel_path.ends_with("_tests.rs")
+        {
+            return Vec::new();
+        }
+        let lines = production_lines(source);
+        let hit_idxs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, line))| bare_gh_constructor(line))
+            .map(|(i, _)| i)
+            .collect();
+        let mut violations = Vec::new();
+        for &idx in &hit_idxs {
+            // The fn runs from the last `fn ` line at or above the hit to
+            // the next `fn ` line below it; the file top counts as one fn.
+            // Comment lines never bound a fn: a `// fn foo()` aside must not
+            // cut the body short of its admitting sink.
+            let is_code = |l: &String| !l.trim_start().starts_with("//");
+            let mut start = 0usize;
+            let mut fn_name = String::new();
+            for i in (0..=idx).rev() {
+                if !is_code(&lines[i].1) {
+                    continue;
+                }
+                if let Some(name) = fn_name_of(&lines[i].1) {
+                    start = i;
+                    fn_name = name;
+                    break;
+                }
+            }
+            let mut end = lines.len();
+            for i in (idx + 1)..lines.len() {
+                if is_code(&lines[i].1) && lines[i].1.contains("fn ") {
+                    end = i;
+                    break;
+                }
+            }
+            let body = lines[start..end]
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let behind_sink = body.contains("gh_budget::output(")
+                || body.contains("bounded_cmd::output_with_timeout");
+            // Allowlist (one site, one reason): crates/fno/src/setup_run.rs
+            // step_gh_auth. The `fno` crate cannot depend on fno-agents, and
+            // the one-time `gh auth status` probe carries no fleet identity
+            // (a human runs setup once).
+            let allowlisted = rel_path == "fno/src/setup_run.rs" && fn_name == "step_gh_auth";
+            if !behind_sink && !allowlisted {
+                let (number, line) = &lines[idx];
+                violations.push(format!("{rel_path}:{number}: {line}"));
+            }
+        }
+        violations
+    }
+
+    fn literal_hits(source: &str) -> Vec<(usize, String)> {
+        production_lines(source)
+            .into_iter()
+            .filter(|(_, line)| bare_gh_constructor(line))
+            .collect()
+    }
+
+    fn rs_files_under(
+        dir: &std::path::Path,
+        rel_base: &std::path::Path,
+        out: &mut Vec<(String, String)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rs_files_under(&path, rel_base, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(rel_base)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    out.push((rel, source));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_gh_spawn_sits_behind_the_budget_seam() {
+        // (c) Every transport still carries its admission call in the
+        // production half: a removed consult fails here before a spawn can
+        // slip past it.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let transports = [
+            "src/bounded_cmd.rs",
+            "src/gate_probes.rs",
+            "src/org_board/budget.rs",
+            "src/loopcheck/bounded_run.rs",
+            "src/pr_draft_ready.rs",
+            "src/backlog/pr_link.rs",
+            "src/operator_notice.rs",
+        ];
+        for rel in transports {
+            let path = manifest.join(rel);
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let prod_text = production_lines(&source)
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prod_text.contains("gh_budget::admit_"),
+                "transport {rel} lost its fleet-budget admission"
+            );
+        }
+
+        let crates_dir = manifest.parent().unwrap().to_path_buf();
+        let mut files = Vec::new();
+        rs_files_under(&manifest.join("src"), &crates_dir, &mut files);
+        rs_files_under(&crates_dir.join("fno/src"), &crates_dir, &mut files);
+
+        let mut raw = 0usize;
+        let mut violations = Vec::new();
+        for (rel_path, source) in &files {
+            raw += literal_hits(source).len();
+            violations.extend(bare_gh_spawns(rel_path, source));
+        }
+        // (b) A wrong haystack must not read clean: the walk on the real
+        // tree finds well over a dozen literal gh constructors.
+        assert!(
+            raw >= 12,
+            "the haystack decayed: only {raw} literal gh constructors found"
+        );
+
+        // (a) The scanner refuses a bare fn and passes the same fn behind
+        // the door.
+        let bare = "fn f() {\n    std::process::Command::new(\"gh\").args([\"api\", \"x\"]).output();\n}\n";
+        assert_eq!(bare_gh_spawns("x.rs", bare).len(), 1, "bare fn is a hit");
+        let behind = "fn f() {\n    let cmd = std::process::Command::new(\"gh\");\n    let _ = crate::gh_budget::output(cmd);\n}\n";
+        assert!(
+            bare_gh_spawns("x.rs", behind).is_empty(),
+            "fn behind the door passes"
+        );
+
+        assert!(
+            violations.is_empty(),
+            "bare gh spawns outside the fleet budget seam:\n{}\n\
+             route each through crate::gh_budget::output or a bounded_cmd \
+             transport, or add an allowlist entry with a reason",
+            violations.join("\n")
+        );
+    }
 }
