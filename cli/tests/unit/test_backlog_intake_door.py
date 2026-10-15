@@ -87,11 +87,17 @@ def test_intake_door_mints_a_node(tmp_path: Path) -> None:
     plan.write_text(PLAN)
     res = _intake(tmp_path, str(plan))
     assert res.returncode == 0, res.stderr
-    assert 'intake x' in res.stdout and '-> backlog: "My Plan"' in res.stdout
+    # The receipt names whatever id prefix this environment's settings mint;
+    # the shape is the contract, not the prefix.
+    receipt = next(
+        (ln for ln in res.stdout.splitlines() if ln.startswith("intake ")), ""
+    )
+    assert '-> backlog: "My Plan"' in receipt, res.stdout
+    minted = receipt.split()[1]
+    assert minted, res.stdout
 
     # Read back through the same door, not the store file: the door is the
     # user path and the store format is not this test's contract.
-    minted = res.stdout.split()[1]
     from fno.rust_binary import find_dev_binary
 
     binary = find_dev_binary()
