@@ -54,7 +54,7 @@ impl Gh for GhReal {
         if let Some(t) = token {
             cmd.env("GH_TOKEN", t);
         }
-        match cmd.output() {
+        match crate::gh_budget::output(cmd) {
             Ok(out) => GhOut {
                 ok: out.status.success(),
                 code: out.status.code().unwrap_or(-1),

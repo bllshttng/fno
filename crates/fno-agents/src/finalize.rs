@@ -2074,16 +2074,15 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let output = match Command::new("fno-gh-coverage")
-        .args([
-            "pr",
-            "view",
-            "--json",
-            "reviews,comments,headRefOid,baseRefName",
-        ])
-        .current_dir(cwd)
-        .output()
-    {
+    let mut cmd = Command::new("fno-gh-coverage");
+    cmd.args([
+        "pr",
+        "view",
+        "--json",
+        "reviews,comments,headRefOid,baseRefName",
+    ]);
+    cmd.current_dir(cwd);
+    let output = match crate::gh_budget::output(cmd) {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             eprintln!(
