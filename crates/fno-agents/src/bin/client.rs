@@ -1136,7 +1136,7 @@ async fn run(args: Vec<String>) -> i32 {
     // and the ports that follow them) route through one door, so a new verb
     // costs a match arm in pr_door.rs, not routing lines against this file's
     // shrink-only budget.
-    if let Some(code) = fno_agents::pr_door::run_verb(verb, args) {
+    if let Some(code) = fno_agents::pr_door::run_verb(verb, &args) {
         return code;
     }
     // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
