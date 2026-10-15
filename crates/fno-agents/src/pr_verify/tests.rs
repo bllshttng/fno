@@ -150,7 +150,6 @@ fn the_golden_replay_pins_every_captured_case() {
         std::fs::write(&state_file, s(case, "state_file")).expect("state file");
         let world = world_of(case, tmp.path());
         let probe = probe(&world);
-        let journal = tmp.path().join("events.jsonl");
         let mut out: Vec<u8> = Vec::new();
         let mut err: Vec<u8> = Vec::new();
         let pr = s(case, "pr");

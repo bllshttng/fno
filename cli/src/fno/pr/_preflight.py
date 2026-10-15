@@ -834,6 +834,10 @@ def run_evidence_check(
     return 0 if decision["satisfied"] else 1
 
 
+def _git(args, cwd: str):
+    return run(["git", *args], cwd=cwd)
+
+
 def check_duplicate_pr(cwd: str, base: str, title: str) -> str:
     """The pr-create guard's refusal text, or '' when the create proceeds."""
     from fno.rust_binary import resolve_binary
