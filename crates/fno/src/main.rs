@@ -1356,15 +1356,17 @@ mod tests {
             decide_role(&os(&["review"]), false),
             Role::ReviewPolicyAlias(os(&[]))
         );
-        // Leaves keep their role: resolve-level is native above, the others
-        // forward, and --help forwards so typer keeps listing them.
+        // Leaves keep their role: the native leaves claim their tails, and
+        // --help forwards so typer keeps listing them.
         assert_eq!(
             decide_role(&os(&["do", "review", "resolve-level", "high"]), false),
             Role::ReviewLevel(os(&["high"]))
         );
+        // The retired --attest tail rides native too: the door refuses it
+        // and names the one attestation writer.
         assert_eq!(
             decide_role(&os(&["do", "review", "classify", "--attest"]), false),
-            Role::Forward
+            Role::ReviewClassify(os(&["--attest"]))
         );
         assert_eq!(
             decide_role(&os(&["do", "review", "--help"]), false),
