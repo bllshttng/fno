@@ -831,11 +831,14 @@ fn boundary_line(node_id: Option<&str>, plan_path: Option<&str>, _project_root: 
 
 use crate::loopcheck::settings::{parse_settings_result, PeerEntry, Settings};
 
-/// The three-file settings chain the Python loader walks, with the same
-/// missing-file note per file. The YAML settings files are noted when absent
-/// but not parsed (config.toml is the native canonical surface -- `loopcheck`
-/// reads nothing else), so a gate that lives only in settings.yaml is a
-/// declared gap, not a silent downgrade.
+/// The settings chain the Python loader walks, with the same missing-file
+/// note per file: the project root's pair, the canonical checkout's pair when
+/// the project root is a linked worktree (cold-start's orient reads the
+/// repo's config from inside the new worktree), then HOME's settings. The
+/// YAML settings files are noted when absent but not parsed (config.toml is
+/// the native canonical surface -- `loopcheck` reads nothing else), so a gate
+/// that lives only in settings.yaml is a declared gap, not a silent
+/// downgrade.
 fn load_review_config(project_root: &Path) -> Settings {
     let mut settings = Settings::default();
     let home = std::env::var("HOME").unwrap_or_default();
@@ -843,6 +846,16 @@ fn load_review_config(project_root: &Path) -> Settings {
         project_root.join(".fno").join("config.toml"),
         project_root.join(".fno").join("settings.yaml"),
     ];
+    if let Some(repo) = crate::paths::canonical_repo_root(project_root) {
+        // canonical_repo_root canonicalizes; compare like against like so the
+        // plain-repo case (repo == project root) does not repeat the pair.
+        let project_canon =
+            std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+        if repo != project_canon {
+            chain.push(repo.join(".fno").join("config.toml"));
+            chain.push(repo.join(".fno").join("settings.yaml"));
+        }
+    }
     if !home.is_empty() {
         chain.push(PathBuf::from(&home).join(".fno").join("settings.yaml"));
     }
