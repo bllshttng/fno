@@ -113,7 +113,16 @@ fn check_stale_base(
     let compare = format!("{remote}/{ref_name}");
     // Fail-open: a network flake must not block a ship, and gh pr create is
     // about to make the real network test anyway.
-    let Some(fetch) = run(&["git", "fetch", remote, ref_name, "--quiet"], cwd) else {
+    let Some(fetch) = run(
+        &[
+            "git",
+            "fetch",
+            remote.as_str(),
+            ref_name.as_str(),
+            "--quiet",
+        ],
+        cwd,
+    ) else {
         return (
             OK,
             Some("could not run git; stale-base check skipped".into()),
