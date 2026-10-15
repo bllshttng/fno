@@ -639,10 +639,13 @@ fn wait_output_with_timeout(
     timeout: Duration,
 ) -> Option<std::process::Output> {
     use std::io::Read;
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
     let (tx, rx) = std::sync::mpsc::channel();
-    let drainer = std::thread::spawn(move || {
+    // The handle is unread by design: the recv below is the join point, and
+    // on the timeout path this thread returns while the drainer finishes at
+    // the killed child's EOF.
+    std::thread::spawn(move || {
         let mut stdout = String::new();
         let mut stderr = String::new();
         if let Some(mut pipe) = stdout_pipe {
