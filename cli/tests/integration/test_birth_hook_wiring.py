@@ -2,7 +2,7 @@
 
 The add/idea hook wiring is native (the golden replays pin its offer, skip
 ladder and events) and the retro path lives in test_retro_land.py. This covers
-the remaining Python A1 path - intake - proving it invokes the shared hook.
+the remaining birth paths prove they invoke the shared hook.
 
 Decompose is NOT one of them. It used to route unflagged children here,
 which spawned a /think on every autonomous decompose rather than offering one;
@@ -90,20 +90,3 @@ def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch, capture_born):
     # Identical re-run stays idempotent and equally silent.
     assert _invoke("backlog", "decompose", "ab-epic0001", "--groups", _GROUPS).exit_code == 0
     assert capture_born == []
-
-
-# -- intake --
-
-def test_intake_fires_birth_hook_once(tmp_path, monkeypatch, capture_born):
-    g = tmp_path / "graph.json"
-    seed_graph(g, '{"entries": []}\n')
-    _route_graph(g, tmp_path, monkeypatch)
-
-    plan = tmp_path / "plan.md"
-    plan.write_text("---\ncreated: 2026-05-05\ntitle: A Plan\n---\n# Body\n\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n")
-
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-
-    assert len(capture_born) == 1
-    assert capture_born[0][0]  # the intaked node's real id reached the hook

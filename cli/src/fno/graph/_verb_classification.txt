@@ -12,7 +12,6 @@
 
 [tracker]
 # node lifecycle + creation (add, idea and the new word answer natively)
-intake
 decompose
 note
 supersede

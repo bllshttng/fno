@@ -99,7 +99,6 @@ A	effective_context_window_percent	py=cli/src/fno/doctor.py;rs=crates/fno-agents
 A	effort must be a non-empty string when provided	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	empty supported {action}	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	error: --force requires --reason text (explain why the cross-check is bypassed)	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
-A	error: --project must be a non-empty string	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/update_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	error: at least one task_id is required	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/cutover.rs|crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	error: cycle detected - {bid} (transitively) depends on {task_id}	py=cli/src/fno/graph/_intake.py;rs=crates/fno-agents/src/backlog/node_ref.rs	# CLASSIFY protocol|msg-twin|data
 A	error: feature {task_id} not found	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/cutover.rs|crates/fno-agents/src/backlog/finale.rs|crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data

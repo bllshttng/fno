@@ -47,6 +47,7 @@ pub mod freshness;
 pub mod get_cli;
 pub mod groom;
 pub mod idea_cap;
+pub mod intake;
 pub mod maintenance;
 pub mod maintenance_archive;
 pub(crate) mod merge_evidence;

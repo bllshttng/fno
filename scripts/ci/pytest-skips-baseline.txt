@@ -180,7 +180,8 @@ cli/tests/integration/test_backlog_alias.py::_native_update::pytest.skip  # nati
 cli/tests/integration/test_collision.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_receipt_readback.py::test_update_receipt_names_the_resolved_id::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_reopen.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_capture_size_cost.py::test_valid_node_types_is_the_one_vocabulary::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
+cli/tests/unit/test_backlog_intake_door.py::_intake::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
+cli/tests/unit/test_backlog_intake_door.py::_add::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/unit/test_contain.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_decompose.py::test_contained_in_survives_a_later_unrelated_mutation::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_external_backend_refusals.py::test_tracker_owned_verbs_refuse_under_external::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary

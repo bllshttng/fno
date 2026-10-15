@@ -273,7 +273,7 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     None
 }
 
-fn work_pairs(doc: &Value) -> Vec<(String, String)> {
+pub(crate) fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(work) = doc.get("work") else {
         return out;
@@ -302,7 +302,7 @@ fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     out
 }
 
-fn expand_home(path: &str) -> PathBuf {
+pub(crate) fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
@@ -1398,7 +1398,7 @@ pub(crate) fn create_node(
 /// The single-entry status ladder the Python model derives on every read:
 /// terminal fields, then PR, blockers, lock, then the plan rung (no plan ->
 /// idea; unreadable plan or a plan-side terminal -> ready; design -> design).
-fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
+pub(crate) fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
     if entry.get("completed_at").is_some_and(|v| !v.is_null()) {
         return "done".into();
     }

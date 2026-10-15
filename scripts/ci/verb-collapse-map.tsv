@@ -177,7 +177,6 @@ backlog encounter	T1	backlog encounter	0
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
 backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
-backlog intake	T1	backlog intake	32
 backlog lane-fill	T1	backlog lane-fill	2
 backlog maintain	T1	backlog maintain	7
 backlog migrate-difficulty	T1	backlog migrate-difficulty	0

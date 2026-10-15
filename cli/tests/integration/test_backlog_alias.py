@@ -1,9 +1,10 @@
 """Phase 01 + 02a + 03: backlog sub-app + verb aliases + triage nesting.
 
 `backlog` is the canonical graph sub-app (the deprecated `graph` top-level
-alias was removed as a true duplicate). Verifies the canonical `intake` verb
-is registered (and the deprecated `adopt` alias is gone), the `done` verb
-works, and the nested `triage` sub-app surface is present.
+alias was removed as a true duplicate). Verifies the `done` verb
+works and the nested `triage` sub-app surface is present (the `intake`
+verb answers at the native door; its adoption case lives in
+`test_backlog_intake_door.py`).
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -109,29 +110,6 @@ def test_ac2_hp_backlog_add_round_trips(tmp_graph):
 # ---------------------------------------------------------------------------
 # Phase 02a - intake (canonical) + done verb
 # ---------------------------------------------------------------------------
-
-
-def test_ac1_hp_intake_adopts_plan(tmp_graph, tmp_path):
-    """`fno backlog intake <plan>` intakes the plan as a new node.
-
-    Asserts the user-visible verb AND the on-disk writer flip so a
-    regression that flips ``_build_intake_node`` back to ``"adopt"`` is
-    caught by the integration suite. This pairs with the unit test on
-    ``INTAKE_SOURCE_VALUES`` membership; the writer must emit the new
-    canonical value, not the legacy one.
-    """
-    plan = tmp_path / "fake-plan.md"
-    plan.write_text("---\ncreated: 2026-05-05\ntitle: My Plan\n---\n# Body\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n")
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-    assert "intake ab-" in r.output or "ab-" in r.output
-
-    graph = _read_store(tmp_graph)
-    entries = graph
-    assert len(entries) == 1, f"expected 1 entry, got {entries!r}"
-    assert entries[0]["source"] == "intake", (
-        f"writer must emit source: 'intake', got {entries[0].get('source')!r}"
-    )
 
 
 def test_adopt_alias_is_gone(tmp_graph, tmp_path):
