@@ -406,24 +406,7 @@ fn forward_verbatim(args: &[String]) -> i32 {
 }
 
 fn exec_python(argv: Vec<String>) -> i32 {
-    let mut cmd = std::process::Command::new(crate::scrape::fno_py());
-    cmd.args(argv);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        eprintln!("fno-agents backlog: the Python CLI could not be exec'd: {err}");
-        eprintln!("       reinstall fno, run `fno doctor update --rust`, or set FNO_PY.");
-        2
-    }
-    #[cfg(not(unix))]
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(err) => {
-            eprintln!("fno-agents backlog: the Python CLI could not be run: {err}");
-            2
-        }
-    }
+    crate::scrape::exec_python("fno-agents backlog", argv)
 }
 
 fn forward_python(resolved: &Resolved<'_>) -> i32 {
