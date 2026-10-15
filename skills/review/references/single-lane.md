@@ -200,7 +200,7 @@ The findings payload is a fenced JSON array, at most the level's cap, ranked mos
 
 `autofix_class` is `gated_auto`, `manual`, or `advisory`. `gated_auto` names a fix a machine can apply: mechanical, scoped to the reviewed diff, provable by a test. `manual` names a fix the author applies. `advisory` records judgment with no fix intended. When two candidates dedup to one, the survivor carries the more conservative class (advisory over manual over gated_auto). A disagreement about fixability resolves against the machine. An absent class reads as absent: nothing is auto-applied on a guess. `owner` names who acts (`author` or `reviewer`), and `--fix` prints it. The class rides the attestation ledger beside the finding, so the next round reads what can be applied without re-deriving it.
 
-Write the array to a temp file and attest in the same command. `emit-attestation.sh` classifies the findings, writes the `review_attestation` row, and carries the verdict it measured from the classified record (pass only on zero blocking findings and a readable contract), so the lane never counts its own findings and no separate pass step exists. Type no verdict word: the positional is ignored on this path:
+Write the array to a temp file and attest in the same command. `emit-attestation.sh` classifies the findings and writes the `review_attestation` row. The row carries the verdict the emitter measured from the classified record: pass only on zero blocking findings and a readable contract. The lane never counts its own findings, and no separate pass step exists. Type no verdict word: the positional is ignored on this path:
 
 ```bash
 bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review --findings-file "$FINDINGS"
