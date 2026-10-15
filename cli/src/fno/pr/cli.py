@@ -442,15 +442,7 @@ def base_check(
 def base_lineage_check(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
 ) -> None:
-    from fno.pr import _base_lineage
-    from fno.pr._proc import ToolMissing
-
-    try:
-        rc = _base_lineage.run_base_lineage_check(pr_number)
-    except ToolMissing as exc:
-        typer.echo(f"fno do pr base-lineage-check: {exc.tool} not found on PATH", err=True)
-        rc = 127
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-lineage-check", [str(pr_number)])
 
 
 @pr_app.command(

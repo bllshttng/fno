@@ -20,7 +20,7 @@ from fno.pr.cli import pr_app
             ["--kind", "merged", "--pr-number=42", "--state-file", "state"],
             "fno.pr._verify.run_verify_merged",
         ),
-        ("base-lineage-check", ["42"], "fno.pr._base_lineage.run_base_lineage_check"),
+        ("base-lineage-check", ["42"], "fno.pr.cli._forward_to_binary"),
         ("merge-result-check", ["42"], "fno.pr._merge_result.run_merge_result_check"),
         ("coverage-check", ["42"], "fno.pr._coverage_gate.run_coverage_check"),
         ("status", ["42"], "fno.pr.cli._forward_to_binary"),

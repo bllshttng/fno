@@ -10,9 +10,38 @@ import shutil
 import subprocess
 import sys
 
-from fno.pr._base_lineage import _fetch_ref, _probe, _rev
+from fno.pr._proc import run
 
 OK, REFUSED_RED, UNKNOWN = 0, 3, 4
+
+_PROBE_TIMEOUT_S = 30
+
+
+def _probe(args: list, cwd: str):
+    """Bounded probe; ``None`` when it could not run at all (no tool, timeout)."""
+    try:
+        return run(args, cwd=cwd, timeout=_PROBE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - incl. ToolMissing, subprocess.TimeoutExpired
+        return None
+
+
+def _fetch_ref(ref: str, cwd: str) -> bool:
+    # --no-write-fetch-head: reading a remote-tracking ref without fetching
+    # answers from whatever the last fetch left behind, and a stale ref is
+    # exactly how a base that has since landed still looks alive.
+    fetch = _probe(
+        [
+            "git", "fetch", "--no-write-fetch-head",
+            "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}",
+        ],
+        cwd,
+    )
+    return fetch is not None and fetch.ok
+
+
+def _rev(ref: str, cwd: str) -> str:
+    res = _probe(["git", "rev-parse", ref], cwd)
+    return res.stdout.strip() if res is not None and res.ok else ""
 
 
 def _gh_pr_refs(pr_number: int, cwd: str) -> tuple[str, str] | None:

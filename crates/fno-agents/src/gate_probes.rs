@@ -429,6 +429,90 @@ fn lineage_decision(
     )
 }
 
+/// Whether `tool` resolves on PATH. The Python verb answered a missing `gh`
+/// with exit 127 naming the tool; without this check the probe seam would
+/// answer `None` and the verb would print `unknown` (4) instead - the one
+/// caller-visible contract the probe seam cannot express.
+fn tool_on_path(tool: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(tool).is_file()))
+        .unwrap_or(false)
+}
+
+/// `fno-agents pr-base-lineage-check <pr>`: the verb door over `lineage`,
+/// the same verdict `fno do pr merge` obeys. One REST read fills the base
+/// ref (the Python `_base_ref` ask); a miss leaves it empty and `lineage`
+/// answers its own unknown for the unreadable base. Output is the Python
+/// verb's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
+/// at 0, stderr `REFUSED` plus the bypass hint at 3, `unknown` at 4, and a
+/// missing `gh` at 127.
+pub fn run_base_lineage_verb(argv: &[String]) -> i32 {
+    const USAGE: &str = "usage: fno-agents pr-base-lineage-check <pr-number>";
+    let number = match argv.first().map(String::as_str).map(str::parse::<u64>) {
+        Some(Ok(number)) => number,
+        _ => {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+    };
+    if !tool_on_path("gh") {
+        eprintln!("fno do pr base-lineage-check: gh not found on PATH");
+        return 127;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let run = |args: &[&str], dir: &Path| {
+        let mut cmd = Command::new(args[0]);
+        cmd.args(&args[1..]).current_dir(dir);
+        run_probe(cmd)
+    };
+    let base_ref = run(&["git", "remote", "get-url", "origin"], &cwd)
+        .filter(|r| r.ok)
+        .and_then(|r| parse_origin_slug(r.stdout.trim()))
+        .and_then(|slug| {
+            let endpoint = format!("repos/{slug}/pulls/{number}");
+            let out = run(&["gh", "api", &endpoint], &cwd)?;
+            if !out.ok {
+                return None;
+            }
+            serde_json::from_str::<Value>(&out.stdout)
+                .ok()?
+                .get("base")
+                .and_then(|base| base.get("ref"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let facts = PrFacts {
+        number,
+        base_ref,
+        ..Default::default()
+    };
+    let (verdict, reason) = lineage(&cwd, &facts, &run);
+    match verdict.as_str() {
+        "ok" => {
+            println!("base-lineage: ok - {reason}");
+            0
+        }
+        "stale" if lineage_bypassed() => {
+            emit_bypass_escape(facts.number, &reason);
+            println!("base-lineage: bypassed (FNO_PR_BASE_LINEAGE_OK) - {reason}");
+            0
+        }
+        "stale" => {
+            eprintln!(
+                "base-lineage: REFUSED - {reason}\n  bypass (records a gate_escape): \
+                 FNO_PR_BASE_LINEAGE_OK=stale-acknowledged"
+            );
+            3
+        }
+        _ => {
+            eprintln!("base-lineage: unknown - {reason}");
+            4
+        }
+    }
+}
+
 /// The merge-result probe in process: the cheap ancestry answer first (the
 /// head already contains its base, so CI on the head IS the merge result),
 /// then the race-guarded pull-head fetch and the repo-wide script, exactly
