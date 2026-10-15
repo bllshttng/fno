@@ -150,6 +150,30 @@ def _write_event(events_path: Path, etype: str, session_id: str) -> None:
     )
 
 
+def _cap_native(tmp_path: Path, *args: str):
+    """The native capture door pinned to the fixture root (cwd, HOME, state)."""
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+    env = dict(_os.environ)
+    env["HOME"] = str(tmp_path)
+    env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
+    proc = _sp.run(
+        [str(binary), "backlog", "capture", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    return proc
+
+
 def test_capture_pass_counts_mixed_vocabulary(tmp_path: Path) -> None:
     """AC4-EDGE: one legacy inbox_add + one capture_add for the session => 2."""
     events = tmp_path / ".fno" / "events.jsonl"
@@ -158,10 +182,8 @@ def test_capture_pass_counts_mixed_vocabulary(tmp_path: Path) -> None:
     # An unrelated session's event must not count.
     _write_event(events, "capture_add", "OTHER")
 
-    res = runner.invoke(
-        _backlog_cli(), ["capture", "capture-pass", "--session-id", "SMIX"]
-    )
-    assert res.exit_code == 0, res.output
+    res = _cap_native(tmp_path, "capture-pass", "--session-id", "SMIX")
+    assert res.returncode == 0, res.stderr
     payload = json.loads(res.stdout.splitlines()[-1])
     assert payload["entries_written"] == 2
 
@@ -171,38 +193,30 @@ def test_capture_pass_counts_legacy_only_session(tmp_path: Path) -> None:
     still seals the gate."""
     events = tmp_path / ".fno" / "events.jsonl"
     _write_event(events, "inbox_add", "SOLD")
-    res = runner.invoke(
-        _backlog_cli(), ["capture", "capture-pass", "--session-id", "SOLD"]
-    )
-    assert res.exit_code == 0, res.output
+    res = _cap_native(tmp_path, "capture-pass", "--session-id", "SOLD")
+    assert res.returncode == 0, res.stderr
     assert json.loads(res.stdout.splitlines()[-1])["entries_written"] == 1
 
 
 def test_emit_reader_coherence(tmp_path: Path) -> None:
     """AC6-FR: capture-pass counts the capture_add THIS binary just emitted.
     Regression-pins the emit-flips-but-reader-doesn't failure mode."""
-    cli = _backlog_cli()
     state = tmp_path / ".fno" / "target-state.md"
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text("---\nsession_id: SCOH\n---\n", encoding="utf-8")
 
-    add = runner.invoke(
-        cli, ["capture", "add", "coherent", "--source", "PR#1", "--why", "w"]
-    )
-    assert add.exit_code == 0, add.output
-    res = runner.invoke(cli, ["capture", "capture-pass"])
-    assert res.exit_code == 0, res.output
+    add = _cap_native(tmp_path, "add", "coherent", "--source", "PR#1", "--why", "w")
+    assert add.returncode == 0, add.stderr
+    res = _cap_native(tmp_path, "capture-pass")
+    assert res.returncode == 0, res.stderr
     assert json.loads(res.stdout.splitlines()[-1])["entries_written"] == 1
 
 
 def test_empty_pass_read_back_accepts_new_vocabulary(tmp_path: Path) -> None:
     """The empty-pass fail-loud read-back finds the capture_empty_pass row the
     same invocation wrote (no false 'event did not land')."""
-    res = runner.invoke(
-        _backlog_cli(),
-        ["capture", "empty-pass", "--reason", "nothing", "--session-id", "SEMP"],
-    )
-    assert res.exit_code == 0, res.output
+    res = _cap_native(tmp_path, "empty-pass", "--reason", "nothing", "--session-id", "SEMP")
+    assert res.returncode == 0, res.stderr
     events = tmp_path / ".fno" / "events.jsonl"
 
     from tests._event_rows import event_rows
