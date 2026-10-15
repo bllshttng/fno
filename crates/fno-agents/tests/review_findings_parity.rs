@@ -207,6 +207,9 @@ fn pinned_command(
     cmd.env("FAKE_GH_LOG", &runtime.log);
     cmd.env("FAKE_GH_BODY", &runtime.body);
     cmd.env("FAKE_GH_CASE", case_dir);
+    // Every client spawn a test file makes is test-owned: the keeper reaper
+    // can attribute (and reap) anything the door leaves behind.
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.current_dir(&runtime.repo);
     cmd
 }
