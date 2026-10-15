@@ -1275,7 +1275,15 @@ mod tests {
         let mut from = 0usize;
         while let Some(rel) = text[from..].find(MARKER) {
             let pos = from + rel;
-            if text[pos + MARKER.len()..].trim_start().starts_with("mod ") {
+            let rest = text[pos + MARKER.len()..].trim_start();
+            // `mod tests` and its visibility-spelled forms gate the same way;
+            // four files in this crate spell `pub mod` / `pub(crate) mod`.
+            let rest = rest
+                .strip_prefix("pub(crate) ")
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest)
+                .trim_start();
+            if rest.starts_with("mod ") {
                 return Some(pos);
             }
             from = pos + 1;
