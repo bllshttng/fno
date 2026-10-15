@@ -1402,105 +1402,6 @@ def test_populated_graph_closure_fetch_does_not_hold_the_merge(
     assert seen["covered_head"] == "coveredSHA"
 
 
-# ── refusal reasons name the cause ───────────────────────────────────────────
-#
-# A refusal that reports only a count leaves the reader to invent the cause, and
-# the nearest exclusion-flavoured vocabulary in the repo is `attestation_origin`,
-# which gates nothing. Two workers escalated green, unblocked PRs to the operator
-# on exactly that inference; both were looking at a head that had moved. These
-# pin the cause into the message so the vacuum is not there to fill.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---- x-f43c: coverage attested in a worktree, merge run from canonical ----
-
-
-def _git_repo(root, remote):
-    """A checkout with a remote, so the coverage reader can resolve its slug."""
-    import subprocess
-
-    root.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
-    subprocess.run(["git", "remote", "add", "origin", remote], cwd=str(root), check=True)
-    (root / ".fno").mkdir(exist_ok=True)
-    return root
-
-
-def _global_events_at(monkeypatch, root):
-    """Point the global events journal at a tmp dir and return it.
-
-    Patches the resolver the code actually calls rather than an env var:
-    an env pin moves only the readers that honor it (``FNO_STATE_DIR`` moves
-    ``state_dir``/``locks_dir``, not every journal path), so patching the
-    resolver is the strict way to keep a negative assertion honest.
-    """
-    from fno import paths
-
-    root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(paths, "global_events_json", lambda: root / "events.jsonl")
-    return root
-
-
-def _write_coverage(events_path, pr, *, repo=None, ts="2026-08-08T02:35:30Z", count=1):
-    data = {
-        "pr": pr,
-        "coverage": "covered",
-        "review_state": "reviewed",
-        "reviewed_count": count,
-        "head_sha": "a3f4b413b",
-        "verdicts": [{
-            "name": "code-review",
-            "producer": "local_attestation",
-            "verdict": "reviewed",
-            "reviewed_sha": "a3f4b413b",
-            "freshness": "fresh",
-        }],
-    }
-    if repo is not None:
-        data["repo"] = repo
-    events_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(events_path, "a", encoding="utf-8") as fh:
-        fh.write(
-            json.dumps({"ts": ts, "type": "review_coverage", "source": "hook", "data": data})
-            + "\n"
-        )
-
-
-
-
-
-
-
-
-
-
-
-
 def test_repo_identity_agrees_across_remote_forms():
     """Every clone form of one repo must produce one key, or the reader stops
     finding the writer's events. Mirrors the Rust parity test."""
@@ -1521,12 +1422,6 @@ def test_repo_identity_agrees_across_remote_forms():
     assert ident("/local/path/widget.git") is None
     assert ident("git@github.com:widget.git") is None
     assert ident("") is None
-
-
-
-
-
-
 
 
 # ---- plan fidelity guard (x-cbab) -------------------------------------------
@@ -1744,9 +1639,9 @@ def test_a_closed_pr_takes_the_same_terminal_exemption(enabled, monkeypatch, cap
     assert "already closed" in obj["reason"]
 
 
-def test_an_open_pr_still_faces_the_coverage_gate(enabled, monkeypatch, capsys, tmp_path):
+def test_an_open_pr_still_holds_as_unreviewed(enabled, monkeypatch, capsys, tmp_path):
     """The exemption must not become a hole: an OPEN uncovered PR still holds
-    as unreviewed - by decide's coverage gate now (x-53c5), whose receipt the
+    as unreviewed - by decide's review verdict now (x-53c5), whose receipt the
     verb renders verbatim."""
     fake = FakeRun(gh_merge=Result(0, "Merged pull request", ""), toplevel=str(tmp_path))
     monkeypatch.setattr(_merge, "run", fake)
@@ -1810,35 +1705,6 @@ def test_a_waiver_does_not_bypass_red_ci(
     failed = _last_json(capsys, stream="err")
     assert failed["outcome"] == "failed"
     assert "require_checks_pass" in failed["reason"]
-
-
-# --- review posture verdict : the gate reads the Rust verdict ---
-
-
-def _covered_row(posture):
-    row = {
-        "coverage": "covered",
-        "reviewed_count": 1,
-        "head_sha": "a" * 40,
-        "verdicts": [
-            {
-                "producer": "local_attestation",
-                "name": "code-review",
-                "verdict": "reviewed",
-                "reviewed_sha": "a" * 40,
-                "freshness": "fresh",
-            }
-        ],
-    }
-    if posture is not None:
-        row["review_posture"] = posture
-    return row
-
-
-
-
-
-
 
 
 # ---- the COVERED pin (external review round, P1) ----
