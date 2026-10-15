@@ -715,10 +715,10 @@ fn resolve_depends_on(
         if let Some(c) = e.get("cwd").and_then(Value::as_str) {
             if !norm.starts_with('/') {
                 let joined = normpath(&Path::new(c).join(&norm).to_string_lossy());
-                abs_form = Some(joined);
                 by_path
                     .entry(joined.clone())
                     .or_insert_with(|| eid.to_string());
+                abs_form = Some(joined);
             }
         }
         let slug = norm
@@ -1137,7 +1137,14 @@ fn warn_unknown_project(project: Option<&str>, known: Option<&std::collections::
     let Some(project) = project.filter(|p| !p.is_empty()) else {
         return;
     };
-    let known = known.unwrap_or(&list_known_projects());
+    let computed;
+    let known = match known {
+        Some(k) => k,
+        None => {
+            computed = list_known_projects();
+            &computed
+        }
+    };
     if known.is_empty() || known.contains(project) {
         return;
     }
@@ -1711,6 +1718,18 @@ fn apply_claim_in_place(
         }
         None => false,
     };
+    // The null-project/cwd backfill resolves from the same immutable read -
+    // computed before the mutable borrow, applied inside it. Only fills
+    // nulls; never overwrites existing values.
+    let needs_backfill = es[idx].get("project").map(Value::is_null).unwrap_or(true)
+        || es[idx].get("cwd").map(Value::is_null).unwrap_or(true);
+    let backfill = if needs_backfill {
+        let (resolved_project, resolved_cwd, _) =
+            resolve_node_project_and_cwd(plan_path, project, es);
+        Some((resolved_project, resolved_cwd))
+    } else {
+        None
+    };
 
     let Some(obj) = es[idx].as_object_mut() else {
         return;
@@ -1779,11 +1798,7 @@ fn apply_claim_in_place(
         obj.insert("points".into(), Value::Number(points.into()));
     }
     // Backfill null project/cwd only; never overwrite existing values.
-    let needs_backfill = obj.get("project").map(Value::is_null).unwrap_or(true)
-        || obj.get("cwd").map(Value::is_null).unwrap_or(true);
-    if needs_backfill {
-        let (resolved_project, resolved_cwd, _) =
-            resolve_node_project_and_cwd(plan_path, project, es);
+    if let Some((resolved_project, resolved_cwd)) = backfill {
         if obj.get("project").map(Value::is_null).unwrap_or(true) {
             if let Some(p) = resolved_project {
                 obj.insert("project".into(), Value::String(p));
@@ -2109,7 +2124,7 @@ fn collect_intake_paths(plan_paths: &[String], from_list: Option<&str>) -> Vec<S
     if let Some(from) = from_list {
         let raw = if from == "-" {
             let mut buf = String::new();
-            if std::io::Read::read_to_string(std::io::stdin(), &mut buf).is_err() {
+            if std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).is_err() {
                 eprintln!("Error: --from -: could not read stdin");
                 std::process::exit(1);
             }
@@ -2280,18 +2295,12 @@ fn intake_single(args: &IntakeArgs, plan_path: &str) -> i32 {
         }
         return 0;
     }
-    intake_commit(args, &graph, &entries, plan_path, prep)
+    intake_commit(args, &graph, plan_path, prep)
 }
 
 /// The write half of the single lane: one locked mutate (claim or mint), the
 /// receipt, then the advisory post steps in the wheel's order.
-fn intake_commit(
-    args: &IntakeArgs,
-    graph: &Path,
-    entries: &[Value],
-    plan_path: &str,
-    prep: IntakeOutcome,
-) -> i32 {
+fn intake_commit(args: &IntakeArgs, graph: &Path, plan_path: &str, prep: IntakeOutcome) -> i32 {
     let base_version = crate::graph_store::base_version(graph).unwrap_or_default();
     if let IntakeOutcome::Claim {
         id,
@@ -2465,14 +2474,8 @@ fn intake_post_steps(graph: &Path, new_id: &str, node: &Value) {
         }
     }
     if let Ok(rows_now) = crate::graph_store::read_rows(graph) {
-        crate::plan_doc::project::project_graph_nodes(
-            &rows_now,
-            std::slice::from_ref(&new_id),
-            None,
-            None,
-            None,
-            None,
-        );
+        let minted = vec![new_id.to_string()];
+        crate::plan_doc::project::project_graph_nodes(&rows_now, &minted, None, None, None, None);
     }
     let _ = super::birth::on_node_born(graph, node, None);
 }
@@ -2709,7 +2712,7 @@ fn multi_commit(
     let mut landed_projects: std::collections::BTreeSet<String> = Default::default();
     let mut new_ids: Vec<String> = Vec::new();
     let mut claimed_ids: Vec<String> = Vec::new();
-    let mut working: Vec<Value> = Vec::new();
+    let mut working;
     for retry in 0..6 {
         working = match crate::graph_store::read_rows(graph) {
             Ok(rows) => rows,
@@ -2718,7 +2721,6 @@ fn multi_commit(
                 return 1;
             }
         };
-        let mut ok = true;
         for (raw, missing) in &resolved {
             if *missing {
                 eprintln!("  warning: not found, skipped: {raw}");
