@@ -146,6 +146,7 @@ pub(crate) fn export(flat: &BTreeMap<String, toml::Value>) -> Exported {
 
 /// A loaded profile: its raw text (saved beside the backups on a join) and
 /// its config flattened to dotted keys.
+#[derive(Debug)]
 pub(crate) struct Profile {
     pub(crate) text: String,
     pub(crate) config: BTreeMap<String, toml::Value>,
@@ -643,12 +644,11 @@ mod tests {
         assert!(!banner.contains("token"));
     }
 
-    /// The header gates the join: no `[profile]`, no join; a future schema
-    /// names itself and the one this fno reads. A hand-written profile's
-    /// secrets count without printing, and its machine-local keys report
-    /// as kept.
-    #[test]
-    fn the_profile_header_gates_the_join() {
+    // The header gates the join: no `[profile]`, no join; a future schema
+    // names itself and the one this fno reads. A hand-written profile's
+    // secrets count without printing, and its machine-local keys report
+    // as kept.
+    {
         let err = parse_profile("[config]\nreview.posture = \"standard\"\n").unwrap_err();
         assert!(err.contains("[profile]"));
         let err = parse_profile("[profile]\nschema = 9\n").unwrap_err();

@@ -132,6 +132,21 @@ fn step_selection_offers_both_layers_and_filters() {
     assert!(select_steps(&bad, Path::new("."))
         .unwrap_err()
         .contains("no-such-step"));
+    // The join lane: out of the default pool, so a plain run never sees
+    // it; an explicit `--only join` without --join refuses, naming the
+    // flag; with the file, the lane selects alone, as an approve-kind
+    // global.
+    let mut join_opts = Opts::default();
+    join_opts.only = vec!["join".into()];
+    assert!(select_steps(&join_opts, Path::new("."))
+        .unwrap_err()
+        .contains("--join"));
+    join_opts.join = Some("-".into());
+    let selected = select_steps(&join_opts, Path::new(".")).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, "join");
+    assert_eq!(selected[0].kind, Kind::Approve);
+    assert_eq!(selected[0].layer, Layer::Global);
     // A global scope never carries project or contributor rows.
     let mut global = Opts::default();
     global.scope = Scope::Global;
@@ -255,6 +270,19 @@ fn the_report_shape_and_wire_fold_hold() {
     let body = dry_run_json(json!({}), &[], &[], &[], "fallback");
     assert_eq!(body["next_action"], "fallback");
     assert_eq!(body["key_gap"], json!(0));
+    // The three join codes are reportable, and `undo` rides the report:
+    // null until a join sets it, then the restore hint round-trips.
+    for code in ["join_backup_failed", "join_restored", "join_pending"] {
+        assert!(CODES.iter().any(|(c, _)| *c == code), "missing {code}");
+        assert_eq!(row("needs_human", code, "fix".into()).code, code);
+    }
+    assert!(Report::default().to_json()["undo"].is_null());
+    let mut rep = Report::default();
+    rep.undo = Some("undo: cp /b/config.toml.x /g/config.toml".into());
+    assert_eq!(
+        rep.to_json()["undo"],
+        "undo: cp /b/config.toml.x /g/config.toml"
+    );
 }
 
 #[test]
@@ -326,70 +354,16 @@ fn once_needs_every_covered_layers_marker() {
     assert!(!all_markers_present_in(Scope::Both, true, false));
 }
 
-/// The workspace-list reader passes a missing key and a real array
-/// through and refuses every other hand-set shape, so setup never
-/// overwrites a hand-set value with its own array.
-#[test]
-fn projects_rows_refuses_a_hand_set_non_array() {
-    assert!(projects_rows(None).unwrap().is_empty());
-    let array = toml::Value::Array(vec![toml::Value::String("stale".into())]);
-    assert_eq!(projects_rows(Some(&array)).unwrap().len(), 1);
-    for bad in [
-        toml::Value::String("my-dir".into()),
-        toml::Value::Integer(3),
-        toml::Value::Table(toml::map::Map::new()),
-    ] {
-        assert!(projects_rows(Some(&bad)).is_err());
-    }
-}
-
-/// The join lane: one step, out of the default pool, selectable only by an
-/// explicit `--only join` on a `--join` run; the refusal names the missing
-/// flag, the report rows carry the three join codes, and `undo` rides the
-/// report: null until a join sets it, then the restore hint round-trips.
-#[test]
-fn the_join_lane_selects_and_reports_codes() {
-    // Out of the default pool: a plain --yes never sees the lane.
-    let mut opts = Opts::default();
-    let base = select_steps(&opts, Path::new(".")).unwrap();
-    assert!(base.iter().all(|s| s.id != "join"));
-    // `--only join` without --join refuses, naming the flag.
-    opts.only = vec!["join".into()];
-    assert!(select_steps(&opts, Path::new("."))
-        .unwrap_err()
-        .contains("--join"));
-    // With the file, the lane selects alone, as an approve-kind global.
-    opts.join = Some("-".into());
-    let selected = select_steps(&opts, Path::new(".")).unwrap();
-    assert_eq!(selected.len(), 1);
-    assert_eq!(selected[0].id, "join");
-    assert_eq!(selected[0].kind, Kind::Approve);
-    assert_eq!(selected[0].layer, Layer::Global);
-    // The three join codes are reportable.
-    for code in ["join_backup_failed", "join_restored", "join_pending"] {
-        assert!(CODES.iter().any(|(c, _)| *c == code), "missing {code}");
-        assert_eq!(row("needs_human", code, "fix".into()).code, code);
-    }
-    assert!(Report::default().to_json()["undo"].is_null());
-    let mut rep = Report::default();
-    rep.undo = Some("undo: cp /b/config.toml.x /g/config.toml".into());
-    assert_eq!(
-        rep.to_json()["undo"],
-        "undo: cp /b/config.toml.x /g/config.toml"
-    );
-}
-
 /// The check-side helpers hold without a platform: the step outcome reads
 /// from the slices this pass appended to, a proposal token parses bare or
-/// quoted, and the drift word spells strings bare.
+/// quoted, the drift word spells strings bare, and the workspace-list
+/// reader passes a missing key and a real array through while refusing
+/// every hand-set non-array.
 #[test]
-fn step_outcome_and_proposal_token_decide_drift_shapes() {
+fn the_check_side_helpers_parse_and_refuse() {
     // An explicit skip beats done: the step's own words carry the reason.
-    let (kind, reason) = step_outcome(
-        "join",
-        &["join: restored".to_string()],
-        &["join: declined".to_string()],
-    );
+    let declined = ["join: declined".to_string()];
+    let (kind, reason) = step_outcome("join", &["join: restored".to_string()], &declined);
     assert_eq!(kind, "skipped");
     assert_eq!(reason, Some("declined"));
     // Done without a skip is a done step; nothing at all is blocked.
@@ -400,7 +374,8 @@ fn step_outcome_and_proposal_token_decide_drift_shapes() {
     assert_eq!(kind, "blocked");
     assert_eq!(reason, None);
     // A skip line that never carried the prefix stays whole.
-    let (kind, reason) = step_outcome("x", &[], &["no prefix".to_string()]);
+    let no_prefix = ["no prefix".to_string()];
+    let (kind, reason) = step_outcome("x", &[], &no_prefix);
     assert_eq!(kind, "skipped");
     assert_eq!(reason, Some("no prefix"));
     // Numbers read bare; bare words read after the Rust quote fallback; a
@@ -412,6 +387,19 @@ fn step_outcome_and_proposal_token_decide_drift_shapes() {
         Some(toml::Value::String("standard".into()))
     );
     assert_eq!(proposal_token("a\u{7}b"), None);
+    // The workspace-list reader passes a missing key and a real array
+    // through and refuses every other hand-set shape, so setup never
+    // overwrites a hand-set value with its own array.
+    assert!(projects_rows(None).unwrap().is_empty());
+    let array = toml::Value::Array(vec![toml::Value::String("stale".into())]);
+    assert_eq!(projects_rows(Some(&array)).unwrap().len(), 1);
+    for bad in [
+        toml::Value::String("my-dir".into()),
+        toml::Value::Integer(3),
+        toml::Value::Table(toml::map::Map::new()),
+    ] {
+        assert!(projects_rows(Some(&bad)).is_err());
+    }
     // The drift word spells strings bare and keeps TOML's other forms.
     assert_eq!(value_word(&toml::Value::String("fn".into())), "fn");
     assert_eq!(value_word(&toml::Value::Boolean(true)), "true");

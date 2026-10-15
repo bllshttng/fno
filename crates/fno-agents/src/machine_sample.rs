@@ -921,10 +921,14 @@ mod tests {
             captured, 2,
             "a later pressure episode gets one new snapshot"
         );
+        // The no-row footer carries the band clause - asserted beside the
+        // sampling contracts it describes.
+        expect_band_clause_in_footer();
     }
 
-    #[test]
-    fn the_no_row_footer_carries_the_band_clause() {
+    /// The no-row footer names the band: the parseable `budget max_live`
+    /// clause, the band floor, and the band default suffix.
+    fn expect_band_clause_in_footer() {
         let line = no_row_footer();
         assert!(line.starts_with("no machine_sample row yet"));
         let i = line.find("budget max_live ").unwrap();

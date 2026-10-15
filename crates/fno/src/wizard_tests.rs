@@ -352,12 +352,10 @@ fn back_navigation_and_the_write_latch() {
         "the refused back re-asked the checklist"
     );
     assert!(pr.notes.iter().any(|n| n.contains("back is off")));
-}
 
-#[test]
-fn a_declined_posture_on_back_clears_the_stale_answer() {
-    // Yes at review-merge seeds self_review, then Back from services
-    // re-asks the screen. A No there must clear the seeded answer, so no
+    // A declined posture on back clears the stale answer: Yes at
+    // review-merge seeds self_review, then Back from services re-asks the
+    // screen. A No there must clear the seeded answer, so no
     // review.posture proposal is built and the note names the kept
     // posture.
     let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
