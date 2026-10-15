@@ -134,13 +134,10 @@ def verify(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number"),
     state_file: str = typer.Option(..., "--state-file", help="Path to target-state.md"),
 ) -> None:
-    from fno.pr import _verify
-
-    if kind is VerifyKind.merged:
-        rc = _verify.run_verify_merged(str(pr_number), state_file)
-    else:
-        rc = _verify.run_verify_reviews(str(pr_number), state_file)
-    raise typer.Exit(code=rc)
+    _forward_to_binary(
+        "pr-verify",
+        ["--kind", kind.value, "--pr-number", str(pr_number), "--state-file", state_file],
+    )
 
 
 @pr_app.command(

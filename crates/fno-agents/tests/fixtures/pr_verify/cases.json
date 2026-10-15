@@ -1,0 +1,696 @@
+[
+ {
+  "name": "merged_no_pr",
+  "kind": "merged",
+  "pr": "",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 2,
+   "out": "",
+   "err": "verify-pr-merged: --pr-number required\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "merged_gh_missing",
+  "kind": "merged",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": true,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-pr-merged: gh missing; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "merged_gh_view_fail",
+  "kind": "merged",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-pr-merged: gh pr view failed; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "merged_records_state",
+  "kind": "merged",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "verify-pr-merged: PR #42 MERGED at 2026-10-13T10:00:00Z\n",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\nmerged_at: \"2026-10-13T10:00:00Z\"\n---\n# state\nmerged_prs: [42]\n"
+  }
+ },
+ {
+  "name": "merged_closed_refuses",
+  "kind": "merged",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 1,
+   "out": "pr_closed_without_merge: PR #42 is CLOSED (not merged) \u2014 investigate before re-promising\n",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "merged_unknown_state_degrades",
+  "kind": "merged",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-pr-merged: unknown PR state: READY; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_no_pr",
+  "kind": "reviews",
+  "pr": "",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 2,
+   "out": "",
+   "err": "verify-review-replies: --pr-number required\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_gh_missing",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": true,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-review-replies: gh missing; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_repo_view_fail",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": true,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-review-replies: gh repo view failed; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_api_fail",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": true,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-review-replies: gh api reviews failed; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_no_reviewers",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_author_fail",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    }
+   ],
+   "author": "null",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "verify-review-replies: could not fetch PR author; degrading open\n",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_missing_reply_flips",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 1,
+   "out": "verify-review-replies: external_review_passed flipped back to false \u2014 missing replies to: rev1\n",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_mention_qualifies",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [
+    {
+     "login": "me",
+     "created_at": "2026-10-13T12:00:00Z",
+     "body": "thanks @rev1, addressed"
+    }
+   ],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_within_24h_qualifies",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [],
+   "review_comments": [
+    {
+     "login": "me",
+     "created_at": "2026-10-13T10:00:00Z",
+     "body": "pushed"
+    }
+   ],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_stale_reply_does_not_qualify",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [
+    {
+     "login": "me",
+     "created_at": "2026-10-12T09:00:00Z",
+     "body": "earlier @rev1"
+    }
+   ],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 1,
+   "out": "verify-review-replies: external_review_passed flipped back to false \u2014 missing replies to: rev1\n",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_bad_reviewer_ts_reads_unreplied",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "not-a-date"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [
+    {
+     "login": "me",
+     "created_at": "2026-10-13T09:30:00Z",
+     "body": "@rev1 done"
+    }
+   ],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 1,
+   "out": "verify-review-replies: external_review_passed flipped back to false \u2014 missing replies to: rev1\n",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ },
+ {
+  "name": "reviews_latest_of_two_reviewers_wins",
+  "kind": "reviews",
+  "pr": "42",
+  "state_file": "---\nsession_id: \"sid-1\"\n---\n# state\n",
+  "fake": {
+   "gh_missing": false,
+   "repo_view_fail": false,
+   "reviews_api_fail": false,
+   "pr_states": [],
+   "checks": {
+    "state": "OPEN",
+    "headRefOid": "deadbeefcafe",
+    "statusCheckRollup": [
+     {
+      "name": "c0",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+     }
+    ]
+   },
+   "reviews": [
+    {
+     "login": "rev1",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T09:00:00Z"
+    },
+    {
+     "login": "rev1",
+     "state": "CHANGES_REQUESTED",
+     "submitted_at": "2026-10-13T11:00:00Z"
+    },
+    {
+     "login": "rev2",
+     "state": "APPROVED",
+     "submitted_at": "2026-10-13T08:00:00Z"
+    }
+   ],
+   "author": "me",
+   "issue_comments": [
+    {
+     "login": "me",
+     "created_at": "2026-10-13T11:30:00Z",
+     "body": "@rev1 fixed"
+    }
+   ],
+   "review_comments": [],
+   "repo": "o/r"
+  },
+  "want": {
+   "exit": 0,
+   "out": "",
+   "err": "",
+   "state_after": "---\nsession_id: \"sid-1\"\n---\n# state\n"
+  }
+ }
+]

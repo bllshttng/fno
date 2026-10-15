@@ -352,13 +352,13 @@ def expired_worklist(
     def _pr_merged(number: int) -> bool:
         """gh-verified merge state; deferral clears every node-side completion field."""
         if number not in pr_merged_cache:
-            from fno.pr._verify import _gh_api_json
+            from fno.pr._proc import run
 
-            row = _gh_api_json(
-                ["repos/{owner}/{repo}/pulls/" + str(number), "--jq", ".merged"],
+            res = run(
+                ["gh", "api", "repos/{owner}/{repo}/pulls/" + str(number), "--jq", ".merged"],
                 cwd=".",
             )
-            pr_merged_cache[number] = row is True
+            pr_merged_cache[number] = res.ok and res.stdout.strip() == "true"
         return pr_merged_cache[number]
 
     for entry in expired:

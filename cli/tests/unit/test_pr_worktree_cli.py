@@ -13,12 +13,12 @@ from fno.pr.cli import pr_app
         (
             "verify",
             ["--kind", "merged", "--pr-number", "42", "--state-file", "state"],
-            "fno.pr._verify.run_verify_merged",
+            "fno.pr.cli._forward_to_binary",
         ),
         (
             "verify",
             ["--kind", "merged", "--pr-number=42", "--state-file", "state"],
-            "fno.pr._verify.run_verify_merged",
+            "fno.pr.cli._forward_to_binary",
         ),
         ("base-lineage-check", ["42"], "fno.pr.cli._forward_to_binary"),
         ("merge-result-check", ["42"], "fno.pr.cli._forward_to_binary"),

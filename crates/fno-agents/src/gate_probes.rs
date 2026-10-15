@@ -433,7 +433,7 @@ fn lineage_decision(
 /// with exit 127 naming the tool; without this check the probe seam would
 /// answer `None` and the verb would print `unknown` (4) instead - the one
 /// caller-visible contract the probe seam cannot express.
-fn tool_on_path(tool: &str) -> bool {
+pub(crate) fn tool_on_path(tool: &str) -> bool {
     std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).any(|dir| dir.join(tool).is_file()))
         .unwrap_or(false)

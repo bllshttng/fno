@@ -21,6 +21,7 @@ pub fn run_verb(verb: &str, args: &[String]) -> Option<i32> {
         } else {
             crate::pr_base_check::run_stdin()
         }),
+        "pr-verify" => Some(crate::pr_verify::run(&args[1..])),
         _ => None,
     }
 }

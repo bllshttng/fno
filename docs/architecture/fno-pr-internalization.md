@@ -18,9 +18,13 @@ drift.
 cli/src/fno/pr/cli.py       Typer verbs; dispatch in-package (no repo-root script)
 cli/src/fno/pr/_proc.py     run() + ToolMissing: capture gh/git output, flag a missing binary
 cli/src/fno/pr/_merge.py    <- pr-merge.sh        (JSON line + merge guards + worktree recovery)
-cli/src/fno/pr/_verify.py   <- verify-pr-merged.sh + verify-review-replies.sh
 cli/src/fno/pr/_rebase.py   <- rebase-resolve.sh  (exit-code protocol incl. 42)
 ```
+
+The verify, base-check, base-lineage-check and merge-result-check bodies are
+native now: the `pr-verify`, `pr-base-check`, `pr-base-lineage-check` and
+`pr-merge-result-check` verbs in `crates/fno-agents` answer them, and `cli.py`
+forwards the spellings.
 
 The auto_merge config is read through the new typed `config.auto_merge`
 (`AutoMergeBlock`) instead of re-parsing `config.toml` in a subprocess, so the
