@@ -389,6 +389,9 @@ pub fn prewarm(leg: &Leg, env: &[(String, String)], cwd: &Path) {
 /// One-line-per-file inventory of every graph-shaped file under the case
 /// HOME, for the exit-mismatch diagnostic: a refusal that names an unreadable
 /// graph is a guess until the probe says which file exists and how big it is.
+/// Backs the file list with the node rows exactly as the orienter's reader
+/// sees them and the manifest identity lines from both candidate paths, so a
+/// node-line mismatch names the rows and the id the report looked up.
 fn graph_state_probe(root: &Path) -> String {
     let mut lines = Vec::new();
     let home = root.join("home").join(".fno");
@@ -409,6 +412,68 @@ fn graph_state_probe(root: &Path) -> String {
             if graphish {
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 lines.push(format!("{} ({} bytes)", path.display(), size));
+            }
+        }
+    }
+    let repo = root.join("repo");
+    let mut repo_stack = vec![repo.join(".fno")];
+    while let Some(dir) = repo_stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                repo_stack.push(path);
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.contains("graph") || name.contains("backlog") || name.ends_with(".db") {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                lines.push(format!("{} ({} bytes)", path.display(), size));
+            }
+        }
+    }
+    let db = fno_agents::state_layout::place(&home, "graph.json");
+    match fno_agents::backlog::read_entries_where(&db, &Default::default()) {
+        Ok(rows) => {
+            let ids: Vec<String> = rows
+                .iter()
+                .filter_map(|r| {
+                    let id = r.get("id").and_then(|v| v.as_str())?;
+                    let status = r.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    Some(format!("{id}:{status}"))
+                })
+                .collect();
+            lines.push(format!("rows[{}]: {}", ids.len(), ids.join(" ")));
+        }
+        Err(exc) => lines.push(format!("rows read failed: {exc}")),
+    }
+    // The space manifest path, computed from the CASE home (not the test
+    // process's HOME): the space root denormalizes the repo path the way
+    // `state path` does, so the probe names the file the door actually wrote.
+    let slug = repo.to_string_lossy().replace('/', "-");
+    let space_manifest = root
+        .join("home")
+        .join(".fno")
+        .join("spaces")
+        .join(slug)
+        .join("target-state.md");
+    for (label, path) in [
+        ("space", space_manifest),
+        ("legacy", repo.join(".fno").join("target-state.md")),
+    ] {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            lines.push(format!("manifest[{label}]: absent ({})", path.display()));
+            continue;
+        };
+        for key in ["graph_node_id", "target_claim_key", "target_claim_holder"] {
+            if let Some(v) = text
+                .lines()
+                .find(|l| l.trim_start().starts_with(key))
+                .map(|l| l.trim().to_string())
+            {
+                lines.push(format!("manifest[{label}] {v}"));
             }
         }
     }

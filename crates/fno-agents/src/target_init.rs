@@ -729,7 +729,7 @@ fn record_denominator_choice(
         "data": data,
     });
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let events = root.join(".fno").join("events.jsonl");
+    let events = crate::paths::events_path(&root);
     if let Err(exc) = crate::event_store::append_envelope(&events, &event.to_string(), None) {
         // A measurement failure must not fail init; say where it went.
         eprintln!("fno do target init: denominator event not recorded: {exc}");
