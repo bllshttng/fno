@@ -259,6 +259,7 @@ def test_a_held_budget_stops_the_coverage_read_after_two_runner_calls(monkeypatc
         return None
 
     def runner(cmd, **kwargs):
+        calls.append(list(cmd))
         endpoint = cmd[-1]
         if endpoint == "repos/o/r/pulls/930":
             return Result(0, json.dumps(PULL), "")
