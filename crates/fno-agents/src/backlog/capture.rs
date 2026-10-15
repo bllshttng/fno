@@ -1089,7 +1089,9 @@ fn completed_node_ids(
         Err(e) => {
             return (
                 done,
-                Some(format!("graph.json unreadable ({e}); skipping eject")),
+                Some(format!(
+                    "the graph store is unreadable ({e}); skipping eject"
+                )),
             );
         }
     };

@@ -754,7 +754,7 @@ def _read_open_captures_with_counts(root: Path) -> "tuple[list[Capture], int, in
         except (OSError, UnicodeDecodeError):
             continue
         file_total += 1
-        items = parse_items(text)
+        items = _parse_capture_items(text)
         row_total += len(items)
         project = _store_label(path, roots)
         # Canonical checkouts (a real .git dir) lead the events lookup. Fold
