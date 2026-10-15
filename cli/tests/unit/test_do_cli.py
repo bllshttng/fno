@@ -46,13 +46,17 @@ def test_old_spelling_forwards_and_teaches_new_path() -> None:
     from fno.cli import app
 
     for argv, destination in (
-        (["target", "init", "--help"], "fno do target"),
         (["pr-watch", "tick", "--help"], "fno do pr watch"),
         (["stub-manifest", "write", "--help"], "fno do pr stub-manifest"),
     ):
         result = runner.invoke(app, argv)
         assert result.exit_code == 0, (argv, result.output)
         assert destination in (result.stderr or "")
+
+    # target init left the registry for the native door; the old spelling
+    # still teaches the new path and nothing else.
+    result = runner.invoke(app, ["target", "init", "--help"])
+    assert "fno target is now fno do target" in (result.stderr or "")
 
 
 def test_pr_hot_leaves_remain_silent_and_cold_leaf_teaches() -> None:
