@@ -200,3 +200,208 @@ def positive_control(
         }
 
 
+_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
+# The reason `fno backlog maintain` stale drains stamp, at any staleness_days.
+_STALE_DRAIN_REASON_RE = re.compile(r"^stale >\d+d, drained by maintain")
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_QUOTED_SPAN_RE = re.compile(r"(?<![A-Za-z0-9])(['\"])[^'\"\n]*\1(?![A-Za-z0-9])")
+
+
+def filing_paths(text: str) -> set[str]:
+    """Paths an incoming filing names, quoted log excerpts and fences removed.
+
+    A path inside a quoted span is something the filer read, not surface they
+    touch.  Backticks stay: that is how a filer names a real surface.
+    ``_file_evidence`` keeps reading ``_PATH_RE`` directly - a recorded node's
+    own quoted paths are still evidence there.
+    """
+    cleaned = _FENCE_RE.sub(" ", text or "")
+    cleaned = _QUOTED_SPAN_RE.sub(" ", cleaned)
+    return set(_PATH_RE.findall(cleaned))
+
+
+def _file_evidence(node: dict[str, Any]) -> list[str]:
+    text = " ".join(
+        value for field in ("details", "title")
+        if isinstance((value := node.get(field)), str)
+    )
+    evidence: list[str] = []
+    for raw in _PATH_RE.findall(text):
+        path = Path(raw)
+        if path.is_file():
+            evidence.append(raw)
+    return evidence
+
+
+def _stale_reason_still_true(node: dict[str, Any]) -> bool:
+    reason = node.get("deferred_reason")
+    deferred_at = node.get("deferred_at")
+    if (
+        not isinstance(reason, str)
+        or not _STALE_DRAIN_REASON_RE.match(reason)
+        or not isinstance(deferred_at, str)
+    ):
+        return False
+    try:
+        parked = datetime.fromisoformat(deferred_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parked.tzinfo is None:
+        parked = parked.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - parked).total_seconds() / 86400
+    return age_days >= 30
+
+
+def assess(
+    node: dict[str, Any],
+    cands: Iterable[Candidate],
+    pr_state: Callable[[int], bool] | None = None,
+) -> Assessment:
+    """Assess one node without changing it or making an external mutation.
+
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
+    """
+    candidates_list = list(cands)
+    pr_number = node.get("pr_number")
+    has_pr = isinstance(pr_number, int) and not isinstance(pr_number, bool)
+    if isinstance(pr_number, int) and not isinstance(pr_number, bool):
+        has_pr = True
+        if (
+            node.get("status") == "done"
+            or node.get("completed_at")
+            or node.get("merged_at")
+            or node.get("pr_merged") is True
+            or (pr_state is not None and pr_state(pr_number))
+        ):
+            return Assessment("satisfied", [f"PR#{pr_number}"], "merged PR recorded on node")
+
+    file_evidence = _file_evidence(node)
+    if file_evidence and (node.get("status") == "done" or has_pr):
+        return Assessment("satisfied", file_evidence, "existing file recorded by node")
+
+    if candidates_list:
+        top = candidates_list[0]
+        return Assessment(
+            "duplicate",
+            [top.node_id],
+            f"candidate surfaced by {', '.join(sorted(top.lanes))}",
+        )
+
+    if _stale_reason_still_true(node):
+        return Assessment(
+            "still_real",
+            [f"deferred reason: {node.get('deferred_reason')}"],
+            "the exact expiry condition remains true",
+        )
+
+    return Assessment(
+        "undecided",
+        [],
+        "no duplicate or completion evidence, and the original condition is not provable",
+    )
+
+
+def expired_worklist(
+    limit: int, *, graph_path: Path
+) -> tuple[dict[str, Any], str]:
+    """Return the ranked worklist and any failed-instrument refusal."""
+    from collections import Counter
+
+    from fno.graph import relatedness
+    from fno.graph.api import wire_rows
+
+    entries = wire_rows(path=graph_path)
+    expired = [
+        entry
+        for entry in entries
+        if entry.get("status") == "deferred" and entry.get("deferred_kind") == "expired"
+    ]
+    excluded_by_kind = sum(
+        1
+        for entry in entries
+        if entry.get("status") == "deferred" and entry.get("deferred_kind") != "expired"
+    )
+    token_cache = {
+        entry["id"]: relatedness._tokens(entry)
+        for entry in entries
+        if isinstance(entry.get("id"), str)
+    }
+
+    worklist: list[dict[str, Any]] = []
+    degraded_warnings: list[str] = []
+    pr_merged_cache: dict[int, bool] = {}
+
+    def _pr_merged(number: int) -> bool:
+        """gh-verified merge state; deferral clears every node-side completion field."""
+        if number not in pr_merged_cache:
+            from fno.pr._proc import run
+
+            res = run(
+                ["gh", "api", "repos/{owner}/{repo}/pulls/" + str(number), "--jq", ".merged"],
+                cwd=".",
+            )
+            pr_merged_cache[number] = res.ok and res.stdout.strip() == "true"
+        return pr_merged_cache[number]
+
+    for entry in expired:
+        result = candidates(
+            str(entry.get("title") or ""),
+            str(entry.get("details") or ""),
+            entries=entries,
+            graph_path=graph_path,
+            exclude_id=entry.get("id") if isinstance(entry.get("id"), str) else None,
+            limit=limit,
+            token_cache=token_cache,
+            domain=str(entry.get("domain") or "code"),
+        )
+        if result.degraded and result.warning and result.warning not in degraded_warnings:
+            degraded_warnings.append(result.warning)
+        assessment = assess(entry, result, pr_state=_pr_merged)
+        worklist.append(
+            {
+                "id": entry.get("id"),
+                "title": entry.get("title"),
+                **assessment.as_dict(),
+                "candidates": [candidate.as_dict() for candidate in result],
+            }
+        )
+
+    # The highest measured candidate score is the worklist rank.  Ties break
+    # on id so a batch is reproducible across runs.
+    worklist.sort(
+        key=lambda row: (
+            -(row["candidates"][0]["score"] if row["candidates"] else 0.0),
+            str(row.get("id") or ""),
+        )
+    )
+    if worklist and all(row["candidates"] for row in worklist):
+        return (
+            {},
+            "failed instrument: every expired node matched a candidate; "
+            "refusing to report an all-match worklist",
+        )
+
+    positive: dict[str, Any] | None = None
+    if worklist and all(not row["candidates"] for row in worklist):
+        control_query = str(expired[0].get("title") or expired[0].get("id") or "")
+        positive = positive_control(
+            control_query, graph_path=graph_path, entries=entries
+        )
+        if not positive["matches"]:
+            return (
+                {},
+                "failed instrument: the positive control matched nothing, so "
+                "the all-empty worklist is not trusted",
+            )
+
+    report = {
+        "population": "deferred_kind=expired",
+        "assessed": len(expired),
+        "excluded_by_kind": excluded_by_kind,
+        "verdicts": dict(Counter(row["verdict"] for row in worklist)),
+        "degraded": bool(degraded_warnings),
+        "warnings": degraded_warnings,
+        "positive_control": positive,
+        "worklist": worklist,
+    }
+    return report, ""

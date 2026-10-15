@@ -134,13 +134,10 @@ def verify(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number"),
     state_file: str = typer.Option(..., "--state-file", help="Path to target-state.md"),
 ) -> None:
-    from fno.pr import _verify
-
-    if kind is VerifyKind.merged:
-        rc = _verify.run_verify_merged(str(pr_number), state_file)
-    else:
-        rc = _verify.run_verify_reviews(str(pr_number), state_file)
-    raise typer.Exit(code=rc)
+    _forward_to_binary(
+        "pr-verify",
+        ["--kind", kind.value, "--pr-number", str(pr_number), "--state-file", state_file],
+    )
 
 
 @pr_app.command(
@@ -423,10 +420,7 @@ def base_check(
         "origin/main", "--base", help="Base ref to compare the branch against"
     ),
 ) -> None:
-    from fno.pr import _preflight
-
-    rc = _preflight.run_base_check(base=base)
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-check", ["--base", base])
 
 
 @pr_app.command(
@@ -442,15 +436,7 @@ def base_check(
 def base_lineage_check(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
 ) -> None:
-    from fno.pr import _base_lineage
-    from fno.pr._proc import ToolMissing
-
-    try:
-        rc = _base_lineage.run_base_lineage_check(pr_number)
-    except ToolMissing as exc:
-        typer.echo(f"fno do pr base-lineage-check: {exc.tool} not found on PATH", err=True)
-        rc = 127
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-lineage-check", [str(pr_number)])
 
 
 @pr_app.command(
@@ -463,9 +449,7 @@ def base_lineage_check(
     ),
 )
 def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR number")) -> None:
-    from fno.pr import _merge_result
-
-    raise typer.Exit(code=_merge_result.run_merge_result_check(pr_number))
+    _forward_to_binary("pr-merge-result-check", [str(pr_number)])
 
 
 @pr_app.command(
