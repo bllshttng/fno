@@ -363,6 +363,7 @@ pub fn seed_node(env: &[(String, String)], cwd: &Path, title: &str) -> String {
     let out = Command::new(shim_dir(cwd).join("fno"))
         .args(["backlog", "idea", title, "--difficulty", "medium"])
         .current_dir(cwd)
+        .env_clear()
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .output()
         .expect("backlog idea spawns");
@@ -498,6 +499,11 @@ pub fn run_verb(
             let bindir = shim_dir(cwd);
             let mut cmd = Command::new(bindir.join("fno"));
             cmd.args(argv).current_dir(cwd);
+            // envs() MERGES with the inherited environment, so base_env's
+            // scrub prefixes are dead unless the inherited env is cleared
+            // first. A CI job env carrying FNO_AGENTS_HOME survived every
+            // leg this way and pulled the spaces root off the golden.
+            cmd.env_clear();
             cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             spawn_cmd(&mut cmd)
         }
@@ -514,6 +520,8 @@ pub fn run_verb(
                 };
             let mut cmd = Command::new(AGENTS_BIN);
             cmd.arg(door).args(rest).current_dir(cwd);
+            // Same merge hazard as the PythonCli leg: clear before pinning.
+            cmd.env_clear();
             cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             spawn_cmd(&mut cmd)
         }
@@ -781,6 +789,7 @@ pub fn side_effects(root: &Path, env: &[(String, String)], cwd: &Path, node: &st
     let out = Command::new(bindir.join("fno"))
         .args(["agents", "claim", "status", &key, "--no-roster"])
         .current_dir(cwd)
+        .env_clear()
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .output()
         .expect("claim status spawns");
