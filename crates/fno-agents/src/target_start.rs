@@ -154,11 +154,7 @@ fn parse_args(rest: &[String]) -> Result<Args, Fail> {
     }
     let node = match node {
         Some(n) if !n.trim().is_empty() => n,
-        _ => {
-            return Err(usage_fail(
-                "the verb takes a node id or feature text",
-            ))
-        }
+        _ => return Err(usage_fail("the verb takes a node id or feature text")),
     };
     Ok(Args {
         node,
@@ -239,8 +235,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         if !receipt.message.is_empty() {
             eprintln!("{}", receipt.message);
         }
-        if receipt.verdict == "refused"
-            || (receipt.verdict == "forked" && is_linked_worktree(&cwd))
+        if receipt.verdict == "refused" || (receipt.verdict == "forked" && is_linked_worktree(&cwd))
         {
             if let Some(next) = &receipt.next {
                 eprintln!("next: {next}");
@@ -269,7 +264,14 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
             });
         }
         if let Some(canonical) = codex_native_repo(&cwd) {
-            return start_codex_native(&canonical, &cwd, &node_id, args, plan_path.as_deref(), deadline);
+            return start_codex_native(
+                &canonical,
+                &cwd,
+                &node_id,
+                args,
+                plan_path.as_deref(),
+                deadline,
+            );
         }
         if under_codex_worktrees(&cwd) {
             return Err(refuse(
@@ -376,10 +378,8 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     if let Some(harness) = ambient_harness.filter(|h| !h.is_empty()) {
         ensure_cmd.args(["--harness", harness]);
     }
-    let ens = crate::bounded_cmd::output_with_timeout_result(
-        ensure_cmd,
-        stage_timeout_secs(deadline),
-    );
+    let ens =
+        crate::bounded_cmd::output_with_timeout_result(ensure_cmd, stage_timeout_secs(deadline));
     let Ok(ens) = ens else {
         return Err(refuse(
             "fno do target start: worktree ensure failed (step: ensure): could not run fno",
@@ -429,9 +429,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     if !in_place {
         let (rc, tail) = run_setup_worktree_hook(&repo_root, &wt_path);
         if rc != 0 && rc != -1 {
-            eprintln!(
-                "fno do target start: setup-worktree.sh exited {rc} (non-fatal): {tail}"
-            );
+            eprintln!("fno do target start: setup-worktree.sh exited {rc} (non-fatal): {tail}");
         }
     }
 
@@ -614,9 +612,17 @@ const TIMED_OUT: &str = "fetch timed out after 60s";
 
 /// Keys are `cwd|remote`. The Python twin keys the refspec too; start's two
 /// callers both fetch the whole remote, so one key shape serves both sets.
-fn fetch_state() -> &'static Mutex<(std::collections::HashSet<String>, std::collections::HashSet<String>)> {
-    static STATE: Mutex<(std::collections::HashSet<String>, std::collections::HashSet<String>)> =
-        Mutex::new((std::collections::HashSet::new(), std::collections::HashSet::new()));
+fn fetch_state() -> &'static Mutex<(
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+)> {
+    static STATE: Mutex<(
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> = Mutex::new((
+        std::collections::HashSet::new(),
+        std::collections::HashSet::new(),
+    ));
     &STATE
 }
 
@@ -686,8 +692,8 @@ fn truthful_base(cwd: &Path, base_label: &str, measure: bool) -> String {
             },
         );
     }
-    let count = git_out(cwd, &["rev-list", "--count", &format!("HEAD..{bare}")])
-        .unwrap_or_default();
+    let count =
+        git_out(cwd, &["rev-list", "--count", &format!("HEAD..{bare}")]).unwrap_or_default();
     if !count.is_empty() && count.chars().all(|c| c.is_ascii_digit()) {
         format!("{base_label} behind={count}")
     } else {
@@ -790,7 +796,10 @@ fn find_node(node_id: &str, entries: Option<&[Value]>) -> Option<Value> {
 /// wedges start - the Python probe's exception arm.
 fn read_node_claim(
     node_id: &str,
-) -> (crate::claims::ClaimState, Option<crate::claims::ClaimRecord>) {
+) -> (
+    crate::claims::ClaimState,
+    Option<crate::claims::ClaimRecord>,
+) {
     let (state, rec) = crate::claims::status(&format!("node:{node_id}"), None);
     if matches!(state, crate::claims::ClaimState::Corrupted) {
         return (crate::claims::ClaimState::Free, None);
@@ -812,12 +821,8 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
         }
     }
     let home = AgentsHome::from_env();
-    let owned = crate::spawn_context::resolve_self_identity(
-        &|k| std::env::var(k).ok(),
-        None,
-        None,
-        &home,
-    );
+    let owned =
+        crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
     if let Some(sid) = owned.session_id.map(|s| s.trim().to_string()) {
         if !sid.is_empty() && holder == format!("target-session:{sid}") {
             return true;
@@ -907,7 +912,9 @@ fn bind_worktree(
     if verdict == "foreign_live" {
         print_foreign_holder_park(
             node,
-            claim_info.as_ref().expect("foreign_live carries its record"),
+            claim_info
+                .as_ref()
+                .expect("foreign_live carries its record"),
             wt_path,
         );
         return Err(Fail {
@@ -990,7 +997,11 @@ fn bind_worktree(
     let prior = match claim_info.as_ref() {
         Some(r) => format!(
             "prior holder {} (state={state_word})",
-            if r.holder.is_empty() { "?" } else { r.holder.as_str() }
+            if r.holder.is_empty() {
+                "?"
+            } else {
+                r.holder.as_str()
+            }
         ),
         None => "no prior claim".to_string(),
     };
@@ -1236,7 +1247,9 @@ fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Resu
         return Ok(());
     };
     if !verdict.held {
-        let missing = verdict.detail.contains("missing under its existing plan root");
+        let missing = verdict
+            .detail
+            .contains("missing under its existing plan root");
         let remedy = if missing {
             "Repair the node with: fno backlog update <id> --plan-path <path>, or \
              restore the plan file."
@@ -1262,11 +1275,7 @@ fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Resu
             "fno do target: dispatch held by plan {}\n  reason: {}\n  set_by: {}\n  \
              release_when: {}\n  review_on: {}\n{exempt_line}Remove dispatch_hold \
              only after the release condition is confirmed. Nothing was claimed.",
-            verdict.owner,
-            verdict.reason,
-            verdict.set_by,
-            verdict.release_when,
-            verdict.review_on
+            verdict.owner, verdict.reason, verdict.set_by, verdict.release_when, verdict.review_on
         ),
         2,
     ))
@@ -1430,7 +1439,9 @@ fn codex_rollout_for_session(session_id: &str) -> Option<PathBuf> {
             } else if path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                .map_or(false, |n| {
+                    n.starts_with("rollout-") && n.ends_with(".jsonl")
+                })
             {
                 paths.push(path);
             }
@@ -1489,7 +1500,9 @@ fn codex_native_repo(cwd: &Path) -> Option<PathBuf> {
     if harness.as_deref() != Some("codex") {
         return None;
     }
-    let session_id = session_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+    let session_id = session_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
     let meta = codex_rollout_for_session(&session_id).and_then(codex_rollout_meta)?;
     if meta.1.get("originator").and_then(Value::as_str) != Some("Codex Desktop") {
         return None;
@@ -1619,7 +1632,9 @@ fn codex_desktop_handoff_policy(repo_root: &Path) -> bool {
     if harness.as_deref() != Some("codex") {
         return false;
     }
-    let Some(session_id) = session_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    let Some(session_id) = session_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
     else {
         return false;
     };
@@ -1720,7 +1735,7 @@ fn start_codex_native(
         let requested_graph_node = find_node(node, None);
         if requested_graph_node.is_none() {
             let text = std::fs::read_to_string(&manifest).unwrap_or_default();
-            let explicitly_unclaimed = Regex::new(r"(?m)^graph_node_id\s*:\s*(?:null|''|\"\")\s*$")
+            let explicitly_unclaimed = Regex::new(r#"(?m)^graph_node_id\s*:\s*(?:null|''|"")\s*$"#)
                 .map(|re| re.is_match(&text))
                 .unwrap_or(false);
             if manifest_node.is_some() || !explicitly_unclaimed {
@@ -1843,7 +1858,7 @@ fn start_codex_native(
     let claim_state = match created_node {
         None => {
             let text = std::fs::read_to_string(&manifest).unwrap_or_default();
-            let explicitly_unclaimed = Regex::new(r"(?m)^graph_node_id\s*:\s*(?:null|''|\"\")\s*$")
+            let explicitly_unclaimed = Regex::new(r#"(?m)^graph_node_id\s*:\s*(?:null|''|"")\s*$"#)
                 .map(|re| re.is_match(&text))
                 .unwrap_or(false);
             if !explicitly_unclaimed {
@@ -2093,9 +2108,9 @@ fn run_bounded_init(
                 unsafe {
                     libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
                 }
-                break child.wait().map_err(|e| {
-                    refuse(format!("fno do target start: init wait failed: {e}"))
-                })?;
+                break child
+                    .wait()
+                    .map_err(|e| refuse(format!("fno do target start: init wait failed: {e}")))?;
             }
             Err(e) => {
                 return Err(refuse(format!(
