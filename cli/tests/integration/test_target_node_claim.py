@@ -122,7 +122,7 @@ def main() -> int:
     raw = sys.argv[1:]
     node_id = next((a for a in raw if not a.startswith("--") and a != "get"), None)
     field = sys.argv[sys.argv.index("--field") + 1] if "--field" in raw else None
-    path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "graph.json")
+    path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "db", "graph.json")
     rows = _rows(path)
     node = next(
         (r for r in rows if isinstance(r, dict) and r.get("id") == node_id), None
@@ -147,8 +147,9 @@ if __name__ == "__main__":
 def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
+    (home / ".fno" / "db").mkdir(parents=True, exist_ok=True)
     seed_graph(
-        home / ".fno" / "graph.json",
+        home / ".fno" / "db" / "graph.json",
         [{"id": node_id, "title": "t", "status": "idea", "priority": "p2",
           "project": "fno", "plan_path": None}],
     )
@@ -373,7 +374,7 @@ def test_codex_thread_identity_aligns_manifest_graph_and_claim(
     # The store owns state; the json mirror can lag the last write.
     from fno.graph.store import read_graph_strict
 
-    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
+    graph = read_graph_strict(home / ".fno" / "db" / "graph.json")[0]
     acquire = next(
         line for line in log.read_text().splitlines() if "claim acquire" in line
     )
@@ -408,7 +409,7 @@ def test_stale_installed_fno_stamps_owner_only(tmp_path, monkeypatch):
     # The store owns state; the json mirror can lag the last write.
     from fno.graph.store import read_graph_strict
 
-    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
+    graph = read_graph_strict(home / ".fno" / "db" / "graph.json")[0]
 
     assert graph.get("locked_by") == "target-session:worker-session", \
         f"owner must survive a stale fno: {graph}"
