@@ -1523,7 +1523,7 @@ pub fn run_decompose(tail: &[String]) -> i32 {
                 }
             },
             "--force" | "-F" => force = true,
-            "--json" => json_mode = true,
+            "--json" | "-J" => json_mode = true,
             other => {
                 if other.starts_with('-') && other != "-" && other.len() > 1 {
                     eprintln!("Error: unknown flag {other}");
