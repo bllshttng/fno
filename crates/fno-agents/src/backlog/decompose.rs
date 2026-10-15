@@ -431,7 +431,7 @@ fn first_cycle(groups: &[NormalizedGroup]) -> Option<Vec<String>> {
 
     fn visit<'a>(
         node: &'a str,
-        adj: &std::collections::HashMap<&'a str, &Vec<String>>,
+        adj: &std::collections::HashMap<&'a str, &'a Vec<String>>,
         color: &mut std::collections::HashMap<&'a str, Color>,
         stack: &mut Vec<&'a str>,
     ) -> Option<Vec<String>> {

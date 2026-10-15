@@ -378,6 +378,7 @@ echo "--- Rust: no plan-status reader ---"
 # blueprint_judge.rs grades plan prose against five product questions;
 # it never classifies `status:` frontmatter.
 EXPECTED_RUST_PLAN_READERS="crates/fno-agents/src/backlog/create_cli.rs
+crates/fno-agents/src/backlog/decompose.rs
 crates/fno-agents/src/backlog/intake.rs
 crates/fno-agents/src/backlog/promise.rs
 crates/fno-agents/src/backlog/session_cli.rs
@@ -392,6 +393,10 @@ crates/fno-agents/src/verify_advise.rs"
 # create_cli.rs reads only the plan frontmatter `status` scalar and hands it
 # to the shared rung table (graph_store::supplied_plan_rung) for the wave
 # append's plan-rung map; it classifies nothing itself, so the shelling rule
+# does not apply to it.
+# decompose.rs reads only the epic plan's max_children frontmatter scalar
+# (the pre-lock cap read, fail-safe to absent) through the shared intake
+# frontmatter reader; it never extracts a plan status, so the shelling rule
 # does not apply to it.
 # intake.rs reads only the plan frontmatter the birth flow consumes
 # (title/created/difficulty/size/priority/project/cwd/claims/blocked_by) and
