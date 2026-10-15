@@ -148,6 +148,7 @@ mod budget;
 mod ci_checks;
 mod coverage;
 mod coverage_classify;
+pub(crate) mod coverage_gate;
 pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;

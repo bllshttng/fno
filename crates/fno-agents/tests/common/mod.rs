@@ -428,8 +428,10 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
     } else {
         None
     };
-    let mut golden_streams = vec![fs::read_to_string(dir.join(format!("{key}.out")))
-        .unwrap_or_else(|e| panic!("[{label}] missing golden {}.out: {e}", key))];
+    let mut golden_streams = vec![
+        fs::read_to_string(dir.join(format!("{key}.out")))
+            .unwrap_or_else(|e| panic!("[{label}] missing golden {}.out: {e}", key)),
+    ];
     let err_path = dir.join(format!("{key}.err"));
     if err_path.exists() {
         golden_streams.push(

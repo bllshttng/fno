@@ -759,11 +759,30 @@ pub(crate) fn review_lane(cwd: &Path, pr: u64) -> bool {
     inputs.self_review_floor_on && floor_applies && payload_is_code(cwd, pr)
 }
 
+/// The lane answer for the `lane` op. With `code_payload` set it answers for
+/// a HYPOTHETICAL code payload and probes no PR: the config half and the
+/// floor engagement only, which is what a caller that has no PR to classify
+/// (the doctor pair check) needs.
+pub(crate) fn lane_answer(cwd: &Path, code_payload: bool) -> bool {
+    if !code_payload {
+        return review_lane(cwd, 0);
+    }
+    let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
+    if inputs.lane_configured || inputs.code_review_configured {
+        return true;
+    }
+    let floor_applies = crate::loopcheck::self_review_floor_applies(
+        inputs.author_harness.as_deref(),
+        inputs.author_harness_pinned_none,
+    );
+    inputs.self_review_floor_on && floor_applies
+}
+
 /// Whether the PR's diff carries a code payload: CODE iff any changed file
 /// is not documentation. Fails closed: a failed read classifies as code, so
 /// a degraded probe cannot bypass the floor. An empty surfaced diff is not
 /// code: nothing to review, no gate.
-fn payload_is_code(cwd: &Path, pr: u64) -> bool {
+pub(crate) fn payload_is_code(cwd: &Path, pr: u64) -> bool {
     let Some(url) = git_origin_url(cwd) else {
         return true;
     };
@@ -806,7 +825,7 @@ fn payload_is_code(cwd: &Path, pr: u64) -> bool {
             .any(|p| !crate::loopcheck::is_documentation_path(p))
 }
 
-fn git_origin_url(cwd: &Path) -> Option<String> {
+pub(crate) fn git_origin_url(cwd: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(cwd)

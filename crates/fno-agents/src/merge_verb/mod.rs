@@ -399,26 +399,16 @@ fn do_merge(
         // "flake override accepted: <checks>" stderr note.
     }
 
-    // Server-visible receipt of the verdict the gate acted on. Staged port:
-    // only the head resolution survives here (the same verb hop the captured
-    // goldens record); the gh status write itself lands with the follow-ups
-    // stage, so a resolvable head publishes nothing at this stage.
-    let publish_head = match verb_call(
-        "authorized-merge",
-        &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
-        VERB_TIMEOUT,
-    ) {
-        Ok(v) => v
-            .get("head")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    };
-    if publish_head.is_empty() {
+    // Server-visible receipt of the verdict the gate acted on, posted to the
+    // head GitHub names for the PR (the same hop the staged version made, in
+    // process). Best-effort: the durable verdict is the event row, and a
+    // failed POST leaves the status absent, which the ruleset reads as
+    // not-passing.
+    let (posted, note) = crate::loopcheck::coverage_gate::publish::publish(repo, pr, None);
+    if !posted {
         flow.lines.push((
             true,
-            "pr-merge: coverage status not posted: no PR head to publish a status on\n".into(),
+            format!("pr-merge: coverage status not posted: {note}\n"),
         ));
     }
 
