@@ -197,7 +197,13 @@ impl FindingRecord {
         let category = clean_str(item, "category");
         let verdict = clean_str(item, "verdict");
         let file = clean_str(item, "file");
-        let line = item.get("line").cloned();
+        // Python `dict.get` reads an explicit JSON null as absent, so the
+        // key's middle stays empty (`f1.py::perf`, the record_line_null
+        // golden); keeping Some(Value::Null) would print `None` there.
+        let line = match item.get("line") {
+            None | Some(Value::Null) => None,
+            other => other.cloned(),
+        };
         let summary = clean_str(item, "summary");
         let failure_scenario = clean_str(item, "failure_scenario");
         let autofix_class = clean_str(item, "autofix_class").and_then(|cleaned| {
@@ -620,11 +626,15 @@ fn render_round_comment(record: &Record, head: &str, round_no: i64, reviewer: &s
         } else {
             finding.finding_key.clone()
         };
+        // Last disposition wins: a corrected entry appended later is the
+        // one the gate reads, and Python's dict renderer overwrote the
+        // same way. First-match here would show the stale status.
         match record
             .dispositions
             .iter()
             .flatten()
-            .find(|d| d.finding_key == key)
+            .filter(|d| d.finding_key == key)
+            .last()
         {
             None => lines.push(format!("- {key}: no disposition")),
             Some(d) => lines.push(format!("- {key}: {} ({})", d.disposition, d.reason)),
@@ -945,13 +955,37 @@ fn run_post(args: &[String]) -> i32 {
         eprintln!("post-dispositions: PR read failed: {}", reason.text);
         return 3;
     }
-    let pr_json: Value = serde_json::from_str(info.stdout.trim()).unwrap_or(Value::Null);
-    let pr_head = pr_json
-        .pointer("/head/sha")
+    // The payload validates fail-closed, Python's `fetch_pr_info_rest`
+    // shape for shape: the comment must never post off an unreadable PR
+    // read, so a malformed body or a missing head sha refuses at 3.
+    let pr_read_failed = |why: &str| {
+        eprintln!("post-dispositions: PR read failed: {why}");
+    };
+    let pr_json: Value = match serde_json::from_str(info.stdout.trim()) {
+        Ok(v) => v,
+        Err(_) => {
+            pr_read_failed("gh api pulls/<n> returned output that is not JSON");
+            return 3;
+        }
+    };
+    if !pr_json.is_object() {
+        pr_read_failed("gh api pulls/<n> returned a JSON value that is not an object");
+        return 3;
+    }
+    let head_obj = pr_json.get("head");
+    if !head_obj.is_some_and(Value::is_object) {
+        pr_read_failed("gh api pulls/<n> carried malformed head/base objects");
+        return 3;
+    }
+    let pr_head = head_obj
+        .and_then(|h| h.get("sha"))
         .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if !pr_head.is_empty() && pr_head != parsed.head {
+        .filter(|s| !s.is_empty());
+    let Some(pr_head) = pr_head else {
+        pr_read_failed("gh api pulls/<n> carried no head sha");
+        return 3;
+    };
+    if pr_head != parsed.head {
         eprintln!(
             "post-dispositions: refusing: PR {pr} head {pr_head} is not the attested head {} \
              (--head takes the full sha); re-request review at the new head",
@@ -1115,6 +1149,41 @@ mod tests {
         assert_eq!(key(json!(Value::Null)), "c.py::perf");
         assert_eq!(key(json!([1, 2])), "c.py:[1, 2]:perf");
         assert_eq!(key(json!({"a": 1})), "c.py:{'a': 1}:perf");
+
+        // The comment shows the LAST disposition for a duplicated key: the
+        // gate's insert overwrites and Python's dict renderer overwrote, so
+        // a corrected entry appended later is the one the human reads.
+        let dup = Record {
+            blocking: 1,
+            nonblocking: 0,
+            histogram: vec![("correctness".to_string(), 1)],
+            findings: vec![Primitive {
+                category: Some("correctness".to_string()),
+                verdict: None,
+                blocking: true,
+                has_required_fields: true,
+                finding_key: "f.py:1:correctness".to_string(),
+                summary: None,
+                autofix_class: None,
+                owner: None,
+            }],
+            truncated: false,
+            dispositions: Some(vec![
+                Disposition {
+                    finding_key: "f.py:1:correctness".to_string(),
+                    disposition: "declined".to_string(),
+                    reason: "first".to_string(),
+                },
+                Disposition {
+                    finding_key: "f.py:1:correctness".to_string(),
+                    disposition: "fixed".to_string(),
+                    reason: "second".to_string(),
+                },
+            ]),
+            review_round: None,
+        };
+        let rendered = render_round_comment(&dup, "abc1234def", 2, "code-review");
+        assert!(rendered.contains("- f.py:1:correctness: fixed (second)"));
 
         // Python str.strip()'s set, not Rust trim's: the unit separator
         // strips, like the golden case pins.

@@ -270,7 +270,7 @@ fn compare_case(bin: &Path, base: &Path, case: &Value) {
     // golden log must produce none.
     let own_log = fs_read(&runtime.log).map(|t| strip_paginate(&strip_wrapper_noise(&t)));
     match fs_read(&golden.join(format!("{key}.log"))) {
-        Some(want) => assert_file("log", &own_log.unwrap_or_default()),
+        Some(_) => assert_file("log", &own_log.unwrap_or_default()),
         None => assert!(
             own_log.is_none(),
             "[{label}] no golden log but the leg ran gh: {:?}",
