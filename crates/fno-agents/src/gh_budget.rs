@@ -526,12 +526,23 @@ pub(crate) fn admit_spawn_at(
 
 /// admit_spawn for an already-built Command: the program and args come off
 /// the command, so a transport admits without knowing what it was handed.
+/// The program check runs before any argv copy: the transports carry every
+/// git read too, and those must stay allocation-free.
 pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
+    if !admission_armed() || !is_github_program(cmd.get_program()) {
+        return None;
+    }
     let args: Vec<String> = cmd
         .get_args()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    admit_spawn(&cmd.get_program(), &args)
+    admit_spawn_at(
+        &ledger_path(),
+        now_ms(),
+        cap_from_env(),
+        cmd.get_program(),
+        &args,
+    )
 }
 
 /// The refusal as a finished child: exit 75 (the Python door's REFUSED),
@@ -1055,7 +1066,11 @@ mod tests {
         let hit_idxs: Vec<usize> = lines
             .iter()
             .enumerate()
-            .filter(|(_, (_, line))| bare_gh_constructor(line))
+            // A comment never spawns; a doc aside quoting the constructor
+            // must not read as a violation.
+            .filter(|(_, (_, line))| {
+                !line.trim_start().starts_with("//") && bare_gh_constructor(line)
+            })
             .map(|(i, _)| i)
             .collect();
         let mut violations = Vec::new();
@@ -1107,7 +1122,7 @@ mod tests {
     fn literal_hits(source: &str) -> Vec<(usize, String)> {
         production_lines(source)
             .into_iter()
-            .filter(|(_, line)| bare_gh_constructor(line))
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && bare_gh_constructor(line))
             .collect()
     }
 
