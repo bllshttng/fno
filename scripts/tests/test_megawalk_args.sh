@@ -31,19 +31,25 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
-# Seed graph.db through the anchor that the resolver passes to the keeper.
-cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/graph.json"
+# Seed the graph through the anchor the resolver reads back: the store
+# cutover moved paths.graph_json() to .fno/db/, so the legacy .fno/ anchor
+# would seed a file no reader opens.
+mkdir -p "$HOME/.fno/db"
+cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/db/graph.json"
 {"entries": [
   {"id": "ab-12345678", "title": "Test", "plan_path": "plans/test.md", "status": "ready"}
 ]}
 JSON
 
-# Case 1: roadmap-tasks.py intake --batch is rejected with a helpful redirect.
+# Case 1: the wheel no longer answers for `intake` at all. The verb moved
+# into the Rust dispatcher (its `--batch` redirect moved with it), so the
+# shim's forward now lands on the Python app's unknown-command error - the
+# wheel cut working as intended, not a shim regression.
 OUT=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" intake --batch plans/foo 2>&1 || true)
-if echo "$OUT" | grep -qiE "removed|multi-path|shell glob"; then
-    pass "intake --batch emits redirect"
+if echo "$OUT" | grep -qiE "No such command 'intake'"; then
+    pass "wheel no longer owns intake (native door)"
 else
-    fail "intake --batch didn't redirect" "got: $OUT"
+    fail "wheel still answers for intake" "got: $OUT"
 fi
 
 # Case 2: resolver returns plan_path for a known ab- ID.
