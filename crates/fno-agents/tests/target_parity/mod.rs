@@ -332,6 +332,12 @@ pub fn base_env(root: &Path, bindir: &Path, session_pid: &str) -> Vec<(String, S
     // The Python leg's init forward (and any resolve_binary consumer) must
     // resolve THIS test's binary, never whatever a host has installed.
     env.push(("FNO_AGENTS_BIN".into(), AGENTS_BIN.to_string()));
+    // The goldens are banner-free: the capture's python prewarm absorbed the
+    // one-time path-migration banner. A door leg has no python prewarm, but
+    // its init still spawns python children whose first dispatch on a fresh
+    // HOME prints the banner into the compared stderr, so opt out the way
+    // pytest does (the migration reads this pin for exactly that isolation).
+    env.push(("FNO_SKIP_MIGRATION".into(), "1".into()));
     env.push(("FNO_SESSION_HARNESS".into(), "claude".into()));
     env.push(("FNO_SESSION_PID".into(), session_pid.into()));
     env.push(("TERM".into(), "dumb".into()));
