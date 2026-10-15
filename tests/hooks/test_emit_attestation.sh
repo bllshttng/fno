@@ -456,35 +456,27 @@ stored '.reason' | grep -qx "unresolvable_base" \
   || fail "terminal reason: want unresolvable_base, got '$(stored '.reason')'"
 
 # 14-16. --findings-file (AC2-HP / AC2-ERR / AC2-EDGE). The classify leg runs
-# the REAL classifier from the repo tree (PYTHONPATH, no fno binary), so these
-# cases exercise producer-true classification through the emitter's transport:
-# the merge into the event payload, the refusals, and the no-file byte shape.
+# the REAL classifier - now the native record door - so these cases exercise
+# producer-true classification through the emitter's transport: the merge
+# into the event payload, the refusals, and the no-file byte shape.
 git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
 git -C "$REPO" checkout -q feature/x-e601
 
-export CLASSIFY_PYTHONPATH="$REPO_ROOT/cli/src"
-export CLASSIFY_PYTHON="$REPO_ROOT/cli/.venv/bin/python"
+CLASSIFY_BIN=""
+for candidate in \
+  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+  if [[ -x "$candidate" ]]; then CLASSIFY_BIN="$candidate"; break; fi
+done
+if [[ -z "$CLASSIFY_BIN" ]]; then
+  echo "SKIP: no built fno-agents binary for the native classifier read" >&2
+  echo "  tried crates/fno-agents/target/{release,debug}/fno-agents." >&2
+  exit 77
+fi
 cat > "$TMP/classify-real.sh" <<'CREAL'
 #!/usr/bin/env bash
 f="$1"
-PYTHONPATH="$CLASSIFY_PYTHONPATH" "$CLASSIFY_PYTHON" - "$f" <<'PY'
-import json, sys
-from fno.review.cli import build_emit_record, RecordBuildError
-try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        payload = json.load(fh)
-except OSError as exc:
-    print(f"classify: cannot read {sys.argv[1]}: {exc}", file=sys.stderr)
-    raise SystemExit(2)
-except ValueError as exc:
-    print(f"classify: {sys.argv[1]} is not valid JSON: {exc}", file=sys.stderr)
-    raise SystemExit(2)
-try:
-    print(json.dumps(build_emit_record(payload)))
-except RecordBuildError as exc:
-    print(f"classify: {sys.argv[1]}: {exc}", file=sys.stderr)
-    raise SystemExit(2)
-PY
+"$CLASSIFY_BIN" review-level findings record --findings-file "$f"
 CREAL
 chmod +x "$TMP/classify-real.sh"
 

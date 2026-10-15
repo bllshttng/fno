@@ -434,6 +434,22 @@ def _findings_payload(blocking: int) -> str:
     return json.dumps(entries)
 
 
+def _seed_record(monkeypatch: pytest.MonkeyPatch, blocking: int, nonblocking: int = 0) -> None:
+    """Hand ``classify`` a canned record: the classifier is native, and the
+    goldens carry its live behavior; these tests wire the attest flow."""
+    from fno.review import cli as review_cli
+
+    monkeypatch.setattr(
+        review_cli,
+        "build_emit_record",
+        lambda findings_file: {
+            "findings_blocking": blocking,
+            "findings_nonblocking": nonblocking,
+            "findings": [],
+        },
+    )
+
+
 def _invoke_classify(runner: CliRunner, repo: Path, findings: Path, *extra: str):
     from fno.review.cli import review_app
 
@@ -463,11 +479,12 @@ def attest_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_attest_measures_fail_on_blocking_findings(
-    runner: CliRunner, attest_env: Path, tmp_path: Path
+    runner: CliRunner, attest_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two blocking findings -> ONE row with verdict fail on the PR head, the
     classified record riding on it, and the reviewed ranges measured so the
     row contributes a tile to the coverage chain."""
+    _seed_record(monkeypatch, blocking=2, nonblocking=1)
     findings = tmp_path / "findings.json"
     findings.write_text(_findings_payload(blocking=2), encoding="utf-8")
     result = _invoke_classify(runner, attest_env, findings, "--emit-record", "--attest", "code-review")
@@ -502,10 +519,11 @@ def test_attest_measures_fail_on_blocking_findings(
 
 
 def test_attest_measures_pass_on_zero_blocking_findings(
-    runner: CliRunner, attest_env: Path, tmp_path: Path
+    runner: CliRunner, attest_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Zero blocking findings -> verdict pass, and a leading-slash reviewer
     name lands stripped, byte-equal to the shell producer's output."""
+    _seed_record(monkeypatch, blocking=0, nonblocking=1)
     findings = tmp_path / "findings.json"
     findings.write_text(_findings_payload(blocking=0), encoding="utf-8")
     result = _invoke_classify(runner, attest_env, findings, "--attest", "/code-review")
@@ -523,9 +541,10 @@ def test_attest_measures_pass_on_zero_blocking_findings(
 
 
 def test_attest_without_the_flag_emits_nothing(
-    runner: CliRunner, attest_env: Path, tmp_path: Path
+    runner: CliRunner, attest_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Plain classify stays a classification: no row, no journal."""
+    _seed_record(monkeypatch, blocking=0, nonblocking=1)
     findings = tmp_path / "findings.json"
     findings.write_text(_findings_payload(blocking=0), encoding="utf-8")
     result = _invoke_classify(runner, attest_env, findings, "--emit-record")
@@ -544,6 +563,7 @@ def test_attest_refuses_off_a_git_repo(
     commit is the one shape downstream can never scope."""
     import fno.harness_identity as hi
 
+    _seed_record(monkeypatch, blocking=0, nonblocking=1)
     monkeypatch.setattr(hi, "resolve_attester_identity", lambda: ("sess-lane", "process"))
     monkeypatch.chdir(tmp_path)  # not a git repo
     findings = tmp_path / "findings.json"
