@@ -144,29 +144,34 @@ def _refuse_unsatisfiable_reviewers() -> None:
     if not reviewers and not peers:
         return
 
-    from fno.review_capability import (
-        detect_session,
-        local_peers_refusal_message,
-        refusal_message,
-        resolve_local_peers,
-        resolve_reviewers,
-    )
+    from dataclasses import asdict
 
-    session = detect_session()
-    verdicts = resolve_reviewers(reviewers, session, registry)
-    peer_verdicts = resolve_local_peers(peers, peer_identity, session)
+    from fno.config import resolvable_reviewers
+    from fno.rust_binary import verb_call
+
+    answer = verb_call(
+        ["review-level", "capability", "reviewers"],
+        {
+            "reviewers": reviewers,
+            "descriptors": {
+                name: asdict(d) for name, d in resolvable_reviewers(registry).items()
+            },
+            "peers": peers,
+            "peer_identity": peer_identity,
+        },
+    )
+    for row in [r for r in answer.get("reviewers", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
+    for row in [r for r in answer.get("local_peers", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
     messages = [
         message
         for message in (
-            refusal_message(verdicts, session),
-            local_peers_refusal_message(peer_verdicts, session),
+            answer.get("reviewers_refusal"),
+            answer.get("local_peers_refusal"),
         )
         if message
     ]
-    for reviewer_verdict in [v for v in verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {reviewer_verdict.line()}", err=True)
-    for peer_verdict in [v for v in peer_verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {peer_verdict.line()}", err=True)
     if messages:
         typer.echo("\n\n".join(messages), err=True)
         raise typer.Exit(code=2)
@@ -198,30 +203,51 @@ def _refuse_unreachable_github_apps() -> None:
     if not apps:
         return
 
-    from fno.review_capability import (
-        github_apps_refusal_message,
-        resolve_github_apps,
-    )
+    from fno.rust_binary import verb_call
 
-    verdicts = resolve_github_apps(apps, nudge_logins=nudge_logins)
-    for v in [v for v in verdicts if v.status == "unverifiable"]:
-        typer.echo(f"note target init: {v.line()}", err=True)
-    message = github_apps_refusal_message(verdicts)
+    answer = verb_call(
+        ["review-level", "capability", "github-apps"],
+        {"apps": apps, "nudge_logins": list(nudge_logins)},
+        timeout=70,
+    )
+    for row in [r for r in answer.get("verdicts", []) if r.get("status") == "unverifiable"]:
+        typer.echo(f"note target init: {row['line']}", err=True)
+    message = answer.get("refusal")
     if message:
         typer.echo(message, err=True)
         raise typer.Exit(code=2)
 
 
+_SIZE_ORDER = {"S": 0, "M": 1, "L": 2}
 
 
 
 
+def _load_blast_cfg():
+    """Load config.target.blast, fail-safe to a disabled default block.
+
+    A malformed settings file (or any load error) degrades to a default
+    ``BlastConfig`` (enabled=False) so a config typo can never make the blast
+    read raise. Mirrors the ``agents_headless_yolo`` try/except idiom.
+    """
+    from fno.config import BlastConfig
+
+    try:
+        from fno.config import load_settings
+
+        return load_settings().target.blast
+    except Exception:
+        return BlastConfig()
 
 
+def _repo_root_or_none() -> Optional[str]:
+    """Best-effort repo root for path normalization; None on any failure."""
+    try:
+        from fno.paths import resolve_repo_root
 
-
-
-
+        return str(resolve_repo_root())
+    except Exception:
+        return None
 
 
 
@@ -977,11 +1003,21 @@ def review_invocation_cmd(
     concrete level outside the builder. A worker or lead can also run this
     verb directly.
 
-    Read-only; writes no state. Always exits 0 - a render failure prints the
-    unsized placeholder form, it never refuses."""
-    from fno.review_capability import render_self_review_invocation
+    Read-only; writes no state. A named door refusal (the fno-agents binary
+    missing or failed) prints the refusal on stderr and exits 1: machinery
+    reading this output embeds it verbatim, so a fabricated placeholder would
+    lie about a gate that cannot answer."""
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    typer.echo(render_self_review_invocation(harness=harness, project_root=Path.cwd()))
+    argv = ["review-level", "capability", "invocation", "--root", str(Path.cwd())]
+    if harness:
+        argv += ["--harness", harness]
+    try:
+        answer = verb_call(argv, {})
+    except VerbUnavailable as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(answer["invocation"])
 
 
 def _read_pr_metadata(pr_number: int, cwd: Path) -> dict[str, Any]:
@@ -1121,7 +1157,7 @@ def request_self_review_cmd(
     ),
 ) -> None:
     """Request one explicit final-head review through the raw self lane."""
-    from fno.review_capability import render_self_review_invocation
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     cwd = Path.cwd()
     head_sha = _git_out(cwd, "rev-parse", "HEAD") or ""
@@ -1173,14 +1209,20 @@ def request_self_review_cmd(
             if not base_branch:
                 raise RuntimeError("PR baseRefName is unresolved; refusing review")
         harness, session_id = _resolve_self_review_identity()
-        payload = render_self_review_invocation(
-            harness=harness,
-            project_root=cwd,
-            pr_number=pr_number,
-            branch=branch or None,
-            head_sha=head_sha,
-            base_branch=base_branch,
-        )
+        argv = ["review-level", "capability", "invocation", "--root", str(cwd)]
+        if harness:
+            argv += ["--harness", harness]
+        if pr_number is not None:
+            argv += ["--pr-number", str(pr_number)]
+        if branch:
+            argv += ["--branch", branch]
+        argv += ["--head-sha", head_sha, "--base-branch", base_branch]
+        try:
+            payload = verb_call(argv, {})["invocation"]
+        except VerbUnavailable as exc:
+            # A named refusal, never a fabricated string: the receipt keeps
+            # the door's full detail under a prefix that names the surface.
+            raise RuntimeError(f"review invocation door refused: {exc}") from None
         receipt = _send_self_review_payload(
             payload=payload, harness=harness, session_id=session_id
         )
@@ -1559,8 +1601,95 @@ def init(
     raise typer.Exit(code=subprocess.run(cmd).returncode)
 
 
+def _bind_node_plan_path(node: dict, plan_path: str) -> None:
+    """First-bind the graph node's ``plan_path`` at init (change 2).
+
+    Shells to ``fno backlog update`` because that verb is the one choke point
+    every plan_path write already goes through (same posture as
+    ``fno.research.deliverable._bind_plan_path``). Never overwrites a
+    non-empty stored value (a group child shares one plan); non-fatal on
+    failure, matching the shell hook's lock-stamp posture.
+    """
+    node_id = str(node.get("id") or "").strip()
+    if not node_id:
+        return
+    stored = node.get("plan_path")
+    stored_str = stored.strip() if isinstance(stored, str) else ""
+    if stored_str:
+        try:
+            same = (
+                Path(stored_str).expanduser().resolve()
+                == Path(plan_path).expanduser().resolve()
+            )
+        except OSError:
+            same = stored_str == plan_path
+        if same:
+            return
+        typer.echo(
+            f"fno do target init: graph node {node_id} is already bound to "
+            f"{stored_str}; leaving it untouched",
+            err=True,
+        )
+        return
+    try:
+        result = subprocess.run(
+            ["fno", "backlog", "update", node_id, "--plan-path", plan_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        typer.echo(f"WARNING: could not bind {plan_path} to {node_id}: {exc}", err=True)
+        return
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:200]
+        typer.echo(
+            f"WARNING: could not bind {plan_path} to {node_id}: {detail}",
+            err=True,
+        )
+        return
+    typer.echo(f"fno do target init: bound graph node {node_id} to {plan_path}", err=True)
 
 
+def _record_denominator_choice(
+    plan_path: Optional[str],
+    deliverables: Optional[int],
+    node: Optional[dict],
+    *,
+    derived: bool = False,
+) -> None:
+    """Emit a ``target_denominator`` event for the deliverables-1 ratio.
+
+    Best-effort: a recording failure never fails a successful init. A declared
+    ``--deliverables`` exit stays the load-bearing bypass risk (reflexive N=1
+    degrades the measurement to a formality); a derived count records as its
+    own kind so it never reads as a declaration in the ratio.
+    """
+    try:
+        from fno.events import _build, append_event
+        from fno.target.denominator import enumerated_scope
+
+        if plan_path and plan_path.strip():
+            denominator = "plan"
+        elif derived:
+            denominator = "derived"
+        elif deliverables is not None:
+            denominator = "deliverables"
+        else:
+            denominator = "none"
+        data: dict = {"denominator": denominator}
+        if deliverables is not None:
+            data["count"] = deliverables
+        if isinstance(node, dict):
+            data["enumerated"] = enumerated_scope(
+                str(node.get("title") or ""), str(node.get("details") or "")
+            )
+        # init's cwd IS the repo root (the manifest was just written to
+        # .fno/target-state.md relative), so the default events path lands beside
+        # it without a resolve_repo_root git round-trip on every successful init.
+        append_event(_build("target_denominator", "target", data))
+    except Exception:  # noqa: BLE001 - a measurement failure must not fail init
+        pass
 
 
 def _warn_no_merge_dropped() -> None:
@@ -1625,14 +1754,210 @@ def _warn_if_authority_not_granted(project_root: Optional[Path] = None) -> None:
     typer.echo(f"--beastmode did NOT take - this session has no authority grant.\n{fix}", err=True)
 
 
+def _maybe_reconcile_lane_slot() -> None:
+    """Bind a parallel-mode lane slot to THIS worker's lifecycle (LD#8).
+
+    Runs right after the init script claims ``node:<id>``. A parallel-mode
+    dispatcher (``fno backlog dispatch-lanes``) holds a lane slot
+    (``parallel-lane:<node>``) across the spawn->init window, TTL-anchored to
+    itself; now that this worker owns the node, re-anchor that slot to the
+    worker's durable session pid so the native lane count tracks the real lane
+    and frees the slot when the worker ends. A no-op for every non-parallel run
+    (this node holds no lane slot) and for a missing pid. Strictly non-fatal:
+    never affects the init exit code the caller propagates.
+    """
+    try:
+        from fno.paths import resolve_repo_root
+
+        repo_root = resolve_repo_root()
+        manifest = repo_root / ".fno" / "target-state.md"
+        text = manifest.read_text(encoding="utf-8")
+        m = re.search(r"^graph_node_id\s*:\s*(.+)$", text, re.MULTILINE)
+        if not m:
+            return
+        node_id = m.group(1).strip().strip("\"'")
+        if not node_id or node_id == "null":
+            return
+        import subprocess
+
+        from fno.claims.session_pid import resolve_session_pid
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is not None:
+            subprocess.run(
+                [
+                    str(binary), "claim", "lane-reconcile",
+                    "--lane", node_id, "--pid", str(resolve_session_pid()),
+                ],
+                capture_output=True, timeout=30, check=False,
+            )
+    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
+        pass
 
 
+def _maybe_check_resume_receipt() -> None:
+    """Best-effort resume-receipt gate on the successor entry path.
+
+    When a prior session left a durable receipt for this node, revalidate it
+    against live claim/HEAD/worktree state and surface the verdict. Non-blocking:
+    prints a verdict line to stderr (a warning on fail-closed) but never affects
+    the init exit code. Hard fail-closed enforcement - which must order the gate
+    BEFORE claim acquisition, a succession-protocol change - is tracked as
+    follow-up; this makes the gate run on every resume so a stale/foreign
+    receipt is observable rather than silently bypassed.
+    """
+    try:
+        from fno.paths import resolve_repo_root
+
+        root = resolve_repo_root()
+        manifest = root / ".fno" / "target-state.md"
+        text = manifest.read_text(encoding="utf-8")
+        node_m = re.search(r"^graph_node_id\s*:\s*(\S+)", text, re.MULTILINE)
+        if not node_m:
+            return
+        node = node_m.group(1).strip().strip("\"'")
+        if not node or node == "null":
+            return
+        from fno.resume.cli import (
+            _artifacts_dir,
+            _find_latest_receipt,
+            _git_head_and_branch,
+            _holder_of,
+            _live_claim_status,
+        )
+        from fno.resume.receipt import (
+            MalformedReceiptError,
+            load_receipt,
+            read_node_events,
+            revalidate,
+        )
+
+        latest = _find_latest_receipt(node, _artifacts_dir(root))
+        if latest is None:
+            return  # fresh node: no predecessor receipt to revalidate
+        try:
+            receipt = load_receipt(latest)
+        except MalformedReceiptError as exc:
+            typer.echo(f"target: resume receipt for {node} is malformed: {exc}", err=True)
+            return
+        sid_m = re.search(r"^session_id\s*:\s*(\S+)", text, re.MULTILINE)
+        own_session = sid_m.group(1).strip().strip("\"'") if sid_m else receipt.identity.session
+        live_head, live_branch = _git_head_and_branch(root)
+        claim = _live_claim_status(node, None)
+        events_path = root / ".fno" / "events.jsonl"
+        node_events = (
+            [e for e in read_node_events([events_path]) if _receipt_event_node(e) == node]
+            if events_path.exists() else []
+        )
+        res = revalidate(
+            receipt,
+            live_head=live_head,
+            live_branch=live_branch,
+            worktree_exists=root.exists(),
+            live_claim_holder=_holder_of(claim),
+            own_session=own_session,
+            node_events=node_events,
+        )
+        if res.ok:
+            typer.echo(
+                f"target: resume receipt for {node} revalidated ok "
+                f"(gen {receipt.identity.generation}, head {receipt.head[:8]})",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"target: resume receipt for {node} FAIL-CLOSED ({res.reason}) - "
+                "revalidate before proceeding; see `fno do resume receipt validate`",
+                err=True,
+            )
+    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
+        pass
 
 
+def _receipt_event_node(e: dict) -> Optional[str]:
+    for key in ("node_id", "graph_node_id"):
+        v = e.get(key)
+        if isinstance(v, str) and v:
+            return v
+    data = e.get("data")
+    if isinstance(data, dict):
+        for key in ("node_id", "graph_node_id"):
+            v = data.get(key)
+            if isinstance(v, str) and v:
+                return v
+    return None
 
 
+def _print_orientation_report() -> None:
+    """Change A : print the resolved situation report as init's first
+    orientation output. Reads the just-written manifest; strictly read-only and
+    fully non-fatal -- a degraded report never affects the init exit code.
+    """
+    try:
+        from fno.paths import resolve_repo_root
+        from fno.target.orient import load_orientation, render
+
+        typer.echo(render(load_orientation(resolve_repo_root())))
+    except Exception:  # noqa: BLE001 - orientation is additive; never block init
+        pass
 
 
+def _maybe_dispatch_work_start() -> None:
+    """A2 : fire a ``work-start`` context /think after a node is claimed.
+
+    Runs right after the init script returns success - the authoritative
+    ``fno agents claim acquire node:<id>`` has completed and the manifest is written, so
+    this is the "node enters work" moment (Claude's Discretion 4). Reads the
+    claimed ``graph_node_id`` back from the manifest (``null`` => no node claimed
+    => nothing to dispatch) and routes the durable node through
+    ``on_node_work_start``, gated by ``config.think_spawn.on_work_start``
+    (default OFF). Strictly non-fatal: any failure here never affects the init
+    exit code the caller propagates.
+    """
+    try:
+        from fno.config import load_settings
+
+        # Gate-first: the default-OFF install (every un-opted-in install) pays one
+        # settings read and returns - NO git rev-parse, NO graph load, NO manifest
+        # read. The wrapper re-checks the sub-flag authoritatively below.
+        try:
+            if not load_settings().think_spawn.on_work_start:
+                return
+        except Exception:  # noqa: BLE001 - fail-safe to disabled
+            return
+
+        from fno.paths import resolve_repo_root
+
+        repo_root = resolve_repo_root()
+        manifest = repo_root / ".fno" / "target-state.md"
+        text = manifest.read_text(encoding="utf-8")
+        m = re.search(r"^graph_node_id\s*:\s*(.+)$", text, re.MULTILINE)
+        if not m:
+            return
+        node_id = m.group(1).strip().strip("\"'")
+        if not node_id or node_id == "null":
+            return
+
+        from fno.provenance.spawn_think import on_node_work_start
+
+        node = _find_node(node_id)
+        if node is not None:
+            # Carry the session's persisted dispatch pins into the work-start
+            # /think spawn. maybe_spawn_think reads node["model"]/node["provider"]
+            # at the spawn seam, so overlaying the manifest fields here is all it
+            # takes for `fno do target start --model X` to reach the spawned worker.
+            dm = re.search(r"^dispatch_model\s*:\s*(.*)$", text, re.MULTILINE)
+            dp = re.search(r"^dispatch_provider\s*:\s*(.*)$", text, re.MULTILINE)
+            model_pin = dm.group(1).strip().strip("\"'") if dm else ""
+            provider_pin = dp.group(1).strip().strip("\"'") if dp else ""
+            if model_pin:
+                node["model"] = model_pin
+            if provider_pin:
+                node["provider"] = provider_pin
+            on_node_work_start(node, project_root=repo_root)
+    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
+        pass
 
 
 # --------------------------------------------------------------------------- #
