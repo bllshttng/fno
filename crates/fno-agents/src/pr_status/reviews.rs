@@ -772,13 +772,13 @@ fn payload_is_code(cwd: &Path, pr: u64) -> bool {
     };
     let mut names: Vec<String> = Vec::new();
     for page in 1..=10 {
-        let out = std::process::Command::new("gh")
-            .args([
-                "api",
-                &format!("repos/{slug}/pulls/{pr}/files?per_page=100&page={page}"),
-            ])
-            .current_dir(cwd)
-            .output();
+        let mut cmd = std::process::Command::new("gh");
+        cmd.args([
+            "api",
+            &format!("repos/{slug}/pulls/{pr}/files?per_page=100&page={page}"),
+        ]);
+        cmd.current_dir(cwd);
+        let out = crate::gh_budget::output(cmd);
         let Ok(out) = out else {
             return true;
         };
