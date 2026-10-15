@@ -18,30 +18,49 @@
       },
       "description": "Set a target and walk away. Say f[no] to mostly done.",
       "category": "workflow",
-      "tags": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
+      "tags": [
+        "workflow",
+        "tdd",
+        "planning",
+        "code-review",
+        "autonomous",
+        "target"
+      ]
     },
     {
       "name": "fno-nightly",
       "source": {
         "source": "github",
         "repo": "bllshttng/footnote",
-        "ref": "nightly"
+        "ref": "plugin-nightly"
       },
       "description": "Footnote nightly: yesterday's green main, rolling and replaceable.",
       "category": "workflow",
-      "tags": ["workflow", "nightly", "tdd", "planning", "autonomous", "target"]
+      "tags": [
+        "workflow",
+        "nightly",
+        "tdd",
+        "planning",
+        "autonomous",
+        "target"
+      ]
     },
     {
       "name": "buddy",
       "source": {
         "source": "git-subdir",
-        "url": "bllshttng/footnote",
+        "url": "https://github.com/bllshttng/footnote.git",
         "path": "plugins/buddy",
         "ref": "main"
       },
       "description": "Bring back buddy: a terminal companion beside your status line. /buddy or /bbb.",
       "category": "fun",
-      "tags": ["buddy", "companion", "statusline", "mod"]
+      "tags": [
+        "buddy",
+        "companion",
+        "statusline",
+        "mod"
+      ]
     }
   ]
 }

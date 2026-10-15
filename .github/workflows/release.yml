@@ -317,6 +317,21 @@ jobs:
             exit "$rc"
           fi
 
+      - name: Validate the selected plugin source before any publication
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          SOURCE_SHA: ${{ steps.pick.outputs.sha }}
+          VERSION: ${{ steps.math.outputs.version }}
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir "$scratch/source"
+          git archive "$SOURCE_SHA" | tar -x -C "$scratch/source"
+          rustc --edition=2021 crates/fno-agents/ci/plugin_tree.rs -o "$scratch/plugin-tree"
+          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
+          "$scratch/plugin-tree" build "$scratch/source" "$scratch/tree" "$SOURCE_SHA" "$semver"
+
   binaries:
     name: build binary tarballs
     needs: resolve
@@ -400,6 +415,15 @@ jobs:
           git tag -f nightly "$stamped"
           git push -f origin refs/tags/nightly
           echo "stamped=${stamped}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the shared nightly plugin tree
+        if: inputs.dry_run != true
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.sha }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
+          bash scripts/release/publish-plugin.sh "$SOURCE_SHA" "$semver" plugin-nightly
 
       - name: Publish the nightly release
         run: |
@@ -559,19 +583,18 @@ jobs:
 
       - name: Stable plugin channel (stable only)
         if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
-        # Move the `stable` branch the plugin marketplaces pin, and add the
-        # plugin tag beside v<src>. Both live INSIDE the approved job: the
-        # plugin channel moves only on stable promotion.
+        # Both marketplaces consume one generated tree. Preserve the previous
+        # stable tip as its parent so installed clones can fast-forward.
+        id: stable-plugin
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git push -f origin "+${SHA}:refs/heads/stable"
-          echo "stable branch moved to ${SHA}"
+          bash scripts/release/publish-plugin.sh "$SHA" "$VERSION" stable
           if git rev-parse --verify -q "refs/tags/fno--v${VERSION}" >/dev/null; then
             echo "plugin tag fno--v${VERSION} already exists - skipping"
           else
-            git tag "fno--v${VERSION}" "$SHA"
+            git tag "fno--v${VERSION}" "$(git ls-remote origin refs/heads/stable | cut -f1)"
             git push origin "refs/tags/fno--v${VERSION}"
             echo "plugin tag fno--v${VERSION} pushed"
           fi
