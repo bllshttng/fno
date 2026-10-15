@@ -14,6 +14,11 @@
 //!   read walks every page; the Python leg read one), and
 //! - every `gh proxy: <sentence>` segment cuts from the streams (the
 //!   Python leg's gh wrapper noise, which the native leg never has).
+//!
+//! Two wrapper-shaped cases ("post pr read fails", "post non github origin")
+//! had a reason TAIL built from that machine's wrapper noise, so the capture
+//! cut it to nothing and the table pins only the sentence's `err_prefix`;
+//! the prefix rules whenever the table declares one, exact `.err` otherwise.
 
 mod common;
 
@@ -272,19 +277,23 @@ fn compare_case(bin: &Path, base: &Path, case: &Value, problems: &mut Vec<String
         }
         None => bad(format!("missing golden {}", out_path.display())),
     }
-    // stderr: exact when frozen, prefix when the table says so, else free.
-    let err_path = golden.join(format!("{key}.err"));
-    if let Some(want) = fs_read(&err_path) {
-        if stderr != want {
-            bad(format!(
-                "stderr differs\ngolden={want:?}\nrust  ={stderr:?}"
-            ));
-        }
-    } else if let Some(prefix) = case["err_prefix"].as_str() {
+    // stderr: the table's declared prefix RULES when it declares one (two
+    // wrapper-shaped cases had machine-noise reason tails the capture cut to
+    // nothing), else exact when frozen, else free.
+    if let Some(prefix) = case["err_prefix"].as_str() {
         if !stderr.starts_with(prefix) {
             bad(format!(
                 "stderr lacks the frozen prefix\nprefix={prefix:?}\nrust={stderr:?}"
             ));
+        }
+    } else {
+        let err_path = golden.join(format!("{key}.err"));
+        if let Some(want) = fs_read(&err_path) {
+            if stderr != want {
+                bad(format!(
+                    "stderr differs\ngolden={want:?}\nrust  ={stderr:?}"
+                ));
+            }
         }
     }
     // argv log: compared with the paginate token dropped; a case with no
