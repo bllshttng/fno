@@ -1745,14 +1745,38 @@ mod tests {
     #[test]
     fn the_refusal_notice_names_the_nodes_and_their_columns() {
         // Built through parse_ops, so the fixture doubles as a from_json check.
-        let changes = parse_ops(
-            &json!([
-                {"op": "u", "t": "nodes", "c": ["id", "title", "plan_path", "status"],
-                 "o": ["fb-4908", "shared", null, "idea"], "n": ["fb-4908", "shared", "p.md", "ready"]},
-                {"op": "i", "t": "comments", "c": ["id", "body"], "o": [], "n": ["c-1", "hello"]},
-            ])
-            .to_string(),
-        )
+        // Built through ops_json, so the fixture doubles as a wire round-trip check.
+        let changes = parse_ops(&ops_json(&[
+            Change {
+                op: Op::Update,
+                table: NODES.into(),
+                columns: vec![
+                    "id".into(),
+                    "title".into(),
+                    "plan_path".into(),
+                    "status".into(),
+                ],
+                old: vec![
+                    SqlValue::Text("fb-4908".into()),
+                    SqlValue::Text("shared".into()),
+                    SqlValue::Null,
+                    SqlValue::Text("idea".into()),
+                ],
+                new: vec![
+                    SqlValue::Text("fb-4908".into()),
+                    SqlValue::Text("shared".into()),
+                    SqlValue::Text("p.md".into()),
+                    SqlValue::Text("ready".into()),
+                ],
+            },
+            Change {
+                op: Op::Insert,
+                table: "comments".into(),
+                columns: vec!["id".into(), "body".into()],
+                old: vec![],
+                new: vec![SqlValue::Text("c-1".into()), SqlValue::Text("hello".into())],
+            },
+        ]))
         .unwrap();
         let notice = refusal_notice(&changes);
         assert!(notice.contains("fb-4908"), "{notice}");
