@@ -14,6 +14,7 @@
 //! lanes are characterised in the in-module tests below.
 use serde_json::json;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
@@ -28,6 +29,10 @@ const SCRATCH_MINUTES: u64 = 24 * 60;
 const UV_PRUNE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Age at which the daemon's daily gate re-runs the sweep.
 const DAILY_SECS: u64 = 24 * 3600;
+/// Age at which the daemon re-runs the cargo build-base lane alone. A fleet
+/// of builds once grew the base from 4 GB to 144 GB between two daily sweeps,
+/// so the cap must hold on the scale of hours, not days.
+const CARGO_LANE_SECS: u64 = 3600;
 /// Dated stamp dirs under `<state-root>/backups` are report-only by
 /// default: the state-root inventory holds migration and recovery stamps to
 /// the operator's yes, never the janitor's clock. Setting the retention
@@ -472,21 +477,40 @@ fn cargo_build_dirs_roots(home: &AgentsHome, include_cwd_root: bool) -> Vec<Stri
     roots
 }
 
-/// The build-base lane: `cargo_build_dirs::sweep` per root from
-/// [`cargo_build_dirs_roots`]. Roots with no `crates/*/Cargo.toml` are
-/// skipped - sweeping a manifest-less root under a shared base could only
-/// ever misjudge rows it cannot resolve. The note carries each root's summary
-/// line; bytes are reclaimed (apply) or projected (dry run).
-fn cargo_build_dirs_lane(home: &AgentsHome, apply: bool, include_cwd_root: bool) -> Lane {
-    let mut lane = Lane::new("cargo_build_dirs", Vec::new());
-    let roots = cargo_build_dirs_roots(home, include_cwd_root);
-    let mut notes: Vec<String> = Vec::new();
+/// The fno build base a root resolves to, canonical so two spellings of one
+/// base group together.
+fn build_base_key(root: &Path) -> PathBuf {
+    let base = crate::cargo_build_dirs::fno_build_base(root);
+    base.canonicalize().unwrap_or(base)
+}
+
+/// Roots that carry a Cargo manifest, grouped by the build base each one
+/// resolves to. Roots with no manifest are skipped - sweeping a
+/// manifest-less root under a shared base could only ever misjudge rows it
+/// cannot resolve.
+fn roots_by_base(roots: Vec<String>) -> BTreeMap<PathBuf, Vec<PathBuf>> {
+    let mut by_base: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for root in roots {
         let root = PathBuf::from(&root);
         if crate::cargo_build_dirs::workspace_manifests(&root).is_empty() {
             continue;
         }
-        let rep = crate::cargo_build_dirs::sweep(&root, apply, SystemTime::now());
+        by_base.entry(build_base_key(&root)).or_default().push(root);
+    }
+    by_base
+}
+
+/// The build-base lane: one `cargo_build_dirs::sweep_roots` per fno build
+/// base, over every root from [`cargo_build_dirs_roots`] that resolves to
+/// it. Every Rust repo on the machine shares the base by default, so the cap
+/// and the live-cargo fence must judge all their rows together. The note
+/// carries each base's summary line; bytes are reclaimed (apply) or
+/// projected (dry run).
+fn cargo_build_dirs_lane(home: &AgentsHome, apply: bool, include_cwd_root: bool) -> Lane {
+    let mut lane = Lane::new("cargo_build_dirs", Vec::new());
+    let mut notes: Vec<String> = Vec::new();
+    for roots in roots_by_base(cargo_build_dirs_roots(home, include_cwd_root)).values() {
+        let rep = crate::cargo_build_dirs::sweep_roots(roots, apply, SystemTime::now());
         lane.bytes += rep.projected_bytes;
         if let Some(summary) = rep.lines.last() {
             notes.push(summary.clone());
@@ -764,9 +788,46 @@ pub fn maybe_run_daily(home: &AgentsHome) {
         Err(_) => true,
     };
     if stale {
+        // The full run carries the cargo lane, so it also satisfies the
+        // hourly gate instead of sweeping the base twice in one tick.
+        let _ = std::fs::write(cargo_stamp_path(home), b"");
         let (_rc, summary) = run_reclaim_lanes(home, true, false, false);
         emit_sweep_event(home, &summary);
     }
+}
+
+/// `<state-root>/reclaim/cargo-last-run`: the hourly gate's stamp, holding
+/// the last hourly sweep's summary lines.
+fn cargo_stamp_path(home: &AgentsHome) -> PathBuf {
+    reclaim_state_root(home)
+        .join("reclaim")
+        .join("cargo-last-run")
+}
+
+/// The daemon's hourly gate for the cargo build-base lane alone, apply. The
+/// stamp is written before the run, so a sweep that crashes waits out the
+/// hour instead of re-running every tick; an unwritable stamp skips the run
+/// and leaves the base to the daily gate. After the run the stamp holds the
+/// lane's summary lines, the record of what the last hourly sweep did.
+pub fn maybe_run_cargo_hourly(home: &AgentsHome) {
+    let stamp = cargo_stamp_path(home);
+    let stale = std::fs::metadata(&stamp)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|m| m.elapsed().ok())
+        .map(|age| age.as_secs() > CARGO_LANE_SECS)
+        .unwrap_or(true);
+    if !stale {
+        return;
+    }
+    if let Some(dir) = stamp.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(&stamp, b"").is_err() {
+        return;
+    }
+    let lane = cargo_build_dirs_lane(home, true, false);
+    let _ = std::fs::write(&stamp, format!("{}\n", lane.note));
 }
 
 /// What one sweep did, carried from the lane run to the daemon's event.
@@ -803,7 +864,8 @@ fn emit_sweep_event(home: &AgentsHome, summary: &ReclaimSummary) {
 pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
     // Leading subcommands. `remove-for <tree> [--json]` is the best-effort
     // tree-removal reclaim; it never errors. `cargo-build-dirs [--apply]`
-    // runs only the build-base lane for the cwd's canonical repo.
+    // runs only the build-base lane for the cwd's canonical repo, together
+    // with every registered repo that shares its build base.
     match args.first().map(String::as_str) {
         Some("remove-for") => {
             let Some(tree) = args.get(1) else {
@@ -829,7 +891,13 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
             let apply = args.iter().skip(1).any(|a| a == "--apply");
             let cwd = std::env::current_dir().unwrap_or_default();
             let root = canonical_repo_root(&cwd).unwrap_or(cwd);
-            crate::cargo_build_dirs::sweep(&root, apply, SystemTime::now());
+            let mut roots = roots_by_base(cargo_build_dirs_roots(home, false))
+                .remove(&build_base_key(&root))
+                .unwrap_or_default();
+            let root_key = root.canonicalize().unwrap_or_else(|_| root.clone());
+            roots.retain(|r| r.canonicalize().unwrap_or_else(|_| r.clone()) != root_key);
+            roots.insert(0, root.clone());
+            crate::cargo_build_dirs::sweep_roots(&roots, apply, SystemTime::now());
             crate::cargo_build_dirs::reclaim_idle_trees(&root, apply, SystemTime::now());
             return 0;
         }

@@ -66,7 +66,9 @@ jobs:
       github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +76,15 @@ jobs:
           # The lineage probe compares the base branch against the default
           # branch, which a shallow single-branch clone cannot answer.
           fetch-depth: 0
+      - name: Rust toolchain (lineage verb build)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/fno-agents
+      - name: Build fno-agents (lineage verb)
+        working-directory: crates/fno-agents
+        run: cargo build --bin fno-agents
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Check base lineage
@@ -113,12 +124,23 @@ jobs:
   sweep:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Rust toolchain (lineage verb build)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/fno-agents
+      - name: Build fno-agents (lineage verb)
+        working-directory: crates/fno-agents
+        run: cargo build --bin fno-agents
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Re-stamp open PRs stacked on a non-default base

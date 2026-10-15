@@ -62,6 +62,11 @@ def _ensure_passthrough(monkeypatch):
     import fno.rust_binary as rb
 
     def _passthrough(verb, payload, unavailable=None, **kwargs):
+        if verb == "pr-base-check":
+            # The stale-base guard answers from the binary now; the default
+            # here is the clear pass. A case that needs the refusal or the
+            # fail-open message patches this seam itself.
+            return {"code": 0, "message": None}
         assert verb == "pr-closure-ensure", verb
         return {"body": payload["body"]}
 
@@ -164,9 +169,10 @@ def test_ship_gh_create_failure_abandons_and_requeues(tmp_path, graph):
 
 # ── x-9b87: stale-base guard parity with worker/ship.py ──────────────────────
 # The batch lane opens its PR via its own `gh pr create`, so it must run the
-# same `check_stale_base` guard the /fno:ship pr create + worker paths run. On stale it
-# routes through the EXISTING abandon path (never `refuse`, which would wedge
-# the batch open and re-hit the same stale worktree every daemon tick).
+# same stale-base guard the /fno:ship pr create + worker paths run (the
+# binary's pr-base-check verb). On stale it routes through the EXISTING abandon
+# path (never `refuse`, which would wedge the batch open and re-hit the same
+# stale worktree every daemon tick).
 
 
 def test_ship_stale_base_abandons_and_skips_create(tmp_path, graph, monkeypatch):
@@ -177,8 +183,8 @@ def test_ship_stale_base_abandons_and_skips_create(tmp_path, graph, monkeypatch)
     B.join_batch(domain="code", node_id="x-1", root=tmp_path)
     B.join_batch(domain="code", node_id="x-2", root=tmp_path)
     monkeypatch.setattr(
-        "fno.pr._preflight.check_stale_base",
-        lambda *a, **k: (1, "stale base: HEAD is 30h behind origin/main"),
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, **k: {"code": 3, "message": "stale base: HEAD is 30h behind origin/main"},
     )
     gh = FakeGh()
     r = B.ship_batch(domain="code", root=tmp_path, run=gh)
@@ -253,7 +259,6 @@ def test_ship_fresh_base_creates_pr_and_duplicate_refusal_abandons(
     graph([_member_node("x-1")])
     _open(tmp_path)
     B.join_batch(domain="code", node_id="x-1", root=tmp_path)
-    monkeypatch.setattr("fno.pr._preflight.check_stale_base", lambda *a, **k: (0, None))
     monkeypatch.setattr(
         "fno.pr._preflight.check_duplicate_pr", lambda *a, **k: ""
     )
@@ -294,8 +299,13 @@ def test_ship_stale_guard_failopen_still_creates_pr(tmp_path, graph, monkeypatch
     _open(tmp_path)
     B.join_batch(domain="code", node_id="x-1", root=tmp_path)
     monkeypatch.setattr(
-        "fno.pr._preflight.check_stale_base",
-        lambda *a, **k: (0, "could not refresh origin/main; stale-base check skipped"),
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, **k: {
+            "code": 0,
+            "message": "could not refresh origin/main; stale-base check skipped",
+        }
+        if verb == "pr-base-check"
+        else {"body": payload["body"]},
     )
     monkeypatch.setattr(
         "fno.pr._preflight.check_duplicate_pr", lambda *a, **k: ""

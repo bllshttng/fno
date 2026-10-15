@@ -462,11 +462,12 @@ def ship_batch(
                 # the same verdict the stale-base guard below enforces, so the
                 # lane abandons and requeues instead of noop-looping on a
                 # refusal only a rebase can clear.
-                from fno.pr._preflight import check_stale_base
+                from fno.rust_binary import verb_call
 
-                base_code, base_msg = check_stale_base(
-                    base=f"origin/{base}", cwd=worktree
+                answer = verb_call(
+                    "pr-base-check", {"base": f"origin/{base}", "cwd": worktree}
                 )
+                base_code, base_msg = answer["code"], answer["message"]
                 if base_code != 0:
                     _abandon_and_requeue(domain, members, root)
                     return ShipResult(
@@ -505,15 +506,18 @@ def ship_batch(
 
     if pr_url is None:
         # Stale-base guard parity: the batch lane is the third
-        # gh-pr-create site, so it runs the same check_stale_base the
-        # /fno:ship pr create + worker/ship.py paths run. The batch worktree is born off
+        # gh-pr-create site, so it runs the same stale-base guard (the
+        # binary's pr-base-check) the /fno:ship pr create + worker/ship.py paths run. The batch worktree is born off
         # origin/main by `fno agents workspace worktree ensure`, so this is defense-in-depth for a
         # future refactor - refuse via the EXISTING abandon path (never a wedged
         # `refuse`: a batch left open would re-hit the same stale worktree every
         # daemon tick). Guard precedes the push so a stale branch is never pushed.
-        from fno.pr._preflight import check_stale_base
+        from fno.rust_binary import verb_call
 
-        base_code, base_msg = check_stale_base(base=f"origin/{base}", cwd=worktree)
+        answer = verb_call(
+            "pr-base-check", {"base": f"origin/{base}", "cwd": worktree}
+        )
+        base_code, base_msg = answer["code"], answer["message"]
         if base_msg and base_code == 0:
             # Fail-open path: the guard was SKIPPED (git missing / fetch flake).
             # Say so - a silently-skipped guard must not read as a clean pass.
