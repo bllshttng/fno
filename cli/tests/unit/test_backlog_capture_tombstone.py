@@ -110,7 +110,7 @@ def test_backlog_capture_hidden_but_invocable(native_backlog_door) -> None:
         [str(binary), "backlog", "capture", "--help"],
         capture_output=True, text=True, env=_os.environ, timeout=60,
     )
-    assert cap.exit_code == 0, cap.stderr
+    assert cap.returncode == 0, cap.stderr
     assert "backlog capture" in cap.stdout
     assert "add" in cap.stdout and "tidy" in cap.stdout
 
