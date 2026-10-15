@@ -12,6 +12,7 @@ The parse, plumbing, and derivation halves moved with the init decision layer in
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 

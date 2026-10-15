@@ -9,7 +9,6 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-import os
 from types import SimpleNamespace
 
 import pytest
