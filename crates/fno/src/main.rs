@@ -485,6 +485,21 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "reply" => {
+            // Help stays Python's, so `reply --help` still prints the full
+            // local verb's docs; only the routed tail is claimed.
+            if tail
+                .iter()
+                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+            {
+                return None;
+            }
+            Some(Role::RemoteMail(
+                std::iter::once(OsString::from("reply"))
+                    .chain(tail.to_vec())
+                    .collect(),
+            ))
+        }
         "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -836,7 +851,7 @@ fn main() {
             &rest,
         )),
         Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail send|peek <name>@<host>",
+            "fno agents mail send|peek|reply <name>@<host>",
             &["mail-remote"],
             &rest,
         )),
@@ -1163,6 +1178,24 @@ mod tests {
                 false
             ),
             Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
+        );
+        // The cross-host reply claims its verb on both mounts, tail
+        // included; help stays with the Python reply.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "reply", "--to", "fmail-x", "hi"]),
+                false
+            ),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "reply", "--to", "fmail-x", "hi"]), false),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "reply", "--help"]), false),
+            Role::Forward,
+            "help stays Python's"
         );
     }
 
