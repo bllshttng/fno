@@ -341,15 +341,34 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
             }
         }
     }
-    let parsed = verb_call(
+    // A parse read that fails refuses like every other hold-read fault: the
+    // leg crashed here, which is the same fail-closed answer in a different
+    // shape - never a silent narrowing of the candidate set.
+    let parsed = match verb_call(
         "pr-closure-parse",
         &json!({"body": body}),
         Duration::from_secs(30),
-    );
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            hold_refusal(
+                &mut flow,
+                pr,
+                &base,
+                &format!(
+                    "dispatch-hold-invalid: hold lookup unavailable: the closure-line parse \
+                     could not run: {}; retry the hold lookup; do not edit the PR body",
+                    e.message
+                ),
+            );
+            return flow;
+        }
+    };
     for claimed in parsed
-        .ok()
-        .and_then(|v| v.get("ids").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
+        .get("ids")
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
     {
         if let Some(id) = claimed.as_str() {
             if !candidates.iter().any(|c| c == id) {

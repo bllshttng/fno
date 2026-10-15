@@ -81,7 +81,6 @@ pub fn run_op(op: &str, payload: &Value) -> String {
 /// shape, never to a wrong one.
 pub(crate) fn status_cache_key(payload: &Value) -> Value {
     use sha2::{Digest, Sha256};
-    use std::process::Command;
 
     let cwd = PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
     let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);

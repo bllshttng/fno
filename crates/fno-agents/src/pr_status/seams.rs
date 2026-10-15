@@ -257,7 +257,7 @@ pub(crate) fn hold_verdict(cwd: &Path, pr: u64, pr_json: Option<&Value>) -> Hold
             };
         }
     }
-    let out = crate::merge_verb::hold_check_flow(pr as i64, cwd);
+    let mut out = crate::merge_verb::hold_check_flow(pr as i64, cwd);
     let mut stderr = String::new();
     for (err, line) in std::mem::take(&mut out.lines) {
         if err {
