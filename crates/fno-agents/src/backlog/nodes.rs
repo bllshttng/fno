@@ -2112,6 +2112,35 @@ fn do_quality(rows: &[(String, String)]) -> Option<(&'static str, String)> {
     unreadable.map(|h| ("unreadable", h))
 }
 
+/// A store-shaped archive db for a test outside this module: one typed
+/// nodes row and one parked nodes_raw row per named id, in tables holding
+/// only the columns the pool reader selects. The fixture has to come from
+/// here because both tables are owned by this module. It is a bare file,
+/// deliberately not `backlog::open`: the store door walks a legacy-spelled
+/// anchor to its db/ twin and would flip the file under test to WAL.
+#[cfg(test)]
+pub(crate) fn archive_pool_fixture(path: &std::path::Path, node_ids: &[&str], raw_ids: &[&str]) {
+    let connection = Connection::open(path).unwrap();
+    let mut batch = String::from(
+        "CREATE TABLE nodes (\
+             id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, slug TEXT NOT NULL, \
+             title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL);\n\
+         CREATE TABLE nodes_raw (\
+             id TEXT PRIMARY KEY, ordinal INTEGER NOT NULL, body TEXT NOT NULL);\n",
+    );
+    for id in node_ids {
+        batch.push_str(&format!(
+            "INSERT INTO nodes VALUES ('{id}', 0, 's', 't', 'done', 'p2');\n"
+        ));
+    }
+    for id in raw_ids {
+        batch.push_str(&format!(
+            "INSERT INTO nodes_raw VALUES ('{id}', 0, '{{}}');\n"
+        ));
+    }
+    connection.execute_batch(&batch).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

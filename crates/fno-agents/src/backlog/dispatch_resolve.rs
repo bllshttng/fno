@@ -2,8 +2,9 @@
 //!
 //! Ports `fno/agents/harness_map.py` - `resolve_dispatch` and the seams it
 //! owns (`normalize_command`, `dispatch_command`, `substrate_default`,
-//! `thread_seatable`, `spawn_state`, `footnote_verbs`, and the
-//! skill-presence probe `fno.review_capability.resolve_skill_presence`)
+//! `thread_seatable`, `spawn_state`, `footnote_verbs`, and the shared
+//! skill-presence probe, native in `skill_presence` here since the
+//! review-capability port folded the Python twin into it)
 //! over the native capability table (`HarnessContract::packaged`) and the
 //! shared merge-posture vocabulary. Refusal texts are byte-matched to the
 //! Python owner; the decision log rides the result so a receipt answers
@@ -207,34 +208,93 @@ fn claude_skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// The dispatch-verb registry's `requires == "skill"` gate: the shared
-/// probe's three outcomes, narrowed to the one the resolver refuses on.
-/// `unverifiable` degrades to admitted (the stop gate is the backstop);
-/// only a searched-and-absent answer refuses.
-fn skill_presence_refusal(name: &str, context: &str) -> Option<String> {
+/// The shared skill-presence probe, byte-matched to the Python resolver's
+/// three outcomes: found -> satisfiable, absent with one root readable ->
+/// unavailable, unanswerable -> unverifiable (degrades rather than bricking
+/// a run). The harness gate lives HERE, so a codex dispatch probing Claude's
+/// roots answers `unverifiable` instead of `unavailable` - the dual this
+/// port collapses (the Python resolver gated on harness; the Rust one
+/// probed every harness).
+pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'static str, String) {
+    skill_presence_in(name, harness, context, claude_skill_roots())
+}
+
+/// The roots are injected so the absent/unverifiable boundary is testable
+/// without mutating HOME (cargo runs unit tests in parallel).
+pub(crate) fn skill_presence_in(
+    name: &str,
+    harness: &str,
+    context: &str,
+    roots: Vec<std::path::PathBuf>,
+) -> (&'static str, String) {
+    let proceed = "Proceeding - if the gate does go unmet, run the skill by hand";
+    if harness != "claude" {
+        return (
+            "unverifiable",
+            format!(
+                "needs a resolvable skill; footnote only knows Claude's skill \
+                 roots and this is harness={harness}. {proceed}"
+            ),
+        );
+    }
     if name.contains(':') {
-        return None;
+        return (
+            "unverifiable",
+            format!(
+                "{} is a plugin-qualified skill; footnote does not read the \
+                 plugin cache layout, so availability cannot be verified. {proceed}",
+                py_repr(name)
+            ),
+        );
     }
     let mut searched: Vec<String> = Vec::new();
-    for root in claude_skill_roots() {
+    for root in &roots {
         if !root.is_dir() {
             continue;
         }
         searched.push(root.to_string_lossy().to_string());
         if root.join(name).join("SKILL.md").is_file() {
-            return None;
+            return (
+                "satisfiable",
+                format!("skill resolves at {}", root.join(name).display()),
+            );
         }
     }
     if searched.is_empty() {
-        return None;
+        let looked: Vec<String> = roots
+            .iter()
+            .map(|r| r.to_string_lossy().to_string())
+            .collect();
+        return (
+            "unverifiable",
+            format!(
+                "no skill root exists on this host (looked for {}), so \
+                 availability cannot be verified. {proceed}",
+                looked.join(", ")
+            ),
+        );
     }
-    Some(format!(
-        "skill {} resolves in none of the roots searched ({}); install it \
-         there or change {}",
-        py_repr(name),
-        searched.join(", "),
-        context
-    ))
+    (
+        "unavailable",
+        format!(
+            "skill {} resolves in none of the roots searched ({}); install \
+             it there or change {}",
+            py_repr(name),
+            searched.join(", "),
+            context
+        ),
+    )
+}
+
+/// The dispatch-verb registry's `requires == "skill"` gate: the shared
+/// probe's three outcomes, narrowed to the one the resolver refuses on.
+/// `unverifiable` degrades to admitted (the stop gate is the backstop);
+/// only a searched-and-absent answer refuses.
+fn skill_presence_refusal(name: &str, harness: &str, context: &str) -> Option<String> {
+    match skill_presence(name, harness, context) {
+        ("unavailable", reason) => Some(reason),
+        _ => None,
+    }
 }
 
 /// Translate a claude-syntax footnote slash command to the harness's
@@ -557,9 +617,11 @@ pub fn resolve_dispatch_with(
                     .rsplit(':')
                     .next()
                     .unwrap_or(head);
-                if let Some(reason) =
-                    skill_presence_refusal(skill_name, "config.dispatch.verb_registry")
-                {
+                if let Some(reason) = skill_presence_refusal(
+                    skill_name,
+                    &chosen_harness,
+                    "config.dispatch.verb_registry",
+                ) {
                     return Err(reason);
                 }
             }

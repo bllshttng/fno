@@ -241,7 +241,6 @@ pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
-pub mod launch_exec;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
@@ -346,6 +345,7 @@ pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
 pub(crate) mod owner_ladder;
+pub mod pane_claim;
 pub mod pane_keeper;
 pub mod pane_rebind;
 pub mod pane_relaunch;
@@ -421,6 +421,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod review_capability;
 pub mod review_doors;
 pub mod review_freshness;
 pub mod review_level;
@@ -488,6 +489,7 @@ pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub(crate) mod spawn_watch;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -1562,6 +1564,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A launch the spawn gate or the dispatch door refused before any
     // worker existed; the feed projects it so a refused launch shows.
     "agent_spawn_refused",
+    // The first-turn watch saw a launch's first assistant line; carries the
+    // latency from the call per harness, substrate and machine.
+    "spawn_first_turn",
     // A reaped session came back (client-emitted): one event per revive
     // naming the verb, the actor session, the prior name and the session id.
     "agent_revived",
@@ -1902,6 +1907,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (unknown session / third distinct id) without storing.
     "session_report_stored",
     "session_report_dropped",
+    // A foreground SessionStart report bound its row to a proven pane claim
+    // (pane_claim.rs), moving it off a stale or absent mux ref.
+    "session_pane_rebound",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",

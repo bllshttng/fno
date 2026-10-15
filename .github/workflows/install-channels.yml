@@ -126,6 +126,16 @@ jobs:
             expect: pass
             node: ''
             readme: ['bash scripts/setup.sh']
+          - id: setup-scratch-home
+            runs-on: ubuntu-latest
+            expect: pass
+            node: ''
+            readme: []
+          - id: setup-scratch-home-macos
+            runs-on: macos-14
+            expect: pass
+            node: ''
+            readme: []
           - id: readme-commands
             runs-on: ubuntu-latest
             expect: pass

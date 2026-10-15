@@ -1210,11 +1210,11 @@ fn affirmative(value: &toml::Value) -> bool {
 /// to a review posture below the self_review floor (rank 3), so GitHub-native
 /// auto-merge must NOT be armed.
 ///
-/// This is the GitHub-native arm of the floor the Python merge verb enforces
-/// on every granted merge (`automerge_floor_refusal` in
-/// `fno/review_capability.py`, applied by the manifest arm and the
-/// durable-grant resolver). Without it a below-floor repo that can never pass
-/// the merge verb could still hand the merge to GitHub at the green terminal.
+/// This is now the ONE enforcement arm of that floor: the Python twin
+/// (`automerge_floor_refusal` in `fno/review_capability.py`) deleted with the
+/// module, which had no production caller left. Without this arm a
+/// below-floor repo that can never pass the merge verb could still hand the
+/// merge to GitHub at the green terminal.
 ///
 /// The below-floor set is derived from the legacy-inference mirror in
 /// `loopcheck::resolve_posture_config`: only three cells resolve below rank 3
