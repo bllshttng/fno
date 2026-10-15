@@ -128,7 +128,7 @@ pub fn example_inventory() -> (BTreeMap<String, toml::Value>, Vec<String>) {
 /// Parse one config file into dotted keys. `Ok(None)` when the file is
 /// absent; `Err` names the file, because a config that cannot be read must
 /// stop the inventory rather than silently answer "default".
-fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
+pub(crate) fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -242,8 +242,30 @@ pub fn lookup_key(key: &str) -> Option<String> {
     )
 }
 
+/// The effective value of one dotted key as its raw TOML value, project
+/// beating global, an unreadable or absent file counting as unset (the
+/// fail-open shape [`lookup`] applies). [`lookup`] answers only for
+/// string-valued keys: a TOML integer or boolean reads back `None` there
+/// even when the key is set, which would flag a correctly configured
+/// machine as drifted on every check.
+pub fn lookup_value(
+    global: Option<&Path>,
+    project: Option<&Path>,
+    key: &str,
+) -> Option<toml::Value> {
+    fn file_value(path: &Path, key: &str) -> Option<toml::Value> {
+        match read_flat(path) {
+            Ok(Some(map)) => map.get(key).cloned(),
+            _ => None,
+        }
+    }
+    project
+        .and_then(|p| file_value(p, key))
+        .or_else(|| global.and_then(|g| file_value(g, key)))
+}
+
 /// The global config file, beside the state root's other durable files.
-fn global_config_path() -> PathBuf {
+pub(crate) fn global_config_path() -> PathBuf {
     crate::model_catalog::state_dir().join("config.toml")
 }
 

@@ -660,6 +660,141 @@ row_clone_setup() {
   shared_smoke "$HOME/.local/bin"
 }
 
+# setup-scratch-home: the setup verb's three report modes plus the wizard's
+# unattended refusal, scored on the fresh HOME the harness already scrubbed
+# to. The binary is built from THIS tree, not a published wheel: the wizard
+# verb ships in no release yet, so the PyPI and script channels cannot serve
+# this row.
+row_setup_scratch_home() {
+  assert_clean_machine
+  local tree="$BASE/tree"
+  copy_tree_to_scratch "$tree"
+  if [ -n "$RUNNER_CARGO_BIN" ]; then
+    # The image's rustup proxies live here; RUSTUP_HOME stays at its default.
+    # Some images ship rustup with no default toolchain; pick one.
+    export PATH="$RUNNER_CARGO_BIN:$PATH"
+    rustup show active-toolchain >/dev/null 2>&1 || rustup default stable
+  else
+    # No rust on the image: install a private minimal toolchain.
+    export RUSTUP_HOME="$BASE/rustup"
+    export CARGO_HOME="$BASE/cargo-home"
+    run_capture sh -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path'
+    if [ "$RC" -ne 0 ] || [ ! -x "$CARGO_HOME/bin/cargo" ]; then
+      miss "rustup" "rustup install rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+      return 0
+    fi
+    export PATH="$CARGO_HOME/bin:$PATH"
+  fi
+  # Fresh CARGO_HOME for the preinstalled branch too, so the build lands in
+  # scratch instead of the image's own store.
+  export CARGO_HOME="$BASE/cargo-home"
+  mkdir -p "$CARGO_HOME"
+  run_capture_bounded 1200 cargo install --path "$tree/crates/fno"
+  if [ "$RC" -ne 0 ] || [ ! -x "$CARGO_HOME/bin/fno" ]; then
+    miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
+    return 0
+  fi
+  local fno="$CARGO_HOME/bin/fno"
+  cd "$BASE/work"
+
+  # 1. Dry run: the JSON report prints, and the scratch HOME stays untouched.
+  run_capture "$fno" config setup run --dry-run --json
+  if [ "$RC" -ne 0 ]; then
+    miss "dry-run" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+  else
+    printf '%s\n' "$OUT"
+    if printf '%s' "$OUT" | python3 -c '
+import json, sys
+rep = json.load(sys.stdin)
+missing = [k for k in ("proposed", "verified", "rows", "next_action") if k not in rep]
+if missing:
+    sys.exit("missing fields: %s" % ", ".join(missing))
+'; then
+      pass "dry-run" "the dry-run report carries the contract fields"
+    else
+      miss "dry-run" "the dry-run report is not valid JSON with the contract fields"
+    fi
+    for f in config.toml sidecar/setup-profile.toml sidecar/setup-done; do
+      if [ -e "$HOME/.fno/$f" ]; then
+        miss "dry-run-write" "--dry-run wrote $HOME/.fno/$f"
+      fi
+    done
+  fi
+
+  # 2. Batch apply: exits 0 under --json, proposes the approve steps, and
+  # never loads a launchd agent by itself.
+  run_capture "$fno" config setup run --yes --json
+  if [ "$RC" -ne 0 ]; then
+    miss "apply" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+  else
+    printf '%s\n' "$OUT"
+    if printf '%s' "$OUT" | python3 -c '
+import json, sys
+rep = json.load(sys.stdin)
+if not rep.get("proposed"):
+    sys.exit("the batch apply proposed nothing")
+'; then
+      pass "apply" "the batch apply proposed its approve steps"
+    else
+      miss "apply" "the --yes report proposed nothing"
+    fi
+  fi
+  if [ "$(uname -s)" = "Darwin" ]; then
+    run_capture launchctl list
+    case "$OUT" in
+      *sh.fno*) miss "launchagents" "an sh.fno agent loaded under --yes" ;;
+      *) pass "launchagents" "no sh.fno agent loaded under --yes" ;;
+    esac
+  fi
+
+  # 3. Drift check: on a just-applied machine it reads 0 (clean) or 1 (drift
+  # rows); any other code is a crash.
+  run_capture "$fno" config setup run --check --json
+  if [ "$RC" -ne 0 ] && [ "$RC" -ne 1 ]; then
+    miss "check" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+  else
+    printf '%s\n' "$OUT"
+    if printf '%s' "$OUT" | python3 -c 'import json, sys; json.load(sys.stdin)'; then
+      pass "check" "the drift check reports valid JSON at exit $RC"
+    else
+      miss "check" "the --check report is not valid JSON"
+    fi
+  fi
+
+  # 4. The wizard refuses an unattended stdin: exit 2 with the refusal line.
+  run_capture sh -c '"$1" do wizard </dev/null' sh "$fno"
+  printf '%s\n' "$OUT"
+  if [ "$RC" -ne 2 ]; then
+    miss "wizard" "rc=$RC, want 2"
+  elif ! printf '%s' "$OUT" | grep -qF "fno do wizard needs a person on stdin."; then
+    miss "wizard" "exit 2 but the refusal line is missing"
+  else
+    pass "wizard" "unattended stdin is refused with exit 2 and the refusal line"
+  fi
+
+  # 5. Linux has no launchd: forcing the service step lands a needs_human row.
+  if [ "$(uname -s)" != "Darwin" ]; then
+    run_capture "$fno" config setup run --yes --json --only pr-watcher
+    if [ "$RC" -ne 0 ]; then
+      miss "linux-service" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+    else
+      printf '%s\n' "$OUT"
+      if printf '%s' "$OUT" | python3 -c '
+import json, sys
+rep = json.load(sys.stdin)
+rows = rep.get("rows", [])
+hit = [r for r in rows if r.get("list") == "needs_human" and r.get("code") == "service_platform"]
+if not hit:
+    sys.exit("no needs_human service_platform row among %d rows" % len(rows))
+'; then
+        pass "linux-service" "the forced service step reports needs_human service_platform"
+      else
+        miss "linux-service" "the forced service step is not needs_human service_platform"
+      fi
+    fi
+  fi
+}
+
 row_readme_commands() {
   run_capture bash "$REPO_ROOT/scripts/ci/check-readme-install-commands.sh"
   if [ "$RC" -eq 0 ]; then
@@ -685,6 +820,7 @@ run_row() {
     cargo)                 row_cargo ;;
     skills-sh)             row_skills_sh ;;
     clone-setup)           row_clone_setup ;;
+    setup-scratch-home)    row_setup_scratch_home ;;
     readme-commands)       row_readme_commands ;;
     *)
       printf 'FAIL[row] unknown row id: %s\n' "$ROW"

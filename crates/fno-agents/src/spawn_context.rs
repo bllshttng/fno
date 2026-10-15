@@ -447,7 +447,13 @@ pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
         if SEGMENT_TOKENS.contains(&basename) {
             return Some(basename_into_harness(basename));
         }
-        let stem = basename.rsplit('.').next().unwrap_or("");
+        // The part BEFORE the last dot, not after: `rsplit('.').next()`
+        // answers the extension ("js", "exe"), the opposite of "gemini.js ->
+        // gemini" this is meant to implement. Measured against a live
+        // opencode install: its binary is literally `opencode.exe` (a
+        // bun-compiled executable), and the old `.next()` form matched
+        // neither it nor any other dotted name, ever.
+        let stem = basename.rsplit_once('.').map_or(basename, |(s, _)| s);
         if SEGMENT_TOKENS.contains(&stem) {
             return Some(basename_into_harness(stem));
         }
@@ -1349,6 +1355,22 @@ mod tests {
                 .find(|(name, _)| *name == k)
                 .map(|(_, v)| v.to_string())
         }
+    }
+
+    #[test]
+    fn harness_name_of_command_matches_a_dotted_executable_name() {
+        // The part BEFORE the last dot is the stem, not after: a bun/node
+        // compiled binary ships as `<name>.exe`, and a script ships as
+        // `<name>.js` - both name the harness, not the dot-suffix.
+        assert_eq!(
+            harness_name_of_command("/Users/x/.bun/install/global/node_modules/@opencode/cli/bin/opencode.exe serve --service"),
+            Some("opencode")
+        );
+        assert_eq!(harness_name_of_command("gemini.js --flag"), Some("gemini"));
+        // A bare name with no extension still matches on basename alone.
+        assert_eq!(harness_name_of_command("codex"), Some("codex"));
+        // An unrelated dotted name matches nothing.
+        assert_eq!(harness_name_of_command("node.exe server.js"), None);
     }
 
     #[test]

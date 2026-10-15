@@ -38,7 +38,7 @@
 #                      who manage their own dotfiles)
 #   FNO_NO_WIRE        set to any non-empty value to skip the plugin wiring step
 #                      (every agent CLI on PATH gets the fno plugin otherwise;
-#                      `fno config setup wizard` still chooses by hand)
+#                      `fno do wizard` still chooses by hand)
 #
 # The channel is read from the TREE this script sits in: the nightly
 # tag stamps a dev version into .claude-plugin/plugin.json, so an install run
@@ -496,7 +496,7 @@ wire_harnesses() {
 	[ -x "$_mux" ] || return 0
 	say "wiring the fno plugin into detected agent CLIs (set FNO_NO_WIRE to skip this)..."
 	if ! "$_mux" config setup auto-wire >&2; then
-		say "plugin wiring did not finish; run 'fno config setup wizard' to wire by hand."
+		say "plugin wiring did not finish; run 'fno do wizard' to wire by hand."
 	fi
 }
 
