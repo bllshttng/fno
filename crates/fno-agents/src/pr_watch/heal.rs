@@ -76,7 +76,11 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
 
     // One heal per window: concurrent SessionStarts reinstall at most once.
     // A held gate (or a gate that cannot run) reads as someone else healing,
-    // never as a reason to abort the hook.
+    // never as a reason to abort the hook. The gate sits at the global
+    // claims root, the root the Python leaf passed explicitly: `pr-watch` is
+    // not a global key prefix, so a rootless claim would land in the repo
+    // space and two machines would never meet at one gate.
+    let flight_root = crate::claims_root::global_claims_root();
     let holder = format!(
         "pr-watch-heal:{}:{}",
         std::process::id(),
@@ -91,7 +95,7 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         FLIGHT_TTL_MS,
         FLIGHT_SCOPE,
         Some(std::process::id()),
-        None,
+        flight_root.clone(),
         None,
     ) {
         FlightGate::Acquired(held_by) => held_by,
@@ -119,8 +123,9 @@ pub(crate) fn leaf_output(args: &[String]) -> (String, i32) {
         &status::state_root(&cwd),
     );
     // The TTL plus the pid probe retire a lost holder; a failed release must
-    // never mask the cure's outcome.
-    let _ = crate::claims::release(FLIGHT_KEY, &held_by, None, None);
+    // never mask the cure's outcome. The release reads the same root the
+    // acquire took, or it releases nothing.
+    let _ = crate::claims::release(FLIGHT_KEY, &held_by, flight_root.as_deref(), None);
     (
         format!("pr-watch heal: {msg}\n"),
         if rc != 0 { 1 } else { 0 },
