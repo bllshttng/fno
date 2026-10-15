@@ -1115,16 +1115,23 @@ mod tests {
             SendVerdict::Pending
         );
         assert_eq!(send_verdict(None, || unreachable!()), SendVerdict::Pending);
-        // The exit-14 row ends like a delivered one: one inject, the next
-        // beat reads the seen ledger instead of re-sending, and the retry
-        // ledger holds no entry for it.
+        // The exit-14 row ends like a delivered one: one inject, and the
+        // next beat reads the seen ledger instead of re-sending. The real
+        // inject_row writes that ledger as its side effect, so the fake
+        // simulates the write; the loop itself only reads it.
         let exit14_home = std::path::Path::new("/tmp/fno-mail-arm-exit14-test");
         let _ = std::fs::remove_dir_all(exit14_home);
         std::fs::create_dir_all(exit14_home).unwrap();
         let mut injects = 0;
-        let mut delivered_once = |_row: &crate::mail_bus::BusRow| {
+        let mut delivered_once = |row: &crate::mail_bus::BusRow| {
+            use std::io::Write as _;
             injects += 1;
             assert_eq!(injects, 1, "the exit-14 row was injected twice");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(crate::mail_remote::seen_path(exit14_home))
+                .and_then(|mut f| writeln!(f, "{}", row.msg_id));
             true
         };
         assert_eq!(
@@ -1143,8 +1150,8 @@ mod tests {
                 exit14_home,
                 &mut delivered_once
             ),
-            1,
-            "the second beat delivers from the seen ledger, no second send"
+            0,
+            "the second beat reads the seen ledger and re-sends nothing"
         );
         assert_eq!(injects, 1, "the durable demotion ran the local send once");
         assert!(
