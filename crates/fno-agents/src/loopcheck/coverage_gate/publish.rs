@@ -93,7 +93,10 @@ pub(crate) fn publish(cwd: &Path, pr: u64, head: Option<&str>) -> (bool, String)
         } else if v.state == GateState::Covered && v.note == NO_LANE_NOTE {
             // No review lane configured: the merge gate does not apply. Say so
             // on the status instead of reading as a pass on nothing.
-            ("success", NO_LANE_NOTE.to_string())
+            (
+                "success",
+                "no review lane configured; merge ungated".to_string(),
+            )
         } else if v.state == GateState::Covered {
             // Covered, but the row pinned no head. The verdict still stands; it
             // just cannot name the sha it was computed at.
@@ -124,7 +127,21 @@ pub(crate) fn publish(cwd: &Path, pr: u64, head: Option<&str>) -> (bool, String)
                 truncate_description(&refusal_line(&v.refusal, &v.note)),
             )
         };
-    post_pair(cwd, &head, (required_state, required_description), true)
+    // POST on the head the row pins, not one the caller guessed at: the
+    // verdict describes that sha and no other. The override arm above
+    // returns its own pin; every other covered-with-head answer moves the
+    // post to the pinned sha, the diagnostic sentence included.
+    let post_head = if v.state == GateState::Covered && !v.covered_head.is_empty() {
+        v.covered_head.clone()
+    } else {
+        head
+    };
+    post_pair(
+        cwd,
+        &post_head,
+        (required_state, required_description),
+        true,
+    )
 }
 
 /// Attempt BOTH status posts even when the first fails: a failed

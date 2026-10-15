@@ -389,13 +389,19 @@ def run_verify_merged(
     # an opt-in operator step a fresh install has not applied. The merge
     # verb's own gate, not a second truth table; no review lane configured
     # reads COVERED inside the gate itself.
-    from fno.pr import _coverage_gate
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    gate_state, gate_refusal, gate_head, gate_note = _coverage_gate.coverage_verdict(
-        int(pr_number), repo, recompute=True
-    )
-    if gate_state != _coverage_gate.COVERED:
-        line = _coverage_gate.refusal_line(gate_refusal, gate_note)
+    try:
+        answer = verb_call(
+            ["review-coverage", "op"],
+            {"op": "verdict", "pr": int(pr_number), "cwd": repo, "recompute": True},
+            timeout=300,
+        )
+    except VerbUnavailable as exc:
+        answer = {"state": 4, "line": f"coverage verdict unavailable: {exc}"}
+    gate_head = answer.get("covered_head") or ""
+    if answer.get("state") != 0:
+        line = answer.get("line") or ""
         _emit_audit(
             repo_root,
             state_file,
