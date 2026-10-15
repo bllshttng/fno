@@ -29,11 +29,15 @@ pub fn run(argv: &[String]) -> i32 {
     let mut it = argv.iter().map(String::as_str);
     while let Some(arg) = it.next() {
         match arg {
-            "--base" => {
-                if let Some(value) = it.next() {
-                    base = value;
+            "--base" => match it.next() {
+                Some(value) => base = value,
+                None => {
+                    eprintln!(
+                        "usage: fno-agents pr-base-check --base <ref> (--base needs a value)"
+                    );
+                    return 2;
                 }
-            }
+            },
             other => {
                 eprintln!("usage: fno-agents pr-base-check [--base <ref>] (got {other})");
                 return 2;
