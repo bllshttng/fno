@@ -769,10 +769,53 @@ fn main() {
     // verb carries the brake for every door; this front door adds the
     // census and the ceiling. The same verb from a human's shell has no
     // identity to carry and admits.
+    // The floor setter: `fno agents spawn --floor N` writes the cap floor
+    // here, before any forwarding, so the Python CLI never sees the flag.
+    // Alone it prints the receipt and exits, and never admits - every caller
+    // can set the user's floor. With a payload the receipt goes to stderr,
+    // keeping stdout clean for the spawn receipt, and admission and the
+    // forward run on the peeled argv.
+    let mut args = args;
     if let (Some("agents"), Some("spawn")) = (
         args.first().and_then(|a| a.to_str()),
         args.get(1).and_then(|a| a.to_str()),
     ) {
+        let names: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let peeled = match fno::spawn_floor::peel(&names) {
+            Ok(peeled) => peeled,
+            Err(message) => {
+                eprintln!("fno agents spawn --floor: {message}");
+                std::process::exit(2);
+            }
+        };
+        if peeled.help {
+            eprintln!(
+                "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
+                 then spawn if a name or payload follows. The front door reads this flag, \
+                 so the list below does not show it."
+            );
+        }
+        // Help forwards with no write, even when a floor came with it.
+        if let Some(floor) = peeled.floor.filter(|_| !peeled.help) {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match fno::spawn_floor::set_floor(floor, &cwd) {
+                Ok(receipt) => {
+                    if peeled.rest.len() == 2 {
+                        println!("{receipt}");
+                        std::process::exit(0);
+                    }
+                    eprintln!("{receipt}");
+                }
+                Err(err) => {
+                    eprintln!("fno agents spawn --floor: {}", err.message);
+                    std::process::exit(err.code);
+                }
+            }
+        }
+        args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {
             eprintln!("fno agents spawn: {failure}");
             std::process::exit(1);
