@@ -31,13 +31,13 @@ pub const DEFAULT_FLOOR: u32 = 1;
 /// The reason an older first run stamped on a cap it guessed from the machine
 /// budget. The reader treats it as no measurement.
 const SEED_REASON: &str = "seeded from machine budget";
-/// What every soft-cap refusal names to hold the learned cap up. `fno config
-/// set` refuses this key, so the hint names the file the gate reads.
+/// What every soft-cap refusal names to hold the learned cap up. The spawn
+/// door's `--floor` writes the key.
 /// What every soft refusal says about --force.
 const FORCE_TAIL: &str =
     "For one spawn the user ordered: --force. It passes every soft limit and never the RAM floor.";
 pub const MAX_LIVE_REMEDY: &str = "raise agents.max_live in ~/.fno/config.toml";
-pub const FLOOR_REMEDY: &str = "set [agents.capacity] floor = N in ~/.fno/config.toml";
+pub const FLOOR_REMEDY: &str = "fno agents spawn --floor N";
 
 /// `[agents.capacity]` thresholds, defaults mirroring the runaway arm's band.
 #[derive(Debug, Clone, Copy)]
@@ -227,9 +227,8 @@ impl Effective {
     pub fn override_hint(&self) -> Option<String> {
         (self.cap < self.ceiling).then(|| {
             format!(
-                "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To stop it \
-                 learning this low: {FLOOR_REMEDY} (the gate also reads the project \
-                 .fno/config.toml). {FORCE_TAIL}",
+                "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To hold \
+                 the cap at N or above: {FLOOR_REMEDY}. {FORCE_TAIL}",
                 self.learned_cap(),
                 self.ceiling
             )
