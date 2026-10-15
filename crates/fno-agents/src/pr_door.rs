@@ -14,6 +14,13 @@ pub fn run_verb(verb: &str, args: &[String]) -> Option<i32> {
         "pr-create" => Some(crate::pr_create::run_pr_create_verb(&args[1..])),
         "pr-base-lineage-check" => Some(crate::gate_probes::run_base_lineage_verb(&args[1..])),
         "pr-merge-result-check" => Some(crate::pr_merge_result::run_merge_result_verb(&args[1..])),
+        // verb_call serves the JSON payload on stdin with no argv; the CLI
+        // forward passes `--base`. The arg presence picks the transport.
+        "pr-base-check" => Some(if args.len() > 1 {
+            crate::pr_base_check::run(&args[1..])
+        } else {
+            crate::pr_base_check::run_stdin()
+        }),
         _ => None,
     }
 }

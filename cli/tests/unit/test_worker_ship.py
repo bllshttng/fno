@@ -21,6 +21,11 @@ def _trailer_ensure_passthrough(monkeypatch):
     import fno.rust_binary as rb
 
     def _passthrough(verb, payload, unavailable=None, **kwargs):
+        if verb == "pr-base-check":
+            # The stale-base guard answers from the binary now. Every test in
+            # this file wants the clear pass; a refusal case patches this seam
+            # itself.
+            return {"code": 0, "message": None}
         assert verb == "pr-closure-ensure", verb
         return {"body": payload["body"]}
 
@@ -109,8 +114,6 @@ def test_ac2_hp_ship_creates_pr(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship
@@ -147,8 +150,6 @@ def test_ac2_hp_ship_writes_artifact(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship
@@ -357,8 +358,6 @@ def test_ac1_hp_ship_does_not_arm_automerge(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from importlib import reload
@@ -408,8 +407,6 @@ def test_ac2_hp_ship_stamps_node_pr_link(tmp_path, monkeypatch):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship
@@ -452,8 +449,6 @@ def test_ac2_err_stamp_failure_reports_incomplete_delivery(tmp_path, monkeypatch
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship
@@ -486,8 +481,6 @@ def test_no_node_id_skips_stamp(tmp_path):
     ]
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship
@@ -518,7 +511,8 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     refusal = "stale base: your branch's merge-base with origin/main is 3.0 days behind"
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(3, refusal)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, **k: {"code": 3, "message": refusal},
     ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
@@ -551,7 +545,10 @@ def test_guard_refusal_blocks_pr_create(tmp_path, monkeypatch):
     )
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, **k: {"code": 0, "message": None}
+        if verb == "pr-base-check"
+        else {"body": payload["body"]},
     ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=dup_refusal
     ):
@@ -584,8 +581,6 @@ def test_non_full_verification_refuses_pr_create(tmp_path, monkeypatch):
     )
 
     with patch("subprocess.run", mock_run), patch(
-        "fno.pr._preflight.check_stale_base", return_value=(0, None)
-    ), patch(
         "fno.pr._preflight.check_duplicate_pr", return_value=""
     ):
         from fno.worker.ship import ship

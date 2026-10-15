@@ -423,10 +423,7 @@ def base_check(
         "origin/main", "--base", help="Base ref to compare the branch against"
     ),
 ) -> None:
-    from fno.pr import _preflight
-
-    rc = _preflight.run_base_check(base=base)
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-check", ["--base", base])
 
 
 @pr_app.command(
