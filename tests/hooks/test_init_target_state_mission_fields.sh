@@ -51,6 +51,7 @@ TARGET_MISSION_WAVE="2" \
 TARGET_MISSION_SLUG="2026-05-13-test-slug" \
 TARGET_MISSION_FROM_MSG_ID="msg-abc-foo" \
 PATH="$TMP1/bin:$PATH" \
+FNO_AGENTS_BIN="$TMP1/bin/fno-agents" \
 FNO_TEST_SPACE="$TMP1/space" \
   bash "$INIT" >/dev/null 2>&1 \
   || fail "AC1-HP: init exited non-zero with mission vars set"
@@ -131,6 +132,7 @@ env -u TARGET_MISSION_ID \
     TARGET_START=1 \
     TARGET_INPUT="mission fields defaults" \
     PATH="$TMP2/bin:$PATH" \
+    FNO_AGENTS_BIN="$TMP2/bin/fno-agents" \
     FNO_TEST_SPACE="$TMP2/space" \
     bash "$INIT" >/dev/null 2>&1 \
   || fail "AC2-ERR: init exited non-zero with no mission vars"

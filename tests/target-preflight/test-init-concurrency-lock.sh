@@ -49,7 +49,7 @@ run_init() {
         cd "$cwd"
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH TARGET_LOCATION_OK TARGET_SIZE
         env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" FNO_TARGET_INIT_GATED=1 \
-            PATH="$cwd/bin:$PATH" FNO_TEST_SPACE="$cwd/space" \
+            PATH="$cwd/bin:$PATH" FNO_AGENTS_BIN="$cwd/bin/fno-agents" FNO_TEST_SPACE="$cwd/space" \
             "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?
