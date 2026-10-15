@@ -279,7 +279,19 @@ pub(crate) struct FileLock {
 }
 
 impl FileLock {
+    /// The panicking form, kept for the callers that own their own store and
+    /// have no degrade. The budget consult does NOT use this one; it takes
+    /// try_acquire.
     pub(crate) fn acquire(path: &Path) -> FileLock {
+        FileLock::try_acquire(path)
+            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()))
+    }
+
+    /// The fallible twin: None when the lock file cannot be created or
+    /// flocked (a read-only or uncreatable state directory). The budget
+    /// consult degrades to a lock-free read instead of aborting the process
+    /// on every gh call - the module's fail-open rule.
+    pub(crate) fn try_acquire(path: &Path) -> Result<FileLock, String> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -287,11 +299,12 @@ impl FileLock {
             .create(true)
             .append(true)
             .open(path)
-            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()));
-        unsafe {
-            libc::flock(handle.as_raw_fd(), libc::LOCK_EX);
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) };
+        if locked != 0 {
+            return Err(format!("cannot flock {}: {locked}", path.display()));
         }
-        FileLock { handle }
+        Ok(FileLock { handle })
     }
 }
 
@@ -375,7 +388,7 @@ fn refusal_line(verdict: &Verdict) -> String {
 /// so tests pass a temp path, a fixed clock, and a small cap.
 pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, state) = read_ledger(path);
 
     // Exempt shapes are admitted and write nothing: a version probe is not
@@ -581,7 +594,7 @@ pub(crate) fn admission_armed() -> bool {
 /// while a backoff is already live, so two writers reporting one refusal
 /// widen nothing.
 pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, _) = read_ledger(path);
     if now < ledger.backoff_until_ms {
         return Ok(());
@@ -1106,11 +1119,22 @@ mod tests {
                 .join("\n");
             let behind_sink = body.contains("gh_budget::output(")
                 || body.contains("bounded_cmd::output_with_timeout");
-            // Allowlist (one site, one reason): crates/fno/src/setup_run.rs
-            // step_gh_auth. The `fno` crate cannot depend on fno-agents, and
-            // the one-time `gh auth status` probe carries no fleet identity
-            // (a human runs setup once).
-            let allowlisted = rel_path == "fno/src/setup_run.rs" && fn_name == "step_gh_auth";
+            // Allowlist (one site, one reason each):
+            // - crates/fno/src/setup_run.rs step_gh_auth: the `fno` crate
+            //   cannot depend on fno-agents, and the one-time `gh auth
+            //   status` probe carries no fleet identity (a human runs setup
+            //   once).
+            // - fno-agents/src/merge_hold.rs disarm_automerge: the emergency
+            //   auto-merge disarm must reach GitHub even under a fleet hold;
+            //   an armed queue merging server-side is the outcome the hold
+            //   exists to prevent.
+            let allowlist = [
+                ("fno/src/setup_run.rs", "step_gh_auth"),
+                ("fno-agents/src/merge_hold.rs", "disarm_automerge"),
+            ];
+            let allowlisted = allowlist
+                .iter()
+                .any(|(p, f)| rel_path == *p && fn_name == *f);
             if !behind_sink && !allowlisted {
                 let (number, line) = &lines[idx];
                 violations.push(format!("{rel_path}:{number}: {line}"));

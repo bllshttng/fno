@@ -327,13 +327,15 @@ fn pr_number(entry: &Value) -> Option<u64> {
 }
 
 /// Best-effort `gh pr merge --disable-auto`: a queue armed before the hold
-/// would otherwise merge server-side with no re-check. The disarm itself
-/// admits against the fleet budget: a hold reads as `failed: gh exited 75`
-/// and sends nothing.
+/// would otherwise merge server-side with no re-check. Deliberately NOT
+/// budget-admitted: the disarm is the emergency stop, and refusing it under
+/// a fleet hold leaves GitHub's own queue free to merge the held PR
+/// server-side, the exact outcome the hold exists to prevent.
 pub(crate) fn disarm_automerge(pr: u64) -> String {
-    let mut cmd = std::process::Command::new("gh");
-    cmd.args(["pr", "merge", &pr.to_string(), "--disable-auto"]);
-    match crate::gh_budget::output(cmd) {
+    match std::process::Command::new("gh")
+        .args(["pr", "merge", &pr.to_string(), "--disable-auto"])
+        .output()
+    {
         Ok(o) if o.status.success() => "issued".to_string(),
         Ok(o) => format!("failed: gh exited {}", o.status.code().unwrap_or(-1)),
         Err(e) => format!("failed: {e}"),
