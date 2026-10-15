@@ -1127,7 +1127,8 @@ mod tests {
         );
         assert!(extended.contains(&"perf".to_string()));
         assert!(extended.contains(&"vibes".to_string()));
-        assert_eq!(extended.len(), allow.len() + 1);
+        // Two survivors: " Perf " cleans to perf, "" drops, the repeat dedupes.
+        assert_eq!(extended.len(), allow.len() + 2);
         assert_eq!(
             extend_categories(default_categories(), cfg(json!("perf")).as_ref()),
             allow
