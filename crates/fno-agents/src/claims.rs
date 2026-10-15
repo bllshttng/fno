@@ -1903,6 +1903,13 @@ impl EnvVarGuard {
         unsafe { std::env::set_var(var, value) };
         Self { var, prev }
     }
+
+    /// Clear `var` for the rest of the scope; the prior value comes back on drop.
+    pub fn unset(var: &'static str) -> Self {
+        let prev = std::env::var_os(var);
+        unsafe { std::env::remove_var(var) };
+        Self { var, prev }
+    }
 }
 
 #[cfg(test)]

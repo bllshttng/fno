@@ -2167,9 +2167,10 @@ class ProviderBudget(BaseModel):
     `subagents` is that second dimension, and it is consumed by ROUTE
     RESOLUTION rather than by a guard: a native subagent is a harness-internal
     Task call fno never observes, so a spawn-path guard is decorative for
-    exactly the case that cost the account. `review_capability` reads this
-    budget and refuses to hand a panel reviewer to a provider that cannot
-    afford one - a worker cannot fan out a panel it was never handed.
+    exactly the case that cost the account. The capability resolver that once
+    read this budget to refuse a panel reviewer is gone (the native
+    `review-level capability` door replaced it); a worker cannot fan out a
+    panel it was never handed.
 
     `None` on either field means unbounded in that dimension, which is what an
     unlisted provider gets: today's behavior for every dedicated account.

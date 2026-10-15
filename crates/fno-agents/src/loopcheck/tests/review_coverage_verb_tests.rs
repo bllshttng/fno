@@ -1,46 +1,54 @@
 use super::*;
 
+/// The hint is rendered IN PROCESS by the native capability builder now:
+/// the same function the parity goldens freeze, so the stub-script bridge
+/// cases died with the spawn. The three behaviors the bridge kept are the
+/// sized answer, the placeholder-as-None case, and the harness spelling.
 #[test]
-fn sized_hint_bridge_reads_one_clean_line_and_nothing_else() {
-    // The bridge is a dumb pipe for the Python render: one sane line in,
-    // Some(line) out; everything else (non-zero exit, chatter, an overlong
-    // blob, a missing binary) is None so the refusal falls back to the
-    // levelless line rather than embedding garbage as an invocation.
+fn sized_hint_renders_in_process() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
-
-    let stub = |body: &str| -> std::path::PathBuf {
-        crate::write_exec_stub(dir, &format!("stub-{}", body.len()), body)
+    let repo = dir.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git spawns");
+        assert!(status.success(), "git {args:?} failed");
     };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.test"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(repo.join("base.txt"), "seed\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    git(&["branch", "origin/main"]);
+    std::fs::write(repo.join("b.txt"), "1\n2\n").unwrap();
+    std::fs::write(repo.join("c.txt"), "3\n4\n5\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "small"]);
 
-    let good = stub("#!/bin/sh\nprintf '/code-review from-stub --comment --fix\\n'\n");
+    // Sized: two files and five lines land in the low tier, and the claude
+    // spelling rides the parity-checked base row.
     assert_eq!(
-        sized_self_review_hint(good.to_str().unwrap(), dir, Some("claude")).as_deref(),
-        Some("/code-review from-stub --comment --fix")
+        sized_self_review_hint(&repo, Some("claude")).as_deref(),
+        Some("/fno:review low --comment")
     );
-
-    let failing = stub("#!/bin/sh\nexit 1\n");
+    // The harness spelling: codex renders $fno:review through the same
+    // normalizer every dispatch surface uses.
     assert_eq!(
-        sized_self_review_hint(failing.to_str().unwrap(), dir, None),
-        None
+        sized_self_review_hint(&repo, Some("codex")).as_deref(),
+        Some("$fno:review low --comment")
     );
-
-    let chatty = stub("#!/bin/sh\nprintf 'line one\\nline two\\n'\n");
-    assert_eq!(
-        sized_self_review_hint(chatty.to_str().unwrap(), dir, None),
-        None
-    );
-
-    // An unsized render keeps its `<level>` placeholder; embedding that in
-    // a copy-me slot hands the reader a string it cannot run, so the
-    // filter reads it as no hint at all.
-    let placeholder = stub("#!/bin/sh\nprintf '/code-review <level> --comment\\n'\n");
-    assert_eq!(
-        sized_self_review_hint(placeholder.to_str().unwrap(), dir, None),
-        None
-    );
-
-    assert_eq!(sized_self_review_hint("/nonexistent/fno", dir, None), None);
+    // Placeholder: no measurable diff, so the hint reads as None and the
+    // levelless line stands.
+    assert_eq!(sized_self_review_hint(dir, Some("claude")), None);
 }
 
 /// Run the verb until the quota probe answers decisively (a bool

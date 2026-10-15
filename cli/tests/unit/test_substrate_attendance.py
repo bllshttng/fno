@@ -100,25 +100,6 @@ def test_every_dict_spawn_lane_names_its_substrate():
     assert 'substrate="headless"' in inspect.getsource(codex_lane)
 
 
-def test_detect_session_reports_the_stamp_or_says_unknown():
-    from fno.review_capability import detect_session
-
-    claude = {"CLAUDE_CODE_SESSION_ID": "s1"}
-    for substrate in ("pane", "thread", "headless"):
-        s = detect_session(
-            {**claude, **SPAWNED, FNO_AGENT_SUBSTRATE: substrate},
-            unattended_configured=False,
-        )
-        assert s.substrate == substrate
-        assert s.attended is (substrate in ATTENDED_SUBSTRATES)
-
-    unstamped = detect_session({**claude, **SPAWNED}, unattended_configured=False)
-    assert (unstamped.substrate, unstamped.attended) == ("unknown", False)
-
-    operator = detect_session(claude, unattended_configured=False)
-    assert (operator.substrate, operator.attended) == ("interactive", True)
-
-
 
 
 def test_think_presence_follows_the_same_rule(tmp_path):

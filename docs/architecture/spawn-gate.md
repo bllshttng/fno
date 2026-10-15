@@ -4,7 +4,7 @@ There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane ax
 
 ## The verb contract
 
-`fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The verb exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 600-second queue) streams on stderr.
+`fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The verb exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 240-second queue) streams on stderr.
 
 Two modes:
 
@@ -32,6 +32,8 @@ On 2026-10-14 the gate refused at a load of 8 on 16 cores with 90 percent of RAM
 ## A waiting spawn names its place
 
 A spawn that waits holds one `gate-wait:<holder>` ticket in the gate's global claims root. Its place is one plus the live tickets that joined before it. On its first wait, and every 30 seconds after, it prints `spawn queued: place 2 of 3 waiting; waiting on the slot cap, 8 live of 8; waited 30s`. The reason is the slot cap, the fleet CPU hold, or the gate mutex. On 2026-10-14, 5 of 54 attempts launched in four hours, and no wait named its place or its reason. A spawn behind the gate mutex printed nothing at all.
+
+The queue gives up after 240 seconds with exit 75. It used to wait 600 seconds. The first-turn watch tells a caller where its spawn is stuck by 5 minutes after the call, so the gate answers first ([spawn-watch](spawn-watch.md)).
 
 A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `queue_size` and `waiting_on`, where the place is the back of the queue. A queue timeout carries them too. A refused native launch line names the place: `spawn gate refused the native launch (no_wait, place 3 of 3 waiting on max_live): ...`. The ticket leaves the queue as the gate returns.
 

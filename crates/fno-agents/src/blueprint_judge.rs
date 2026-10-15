@@ -1584,6 +1584,13 @@ mod tests {
 
     #[test]
     fn mission_fit_reads_project_vision_from_a_local_config() {
+        // config_lookup honors $FNO_CONFIG, which agents_config tests set under
+        // this lock; read with it held and the pins cleared.
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _config = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
+        let _root = crate::claims::EnvVarGuard::unset("FNO_CONFIG_SEARCH_ROOT");
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join(".fno");
         std::fs::create_dir_all(&cfg).unwrap();

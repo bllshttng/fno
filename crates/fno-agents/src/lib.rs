@@ -421,6 +421,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod review_capability;
 pub mod review_doors;
 pub mod review_freshness;
 pub mod review_level;
@@ -488,6 +489,7 @@ pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub(crate) mod spawn_watch;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -1566,6 +1568,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A launch the spawn gate or the dispatch door refused before any
     // worker existed; the feed projects it so a refused launch shows.
     "agent_spawn_refused",
+    // The first-turn watch saw a launch's first assistant line; carries the
+    // latency from the call per harness, substrate and machine.
+    "spawn_first_turn",
     // A reaped session came back (client-emitted): one event per revive
     // naming the verb, the actor session, the prior name and the session id.
     "agent_revived",
