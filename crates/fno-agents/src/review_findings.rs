@@ -17,6 +17,7 @@
 //! category list from here: one copy of the blocking rule's allowlist, the
 //! producer and the gate both.
 
+use crate::publish_review::Gh;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
