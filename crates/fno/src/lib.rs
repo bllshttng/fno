@@ -95,7 +95,10 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_detect;
+pub mod setup_profile;
 pub mod setup_run;
+pub mod setup_services;
 pub mod sideline_color;
 pub mod spawn_journal;
 pub mod splash;
@@ -124,6 +127,8 @@ pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub mod wizard;
+pub mod wizard_term;
 pub mod wordmark;
 pub mod yard_overlay;
 
