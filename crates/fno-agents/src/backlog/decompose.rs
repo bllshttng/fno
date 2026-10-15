@@ -406,12 +406,18 @@ fn execution_strategy_body(text: &str) -> Option<String> {
     use regex::Regex;
     use std::sync::OnceLock;
     static SECTION: OnceLock<Regex> = OnceLock::new();
-    let section = SECTION.get_or_init(|| {
-        Regex::new(r"(?ms)^##[ \t]+Execution Strategy[ \t]*$\n(.*?)(?=^##[ \t]|\z)").unwrap()
-    });
-    section
-        .captures(text)
-        .map(|c| c.get(1).map(|g| g.as_str().to_string()).unwrap_or_default())
+    // The regex crate has no look-around, so the section body is cut in two
+    // steps: anchor the heading, then bound it at the next heading.
+    let section =
+        SECTION.get_or_init(|| Regex::new(r"(?m)^##[ \t]+Execution Strategy[ \t]*$").unwrap());
+    let m = section.find(text)?;
+    let body = &text[m.end()..];
+    let breaker = Regex::new(r"(?m)^##?[ \t]+").unwrap();
+    let cut = match breaker.find(body) {
+        Some(nxt) => &body[..nxt.start()],
+        None => body,
+    };
+    Some(cut.to_string())
 }
 
 /// The `_first_cycle` DFS: a cycle path among groups (by slug), GRAY/WHITE/

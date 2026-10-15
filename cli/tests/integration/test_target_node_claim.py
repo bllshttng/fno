@@ -47,7 +47,13 @@ if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
   # Only the refusal codes stay canned - those tests assert the refusal
   # wiring, not the store.
   if [[ "${MOCK_ABI_ACQUIRE_RC:-0}" == "0" ]]; then
-    exec "${MOCK_ABI_FRONT:?no fno front}" "$@"
+    # The init script discards the front's stdout and sends stderr to
+    # .claim-err; a silent rc=1 keeps its real refusal on stdout, so this
+    # delegation records both streams for the failing assertion to print.
+    "${MOCK_ABI_FRONT:?no fno front}" "$@" > "$MOCK_ABI_LOG.front-out" 2> "$MOCK_ABI_LOG.front-err"
+    rc=$?
+    echo "FRONT_RC:$rc" >> "$MOCK_ABI_LOG"
+    exit "$rc"
   fi
   exit "$MOCK_ABI_ACQUIRE_RC"
 fi
@@ -257,11 +263,20 @@ def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
 
     # The state names only the blocked class; init also writes the acquire's
     # stderr to .claim-err and its own stderr, and the refusal lives there.
+    # The mock's delegation records the front's stdout/stderr beside the log.
     claim_err = repo.parent / "space" / ".claim-err"
     err_text = claim_err.read_text() if claim_err.exists() else ""
+    front_out = Path(f"{log}.front-out")
+    front_err = Path(f"{log}.front-err")
+    front_text = ""
+    if front_out.exists() or front_err.exists():
+        front_text = (
+            f"--- front stdout ---\n{front_out.read_text() if front_out.exists() else ''}"
+            f"--- front stderr ---\n{front_err.read_text() if front_err.exists() else ''}"
+        )
     assert f'target_claim_key: "node:{node_id}"' in state, (
         f"{state}\n--- init stderr ---\n{r.stderr}\n"
-        f"--- .claim-err ---\n{err_text}"
+        f"--- .claim-err ---\n{err_text}\n{front_text}"
     )
     assert "target_claim_holder:" in state
     assert 'target_claim_ttl: "2h"' in state
