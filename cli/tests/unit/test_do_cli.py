@@ -32,8 +32,9 @@ def test_do_advertises_exactly_eleven_direct_children() -> None:
 def test_nested_target_init_and_pr_children_resolve() -> None:
     from fno.cli import app
 
+    # do target init left the python registry for the native door; the two
+    # pr children still resolve here.
     for argv in (
-        ["do", "target", "init", "--help"],
         ["do", "pr", "watch", "tick", "--help"],
         ["do", "pr", "stub-manifest", "write", "--help"],
     ):
