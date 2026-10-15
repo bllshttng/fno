@@ -327,7 +327,10 @@ fn pr_number(entry: &Value) -> Option<u64> {
 }
 
 /// Best-effort `gh pr merge --disable-auto`: a queue armed before the hold
-/// would otherwise merge server-side with no re-check.
+/// would otherwise merge server-side with no re-check. Deliberately NOT
+/// budget-admitted: the disarm is the emergency stop, and refusing it under
+/// a fleet hold leaves GitHub's own queue free to merge the held PR
+/// server-side, the exact outcome the hold exists to prevent.
 pub(crate) fn disarm_automerge(pr: u64) -> String {
     match std::process::Command::new("gh")
         .args(["pr", "merge", &pr.to_string(), "--disable-auto"])

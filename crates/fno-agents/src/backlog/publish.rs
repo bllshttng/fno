@@ -471,16 +471,11 @@ enum Pages {
 }
 
 fn pages_state(owner: &str, repo: &str) -> Pages {
-    let child = match Command::new("gh")
-        .args(["api", &format!("repos/{owner}/{repo}/pages")])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return Pages::Unavailable("gh is not on PATH".to_string()),
-    };
-    let out = match child.wait_with_output() {
+    let mut cmd = Command::new("gh");
+    cmd.args(["api", &format!("repos/{owner}/{repo}/pages")]);
+    // Behind the fleet budget: output() pipes both streams, so the refused
+    // shape reads like any gh failure (exit 75, the ledger line on stderr).
+    let out = match crate::gh_budget::output(cmd) {
         Ok(o) => o,
         Err(e) => return Pages::Unavailable(format!("gh api did not finish: {e}")),
     };
@@ -525,19 +520,18 @@ fn pages_state(owner: &str, repo: &str) -> Pages {
 /// nothing else. A failure leaves the branch pushed; the caller exits 1
 /// quoting GitHub's message.
 fn enable_pages(owner: &str, repo: &str) -> Result<(), String> {
-    let out = Command::new("gh")
-        .args([
-            "api",
-            "-X",
-            "POST",
-            &format!("repos/{owner}/{repo}/pages"),
-            "-f",
-            "source[branch]=gh-pages",
-            "-f",
-            "source[path]=/",
-        ])
-        .output()
-        .map_err(|e| format!("cannot run gh: {e}"))?;
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "api",
+        "-X",
+        "POST",
+        &format!("repos/{owner}/{repo}/pages"),
+        "-f",
+        "source[branch]=gh-pages",
+        "-f",
+        "source[path]=/",
+    ]);
+    let out = crate::gh_budget::output(cmd).map_err(|e| format!("cannot run gh: {e}"))?;
     if out.status.success() {
         return Ok(());
     }
