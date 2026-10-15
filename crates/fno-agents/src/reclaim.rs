@@ -472,21 +472,29 @@ fn cargo_build_dirs_roots(home: &AgentsHome, include_cwd_root: bool) -> Vec<Stri
     roots
 }
 
-/// The build-base lane: `cargo_build_dirs::sweep` per root from
-/// [`cargo_build_dirs_roots`]. Roots with no `crates/*/Cargo.toml` are
+/// The build-base lane: one `cargo_build_dirs::sweep_roots` per fno build
+/// base, over every root from [`cargo_build_dirs_roots`] that resolves to it.
+/// Every Rust repo on the machine shares the base by default, so the cap and
+/// the live-cargo fence must judge all their rows together. Roots with no Cargo manifest are
 /// skipped - sweeping a manifest-less root under a shared base could only
-/// ever misjudge rows it cannot resolve. The note carries each root's summary
+/// ever misjudge rows it cannot resolve. The note carries each base's summary
 /// line; bytes are reclaimed (apply) or projected (dry run).
 fn cargo_build_dirs_lane(home: &AgentsHome, apply: bool, include_cwd_root: bool) -> Lane {
     let mut lane = Lane::new("cargo_build_dirs", Vec::new());
-    let roots = cargo_build_dirs_roots(home, include_cwd_root);
-    let mut notes: Vec<String> = Vec::new();
-    for root in roots {
+    let mut by_base: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for root in cargo_build_dirs_roots(home, include_cwd_root) {
         let root = PathBuf::from(&root);
         if crate::cargo_build_dirs::workspace_manifests(&root).is_empty() {
             continue;
         }
-        let rep = crate::cargo_build_dirs::sweep(&root, apply, SystemTime::now());
+        let base = crate::cargo_build_dirs::fno_build_base(&root);
+        let base = base.canonicalize().unwrap_or(base);
+        by_base.entry(base).or_default().push(root);
+    }
+    let mut notes: Vec<String> = Vec::new();
+    for roots in by_base.values() {
+        let rep = crate::cargo_build_dirs::sweep_roots(roots, apply, SystemTime::now());
         lane.bytes += rep.projected_bytes;
         if let Some(summary) = rep.lines.last() {
             notes.push(summary.clone());
