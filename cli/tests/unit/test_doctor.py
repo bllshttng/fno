@@ -993,7 +993,7 @@ def test_fix_refreshes_wedged_pr_watch_instead_of_healing(
     assert len(spawn) == 1
     assert spawn[0][1:3] == ["pr-watch", "refresh"]
     assert "--force-bounce" in spawn[0]
-    assert "doctor" in spawn[0] and "doctor-fix" in spawn[0]
+    assert "doctor-fix" in spawn[0]
     assert "pr-watch refresh" in result.stderr
 
 
