@@ -6,9 +6,11 @@ without creating another store or changing graph state.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from fno.graph import relatedness
 
@@ -69,6 +71,22 @@ class CandidateResults(list[Candidate]):
         super().__init__(values)
         self.degraded = degraded
         self.warning = warning
+
+
+@dataclass(frozen=True)
+class Assessment:
+    """A human-reviewable verdict with evidence or an explicit reason."""
+
+    verdict: str
+    evidence: list[str]
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "verdict": self.verdict,
+            "evidence": list(self.evidence),
+            "reason": self.reason,
+        }
 
 
 def _graph_path() -> Path:
