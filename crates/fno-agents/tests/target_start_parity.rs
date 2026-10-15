@@ -1,5 +1,5 @@
 //! parity-stage: characterization
-//! parity-oracle: cli/src/fno/target_cli.py
+//! parity-oracle: cli/src/fno/target_cli.py:start
 //!
 //! Golden parity for the `fno do target start` port. The goldens were
 //! captured from the live Python CLI at its recorded sha; this test now

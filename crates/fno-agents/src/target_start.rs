@@ -426,8 +426,9 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     // runs, in place.
     let in_place = resolve_soft(&wt_path) == resolve_soft(&repo_root);
 
-    // 2. Link the remaining shared non-fno state (.claude/, vault) via the
-    //    canonical setup hook. Non-fatal: name a failure, never abort.
+    // 2. Link the remaining shared non-fno state (the harness config dirs,
+    //    the vault) via the canonical setup hook. Non-fatal: name a failure,
+    //    never abort.
     if !in_place {
         let (rc, tail) = run_setup_worktree_hook(&repo_root, &wt_path);
         if rc != 0 && rc != -1 {
