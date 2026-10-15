@@ -8218,8 +8218,8 @@ event_types:
     data:
       required: []
   - name: session_pane_rebound
-    description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
-    sources: [daemon, agents]
+    description: "A foreground SessionStart report bound its row to a proven pane claim (pane_claim.rs)."
+    sources: [daemon]
     data:
       required: []
   - name: session_pane_rebound_failed
