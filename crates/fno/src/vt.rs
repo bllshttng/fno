@@ -1815,7 +1815,10 @@ impl Notice {
                 let conemu = !cmd.is_empty()
                     && cmd.bytes().all(|b| b.is_ascii_digit())
                     && matches!(cmd.parse::<u8>(), Ok(1..=12));
-                if conemu {
+                if cmd == "2" {
+                    // ConEmu `9;2;<text>` is a message box: keep its text.
+                    text.split_once(';').map_or(String::new(), |(_, t)| t.to_string())
+                } else if conemu {
                     String::new()
                 } else {
                     text.clone()
@@ -2692,10 +2695,10 @@ mod tests {
 
         // ConEmu OSC 9 sub-commands (Claude Code's `9;4;<state>` progress)
         // are not notices; a body that merely starts with a digit still is.
-        pane.feed(b"\x1b]9;4;3;\x07\x1b]9;4;0\x07\x1b]9;5 minutes left\x07");
+        pane.feed(b"\x1b]9;4;3;\x07\x1b]9;4;0\x07\x1b]9;2;box text\x07\x1b]9;5 minutes left\x07");
         let notices = pane.take_notices();
         let bodies: Vec<&str> = notices.iter().map(|n| n.body.as_str()).collect();
-        assert_eq!(bodies, vec!["5 minutes left"]);
+        assert_eq!(bodies, vec!["box text", "5 minutes left"]);
 
         // An ESC inside the payload aborts the capture (the 133 garbage
         // handback discipline): no notice, every byte handed back, and the
