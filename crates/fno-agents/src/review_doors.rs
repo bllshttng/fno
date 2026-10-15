@@ -17,12 +17,13 @@ pub fn dispatch(verb: &str, rest: &[String]) -> Option<i32> {
     }
 }
 
-/// The `review-level` door: the capability group rides UNDER it, so
-/// fno-agents gains no root verb and menu-caps stays at root 12/12. The
-/// interception runs before the level parser, and only when the second
-/// token is one of the four action words - `capability` is not a level
-/// word, so no valid level call changes, and a bare `review-level
-/// capability` falls through to the level door (its usage refusal).
+/// The `review-level` door: the capability group and the findings actions
+/// ride UNDER it, so fno-agents gains no root verb and menu-caps stays at
+/// root 12/12. The interception runs before the level parser, and only when
+/// the second token is one of the action words - `capability` and
+/// `findings` are not level words, so no valid level call changes, and a
+/// bare `review-level capability` or `review-level findings` falls through
+/// to the level door (its usage refusal).
 fn run_review_level_door(rest: &[String]) -> i32 {
     if rest.first().map(String::as_str) == Some("capability")
         && rest.get(1).map(String::as_str).is_some_and(|action| {
@@ -33,6 +34,13 @@ fn run_review_level_door(rest: &[String]) -> i32 {
         })
     {
         crate::review_capability::run(&rest[1..])
+    } else if rest.first().map(String::as_str) == Some("findings")
+        && rest
+            .get(1)
+            .map(String::as_str)
+            .is_some_and(|action| matches!(action, "record" | "categories" | "post"))
+    {
+        crate::review_findings::run_findings_door(&rest[1..])
     } else {
         crate::review_level::run_review_level(rest)
     }

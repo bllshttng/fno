@@ -1,0 +1,1 @@
+{"findings_blocking": 0, "findings_nonblocking": 0, "category_histogram": {}, "findings": [], "dispositions": [{"finding_key": "x", "disposition": "fixed", "reason": "r"}]}
