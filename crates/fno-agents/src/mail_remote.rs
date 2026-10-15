@@ -348,6 +348,18 @@ the message directly after the target; none was found"
                 return 2;
             }
             let from_id = sender_id(&os_user(), &local_host, &name_part);
+            // Sender-side style check: the receiver's door refuses an
+            // unvetted body after transit, where only the sender's `mail
+            // status` shows the loss. A refused body exits 1 having
+            // written no row; a door that cannot run reads clean.
+            if let Some(report) = crate::mail_arm::style_door_report(&payload) {
+                eprint!("{report}");
+                eprintln!(
+                    "fno agents mail send: the receiver's style door refuses this \
+body; nothing was sent"
+                );
+                return 1;
+            }
             send_via_store(
                 &remote,
                 &from_id,
@@ -1038,6 +1050,17 @@ mod tests {
             .position(|word| word == "--word-cap")
             .expect("cap flag");
         assert_eq!(capped[cap_at + 1], "60");
+        // The sender-side consult rides the same door without --json, so
+        // exit 1 with the human report is the refusal.
+        let report_argv = crate::mail_arm::style_door_report_argv(None);
+        assert!(
+            !report_argv.iter().any(|word| word == "--json"),
+            "the report form prints the human report, no JSON receipt"
+        );
+        assert!(
+            report_argv.contains(&"--stdin".to_string()),
+            "the body still rides stdin"
+        );
         // The pull arm's exit reading: 0 delivers, and so does the Python
         // receipts' NOT LANDED exit (a durable demotion - the durable copy
         // is written, so a retry would duplicate it; the constant's comment

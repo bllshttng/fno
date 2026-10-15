@@ -361,17 +361,45 @@ fn mail_word_cap() -> Option<i64> {
 /// budget window, a down door, or an internal error. The body rides a
 /// writer thread, so a payload wider than the pipe buffer cannot deadlock
 /// the read.
-fn style_door_refuses(payload: &str) -> bool {
+pub(crate) fn style_door_refuses(payload: &str) -> bool {
+    ask_style_door(&style_door_argv(mail_word_cap()), payload)
+        .map(|output| door_confirms_refusal(&output.stdout))
+        .unwrap_or(false)
+}
+
+/// The sender-side consult: run the same door before a cross-host store
+/// send writes its row, so a refused body dies at the sender instead of in
+/// transit, where only the sender's `mail status` shows the loss.
+/// `Some(report)` when the door names violations; `None` when the body is
+/// clean or the door cannot run, which reads clean exactly as the pull
+/// side does.
+pub(crate) fn style_door_report(payload: &str) -> Option<String> {
+    let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
+    (output.status.code() == Some(1)).then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The report form of the door consult: the same argv without --json, so
+/// exit 1 with the human report is the refusal and stdout rides to the
+/// sender.
+pub(crate) fn style_door_report_argv(word_cap: Option<i64>) -> Vec<String> {
+    style_door_argv(word_cap)
+        .into_iter()
+        .filter(|word| word != "--json")
+        .collect()
+}
+
+/// Spawn the door with `argv`, feed it the payload through a writer
+/// thread, and return the output. `None` when the door cannot start or a
+/// read fails - both read clean.
+fn ask_style_door(argv: &[String], payload: &str) -> Option<std::process::Output> {
     let mut cmd = std::process::Command::new(crate::mail_remote::fno_binary());
-    cmd.args(style_door_argv(mail_word_cap()));
-    let Ok(mut child) = cmd
+    cmd.args(argv);
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-    else {
-        return false;
-    };
+        .ok()?;
     let payload = payload.to_string();
     let mut pipe = child.stdin.take();
     std::thread::spawn(move || {
@@ -379,10 +407,7 @@ fn style_door_refuses(payload: &str) -> bool {
             let _ = stdin.write_all(payload.as_bytes());
         }
     });
-    match child.wait_with_output() {
-        Ok(output) => door_confirms_refusal(&output.stdout),
-        Err(_) => false,
-    }
+    child.wait_with_output().ok()
 }
 
 /// True when the row was already delivered by an earlier beat.
