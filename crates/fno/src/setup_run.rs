@@ -1739,7 +1739,7 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
             "key_gap": key_gap,
             "first_merged_pr_at": first_merged,
             "drift": drift,
-            "rows": red,
+            "rows": red.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
         });
         println!(
             "{}",
