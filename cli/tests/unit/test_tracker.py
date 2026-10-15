@@ -373,7 +373,6 @@ def test_create_verbs_refuse_on_external_backend(
     assert code == 1, f"{verb} did not refuse: {out}"
     assert "github" in out
     assert "tracker" in out.lower()
-    assert "tracker" in result.output.lower()
 
 
 def test_active_backend_name_default_and_override(monkeypatch):
