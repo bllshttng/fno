@@ -1168,7 +1168,7 @@ event_types:
 
   - name: backlog_refused_flush
     description: "A shared-backlog flush the primary refused took this machine's rows back for every row the batch touched. The take-back reverted this machine's own writes; the refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
-    sources: [rust]
+    sources: [daemon]
     data:
       required: [nodes, tables, batch, error]
       properties:
