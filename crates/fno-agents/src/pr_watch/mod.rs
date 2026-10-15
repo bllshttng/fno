@@ -1,8 +1,9 @@
-//! The `pr-watch` verb family's Rust home. `status`, `install`, `refresh`
-//! and `uninstall` live here; heal and tick follow, each one replacing a
+//! The `pr-watch` verb family's Rust home. `status`, `install`, `refresh`,
+//! `uninstall` and `heal` live here; tick follows, each one replacing a
 //! Python leaf with a working forward until the Python package is gone.
 //! One verb per PR, every spelling kept.
 
+mod heal;
 mod install;
 pub(crate) mod refresh;
 mod render;
@@ -16,9 +17,10 @@ pub fn run(args: &[String]) -> i32 {
         Some("status") => status::run(&args[1..]),
         Some("install") => install::run(&args[1..]),
         Some("uninstall") => install::run_uninstall(&args[1..]),
+        Some("heal") => heal::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal> [--json|-J] [-N]"
             );
             2
         }

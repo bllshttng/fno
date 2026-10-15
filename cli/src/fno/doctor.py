@@ -4624,30 +4624,27 @@ def doctor_command(
         # current binary first.
         pw = result.get("pr_watch") or {}
         if pw.get("verdict") in ("dead", "wedged") and not json_out:
-            from fno.pr_watch._install import _LAUNCH_AGENTS_DIR, heal_watcher
+            # Both cures are the native verbs: heal bounces a dead watcher,
+            # refresh re-renders a wedged one. Each self-gates (the enabled
+            # flag, the bounce-pending grace, the single-flight), so doctor
+            # only relays what the verb said.
+            import subprocess
+            from fno.rust_binary import resolve_binary
 
+            binary = resolve_binary()
             if pw.get("verdict") == "wedged":
-                # The refresh verb is the native cure; it self-gates on pr_watch.enabled.
-                import subprocess
-                from fno.rust_binary import resolve_binary
-
-                binary = resolve_binary()
-                if binary is None:
-                    said = "skipped; fno-agents binary not found"
-                else:
-                    proc = subprocess.run(
-                        [str(binary), "pr-watch", "refresh", "--force-bounce", "--caller", "doctor-fix"],
-                        capture_output=True, text=True, check=False, timeout=120,
-                    )
-                    said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
-                typer.echo(f"fno doctor: --fix pr-watch refresh: {said}", err=True)
+                cure, verb_argv = "refresh", ["refresh", "--force-bounce", "--caller", "doctor-fix"]
             else:
-                hmsg, _ = heal_watcher(
-                    launch_agents_dir=_LAUNCH_AGENTS_DIR,
-                    defer_when_ticking=True,
-                    caller="doctor-fix",
+                cure, verb_argv = "heal", ["heal", "--caller", "doctor-fix"]
+            if binary is None:
+                said = "skipped; fno-agents binary not found"
+            else:
+                proc = subprocess.run(
+                    [str(binary), "pr-watch", *verb_argv],
+                    capture_output=True, text=True, check=False, timeout=120,
                 )
-                typer.echo(f"fno doctor: --fix pr-watch heal: {hmsg}", err=True)
+                said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
+            typer.echo(f"fno doctor: --fix pr-watch {cure}: {said}", err=True)
 
         # A stale plugin cache is counted in `blockers`, and nothing on this path
         # clears it: the exec below is `fno update`, which does not own claude's
