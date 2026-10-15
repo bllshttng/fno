@@ -76,7 +76,9 @@
    "gh_missing": false,
    "repo_view_fail": false,
    "reviews_api_fail": false,
-   "pr_states": [],
+   "pr_states": [
+    null
+   ],
    "checks": {
     "state": "OPEN",
     "headRefOid": "deadbeefcafe",
@@ -110,7 +112,12 @@
    "gh_missing": false,
    "repo_view_fail": false,
    "reviews_api_fail": false,
-   "pr_states": [],
+   "pr_states": [
+    {
+     "state": "MERGED",
+     "mergedAt": "2026-10-13T10:00:00Z"
+    }
+   ],
    "checks": {
     "state": "OPEN",
     "headRefOid": "deadbeefcafe",
@@ -144,7 +151,14 @@
    "gh_missing": false,
    "repo_view_fail": false,
    "reviews_api_fail": false,
-   "pr_states": [],
+   "pr_states": [
+    {
+     "state": "CLOSED",
+     "mergedAt": "",
+     "isDraft": false,
+     "reviewDecision": ""
+    }
+   ],
    "checks": {
     "state": "OPEN",
     "headRefOid": "deadbeefcafe",
@@ -178,7 +192,13 @@
    "gh_missing": false,
    "repo_view_fail": false,
    "reviews_api_fail": false,
-   "pr_states": [],
+   "pr_states": [
+    {
+     "state": "READY",
+     "mergedAt": "",
+     "isDraft": false
+    }
+   ],
    "checks": {
     "state": "OPEN",
     "headRefOid": "deadbeefcafe",
