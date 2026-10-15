@@ -147,7 +147,10 @@ fn verify_merged(
         return 2;
     }
     if state_file.is_empty() || !readable(state_file) {
-        let _ = writeln!(err, "verify-pr-merged: --state-file unreadable: {state_file}");
+        let _ = writeln!(
+            err,
+            "verify-pr-merged: --state-file unreadable: {state_file}"
+        );
         return 2;
     }
     if !gh_present {
@@ -195,7 +198,10 @@ fn verify_merged(
         return 1;
     }
     if state != "OPEN" {
-        let _ = writeln!(err, "verify-pr-merged: unknown PR state: {state}; degrading open");
+        let _ = writeln!(
+            err,
+            "verify-pr-merged: unknown PR state: {state}; degrading open"
+        );
         return 0;
     }
 
@@ -311,7 +317,9 @@ fn verify_merged(
         return 1;
     }
 
-    bounded_remediation(pr, state_file, cwd, &journal, number, &pr_json, run, out, err)
+    bounded_remediation(
+        pr, state_file, cwd, &journal, number, &pr_json, run, out, err,
+    )
 }
 
 /// Single authorized-merge ask + single 30s poll (anti-thrash; the verb
@@ -374,10 +382,7 @@ fn bounded_remediation(
         // before reporting. Never a retry loop.
         for attempt in 0..2 {
             let fresh = fetch_pr_state(pr, cwd, run);
-            let fresh_state = fresh
-                .as_ref()
-                .map(|j| s_of(j, "state"))
-                .unwrap_or_default();
+            let fresh_state = fresh.as_ref().map(|j| s_of(j, "state")).unwrap_or_default();
             if fresh_state == "MERGED" {
                 let merged_at = fresh
                     .as_ref()
@@ -423,9 +428,15 @@ fn bounded_remediation(
 
     if outcome == "failed" {
         let lowered = detail.to_lowercase();
-        let freshness_hit = ["freshness", "stale state", "state file", "state-file mtime", "git-protection"]
-            .iter()
-            .any(|tok| lowered.contains(tok));
+        let freshness_hit = [
+            "freshness",
+            "stale state",
+            "state file",
+            "state-file mtime",
+            "git-protection",
+        ]
+        .iter()
+        .any(|tok| lowered.contains(tok));
         if freshness_hit {
             emit_audit(
                 journal,
@@ -458,7 +469,10 @@ fn bounded_remediation(
         "merge_attempt_did_not_complete",
         Some(json!({ "outcome": outcome, "detail": detail })),
     );
-    let _ = writeln!(out, "merge_attempt_did_not_complete: PR #{pr} {outcome}: {detail}");
+    let _ = writeln!(
+        out,
+        "merge_attempt_did_not_complete: PR #{pr} {outcome}: {detail}"
+    );
     1
 }
 
@@ -481,13 +495,7 @@ fn remote_delete_cleanup(number: u64, cwd: &Path, run: RunProbe, err: &mut dyn W
     );
     let fields: Vec<String> = read
         .filter(|r| r.ok)
-        .map(|r| {
-            r.stdout
-                .trim()
-                .split('\t')
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|r| r.stdout.trim().split('\t').map(str::to_string).collect())
         .unwrap_or_default();
     let branch = fields.first().map(String::as_str).unwrap_or_default();
     let base_repo = fields.get(2).map(String::as_str).unwrap_or_default();
@@ -537,7 +545,10 @@ fn verify_reviews(
         return 2;
     }
     if state_file.is_empty() || !readable(state_file) {
-        let _ = writeln!(err, "verify-review-replies: --state-file unreadable: {state_file}");
+        let _ = writeln!(
+            err,
+            "verify-review-replies: --state-file unreadable: {state_file}"
+        );
         return 2;
     }
     if !gh_present {
@@ -564,7 +575,10 @@ fn verify_reviews(
         .map(|r| r.stdout.trim().to_string())
         .unwrap_or_default();
     if repo_slug.is_empty() {
-        let _ = writeln!(err, "verify-review-replies: gh repo view failed; degrading open");
+        let _ = writeln!(
+            err,
+            "verify-review-replies: gh repo view failed; degrading open"
+        );
         return 0;
     }
 
@@ -578,7 +592,10 @@ fn verify_reviews(
         ],
     );
     let Some(reviews) = reviews else {
-        let _ = writeln!(err, "verify-review-replies: gh api reviews failed; degrading open");
+        let _ = writeln!(
+            err,
+            "verify-review-replies: gh api reviews failed; degrading open"
+        );
         return 0;
     };
 
@@ -777,7 +794,8 @@ fn read_field(state_file: &str, field: &str) -> String {
 fn dequote(val: &str) -> String {
     let b = val.as_bytes();
     if val.len() >= 2
-        && ((b[0] == b'"' && b[val.len() - 1] == b'"') || (b[0] == b'\'' && b[val.len() - 1] == b'\''))
+        && ((b[0] == b'"' && b[val.len() - 1] == b'"')
+            || (b[0] == b'\'' && b[val.len() - 1] == b'\''))
     {
         return val[1..val.len() - 1].to_string();
     }
