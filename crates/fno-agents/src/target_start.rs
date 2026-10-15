@@ -27,6 +27,7 @@
 
 use regex::Regex;
 use serde_json::{json, Value};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -376,7 +377,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         .arg(&repo_root)
         .args(["--name", &name]);
     if let Some(harness) = ambient_harness.filter(|h| !h.is_empty()) {
-        ensure_cmd.args(["--harness", harness]);
+        ensure_cmd.args(["--harness", &harness]);
     }
     let ens =
         crate::bounded_cmd::output_with_timeout_result(ensure_cmd, stage_timeout_secs(deadline));
@@ -610,19 +611,26 @@ fn base_receipt(cwd: &Path, base: &str) -> Result<String, Fail> {
 
 const TIMED_OUT: &str = "fetch timed out after 60s";
 
+/// The Python fetch ran under `timeout=60`; keep the value.
+const REMOTE_FETCH_BUDGET_S: u64 = 60;
+
 /// Keys are `cwd|remote`. The Python twin keys the refspec too; start's two
 /// callers both fetch the whole remote, so one key shape serves both sets.
 fn fetch_state() -> &'static Mutex<(
     std::collections::HashSet<String>,
     std::collections::HashSet<String>,
 )> {
-    static STATE: Mutex<(
-        std::collections::HashSet<String>,
-        std::collections::HashSet<String>,
-    )> = Mutex::new((
-        std::collections::HashSet::new(),
-        std::collections::HashSet::new(),
-    ));
+    static STATE: std::sync::LazyLock<
+        Mutex<(
+            std::collections::HashSet<String>,
+            std::collections::HashSet<String>,
+        )>,
+    > = std::sync::LazyLock::new(|| {
+        Mutex::new((
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        ))
+    });
     &STATE
 }
 
@@ -630,7 +638,7 @@ fn fetch_state() -> &'static Mutex<(
 /// fetch verdict: it lands in the second set and callers tell the two apart.
 fn refresh_remote(cwd: &Path, remote: &str) -> (bool, String) {
     let key = format!("{}|{remote}", cwd.display());
-    if let Ok(mut state) = fetch_state().lock() {
+    if let Ok(state) = fetch_state().lock() {
         if state.0.contains(&key) {
             return (true, String::new());
         }
@@ -638,11 +646,9 @@ fn refresh_remote(cwd: &Path, remote: &str) -> (bool, String) {
             return (false, TIMED_OUT.to_string());
         }
     }
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["fetch", "--quiet", remote])
-        .output();
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(cwd).args(["fetch", "--quiet", remote]);
+    let out = crate::bounded_cmd::output_with_timeout_result(cmd, REMOTE_FETCH_BUDGET_S);
     match out {
         Err(e) => (false, e.to_string()),
         Ok(o) if o.status.success() => {
@@ -651,16 +657,16 @@ fn refresh_remote(cwd: &Path, remote: &str) -> (bool, String) {
             }
             (true, String::new())
         }
-        Ok(o) => {
-            let failed = String::from_utf8_lossy(&o.stderr).trim().to_string();
+        Ok(o) if o.status.signal().is_some() => {
+            // The bound killed the group and git never answered. A timeout is
+            // not a fetch verdict, and the key lands in the second set so the
+            // next caller of this remote pays no second 60s.
             if let Ok(mut state) = fetch_state().lock() {
-                // No wall-clock kill here (git's own 60s bound is not yet
-                // ported); a hung fetch wedges this one start, the failure
-                // the deadline still bounds at the stage level.
-                let _ = &failed;
+                state.1.insert(key);
             }
-            (false, failed)
+            (false, TIMED_OUT.to_string())
         }
+        Ok(o) => (false, String::from_utf8_lossy(&o.stderr).trim().to_string()),
     }
 }
 
@@ -675,7 +681,7 @@ fn truthful_base(cwd: &Path, base_label: &str, measure: bool) -> String {
         return unmeasured_base(base_label, "idempotent-path-does-no-network");
     }
     let bare = base_label.rsplit_once('@').map_or(base_label, |(b, _)| b);
-    let Some((remote, branch)) = bare.split_once('/') else {
+    let Some((remote, _)) = bare.split_once('/') else {
         // No `<remote>/<branch>` shape means the label names a LOCAL ref, and
         // `HEAD..<local-branch>` is exactly the stale-ref silent zero this
         // function exists to refuse.
@@ -1503,14 +1509,14 @@ fn codex_native_repo(cwd: &Path) -> Option<PathBuf> {
     let session_id = session_id
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())?;
-    let meta = codex_rollout_for_session(&session_id).and_then(codex_rollout_meta)?;
+    let meta = codex_rollout_for_session(&session_id).and_then(|p| codex_rollout_meta(&p))?;
     if meta.1.get("originator").and_then(Value::as_str) != Some("Codex Desktop") {
         return None;
     }
     let resolved = resolve_soft(cwd);
     let codex_home = resolve_soft(
         &std::env::var("CODEX_HOME")
-            .map(expand_user)
+            .map(|s| expand_user(&s))
             .unwrap_or_else(|_| expand_user("~/.codex")),
     );
     let native_root = codex_home.join("worktrees");
@@ -1550,7 +1556,7 @@ fn codex_native_repo(cwd: &Path) -> Option<PathBuf> {
 fn under_codex_worktrees(cwd: &Path) -> bool {
     let codex_home = resolve_soft(
         &std::env::var("CODEX_HOME")
-            .map(expand_user)
+            .map(|s| expand_user(&s))
             .unwrap_or_else(|_| expand_user("~/.codex")),
     );
     let native_root = codex_home.join("worktrees");
@@ -1563,7 +1569,7 @@ fn under_codex_worktrees(cwd: &Path) -> bool {
 /// creates, repairs, or writes this private app state.
 fn codex_project_assignment(session_id: &str, cwd: &Path, canonical: &Path) -> bool {
     let codex_home = std::env::var("CODEX_HOME")
-        .map(expand_user)
+        .map(|s| expand_user(&s))
         .unwrap_or_else(|_| expand_user("~/.codex"));
     let codex_home = resolve_soft(&codex_home);
     let Ok(state) = std::fs::read_to_string(codex_home.join(".codex-global-state.json")) else {
@@ -1638,7 +1644,8 @@ fn codex_desktop_handoff_policy(repo_root: &Path) -> bool {
     else {
         return false;
     };
-    let Some((_id, meta)) = codex_rollout_for_session(&session_id).and_then(codex_rollout_meta)
+    let Some((_id, meta)) =
+        codex_rollout_for_session(&session_id).and_then(|p| codex_rollout_meta(&p))
     else {
         return false;
     };
