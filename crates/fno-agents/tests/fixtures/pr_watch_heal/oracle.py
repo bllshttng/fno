@@ -41,7 +41,6 @@ def main() -> int:
 
     from fno.config import load_settings
     from fno.pr_watch import _install as m
-    from fno.pr_watch import cli as cli_mod
 
     agents_dir = Path(args.case) / "LaunchAgents"
 
