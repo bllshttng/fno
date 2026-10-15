@@ -73,21 +73,6 @@ fn rank(table: &str) -> usize {
         .unwrap_or(SHARED_TABLES.len())
 }
 
-/// Tables in graph.db that stay on this machine: store metadata (the content
-/// version, the sync cursor, render marks), the outbox, and the search index,
-/// which each replica rebuilds.
-#[cfg(test)]
-const LOCAL_TABLES: &[&str] = &[
-    "graph_meta",
-    "backlog_outbox",
-    "backlog_refused",
-    "nodes_fts",
-    "nodes_fts_data",
-    "nodes_fts_idx",
-    "nodes_fts_docsize",
-    "nodes_fts_config",
-];
-
 /// A refused flush's text starts with this.
 pub const REFUSED: &str = "backlog write refused by the shared primary";
 
@@ -1376,6 +1361,23 @@ mod tests {
     use crate::store_remote::test_primary;
     use rusqlite::params;
     use std::path::PathBuf;
+
+    /// Tables in graph.db that stay on this machine: store metadata (the
+    /// content version, the sync cursor, render marks), the outbox, the
+    /// refused-batch dead letter, and the search index, which each replica
+    /// rebuilds. Lives inside the test module: the emit-kind scanner reads
+    /// the first `#[cfg(test)]` as the boundary, and a production emit below
+    /// a cfg(test) item would read as test-only.
+    const LOCAL_TABLES: &[&str] = &[
+        "graph_meta",
+        "backlog_outbox",
+        "backlog_refused",
+        "nodes_fts",
+        "nodes_fts_data",
+        "nodes_fts_idx",
+        "nodes_fts_docsize",
+        "nodes_fts_config",
+    ];
 
     /// The fixtures write rows the way any writer does, through the open
     /// seam; the store module owns the table, so its name rides a constant.
