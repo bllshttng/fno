@@ -36,7 +36,11 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 
 ## Gate-safety
 
-`start` lives in `cli/src/fno/target_cli.py`, which the `shellout-drift` guard scans. It adds no new repo-root bash shell-out: it exec's `fno` (its own subcommands) for ensure + init, and reaches `setup-worktree.sh` only through the exempt `worktree.py` runner. The guard stays green.
+`start` is native now. The verb runs in `crates/fno-agents/src/target_start.rs` behind the `target-start` hidden door. The front door (`crates/fno/src/main.rs`) claims the literal `do target start` prefix and execs the door. It adds no new repo-root bash shell-out. It execs `fno worktree ensure` for the tree. It calls the sibling binary's own `target-init` door for init. It reaches `setup-worktree.sh` only through a bounded runner that mirrors the exempt `worktree.py` one. The `shellout-drift` guard stays green.
+
+## The `--steps` flag
+
+`fno do target start <node> --steps` stamps the run as steps mode. Start forwards `--steps` to the init door. Init sets `TARGET_TURN_MODE=steps` for the helper process. The manifest carries `turn_mode: steps`. The stop gate then lets every stop through. The flag rides the argv, never the environment. Ruling d-b7ef7d2d put it there. An inherited `TARGET_TURN_MODE` can never stamp a run its caller did not ask for.
 
 ## Placement
 

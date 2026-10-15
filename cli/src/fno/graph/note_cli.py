@@ -162,7 +162,11 @@ def cmd_note(
         argv += extra
         proc = subprocess.run(argv, check=False)
         raise typer.Exit(code=proc.returncode)
-    if not task_id or "--blocking" in extra or "--resolve" in extra:
+    # ignore_unknown_options leaves a leading engine flag in the positional
+    # slots (`note --resolve <id>` arrives as task_id="--resolve"), so the
+    # flag is read across all three, never from extra alone.
+    engine_flags = {"--blocking", "--resolve"}
+    if not task_id or engine_flags & {task_id, text, *extra}:
         from fno.rust_binary import resolve_binary
 
         binary = resolve_binary()

@@ -1128,9 +1128,15 @@ mod tests {
             //   auto-merge disarm must reach GitHub even under a fleet hold;
             //   an armed queue merging server-side is the outcome the hold
             //   exists to prevent.
+            // - fno-agents/src/merge_verb/mod.rs disarm_queued_auto_merge:
+            //   the check-stage port of the same emergency stop, same reason.
             let allowlist = [
                 ("fno/src/setup_run.rs", "step_gh_auth"),
                 ("fno-agents/src/merge_hold.rs", "disarm_automerge"),
+                (
+                    "fno-agents/src/merge_verb/mod.rs",
+                    "disarm_queued_auto_merge",
+                ),
             ];
             let allowlisted = allowlist
                 .iter()

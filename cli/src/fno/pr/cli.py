@@ -698,18 +698,10 @@ def hold_check(
     repo: Optional[str] = typer.Option(None, "--repo", help="Repository working directory."),
 ) -> None:
     """Refuse a PR whose bound plan ancestry carries an active or unreadable hold."""
-    from fno.pr import _hold, _review_hold
-
-    worktree = _review_hold.resolve_pr_worktree(pr_number, repo or os.getcwd())
-    # "" = no local worktree on the PR branch. The hold reader is
-    # graph-resident and runs from the caller's checkout (its cwd only
-    # resolves the canonical root), so an empty path hands it that checkout -
-    # a graph-bound hold still gates a PR that is not checked out here.
-    reason = _hold.merge_hold_reason(pr_number, worktree or repo or os.getcwd())
-    if reason:
-        typer.echo(reason, err=True)
-        raise typer.Exit(code=3)
-    typer.echo(f"PR {pr_number}: no plan dispatch hold")
+    args = [str(pr_number)]
+    if repo:
+        args += ["--repo", repo]
+    _forward_to_binary("authorized-merge", ["hold-check", *args])
 
 
 @pr_app.command(
@@ -785,10 +777,25 @@ def global_receipt_events_path() -> None:
 def sync_canonical(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number of the merged PR"),
 ) -> None:
-    from fno.pr import _sync_canonical
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    rc = _sync_canonical.run_sync_canonical(pr_number)
-    raise typer.Exit(code=rc)
+    try:
+        answer = verb_call(
+            "sync-canonical",
+            {"action": "sync", "cwd": os.getcwd(), "pr": pr_number},
+            timeout=900.0,
+        )
+    except VerbUnavailable as exc:
+        # The marker stays withheld, so the next reconcile retries.
+        typer.echo(
+            f"post-merge sync: native verb unavailable ({exc}); skipping", err=True
+        )
+        raise typer.Exit(code=1)
+    for line in answer.get("stdout") or []:
+        typer.echo(line)
+    for line in answer.get("stderr") or []:
+        typer.echo(line, err=True)
+    raise typer.Exit(code=int(answer.get("exit", 1)))
 
 
 @pr_app.command(

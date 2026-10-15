@@ -520,6 +520,7 @@ pub mod target_blast;
 pub mod target_denominator;
 pub mod target_init;
 pub mod target_orient;
+pub mod target_start;
 pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;

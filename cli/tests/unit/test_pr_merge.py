@@ -15,41 +15,13 @@ from types import SimpleNamespace
 import pytest
 
 from fno.config import AutoMergeBlock
-from fno.pr import _coverage_gate, _hold, _merge
+from fno.pr import _coverage_gate, _merge
 from fno.pr._proc import Result
 from fno.graph.store import read_graph_strict
 
 # Captured at import, before conftest's autouse hermetic stub replaces the
 # attribute: the test that exercises the door itself needs the real one.
 _REAL_AUTHORIZED_MERGE = _merge._authorized_merge
-# Same capture for the plan-hold reader: the hold-path test below restores it.
-_REAL_HOLD_FOR_PR = _hold.hold_for_pr
-
-
-@pytest.fixture(autouse=True)
-def _hold_reads_a_quiet_pr(monkeypatch):
-    """hold_for_pr now reads the PR through the binary verbs.
-
-    Answer the two reads with an untrailerred, unheld PR so every merge-path
-    test proceeds past the hold lookup without a binary call; a test that
-    needs a specific body re-stubs `fno.rust_binary.verb_call` itself.
-    """
-    import fno.rust_binary as rb
-
-    real_verb_call = rb.verb_call
-
-    def _quiet(verb, payload, unavailable=None, **kwargs):
-        if verb == "pr-closure-context":
-            return {
-                "number": payload.get("pr"),
-                "url": "https://example/pr",
-                "body": "",
-            }
-        if verb == "pr-closure-parse":
-            return {"ids": []}
-        return real_verb_call(verb, payload, unavailable or rb.VerbUnavailable, **kwargs)
-
-    monkeypatch.setattr(rb, "verb_call", _quiet)
 
 
 class FakeRun:
@@ -351,8 +323,8 @@ def enabled(monkeypatch, tmp_path):
         _door_stub(None),
     )
     # The graph_json hermeticity pin this fixture used to carry is closed at
-    # the reader now: the autouse _hermetic_merge_hold_gate fixture in
-    # tests/conftest.py defaults hold_for_pr to no hold for every test.
+    # the reader now: the merge gate reads its hold receipt through the
+    # authorized-merge door this suite stubs above.
 
 
 def _door_stub(answer):
@@ -925,8 +897,6 @@ def test_merge_lock_released_after_merge(enabled, monkeypatch, tmp_path, capsys)
 
 def test_merge_lock_unavailable_fails_open(enabled, monkeypatch, capsys, tmp_path):
     import fno.paths as paths
-
-    monkeypatch.setattr("fno.pr._hold.merge_hold_reason", lambda pr, cwd: None)
 
     def _boom():
         raise RuntimeError("no canonical root")
@@ -2006,45 +1976,6 @@ def test_fake_run_raises_on_an_unmatched_gh_shape():
         fake(["gh", "api", "repos/o/r/some/unhandled"])
     with pytest.raises(AssertionError, match="gh"):
         fake(["gh", "auth", "status"])
-
-
-def test_populated_graph_closure_fetch_does_not_hold_the_merge(
-    enabled, monkeypatch, capsys, tmp_path
-):
-    """With a non-empty graph the hold pays its closure fetch over the
-    _merge.run seam, and the fake must serve that fetch a real JSON object -
-    an unmatched shape falling through to a fabricated Result is the
-    absence-as-success trap. In CI (job 96169117491) a per-worker sandbox graph
-    populated by an earlier test made exactly this call reach the fake's
-    view_url tail: `gh pr view --json number,body,url,state,mergedAt,files`
-    came back non-JSON, the closure parser failed closed, and the merge was
-    held before any merge command was recorded (the IndexError the job died
-    on). Deterministic form: restore the real reader (conftest's autouse
-    _hermetic_merge_hold_gate stubs it), one cwd-less graph entry makes it
-    fetch, an empty PR body carries no trailer ids, so nothing is held and the
-    merge lands pinned."""
-    (tmp_path / ".fno").mkdir()
-    _checks_enabled(monkeypatch)
-    monkeypatch.setattr(_hold, "hold_for_pr", _REAL_HOLD_FOR_PR)
-    monkeypatch.setattr(
-        _merge,
-        "_review_coverage_for_pr",
-        lambda pr, repo, head=None: ({"coverage": "covered", "review_state": "reviewed", "reviewed_count": 1, "head_sha": "coveredSHA"}, ""),
-    )
-    monkeypatch.setattr(_merge, "_pr_head_oid", lambda pr, repo: "coveredSHA")
-    # One cwd-less entry: _cwd_in_this_repo passes cwd-less entries, so by_id
-    # is non-empty and hold_for_pr pays the closure fetch instead of skipping.
-    seed_graph(tmp_path / "graph.json", json.dumps({"entries": [{"id": "x-eeee", "status": "done"}]}))
-    monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "graph.json")
-    fake = _AutoMergeRejectingRun(
-        rollup=_rollup("SUCCESS", head="coveredSHA"), toplevel=str(tmp_path)
-    )
-    monkeypatch.setattr(_merge, "run", fake)
-
-    seen = _capture_posture(monkeypatch)
-    assert _merge.run_merge(["42"], cwd=str(tmp_path)) == 0
-    assert _last_json(capsys)["outcome"] == "merged"
-    assert seen["covered_head"] == "coveredSHA"
 
 
 # ── refusal reasons name the cause ───────────────────────────────────────────

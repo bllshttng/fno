@@ -266,7 +266,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:906 |
 | `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agents/src/claude_ask.rs:687 |
 | `FNO_WORKER_NAME` | py+rs | The spawned worker's name: the dispatcher pins it (py), the task-grain claim metadata reads it back (crates/fno-agents/src/backlog/task.rs). |
-| `FNO_WORKTREE_POLICY` | py | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
+| `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agents/src/gemini_ask.rs:103 |
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
 | `GITHUB_ACTIONS` | py | unclear: cli/src/fno/test_cmd.py:1859 |
@@ -307,8 +307,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `STARSHIP_CONFIG` | py | unclear: cli/src/fno/setup/starship.py:47 |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | py | unclear: cli/src/fno/cost/_register.py:480 |
-| `TARGET_ALLOW_IN_REVIEW` | py+rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
-| `TARGET_CLAIM_TTL` | py | unclear: cli/src/fno/target_cli.py:3239 |
+| `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
+| `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | py | unclear: cli/src/fno/target_cli.py:1369 |
 | `TARGET_MISSION_ID` | py | Presence marks the post-merge ritual as an autonomous run. |
 | `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |

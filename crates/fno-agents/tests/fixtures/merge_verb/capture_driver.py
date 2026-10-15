@@ -465,7 +465,10 @@ def substitute_placeholders(case_dir, head_sha, pull_sha=None):
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
                 continue
-            text = text.replace("__CASE_DIR__", str(case_dir))
+            # The physical spelling: the child's os.getcwd() resolves macOS
+            # symlinked tempdirs (/var -> /private/var), and the hold door
+            # compares the row's stored cwd against it byte-for-byte.
+            text = text.replace("__CASE_DIR__", os.path.realpath(str(case_dir)))
             if head_sha:
                 text = text.replace("__HEAD_SHA__", head_sha)
             if pull_sha:

@@ -1,1 +1,1 @@
-{"agents": ["pr-worktree"], "asked_keys": [], "events": [], "front": [], "gh": [], "worker": ["read"]}
+{"agents": ["pr-worktree", "pr-closure-context", "pr-closure-parse", "hold-verdict"], "asked_keys": [], "events": [], "front": [], "gh": ["merge-disable-auto"], "worker": ["read"]}

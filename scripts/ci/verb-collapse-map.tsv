@@ -324,12 +324,10 @@ do target check-contained	T1	do target check-contained	4
 do target check-dispatch-hold	T1	do target check-dispatch-hold	2
 do target check-review-gate	T1	do target check-review-gate	4
 do target denominator-ratio	T1	do target denominator-ratio	2
-do target init	T1	do target init	90
 do target request-self-review	T1	do target request-self-review	12
 do target resolve-model	T1	do target resolve-model	2
 do target resolve-owned-identity	T1	do target resolve-owned-identity	3
 do target review-invocation	T1	do target review-invocation	4
-do target start	T1	do target start	31
 do target status	T1	do target status	8
 do think dispatch	T1	do think dispatch	4
 do think inspect	T1	do think inspect	7
@@ -517,12 +515,10 @@ target check-contained	T1	target check-contained	4
 target check-dispatch-hold	T1	target check-dispatch-hold	2
 target check-review-gate	T1	target check-review-gate	4
 target denominator-ratio	T1	target denominator-ratio	2
-target init	KEEP	target init	90	deliberate readability slack for a high-traffic distinct operation
 target request-self-review	T1	target request-self-review	12
 target resolve-model	T1	target resolve-model	2
 target resolve-owned-identity	T1	target resolve-owned-identity	3
 target review-invocation	T1	target review-invocation	4
-target start	T1	target start	31
 target status	T1	target status	8
 test	KEEP	test	108	single-leaf group
 think dispatch	T1	think dispatch	4

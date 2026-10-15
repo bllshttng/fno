@@ -17,7 +17,6 @@ restart
 # L2 your first shipped PR
 whoami status
 status
-target start
 target status
 # L3 how "done" is decided
 pr status

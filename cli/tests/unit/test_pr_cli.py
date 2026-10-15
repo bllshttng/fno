@@ -408,6 +408,31 @@ def test_pr_merge_forwards_legacy_invoker_flag(monkeypatch):
     assert result.exit_code == 2
 
 
+def test_pr_hold_check_forwards_pr_and_repo_through_the_operand_door(monkeypatch):
+    """The plan-hold door: pr and --repo ride verbatim; the worktree
+    resolution and the hold read are the operand flow's own first hops."""
+    import subprocess
+
+    import fno.rust_binary
+
+    seen = []
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["do", "pr", "hold-check", "42", "--repo", str(Path("/srv/repo"))])
+    assert seen == [
+        ["/fake/fno-agents", "authorized-merge", "hold-check", "42", "--repo", "/srv/repo"],
+    ]
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["do", "pr", "hold-check", "7"])
+    assert seen[-1] == ["/fake/fno-agents", "authorized-merge", "hold-check", "7"]
+    assert result.exit_code == 0
+
+
 def test_closure_trailer_forwards_node_and_extra_to_the_binary(monkeypatch):
     import subprocess
 

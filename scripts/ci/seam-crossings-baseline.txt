@@ -70,8 +70,6 @@ crossing	crates/fno-agents/src/pane_stop.rs	let mut child = std::process::Comman
 crossing	crates/fno-agents/src/pr_admission.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pr_base_check.rs	let _ = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/pr_status/reviews.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/pr_status/seams.rs	let out = match std::process::Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/pr_status_facts.rs	None => Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/prove_it_verdicts.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/provider.rs	let out = match std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/provider_cap_verbs.rs	let fno = crate::scrape::fno_bin();
@@ -93,6 +91,7 @@ crossing	crates/fno-agents/src/select_read.rs	.unwrap_or_else(|_| crate::scrape:
 crossing	crates/fno-agents/src/spawn_gate.rs	let _ = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
+crossing	crates/fno-agents/src/target_start.rs	let mut ensure_cmd = Command::new("fno");
 crossing	crates/fno-agents/src/team_alarm.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno/src/attention_api.rs	crate::server::fno_bin(),
 crossing	crates/fno/src/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());

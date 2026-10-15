@@ -1879,7 +1879,7 @@ pub(crate) fn vault_write_is_temp_stray(home: Option<&Path>, cwd: &Path) -> bool
 /// to the same flat `project.id`, so one lookup covers both. An empty/`null`
 /// value, an unreadable file, or an id outside `[A-Za-z0-9._-]` yields None so
 /// the caller falls back to the basename.
-fn read_project_id(path: &Path) -> Option<String> {
+pub(crate) fn read_project_id(path: &Path) -> Option<String> {
     let t = load_config_toml(path)?;
     let id = toml_string_at(&t, &["project", "id"])?;
     // The Python settings model rejects ids outside [A-Za-z0-9._-]
@@ -1891,7 +1891,7 @@ fn read_project_id(path: &Path) -> Option<String> {
 
 /// Project ids are restricted to `[A-Za-z0-9._-]`, matching the Python
 /// `validate_project_id` regex. ASCII byte check (no `regex` dependency).
-fn valid_project_id(s: &str) -> bool {
+pub(crate) fn valid_project_id(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
