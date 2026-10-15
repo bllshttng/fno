@@ -1807,8 +1807,24 @@ impl Notice {
                     _ => text.clone(),
                 }
             }
-            // iTerm2/ConEmu OSC 9: the payload IS the body.
-            _ => text.clone(),
+            // iTerm2 OSC 9: the payload IS the body, except a ConEmu
+            // sub-command (`9;4;3;` progress, `9;1;` sleep, ...): its first
+            // field is a number 1 to 12, and it is not text for a human.
+            _ => {
+                let cmd = text.split(';').next().unwrap_or("");
+                let conemu = !cmd.is_empty()
+                    && cmd.bytes().all(|b| b.is_ascii_digit())
+                    && matches!(cmd.parse::<u8>(), Ok(1..=12));
+                if cmd == "2" {
+                    // ConEmu `9;2;<text>` is a message box: keep its text.
+                    text.split_once(';')
+                        .map_or(String::new(), |(_, t)| t.to_string())
+                } else if conemu {
+                    String::new()
+                } else {
+                    text.clone()
+                }
+            }
         };
         Notice {
             body: body.chars().filter(|c| !c.is_control()).collect(),
@@ -2677,6 +2693,13 @@ mod tests {
         let bodies: Vec<&str> = notices.iter().map(|n| n.body.as_str()).collect();
         assert_eq!(bodies, vec!["claude needs you", "iterm body", "Body"]);
         assert_eq!(frame_text(&pane.frame()), "rest");
+
+        // ConEmu OSC 9 sub-commands (Claude Code's `9;4;<state>` progress)
+        // are not notices; a body that merely starts with a digit still is.
+        pane.feed(b"\x1b]9;4;3;\x07\x1b]9;4;0\x07\x1b]9;2;box text\x07\x1b]9;5 minutes left\x07");
+        let notices = pane.take_notices();
+        let bodies: Vec<&str> = notices.iter().map(|n| n.body.as_str()).collect();
+        assert_eq!(bodies, vec!["box text", "5 minutes left"]);
 
         // An ESC inside the payload aborts the capture (the 133 garbage
         // handback discipline): no notice, every byte handed back, and the
