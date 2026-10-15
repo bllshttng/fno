@@ -114,9 +114,12 @@ fn pr_states_by_repo(refs: &[(String, i64)]) -> (BTreeMap<(String, i64), String>
     if repos.is_empty() {
         return (states, outages);
     }
-    let gh_ok = std::process::Command::new("gh")
-        .arg("--version")
-        .output()
+    // Routed through the budget door like every other gh spawn here: a
+    // 0-point version probe admits with no stamp, and the guard sees one
+    // spelling for the gh reads in this fn.
+    let mut probe = std::process::Command::new("gh");
+    probe.arg("--version");
+    let gh_ok = crate::gh_budget::output(probe)
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !gh_ok {
