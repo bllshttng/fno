@@ -33,6 +33,7 @@ pub const GATE_DEFAULT_FLOOR: i64 = 1;
 /// A setter refusal and the exit code the front door leaves with. Code 2 is
 /// a refusal that wrote nothing; code 1 is a failure after or during a write
 /// attempt.
+#[derive(Debug)]
 pub struct FloorError {
     pub code: i32,
     pub message: String,
@@ -47,7 +48,14 @@ impl FloorError {
     }
 }
 
+impl std::fmt::Display for FloorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 /// What `peel` took off the argv, and what is left to forward.
+#[derive(Debug)]
 pub struct Peeled {
     pub floor: Option<u32>,
     /// The argv with the flag and its value removed. A `--floor` after the
@@ -110,6 +118,7 @@ pub fn peel(args: &[String]) -> Result<Peeled, String> {
 /// The receipt the setter prints: the old value, the new one, the file it
 /// landed in, and - only when the value sits above `agents.max_live` - the
 /// clamp line, because `capacity` holds a floor above the ceiling at it.
+#[derive(Debug)]
 pub struct FloorReceipt {
     pub old: Option<i64>,
     pub new: u32,
