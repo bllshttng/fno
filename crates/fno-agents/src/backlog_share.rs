@@ -1514,4 +1514,87 @@ mod tests {
             "{refusal}"
         );
     }
+
+    /// The silent take-back sequence: a landed add, a peer's change on the
+    /// primary, a local update while the primary is unreachable, then a
+    /// flush the primary refuses. The take-back must keep the refused
+    /// statements for retry or inspection, and the notice must name what it
+    /// reverted.
+    #[test]
+    fn a_refused_flush_keeps_the_statements_and_the_notice_names_the_revert() {
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "fb-4908", "shared");
+        flush(&a.graph).unwrap();
+
+        // A peer moved the row on the primary behind this machine's back.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                &format!("UPDATE {NODES} SET title = 'peer' WHERE id = 'fb-4908'"),
+                [],
+            )
+            .unwrap();
+
+        // The primary goes unreachable; the write lands in the outbox only.
+        route_to_primary(Some((
+            test_primary::dead(),
+            crate::backlog::database_path(&a.graph),
+        )));
+        crate::backlog::open(&a.graph)
+            .unwrap()
+            .execute(
+                &format!(
+                    "UPDATE {NODES} SET plan_path = 'p.md', status = 'ready'
+                     WHERE id = 'fb-4908'"
+                ),
+                [],
+            )
+            .unwrap();
+        assert!(flush(&a.graph).unwrap_err().contains("is unreachable"));
+        assert!(outbox(&a) > 0);
+
+        // The primary is back. Its refusal takes the row back to the peer's.
+        on(&primary, &a);
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(refusal.starts_with(REFUSED), "{refusal}");
+        let connection = crate::backlog::open(&a.graph).unwrap();
+        let (plan_path, status): (Option<String>, String) = connection
+            .query_row(
+                &format!("SELECT plan_path, status FROM {NODES} WHERE id = 'fb-4908'"),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (plan_path.as_deref(), status.as_str()),
+            (None, "idea"),
+            "the update was taken back, so the writer must be told"
+        );
+        assert_eq!(outbox(&a), 0);
+
+        // The refused statements are kept, exactly as publish sent them.
+        let (kept, error, ops): (i64, String, String) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(MAX(error), ''), COALESCE(MAX(ops), '')
+                 FROM backlog_refused",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "the refused batch is kept");
+        assert!(error.starts_with(REFUSED), "{error}");
+        let parsed = parse_ops(&ops).unwrap();
+        assert!(
+            parsed
+                .iter()
+                .any(|c| c.table == NODES && c.columns.iter().any(|name| name == "plan_path")),
+            "{ops}"
+        );
+    }
 }
