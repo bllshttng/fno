@@ -1468,7 +1468,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn events_path() -> PathBuf {
-    crate::paths::events_path(&repo_root())
+    // The wheel's journal path, kept verbatim: the deferrals gate's stop-hook
+    // reader and the Python store clients resolve this same file, so a space
+    // resolver here would write a store the gate never reads.
+    repo_root().join(".fno").join("events.jsonl")
 }
 
 /// Read session_id from target-state.md; fall back to "manual". Resolves
