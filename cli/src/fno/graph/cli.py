@@ -68,6 +68,12 @@ from fno.graph.worked import cmd_worked as _cmd_worked  # noqa: E402
 
 from fno.graph.triage_forward import register_triage_forward  # noqa: E402
 register_triage_forward(cli)
+from fno.graph.native_forward import register_native_forward  # noqa: E402
+
+# The create/epic verbs whose bodies ported to the dispatcher; the wheel
+# keeps the route (hidden, whole-argv forward) so this wheel still serves them.
+register_native_forward(cli, "intake")
+register_native_forward(cli, "decompose")
 cli.command("worked", hidden=True)(_cmd_worked)
 
 

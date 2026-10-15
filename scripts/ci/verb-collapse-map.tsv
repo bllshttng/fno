@@ -168,6 +168,7 @@ backlog carveout resolve	T1	backlog carveout resolve	1
 backlog carveout update	T1	backlog carveout update	1
 backlog collisions check	T1	backlog collisions check	11
 backlog cost	T1	backlog cost	1
+backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
 backlog dispatch-lanes	T1	backlog dispatch-lanes	1
@@ -176,6 +177,7 @@ backlog encounter	T1	backlog encounter	0
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
 backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
+backlog intake	T1	backlog intake	32
 backlog lane-fill	T1	backlog lane-fill	2
 backlog maintain	T1	backlog maintain	7
 backlog migrate-difficulty	T1	backlog migrate-difficulty	0

@@ -11,7 +11,10 @@
 # the dangerous direction, so unsure verbs sit tracker-owned.
 
 [tracker]
-# node lifecycle + creation (add, idea and the new word answer natively)
+# node lifecycle + creation (add, idea and the new word answer natively;
+# intake and decompose ride their wheel forwards to the native door)
+intake
+decompose
 note
 supersede
 # board and queue state
