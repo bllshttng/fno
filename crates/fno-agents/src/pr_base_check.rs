@@ -244,6 +244,7 @@ fn emit_bypass(cwd: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gate_probes::Run;
 
     /// One fake probe answering the guard's whole git world from a case row:
     /// whether the fetch succeeds, the merge-base sha (None fails it), the
