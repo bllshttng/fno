@@ -41,15 +41,15 @@ cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fi
 ]}
 JSON
 
-# Case 1: the wheel no longer answers for `intake` at all. The verb moved
-# into the Rust dispatcher (its `--batch` redirect moved with it), so the
-# shim's forward now lands on the Python app's unknown-command error - the
-# wheel cut working as intended, not a shim regression.
+# Case 1: intake's `--batch` redirect answers from the native door now. The
+# verb and its redirect moved into the Rust dispatcher, and the wheel keeps
+# only the route (the triage shape), so the shim's forward lands on the
+# native removal refusal - the redirect alive, one implementation.
 OUT=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" intake --batch plans/foo 2>&1 || true)
-if echo "$OUT" | grep -qiE "No such command 'intake'"; then
-    pass "wheel no longer owns intake (native door)"
+if echo "$OUT" | grep -qiE "multi-path intake"; then
+    pass "intake --batch redirects at the native door"
 else
-    fail "wheel still answers for intake" "got: $OUT"
+    fail "intake --batch lost its redirect" "got: $OUT"
 fi
 
 # Case 2: resolver returns plan_path for a known ab- ID.
