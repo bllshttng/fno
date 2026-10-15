@@ -71,9 +71,12 @@ def test_backlog_new_writes_difficulty(tmp_graph):
 def test_capture_promote_requires_and_writes_difficulty(tmp_graph, tmp_path, monkeypatch):
     import json as _json
 
+    # The native capture add resolves its inbox from its cwd; chdir into the
+    # fixture root so a vault-linked checkout never receives the write (the
+    # state canary refuses exactly that).
+    monkeypatch.chdir(tmp_path)
     seeded = run_native_create(
         tmp_graph,
-
         "capture",
         "add",
         "promoted work",
