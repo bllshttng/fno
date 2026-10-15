@@ -775,78 +775,11 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
     assert ask["route_env"].get("FNO_ROUTE_PROVIDER") == "zai"
 
 
-def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None:
-    """A fresh routed claude thread spawn execs the lane's own bg line through
-    the launch kind: the ask carries the RAW overlays and the record
-    context (the compose happens in the door), the dispatcher path never
-    runs, and the gate still releases."""
-    from fno.agents import spawn_gate
-    from fno.agents.cli import agents_app
-
-    gate_calls: list[Any] = []
-
-    class RecordingGate(_Gate):
-        release_calls: list[bool] = []
-
-        def release(self) -> None:
-            RecordingGate.release_calls.append(True)
-
-    monkeypatch.setattr(
-        spawn_gate, "run_gate", lambda *a, **k: gate_calls.append(a) or RecordingGate()
-    )
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    row = {
-        "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
-        "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
-    }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
-    from fno.agents import spawn_lineage
-
-    monkeypatch.setattr(
-        spawn_lineage,
-        "_capture_parent_edge",
-        lambda: ("lead-1", "claude", str(tmp_path)),
-    )
-    ask_file = tmp_path / "door-ask.json"
-    fake = tmp_path / "fake-agents"
-    fake.write_text(
-        "#!/bin/sh\n"
-        'echo "$@" >> ' + str(tmp_path / "calls.log") + "\n"
-        "tee " + str(tmp_path / "stdin.log") + " > /dev/null\n"
-        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
-        'if [ "$1" = "spawn-overlay" ]; then cp '
-        + str(tmp_path / "stdin.log") + " " + str(ask_file) + "; fi\n"
-        'echo \'{"exit":0}\'\n',
-        encoding="utf-8",
-    )
-    fake.chmod(0o755)
-    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w", "go", "--harness", "claude",
-         "--substrate", "thread", "--route", "zai-flash"],
-    )
-    assert result.exit_code == 0, result.output
-    ask = json.loads(ask_file.read_text(encoding="utf-8"))
-    assert ask["harness"] == "claude"
-    assert ask["name"] == "w"
-    assert ask["payload"] == "go"
-    assert ask["route_env"].get("ANTHROPIC_AUTH_TOKEN") == "zk-live"
-    assert ask["account_env"] == {}
-    assert ask["model"] == "glm-5.3-flash[1m]"
-    assert ask["effort"] == "xhigh"
-    assert ask["provider"] == "zai"
-    assert ask["launcher_session"] == "lead-1"
-    assert RecordingGate.release_calls, "the gate still releases"
-
-
-def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, monkeypatch) -> None:
-    """A lane spawn carrying an axis the template does not express (a --model
-    override) keeps the dispatcher path - the swap is for plain lane spawns,
-    and the template's model hole belongs to the route, not a flag."""
+def test_routed_lane_spawn_always_dispatches(tmp_path: Path, monkeypatch) -> None:
+    """A routed claude thread spawn with no extra axes reaches dispatch_spawn,
+    never the spawn-overlay `launch` kind: every spawn writes its registry
+    row through the one dispatcher (x-403f), there is no separate native
+    lane relying on the SessionStart adopt to mint the row later."""
     from fno.agents import spawn_gate
     from fno.agents.cli import agents_app
 
@@ -872,13 +805,32 @@ def test_native_lane_keeps_the_dispatcher_for_templated_axes(tmp_path: Path, mon
         return SpawnResult(kind="created", name=kw["name"], provider="claude", short_id="c-1")
 
     monkeypatch.setattr("fno.agents.dispatch.dispatch_spawn", fake_dispatch)
+    # spawn-overlay is legitimately called for OTHER kinds during normal
+    # resolution (e.g. `compose`, to read the lane row); the fix is about the
+    # `launch` kind specifically, so every call's payload is appended and
+    # checked rather than asserting spawn-overlay is never invoked at all.
+    overlay_log = tmp_path / "overlay-stdin.log"
+    fake = tmp_path / "fake-agents"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "spawn-axes" ]; then echo \'{"action":"pass"}\'; exit 0; fi\n'
+        'if [ "$1" = "spawn-overlay" ]; then cat >> '
+        + str(overlay_log) + "; fi\n"
+        'echo \'{"exit":0}\'\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: fake)
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w", "go", "--harness", "claude",
-         "--route", "zai-flash", "--model", "glm-5.3-flash[1m]"],
+         "--substrate", "thread", "--route", "zai-flash"],
     )
     assert result.exit_code == 0, result.output
-    assert dispatched, "the --model override keeps the dispatcher path"
+    assert dispatched, "a plain routed thread spawn reaches dispatch_spawn"
+    assert dispatched[0]["name"] == "w"
+    overlay_calls = overlay_log.read_text(encoding="utf-8") if overlay_log.exists() else ""
+    assert '"kind": "launch"' not in overlay_calls, "the spawn-overlay launch kind is never reached"
 
 
 def test_bg_create_routed_spawn_passes_settings_flag(
