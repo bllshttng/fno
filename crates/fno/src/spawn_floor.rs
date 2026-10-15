@@ -517,6 +517,8 @@ mod tests {
         let dir = temp_dir("write");
         let target = dir.join("config.toml");
         fs::write(&target, "# my cap\n[agents]\nmax_live = 24\n").unwrap();
+        // A real user config sits at 0600; the setter preserves its mode.
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
         let receipt = set_floor_at(8, &target, &[], &dir).unwrap();
         assert!(!receipt.unchanged);
         let body = fs::read_to_string(&target).unwrap();
@@ -525,6 +527,11 @@ mod tests {
         assert!(body.contains("[agents.capacity]\nfloor = 8"), "{body}");
         let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "a written file keeps 0600");
+        // A target the setter creates lands at 0600 without a chmod.
+        let fresh = dir.join("fresh.toml");
+        set_floor_at(3, &fresh, &[], &dir).unwrap();
+        let mode = fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "a created file lands at 0600");
         assert!(
             receipt.to_string().contains("1 (default) -> 8"),
             "{receipt}"
