@@ -8609,6 +8609,40 @@ event_types:
     sources: [test, daemon, hook, loop]
     data:
       required: []
+  - name: setup_run
+    description: "One finished or blocked `fno config setup run`: the run id, host, outcome and wall duration. Emitted once per run after the verify block, on both the JSON and human output paths; never on the read-only modes (--dry-run, --list, --export, --check)."
+    sources: [cli]
+    data:
+      required: [run_id, host, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        host:
+          type: string
+        outcome:
+          type: string
+          enum: [finished, blocked]
+        duration_ms:
+          type: integer
+  - name: setup_step
+    description: "One setup step inside a `fno config setup run`: the run id, the step id, its outcome (done, skipped, or blocked), the wall duration, and the skip reason or report code when one applies. Emitted after the step loop, one row per step, beside setup_run."
+    sources: [cli]
+    data:
+      required: [run_id, step, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        step:
+          type: string
+        outcome:
+          type: string
+          enum: [done, skipped, blocked]
+        duration_ms:
+          type: integer
+        skip_reason:
+          type: string
+        code:
+          type: string
 # Size cap per Failure Modes (Boundaries): the system rejects events whose
 # data payload exceeds 64KB. Validators enforce this at validate() time.
 limits:
