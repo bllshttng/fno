@@ -1770,8 +1770,7 @@ fn start_codex_native(
             if rc > 0 { rc } else { 1 },
         ));
     }
-    let manifest = cwd.join(".fno").join("target-state.md");
-    if manifest.is_file() && !manifest.is_symlink() {
+    if let Some(manifest) = worktree_manifest(cwd) {
         let manifest_node = manifest_node_id(&manifest);
         let requested_graph_node = find_node(node, None);
         if requested_graph_node.is_none() {
@@ -1955,8 +1954,7 @@ fn prepare_codex_native_branch(cwd: &Path, node: &str) -> Result<String, Fail> {
     };
     let current = git_out(cwd, &["branch", "--show-current"]).unwrap_or_default();
     if current == branch {
-        let manifest = cwd.join(".fno").join("target-state.md");
-        if !(manifest.is_file() && !manifest.is_symlink()) {
+        if worktree_manifest(cwd).is_none() {
             let head_sha = git_out(cwd, &["rev-parse", "HEAD"]);
             let base_sha = git_out(cwd, &["rev-parse", &base]);
             match (head_sha, base_sha) {

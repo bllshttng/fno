@@ -27,7 +27,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import typer
 
