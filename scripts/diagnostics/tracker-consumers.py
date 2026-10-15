@@ -85,6 +85,10 @@ READ_ALLOWLIST = (
     # pattern-matches protected filenames in hook payloads to refuse
     # writes; it never opens the store.
     "crates/fno-agents/src/hook/write_gate.rs",
+    # The target-init port's dispatch-hold refusal prose names the store
+    # file ("restore graph.json and retry"); the module's own read routes
+    # through graph_store like the backlog namespace's.
+    "crates/fno-agents/src/target_init.rs",
 )
 
 # Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the

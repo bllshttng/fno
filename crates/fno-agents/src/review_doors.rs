@@ -11,6 +11,8 @@ pub fn dispatch(verb: &str, rest: &[String]) -> Option<i32> {
         "review-summary" => Some(crate::review_summary::run_review_summary(rest)),
         "review-level" => Some(run_review_level_door(rest)),
         "review-policy" => Some(crate::review_policy::run_review_policy(rest)),
+        "target-init" => Some(crate::target_init::run(rest)),
+        "target-blast-check" => Some(crate::target_blast::run_blast_check(rest)),
         _ => None,
     }
 }

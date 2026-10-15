@@ -35,7 +35,7 @@ from typing import Any, Callable, NoReturn, Optional, Tuple
 
 import typer
 
-from fno._subprocess_util import propagate_returncode, run_bounded
+from fno._subprocess_util import run_bounded
 from fno.paths import git_common_dir, resolve_plugin_script
 from fno.tombstones import tombstone_group_cls
 
@@ -221,43 +221,6 @@ def _refuse_unreachable_github_apps() -> None:
 _SIZE_ORDER = {"S": 0, "M": 1, "L": 2}
 
 
-def _modulate_size(
-    verdict: str,
-    *,
-    size_explicit: bool,
-    operator_size: Optional[str],
-    downgrade: bool,
-    matched_paths: Optional[list] = None,
-) -> tuple[Optional[str], Optional[str]]:
-    """Pure blast -> effective-size decision (Locked Decision 1: floor up, cautious down).
-
-    Returns ``(effective_size, announce)``:
-      * ``effective_size`` is the token to FORCE into TARGET_SIZE, or ``None``
-        meaning "leave the operator/default size untouched".
-      * ``announce`` is a one-line human note, or ``None`` when nothing changed.
-
-    Rules:
-      high    -> floor at ``M``: max(base, M), even over an explicit ``S``
-                 (non-overridable downward). base is the operator size or the
-                 implicit ``M`` default. Always pins the floor (so a re-init
-                 reads the floored size, never regresses).
-      low     -> downgrade to ``S`` ONLY when ``downgrade`` and the size was
-                 NOT explicitly pinned. An explicit size is never downgraded.
-      unknown -> no change (fail-safe to today's behavior).
-    """
-    base = operator_size or "M"
-    if verdict == "high":
-        floor = "M"
-        effective = base if _SIZE_ORDER[base] >= _SIZE_ORDER[floor] else floor
-        hit = (matched_paths or ["control-plane"])[0]
-        if effective != base:
-            note = f"blast: high ({hit}) -> floor {effective} (operator size {base} raised)"
-        else:
-            note = f"blast: high ({hit}); ceremony already at/above floor M (size {base})"
-        return effective, note
-    if verdict == "low" and downgrade and not size_explicit:
-        return "S", "blast: low -> fast path S (no size pinned)"
-    return None, None
 
 
 def _load_blast_cfg():
@@ -287,92 +250,8 @@ def _repo_root_or_none() -> Optional[str]:
         return None
 
 
-def _resolve_plan_for_blast(plan_path: Optional[str], input_: Optional[str]) -> Optional[str]:
-    """Plan path the blast read should classify, or None to skip.
-
-    Honors Locked Decision 2 (plan AND node inputs covered): an explicit
-    ``--plan-path`` wins; otherwise the ``--input`` is tokenized and each token
-    is matched (exact, case-insensitive, format-agnostic) against a graph entry
-    id. This covers modifier-prefixed node inputs - the auto-continue path
-    builds ``/target --no-merge <id>`` and passes the original arg to
-    ``fno do target init`` - while a free-text feature description (no token equals
-    an id) simply skips. Exactly one distinct node match is required; zero or
-    ambiguous (>=2) -> skip. No fuzzy title guessing, so a description never
-    mis-resolves. Fail-safe to None on any error.
-    """
-    if plan_path:
-        return plan_path
-    tokens = (input_ or "").split()
-    if not tokens:
-        return None
-    try:
-        from fno.graph.load import load_graph
-        from fno.graph.store import read_nodes_by_ids
-        from fno.paths import graph_json
-
-        fast = read_nodes_by_ids(graph_json(), tokens)
-        graph_data = fast["entries"] if fast is not None else load_graph(graph_json())
-        if not isinstance(graph_data, list):
-            return None
-        by_id = {
-            entry["id"].lower(): entry
-            for entry in graph_data
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str) and not entry.get("archived_at")
-        }
-        matched = {tok.lower(): by_id[tok.lower()] for tok in tokens if tok.lower() in by_id}
-        if len(matched) == 1:
-            return next(iter(matched.values())).get("plan_path") or None
-    except Exception:
-        return None
-    return None
 
 
-def _resolve_plan_pointer(plan_path: str) -> Optional[str]:
-    """The plan pointer to bind, NORMALIZED, or None when it does not resolve.
-
-    Returns the resolved pointer rather than a bool because the value written to
-    the write-once manifest must be the one whose existence was proven. ``~`` is
-    expanded here but NOT by init-target-state.sh - bash does not tilde-expand a
-    variable's value - so admitting a ``~``-prefixed pointer and then storing the
-    raw string would pass this check and read as missing in every consumer, which
-    is the exact wedge this gate exists to prevent. A ``#group-N`` anchor is
-    stripped for the stat the way the shell does (``${INITIAL_PLAN_PATH%%#*}``)
-    and preserved on the way out. A RELATIVE pointer resolves against the repo
-    root, not the process cwd: the graph is global (one graph.json spans every
-    project), so a relative plan_path in it is repo-root-relative by convention
-    and is meaningless against a caller's cwd. Normalizing it to absolute here is
-    also what makes the shell safe, because init-target-state.sh does NOT anchor
-    relative paths - both of its plan stats are bare and cwd-relative - so
-    handing it a still-relative pointer is what would break it from a
-    subdirectory. Do not "simplify" this back to passing the raw string through.
-
-    A footnote plan can be a file or a directory whose entry point is
-    ``00-INDEX.md``. Resolve that entry point and read it before binding so an
-    existing but unreadable plan cannot start a planless worker.
-
-    Fail-CLOSED to None, the opposite of ``_resolve_plan_for_blast`` above and
-    deliberately so: an unresolved blast read only forgoes ceremony modulation,
-    while an unverified pointer here makes initialization refuse before the
-    write-once manifest is created.
-    """
-    try:
-        bare, sep, anchor = plan_path.partition("#")
-        bare = bare.strip()
-        if not bare:
-            return None
-        resolved = Path(bare).expanduser()
-        if not resolved.is_absolute():
-            root = _repo_root_or_none()
-            if root:
-                resolved = Path(root) / resolved
-        if not resolved.exists():
-            return None
-        from fno.target.blast import resolve_plan_index
-
-        resolve_plan_index(resolved).read_text(encoding="utf-8")
-        return f"{resolved}{sep}{anchor}"
-    except Exception:
-        return None
 
 
 _TARGET_NODE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$", re.IGNORECASE)
@@ -1044,40 +923,25 @@ def blast_check(
 ) -> None:
     """Classify a plan's touched surface as high / low / unknown blast radius.
 
-    Prints JSON ``{verdict, matched_paths, reason}`` (``--quiet`` prints the
-    bare token). Always exits 0 and always returns a verdict, even on an
-    unreadable plan or a classifier error (-> ``unknown``): the caller treats a
-    non-``high``/``low`` verdict as "leave ceremony unchanged", so this verb can
-    never block a target init.
+    `fno do target blast-check` runs in the fno-agents binary now: this
+    command is a thin forward and the classifier is the native
+    `target_blast.rs` door, the same leg the init modulation reads.
     """
-    from fno.target.blast import (
-        UNKNOWN,
-        classify,
-        parse_ownership_map,
-        resolve_plan_index,
-    )
+    from fno.rust_binary import resolve_binary
 
-    try:
-        text = resolve_plan_index(plan).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        result = {
-            "verdict": UNKNOWN,
-            "matched_paths": [],
-            "reason": f"cannot read plan {plan!r}: {exc}",
-        }
-    else:
-        cfg = _load_blast_cfg()
-        paths = parse_ownership_map(text)
-        try:
-            result = classify(paths, cfg, repo_root=_repo_root_or_none())
-        except Exception as exc:  # noqa: BLE001 - fail-safe to unknown, never raise
-            result = {
-                "verdict": UNKNOWN,
-                "matched_paths": [],
-                "reason": f"classifier error: {exc}",
-            }
-
-    typer.echo(result["verdict"] if quiet else json.dumps(result))
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do target blast-check: the classifier is native, but no "
+            "fno-agents binary resolved (set FNO_AGENTS_BIN or install "
+            "fno-agents)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    cmd = [str(binary), "target-blast-check", plan]
+    if quiet:
+        cmd.append("--quiet")
+    raise typer.Exit(code=subprocess.run(cmd).returncode)
 
 
 # Exit code meaning "this gate refused", distinct from every code Click itself
@@ -1696,443 +1560,49 @@ def init(
         "falsifiable where an absent denominator is not.",
     ),
 ) -> None:
-    """Bootstrap a target session via the canonical init script.
+    """Bootstrap a target session (native decision layer).
 
-    Requires --input or --plan-path. With neither, exits non-zero and writes
-    no state file: a stub (empty input + plan) is exactly what the stop hook
-    archives, so refusing it here prevents the archive loop at the source.
+    `fno do target init` runs in the fno-agents binary now: this command is a
+    thin forward so Python `start`'s subprocess composition (via
+    `_resolve_fno_cmd()`) keeps working. The refusals, the gates, the helper
+    env, and the orientation report are the native door's, held byte-identical
+    by the frozen parity goldens.
     """
-    if not input_ and not plan_path:
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
         typer.echo(
-            "fno do target init: requires --input <text|ab-id> or --plan-path <path>.\n"
-            "Refusing to write a stub state file (empty input + plan); the stop "
-            "hook would archive it, and a re-running bootstrap loops.\n"
-            'Example: fno do target init --input "fix the login redirect bug"',
+            "fno do target init: the decision layer is native, but no "
+            "fno-agents binary resolved (set FNO_AGENTS_BIN or install "
+            "fno-agents)",
             err=True,
         )
-        raise typer.Exit(code=2)
-
-    # The denominator is a positive integer or absent. Zero/negative is refused
-    # at parse, never stored: a stamped 0 would read as "deliver nothing" and
-    # invert the gate. Absent (the default) leaves the field out of the manifest
-    # entirely, which is distinct from 0 - absence is the unmeasurable case the
-    # denominator gate keys on, never a measured-zero (AC1-DENOM). Runs before
-    # the review gates and plugin resolution: a usage error surfaces as itself,
-    # not as a later missing-plugin or unsatisfiable-reviewer message.
-    if deliverables is not None and deliverables <= 0:
-        typer.echo(
-            f"fno do target init: --deliverables must be a positive integer (got "
-            f"{deliverables}). Omit it for plan-backed runs; the plan's task "
-            f"count is the denominator.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    _refuse_unsatisfiable_reviewers()
-    _refuse_unreachable_github_apps()
-
-    script_path = _resolve_init_script()
-    if not script_path.is_file():
-        # Capability-accurate degrade (US3 / AC3-ERR): a bare `pip install fno`
-        # ships the CLI + binaries but NOT the footnote plugin (skills + hooks),
-        # so there is no pipeline for `target init` to bootstrap. Name the
-        # missing capability and the install path - never a 127 or traceback.
-        # In a clone the script is present and this branch never fires, so
-        # in-clone behavior is byte-for-byte unchanged (AC3-HP). The is_file()
-        # check runs before any subprocess, so no partial state is written
-        # (AC3-FR / AC3-EDGE).
-        typer.echo(
-            "fno do target init: needs the footnote plugin (skills + hooks), which "
-            "a bare `pip install fno` does not ship - the bundled CLI has no "
-            "pipeline to bootstrap.\n"
-            "Install the plugin and run from its checkout:\n"
-            "  clone the footnote repo, then run `claude --plugin-dir "
-            "/path/to/footnote`\n"
-            "Or set CLAUDE_PLUGIN_ROOT / FNO_REPO_ROOT to an existing plugin "
-            f"checkout. (resolved, not on disk: {script_path})",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-
-    normalized_size: Optional[str] = None
-    if size is not None:
-        normalized_size = size.strip().upper()
-        if normalized_size not in {"S", "M", "L"}:
-            typer.echo(
-                f"fno do target init: invalid --size {size!r}; expected S, M, or L.",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-
-    # Validate the dispatch pins before writing any state. Empty --model/--harness
-    # is a usage error (never a forwarded empty argv token); the harness pin is
-    # resolved only when given, so an absent pin lets the spawn path infer the
-    # harness at dispatch time rather than freezing it here.
-    from fno._flag_aliases import refuse_retired_provider
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        reject_empty_model,
-        resolve_dispatch_harness,
-    )
-
-    refuse_retired_provider(_provider_tombstone)
-
-    try:
-        dispatch_model = reject_empty_model(model)
-        dispatch_harness = (
-            resolve_dispatch_harness(harness)[0] if harness is not None else None
-        )
-    except DispatchFlagError as exc:
-        typer.echo(f"fno do target init: {exc}", err=True)
-        raise typer.Exit(code=2)
-
-    # Resolved once and shared: both gates below want the same exact-match
-    # node, and the graph is read ONCE for all of them (round-12 finding 10).
-    # An unreadable graph on a NAMED dispatch refuses here - the resolver's
-    # old fail-open swallowed the read failure before the hold gate could see
-    # it, silently skipping the check exactly when nothing could prove the
-    # plan unheld. Free text keeps its proceed path.
-    _dispatch_entries = _graph_entries_or_none()
-    if _dispatch_entries is None and (
-        _input_may_name_a_node(input_) or plan_path
-    ):
-        _refuse_unreadable_graph_hold("init")
-    _dispatch_node = _resolve_dispatch_node(
-        input_, plan_path, entries=_dispatch_entries or []
-    )
-
-    _refuse_dispatch_hold(_dispatch_node, entries=_dispatch_entries)
-
-    # A named contained node is redirected to its delivery unit before anything
-    # is claimed (task 1.3b).
-    _redirect_if_contained(_dispatch_node)
-    _binding = _target_binding(
-        input_, _dispatch_node.get("id"), plan_path, "init", exit_on_fork=True
-    ) if isinstance(_dispatch_node, dict) else {}
-
-    from fno.harness_identity import env_marks_unattended
-
-    # Retro-triaged nodes get a dispatch-time dedup check before the shell
-    # bootstrap acquires the node claim. Ordinary target inputs return early;
-    # probe failures remain fail-open toward dispatch.
-    _retro_dispatch_preflight(
-        _dispatch_node,
-        beastmode=beastmode,
-        unattended=env_marks_unattended(os.environ),
-    )
-
-    # Blast-radius modulation: a deterministic blast read on the plan's
-    # File Ownership Map can raise ceremony to an M floor (high blast) or drop to
-    # the S fast path (low blast, unpinned size) BEFORE the immutable manifest is
-    # written. Plan AND node inputs are covered (a free-text input has no surface
-    # yet -> skipped). Gated on config.target.blast.enabled FIRST, so the disabled
-    # path does zero extra work (no graph load, no classify) and is byte-for-byte
-    # today's behavior. Every failure degrades to "unknown" -> no change.
-    cfg = _load_blast_cfg()
-    blast_plan = (
-        _resolve_plan_for_blast(plan_path, input_)
-        if getattr(cfg, "enabled", False)
-        else None
-    )
-    if blast_plan:
-        try:
-            from fno.target.blast import (
-                classify,
-                parse_ownership_map,
-                resolve_plan_index,
-            )
-
-            plan_text = resolve_plan_index(blast_plan).read_text(encoding="utf-8")
-            result = classify(
-                parse_ownership_map(plan_text),
-                cfg,
-                repo_root=_repo_root_or_none(),
-            )
-        except Exception:  # noqa: BLE001 - fail-safe: any error -> unchanged
-            result = {"verdict": "unknown", "matched_paths": []}
-        # An existing TARGET_SIZE in the env is an operator pin too (the
-        # documented init path lets callers pin the resolved profile via the env
-        # var, not only --size). Treat it as explicit so a low-blast plan never
-        # strips ceremony the operator already pinned.
-        env_size: Optional[str] = os.environ.get("TARGET_SIZE", "").strip().upper()
-        env_size = env_size if env_size in {"S", "M", "L"} else None
-        effective, announce = _modulate_size(
-            result.get("verdict", "unknown"),
-            size_explicit=size is not None or env_size is not None,
-            operator_size=normalized_size or env_size,
-            downgrade=bool(getattr(cfg, "downgrade", True)),
-            matched_paths=result.get("matched_paths", []),
-        )
-        if effective is not None:
-            normalized_size = effective
-        if announce:
-            typer.echo(announce, err=True)
-
-    # Carry the resolved node's bound plan_path into the manifest when the caller
-    # gave a node input but no --plan-path. init-target-state.sh sources plan_path
-    # only from TARGET_PLAN_PATH (= --plan-path), so without this a `start <node>`
-    # whose node already has a plan bound writes plan_path: "" to the immutable
-    # manifest and the orienter reports "plan: none", forcing a manual
-    # first-fill. An explicit --plan-path wins; an idea-first free-text input
-    # resolves no node and stays empty for the legitimate blueprint-then-first-fill
-    # flow. Reuses the same fail-safe node->plan resolver the blast read uses.
-    #
-    # Gated on the plan resolving to a readable plan, because the manifest is
-    # WRITE-ONCE
-    # and `fno do state set --field plan_path` accepts a first-fill only while the
-    # field is EMPTY (else exit 5). Back-filling a dangling pointer would
-    # therefore not just record a bad path, it would close the only legal repair
-    # route. Continuing empty would instead run a planned node without its plan,
-    # so this path refuses before writing either state.
-    # What gets bound is the NORMALIZED pointer the gate proved, never the raw
-    # graph string - see _resolve_plan_pointer for why storing the raw form
-    # re-opens the wedge on a `~` path. An explicit --plan-path goes through the
-    # same read gate: naming a broken path must refuse loudly, never write a
-    # broken pointer or continue planless.
-    if plan_path:
-        explicit_plan = plan_path
-        bound = _resolve_plan_pointer(explicit_plan)
-        if not bound:
-            typer.echo(
-                f"fno do target init: REFUSING because the explicit --plan-path "
-                f"does not resolve to a readable plan ({explicit_plan}). "
-                f"Correct --plan-path and retry.",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        plan_path = bound
-    else:
-        resolved_plan = _resolve_plan_for_blast(None, input_)
-        if resolved_plan:
-            bound = _resolve_plan_pointer(resolved_plan)
-            if bound:
-                plan_path = bound
-            else:
-                typer.echo(
-                    f"fno do target init: REFUSING because the node's bound plan_path "
-                    f"does not resolve to a readable plan ({resolved_plan}). "
-                    f"Repair the node with: fno backlog update <id> --plan-path <path>",
-                    err=True,
-                )
-                raise typer.Exit(code=2)
-
-    # Scope denominator: a plan-less code node states its own scope. The
-    # deliverables count is derived from the node's own details (highest
-    # ordinal marker, a two-member construction, else 1) and the run proceeds
-    # - the derived count is falsifiable, so 'shipped M of N' stays
-    # expressible without a blueprint. Fires only for a resolved node - a
-    # free-text idea makes its own denominator via /blueprint, and a bound
-    # plan back-filled just above already satisfies it. Sits AFTER the
-    # back-fill and BEFORE the manifest is written. An explicit
-    # --deliverables wins; the derivation stamps the manifest when absent.
-    _deliverables_derived = False
-    if (
-        deliverables is None
-        and not (plan_path and plan_path.strip())
-        and isinstance(_dispatch_node, dict)
-        and _dispatch_node.get("domain") == "code"
-    ):
-        from fno.target.denominator import derive_deliverables
-
-        deliverables = derive_deliverables(
-            str(_dispatch_node.get("title") or ""),
-            str(_dispatch_node.get("details") or ""),
-        )
-        _deliverables_derived = True
-        typer.echo(
-            f"fno do target init: no plan bound, so the deliverables count is "
-            f"derived from the node's own details: {deliverables}. Pass "
-            f"--deliverables N to declare a different count.",
-            err=True,
-        )
-
-    # A DECLARED required binding revalidates natively before the claim;
-    # undeclared = no gate, so no binary is needed to decline one.
-    if (os.environ.get("FNO_TASK_CONTEXT_FILE") or "").strip():
-        from fno.rust_binary import VerbUnavailable, verb_call
-
-        try:
-            gate = verb_call("task-context-gate", {"node": str((_dispatch_node or {}).get("id") or ""), "root": str(Path.cwd())})
-        except VerbUnavailable as exc:
-            gate = {"ok": False, "reason": "context_native_verifier_unavailable", "detail": str(exc)}
-        if not gate.get("ok"):
-            detail = f" ({gate.get('detail')})" if gate.get("detail") else ""
-            typer.echo(f"fno do target init: task-context gate refused: {gate.get('reason')}{detail}", err=True)
-            raise typer.Exit(code=2)
-
-    # First-bind the graph pointer (change 2), the reverse leg of the
-    # backfill above: init --plan-path wrote only the manifest, so the
-    # graph never learned the plan exists. Sits after every refusal
-    # and outside every claim gate - a fact about the node, not about who
-    # holds the claim.
-    if plan_path and isinstance(_dispatch_node, dict):
-        _bind_node_plan_path(_dispatch_node, plan_path)
-
-    env = dict(os.environ)
-    env["TARGET_START"] = "1"
-    env["FNO_TARGET_BINDING"] = str(_binding.get("verdict") or "")
-    env["TARGET_ADOPTED_PR"] = str(_binding.get("pr") or "")
-    # Change D: resolve `attended` from the substrate before the bash
-    # manifest writer runs. Marking the run unattended makes init stamp
-    # `attended: false`, so the skill surfaces offers as non-blocking lines
-    # instead of a [Y/n] that hangs a detached session.
-    #
-    # The read used to be FNO_AGENT_SELF presence, which is not the substrate:
-    # every spawn substrate injects it, pane included, and pane is the default.
-    # A context-warm pane worker with an operator watching stamped
-    # `attended: false`. `env_marks_unattended` reads the substrate the
-    # spawner stamped. An explicit TARGET_UNATTENDED still always wins.
-    if "TARGET_UNATTENDED" not in env and env_marks_unattended(env):
-        env["TARGET_UNATTENDED"] = "1"
+        raise typer.Exit(code=1)
+    cmd = [str(binary), "target-init"]
     if input_:
-        env["TARGET_INPUT"] = input_
+        cmd += ["--input", input_]
     if plan_path:
-        env["TARGET_PLAN_PATH"] = plan_path
-    if normalized_size:
-        env["TARGET_SIZE"] = normalized_size
-    if dispatch_model:
-        env["TARGET_DISPATCH_MODEL"] = dispatch_model
-    # The env var and the manifest field keep their spelling: both are read by
-    # other processes and are wave 5's to move, not this wave's.
-    if dispatch_harness:
-        env["TARGET_DISPATCH_PROVIDER"] = dispatch_harness
-    if deliverables is not None:
-        env["TARGET_DELIVERABLES"] = str(deliverables)
-    # Sole authority: an inherited TARGET_BEASTMODE must never self-grant (spawns
-    # inherit the parent env wholesale, so per-provider scrubbing cannot cover it).
-    env["TARGET_BEASTMODE"] = "1" if beastmode else ""
-    # Asymmetric on purpose: --no-merge SETS the refusal but never clears an
-    # inherited one, so a stray flag omission cannot upgrade a run to mergeable.
+        cmd += ["--plan-path", plan_path]
+    if size:
+        cmd += ["--size", size]
+    if model:
+        cmd += ["--model", model]
+    if harness:
+        cmd += ["--harness", harness]
+    if _provider_tombstone:
+        cmd += ["--provider", _provider_tombstone]
+    if beastmode:
+        cmd += ["--beastmode"]
     if no_merge:
-        env["TARGET_NO_MERGE"] = "1"
-    # The review-capability gate already ran in-process above; say so, or the
-    # script runs it again. Not free to repeat: resolve_github_apps
-    # probes GitHub with two 30s-timeout `gh` calls per unrecognized login.
-    env["FNO_TARGET_INIT_GATED"] = "1"
-
-    # Stamp the launcher's process-bound harness proof for the script and the
-    # owned-identity verb it spawns. THIS process is the outermost
-    # spawn of the command, where os.getppid() is still readable; under the
-    # codex sandbox every DEEPER fork (the script bash, the verb inside it)
-    # hits PermissionError reading its parent's ppid, so their walk returns
-    # None and collision-elimination then rejects the worker's own registry
-    # row. FNO_SESSION_PID is the existing launcher-override seam
-    # (resolve_session_pid honors it); FNO_SESSION_HARNESS rides the same
-    # trust and resolve_session_harness honors the pair only while the pid is
-    # alive. A dead or forged pair fails closed to the walk's own answer.
-    if "FNO_SESSION_HARNESS" not in env:
-        from fno.claims.session_pid import resolve_session_harness, resolve_session_pid
-
-        _proven_harness = resolve_session_harness()
-        if _proven_harness:
-            env["FNO_SESSION_HARNESS"] = _proven_harness
-            _proven_pid = resolve_session_pid()
-            if _proven_pid:
-                env["FNO_SESSION_PID"] = str(_proven_pid)
-
-    proc = subprocess.run(["bash", str(script_path)], check=False, env=env)
-    if proc.returncode == 0:
-        if beastmode:
-            _warn_if_authority_not_granted()
-        _print_orientation_report()
-        _maybe_dispatch_work_start()
-        _maybe_reconcile_lane_slot()
-        _maybe_check_resume_receipt()
-        _record_denominator_choice(
-            plan_path, deliverables, _dispatch_node, derived=_deliverables_derived
-        )
-    raise typer.Exit(code=propagate_returncode(proc.returncode))
+        cmd += ["--no-merge"]
+    if deliverables is not None:
+        cmd += ["--deliverables", str(deliverables)]
+    raise typer.Exit(code=subprocess.run(cmd).returncode)
 
 
-def _bind_node_plan_path(node: dict, plan_path: str) -> None:
-    """First-bind the graph node's ``plan_path`` at init (change 2).
-
-    Shells to ``fno backlog update`` because that verb is the one choke point
-    every plan_path write already goes through (same posture as
-    ``fno.research.deliverable._bind_plan_path``). Never overwrites a
-    non-empty stored value (a group child shares one plan); non-fatal on
-    failure, matching the shell hook's lock-stamp posture.
-    """
-    node_id = str(node.get("id") or "").strip()
-    if not node_id:
-        return
-    stored = node.get("plan_path")
-    stored_str = stored.strip() if isinstance(stored, str) else ""
-    if stored_str:
-        try:
-            same = (
-                Path(stored_str).expanduser().resolve()
-                == Path(plan_path).expanduser().resolve()
-            )
-        except OSError:
-            same = stored_str == plan_path
-        if same:
-            return
-        typer.echo(
-            f"fno do target init: graph node {node_id} is already bound to "
-            f"{stored_str}; leaving it untouched",
-            err=True,
-        )
-        return
-    try:
-        result = subprocess.run(
-            ["fno", "backlog", "update", node_id, "--plan-path", plan_path],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        typer.echo(f"WARNING: could not bind {plan_path} to {node_id}: {exc}", err=True)
-        return
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()[:200]
-        typer.echo(
-            f"WARNING: could not bind {plan_path} to {node_id}: {detail}",
-            err=True,
-        )
-        return
-    typer.echo(f"fno do target init: bound graph node {node_id} to {plan_path}", err=True)
 
 
-def _record_denominator_choice(
-    plan_path: Optional[str],
-    deliverables: Optional[int],
-    node: Optional[dict],
-    *,
-    derived: bool = False,
-) -> None:
-    """Emit a ``target_denominator`` event for the deliverables-1 ratio.
-
-    Best-effort: a recording failure never fails a successful init. A declared
-    ``--deliverables`` exit stays the load-bearing bypass risk (reflexive N=1
-    degrades the measurement to a formality); a derived count records as its
-    own kind so it never reads as a declaration in the ratio.
-    """
-    try:
-        from fno.events import _build, append_event
-        from fno.target.denominator import enumerated_scope
-
-        if plan_path and plan_path.strip():
-            denominator = "plan"
-        elif derived:
-            denominator = "derived"
-        elif deliverables is not None:
-            denominator = "deliverables"
-        else:
-            denominator = "none"
-        data: dict = {"denominator": denominator}
-        if deliverables is not None:
-            data["count"] = deliverables
-        if isinstance(node, dict):
-            data["enumerated"] = enumerated_scope(
-                str(node.get("title") or ""), str(node.get("details") or "")
-            )
-        # init's cwd IS the repo root (the manifest was just written to
-        # .fno/target-state.md relative), so the default events path lands beside
-        # it without a resolve_repo_root git round-trip on every successful init.
-        append_event(_build("target_denominator", "target", data))
-    except Exception:  # noqa: BLE001 - a measurement failure must not fail init
-        pass
 
 
 def _warn_no_merge_dropped() -> None:
@@ -2197,210 +1667,14 @@ def _warn_if_authority_not_granted(project_root: Optional[Path] = None) -> None:
     typer.echo(f"--beastmode did NOT take - this session has no authority grant.\n{fix}", err=True)
 
 
-def _maybe_reconcile_lane_slot() -> None:
-    """Bind a parallel-mode lane slot to THIS worker's lifecycle (LD#8).
-
-    Runs right after the init script claims ``node:<id>``. A parallel-mode
-    dispatcher (``fno backlog dispatch-lanes``) holds a lane slot
-    (``parallel-lane:<node>``) across the spawn->init window, TTL-anchored to
-    itself; now that this worker owns the node, re-anchor that slot to the
-    worker's durable session pid so the native lane count tracks the real lane
-    and frees the slot when the worker ends. A no-op for every non-parallel run
-    (this node holds no lane slot) and for a missing pid. Strictly non-fatal:
-    never affects the init exit code the caller propagates.
-    """
-    try:
-        from fno.paths import resolve_repo_root
-
-        repo_root = resolve_repo_root()
-        manifest = repo_root / ".fno" / "target-state.md"
-        text = manifest.read_text(encoding="utf-8")
-        m = re.search(r"^graph_node_id\s*:\s*(.+)$", text, re.MULTILINE)
-        if not m:
-            return
-        node_id = m.group(1).strip().strip("\"'")
-        if not node_id or node_id == "null":
-            return
-        import subprocess
-
-        from fno.claims.session_pid import resolve_session_pid
-        from fno.rust_binary import resolve_binary
-
-        binary = resolve_binary()
-        if binary is not None:
-            subprocess.run(
-                [
-                    str(binary), "claim", "lane-reconcile",
-                    "--lane", node_id, "--pid", str(resolve_session_pid()),
-                ],
-                capture_output=True, timeout=30, check=False,
-            )
-    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
-        pass
 
 
-def _maybe_check_resume_receipt() -> None:
-    """Best-effort resume-receipt gate on the successor entry path.
-
-    When a prior session left a durable receipt for this node, revalidate it
-    against live claim/HEAD/worktree state and surface the verdict. Non-blocking:
-    prints a verdict line to stderr (a warning on fail-closed) but never affects
-    the init exit code. Hard fail-closed enforcement - which must order the gate
-    BEFORE claim acquisition, a succession-protocol change - is tracked as
-    follow-up; this makes the gate run on every resume so a stale/foreign
-    receipt is observable rather than silently bypassed.
-    """
-    try:
-        from fno.paths import resolve_repo_root
-
-        root = resolve_repo_root()
-        manifest = root / ".fno" / "target-state.md"
-        text = manifest.read_text(encoding="utf-8")
-        node_m = re.search(r"^graph_node_id\s*:\s*(\S+)", text, re.MULTILINE)
-        if not node_m:
-            return
-        node = node_m.group(1).strip().strip("\"'")
-        if not node or node == "null":
-            return
-        from fno.resume.cli import (
-            _artifacts_dir,
-            _find_latest_receipt,
-            _git_head_and_branch,
-            _holder_of,
-            _live_claim_status,
-        )
-        from fno.resume.receipt import (
-            MalformedReceiptError,
-            load_receipt,
-            read_node_events,
-            revalidate,
-        )
-
-        latest = _find_latest_receipt(node, _artifacts_dir(root))
-        if latest is None:
-            return  # fresh node: no predecessor receipt to revalidate
-        try:
-            receipt = load_receipt(latest)
-        except MalformedReceiptError as exc:
-            typer.echo(f"target: resume receipt for {node} is malformed: {exc}", err=True)
-            return
-        sid_m = re.search(r"^session_id\s*:\s*(\S+)", text, re.MULTILINE)
-        own_session = sid_m.group(1).strip().strip("\"'") if sid_m else receipt.identity.session
-        live_head, live_branch = _git_head_and_branch(root)
-        claim = _live_claim_status(node, None)
-        events_path = root / ".fno" / "events.jsonl"
-        node_events = (
-            [e for e in read_node_events([events_path]) if _receipt_event_node(e) == node]
-            if events_path.exists() else []
-        )
-        res = revalidate(
-            receipt,
-            live_head=live_head,
-            live_branch=live_branch,
-            worktree_exists=root.exists(),
-            live_claim_holder=_holder_of(claim),
-            own_session=own_session,
-            node_events=node_events,
-        )
-        if res.ok:
-            typer.echo(
-                f"target: resume receipt for {node} revalidated ok "
-                f"(gen {receipt.identity.generation}, head {receipt.head[:8]})",
-                err=True,
-            )
-        else:
-            typer.echo(
-                f"target: resume receipt for {node} FAIL-CLOSED ({res.reason}) - "
-                "revalidate before proceeding; see `fno do resume receipt validate`",
-                err=True,
-            )
-    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
-        pass
 
 
-def _receipt_event_node(e: dict) -> Optional[str]:
-    for key in ("node_id", "graph_node_id"):
-        v = e.get(key)
-        if isinstance(v, str) and v:
-            return v
-    data = e.get("data")
-    if isinstance(data, dict):
-        for key in ("node_id", "graph_node_id"):
-            v = data.get(key)
-            if isinstance(v, str) and v:
-                return v
-    return None
 
 
-def _print_orientation_report() -> None:
-    """Change A : print the resolved situation report as init's first
-    orientation output. Reads the just-written manifest; strictly read-only and
-    fully non-fatal -- a degraded report never affects the init exit code.
-    """
-    try:
-        from fno.paths import resolve_repo_root
-        from fno.target.orient import load_orientation, render
-
-        typer.echo(render(load_orientation(resolve_repo_root())))
-    except Exception:  # noqa: BLE001 - orientation is additive; never block init
-        pass
 
 
-def _maybe_dispatch_work_start() -> None:
-    """A2 : fire a ``work-start`` context /think after a node is claimed.
-
-    Runs right after the init script returns success - the authoritative
-    ``fno agents claim acquire node:<id>`` has completed and the manifest is written, so
-    this is the "node enters work" moment (Claude's Discretion 4). Reads the
-    claimed ``graph_node_id`` back from the manifest (``null`` => no node claimed
-    => nothing to dispatch) and routes the durable node through
-    ``on_node_work_start``, gated by ``config.think_spawn.on_work_start``
-    (default OFF). Strictly non-fatal: any failure here never affects the init
-    exit code the caller propagates.
-    """
-    try:
-        from fno.config import load_settings
-
-        # Gate-first: the default-OFF install (every un-opted-in install) pays one
-        # settings read and returns - NO git rev-parse, NO graph load, NO manifest
-        # read. The wrapper re-checks the sub-flag authoritatively below.
-        try:
-            if not load_settings().think_spawn.on_work_start:
-                return
-        except Exception:  # noqa: BLE001 - fail-safe to disabled
-            return
-
-        from fno.paths import resolve_repo_root
-
-        repo_root = resolve_repo_root()
-        manifest = repo_root / ".fno" / "target-state.md"
-        text = manifest.read_text(encoding="utf-8")
-        m = re.search(r"^graph_node_id\s*:\s*(.+)$", text, re.MULTILINE)
-        if not m:
-            return
-        node_id = m.group(1).strip().strip("\"'")
-        if not node_id or node_id == "null":
-            return
-
-        from fno.provenance.spawn_think import on_node_work_start
-
-        node = _find_node(node_id)
-        if node is not None:
-            # Carry the session's persisted dispatch pins into the work-start
-            # /think spawn. maybe_spawn_think reads node["model"]/node["provider"]
-            # at the spawn seam, so overlaying the manifest fields here is all it
-            # takes for `fno do target start --model X` to reach the spawned worker.
-            dm = re.search(r"^dispatch_model\s*:\s*(.*)$", text, re.MULTILINE)
-            dp = re.search(r"^dispatch_provider\s*:\s*(.*)$", text, re.MULTILINE)
-            model_pin = dm.group(1).strip().strip("\"'") if dm else ""
-            provider_pin = dp.group(1).strip().strip("\"'") if dp else ""
-            if model_pin:
-                node["model"] = model_pin
-            if provider_pin:
-                node["provider"] = provider_pin
-            on_node_work_start(node, project_root=repo_root)
-    except Exception:  # noqa: BLE001 - additive; never affect the init exit code
-        pass
 
 
 # --------------------------------------------------------------------------- #

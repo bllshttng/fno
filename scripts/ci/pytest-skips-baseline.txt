@@ -172,7 +172,6 @@ cli/tests/unit/test_skill_bundles.py::test_strip_passthrough_when_no_frontmatter
 cli/tests/unit/test_spawn_account_provenance.py::TestVocabulary.test_the_carrier_word_is_spelled_identically_across_runtimes::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_stale_escalate.py::test_reconcile_channel_end_to_end_against_the_binary::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_target_init_review_gate.py::test_the_script_reads_the_marker_this_module_writes::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_worktree_reap_equivalence.py::_gate_binary::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_worktree_reap_equivalence.py::_gate_env::pytest.skip  # on main before this ratchet
 cli/tests/graph/test_batched_member_selection.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary

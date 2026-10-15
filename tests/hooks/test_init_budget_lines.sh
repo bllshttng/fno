@@ -96,6 +96,7 @@ printf '# isolated\n' > "$_BLANK_HP"
 (cd "$TMP_HP" && \
   HOME="${TMP_HP}/home" \
   PATH="${TMP_HP}/bin:${PATH}" \
+  FNO_AGENTS_BIN="${TMP_HP}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_HP}/space" \
   GLOBAL_SETTINGS="${_BLANK_HP}" \
   TARGET_START=1 \
@@ -154,6 +155,7 @@ printf '# isolated\n' > "$_BLANK_ERR"
 (cd "$TMP_ERR" && \
   HOME="${TMP_ERR}/home" \
   PATH="${TMP_ERR}/bin:${PATH}" \
+  FNO_AGENTS_BIN="${TMP_ERR}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_ERR}/space" \
   GLOBAL_SETTINGS="${_BLANK_ERR}" \
   TARGET_START=1 \
@@ -210,6 +212,7 @@ printf '# isolated\n' > "$_BLANK_WALL"
 (cd "$TMP_WALL" && \
   HOME="${TMP_WALL}/home" \
   PATH="${TMP_WALL}/bin:${PATH}" \
+  FNO_AGENTS_BIN="${TMP_WALL}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_WALL}/space" \
   GLOBAL_SETTINGS="${_BLANK_WALL}" \
   TARGET_START=1 \
@@ -252,6 +255,7 @@ printf '# isolated\n' > "$_BLANK_COST"
 (cd "$TMP_COST" && \
   HOME="${TMP_COST}/home" \
   PATH="${TMP_COST}/bin:${PATH}" \
+  FNO_AGENTS_BIN="${TMP_COST}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_COST}/space" \
   GLOBAL_SETTINGS="${_BLANK_COST}" \
   TARGET_START=1 \
