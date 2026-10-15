@@ -916,4 +916,64 @@ mod tests {
             Some(3.5)
         );
     }
+
+    /// Reproduces the main-line flake directly: a stranger already holds the
+    /// published port when the receiver restarts. The old code bound-failed
+    /// and left the stale record pointing at the stranger; this asserts the
+    /// record is cleared and republished on a fresh port that actually
+    /// serves, rather than depending on a timing race to ever hit this path.
+    #[tokio::test]
+    async fn restart_clears_stale_record_when_port_is_taken() {
+        let (home, _td) = home();
+        let dir = home.otel_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let stranger = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let taken_port = stranger.local_addr().unwrap().port();
+        std::fs::write(dir.join("port"), taken_port.to_string()).unwrap();
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(run_on_port_ready(
+            home.clone(),
+            Arc::clone(&shutdown),
+            taken_port,
+            Some(ready_tx),
+        ));
+        let bound = tokio::time::timeout(Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(
+            bound, taken_port,
+            "a stranger holds the published port; the receiver must take a fresh one"
+        );
+        let recorded: u16 = std::fs::read_to_string(dir.join("port"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            recorded, bound,
+            "the stale record must be replaced, never left pointing at the stranger"
+        );
+        assert_eq!(
+            post(
+                bound,
+                "/v1/logs",
+                &body(json!([api_request("req_taken", "sess-taken", 1)]))
+            )
+            .await,
+            200
+        );
+
+        drop(stranger);
+        shutdown.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }
