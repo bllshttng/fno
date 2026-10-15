@@ -257,6 +257,39 @@ mod tests {
     }
 
     #[test]
+    fn state_path_questions_follows_the_arms_published_folder_while_fresh() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-state-path-q-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let _env = EnvGuard::new(&base);
+        let attention = base.join("attention");
+        fs::create_dir_all(&attention).unwrap();
+        let cwd = base.join("anywhere");
+        fs::create_dir_all(&cwd).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let publish = |as_of: u64| {
+            let payload = serde_json::json!({"as_of": as_of, "items": [], "questions_dir": "/vault/internal/fno/questions"});
+            fs::write(attention.join("items.json"), payload.to_string()).unwrap();
+        };
+        publish(now);
+        assert_eq!(
+            resolve("questions", &cwd).unwrap(),
+            PathBuf::from("/vault/internal/fno/questions"),
+            "a reader in any cwd lands on the folder the arm writes"
+        );
+        // A dead arm's folder must not outlive its beat: the cwd derivation returns.
+        publish(now - 601);
+        assert_eq!(
+            resolve("questions", &cwd).unwrap(),
+            crate::escalation::questions_dir(&cwd)
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn state_path_migrates_legacy_events_and_keeps_target_state_fallback() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let base =
