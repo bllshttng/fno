@@ -1038,7 +1038,8 @@
     ],
     "env": {},
     "origin": "github",
-    "detached": false
+    "detached": false,
+    "err_prefix": "classify: findings.json: "
   },
   {
     "label": "classify round negative refused",

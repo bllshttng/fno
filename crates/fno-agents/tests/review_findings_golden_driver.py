@@ -554,7 +554,11 @@ CLASSIFY_CASES = [
         "label": "classify build refusal",
         "payload": {"oops": True},
         "args": ["--findings-file", "findings.json"],
-        "err": {"strip": "classify: findings.json: "},
+        # Prefix, not strip: the record cases strip because the record
+        # action prints the bare reason, but the classify action prints its
+        # own `classify: <F>: ` wrapper, and parity compares classify
+        # stderr whole.
+        "err": {"prefix": "classify: findings.json: "},
     },
     {
         "label": "classify round negative refused",
