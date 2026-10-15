@@ -21,7 +21,7 @@ cli/src/fno/pr/_merge.py    <- pr-merge.sh        (JSON line + merge guards + wo
 cli/src/fno/pr/_rebase.py   <- rebase-resolve.sh  (exit-code protocol incl. 42)
 ```
 
-The verify, base-check, base-lineage-check and merge-result-check bodies are native now: the `pr-verify`, `pr-base-check`, `pr-base-lineage-check` and `pr-merge-result-check` verbs in `crates/fno-agents` answer them, and `cli.py` forwards the spellings.
+The verify, base-check, base-lineage-check and merge-result-check bodies are native now. The `pr-verify`, `pr-base-check`, `pr-base-lineage-check` and `pr-merge-result-check` verbs in `crates/fno-agents` answer them, and `cli.py` forwards the spellings.
 
 The auto_merge config is read through the new typed `config.auto_merge`
 (`AutoMergeBlock`) instead of re-parsing `config.toml` in a subprocess, so the
