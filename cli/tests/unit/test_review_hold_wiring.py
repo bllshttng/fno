@@ -132,8 +132,8 @@ def test_the_pre_push_form_holds_the_local_branch(monkeypatch, capsys) -> None:
     }
     monkeypatch.setattr(target_cli, "_git_out", lambda cwd, *args: git.get(tuple(args), ""))
     monkeypatch.setattr(
-        "fno.review_capability.render_self_review_invocation",
-        lambda **kw: "/review high --comment",
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {"invocation": "/review high --comment", "harness": "claude"},
     )
     monkeypatch.setattr(target_cli, "_resolve_self_review_identity", lambda: ("claude", "sess-1"))
     monkeypatch.setattr(
@@ -220,21 +220,21 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
     """The hold key and the payload target are two different things.
 
     Reusing one variable for both broke the post-push form outright: the
-    renderer refuses `pr_number` and `branch` together, that ValueError was
-    caught as a refusal, and every `request-self-review --pr <n>` exited 2. The
-    hold still has to key on the PR's own head ref, because the merge guard
-    resolves the branch from GitHub and looks up that key.
+    renderer refuses `pr_number` and `branch` together, that refusal was
+    caught as a generic failure, and every `request-self-review --pr <n>`
+    exited 2. The hold still has to key on the PR's own head ref, because
+    the merge guard resolves the branch from GitHub and looks up that key.
+    The door now takes the target as flags, so the argv carries `--pr-number`
+    and must carry no `--branch`.
     """
-    rendered: dict = {}
+    calls: list[list] = []
     held: list[dict] = []
 
-    def _render(**kwargs):
-        if kwargs.get("branch") is not None and kwargs.get("pr_number") is not None:
-            raise ValueError("explicit self-review target takes pr_number or branch, not both")
-        rendered.update(kwargs)
-        return "/review high --comment"
+    def _render(argv, payload, *args, **kwargs):
+        calls.append(list(argv))
+        return {"invocation": "/review high --comment", "harness": "claude"}
 
-    monkeypatch.setattr("fno.review_capability.render_self_review_invocation", _render)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _render)
     monkeypatch.setattr(target_cli, "_git_out", lambda cwd, *args: "deadbeef" * 5)
     monkeypatch.setattr(
         target_cli,
@@ -258,6 +258,8 @@ def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
 
     receipt = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert receipt["outcome"] == "queued"
-    assert rendered["pr_number"] == 1584
-    assert rendered["branch"] is None
+    argv = calls[0]
+    assert argv[:3] == ["review-level", "capability", "invocation"]
+    assert "--pr-number" in argv and "1584" in argv
+    assert "--branch" not in argv
     assert held[0]["branch"] == "feature/pr-head"

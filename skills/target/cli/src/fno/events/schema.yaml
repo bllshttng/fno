@@ -1166,6 +1166,26 @@ event_types:
           description: "Human-readable reason for the refusal (e.g. PR state, CI bucket summary)."
     consumers: [operator]
 
+  - name: backlog_refused_flush
+    description: "A shared-backlog flush the primary refused took this machine's rows back for every row the batch touched. The take-back reverted this machine's own writes; the refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    sources: [daemon]
+    data:
+      required: [nodes, tables, batch, error]
+      properties:
+        nodes:
+          type: array
+          description: "One entry per nodes-table change with an id: {id, columns}."
+        tables:
+          type: array
+          description: "Non-nodes tables the batch touched, one {table, rows} entry per table."
+        batch:
+          type: string
+          description: "The refused batch id (origin:db:last:content-hash)."
+        error:
+          type: string
+          description: "The primary's refusal text."
+    consumers: [operator]
+
   - name: backlog_done_forced
     description: "fno backlog done closed a node via --force --reason, bypassing the gh cross-check."
     sources: [backlog]
@@ -8388,6 +8408,11 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: spawn_first_turn
+    description: "The first-turn watch saw a launched worker's first assistant line: latency_ms from the spawn call, row_ms to its registry row, with harness, substrate and machine."
+    sources: [daemon]
+    data:
+      required: [name, latency_ms]
   - name: gate_written
     description: "A target gate wrote its event: the legacy gates writer's counterpart of phase_init."
     sources: [target, hook, legacy]
@@ -8584,6 +8609,40 @@ event_types:
     sources: [test, daemon, hook, loop]
     data:
       required: []
+  - name: setup_run
+    description: "One finished or blocked `fno config setup run`: the run id, host, outcome and wall duration. Emitted once per run after the verify block, on both the JSON and human output paths; never on the read-only modes (--dry-run, --list, --export, --check)."
+    sources: [cli]
+    data:
+      required: [run_id, host, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        host:
+          type: string
+        outcome:
+          type: string
+          enum: [finished, blocked]
+        duration_ms:
+          type: integer
+  - name: setup_step
+    description: "One setup step inside a `fno config setup run`: the run id, the step id, its outcome (done, skipped, or blocked), the wall duration, and the skip reason or report code when one applies. Emitted after the step loop, one row per step, beside setup_run."
+    sources: [cli]
+    data:
+      required: [run_id, step, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        step:
+          type: string
+        outcome:
+          type: string
+          enum: [done, skipped, blocked]
+        duration_ms:
+          type: integer
+        skip_reason:
+          type: string
+        code:
+          type: string
 # Size cap per Failure Modes (Boundaries): the system rejects events whose
 # data payload exceeds 64KB. Validators enforce this at validate() time.
 limits:

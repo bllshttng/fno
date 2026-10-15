@@ -34,8 +34,9 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
 /// explicit choice, documented in docs/architecture/review-lanes.md.
 /// `sigma` is RETIRED: its invocation names the replacement (the default
 /// lane), never a hint that the panel runs, and a config still naming sigma
-/// is refused at init by the Python capability check with the same
-/// replacement in the refusal. No `--fix` in any hint: a fix pass moves HEAD
+/// is refused at init by the native capability door (`review-level
+/// capability`) with the same replacement in the refusal. No `--fix` in any
+/// hint: a fix pass moves HEAD
 /// and voids the attestation the round just earned. Kept honest against the
 /// Python descriptor table by check-reviewer-descriptor-parity.sh.
 pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
@@ -47,8 +48,9 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
 /// `(invocation, is_self_cert, per_harness)`. The flag mirrors the Python
 /// descriptor's `asserts` field: a surface that names `declare` without saying
 /// it asserts nothing invites an operator to clear the gate with no review
-/// behind it.
-pub(super) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
+/// behind it. `pub(crate)`: the review-capability renderer reads the same
+/// row for the `code-review` base spelling.
+pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
     REVIEWER_INVOCATIONS
         .iter()
         .find(|(n, _, _, _)| *n == name)

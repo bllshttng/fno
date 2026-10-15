@@ -154,6 +154,13 @@ def test_request_self_review_without_pr_pins_local_head_and_branch(
         lambda: ("codex", "codex-session"),
     )
     monkeypatch.setattr(
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {
+            "invocation": "$fno:review <level> feature/x-98ac HEAD abc1234 against origin/main",
+            "harness": "codex",
+        },
+    )
+    monkeypatch.setattr(
         target_cli,
         "_send_self_review_payload",
         lambda **kwargs: calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"},
@@ -193,22 +200,6 @@ def test_request_self_review_without_pr_refuses_detached_head(
     receipt = json.loads(result.output)
     assert receipt["outcome"] == "refused"
     assert "no branch" in receipt["reason"]
-
-
-def test_render_self_review_invocation_refuses_pr_and_branch_together():
-    from fno.review_capability import render_self_review_invocation
-
-    try:
-        render_self_review_invocation(
-            pr_number=123,
-            branch="feature/x-98ac",
-            head_sha="abc1234",
-            base_branch="main",
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("pr_number and branch together must raise ValueError")
 
 
 def test_skill_prose_describes_the_same_direction_as_the_decision():

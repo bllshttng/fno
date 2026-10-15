@@ -223,10 +223,11 @@ def env_marks_unattended(env: "Mapping[str, str]") -> bool:
 
     One rule, several readers: `fno do target init` folds it into
     ``TARGET_UNATTENDED`` for the manifest writer, `init-target-state.sh` ORs
-    that with ``config.unattended.enabled``, ``review_capability.detect_session``
-    re-derives it in-session, and ``provenance/spawn_think`` asks the same
-    question about the session filing an idea. They agreed before only by
-    repeating one expression in four places.
+    that with ``config.unattended.enabled``, and the native capability door
+    (`fno-agents review-level capability`) re-derives it in-process, and
+    ``provenance/spawn_think`` asks the same question about the session filing
+    an idea. They agreed before only by repeating one expression in four
+    places.
 
     Dependency-free on purpose: spawn_think's presence classifier is a locked
     decision to stay off config and off tty probes, so this reads env and

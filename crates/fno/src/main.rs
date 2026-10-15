@@ -75,6 +75,10 @@ enum Role {
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno do wizard`: the interactive terminal host for the wizard flow.
+    /// Native, because it owns the raw-mode terminal and must run before any
+    /// Python wheel exists on a fresh machine.
+    Wizard(Vec<OsString>),
     /// `mux ls [--json]`: list sessions (no TTY needed). The bool is `--json`.
     MuxLs(bool),
     /// `mux kill-server [<name>] [--json]`: shut a session down (no TTY needed).
@@ -544,6 +548,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
     }
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
+    {
+        return Role::Wizard(args[2..].to_vec());
+    }
     if fno::setup_autowire::classify(args).is_some() {
         return Role::SetupAutowire;
     }
@@ -713,6 +722,7 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
             if kill_req.stale_idle || kill_req.all {
@@ -1088,6 +1098,11 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "review", "classify"]), false),
             Role::Forward
+        );
+        // The wizard claims its leaf the same literal way.
+        assert_eq!(
+            decide_role(&os(&["do", "wizard", "--json"]), false),
+            Role::Wizard(os(&["--json"]))
         );
     }
 

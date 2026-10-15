@@ -373,6 +373,12 @@ dual_owner_kinds = {
     # session-report arm and the Python identification arm emit the same
     # failure row into one journal.
     "role_manifest_arm_failed",
+    # session_pane_rebound: the Python heal that used to emit this is
+    # deleted; the Rust daemon (pane_claim.rs) is the sole emitter now.
+    # schema.yaml still names source "agents" alongside "daemon" because
+    # that field also feeds the tracked events_schema.json projection,
+    # which only a cargo build can regenerate.
+    "session_pane_rebound",
     # triage_applied: one row per committed triage apply, emitted by the
     # native triage engine (Rust) and the Python twin it ports, both with
     # the backlog source, until the Python leg deletes with the closing

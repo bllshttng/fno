@@ -36,6 +36,8 @@ A build from before the shared backlog writes with no outbox, and the primary ne
 
 A row that a peer changed first refuses the whole batch, and the primary writes nothing. The replica then takes the primary's rows back for every row the batch touched, and the refusal names the table. A write through `mutate_rows` syncs and retries by itself.
 
+The take-back is not silent. It keeps the refused batch in the replica's `backlog_refused` table, exactly as the flush sent it, so a retry or an inspection can read what this machine tried to write. It also prints one notice naming each node and the columns the take-back reverted, and records the same facts as a `backlog_refused_flush` event in the space's `events.jsonl`. A refusal that lands while the writer is between turns still reaches an operator who reads the journal: without it, an update that printed `Updated` can revert minutes later, and nothing says so until a human notices the node back at `idea`.
+
 If the primary cannot be reached, backlog writes still land in the replica and wait in the outbox. The next flush that reaches the primary sends them, and a peer's newer change refuses them then. Reads keep working from the replica. To work alone for good, unset `store.share_backlog`.
 
 ## Start sharing
@@ -58,7 +60,7 @@ These facts stay on each machine. The agent registry, the roles, the questions, 
 To build a node on this machine, follow these steps in order:
 
 1. Share the backlog with the steps above. Then `fno backlog get <node>` answers.
-2. Map the node's project to this machine's checkout. Add `[work.workspaces.<slug>]` with `projects = [{ name = "<project>", path = "<checkout>" }]` to `~/.fno/config.toml`. Then `fno backlog get <node> --field _resolved_cwd` must print a directory that exists here. Without the entry, it prints the path of the machine that filed the node.
+2. Copy the first machine's setup with a join, then register this checkout. On the first machine run `fno config setup run --export --out fno-profile.toml`; copy the file here and run `fno do wizard --join fno-profile.toml`. The join applies the portable keys; paths, workspaces and machine names stay behind by class (`classify` in `crates/fno/src/setup_profile.rs` keeps `work.` local on purpose). Tick the wizard's projects screen so it appends this checkout to `work.workspaces.main.projects`. Then `fno backlog get <node> --field _resolved_cwd` must print a directory that exists here. Without the row, it prints the path of the machine that filed the node.
 3. Run `fno do target start <node>`. The node claim lives on the primary, so two machines never build one node.
 
 To lead a scope on this machine, follow these steps in order:

@@ -1057,7 +1057,6 @@ K6	cli/tests/unit/test_pr_watch_notify_phase.py	py	5
 K6	cli/tests/unit/test_pr_worktree_cli.py	py	2
 K6	cli/tests/unit/test_publish_review.py	py	5
 K6	cli/tests/unit/test_register_pr_url.py	py	4
-K6	cli/tests/unit/test_review_capability.py	py	30
 K6	cli/tests/unit/test_review_classify_hold.py	py	1
 K6	cli/tests/unit/test_review_cli.py	py	21
 K6	cli/tests/unit/test_review_findings.py	py	39

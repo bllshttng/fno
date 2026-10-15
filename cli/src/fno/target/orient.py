@@ -35,10 +35,10 @@ class OrientLine:
 # --- git helpers (self-contained so orient never imports target_cli; that
 #     module imports orient for the `status` command + init print) -----------
 
-# The one git-out helper lives HERE again: review_capability kept it only as a
-# re-export seam for these callers, and the diff-sizing path it served moved to
-# the fno-agents `review-level` door (ported 2026-10). Self-contained like the
-# rest of this block: orient never imports target_cli.
+# The one git-out helper lives HERE again: the review-capability module kept
+# it only as a re-export seam for these callers, and that module is gone -
+# the door lives in fno-agents `review-level capability` (ported 2026-10).
+# Self-contained like the rest of this block: orient never imports target_cli.
 
 
 def _git_out(cwd: Path, *args: str) -> Optional[str]:
@@ -590,17 +590,16 @@ def _self_review_clause(project_root: Optional[Path] = None) -> str:
     available. A refusal stays visible; it never routes a review command through
     the mail bus. Never raises."""
     try:
-        from fno.review_capability import (
-            detect_session,
-            diff_review_level,
-            self_review_invocation,
-        )
+        from fno.rust_binary import verb_call
 
-        s = detect_session()
-        verb = self_review_invocation(s.harness, level=diff_review_level(project_root))
+        argv = ["review-level", "capability", "invocation"]
+        if project_root is not None:
+            argv += ["--root", str(project_root)]
+        answer = verb_call(argv, {})
+        verb = answer["invocation"]
+        harness = answer["harness"]
     except Exception:  # noqa: BLE001 - advisory; the stop gate is the backstop
         return ""
-    harness = s.harness or "unknown"
     clause = (
         f"self-review required for code ({harness}): run `{verb}` (the lane "
         "emits its own attestation; `bash skills/review/scripts/"
