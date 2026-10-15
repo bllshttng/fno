@@ -1078,11 +1078,10 @@ fn ship_batch(domain: &str, base: &str, title: Option<&str>, root: &Path) -> Shi
     // Idempotency: reuse an existing PR for the branch before creating one.
     let mut pr_url: Option<String> = None;
     let mut pr_number: Option<i64> = None;
-    if let Ok(lst) = std::process::Command::new("gh")
-        .args(["pr", "list", "--head", &branch, "--json", "number,url"])
-        .current_dir(&wt)
-        .output()
-    {
+    let mut list_cmd = std::process::Command::new("gh");
+    list_cmd.args(["pr", "list", "--head", &branch, "--json", "number,url"]);
+    list_cmd.current_dir(&wt);
+    if let Ok(lst) = crate::gh_budget::output(list_cmd) {
         if lst.status.success() {
             let text = String::from_utf8_lossy(&lst.stdout);
             if let Ok(Ok(items)) = serde_json::from_str::<Value>(text.trim())
@@ -1185,21 +1184,21 @@ fn ship_batch(domain: &str, base: &str, title: Option<&str>, root: &Path) -> Shi
                 };
             }
         }
-        let created = std::process::Command::new("gh")
-            .args([
-                "pr",
-                "create",
-                "--title",
-                &pr_title,
-                "--body",
-                &batch_pr_body(&batch),
-                "--base",
-                base,
-                "--head",
-                &branch,
-            ])
-            .current_dir(&wt)
-            .output();
+        let mut create_cmd = std::process::Command::new("gh");
+        create_cmd.args([
+            "pr",
+            "create",
+            "--title",
+            &pr_title,
+            "--body",
+            &batch_pr_body(&batch),
+            "--base",
+            base,
+            "--head",
+            &branch,
+        ]);
+        create_cmd.current_dir(&wt);
+        let created = crate::gh_budget::output(create_cmd);
         let created = match created {
             Ok(c) => c,
             Err(e) => {

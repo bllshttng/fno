@@ -265,15 +265,14 @@ pub fn run_discover(tail: &[String]) -> i32 {
         let Some(slug) = &repo else {
             return None;
         };
-        let out = std::process::Command::new("gh")
-            .args([
-                "api",
-                &format!("repos/{slug}/pulls/{number}"),
-                "--jq",
-                ".merged",
-            ])
-            .output()
-            .ok()?;
+        let mut merged_cmd = std::process::Command::new("gh");
+        merged_cmd.args([
+            "api",
+            &format!("repos/{slug}/pulls/{number}"),
+            "--jq",
+            ".merged",
+        ]);
+        let out = crate::gh_budget::output(merged_cmd).ok()?;
         let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
         match text.as_str() {
             "true" => Some(true),
