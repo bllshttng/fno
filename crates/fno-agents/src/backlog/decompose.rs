@@ -916,9 +916,20 @@ fn parse_strategy_yaml(text: &str) -> Option<Value> {
     for t in tasks_arr {
         let t = t.as_object()?;
         let id = scalar_to_string(t.get("id").unwrap_or(&Value::Null));
-        let surface = str_list(t.get("surface").unwrap_or(&Value::Null))?;
-        let acceptance = str_list(t.get("acceptance").unwrap_or(&Value::Null))?;
-        let blocked_by = str_list(t.get("blocked_by").unwrap_or(&Value::Null))?;
+        // A missing list defaults empty (the wheel's t.get(..., [])); a list
+        // PRESENT but malformed still refuses, like the wheel's isinstance check.
+        let surface = match t.get("surface") {
+            Some(v) => str_list(v)?,
+            None => Vec::new(),
+        };
+        let acceptance = match t.get("acceptance") {
+            Some(v) => str_list(v)?,
+            None => Vec::new(),
+        };
+        let blocked_by = match t.get("blocked_by") {
+            Some(v) => str_list(v)?,
+            None => Vec::new(),
+        };
         let notes = scalar_to_string(t.get("notes").unwrap_or(&Value::Null))
             .trim()
             .to_string();
