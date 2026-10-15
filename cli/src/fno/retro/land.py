@@ -154,6 +154,7 @@ def _default_inbox(repo_root: Path, candidate: Candidate) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        cwd=str(repo_root),
     )
     if proc.returncode != 0:
         raise RuntimeError(
