@@ -128,7 +128,7 @@ The recovery and the cleanup failure ride separate fields. A recovery that worke
 ## Who calls it
 
 - **`fno do pr merge`** (`cli/src/fno/pr/_merge.py`) asks twice. The `decide_only` pass comes first, so a merge about to be refused never publishes its coverage status receipt. The second pass re-runs the whole chain and closes the window the first one opened.
-- **`fno do pr verify --kind merged`** (`cli/src/fno/pr/_verify.py`) asks once, then re-reads the PR before it reports. This verb's name is its contract, so the receipt is not its last word.
+- **`fno do pr verify --kind merged`** (`crates/fno-agents/src/pr_verify.rs`) asks once, then re-reads the PR before it reports. This verb's name is its contract, so the receipt is not its last word.
 - **`fno-agents finalize`** arms at a green terminal. What stays in finalize is what only the terminal knows: the merge-gating opt-out claim, and the optional-App review evidence.
 
 Python reaches it through `fno.rust_binary.verb_call("authorized-merge", payload)`, the single door. An unreachable binary answers `unknown`, never a clear merge. A merge whose authorization nobody read is not an authorized merge.

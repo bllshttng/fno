@@ -1132,13 +1132,12 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "pr-push") {
         return fno_agents::pr_push::run_push(&args[1..]);
     }
-    // `pr-body-check`: the repo's body guards, run before `gh pr create`.
-    if matches!(verb, "pr-body-check") {
-        return fno_agents::pr_body_check::run(&args[1..]);
-    }
-    // `pr-create`: the duplicate-guarded create (see pr_create.rs doc).
-    if matches!(verb, "pr-create") {
-        return fno_agents::pr_create::run_pr_create_verb(&args[1..]);
+    // The binary-direct `pr-*` verbs (body-check, create, base-lineage-check,
+    // and the ports that follow them) route through one door, so a new verb
+    // costs a match arm in pr_door.rs, not routing lines against this file's
+    // shrink-only budget.
+    if let Some(code) = fno_agents::pr_door::run_verb(verb, &args) {
+        return code;
     }
     // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
     // the produce verbs ported from Python (branch-ids, ensure, trailer,
