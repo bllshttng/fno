@@ -1817,16 +1817,9 @@ impl Probes for RealProbes {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
-        if crate::gh_budget::admission_armed() {
-            if let Some(line) = crate::gh_budget::admit_fleet(args) {
-                return Ok((false, line));
-            }
-        }
-        let out = Command::new("gh")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .map_err(|error| error.to_string())?;
+        let mut cmd = Command::new("gh");
+        cmd.args(args).current_dir(cwd);
+        let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok((out.status.success(), combined))

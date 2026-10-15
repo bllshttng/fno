@@ -178,6 +178,11 @@ fn law_authority(subject: &str, cwd: Option<&Path>) -> (&'static str, String) {
 /// One bounded subprocess: `(exit, stdout, stderr)`, killed at `secs`. A hung
 /// `git`/`gh` must not hang the proxy door or the sweep tick.
 fn run_bounded(argv: &[String], cwd: Option<&Path>, secs: u64) -> (i32, String, String) {
+    // The fleet budget admits before the spawn: a refused gh flip reads as
+    // exit 75 with the ledger line on stderr.
+    if let Some(line) = crate::gh_budget::admit_spawn(std::ffi::OsStr::new(&argv[0]), &argv[1..]) {
+        return (75, String::new(), line);
+    }
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .stdout(Stdio::piped())

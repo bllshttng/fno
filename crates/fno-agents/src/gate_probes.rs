@@ -27,6 +27,16 @@ fn read_all<R: std::io::Read>(mut pipe: R) -> String {
 }
 
 fn probe_run(cmd: &mut Command, timeout: Duration) -> Option<Run> {
+    // The fleet budget admits before the spawn: a refused gh probe leaves no
+    // child and reads as exit 75 with the ledger line on stderr.
+    if let Some(line) = crate::gh_budget::admit_command(cmd) {
+        return Some(Run {
+            ok: false,
+            code: Some(75),
+            stdout: String::new(),
+            stderr: line,
+        });
+    }
     let _ = cmd.stdin(std::process::Stdio::null());
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
