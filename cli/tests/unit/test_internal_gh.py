@@ -243,6 +243,47 @@ def test_coverage_review_read_preserves_refusal_body_byte_for_byte(monkeypatch):
     assert json.loads(result.stdout)["comments"][0]["body"] == refusal
 
 
+def test_a_held_budget_stops_the_coverage_read_after_two_runner_calls(monkeypatch):
+    # The REST runner consults the fleet budget per request. A hold on the
+    # third consult stops the read: two gh reads went out, the comments page
+    # never does, and the stderr carries the gh budget: marker the Rust
+    # adapter wrapper classifies.
+    calls: list[list[str]] = []
+
+    def admit(argv):
+        if len(calls) >= 2:
+            return (
+                "gh budget: fleet GitHub rate limit held locally "
+                "(budget: 2/1 points in 60s)"
+            )
+        return None
+
+    def runner(cmd, **kwargs):
+        endpoint = cmd[-1]
+        if endpoint == "repos/o/r/pulls/930":
+            return Result(0, json.dumps(PULL), "")
+        if endpoint == "repos/o/r/pulls/930/reviews?per_page=100&page=1":
+            return Result(0, "[]", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(_internal_gh._quota, "admit", admit)
+    monkeypatch.setattr(
+        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
+    )
+    result = _internal_gh.execute(
+        "coverage",
+        ["pr", "view", "930", "--json", "reviews,comments"],
+        runner=runner,
+        real_gh="/real/gh",
+    )
+    assert result.returncode == 1
+    assert "gh budget:" in result.stderr
+    assert calls == [
+        ["/real/gh", "api", "repos/o/r/pulls/930"],
+        ["/real/gh", "api", "repos/o/r/pulls/930/reviews?per_page=100&page=1"],
+    ]
+
+
 def test_coverage_review_read_empty_collections_are_known_empty(monkeypatch):
     def runner(cmd, **kwargs):
         endpoint = cmd[-1]
