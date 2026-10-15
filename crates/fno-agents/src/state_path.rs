@@ -127,8 +127,13 @@ pub(crate) fn resolve(name: &str, cwd: &std::path::Path) -> Option<PathBuf> {
         // Nothing in Python reads it, so there is no Python accessor to mirror.
         "escalations" => Some(crate::escalation::dir(cwd)),
         // Rust-owned like `escalations`: the attention arm writes question
-        // pages here and the lead check-in reads them.
-        "questions" => Some(crate::escalation::questions_dir(cwd)),
+        // pages here and the lead check-in reads them. The arm's published
+        // folder wins, so a reader in a vault or any other cwd sees the
+        // pages the daemon writes.
+        "questions" => Some(
+            crate::attention_arm::published_questions_dir()
+                .unwrap_or_else(|| crate::escalation::questions_dir(cwd)),
+        ),
         _ => None,
     }
 }

@@ -7,7 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::finalize::{resolve_obsidian_vault, resolve_project_name, resolve_vault_root};
+use crate::finalize::{
+    read_project_id, resolve_obsidian_vault, resolve_project_name, resolve_vault_root,
+};
 
 /// The four classes that reach the superuser. Everything else, the lead
 /// decides and logs.
@@ -92,6 +94,45 @@ pub fn questions_dir(cwd: &Path) -> PathBuf {
     vault_dir_with_home(cwd, home.as_deref(), "questions")
 }
 
+/// Where a cwd sits against the vault root.
+enum VaultCwd {
+    Outside,
+    /// Inside `internal/<project>/`, or `internal/agents/<project>/`, so the
+    /// folder names the project that owns it.
+    Owned(String),
+    /// Inside the vault but under no project folder: the vault root,
+    /// `internal/`, `internal/agents` itself, or an agent session dir.
+    Unowned,
+}
+
+/// Classify `cwd` against the vault. Both sides canonicalize, so the
+/// `internal/footnote -> fno` symlink reads as `fno`. `internal/agents` is the
+/// cross-project inbox, never a project: only a child that is itself a vault
+/// project folder names an owner.
+fn classify_vault_cwd(vroot: &Path, cwd: &Path) -> VaultCwd {
+    let vroot = vroot.canonicalize().unwrap_or_else(|_| vroot.to_path_buf());
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let Ok(rel) = cwd.strip_prefix(&vroot) else {
+        return VaultCwd::Outside;
+    };
+    let mut parts = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned());
+    if parts.next().as_deref() != Some("internal") {
+        return VaultCwd::Unowned;
+    }
+    let owner = match parts.next() {
+        Some(seg) if seg == "agents" => parts
+            .next()
+            .filter(|child| vroot.join("internal").join(child).is_dir()),
+        other => other,
+    };
+    match owner {
+        Some(o) if crate::finalize::valid_project_id(&o) => VaultCwd::Owned(o),
+        _ => VaultCwd::Unowned,
+    }
+}
+
 pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -> PathBuf {
     let settings = cwd.join(".fno/config.toml");
     let mut candidates: Vec<PathBuf> = vec![settings.clone()];
@@ -100,7 +141,6 @@ pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -
     }
     if let Some(vault) = resolve_obsidian_vault(&candidates) {
         if let Some(vroot) = resolve_vault_root(&vault, home) {
-            let project = resolve_project_name(None, home, cwd);
             // A temp-dir cwd whose project name is a basename fallback is a
             // test or probe process (a leaked test daemon once wrote 203
             // `internal/fnoe<pid>_<n>/questions` dirs into the real vault).
@@ -108,6 +148,20 @@ pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -
             if crate::finalize::vault_write_is_temp_stray(home, cwd) {
                 return crate::paths::space_dir(cwd).join(leaf);
             }
+            let declared = read_project_id(&cwd.join(".fno/config.toml")).is_some()
+                || home.is_some_and(|h| read_project_id(&h.join(".fno/config.toml")).is_some());
+            let project = match classify_vault_cwd(&vroot, cwd) {
+                VaultCwd::Owned(owner) if !declared => owner,
+                // The vault is no project, so a cwd inside it names none:
+                // a vault-level `project.id` says whose pages these are.
+                VaultCwd::Unowned if !declared => {
+                    match read_project_id(&vroot.join(".fno/config.toml")) {
+                        Some(id) => id,
+                        None => return crate::paths::space_dir(cwd).join(leaf),
+                    }
+                }
+                _ => resolve_project_name(None, home, cwd),
+            };
             return vroot.join("internal").join(project).join(leaf);
         }
     }
@@ -632,6 +686,69 @@ The lead waits. A force push cannot be undone.
         );
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn vault_cwd_resolves_to_owning_project_not_its_own_name() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-escalation-vcwd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let vault = base.join("c3po");
+        for d in [
+            "internal/fno",
+            "internal/agents/0a1b2c3d",
+            "internal/agents/fno",
+        ] {
+            std::fs::create_dir_all(vault.join(d)).unwrap();
+        }
+        std::os::unix::fs::symlink(vault.join("internal/fno"), vault.join("internal/footnote"))
+            .unwrap();
+        std::fs::create_dir_all(base.join(".fno")).unwrap();
+        std::fs::write(
+            base.join(".fno/config.toml"),
+            "[obsidian]\nenabled = true\nvault = \"c3po\"\n",
+        )
+        .unwrap();
+        // The vault is a git repo with a remote, as the real one is: without
+        // the vault branch the remote slug names it `c3po`.
+        for args in [
+            &["init", "-q"][..],
+            &["remote", "add", "origin", "git@github.com:x/c3po.git"][..],
+        ] {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&vault)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        }
+        let questions = |cwd: &Path| vault_dir_with_home(cwd, Some(&base), "questions");
+        let fno_dir = vault.join("internal/fno/questions");
+        assert_eq!(questions(&vault.join("internal/fno")), fno_dir);
+        assert_eq!(questions(&vault.join("internal/footnote")), fno_dir);
+        assert_eq!(questions(&vault.join("internal/agents/fno")), fno_dir);
+        // Agent session dirs, `internal/agents` itself and the vault root own
+        // no project: with no vault-level id the write leaves the vault.
+        for cwd in [
+            vault.join("internal/agents"),
+            vault.join("internal/agents/0a1b2c3d"),
+            vault.clone(),
+        ] {
+            let got = questions(&cwd);
+            assert!(
+                !got.starts_with(vault.join("internal")),
+                "{} must not write the vault: {}",
+                cwd.display(),
+                got.display()
+            );
+        }
+        // A vault-level project id names the owner of those cwds.
+        std::fs::create_dir_all(vault.join(".fno")).unwrap();
+        std::fs::write(vault.join(".fno/config.toml"), "[project]\nid = \"fno\"\n").unwrap();
+        assert_eq!(questions(&vault.join("internal/agents")), fno_dir);
+        assert_eq!(questions(&vault.join("internal/agents/0a1b2c3d")), fno_dir);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
