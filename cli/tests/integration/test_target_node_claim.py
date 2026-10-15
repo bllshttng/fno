@@ -222,6 +222,12 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
         "MOCK_ABI_FRONT": str(front),
         **stub_env,
     })
+    # The state-path stub owns FNO_AGENTS_BIN, and the ported claim leaf
+    # resolves that env FIRST, so the front's claim delegation would exec the
+    # stub and inherit its silent no-binary exit 1 (a smoke runner keeps no
+    # fno-agents on PATH). The stub's own contract answers this: other verbs
+    # delegate to the next real fno-agents on PATH, so give the walk one.
+    env["PATH"] = f"{bindir}:{native.parent}:{env['PATH']}"
     return repo, home, log, env
 
 
