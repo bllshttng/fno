@@ -330,19 +330,25 @@ fn python_refusal(stdout: &[u8]) -> Option<String> {
 /// tool call that runs the setter. The user's own shell line runs no
 /// PreToolUse hook, so the same line still works from a person. The scan is
 /// a token sweep like every probe here: `--floor` or `--floor=` before the
-/// first `--` fence on an `agents spawn` line is the setter.
+/// first `--` fence on an `agents spawn` line is the setter. A quote edge
+/// flips payload state, so a quoted payload string never trips the flag
+/// test.
 fn refuse_floor_setter(cmd: &str) -> Option<String> {
     let mut at_spawn = false;
+    let mut quoted = false;
     for tok in cmd.split_whitespace() {
         if tok == "--" {
             return None;
         }
-        if at_spawn && (tok == "--floor" || tok.starts_with("--floor=")) {
+        if !quoted && at_spawn && (tok == "--floor" || tok.starts_with("--floor=")) {
             return Some(
                 "spawn-gate: the spawn cap floor is the user's setting, so an agent tool call \
                  cannot run it. The user sets it in a shell: fno agents spawn --floor N"
                     .to_string(),
             );
+        }
+        if tok.matches('"').count() % 2 == 1 {
+            quoted = !quoted;
         }
         if tok == "spawn" {
             at_spawn = true;
@@ -366,5 +372,8 @@ mod floor_setter_tests {
         assert!(refuse_floor_setter("fno agents spawn w1 hi").is_none());
         assert!(refuse_floor_setter("fno agents gate-status").is_none());
         assert!(refuse_floor_setter("git status").is_none());
+        // A quoted payload string is payload, never the setter.
+        assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
+        assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
     }
 }
