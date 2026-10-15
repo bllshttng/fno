@@ -1166,6 +1166,26 @@ event_types:
           description: "Human-readable reason for the refusal (e.g. PR state, CI bucket summary)."
     consumers: [operator]
 
+  - name: backlog_refused_flush
+    description: "A shared-backlog flush the primary refused took this machine's rows back for every row the batch touched. The take-back reverted this machine's own writes; the refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    sources: [backlog]
+    data:
+      required: [nodes, tables, batch, error]
+      properties:
+        nodes:
+          type: array
+          description: "One entry per nodes-table change with an id: {id, columns}."
+        tables:
+          type: array
+          description: "Non-nodes tables the batch touched, one {table, rows} entry per table."
+        batch:
+          type: string
+          description: "The refused batch id (origin:db:last:content-hash)."
+        error:
+          type: string
+          description: "The primary's refusal text."
+    consumers: [operator]
+
   - name: backlog_done_forced
     description: "fno backlog done closed a node via --force --reason, bypassing the gh cross-check."
     sources: [backlog]
