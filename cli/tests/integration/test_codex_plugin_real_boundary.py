@@ -33,8 +33,21 @@ def _run(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.fixture
+def staged_source(tmp_path: Path) -> Path:
+    stage = tmp_path / "staged-source"
+    for relative in ("skills", "agents", "commands", "hooks", "assets", ".claude-plugin", ".codex-plugin"):
+        shutil.copytree(REPO_ROOT / relative, stage / relative)
+    descriptor = stage / ".agents/plugins/marketplace.json"
+    descriptor.parent.mkdir(parents=True)
+    marketplace = json.loads((REPO_ROOT / ".agents/plugins/marketplace.json").read_text())
+    marketplace["plugins"][0]["source"] = {"source": "local", "path": "."}
+    descriptor.write_text(json.dumps(marketplace), encoding="utf-8")
+    return stage
+
+
 def test_codex_0145_rejects_escaping_alias_and_installs_canonical_identity(
-    tmp_path: Path,
+    tmp_path: Path, staged_source: Path,
 ) -> None:
     if shutil.which("codex") is None:
         pytest.fail("real Codex test enabled but codex is not installed")
@@ -110,7 +123,7 @@ def test_codex_0145_rejects_escaping_alias_and_installs_canonical_identity(
         "plugin",
         "marketplace",
         "add",
-        str(REPO_ROOT),
+        str(staged_source),
         "--json",
     )
     assert canonical_add.returncode == 0, canonical_add.stderr
@@ -139,7 +152,7 @@ def test_codex_0145_rejects_escaping_alias_and_installs_canonical_identity(
 
 
 def test_codex_0145_failed_legacy_migration_restores_config_cache_and_marker(
-    tmp_path: Path,
+    tmp_path: Path, staged_source: Path,
 ) -> None:
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -223,7 +236,7 @@ def test_codex_0145_failed_legacy_migration_restores_config_cache_and_marker(
             channel="dev",
             runner=runner,
             codex_home=home,
-            source_root=REPO_ROOT,
+            source_root=staged_source,
         )
 
     assert caught.value.stage == "plugin-add"

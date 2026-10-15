@@ -11,3 +11,5 @@ The join-policy suite retains ownership of policy decisions. The new CI case cov
 The postinstall smoke drops its exact unquoted-command substring check. The context census and manifest tests cover the live registration. Source smoke validates the marketplace manifest. Strict plugin validation runs against the generated artifact in CI, because the source repository's root context file does not ship.
 
 Local validation covers the existing join-policy suite, Rust formatting, standalone builder compilation and shell syntax. The generic `fno doctor test` runner treats a Rust source path as a pytest argument and exits 4. Rust execution and all package/publication acceptance run in CI.
+
+The real Codex 0.145 tests use a staged local-source fixture. They retain canonical identity and rollback checks against the actual CLI. Passing the public repository directly now selects the release branch and cannot exercise developer-stage convergence. Both focused tests pass with Codex 0.145.0.
