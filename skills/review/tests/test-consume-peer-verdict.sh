@@ -25,10 +25,11 @@ git -C "$REPO" add tracked
 git -C "$REPO" commit -qm feature
 
 # The stub stands in for the CLI boundary only: it runs the real classifier -
-# the native record door - logs the record it built, and for an --attest call
-# logs the verdict that record measures, so run_case asserts what the writer
-# wrote instead of an argv spelling. The verdict rule mirrors classify
-# --attest: pass only on zero blocking findings.
+# the native record door - logs the record it built, and logs the
+# review_attestation payload the emitter writes, so run_case asserts what the
+# writer wrote instead of an argv spelling. The verdict rule is the
+# emitter's, measured from the record: pass only on zero blocking findings
+# and a readable contract.
 REPO_ROOT="$(cd "$REVIEW_DIR/../.." && pwd)"
 CLASSIFY_BIN=""
 for candidate in \
@@ -45,26 +46,32 @@ export CLASSIFY_BIN
 cat > "$BIN/fno" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FNO_TEST_LOG"
+if [[ "${1:-}" == "doctor" && "${2:-}" == "event" && "${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t) type="$2"; shift 2 ;;
+      -d) data="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "$type" == "review_attestation" ]]; then
+    printf '%s\n' "$data" >> "$FNO_TEST_LOG"
+  fi
+  exit 0
+fi
 if [[ "${1:-}" == "do" && "${2:-}" == "review" && "${3:-}" == "classify" ]]; then
-  f=""; attest=""
+  f=""
   shift 3
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --findings-file) f="$2"; shift 2 ;;
-      --attest) attest="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
   record="$("$CLASSIFY_BIN" review-level findings record --findings-file "$f")" || exit $?
-  out="$(printf '%s' "$record" | jq -c .)"
-  {
-    printf '%s\n' "$out"
-    if [[ -n "$attest" ]]; then
-      verdict="$(printf '%s' "$record" | jq -r 'if (.findings_blocking // 1) == 0 then "pass" else "fail" end')"
-      printf '{"verdict":"%s"}\n' "$verdict"
-    fi
-  } >> "$FNO_TEST_LOG"
-  printf '%s\n' "$out"
+  printf '%s' "$record" | jq -c . >> "$FNO_TEST_LOG"
+  printf '%s\n' "$record"
   exit 0
 fi
 exit 0
