@@ -473,9 +473,11 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
                         return true;
                     }
                     // The send landed but the ledger write failed: leave
-                    // pending, so the next beat at least reconciles the row
-                    // state (the send itself does not replay: this process
-                    // ran it once).
+                    // pending, so the next beat reconciles the row state.
+                    // The cost is one replayed local send on the next beat
+                    // (the ledger is the at-least-once dedup, so delivering
+                    // without it would trade one duplicate for unbounded
+                    // ones on a redelivered row).
                     false
                 }
                 SendVerdict::Refused => {

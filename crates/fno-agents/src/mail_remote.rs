@@ -618,10 +618,12 @@ struct ReplyTail {
 }
 
 impl ReplyTail {
-    /// Route attempt only for a well-formed reply: one `--to`, exactly one
-    /// body form, no uncarryable words. Anything else forwards.
+    /// Route attempt for a well-formed reply: one `--to`, exactly one body
+    /// form. Uncarryable words ride along: the foreign route refuses them
+    /// naming each, and every other route forwards so Python keeps owning
+    /// its own flags.
     fn routable(&self) -> bool {
-        self.to.is_some() && self.body.is_some() && self.body_sources == 1 && self.extra.is_empty()
+        self.to.is_some() && self.body.is_some() && self.body_sources == 1
     }
 }
 
@@ -1167,6 +1169,28 @@ mod tests {
             reply_route(""),
             ReplyRoute::Forward,
             "an empty address forwards"
+        );
+        // The route gate: uncarryable words never short-circuit it (the
+        // foreign route refuses them naming each; Python keeps its own
+        // flags locally), while a duplicated body still forwards.
+        let flagged = ReplyTail {
+            to: Some("fmail-x".to_string()),
+            body: Some("ok".to_string()),
+            body_sources: 1,
+            kind: false,
+            extra: vec!["--json".to_string()],
+        };
+        assert!(
+            flagged.routable(),
+            "a Python-only flag rides to the route decision"
+        );
+        let dup = ReplyTail {
+            body_sources: 2,
+            ..flagged
+        };
+        assert!(
+            !dup.routable(),
+            "a duplicated body forwards to the Python verb"
         );
     }
 }
