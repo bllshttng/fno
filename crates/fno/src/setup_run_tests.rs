@@ -252,7 +252,7 @@ fn the_report_shape_and_wire_fold_hold() {
         .keys()
         .map(|k| k.as_str())
         .collect();
-    assert_eq!(keys.len(), 7);
+    assert_eq!(keys.len(), 8);
     for k in [
         "detected",
         "proposed",
@@ -260,6 +260,7 @@ fn the_report_shape_and_wire_fold_hold() {
         "needs_human",
         "key_gap",
         "rows",
+        "verified",
         "next_action",
     ] {
         assert!(keys.contains(&k), "missing {k}");

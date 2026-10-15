@@ -1412,6 +1412,9 @@ fn dry_run_json(
         "needs_human": needs_human,
         "key_gap": key_gap,
         "rows": rows.iter().map(|r| r.to_json()).collect::<Vec<_>>(),
+        // The field the report contract carries in every mode; a dry run
+        // verifies nothing, so it stays empty here.
+        "verified": [],
         "next_action": next_action(rows, fallback),
     })
 }
