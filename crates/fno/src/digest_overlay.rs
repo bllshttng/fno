@@ -866,7 +866,7 @@ fn project_root(cwd: &Path) -> PathBuf {
 
 /// The project config roots, HIGHEST precedence first: this checkout, then the
 /// canonical one behind it when this is a linked worktree.
-fn config_roots(cwd: &Path) -> Vec<PathBuf> {
+pub(crate) fn config_roots(cwd: &Path) -> Vec<PathBuf> {
     config_roots_with(cwd, canonical_suppressed_by_env())
 }
 
@@ -1054,7 +1054,7 @@ pub(crate) fn config_top_str(cwd: &Path, key: &str) -> Option<String> {
 /// `$FNO_GLOBAL_SETTINGS_PATH` when set, else `$HOME/.fno/config.toml`. One
 /// source for both the explicit tier and the section ladder's last rung, so
 /// the two can never resolve different global files.
-fn global_config_toml() -> Option<PathBuf> {
+pub(crate) fn global_config_toml() -> Option<PathBuf> {
     match non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         // Python's `_prefer_toml` substitutes the config.toml sibling ONLY
         // for a pin whose basename is exactly `settings.yaml` (and the unset
@@ -1121,7 +1121,12 @@ fn read_section_file(path: &Path, section: &str, key: &str) -> Option<String> {
     read_value(&std::fs::read_to_string(path).ok()?, section, key)
 }
 
-fn read_nested_file(path: &Path, section: &str, subsection: &str, key: &str) -> Option<String> {
+pub(crate) fn read_nested_file(
+    path: &Path,
+    section: &str,
+    subsection: &str,
+    key: &str,
+) -> Option<String> {
     read_nested_value(
         &std::fs::read_to_string(path).ok()?,
         section,
