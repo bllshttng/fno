@@ -2842,8 +2842,8 @@ mod tests {
             2
         );
         let adopt_clash = serde_json::json!([
-            {"slug": "a", "title": "A", "adopt": ["x-1234"]},
-            {"slug": "b", "title": "B", "adopt": ["x-1234"]},
+            {"slug": "a", "title": "A", "adopt": ["x-aaaa"]},
+            {"slug": "b", "title": "B", "adopt": ["x-aaaa"]},
         ]);
         assert!(validate_groups(&adopt_clash, None, None, None).is_err());
         let ok = serde_json::json!([
