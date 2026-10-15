@@ -495,6 +495,205 @@ fn cmd_peek(args: &[String]) -> i32 {
     relay(&host, &relay_words)
 }
 
+/// Where a reply to `from` (the answered message's raw sender address)
+/// goes. The cross-host form `<user>@<host>/<name>` answers at
+/// `<name>@<host>`; an OS-user label (`name` equals `user`) predates role
+/// names, so it refuses naming the send form instead of guessing; every
+/// other shape forwards to the Python reply, which owns local routing.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReplyRoute {
+    Forward,
+    Refuse(String),
+    Send { name: String, host: String },
+}
+
+pub(crate) fn reply_route(from: &str) -> ReplyRoute {
+    let Some((head, name)) = from.rsplit_once('/') else {
+        return ReplyRoute::Forward;
+    };
+    let Some((user, host)) = head.split_once('@') else {
+        return ReplyRoute::Forward;
+    };
+    // Strictness: only the form sender_id writes. Anything else (a bare
+    // handle, a nested slash, a second @) is not the relay's label, so the
+    // Python reply decides.
+    if user.is_empty() || name.is_empty() || host.is_empty() {
+        return ReplyRoute::Forward;
+    }
+    if host.contains('/') || host.contains('@') || user.contains('/') {
+        return ReplyRoute::Forward;
+    }
+    let host = mail_bus::normalize_host(host);
+    let local = mail_bus::normalize_host(&crate::claims::hostname());
+    if host == local {
+        return ReplyRoute::Forward;
+    }
+    if name == user {
+        // An old OS-user label has no addressable role name, so the honest
+        // answer is the send form, not a guessed delivery.
+        return ReplyRoute::Refuse(format!(
+            "sender {from} carries no role name; send to the lead by name with \
+             fno agents mail send <name>@{host} \"...\""
+        ));
+    }
+    ReplyRoute::Send {
+        name: name.to_string(),
+        host,
+    }
+}
+
+/// The cross-host branch of `mail reply`: when the answered message's raw
+/// sender is a foreign-host identity, the reply is a cross-host send to
+/// `<name>@<host>` and this returns the exit code. `None` hands the reply
+/// back to the Python verb (local sender, missing row, any other address
+/// shape). A flag the store lane cannot carry is refused here, naming it,
+/// rather than dropped. The mail port's later native reply leaf calls this
+/// before its local logic, so the branch stays one function.
+pub(crate) fn reply_cross_host(
+    answered_id: &str,
+    body: &str,
+    kind: bool,
+    extra: &[String],
+) -> Option<i32> {
+    let from = crate::chats::message_from(answered_id)?;
+    match reply_route(&from) {
+        ReplyRoute::Forward => None,
+        ReplyRoute::Refuse(message) => {
+            eprintln!("{message}");
+            Some(2)
+        }
+        ReplyRoute::Send { name, host } => {
+            if !extra.is_empty() {
+                eprintln!(
+                    "fno agents mail reply: a cross-host store reply carries only the \
+                     body; it cannot carry: {extra:?}"
+                );
+                return Some(2);
+            }
+            let label = resolve_from_name(&SendTail::default())
+                .map(|f| match f {
+                    FromName::Given(v) | FromName::SelfName(v) | FromName::OsUser(v) => v,
+                })
+                .unwrap_or_else(|_| os_user());
+            if kind {
+                eprintln!("note: a cross-host reply carries no kind; --kind dropped");
+            }
+            Some(cmd_send(&[
+                format!("{name}@{host}"),
+                "--from-name".to_string(),
+                label,
+                body.to_string(),
+            ]))
+        }
+    }
+}
+
+/// The tail parser for `mail reply`. Only the forms the cross-host lane
+/// owns are lifted; everything else rides to the Python reply verbatim,
+/// which keeps its refusals and exit codes identical to the local verb's
+/// (a duplicated body, an unknown flag, a missing --to).
+#[derive(Default)]
+struct ReplyTail {
+    to: Option<String>,
+    body: Option<String>,
+    /// How many body forms rode in (positional, --body, --body-file).
+    body_sources: usize,
+    /// `--kind` was passed: accepted, and dropped on the cross-host route
+    /// with a note, because a bus row carries no kind.
+    kind: bool,
+    /// Words the store lane cannot carry. Nonempty means forward.
+    extra: Vec<String>,
+}
+
+impl ReplyTail {
+    /// Route attempt only for a well-formed reply: one `--to`, exactly one
+    /// body form, no uncarryable words. Anything else forwards.
+    fn routable(&self) -> bool {
+        self.to.is_some() && self.body.is_some() && self.body_sources == 1 && self.extra.is_empty()
+    }
+}
+
+fn cmd_reply(args: &[String]) -> i32 {
+    let mut tail = ReplyTail::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--to" => match args.get(i + 1) {
+                Some(v) => {
+                    tail.to = Some(v.clone());
+                    i += 2;
+                }
+                None => return forward_reply(args),
+            },
+            "--body" => match args.get(i + 1) {
+                Some(v) => {
+                    tail.body = Some(v.clone());
+                    tail.body_sources += 1;
+                    i += 2;
+                }
+                None => return forward_reply(args),
+            },
+            "--body-file" => match args.get(i + 1) {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => {
+                        tail.body = Some(text);
+                        tail.body_sources += 1;
+                        i += 2;
+                    }
+                    Err(_) => return forward_reply(args),
+                },
+                None => return forward_reply(args),
+            },
+            "--kind" => match args.get(i + 1) {
+                Some(_) => {
+                    tail.kind = true;
+                    i += 2;
+                }
+                None => return forward_reply(args),
+            },
+            other => {
+                // A positional body, or a word the store lane cannot carry
+                // (an unknown flag, a Python-only flag). Both are logged in
+                // `extra`; the body position matters, so record which.
+                if other.starts_with('-') {
+                    tail.extra.push(other.to_string());
+                } else {
+                    tail.body = Some(other.to_string());
+                    tail.body_sources += 1;
+                }
+            }
+        }
+    }
+    // One exec hop for the whole reply surface: the front door claims every
+    // `mail reply`, and any case the cross-host branch does not own execs
+    // the Python reply with the original tail, so its refusals, kinds and
+    // exit codes stay byte-identical (the parity contract).
+    if !tail.routable() {
+        return forward_reply(args);
+    }
+    match reply_cross_host(
+        tail.to.as_deref().expect("checked routable"),
+        tail.body.as_deref().expect("checked routable"),
+        tail.kind,
+        &tail.extra,
+    ) {
+        Some(code) => code,
+        None => forward_reply(args),
+    }
+}
+
+/// The verbatim Python forward: the original tail, same argv shape the
+/// front door would hand the Python CLI on main.
+fn forward_reply(args: &[String]) -> i32 {
+    let mut argv: Vec<String> = vec![
+        "agents".to_string(),
+        "mail".to_string(),
+        "reply".to_string(),
+    ];
+    argv.extend(args.iter().cloned());
+    crate::scrape::exec_python("fno agents mail reply", argv)
+}
+
 fn cmd_status(_args: &[String]) -> i32 {
     match store_path() {
         StorePath::Primary(remote) => {
@@ -530,15 +729,18 @@ cross-host target answered over the ssh fallback leave no bus rows"
     }
 }
 
-/// Binary-direct entry from `fno-agents mail-remote <send|peek|status> ...`.
+/// Binary-direct entry from `fno-agents mail-remote <send|peek|status|reply> ...`.
 /// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
 pub fn run(args: &[String]) -> i32 {
     match args.first().map(|a| a.as_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
+        Some("reply") => cmd_reply(&args[1..]),
         Some("status") => cmd_status(&args[1..]),
         _ => {
-            eprintln!("usage: fno-agents mail-remote <send|peek|status> <name>@<host> [args...]");
+            eprintln!(
+                "usage: fno-agents mail-remote <send|peek|status|reply> <name>@<host> [args...]"
+            );
             2
         }
     }
@@ -900,6 +1102,48 @@ mod tests {
         assert!(
             !crate::mail_remote::retry_path(exit14_home).exists(),
             "a delivered row books no ladder entry"
+        );
+        // The reply route: a foreign-host sender routes to a cross-host
+        // send at <name>@<host>; the local host forwards to the Python
+        // reply; an OS-user label refuses naming the send form; a bare
+        // handle or any other shape forwards. The local-host case is built
+        // from the test host, so the same asserts hold on any machine.
+        use crate::mail_remote::{reply_route, ReplyRoute};
+        let test_host = crate::mail_bus::normalize_host(&crate::claims::hostname());
+        assert_eq!(
+            reply_route("bb16@some-remote/nemo"),
+            ReplyRoute::Send {
+                name: "nemo".to_string(),
+                host: "some-remote".to_string()
+            }
+        );
+        assert_eq!(
+            reply_route(&format!("a@{test_host}/b")),
+            ReplyRoute::Forward,
+            "the local host forwards to the Python reply"
+        );
+        assert_eq!(
+            reply_route("bb16@some-remote/bb16"),
+            ReplyRoute::Refuse(
+                "sender bb16@some-remote/bb16 carries no role name; send to the lead \
+                 by name with fno agents mail send <name>@some-remote \"...\""
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            reply_route("some-agent"),
+            ReplyRoute::Forward,
+            "a bare handle forwards"
+        );
+        assert_eq!(
+            reply_route("a@h/x/y"),
+            ReplyRoute::Forward,
+            "a nested slash is not the relay's label form"
+        );
+        assert_eq!(
+            reply_route(""),
+            ReplyRoute::Forward,
+            "an empty address forwards"
         );
     }
 }
