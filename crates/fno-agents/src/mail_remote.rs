@@ -87,9 +87,10 @@ pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
 pub enum FromName {
     /// `--from-name <value>` won.
     Given(String),
-    /// `--from-self`: the ambient session's own name (FNO_AGENT_SELF).
+    /// The ambient session's own name, from `--from-self` or the ambient
+    /// value, or the session's registry row: the replier's role name.
     SelfName(String),
-    /// Neither flag: the OS user.
+    /// No identity above the OS user resolved: the plain-shell form.
     OsUser(String),
 }
 
@@ -124,10 +125,17 @@ pub fn parse_send_tail(args: &[String]) -> Result<SendTail, String> {
     Ok(tail)
 }
 
-/// Resolve the from_id name part from an explicit ambient value, so the
-/// rule is testable without env mutation. `--from-self` is fail-loud,
-/// matching the local verb's contract: no ambient session identity, no send.
-pub fn resolve_from_name_with(ambient: Option<&str>, tail: &SendTail) -> Result<FromName, String> {
+/// Resolve the from_id name part from an explicit ambient value and
+/// registry-row name, so the rule is testable without env or file
+/// mutation. `--from-self` is fail-loud, matching the local verb's
+/// contract: no ambient session identity, no send. The default order:
+/// `--from-self` (strict), `--from-name`, the ambient session's own name,
+/// the session's registry row, then the OS user.
+pub fn resolve_from_name_with(
+    ambient: Option<&str>,
+    row_name: Option<&str>,
+    tail: &SendTail,
+) -> Result<FromName, String> {
     if tail.from_self {
         let value = ambient.unwrap_or_default().trim();
         if value.is_empty() {
@@ -142,12 +150,47 @@ pub fn resolve_from_name_with(ambient: Option<&str>, tail: &SendTail) -> Result<
     if let Some(given) = &tail.from_name {
         return Ok(FromName::Given(given.clone()));
     }
+    if let Some(value) = ambient.map(str::trim).filter(|v| !v.is_empty()) {
+        return Ok(FromName::SelfName(value.to_string()));
+    }
+    if let Some(value) = row_name.map(str::trim).filter(|v| !v.is_empty()) {
+        return Ok(FromName::SelfName(value.to_string()));
+    }
     Ok(FromName::OsUser(os_user()))
 }
 
-/// The CLI form: reads the ambient identity from the process environment.
+/// The CLI form: reads the ambient identity from the process environment
+/// and the session's registry row from the live store.
 pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
-    resolve_from_name_with(std::env::var("FNO_AGENT_SELF").ok().as_deref(), tail)
+    resolve_from_name_with(
+        std::env::var("FNO_AGENT_SELF").ok().as_deref(),
+        session_row_name().as_deref(),
+        tail,
+    )
+}
+
+/// The registry row name for the ambient session, when this shell is one.
+/// The canonical resolver proves session id and harness; the row is found
+/// by that pair, so a renamed agent answers with its current name and a
+/// plain shell (no identity) falls through to the OS user.
+fn session_row_name() -> Option<String> {
+    let get = |name: &str| std::env::var(name).ok();
+    let identity = crate::spawn_context::resolve_self_identity(
+        &get,
+        None,
+        None,
+        &crate::paths::AgentsHome::from_env(),
+    );
+    let session = identity.session_id.as_deref()?.trim();
+    let harness = identity.harness.as_deref()?.trim();
+    if session.is_empty() || harness.is_empty() {
+        return None;
+    }
+    let path = crate::paths::AgentsHome::shared_registry_json();
+    let registry = crate::state::try_load_registry(&path).ok()??;
+    registry
+        .find_by_session(harness, session)
+        .map(|row| row.name.clone())
 }
 
 fn os_user() -> String {
@@ -583,9 +626,42 @@ mod tests {
             from_self: true,
             ..SendTail::default()
         };
-        assert!(resolve_from_name_with(None, &selfy).is_err());
-        assert!(resolve_from_name_with(Some("  "), &selfy).is_err());
-        assert!(resolve_from_name_with(Some("nemo"), &selfy).is_ok());
+        assert!(resolve_from_name_with(None, None, &selfy).is_err());
+        assert!(resolve_from_name_with(Some("  "), Some("row"), &selfy).is_err());
+        assert!(resolve_from_name_with(Some("nemo"), Some("row"), &selfy).is_ok());
+        // The default label tiers: --from-name wins over both identity
+        // tiers, the ambient session's own name wins over the registry row,
+        // and the row wins over the OS user. A shell with none of the
+        // three keeps the plain `<user>@<host>/<user>` form.
+        let plain = SendTail::default();
+        assert_eq!(
+            resolve_from_name_with(None, Some("Quinlan"), &plain),
+            Ok(FromName::SelfName("Quinlan".to_string()))
+        );
+        assert_eq!(
+            resolve_from_name_with(Some("quinlan"), Some("Quinlan"), &plain),
+            Ok(FromName::SelfName("quinlan".to_string())),
+            "the ambient session name outranks the registry row"
+        );
+        assert_eq!(
+            resolve_from_name_with(None, None, &plain),
+            Ok(FromName::OsUser(os_user())),
+            "no identity tiers resolves to the OS user"
+        );
+        let named = SendTail {
+            from_name: Some("rowan".to_string()),
+            ..SendTail::default()
+        };
+        assert_eq!(
+            resolve_from_name_with(Some("ambient"), Some("Quinlan"), &named),
+            Ok(FromName::Given("rowan".to_string())),
+            "--from-name outranks every identity tier"
+        );
+        // Blank ambient and row values fall through, never stamp a blank.
+        assert_eq!(
+            resolve_from_name_with(Some("  "), Some("  "), &plain),
+            Ok(FromName::OsUser(os_user()))
+        );
         // Sender identity normalizes the host part.
         assert_eq!(
             sender_id("bb16", "iMac2D2.local", "nemo"),
