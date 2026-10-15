@@ -153,10 +153,10 @@ fn build_runtime(case: &Value, base: &Path, key: &str, stub: &Path) -> Runtime {
         std::fs::set_permissions(&gh, perms).unwrap();
     }
     Runtime {
-        dir,
-        repo,
         log: dir.join("gh.log"),
         body: dir.join("gh-body.txt"),
+        dir,
+        repo,
     }
 }
 
