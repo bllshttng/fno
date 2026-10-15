@@ -1,0 +1,1 @@
+coverage uncovered: 1 reviewed (no head-pinned pass attestation - run the review verb at HEAD - `fno do review --level medium --reviewer code-review` - close every finding, commit and push first, then attest at the final head with `bash skills/review/scripts/emit-attestation.sh <reviewer>`) [coverage row pinned to ef5fdb251 at 2026-10-13T00:05:00Z]
