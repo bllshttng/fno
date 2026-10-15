@@ -204,6 +204,15 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         None => None,
     };
 
+    // 3b. Model validation: a whitespace-only --model is a typo, not a
+    // choice. The Python body refused it at parse; the door keeps the
+    // contract so the forward cannot smuggle an empty dispatch model in.
+    if args.model.as_ref().map_or(false, |m| m.trim().is_empty()) {
+        return Err(refuse(
+            "fno do target init: --model must not be empty.".to_string(),
+        ));
+    }
+
     // 4. The plugin helper must exist before anything runs.
     let script_path = resolve_init_script();
     if !script_path.is_file() {
