@@ -294,6 +294,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
             false,
             args.beastmode,
             args.no_merge,
+            args.steps,
         )? {
             return Ok(0);
         }
@@ -458,6 +459,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         !in_place,
         args.beastmode,
         args.no_merge,
+        args.steps,
     )? {
         return Ok(0);
     }
@@ -780,6 +782,19 @@ fn manifest_node_id(manifest: &Path) -> Option<String> {
     }
 }
 
+/// The manifest's turn mode; None when the line is absent, which is an
+/// ordinary (looping) run - the helper writes the line only for steps.
+fn manifest_turn_mode(manifest: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let re = Regex::new(r"(?m)^turn_mode\s*:\s*(.+)$").ok()?;
+    let val = re.captures(&text)?.get(1)?.as_str().trim().to_string();
+    if val.is_empty() {
+        None
+    } else {
+        Some(val)
+    }
+}
+
 /// The graph node row for an exact id, or None. An archived row reads as
 /// absent, exactly like the Python `_find_node` readback.
 fn find_node(node_id: &str, entries: Option<&[Value]>) -> Option<Value> {
@@ -896,6 +911,7 @@ fn print_foreign_holder_park(node_id: &str, rec: &crate::claims::ClaimRecord, wt
 /// Classify and re-bind an existing manifest. Ok(true) when the caller is
 /// done; Ok(false) means no manifest exists here and the caller should run
 /// init against this tree.
+#[allow(clippy::too_many_arguments)]
 fn bind_worktree(
     node: &str,
     wt_path: &Path,
@@ -904,10 +920,14 @@ fn bind_worktree(
     node_match_guaranteed: bool,
     beastmode: bool,
     no_merge: bool,
+    steps: bool,
 ) -> Result<bool, Fail> {
     let Some(manifest) = worktree_manifest(wt_path) else {
         return Ok(false);
     };
+    if steps && manifest_turn_mode(&manifest).as_deref() != Some("steps") {
+        warn_steps_dropped(&manifest);
+    }
     // A manifest means init ran. Classify the live node claim from this
     // session's view: foreign-live -> park; ours -> idempotent
     // already-claimed; a dead predecessor -> re-acquire under this session so
@@ -1161,6 +1181,20 @@ fn warn_no_merge_dropped() {
          manifest says. Verify with:\n  sed -n \
          's/^auto_merge_approved:[[:space:]]*//p' \"$(fno-agents state path \
          target-state)\"\nand if it is not `false`, do not rely on this flag."
+    );
+}
+
+/// Name a --steps that did not take. The idempotent and successor paths
+/// re-bind an existing write-once manifest, so a mode the caller asked for
+/// and the manifest did not record stays a silent divergence unless this
+/// prints.
+fn warn_steps_dropped(manifest: &Path) {
+    eprintln!(
+        "WARNING: --steps did NOT take - the manifest at {} is write-once and \
+         does not carry turn_mode: steps. The stop gate keeps its normal \
+         looping posture for this session. To run steps mode, cancel this \
+         session (fno do target cancel) and re-start the node with --steps.",
+        manifest.display()
     );
 }
 

@@ -815,13 +815,22 @@ fn expand_tilde(path: &str) -> PathBuf {
 /// resolve to None, exactly like the Python resolver. A plan path matches
 /// graph rows whose plan_path canonicalizes to the same file; a plan shared
 /// by a delivery unit and its contained children narrows to the units. The
-/// start port reuses this for its pre-ensure hold gate.
+/// start port reuses this for its pre-ensure hold gate. Like the Python
+/// resolver's default, entries=None reads the graph here, so a caller with
+/// no resolution step of its own still gets a resolved node to hold-check.
 pub(crate) fn resolve_dispatch_node(
     input: Option<&str>,
     plan_path: Option<&str>,
     entries: Option<&[serde_json::Value]>,
 ) -> Option<serde_json::Value> {
-    let entries = entries?;
+    let owned;
+    let entries: &[serde_json::Value] = match entries {
+        Some(rows) => rows,
+        None => {
+            owned = graph_rows(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            owned.as_deref()?
+        }
+    };
     let node_token = Regex::new(r"(?i)^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").unwrap();
     let tokens: Vec<String> = input
         .unwrap_or("")
