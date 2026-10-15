@@ -13,6 +13,7 @@ pub fn run_verb(verb: &str, args: &[String]) -> Option<i32> {
         "pr-body-check" => Some(crate::pr_body_check::run(&args[1..])),
         "pr-create" => Some(crate::pr_create::run_pr_create_verb(&args[1..])),
         "pr-base-lineage-check" => Some(crate::gate_probes::run_base_lineage_verb(&args[1..])),
+        "pr-merge-result-check" => Some(crate::pr_merge_result::run_merge_result_verb(&args[1..])),
         _ => None,
     }
 }

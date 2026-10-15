@@ -455,9 +455,7 @@ def base_lineage_check(
     ),
 )
 def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR number")) -> None:
-    from fno.pr import _merge_result
-
-    raise typer.Exit(code=_merge_result.run_merge_result_check(pr_number))
+    _forward_to_binary("pr-merge-result-check", [str(pr_number)])
 
 
 @pr_app.command(

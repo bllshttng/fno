@@ -518,15 +518,31 @@ pub fn run_base_lineage_verb(argv: &[String]) -> i32 {
 /// then the race-guarded pull-head fetch and the repo-wide script, exactly
 /// the spawned verb's order.
 pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeOutcome {
+    let (verdict, reason) = merge_result_verdict(cwd, facts, run);
+    match verdict.as_str() {
+        "ok" => ProbeOutcome::Clear,
+        "red" => ProbeOutcome::Refused(reason),
+        _ => ProbeOutcome::Inconclusive(reason),
+    }
+}
+
+/// The same walk in the verb's own vocabulary (`ok|red|unknown` plus the
+/// reason the Python verb printed), so the standalone verb and the in-process
+/// gate share one implementation.
+pub(crate) fn merge_result_verdict(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
     let base = facts.base_ref.as_str();
     let head_oid = facts.head_sha.as_str();
     if base.is_empty() || head_oid.is_empty() {
-        return ProbeOutcome::Inconclusive(
+        return (
+            "unknown".into(),
             "merge-result probe could not read the PR base/head".into(),
         );
     }
     if !fetch_ref(cwd, base, run) {
-        return ProbeOutcome::Inconclusive(format!("could not fetch base branch '{base}'"));
+        return (
+            "unknown".into(),
+            format!("could not fetch base branch '{base}'"),
+        );
     }
     let ancestor = run(
         &[
@@ -539,7 +555,10 @@ pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeO
         cwd,
     );
     if ancestor.map(|r| r.code == Some(0)).unwrap_or(false) {
-        return ProbeOutcome::Clear;
+        return (
+            "ok".into(),
+            format!("head already contains {base} - CI on the head is the merge result"),
+        );
     }
     let spec = format!("refs/pull/{}/head:refs/fno/merge-result/head", facts.number);
     let fetched = run(
@@ -557,25 +576,24 @@ pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeO
     .map(|_| rev(cwd, "refs/fno/merge-result/head", run))
     .unwrap_or_default();
     if fetched != head_oid {
-        return ProbeOutcome::Inconclusive(format!(
-            "PR head moved during the probe ({} != {})",
-            &fetched[..8.min(fetched.len())],
-            &head_oid[..8.min(head_oid.len())]
-        ));
+        return (
+            "unknown".into(),
+            format!(
+                "PR head moved during the probe ({} != {})",
+                &fetched[..8.min(fetched.len())],
+                &head_oid[..8.min(head_oid.len())]
+            ),
+        );
     }
     let Some(top) =
         crate::paths::canonical_repo_root(cwd).map(|p| p.to_string_lossy().into_owned())
     else {
-        return ProbeOutcome::Inconclusive(
+        return (
+            "unknown".into(),
             "could not resolve the canonical repo root for the merge-result script".into(),
         );
     };
-    let (verdict, reason) = run_merge_script(&top, &format!("origin/{base}"), head_oid, cwd);
-    match verdict.as_str() {
-        "ok" => ProbeOutcome::Clear,
-        "red" => ProbeOutcome::Refused(reason),
-        _ => ProbeOutcome::Inconclusive(reason),
-    }
+    run_merge_script(&top, &format!("origin/{base}"), head_oid, cwd)
 }
 
 /// The static step: the repo's own `check-merge-result.sh` (merge-tree +
@@ -999,5 +1017,40 @@ mod tests {
         let entries = vec![json!({"id": "x-ok", "project": "fno", "cwd": "/repo"})];
         let out = dispatch_hold_rows(Path::new("/repo"), &facts(9), &entries);
         assert_eq!(out, ProbeOutcome::Clear);
+    }
+
+    /// The fake probe the merge-result verdict tests share: `git fetch` and
+    /// `git merge-base` succeed, everything else cannot run.
+    fn fetch_only_run(args: &[&str], _dir: &Path) -> Option<Run> {
+        let ok = args.first() == Some(&"git")
+            && matches!(args.get(1), Some(&"fetch") | Some(&"merge-base"));
+        ok.then(|| Run {
+            ok: true,
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+
+    #[test]
+    fn merge_result_verdict_ok_when_head_contains_base() {
+        let run = |args: &[&str], dir: &Path| fetch_only_run(args, dir);
+        let mut facts = facts(9);
+        facts.base_ref = "main".into();
+        let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
+        assert_eq!(verdict, "ok");
+        assert_eq!(
+            reason,
+            "head already contains main - CI on the head is the merge result"
+        );
+    }
+
+    #[test]
+    fn merge_result_verdict_unknown_when_facts_blank() {
+        let run = |args: &[&str], dir: &Path| fetch_only_run(args, dir);
+        let facts = PrFacts::default();
+        let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
+        assert_eq!(verdict, "unknown");
+        assert_eq!(reason, "merge-result probe could not read the PR base/head");
     }
 }
