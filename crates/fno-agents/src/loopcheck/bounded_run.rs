@@ -415,17 +415,8 @@ pub(crate) fn bounded_read(
     // adapters that wrap it are GitHub traffic; fno and git reads are not,
     // and the 0-point shapes (version probes, `api rate_limit`) admit
     // untouched.
-    let bin_name = std::path::Path::new(bin)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if (bin_name == "gh" || super::gh_read::internal_gh_adapter(bin_name))
-        && crate::gh_budget::admission_armed()
-    {
-        let argv: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
-        if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
-            return Err(GhReadError::budget_refused_with_detail(read_name, line));
-        }
+    if let Some(line) = crate::gh_budget::admit_spawn(bin, args) {
+        return Err(GhReadError::budget_refused_with_detail(read_name, line));
     }
     match run_bounded(bin, args, cwd, timeout) {
         BoundedRun::Completed(out) => Ok(out),
