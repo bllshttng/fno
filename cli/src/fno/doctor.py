@@ -1322,20 +1322,26 @@ def _post_merge_sync_health() -> dict[str, Any]:
     ``post_merge.auto_run``: reporting is not acting.
     """
     try:
-        from fno.pr._sync_canonical import sync_staleness
+        from fno.rust_binary import VerbUnavailable, verb_call
 
         # fetch=True: doctor is the human-facing report and runs interactively,
         # so it can afford the fetch that makes the behind-count trustworthy.
         # Without it a merge aged out of the gh window leaves no markerless row
         # and a stale remote-tracking ref reads as zero behind - the outage goes
         # invisible exactly when it has lasted longest.
-        st = sync_staleness(fetch=True)
+        st = verb_call(
+            "sync-canonical",
+            {"action": "staleness", "cwd": os.getcwd(), "fetch": True},
+            timeout=120.0,
+        )
         return {
             "state": st["state"],
             "stale": st["state"] == "stale",
             "behind": st["behind"],
             "detail": st["detail"],
         }
+    except VerbUnavailable:
+        return {"state": "unknown", "stale": False, "behind": None, "detail": ""}
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         return {"state": "unknown", "stale": False, "behind": None, "detail": ""}
 

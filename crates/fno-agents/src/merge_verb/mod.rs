@@ -108,7 +108,9 @@ pub(crate) fn run_operand(args: &[String]) -> i32 {
             }
             flow.exit_code
         }
-        // merge-result-check and hold-check land with the check stage.
+        Some("hold-check") => run_hold_check_operand(&args[1..]),
+        // merge-result-check stays on its own verb (`pr-merge-result-check`);
+        // no operand door asks for it here.
         _ => {
             eprintln!(
                 "fno-agents authorized-merge: not native yet; the Python leg still owns this verb"
@@ -154,10 +156,617 @@ pub(crate) fn run_op(op: &str, payload: &Value) -> Result<Value, String> {
             }
             Ok(Value::Object(answer))
         }
+        // The check-stage door: the status cache-key op and the seams probe
+        // ride the payload form; the answer carries the door's streams and
+        // exit, the same shape the spawned leaf answered.
+        "hold-check" => {
+            let pr = payload.get("pr").and_then(Value::as_i64).unwrap_or(0);
+            let cwd = payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let mut flow = hold_check_flow(pr, &cwd);
+            let mut stdout = String::new();
+            let mut stderr = String::new();
+            for (err, line) in std::mem::take(&mut flow.lines) {
+                if err {
+                    stderr.push_str(&line);
+                } else {
+                    stdout.push_str(&line);
+                }
+            }
+            Ok(json!({
+                "exit": flow.exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+            }))
+        }
         other => Err(format!(
             "fno-agents authorized-merge: unsupported op {other}\n"
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// hold-check: the plan-hold door the git-protection hook and the status
+// probes read. The decision bodies all live native already (`pr_binding_keys`,
+// the `hold-verdict` op, the worktree resolver); this flow is the
+// orchestration the deleted Python leaf performed, byte-shaped after the
+// goldens frozen from it under tests/golden/merge_verb/hold_*.
+// ---------------------------------------------------------------------------
+
+/// The `authorized-merge hold-check <pr> [--repo <path>]` operand door.
+fn run_hold_check_operand(args: &[String]) -> i32 {
+    let mut pr_raw: Option<&str> = None;
+    let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--repo" && i + 1 < args.len() {
+            cwd = PathBuf::from(&args[i + 1]);
+            i += 2;
+        } else {
+            pr_raw = Some(args[i].as_str());
+            i += 1;
+        }
+    }
+    let Some(raw) = pr_raw else {
+        eprintln!("hold-check: pr number required\n");
+        return 1;
+    };
+    let Ok(pr) = raw.parse::<i64>() else {
+        eprintln!("hold-check: invalid pr number: {raw}\n");
+        return 1;
+    };
+    let mut flow = hold_check_flow(pr, &cwd);
+    for (err, line) in std::mem::take(&mut flow.lines) {
+        if err {
+            eprint!("{line}");
+        } else {
+            print!("{line}");
+        }
+    }
+    flow.exit_code
+}
+
+/// The plan-hold read the merge guard, the hook and the status probes share:
+/// resolve the PR's local worktree, read the bound plan ancestry's hold, echo
+/// + exit 3 on a hold, or print the clear line. Refusals fail closed and
+/// disarm any queued GitHub auto-merge on the way out.
+pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
+    let mut flow = FlowResult::new();
+    // A hold is a graph-resident concept: under an external tracker backend
+    // the graph is not this repo's delivery record, so there is no plan hold
+    // to read - never "unreadable".
+    let backend = std::env::var("FNO_TRACKER_BACKEND").unwrap_or_else(|_| "graph".to_string());
+    if backend != "graph" {
+        hold_clear(&mut flow, pr);
+        return flow;
+    }
+    let worktree = match resolve_pr_worktree(pr, cwd) {
+        Ok(wt) => wt,
+        Err(message) => {
+            flow.lines.push((true, format!("{message}\n")));
+            flow.exit_code = 1;
+            return flow;
+        }
+    };
+    // "" = no local worktree on the PR branch: the hold read runs from the
+    // caller's checkout, whose cwd only resolves the repo root.
+    let base: PathBuf = if worktree.as_os_str().is_empty() {
+        cwd.to_path_buf()
+    } else {
+        worktree
+    };
+    let rows = match worker_rows(&base) {
+        Ok(rows) => rows,
+        Err(error) => {
+            hold_refusal(
+                &mut flow,
+                pr,
+                &base,
+                &format!("dispatch-hold-invalid: backlog graph is unreadable: {error}"),
+            );
+            return flow;
+        }
+    };
+    let mut by_id: std::collections::BTreeMap<String, &Value> = Default::default();
+    for row in &rows {
+        if let Some(id) = row.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                by_id.insert(id.to_string(), row);
+            }
+        }
+    }
+    if by_id.is_empty() {
+        hold_clear(&mut flow, pr);
+        return flow;
+    }
+    let root = hold_repo_root(&base);
+    let root_prefix = format!("{}/", root.trim_end_matches('/'));
+    if !rows.iter().any(|row| cwd_in_repo(row, &root, &root_prefix)) {
+        hold_clear(&mut flow, pr);
+        return flow;
+    }
+    let stamped = rows
+        .iter()
+        .any(|row| node_pr_refs(row).iter().any(|(n, _)| *n == pr));
+    let ctx = match verb_call(
+        "pr-closure-context",
+        &json!({"pr": pr, "repo": Value::Null, "cwd": cwd.to_string_lossy()}),
+        Duration::from_secs(60),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            hold_refusal(
+                &mut flow,
+                pr,
+                &base,
+                &format!(
+                    "dispatch-hold-invalid: hold lookup unavailable: gh call failed before \
+                     PR content was read: {}; retry the hold lookup; do not edit the PR body",
+                    e.message
+                ),
+            );
+            return flow;
+        }
+    };
+    let url = ctx.get("url").and_then(Value::as_str).unwrap_or("");
+    let body = ctx.get("body").and_then(Value::as_str).unwrap_or("");
+    let mut candidates: Vec<String> = Vec::new();
+    if stamped {
+        match find_pr_node_id(&rows, pr, url) {
+            Some(id) => candidates.push(id),
+            None => {
+                // The ref match collapsed to None - a safe skip for
+                // reconcile, but here None reads as "no binding". Surface the
+                // ambiguity and fail closed instead of assuming unheld.
+                if let Some(our_slug) = repo_slug_from_url(url) {
+                    let ambiguous = repo_scoped_number_matches(&rows, pr, &our_slug);
+                    if ambiguous.len() > 1 {
+                        hold_refusal(
+                            &mut flow,
+                            pr,
+                            &base,
+                            &format!(
+                                "dispatch-hold-invalid: PR {pr} maps ambiguously to graph \
+                                 nodes {}; refusing to assume unheld; disambiguate the \
+                                 entries' pr_url and retry",
+                                ambiguous.join(", ")
+                            ),
+                        );
+                        return flow;
+                    }
+                }
+            }
+        }
+    }
+    let parsed = verb_call(
+        "pr-closure-parse",
+        &json!({"body": body}),
+        Duration::from_secs(30),
+    );
+    for claimed in parsed
+        .ok()
+        .and_then(|v| v.get("ids").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+    {
+        if let Some(id) = claimed.as_str() {
+            if !candidates.iter().any(|c| c == id) {
+                candidates.push(id.to_string());
+            }
+        }
+    }
+    if candidates.is_empty() {
+        hold_clear(&mut flow, pr);
+        return flow;
+    }
+    let graph_path = crate::org_board::scope::graph_json_path(&base);
+    for id in &candidates {
+        if !by_id.contains_key(id.as_str()) {
+            if stamped && candidates.first() == Some(id) {
+                disarm_queued_auto_merge(
+                    &mut flow,
+                    pr,
+                    &base,
+                    &format!(
+                        "dispatch-hold-invalid: graph node {id} disappeared during hold lookup"
+                    ),
+                );
+                let why = format!(
+                    "dispatch-hold-invalid: graph node {id} disappeared during hold lookup"
+                );
+                flow.lines
+                    .push((true, format!("{why}; refusing to assume unheld\n")));
+                flow.exit_code = 3;
+                return flow;
+            }
+            // A trailer can name an id this graph slice does not carry.
+            continue;
+        }
+        let receipt = match verb_call(
+            "authorized-merge",
+            &json!({"op": "hold-verdict", "node": id, "graph": graph_path.to_string_lossy()}),
+            Duration::from_secs(15),
+        ) {
+            Ok(v) => v,
+            Err(e) => json!({
+                "outcome": "invalid",
+                "owner": id,
+                "detail": format!("hold verdict read failed: {}", e.message),
+            }),
+        };
+        let outcome = receipt.get("outcome").and_then(Value::as_str).unwrap_or("");
+        if outcome == "absent" {
+            continue;
+        }
+        let held = outcome == "held";
+        let owner = match receipt.get("owner") {
+            None | Some(Value::Null) => "unknown".to_string(),
+            Some(Value::String(s)) if s.is_empty() => "unknown".to_string(),
+            Some(v) => py_str(v),
+        };
+        let field = |name: &str| -> String {
+            match receipt.get(name) {
+                None | Some(Value::Null) => String::new(),
+                Some(v) => py_str(v),
+            }
+        };
+        let prefix = if held {
+            "dispatch-hold"
+        } else {
+            "dispatch-hold-invalid"
+        };
+        let guard = format!("{prefix}:{owner}");
+        if held {
+            let reason = field("reason");
+            let why = format!("{guard}: {reason}");
+            disarm_queued_auto_merge(&mut flow, pr, &base, &why);
+            let mut line = format!(
+                "{why}; set_by={}; release_when={}; review_on={}",
+                field("set_by"),
+                field("release_when"),
+                field("review_on")
+            );
+            let exempt = field("exempt");
+            if !exempt.is_empty() {
+                line.push_str(&format!("; exempt={exempt}"));
+            }
+            flow.lines.push((true, format!("{line}\n")));
+        } else {
+            let why = format!("{guard}: {}", field("detail"));
+            disarm_queued_auto_merge(&mut flow, pr, &base, &why);
+            flow.lines
+                .push((true, format!("{why}; refusing to assume unheld\n")));
+        }
+        flow.exit_code = 3;
+        return flow;
+    }
+    hold_clear(&mut flow, pr);
+    flow
+}
+
+fn hold_clear(flow: &mut FlowResult, pr: i64) {
+    flow.lines
+        .push((false, format!("PR {pr}: no plan dispatch hold\n")));
+    flow.exit_code = 0;
+}
+
+/// One fail-closed hold refusal: disarm any queued auto-merge, name the
+/// reason on stderr, exit 3. `why` already carries the `dispatch-hold-invalid:`
+/// prefix the caller words.
+fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, why: &str) {
+    disarm_queued_auto_merge(flow, pr, base, why);
+    flow.lines
+        .push((true, format!("{why}; refusing to assume unheld\n")));
+    flow.exit_code = 3;
+}
+
+/// Best-effort `gh pr merge <n> --disable-auto` when a hold is seen: the
+/// queue fires server-side with no re-check, so a hold added after arming was
+/// silently ignored. Fires on every positive hold/invalid verdict, never on
+/// an unheld read; any failure notes and returns.
+fn disarm_queued_auto_merge(flow: &mut FlowResult, pr: i64, cwd: &Path, why: &str) {
+    let mut child = match Command::new("gh")
+        .args(["pr", "merge", &pr.to_string(), "--disable-auto"])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return,
+    };
+    let output = wait_output_with_timeout(child, Duration::from_secs(15));
+    let Some(output) = output else {
+        flow.lines.push((
+            true,
+            format!("hold: auto-merge disarm probe failed for PR {pr}: timed out after 15s\n"),
+        ));
+        return;
+    };
+    if output.status.success() {
+        flow.lines.push((
+            true,
+            format!(
+                "hold: disabled an armed auto-merge for PR {pr} ({why}); re-arm with \
+                 `gh pr merge {pr} --auto` once the hold clears\n"
+            ),
+        ));
+        return;
+    }
+    // A non-zero exit includes the benign "auto-merge not enabled" AND the
+    // dangerous auth/network failure - gh's own output is the only thing that
+    // distinguishes them, so surface it.
+    let text = if output.stderr.is_empty() {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    } else {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    };
+    let tail: Vec<&str> = text.trim().lines().collect();
+    let detail = tail
+        .last()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .unwrap_or_else(|| format!("exit {}", output.status.code().unwrap_or(-1)));
+    flow.lines.push((
+        true,
+        format!(
+            "hold: auto-merge disarm for PR {pr} returned nonzero ({detail}); an armed \
+             queue entry may still exist - re-run `gh pr merge --disable-auto` by hand \
+             if auth or network failed\n"
+        ),
+    ));
+}
+
+/// One graph rows read through the same worker door the Python leg used:
+/// `fno-agents-worker --store-exec --graph <path>`, the api rows request on
+/// stdin, the `{ok, result|error}` envelope on stdout.
+fn worker_rows(cwd: &Path) -> Result<Vec<Value>, String> {
+    let graph = crate::org_board::scope::graph_json_path(cwd);
+    let bin = std::env::var_os("FNO_AGENTS_WORKER")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            resolve_agents_bin()
+                .map(|exe| exe.with_file_name("fno-agents-worker"))
+                .filter(|p| p.exists())
+        })
+        .ok_or_else(|| {
+            "fno-agents-worker not found (set FNO_AGENTS_WORKER or install the runtime)".to_string()
+        })?;
+    let mut child = Command::new(&bin)
+        .args(["--store-exec", "--graph"])
+        .arg(&graph)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("fno-agents-worker failed: {e}"))?;
+    {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let _ = stdin.write_all(
+            json!({"id": 1, "method": "api", "params": {"op": "rows", "include_archived": false}})
+                .to_string()
+                .as_bytes(),
+        );
+    }
+    let output = wait_output_with_timeout(child, Duration::from_secs(60))
+        .ok_or_else(|| "store-exec timed out after 60s".to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "fno-agents-worker exited {}: {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(200)
+                .collect::<String>()
+        ));
+    }
+    let reply: Value = serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+        .map_err(|e| format!("store reply did not parse: {e}"))?;
+    if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+        let message = reply
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("unreadable store reply");
+        return Err(message.to_string());
+    }
+    let rows = reply
+        .pointer("/result/rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // The rows op serves archived residents raw; the default read hides them.
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            !row.get("archived_at")
+                .map(|v| !v.is_null())
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
+/// The bounded one-command wait shared by the flow's subprocess hops: the
+/// exit status plus whatever the pipes captured, or None on a timeout (the
+/// child is killed, the partial pipes dropped).
+fn wait_output_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    };
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        use std::io::Read;
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        use std::io::Read;
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    Some(std::process::Output {
+        status,
+        stdout: stdout.into_bytes(),
+        stderr: stderr.into_bytes(),
+    })
+}
+
+/// The hold read's repo root: the canonical resolution when the workspace
+/// config knows one, else the checkout the read runs from. Node `cwd` fields
+/// store canonical roots, so a linked-worktree caller must land there.
+fn hold_repo_root(base: &Path) -> String {
+    match crate::paths::canonical_repo_root(base) {
+        Some(root) => root.to_string_lossy().to_string(),
+        None => base.to_string_lossy().to_string(),
+    }
+}
+
+/// The leaf's in-repo gate: is this entry plausibly THIS repo's node? An
+/// entry with no usable cwd cannot be proven foreign and is included - only
+/// binding-key matches can ever trigger a gh call.
+fn cwd_in_repo(entry: &Value, root: &str, root_prefix: &str) -> bool {
+    let raw = match entry.get("cwd").and_then(Value::as_str) {
+        Some(raw) if !raw.is_empty() => raw,
+        _ => return true,
+    };
+    let norm = normalize_path(raw);
+    norm == root || norm.starts_with(root_prefix)
+}
+
+/// `os.path.normpath(os.path.expanduser(raw))` for the shapes graph cwd
+/// fields carry: `~` expansion and trailing-separator cleanup.
+fn normalize_path(raw: &str) -> String {
+    let expanded = if raw == "~" {
+        std::env::var("HOME").unwrap_or_else(|_| raw.to_string())
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        match std::env::var("HOME") {
+            Ok(home) => format!("{home}/{rest}"),
+            Err(_) => raw.to_string(),
+        }
+    } else {
+        raw.to_string()
+    };
+    expanded.trim_end_matches('/').to_string()
+}
+
+/// `(pr_number, pr_url)` pairs for a node, primary first, dedup by number.
+fn node_pr_refs(entry: &Value) -> Vec<(i64, Option<String>)> {
+    let mut refs: Vec<(i64, Option<String>)> = Vec::new();
+    if let Some(n) = entry.get("pr_number").and_then(Value::as_i64) {
+        refs.push((
+            n,
+            entry
+                .get("pr_url")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        ));
+    }
+    if let Some(extras) = entry.get("additional_prs").and_then(Value::as_array) {
+        for extra in extras {
+            let Some(n) = extra.get("number").and_then(Value::as_i64) else {
+                continue;
+            };
+            if refs.iter().any(|(seen, _)| *seen == n) {
+                continue;
+            }
+            refs.push((
+                n,
+                extra.get("url").and_then(Value::as_str).map(str::to_string),
+            ));
+        }
+    }
+    refs
+}
+
+/// The graph node linked to this PR, resolved by REPOSITORY: an exact
+/// `pr_url` (primary or additional) match wins; else a number match scoped
+/// to the url's `owner/repo` slug (a url-less node counts as best-effort).
+/// None when nothing resolves unambiguously.
+fn find_pr_node_id(rows: &[Value], pr: i64, pr_url: &str) -> Option<String> {
+    let url = pr_url.trim();
+    if !url.is_empty() {
+        for row in rows {
+            if row.get("pr_url").and_then(Value::as_str).map(str::trim) == Some(url) {
+                return row.get("id").and_then(Value::as_str).map(str::to_string);
+            }
+            for extra in row
+                .get("additional_prs")
+                .and_then(Value::as_array)
+                .map(|a| a.as_slice())
+                .unwrap_or(&[])
+            {
+                if extra.get("url").and_then(Value::as_str).map(str::trim) == Some(url) {
+                    return row.get("id").and_then(Value::as_str).map(str::to_string);
+                }
+            }
+        }
+    }
+    let our_slug = repo_slug_from_url(url)?;
+    let uniq = repo_scoped_number_matches(rows, pr, &our_slug);
+    if uniq.len() == 1 {
+        uniq.into_iter().next()
+    } else {
+        None
+    }
+}
+
+/// Every node id whose PR number matches in the slug's repo. A url-less
+/// same-number node counts (its repo cannot be proven foreign); slugs
+/// compare case-insensitively.
+fn repo_scoped_number_matches(rows: &[Value], pr: i64, our_slug: &str) -> Vec<String> {
+    let mut matches: Vec<String> = Vec::new();
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for (num, url) in node_pr_refs(row) {
+            if num != pr {
+                continue;
+            }
+            match url.as_deref().and_then(repo_slug_from_url) {
+                Some(node_slug) if !node_slug.eq_ignore_ascii_case(our_slug) => {}
+                _ => matches.push(id.to_string()),
+            }
+            break;
+        }
+    }
+    let mut seen: std::collections::BTreeSet<String> = Default::default();
+    matches.retain(|m| seen.insert(m.clone()));
+    matches
+}
+
+/// `owner/repo` from a GitHub PR url, or None: scheme and credentials
+/// optional, host exact, path exactly `owner/repo(.git)?/(pull|issues)/<n>`,
+/// case-insensitive - the `_PR_URL_RE` grammar the Python leaf used.
+fn repo_slug_from_url(url: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r"^(?:[A-Za-z][A-Za-z0-9+.-]*://)?(?:[^/@]*@)?github\.com(?::\d+)?/([^/\s]+)/([^/\s]+?)(?:\.git)?/(?:pull|issues)/(\d+)(?:[/?#]|$)",
+        )
+        .expect("pr url grammar")
+    });
+    let caps = re.captures(url.trim())?;
+    Some(format!("{}/{}", &caps[1], &caps[2]))
 }
 
 pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) -> FlowResult {

@@ -103,23 +103,22 @@ pub(crate) fn status_cache_key(payload: &Value) -> Value {
     let mut material = format!("{head}|{state}|{enabled}|{dispatch}|");
 
     // The PR's dispatch-hold word. The status read supplies the probe it
-    // already ran (`hold_probe_word`); the op door keeps its own probe for
-    // callers that did not. Exit 0 clear, 3 held, anything else unreadable.
+    // already ran (`hold_probe_word`); the op door runs the same flow in
+    // process for callers that did not. Exit 0 clear, 3 held, anything else
+    // unreadable. The word shape (`Some(n):<stderr>`) is kept so a deploy
+    // does not rekey every status row.
     let hold_word = match payload.get("hold_probe_word").and_then(Value::as_str) {
         Some(word) => word.to_string(),
-        None => Command::new(crate::scrape::fno_bin())
-            .args(["do", "pr", "hold-check", &pr.to_string()])
-            .current_dir(&cwd)
-            .output()
-            .ok()
-            .map(|out| {
-                format!(
-                    "{:?}:{}",
-                    out.status.code(),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )
-            })
-            .unwrap_or_else(|| "spawn-failed".to_string()),
+        None => {
+            let mut flow = crate::merge_verb::hold_check_flow(pr as i64, &cwd);
+            let mut stderr = String::new();
+            for (err, line) in std::mem::take(&mut flow.lines) {
+                if err {
+                    stderr.push_str(&line);
+                }
+            }
+            format!("{:?}:{}", Some(flow.exit_code), stderr.trim())
+        }
     };
     material.push_str(&hold_word);
     material.push('|');

@@ -257,17 +257,16 @@ pub(crate) fn hold_verdict(cwd: &Path, pr: u64, pr_json: Option<&Value>) -> Hold
             };
         }
     }
-    let out = match std::process::Command::new(crate::scrape::fno_bin())
-        .args(["do", "pr", "hold-check", &pr.to_string()])
-        .current_dir(cwd)
-        .output()
-    {
-        Ok(out) => out,
-        Err(_) => return HoldVerdict::Unreadable,
-    };
-    match out.status.code() {
-        Some(0) => HoldVerdict::Clear,
-        Some(3) => HoldVerdict::Held(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+    let out = crate::merge_verb::hold_check_flow(pr as i64, cwd);
+    let mut stderr = String::new();
+    for (err, line) in std::mem::take(&mut out.lines) {
+        if err {
+            stderr.push_str(&line);
+        }
+    }
+    match out.exit_code {
+        0 => HoldVerdict::Clear,
+        3 => HoldVerdict::Held(stderr.trim().to_string()),
         _ => HoldVerdict::Unreadable,
     }
 }
