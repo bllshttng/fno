@@ -627,7 +627,12 @@ impl ReplyTail {
     }
 }
 
-fn cmd_reply(args: &[String]) -> i32 {
+/// Parse the reply tail. Every arm advances past the words it consumed, so
+/// the loop always terminates; a missing flag value or an unreadable
+/// --body-file lands its flag in `extra`, which makes the tail unroutable
+/// and sends the whole original tail to the Python reply (its own error
+/// for that shape is the contract).
+fn parse_reply_tail(args: &[String]) -> ReplyTail {
     let mut tail = ReplyTail::default();
     let mut i = 0;
     while i < args.len() {
@@ -637,7 +642,10 @@ fn cmd_reply(args: &[String]) -> i32 {
                     tail.to = Some(v.clone());
                     i += 2;
                 }
-                None => return forward_reply(args),
+                None => {
+                    tail.extra.push(args[i].clone());
+                    i += 1;
+                }
             },
             "--body" => match args.get(i + 1) {
                 Some(v) => {
@@ -645,39 +653,54 @@ fn cmd_reply(args: &[String]) -> i32 {
                     tail.body_sources += 1;
                     i += 2;
                 }
-                None => return forward_reply(args),
+                None => {
+                    tail.extra.push(args[i].clone());
+                    i += 1;
+                }
             },
-            "--body-file" => match args.get(i + 1) {
-                Some(path) => match std::fs::read_to_string(path) {
-                    Ok(text) => {
-                        tail.body = Some(text);
-                        tail.body_sources += 1;
-                        i += 2;
-                    }
-                    Err(_) => return forward_reply(args),
-                },
-                None => return forward_reply(args),
+            "--body-file" => match args
+                .get(i + 1)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+            {
+                Some(text) => {
+                    tail.body = Some(text);
+                    tail.body_sources += 1;
+                    i += 2;
+                }
+                None => {
+                    tail.extra.push(args[i].clone());
+                    i += 1;
+                }
             },
             "--kind" => match args.get(i + 1) {
                 Some(_) => {
                     tail.kind = true;
                     i += 2;
                 }
-                None => return forward_reply(args),
+                None => {
+                    tail.extra.push(args[i].clone());
+                    i += 1;
+                }
             },
             other => {
                 // A positional body, or a word the store lane cannot carry
-                // (an unknown flag, a Python-only flag). Both are logged in
-                // `extra`; the body position matters, so record which.
+                // (an unknown flag, a Python-only flag). The body rides in
+                // `body`; the rest lands in `extra` for the route decision.
                 if other.starts_with('-') {
                     tail.extra.push(other.to_string());
                 } else {
                     tail.body = Some(other.to_string());
                     tail.body_sources += 1;
                 }
+                i += 1;
             }
         }
     }
+    tail
+}
+
+fn cmd_reply(args: &[String]) -> i32 {
+    let tail = parse_reply_tail(args);
     // One exec hop for the whole reply surface: the front door claims every
     // `mail reply`, and any case the cross-host branch does not own execs
     // the Python reply with the original tail, so its refusals, kinds and
@@ -1185,12 +1208,28 @@ mod tests {
             "a Python-only flag rides to the route decision"
         );
         let dup = ReplyTail {
-            body_sources: 2,
+            body_sources: 1,
             ..flagged
         };
         assert!(
             !dup.routable(),
             "a duplicated body forwards to the Python verb"
         );
+        // The reply parser terminates on the positional form (a missing
+        // advance here hung on the most common shape) and forwards the
+        // missing-value shapes to the Python verb.
+        let parsed = parse_reply_tail(&[
+            "--to".to_string(),
+            "fmail-x".to_string(),
+            "hello".to_string(),
+        ]);
+        assert_eq!(parsed.to.as_deref(), Some("fmail-x"));
+        assert_eq!(parsed.body.as_deref(), Some("hello"));
+        assert_eq!(parsed.body_sources, 1);
+        assert!(parsed.extra.is_empty());
+        assert!(parsed.routable());
+        let starved = parse_reply_tail(&["--to".to_string(), "fmail-x".to_string()]);
+        assert!(!starved.routable(), "a --to with no value forwards");
+        assert_eq!(starved.extra, vec!["--to".to_string()]);
     }
 }
