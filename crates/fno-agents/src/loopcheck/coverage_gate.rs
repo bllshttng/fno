@@ -630,7 +630,10 @@ fn ordinary_verdict<P: Probes>(
     // events-only answer, and says so.
     let mut reviews_payload: Option<Vec<Value>> = None;
     let mut unread_note = String::new();
-    if !disposition_named.is_empty() || !disposition_text.is_empty() || !covered {
+    // `named` and `text` are built together (truncated names one key and
+    // carries its own sentence; otherwise the keys and the sentence stand or
+    // fall as one), so one conjunct carries the trigger.
+    if !disposition_named.is_empty() || !covered {
         match read_reviews_payload(probes, cwd, pr) {
             Ok(rows) => reviews_payload = Some(rows),
             Err(why) => unread_note = format!("reviews read unavailable: {why}"),
