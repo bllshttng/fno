@@ -40,6 +40,7 @@ A	active_backlog_batch_ship	py=cli/src/fno/backlog/batch.py;rs=crates/fno-agents
 A	agent name must not be empty	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/claude_ask.rs|crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	agent_session_id_uncaptured	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/removals.rs	# CLASSIFY protocol|msg-twin|data
 A	agents.max_fleet_cpu_share	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/spawn_gate_verb.rs	# CLASSIFY protocol|msg-twin|data
+A	agents.max_live_per_territory	py=cli/src/fno/config/registry.py;rs=crates/fno/src/setup_profile.rs	# CLASSIFY protocol|msg-twin|data the LOCAL_EXACT machine-key table and the registry doc each own their tree's half of the cap key
 A	alternate-account-available	py=cli/src/fno/agents/autonomous_route.py;rs=crates/fno-agents/src/backlog/quota_route.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	an unsupported submit contract cannot carry a nonzero delay	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_fable_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/route_settings.rs	# CLASSIFY protocol|msg-twin|data

@@ -18,7 +18,6 @@ struct Offer {
     kind: &'static str,
     yes: Option<bool>,
     index: Option<usize>,
-    ticks: Vec<usize>,
     options: usize,
 }
 
@@ -65,7 +64,6 @@ impl Prompter for Script {
             kind: "confirm",
             yes: Some(default),
             index: None,
-            ticks: Vec::new(),
             options: 0,
         });
         match self.que.pop_front() {
@@ -93,7 +91,6 @@ impl Prompter for Script {
             kind: "select",
             yes: None,
             index: Some(default),
-            ticks: Vec::new(),
             options: options.len(),
         });
         match self.que.pop_front() {
@@ -115,7 +112,6 @@ impl Prompter for Script {
             kind: "checklist",
             yes: None,
             index: None,
-            ticks: defaults.to_vec(),
             options: 0,
         });
         match self.que.pop_front() {
