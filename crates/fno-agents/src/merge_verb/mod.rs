@@ -486,7 +486,7 @@ fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, why: &str) {
 /// silently ignored. Fires on every positive hold/invalid verdict, never on
 /// an unheld read; any failure notes and returns.
 fn disarm_queued_auto_merge(flow: &mut FlowResult, pr: i64, cwd: &Path, why: &str) {
-    let mut child = match Command::new("gh")
+    let child = match Command::new("gh")
         .args(["pr", "merge", &pr.to_string(), "--disable-auto"])
         .current_dir(cwd)
         .stdin(Stdio::null())
