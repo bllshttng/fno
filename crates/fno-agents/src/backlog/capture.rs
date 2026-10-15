@@ -1559,15 +1559,18 @@ fn write_capture_artifact(
 /// (the store is append-only history; rows written by a pre-rename binary
 /// keep their old type forever).
 fn count_session_events(types: &[&str], session_id: &str, events_path: &Path) -> usize {
-    let Ok(text) = std::fs::read_to_string(events_path) else {
+    // The events store is the substrate (the cutover replaced the journal
+    // append with a SQL commit); import any legacy journal text, then query.
+    let _ = crate::event_store::import_all(events_path);
+    let query = crate::event_store::EventQuery {
+        types: types.iter().map(|t| t.to_string()).collect(),
+        ..Default::default()
+    };
+    let Ok(rows) = crate::event_store::query_events(events_path, &query) else {
         return 0;
     };
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-        .filter(|ev| {
-            let kind = ev.get("type").and_then(Value::as_str).unwrap_or("");
-            types.contains(&kind)
-        })
+    rows.iter()
+        .filter_map(|row| serde_json::from_str::<Value>(&row.line).ok())
         .filter(|ev| {
             ev.get("data")
                 .and_then(|d| d.get("session_id"))

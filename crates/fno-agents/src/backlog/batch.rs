@@ -1293,22 +1293,21 @@ const BATCH_EVENT_KINDS: [&str; 2] = ["active_backlog_batch_ship", "active_backl
 /// ISO-8601 UTC lower bound compared lexically - safe because the journal's
 /// `ts` is always `YYYY-MM-DDTHH:MM:SSZ`.
 fn read_batch_events(events_path: &Path, since: Option<&str>) -> Vec<Value> {
-    let Ok(text) = std::fs::read_to_string(events_path) else {
+    // The events store is the substrate (the cutover replaced the journal
+    // append with a SQL commit); import any legacy journal text, then query.
+    let _ = crate::event_store::import_all(events_path);
+    let query = crate::event_store::EventQuery {
+        types: BATCH_EVENT_KINDS.iter().map(|t| t.to_string()).collect(),
+        ..Default::default()
+    };
+    let Ok(rows) = crate::event_store::query_events(events_path, &query) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(ev) = serde_json::from_str::<Value>(line) else {
+    for row in rows {
+        let Ok(ev) = serde_json::from_str::<Value>(&row.line) else {
             continue;
         };
-        let kind = ev.get("type").and_then(Value::as_str).unwrap_or("");
-        if !BATCH_EVENT_KINDS.contains(&kind) {
-            continue;
-        }
         if let Some(since) = since {
             let ts = ev.get("ts").and_then(Value::as_str).unwrap_or("");
             if ts < since {
