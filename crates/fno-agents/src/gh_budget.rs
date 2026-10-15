@@ -29,6 +29,7 @@
 //! in the payload, never in the exit code, because `verb_call` raises on a
 //! nonzero exit.
 use serde_json::{json, Value};
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -476,6 +477,83 @@ pub fn admit_fleet(argv: &[String]) -> Option<String> {
     }
 }
 
+/// GitHub traffic is gh itself or a loop-check adapter that wraps it.
+pub(crate) fn is_github_program(program: &OsStr) -> bool {
+    let Some(name) = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    name == "gh" || crate::loopcheck::internal_gh_adapter(name)
+}
+
+/// Some(refusal line) when `program args` is GitHub traffic the fleet budget
+/// refuses now. None for every other program, every admit, and every
+/// disarmed unit-test build (admission_armed).
+pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    let argv: Vec<String> = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect();
+    admit_spawn_at(&ledger_path(), now_ms(), cap_from_env(), program, &argv)
+}
+
+/// The same question with the ledger path, clock and cap injected, so tests
+/// pass a temp ledger. The argv carries the subcommand and arguments, NOT
+/// the program name - the shape admit_fleet already takes and points_for
+/// prices.
+pub(crate) fn admit_spawn_at(
+    path: &Path,
+    now: i64,
+    cap: u32,
+    program: &OsStr,
+    args: &[String],
+) -> Option<String> {
+    if !is_github_program(program) {
+        return None;
+    }
+    let verdict = admit(path, args, now, cap);
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// admit_spawn for an already-built Command: the program and args come off
+/// the command, so a transport admits without knowing what it was handed.
+pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    admit_spawn(&cmd.get_program(), &args)
+}
+
+/// The refusal as a finished child: exit 75 (the Python door's REFUSED),
+/// empty stdout, the ledger line on stderr. A caller folds it into its
+/// existing "gh failed" path with no new handling.
+pub(crate) fn refused_output(line: String) -> std::process::Output {
+    std::process::Output {
+        status: std::os::unix::process::ExitStatusExt::from_raw(75 << 8),
+        stdout: Vec::new(),
+        stderr: line.into_bytes(),
+    }
+}
+
+/// Command::output() behind the budget: the door for a direct gh spawn. A
+/// refusal never spawns a child; everything else is the command's own output.
+pub(crate) fn output(mut cmd: std::process::Command) -> std::io::Result<std::process::Output> {
+    if let Some(line) = admit_command(&cmd) {
+        return Ok(refused_output(line));
+    }
+    cmd.output()
+}
+
 /// Whether the in-process consult is armed. A unit-test build runs dozens of
 /// gh-named stubs in one process, and their aggregate stamps would exhaust
 /// (or inherit a hold from) the operator's machine-wide ledger - the stubs
@@ -825,5 +903,47 @@ mod tests {
         record_refusal(&path, t0 + 61_500 + 120_000 + 1_000_000).unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_step, 0);
+    }
+
+    #[test]
+    fn admit_spawn_refuses_github_programs_only() {
+        // A live backoff with the half-open probe spent (the shape the
+        // 2026-10-15 fleet repro seeded): every 1-point gh ask refuses,
+        // other programs never consult the ledger, and a 0-point gh shape
+        // admits without a write.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":1760000600000,"backoff_step":0,"last_refusal_ms":1759999540000,"last_half_open_ms":1760000000000}"#,
+        )
+        .unwrap();
+        let gh = std::ffi::OsStr::new("gh");
+        let args = &["api".to_string(), "user".to_string()];
+        let line = admit_spawn_at(&path, now, 450, gh, args).expect("gh refuses under the backoff");
+        assert!(line.contains("gh budget:"), "line: {line}");
+
+        // An absolute path and the internal coverage adapter are the same
+        // traffic under other names.
+        let abs = std::ffi::OsStr::new("/opt/homebrew/bin/gh");
+        assert!(
+            admit_spawn_at(&path, now, 450, abs, args).is_some(),
+            "an absolute gh path refuses too"
+        );
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        let pr_view = &["pr".to_string(), "view".to_string()];
+        assert!(
+            admit_spawn_at(&path, now, 450, adapter, pr_view).is_some(),
+            "the coverage adapter refuses too"
+        );
+
+        // git never reaches the ledger; `gh --version` is a 0-point shape
+        // that admits untouched. Neither writes a stamp.
+        let before = std::fs::read(&path).unwrap();
+        let git = std::ffi::OsStr::new("git");
+        assert!(admit_spawn_at(&path, now, 450, git, &["status".to_string()]).is_none());
+        assert!(admit_spawn_at(&path, now, 450, gh, &["--version".to_string()]).is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "no stamp for either");
     }
 }
