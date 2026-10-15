@@ -51,6 +51,7 @@ EOF
         env -i \
             HOME="$tmp/home" \
             PATH="$tmp/bin:$PATH" \
+            FNO_AGENTS_BIN="$tmp/bin/fno-agents" \
             FNO_TEST_SPACE="$tmp/space" \
             TARGET_START=1 \
             TARGET_INPUT="test" \

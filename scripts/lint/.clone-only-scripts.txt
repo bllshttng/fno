@@ -27,9 +27,6 @@
 # allowlist entry below (as `fno doctor lint flock-pattern` now does), not to leave it
 # private and unlisted.
 
-# fno do target init - bootstraps the pipeline session manifest; only meaningful
-# when the plugin's skills + hooks are present.
-hooks/helpers/init-target-state.sh :: target init --input drift-probe
 
 # fno doctor bundle {build,check,lint} - operate on the plugin's skills/ source tree.
 scripts/generate-skill-bundles.sh :: bundle

@@ -84,7 +84,6 @@ no-flag: cli/src/fno/state/cli.py init
 no-flag: cli/src/fno/state/cli.py archive
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_validate
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_finalize
-no-flag: cli/src/fno/target_cli.py blast_check
 no-flag: cli/src/fno/target_cli.py request_self_review_cmd
 no-flag: cli/src/fno/worker/cli.py blueprint
 no-flag: cli/src/fno/worker/cli.py ship

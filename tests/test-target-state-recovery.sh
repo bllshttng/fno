@@ -94,7 +94,7 @@ run_recovery_case() {
 
   (
     cd "$case_dir"
-    PATH="$FAKE_BIN:$PATH" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
+    PATH="$FAKE_BIN:$PATH" FNO_AGENTS_BIN="$FAKE_BIN/fno-agents" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
       FNO_TEST_SPACE="$case_dir/space" \
       CODEX_PLUGIN_ROOT="$case_dir" TARGET_START=1 \
       bash "$ROOT_DIR/hooks/helpers/init-target-state.sh" >/dev/null
@@ -128,7 +128,7 @@ init_fixture_repo "$GEMINI_CASE_DIR"
 
 (
   cd "$GEMINI_CASE_DIR"
-  PATH="$FAKE_BIN:$PATH" FNO_TEST_HARNESS=gemini FNO_TARGET_INIT_GATED=1 \
+  PATH="$FAKE_BIN:$PATH" FNO_AGENTS_BIN="$FAKE_BIN/fno-agents" FNO_TEST_HARNESS=gemini FNO_TARGET_INIT_GATED=1 \
     FNO_TEST_SPACE="$GEMINI_CASE_DIR/space" \
     GEMINI_PROJECT_DIR="$GEMINI_CASE_DIR" TARGET_START=1 \
     bash "$ROOT_DIR/hooks/helpers/init-target-state.sh" >/dev/null
@@ -155,7 +155,7 @@ mkdir -p "$ADOPT_HOLDS_WT/space"
 
 (
   cd "$ADOPT_HOLDS_WT"
-  PATH="$FAKE_BIN:$PATH" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
+  PATH="$FAKE_BIN:$PATH" FNO_AGENTS_BIN="$FAKE_BIN/fno-agents" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
     FNO_TEST_SPACE="$ADOPT_HOLDS_WT/space" \
     TARGET_START=1 TARGET_INPUT="$ADOPT_NODE" \
     bash "$ROOT_DIR/hooks/helpers/init-target-state.sh"
@@ -175,7 +175,7 @@ mkdir -p "$ADOPT_FAILS_WT/space"
 adopt_rc=0
 (
   cd "$ADOPT_FAILS_WT"
-  PATH="$FAKE_BIN:$PATH" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
+  PATH="$FAKE_BIN:$PATH" FNO_AGENTS_BIN="$FAKE_BIN/fno-agents" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
     FNO_TEST_SPACE="$ADOPT_FAILS_WT/space" \
     TARGET_START=1 TARGET_INPUT="$ADOPT_NODE" \
     bash "$ROOT_DIR/hooks/helpers/init-target-state.sh"
@@ -194,7 +194,7 @@ mkdir -p "$ADOPT_MERGED_WT/space"
 merged_rc=0
 (
   cd "$ADOPT_MERGED_WT"
-  PATH="$FAKE_BIN:$PATH" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
+  PATH="$FAKE_BIN:$PATH" FNO_AGENTS_BIN="$FAKE_BIN/fno-agents" FNO_TEST_HARNESS=codex FNO_TARGET_INIT_GATED=1 \
     FNO_TEST_SPACE="$ADOPT_MERGED_WT/space" FNO_TEST_PR_STATE=MERGED \
     TARGET_START=1 TARGET_INPUT="$ADOPT_NODE" \
     bash "$ROOT_DIR/hooks/helpers/init-target-state.sh"

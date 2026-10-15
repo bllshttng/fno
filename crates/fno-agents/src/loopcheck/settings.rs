@@ -187,22 +187,22 @@ pub(crate) struct Settings {
     /// None = key absent -> code default (empty, no gate).
     /// Some([]) = explicitly `[]` -> declared no-review-gate path.
     /// Some(list) = every listed login must have a completed review pass.
-    pub(super) github_apps: Option<Vec<String>>,
+    pub(crate) github_apps: Option<Vec<String>>,
     /// config.review.required_bots: legacy alias for `github_apps` (a straight
     /// rename). `github_apps` wins when both are set. Same fail-closed rules.
-    pub(super) required_bots: Option<Vec<String>>,
+    pub(crate) required_bots: Option<Vec<String>>,
     /// config.review.peers: local review harnesses. Identity-free entries form
-    /// one composite, head-pinned local-attestation gate; entries with a shared
+    /// one composite, head-pinned local-attestation `peers` gate; entries with a shared
     /// or per-entry identity retain the legacy GitHub-login gate.
-    pub(super) peers: Vec<PeerEntry>,
+    pub(crate) peers: Vec<PeerEntry>,
     /// config.review.peer_identity: the shared login peers post under.
-    pub(super) peer_identity: Option<String>,
+    pub(crate) peer_identity: Option<String>,
     /// config.review.optional_apps: reviewer logins honored-if-present but NOT
     /// required. The gate never WAITS for them (their absence never blocks -
     /// this kills the App-bot usage-limit wedge), but a blocking finding from
     /// one still holds the gate until addressed ("honor if present"). None =
     /// no optional reviewers.
-    pub(super) optional_apps: Option<Vec<String>>,
+    pub(crate) optional_apps: Option<Vec<String>>,
     /// config.review.reviewers: local reviewer names (sigma |
     /// code-review | declare) satisfied by a head-pinned `review_attestation`
     /// event in events.jsonl, NOT a GitHub login. Empty = no reviewers gate
@@ -210,13 +210,13 @@ pub(crate) struct Settings {
     /// leading '/' is stripped on store so `/code-review` == `code-review`.
     /// Resolvability is validated Python-side; Rust fails closed by matching
     /// evidence, so an unresolvable name is simply never satisfied.
-    pub(super) reviewers: Vec<String>,
+    pub(crate) reviewers: Vec<String>,
     /// config.review.self_review_required (default true): floor the
     /// harness-resolved self-review reviewer onto `reviewers` when a code
     /// payload would otherwise ship unreviewed on a stock install. None means
     /// absent, normalized to true (the obligation defaults ON); `false` is the
     /// documented escape hatch.
-    pub(super) self_review_required: Option<bool>,
+    pub(crate) self_review_required: Option<bool>,
     /// config.review.posture: the named rung of the review ladder.
     /// None = unset, which resolves through the legacy inference (mirroring
     /// `fno.config.resolve_review_posture`) or the shipped self_review floor.
@@ -281,10 +281,10 @@ pub(super) const MALFORMED_REVIEWERS_SENTINEL: &str = "\u{0}malformed-reviewers"
 /// identity selects the legacy posting carrier; otherwise the entry contributes
 /// to the composite local-attestation gate.
 #[derive(Debug, Default, Clone)]
-pub(super) struct PeerEntry {
-    pub(super) provider: String,
-    pub(super) model: Option<String>,
-    pub(super) identity: Option<String>,
+pub(crate) struct PeerEntry {
+    pub(crate) provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) identity: Option<String>,
 }
 
 /// Strip a trailing YAML inline comment (` # ...`) from a raw scalar value
@@ -609,7 +609,7 @@ pub(super) fn fail_closed_settings() -> Settings {
 /// Err so the caller can fail closed + emit an event, rather than silently
 /// zeroing the gate. The typed-Value classification preserves every semantic
 /// the old ListForm branches encoded (see the value_as_* helpers).
-pub(super) fn parse_settings_result(content: &str) -> Result<Settings, String> {
+pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
     let root: toml::Value = content.parse::<toml::Value>().map_err(|e| e.to_string())?;
     let mut s = Settings::default();
 
