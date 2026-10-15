@@ -155,13 +155,13 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     match case["entry"].as_str().unwrap_or("merge") {
         "hold" => {
             cmd.arg("hold-check");
-            if let Some(pr) = case_pr(case) {
+            if let Some(pr) = case_pr(&case) {
                 cmd.arg(pr);
             }
         }
         _ => {
             cmd.arg("merge");
-            if let Some(pr) = case_pr(case) {
+            if let Some(pr) = case_pr(&case) {
                 cmd.arg(pr);
             }
             if let Some(argv) = case["argv"].as_array() {
