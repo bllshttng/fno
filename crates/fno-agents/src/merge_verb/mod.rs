@@ -572,7 +572,10 @@ fn worker_rows(cwd: &Path) -> Result<Vec<Value>, String> {
                 .filter(|p| p.exists())
         })
         .ok_or_else(|| {
-            "fno-agents-worker not found (set FNO_AGENTS_WORKER or install the runtime)".to_string()
+            // Not the classified refusal word (product_boundary owns it, and
+            // this crate may not link fno in production): this door names the
+            // same component and repair in its own sentence.
+            "fno-agents-worker missing (set FNO_AGENTS_WORKER or install the runtime)".to_string()
         })?;
     let mut child = Command::new(&bin)
         .args(["--store-exec", "--graph"])

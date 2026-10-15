@@ -123,7 +123,7 @@ A	fno agents resume: registry read failed: {exc}	py=cli/src/fno/agents/resume_cl
 A	fno agents trace: agent name is required unless --all is set	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data
 A	fno backlog undispatched --json	py=cli/src/fno/backlog/undispatched.py;rs=crates/fno-agents/src/backlog/next.rs|crates/fno-agents/src/backlog/undispatched.rs|crates/fno-agents/src/org_board.rs	# CLASSIFY protocol|msg-twin|data
 A	fno config set active_backlog.enabled true	py=cli/src/fno/doctor.py;rs=crates/fno-agents/src/backlog/rank_cli.rs	# CLASSIFY protocol|msg-twin|data
-A	fno-agents-worker not found (set fno_agents_worker or install the runtime)	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/merge_verb/mod.rs|crates/fno/src/product_boundary.rs	# CLASSIFY protocol|msg-twin|data
+A	fno-agents-worker not found (set fno_agents_worker or install the runtime)	py=cli/src/fno/graph/store.py;rs=crates/fno/src/product_boundary.rs	# CLASSIFY protocol|msg-twin|data
 A	fno/review-coverage-unavailable	py=cli/src/fno/pr/_reviews.py;rs=crates/fno-agents/src/loopcheck/coverage_status.rs|crates/fno-agents/src/org_board/prs.rs|crates/fno-agents/src/pr_status.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_agents_idle_exit_secs	py=cli/scripts/smoke/cursor-agent-keeper-journey.py;rs=crates/fno-agents/src/bin/daemon.rs	# CLASSIFY protocol|msg-twin|data
 A	fno_agents_response_deadline_ms	py=scripts/diagnostics/codex-lead-continuation-smoke.py;rs=crates/fno-agents/src/client.rs|crates/fno/src/mux_cli/harness_command.rs	# CLASSIFY protocol|msg-twin|data
