@@ -8,4 +8,6 @@ The existing Rust stage test gains the Codex marketplace case. When the public m
 
 The join-policy suite retains ownership of policy decisions. The new CI case covers the separate package invariant: the actual hook must deny a forbidden write from a read-only generated tree without invoking uv. Source-version warning probes cover matching and mismatching binary identities. No additional Rust or Python test function is added.
 
+The postinstall smoke drops its exact unquoted-command substring check. The context census and manifest tests cover the live registration. Source smoke validates the marketplace manifest. Strict plugin validation runs against the generated artifact in CI, because the source repository's root context file does not ship.
+
 Local validation covers the existing join-policy suite, Rust formatting, standalone builder compilation and shell syntax. The generic `fno doctor test` runner treats a Rust source path as a pytest argument and exits 4. Rust execution and all package/publication acceptance run in CI.

@@ -67,9 +67,11 @@ fn check(root: &Path) -> Result<usize> {
             }
         }
         if path.starts_with("hooks") && path.extension().is_some_and(|e| e == "sh") {
-            let text = fs::read_to_string(root.join(path))?;
+            let text = fs::read_to_string(root.join(path))?.replace("\\\n", " ");
             for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
-                if line.contains("uv run") || line.contains("uv sync") {
+                if (line.contains("uv run") || line.contains("uv sync"))
+                    && (line.contains("PLUGIN_ROOT") || line.contains("CLI_DIR"))
+                {
                     return Err(format!(
                         "hook may create a plugin environment: {}",
                         path.display()
@@ -129,21 +131,23 @@ fn build(source: &Path, dest: &Path, sha: &str, version: &str) -> Result<()> {
         files(source, Path::new(dir), &mut entries)?;
         selected.extend(entries);
     }
-    let mut scripts = Vec::new();
-    files(source, Path::new("scripts"), &mut scripts)?;
+    let mut dependencies = Vec::new();
+    for dir in ["scripts", "docs"] {
+        files(source, Path::new(dir), &mut dependencies)?;
+    }
     // Follow literal repository paths and sibling filenames transitively.
     // The source is a git archive, so ignored build debris cannot enter it.
     let mut pending: Vec<PathBuf> = selected.iter().cloned().collect();
     while let Some(path) = pending.pop() {
         let bytes = fs::read(source.join(path))?;
         let text = String::from_utf8_lossy(&bytes);
-        for script in &scripts {
-            let rel = script.to_string_lossy();
-            let name = script.file_name().unwrap().to_string_lossy();
+        for dependency in &dependencies {
+            let rel = dependency.to_string_lossy();
+            let name = dependency.file_name().unwrap().to_string_lossy();
             if (text.contains(rel.as_ref()) || text.contains(name.as_ref()))
-                && selected.insert(script.clone())
+                && selected.insert(dependency.clone())
             {
-                pending.push(script.clone());
+                pending.push(dependency.clone());
             }
         }
     }

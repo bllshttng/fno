@@ -10,7 +10,9 @@ git archive HEAD | tar -x -C "$scratch/source"
 sha=$(git rev-parse HEAD)
 rustc --edition=2021 "$scratch/source/crates/fno-agents/ci/plugin_tree.rs" -o "$scratch/plugin-tree"
 "$scratch/plugin-tree" build "$scratch/source" "$scratch/tree" "$sha" 0.0.0-ci
-claude plugin validate "$scratch/tree"
+test -f "$scratch/tree/docs/HARNESSES.md"
+test -f "$scratch/tree/docs/architecture/help-routing.md"
+claude plugin validate "$scratch/tree" --strict
 mkdir "$scratch/codex-home"
 CODEX_HOME="$scratch/codex-home" codex plugin marketplace add "$scratch/tree" --json
 CODEX_HOME="$scratch/codex-home" codex plugin add fno@footnote --json
@@ -26,6 +28,10 @@ expect_refusal() {
     cat "$scratch/refusal"
     grep -F "$needle" "$scratch/refusal"
 }
+
+printf '%s\n' 'uv run --project "${CLAUDE_PLUGIN_ROOT}/cli" python helper.py' > "$scratch/tree/hooks/unsafe-env.sh"
+expect_refusal 'hook may create a plugin environment'
+rm "$scratch/tree/hooks/unsafe-env.sh"
 
 mkdir "$scratch/tree/cli"
 touch "$scratch/tree/cli/forbidden"

@@ -1,3 +1,4 @@
+A	.codex-plugin/plugin.json	py=cli/src/fno/setup/codex_plugin.py;rs=crates/fno-agents/ci/plugin_tree.rs	# shared-vocabulary: Codex plugin manifest path in developer convergence and CI package validation
 A	$(fno config paths shell-stub)	py=cli/src/fno/setup/migrate_paths.py;rs=crates/fno-agents/src/paths_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	(`fno agents spawn --provider <vendor> --model <m>`).	py=cli/src/fno/_flag_aliases.py;rs=crates/fno-agents/src/mail_inject.rs	# CLASSIFY protocol|msg-twin|data
 A	(not yet implemented; planned for a future story)	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/client_verbs.rs	# CLASSIFY protocol|msg-twin|data

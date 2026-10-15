@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - warn about mismatched plugin and runtime sources
 # Advisory only: a binary that names a commit should match the plugin source.
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
