@@ -1894,6 +1894,12 @@ fn start_codex_native(
             code,
         ));
     }
+    let Some(manifest) = worktree_manifest(cwd) else {
+        return Err(refuse(
+            "fno do target start: target init exited successfully but no target \
+             manifest exists; refusing success receipt.",
+        ));
+    };
     let created_node = manifest_node_id(&manifest);
     let claim_state = match created_node {
         None => {
