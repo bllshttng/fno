@@ -378,6 +378,7 @@ echo "--- Rust: no plan-status reader ---"
 # blueprint_judge.rs grades plan prose against five product questions;
 # it never classifies `status:` frontmatter.
 EXPECTED_RUST_PLAN_READERS="crates/fno-agents/src/backlog/create_cli.rs
+crates/fno-agents/src/backlog/intake.rs
 crates/fno-agents/src/backlog/promise.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/backlog/update_cli.rs
@@ -392,6 +393,10 @@ crates/fno-agents/src/verify_advise.rs"
 # to the shared rung table (graph_store::supplied_plan_rung) for the wave
 # append's plan-rung map; it classifies nothing itself, so the shelling rule
 # does not apply to it.
+# intake.rs reads only the plan frontmatter the birth flow consumes
+# (title/created/difficulty/size/priority/project/cwd/claims/blocked_by) and
+# the first H1; it never extracts a plan status, so the shelling rule does
+# not apply to it.
 # update_cli.rs reads only the plan frontmatter `size` (the doc->graph
 # linked-size flow on a plan relink); it never extracts a plan status, so
 # the shelling rule does not apply to it.
@@ -484,6 +489,17 @@ while IFS= read -r reader; do
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE '"status":[[:space:]]*"idea",' \
                 | grep -vE '"status"\.into\(\)' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/backlog/intake.rs" ]; then
+        # intake's "status" literals are GRAPH-row reads and writes (the
+        # dedup warn stamps the derived row status so its lines name the
+        # word the live readers present); its plan reads never touch a
+        # `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)|"status"\.into\(\)' \
                 || true
         )"
     fi
