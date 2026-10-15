@@ -941,6 +941,132 @@
     "detached": false
   },
   {
+    "label": "classify bare",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify emit record",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify emit record round flag",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "2"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round flag overrides payload",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "2"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round zero flag",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "0"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify missing file refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "absent.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "classify: cannot read absent.json: "
+  },
+  {
+    "label": "classify invalid json refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "classify: findings.json is not valid JSON: "
+  },
+  {
+    "label": "classify build refusal",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round negative refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--review-round",
+      "-1"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round not an integer",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--review-round",
+      "x"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
     "label": "post page two marker",
     "action": "post",
     "args": [
@@ -950,6 +1076,69 @@
       "1111111111111111111111111111111111111111",
       "--pr",
       "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify attest retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--attest",
+      "code-review"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify attest equals retired",
+    "action": "classify",
+    "args": [
+      "--findings-file=findings.json",
+      "--attest=code-review"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify reviewer context retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--reviewer-context",
+      "fork"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify execution context retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--execution-context",
+      "inline"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify output contract retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--output-contract",
+      "json_block"
     ],
     "env": {},
     "origin": "github",

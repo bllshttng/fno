@@ -23,6 +23,15 @@ leg, and a bare run says so.
 The `post page two marker` case is rust-only: the Python leg read one
 comment page, so no Python oracle exists for it; its golden is hand-written
 against the native page walk.
+
+The `classify *` table and the `classify * retired` rows are the 3b
+classify port's contribution. The classify cases were captured from the
+live Python classify leaf right before this PR deleted it (one final
+`--only classify` capture; the other tables' goldens were left untouched so
+a newer deployed fno-agents binary could not churn them). The `retired`
+rows are rust-only and hand-written like the page-two case: the Python
+--attest body they parameterize is deleted by the same change that refuses
+the flags, so no Python oracle ever existed for the refusal.
 """
 
 from __future__ import annotations
@@ -483,8 +492,6 @@ POST_CASES = [
     },
 ]
 
-ALL_CASES = RECORD_CASES + POST_CASES
-
 RUST_ONLY_CASE = {
     "label": "post page two marker",
     "action": "post",
@@ -494,14 +501,135 @@ RUST_ONLY_CASE = {
     "detached": False,
 }
 
+# The classify leaf's own surface, captured from the Python leg before this
+# PR deleted it. Refusal order is Python's: file read, JSON parse, record
+# build, then the round check. The two Python-text refusals (errno text,
+# json error text) freeze a declared PREFIX, not the machine-written tail;
+# the record-build refusal strips the wrapper because the tail is the door's
+# own Rust reason on both legs.
+CLASSIFY_CASES = [
+    # Happy bare: the summary line producers parse.
+    {
+        "label": "classify bare",
+        "payload": [finding(1), finding(2, category="typo")],
+        "args": ["--findings-file", "findings.json"],
+    },
+    # Happy record: the bounded record the emitter projects.
+    {
+        "label": "classify emit record",
+        "payload": [finding(1), finding(2, category="typo")],
+        "args": ["--findings-file", "findings.json", "--emit-record"],
+    },
+    # The flag stamps the round last in the record.
+    {
+        "label": "classify emit record round flag",
+        "payload": {"findings": [finding(1)]},
+        "args": ["--findings-file", "findings.json", "--emit-record", "--review-round", "2"],
+    },
+    # The flag overrides a round the payload carried.
+    {
+        "label": "classify round flag overrides payload",
+        "payload": {"findings": [finding(1)], "review_round": 4},
+        "args": ["--findings-file", "findings.json", "--emit-record", "--review-round", "2"],
+    },
+    # Zero is a real round: Python overrides on `is not None`, not truthiness.
+    {
+        "label": "classify round zero flag",
+        "payload": {"findings": [finding(1)]},
+        "args": ["--findings-file", "findings.json", "--emit-record", "--review-round", "0"],
+    },
+    {
+        "label": "classify missing file refused",
+        "payload": {"findings": [finding(1)]},
+        "args": ["--findings-file", "absent.json"],
+        "err": {"prefix": "classify: cannot read absent.json: "},
+    },
+    {
+        "label": "classify invalid json refused",
+        "raw": '{"findings": [}',
+        "args": ["--findings-file", "findings.json"],
+        "err": {"prefix": "classify: findings.json is not valid JSON: "},
+    },
+    {
+        "label": "classify build refusal",
+        "payload": {"oops": True},
+        "args": ["--findings-file", "findings.json"],
+        "err": {"strip": "classify: findings.json: "},
+    },
+    {
+        "label": "classify round negative refused",
+        "payload": {"findings": [finding(1)]},
+        "args": ["--findings-file", "findings.json", "--review-round", "-1"],
+        "err": {"exact": True},
+    },
+    # The typer usage text is leg-specific: stderr unpinned, stdout frozen
+    # empty, same posture as the post usage cases.
+    {
+        "label": "classify round not an integer",
+        "payload": {"findings": [finding(1)]},
+        "args": ["--findings-file", "findings.json", "--review-round", "x"],
+    },
+]
+
+ALL_CASES = RECORD_CASES + POST_CASES + CLASSIFY_CASES
+
+# Rust-only, hand-written: the retired attest flags. Their whole job was
+# parameterizing the Python --attest body this PR deletes, so the refusal is
+# all that remains and no Python oracle exists. The fixture file is present
+# only because the parity harness copies it unconditionally; the refusal
+# fires at argv parse, before any read.
+RETIRED_CASES = [
+    {
+        "label": "classify attest retired",
+        "args": ["--findings-file", "findings.json", "--attest", "code-review"],
+    },
+    {
+        "label": "classify attest equals retired",
+        "args": ["--findings-file=findings.json", "--attest=code-review"],
+    },
+    {
+        "label": "classify reviewer context retired",
+        "args": ["--findings-file", "findings.json", "--reviewer-context", "fork"],
+    },
+    {
+        "label": "classify execution context retired",
+        "args": ["--findings-file", "findings.json", "--execution-context", "inline"],
+    },
+    {
+        "label": "classify output contract retired",
+        "args": ["--findings-file", "findings.json", "--output-contract", "json_block"],
+    },
+]
+
+RETIRED_FIXTURE_PAYLOAD = {"findings": [finding(1)]}
+
+
+def retired_message(flag: str) -> str:
+    """The one-line refusal the native classify prints for a retired flag.
+
+    The hand-written `.err` goldens and the Rust refusal must agree byte for
+    byte; both spell this through this helper's shape.
+    """
+    return (
+        f"classify: {flag} is retired; write the attestation with "
+        "skills/review/scripts/emit-attestation.sh <reviewer> [verdict] "
+        "[reviewer_context] [execution_context] [output_contract] --findings-file F\n"
+    )
+
 
 def cases_json() -> list[dict]:
     """The lockstep table the parity test reads: run spec without payloads."""
     rows = []
     for spec in ALL_CASES:
+        if spec in RECORD_CASES:
+            action = "record"
+        elif spec in POST_CASES:
+            action = "post"
+        else:
+            action = "classify"
         row = {
             "label": spec["label"],
-            "action": "record" if spec in RECORD_CASES else "post",
+            "action": action,
             "args": spec.get("args", []),
             "env": spec.get("env", {}),
             "origin": spec.get("origin", "github"),
@@ -512,6 +640,17 @@ def cases_json() -> list[dict]:
             row["err_prefix"] = err["prefix"]
         rows.append(row)
     rows.append(RUST_ONLY_CASE)
+    for spec in RETIRED_CASES:
+        rows.append(
+            {
+                "label": spec["label"],
+                "action": "classify",
+                "args": spec["args"],
+                "env": {},
+                "origin": "github",
+                "detached": False,
+            }
+        )
     return rows
 
 
@@ -613,12 +752,18 @@ def git(repo: Path, *args: str, env: dict[str, str]) -> None:
     )
 
 
+def payload_text(spec: dict) -> str:
+    """The findings.json bytes: verbatim when the case pins raw text (the
+    invalid-JSON refusal), else the payload serialized."""
+    if "raw" in spec:
+        return spec["raw"]
+    return json.dumps(spec["payload"], ensure_ascii=False)
+
+
 def write_fixtures(case_dir: Path, spec: dict) -> None:
     """The committed per-case fixture files, generated once at capture."""
     case_dir.mkdir(parents=True, exist_ok=True)
-    (case_dir / "findings.json").write_text(
-        json.dumps(spec["payload"], ensure_ascii=False), encoding="utf-8"
-    )
+    (case_dir / "findings.json").write_text(payload_text(spec), encoding="utf-8")
     config = spec.get("config")
     if config is not None:
         (case_dir / "config.toml").write_text(config, encoding="utf-8")
@@ -692,9 +837,7 @@ def child_environ(spec: dict, case_dir: Path, runtime: Path) -> dict[str, str]:
 
 
 def run_leg(spec: dict, case_dir: Path, runtime: Path) -> tuple[str, str, int]:
-    (runtime / "repo" / "findings.json").write_text(
-        json.dumps(spec["payload"], ensure_ascii=False), encoding="utf-8"
-    )
+    (runtime / "repo" / "findings.json").write_text(payload_text(spec), encoding="utf-8")
     log = runtime / "gh.log"
     body = runtime / "gh-body.txt"
     for stale in (log, body):
@@ -711,9 +854,14 @@ def run_leg(spec: dict, case_dir: Path, runtime: Path) -> tuple[str, str, int]:
             sys.executable, "-m", "fno.cli", "do", "review", "classify",
             "--findings-file", "findings.json", "--emit-record",
         ]
-    else:
+    elif spec in POST_CASES:
         argv = [
             sys.executable, "-m", "fno.cli", "do", "review", "post-dispositions",
+            *spec["args"],
+        ]
+    else:
+        argv = [
+            sys.executable, "-m", "fno.cli", "do", "review", "classify",
             *spec["args"],
         ]
     proc = subprocess.run(
@@ -805,30 +953,94 @@ def write_rust_only_fixtures() -> None:
     )
 
 
-def write_goldens() -> int:
-    if GOLDEN_DIR.exists():
-        shutil.rmtree(GOLDEN_DIR)
-    GOLDEN_DIR.mkdir(parents=True)
+def write_retired_flag_goldens() -> None:
+    """Hand-written rust-only goldens for the retired attest flags.
+
+    The refusal fires at argv parse, so every case reads the same shape:
+    exit 2, empty stdout, the one-line refusal on stderr, and no gh call
+    (no log, no body). The fixture exists only for the parity harness's
+    unconditional copy.
+    """
+    for spec in RETIRED_CASES:
+        key = slug(spec["label"])
+        case_dir = GOLDEN_DIR / "cases" / key
+        case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / "findings.json").write_text(
+            json.dumps(RETIRED_FIXTURE_PAYLOAD), encoding="utf-8"
+        )
+        flag = next(
+            a
+            for a in spec["args"]
+            if a.startswith("--") and not a.startswith("--findings-file")
+        )
+        flag = flag.split("=", 1)[0]
+        for stale in (GOLDEN_DIR / f"{key}.log", GOLDEN_DIR / f"{key}.body"):
+            stale.unlink(missing_ok=True)
+        (GOLDEN_DIR / f"{key}.exit").write_text("2\n", encoding="utf-8")
+        (GOLDEN_DIR / f"{key}.out").write_text("", encoding="utf-8")
+        (GOLDEN_DIR / f"{key}.err").write_text(retired_message(flag), encoding="utf-8")
+
+
+def write_stub_and_cases() -> None:
     stub = GOLDEN_DIR / "gh_stub.sh"
     stub.write_text(GH_STUB, encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (GOLDEN_DIR / "cases.json").write_text(
         json.dumps(cases_json(), indent=2) + "\n", encoding="utf-8"
     )
-    root = Path(tempfile.mkdtemp(prefix="review-findings-capture-"))
+
+
+def capture_specs(specs: list[dict], root: Path) -> list[str]:
+    """Run each spec against the live Python leg and freeze its golden."""
     failures: list[str] = []
+    for spec in specs:
+        key = slug(spec["label"])
+        case_dir = GOLDEN_DIR / "cases" / key
+        write_fixtures(case_dir, spec)
+        runtime = build_runtime(spec, case_dir, root, key)
+        out, err, code = run_leg(spec, case_dir, runtime)
+        if not out and code == 0:
+            failures.append(key)
+        freeze(runtime, spec, out, err, code)
+        print(f"{key} exit={code} out={len(out)} err={len(err)}", flush=True)
+    return failures
+
+
+def write_goldens() -> int:
+    if GOLDEN_DIR.exists():
+        shutil.rmtree(GOLDEN_DIR)
+    GOLDEN_DIR.mkdir(parents=True)
+    write_stub_and_cases()
+    root = Path(tempfile.mkdtemp(prefix="review-findings-capture-"))
     try:
-        for spec in ALL_CASES:
-            key = slug(spec["label"])
-            case_dir = GOLDEN_DIR / "cases" / key
-            write_fixtures(case_dir, spec)
-            runtime = build_runtime(spec, case_dir, root, key)
-            out, err, code = run_leg(spec, case_dir, runtime)
-            if not out and code == 0:
-                failures.append(key)
-            freeze(runtime, spec, out, err, code)
-            print(f"{key} exit={code} out={len(out)} err={len(err)}", flush=True)
+        failures = capture_specs(ALL_CASES, root)
         write_rust_only_fixtures()
+        write_retired_flag_goldens()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    if failures:
+        print(f"EMPTY STDOUT (exit 0) for: {', '.join(failures)}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def capture_classify_only() -> int:
+    """Capture ONLY the classify table into the existing golden dir.
+
+    The full run deletes the dir and replays every case against whatever
+    fno-agents binary is deployed, which can churn goldens this capture is
+    not about. The classify cases are additive: the dir stays, the derived
+    files (gh_stub.sh, cases.json) rewrite whole, and only classify_* files
+    are written.
+    """
+    if not GOLDEN_DIR.is_dir():
+        print(f"{GOLDEN_DIR} does not exist; run --write-goldens first", file=sys.stderr)
+        return 2
+    write_stub_and_cases()
+    root = Path(tempfile.mkdtemp(prefix="review-findings-capture-"))
+    try:
+        failures = capture_specs(CLASSIFY_CASES, root)
+        write_retired_flag_goldens()
     finally:
         shutil.rmtree(root, ignore_errors=True)
     if failures:
@@ -840,7 +1052,14 @@ def write_goldens() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-goldens", action="store_true")
+    parser.add_argument(
+        "--only",
+        choices=["classify"],
+        help="capture one table into the existing golden dir without replaying the rest",
+    )
     args = parser.parse_args()
+    if args.only == "classify":
+        return capture_classify_only()
     if args.write_goldens:
         return write_goldens()
     parser.print_usage(sys.stderr)
