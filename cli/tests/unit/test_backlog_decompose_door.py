@@ -124,3 +124,30 @@ def test_decompose_door_names_the_epic_when_unknown(tmp_path: Path) -> None:
     res = _door(tmp_path, "ab-00000000", "--groups", GROUPS)
     assert res.returncode == 3, res.stdout + res.stderr
     assert "not found" in (res.stdout + res.stderr)
+
+
+def test_decompose_door_refuses_a_planless_epic_and_names_contain(tmp_path: Path) -> None:
+    """The plan-less-epic refusal names the folding verb, not a dead end.
+
+    An epic with no plan_path cannot address group fragments; the remedy is
+    `fno backlog contain`, moved here from the wheel plan_base pin when the
+    module went native.
+    """
+    from tests.fixtures.graph_seed import seed_graph
+
+    (tmp_path / ".fno" / "db").mkdir(parents=True, exist_ok=True)
+    planless = {
+        "id": EPIC_ID,
+        "parent": None,
+        "title": "Epic",
+        "type": "epic",
+        "priority": "p1",
+        "domain": "code",
+        "blocked_by": [],
+        "cwd": "",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    seed_graph(tmp_path / ".fno" / "db" / "graph.json", json.dumps({"entries": [planless]}) + "\n")
+    res = _door(tmp_path, EPIC_ID, "--groups", GROUPS)
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "fno backlog contain" in res.stdout + res.stderr
