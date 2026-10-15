@@ -308,11 +308,14 @@ fn review_findings_record_golden_parity() {
     let base = std::env::temp_dir().join(format!("review-findings-record-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
+    let mut ran = 0;
     for case in cases() {
         if case["action"].as_str() == Some("record") {
             compare_case(&bin, &base, &case);
+            ran += 1;
         }
     }
+    assert!(ran > 0, "the record table ran no case: cases.json lost it");
 }
 
 /// The comment golden table, page walk included.
@@ -322,9 +325,12 @@ fn review_findings_post_golden_parity() {
     let base = std::env::temp_dir().join(format!("review-findings-post-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
+    let mut ran = 0;
     for case in cases() {
         if case["action"].as_str() == Some("post") {
             compare_case(&bin, &base, &case);
+            ran += 1;
         }
     }
+    assert!(ran > 0, "the post table ran no case: cases.json lost it");
 }

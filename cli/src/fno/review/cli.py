@@ -386,7 +386,10 @@ def classify(
         typer.secho(f"classify: cannot read {findings_file}: {exc}", err=True)
         raise typer.Exit(code=2) from exc
     try:
-        payload = json.loads(text)
+        # The door reads the file itself; this parse keeps classify's own
+        # invalid-JSON refusal (the error text names Python's parse, not the
+        # door's).
+        json.loads(text)
     except ValueError as exc:
         typer.secho(f"classify: {findings_file} is not valid JSON: {exc}", err=True)
         raise typer.Exit(code=2) from exc

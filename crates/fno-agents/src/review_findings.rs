@@ -697,6 +697,46 @@ fn resolve_branch_pr(
 
 const USAGE: &str = "usage: fno-agents review-level findings <record|categories|post>";
 
+/// The flags the door's actions accept, in either spelling the typer door
+/// read: `--flag value` and `--flag=value`.
+const KNOWN_FLAGS: &[&str] = &[
+    "--findings-file",
+    "--head",
+    "--reviewer",
+    "--pr",
+    "--pr-number",
+    "--review-round",
+    "--root",
+];
+
+/// Normalize the argv into (flag, value) pairs; `--flag value` and
+/// `--flag=value` spell the same option. Anything else is the usage
+/// refusal, exit 2, the typer door's own posture.
+fn flag_pairs(args: &[String]) -> Result<Vec<(&str, &str)>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i].as_str();
+        if let Some(eq) = token.find('=') {
+            let (name, value) = token.split_at(eq);
+            if !KNOWN_FLAGS.contains(&name) {
+                return Err(format!("unknown flag: {token}"));
+            }
+            out.push((name, &value[1..]));
+            i += 1;
+        } else if KNOWN_FLAGS.contains(&token) {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| format!("{token} needs a value"))?;
+            out.push((token, value.as_str()));
+            i += 2;
+        } else {
+            return Err(format!("unknown flag: {token}"));
+        }
+    }
+    Ok(out)
+}
+
 struct PostArgs {
     findings_file: PathBuf,
     head: String,
@@ -713,23 +753,11 @@ fn parse_post_args(args: &[String]) -> Result<PostArgs, String> {
         pr: None,
         review_round: None,
     };
-    let mut i = 0;
-    while i < args.len() {
-        let (flag, value, next_i): (&str, &String, usize) = match args[i].as_str() {
-            "--findings-file" | "--head" | "--reviewer" | "--pr" | "--pr-number"
-            | "--review-round" => {
-                let name = args[i].as_str();
-                let v = args
-                    .get(i + 1)
-                    .ok_or_else(|| format!("{name} needs a value"))?;
-                (name, v, i + 2)
-            }
-            other => return Err(format!("unknown flag: {other}")),
-        };
+    for (flag, value) in flag_pairs(args)? {
         match flag {
             "--findings-file" => out.findings_file = PathBuf::from(value),
-            "--head" => out.head = value.clone(),
-            "--reviewer" => out.reviewer = value.clone(),
+            "--head" => out.head = value.to_string(),
+            "--reviewer" => out.reviewer = value.to_string(),
             "--pr" | "--pr-number" => {
                 out.pr = Some(
                     value
@@ -746,7 +774,6 @@ fn parse_post_args(args: &[String]) -> Result<PostArgs, String> {
             }
             _ => unreachable!(),
         }
-        i = next_i;
     }
     if out.findings_file.as_os_str().is_empty() {
         return Err("--findings-file is required".to_string());
@@ -767,22 +794,19 @@ fn read_payload(path: &Path) -> Result<Value, String> {
 /// refusal reason alone on stderr with exit 2. This is the door the Python
 /// `classify` leaf reads.
 fn run_record(args: &[String]) -> i32 {
-    let mut findings_file: Option<&String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--findings-file" => match args.get(i + 1) {
-                Some(v) => {
-                    findings_file = Some(v);
-                    i += 2;
-                }
-                None => {
-                    eprintln!("--findings-file needs a value");
-                    return 2;
-                }
-            },
-            other => {
-                eprintln!("{USAGE} (unknown flag: {other})");
+    let mut findings_file: Option<&str> = None;
+    let pairs = match flag_pairs(args) {
+        Ok(pairs) => pairs,
+        Err(msg) => {
+            eprintln!("{USAGE} ({msg})");
+            return 2;
+        }
+    };
+    for (flag, value) in pairs {
+        match flag {
+            "--findings-file" => findings_file = Some(value),
+            _ => {
+                eprintln!("{USAGE} (unknown flag: {flag})");
                 return 2;
             }
         }
@@ -816,22 +840,19 @@ fn run_record(args: &[String]) -> i32 {
 /// The `findings categories` action: the resolved allowlist, sorted, for
 /// the Python coverage gate.
 fn run_categories(args: &[String]) -> i32 {
-    let mut root: Option<&String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--root" => match args.get(i + 1) {
-                Some(v) => {
-                    root = Some(v);
-                    i += 2;
-                }
-                None => {
-                    eprintln!("--root needs a value");
-                    return 2;
-                }
-            },
-            other => {
-                eprintln!("{USAGE} (unknown flag: {other})");
+    let mut root: Option<&str> = None;
+    let pairs = match flag_pairs(args) {
+        Ok(pairs) => pairs,
+        Err(msg) => {
+            eprintln!("{USAGE} ({msg})");
+            return 2;
+        }
+    };
+    for (flag, value) in pairs {
+        match flag {
+            "--root" => root = Some(value),
+            _ => {
+                eprintln!("{USAGE} (unknown flag: {flag})");
                 return 2;
             }
         }
