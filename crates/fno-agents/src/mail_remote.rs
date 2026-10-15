@@ -760,5 +760,70 @@ mod tests {
             .position(|word| word == "--word-cap")
             .expect("cap flag");
         assert_eq!(capped[cap_at + 1], "60");
+        // The pull arm's exit reading: 0 delivers, and so does the Python
+        // receipts' NOT LANDED exit (a durable demotion - the durable copy
+        // is written, so a retry would duplicate it; the constant's comment
+        // names the Python owner of the meaning). Exit 1 delivers a refused
+        // verdict only when the style door names the violations; every
+        // other code, and a signal, stay pending on the ladder.
+        use crate::mail_arm::{send_verdict, SendVerdict};
+        assert_eq!(
+            send_verdict(Some(0), || unreachable!()),
+            SendVerdict::Delivered
+        );
+        assert_eq!(
+            send_verdict(
+                Some(crate::mail_receipt::NOT_LANDED_EXIT),
+                || unreachable!()
+            ),
+            SendVerdict::Delivered
+        );
+        assert_eq!(send_verdict(Some(1), || true), SendVerdict::Refused);
+        assert_eq!(send_verdict(Some(1), || false), SendVerdict::Pending);
+        assert_eq!(
+            send_verdict(Some(12), || unreachable!()),
+            SendVerdict::Pending
+        );
+        assert_eq!(
+            send_verdict(Some(16), || unreachable!()),
+            SendVerdict::Pending
+        );
+        assert_eq!(send_verdict(None, || unreachable!()), SendVerdict::Pending);
+        // The exit-14 row ends like a delivered one: one inject, the next
+        // beat reads the seen ledger instead of re-sending, and the retry
+        // ledger holds no entry for it.
+        let exit14_home = std::path::Path::new("/tmp/fno-mail-arm-exit14-test");
+        let _ = std::fs::remove_dir_all(exit14_home);
+        std::fs::create_dir_all(exit14_home).unwrap();
+        let mut injects = 0;
+        let mut delivered_once = |_row: &crate::mail_bus::BusRow| {
+            injects += 1;
+            assert_eq!(injects, 1, "the exit-14 row was injected twice");
+            true
+        };
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(
+                &remote,
+                vec![bus_row(9, "exit14")],
+                exit14_home,
+                &mut delivered_once
+            ),
+            1
+        );
+        assert_eq!(
+            crate::mail_arm::pull_rows_with(
+                &remote,
+                vec![bus_row(9, "exit14")],
+                exit14_home,
+                &mut delivered_once
+            ),
+            1,
+            "the second beat delivers from the seen ledger, no second send"
+        );
+        assert_eq!(injects, 1, "the durable demotion ran the local send once");
+        assert!(
+            !crate::mail_remote::retry_path(exit14_home).exists(),
+            "a delivered row books no ladder entry"
+        );
     }
 }
