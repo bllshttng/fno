@@ -315,13 +315,12 @@ def test_create_verbs_refuse_on_external_backend(
 ):
     # Every creation entry point must refuse on an external backend. The
     # guard lives at the top of the native create path (add, idea and the
-    # new word all ride it) AND of cmd_decompose, cmd_intake, which write
-    # through their own mutators. A guard on only some reachable paths is
-    # decorative, so this exercises each path: if a future creation verb
-    # bypasses the helper, this fails loudly.
-    from typer.testing import CliRunner
-
-    from fno.cli import app
+    # new word all ride it) AND of the native decompose / intake doors,
+    # which write through their own mutators. A guard on only some
+    # reachable paths is decorative, so this exercises each path: if a
+    # future creation verb bypasses the guard, this fails loudly.
+    import os
+    import subprocess
 
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     if verb in {"add", "idea", "new"}:
@@ -339,9 +338,41 @@ def test_create_verbs_refuse_on_external_backend(
         assert "github" in (result.output + result.stderr)
         assert "tracker" in (result.output + result.stderr).lower()
         return
-    result = CliRunner().invoke(app, ["backlog", *args])
-    assert result.exit_code == 1, f"{verb} did not refuse: {result.output}"
-    assert "github" in result.output
+    # decompose and intake answer at the native door now; the same guard
+    # rides the binary under the same backend selection. decompose rides
+    # here only until its port lands in this same PR, then both rows go
+    # through the door below.
+    if verb == "decompose":
+        from typer.testing import CliRunner
+
+        from fno.cli import app
+
+        result = CliRunner().invoke(app, ["backlog", *args])
+        out = result.output
+        code = result.exit_code
+    else:
+        from fno.rust_binary import find_dev_binary
+
+        binary = find_dev_binary()
+        if binary is None:
+            pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+        env = dict(os.environ)
+        env["HOME"] = str(tmp_path)
+        env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
+        env["FNO_TRACKER_BACKEND"] = "github"
+        proc = subprocess.run(
+            [str(binary), "backlog", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=tmp_path,
+            timeout=60,
+        )
+        out = proc.stdout + proc.stderr
+        code = proc.returncode
+    assert code == 1, f"{verb} did not refuse: {out}"
+    assert "github" in out
+    assert "tracker" in out.lower()
     assert "tracker" in result.output.lower()
 
 
