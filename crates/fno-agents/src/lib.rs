@@ -1131,11 +1131,14 @@ mod tests {
         let mut scanned_calls = 0usize;
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            // Production code only: truncate at the first `#[cfg(test)]` marker.
-            // Tests live at the bottom by Rust convention, so test fixtures like
-            // `.emit("tick")` are excluded. (Verified: every production emit in
-            // this crate precedes its file's first `#[cfg(test)]`.)
-            let prod = match text.find("#[cfg(test)]") {
+            // Production code only: truncate at the first `#[cfg(test)]` that
+            // gates a test MODULE. Tests live at the bottom by Rust convention,
+            // so test fixtures like `.emit("tick")` are excluded. An item-level
+            // `#[cfg(test)]` higher up (a test seam const or fn) is not a
+            // boundary: truncating there would hide every production emit
+            // after it, which is exactly what backlog_share.rs's
+            // `route_to_primary` seam did to this scan.
+            let prod = match test_module_boundary(&text) {
                 Some(i) => &text[..i],
                 None => &text[..],
             };
@@ -1190,7 +1193,7 @@ mod tests {
         let mut below_only: Vec<String> = Vec::new();
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            let boundary = match text.find("#[cfg(test)]") {
+            let boundary = match test_module_boundary(&text) {
                 Some(i) => i,
                 None => continue,
             };
@@ -1265,6 +1268,31 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    /// The byte offset of the first `#[cfg(test)]` that gates a test MODULE.
+    /// An item-level `#[cfg(test)]` (a seam const or fn above the module) is
+    /// not a boundary: truncating there hides every production emit after it.
+    /// `None` when the file has no test module at all.
+    fn test_module_boundary(text: &str) -> Option<usize> {
+        const MARKER: &str = "#[cfg(test)]";
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(MARKER) {
+            let pos = from + rel;
+            let rest = text[pos + MARKER.len()..].trim_start();
+            // `mod tests` and its visibility-spelled forms gate the same way;
+            // four files in this crate spell `pub mod` / `pub(crate) mod`.
+            let rest = rest
+                .strip_prefix("pub(crate) ")
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest)
+                .trim_start();
+            if rest.starts_with("mod ") {
+                return Some(pos);
+            }
+            from = pos + 1;
+        }
+        None
     }
 
     /// Extract `(kind, line)` for every `.emit` / `.emit_fields` call with a
@@ -1545,6 +1573,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
+    // A refused shared-backlog flush took this machine's rows back: the
+    // operator notice beside the retained batch (backlog_share::repair).
+    "backlog_refused_flush",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.
