@@ -225,7 +225,7 @@ fn plain_spawn_stays_refused_while_valid_succession_reuses_one_slot() {
     let line = verdict_line(&refusal);
     assert!(line.contains("learned_cap=1, ceiling=2"), "{line}");
     assert!(
-        line.ends_with("remedy: set [agents.capacity] floor = N in ~/.fno/config.toml"),
+        line.ends_with("remedy: fno agents spawn --floor N"),
         "{line}"
     );
     std::fs::write(
