@@ -1602,9 +1602,13 @@ fn has_flag(args: &[String], name: &str) -> bool {
 /// markdown the triage port already reads.
 pub fn run_capture(tail: &[String]) -> i32 {
     let Some(cmd) = tail.first() else {
-        eprint!("{}", include_str!("capture_help.txt"));
-        return 2;
+        print!("{}", include_str!("capture_help.txt"));
+        return 0;
     };
+    if cmd == "--help" || cmd == "-h" {
+        print!("{}", include_str!("capture_help.txt"));
+        return 0;
+    }
     let rest = &tail[1..];
     match cmd.as_str() {
         "add" => cmd_add(rest),

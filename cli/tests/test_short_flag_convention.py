@@ -91,9 +91,10 @@ PHASE2_LOWERCASE_MAP: dict[tuple[str, str], dict[str, str]] = {
     # the surface now, and its -p/-s/-d pins live in
     # test_short_flag_dispatch.py's native-find parity test, the only scan
     # that can see a Rust flag decl.
-    ("backlog/capture.py", "cmd_add"): {
-        "--source": "-s", "--where": "-w", "--priority": "-p",
-    },
+    # cmd_add's row moved with the capture port: the native binary owns
+    # the surface now, and its -s/-w/-p pins ride the committed
+    # capture_help.txt usage text, the only scan that can see a Rust flag
+    # decl.
     # cmd_send moved from agents/cli.py to mail/cli.py in ab-cee91152 (messaging
     # extracted into the dedicated `fno agents mail` namespace); its lowercase shorts
     # moved with it (-k --kind, -b --body, plus the pre-existing -p/-c).
@@ -355,6 +356,20 @@ def test_phase2_commands_carry_their_lowercase_shorts(decls: list[Decl]) -> None
                 )
     assert not missing, "Phase 2 lowercase map not satisfied:\n" + "\n".join(missing)
 
+
+
+def test_capture_add_shorts_live_in_the_native_help() -> None:
+    """The capture port moved cmd_add's shorts to the native binary; the
+    committed usage text is the only scan that can see a Rust flag decl,
+    the same contract the ADD_HELP/IDEA_HELP goldens carry for create."""
+    from pathlib import Path
+
+    help_text = (
+        Path(__file__).resolve().parents[2]
+        / "crates" / "fno-agents" / "src" / "backlog" / "capture_help.txt"
+    ).read_text(encoding="utf-8")
+    for short in ("-s source", "-w where", "-p priority"):
+        assert short in help_text, f"capture add help lost its {short} pin"
 
 # --------------------------------------------------------------------------- #
 # Phase 3 (US3) - two-spelling canonicalization (AC5 declaration shape).

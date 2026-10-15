@@ -93,12 +93,26 @@ def test_a_subgroup_does_not_claim_a_top_level_removal() -> None:
         assert "was removed" not in res.output, res.output
 
 
-def test_backlog_capture_hidden_but_invocable() -> None:
+def test_backlog_capture_hidden_but_invocable(native_backlog_door) -> None:
     """x-71b6 tiering: `capture` is hidden from the advertised backlog menu,
-    but stays fully invocable."""
-    # capture is invocable (its own --help works) even though hidden.
-    cap = runner.invoke(_backlog_cli(), ["capture", "--help"])
-    assert cap.exit_code == 0, cap.output
+    but stays fully invocable. The group left the Python app with the capture
+    port, so invocability now reads at the native door: `--help` exits 0 and
+    prints the usage text."""
+    import subprocess as _sp
+    import os as _os
+
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+    cap = _sp.run(
+        [str(binary), "backlog", "capture", "--help"],
+        capture_output=True, text=True, env=_os.environ, timeout=60,
+    )
+    assert cap.exit_code == 0, cap.stderr
+    assert "backlog capture" in cap.stdout
+    assert "add" in cap.stdout and "tidy" in cap.stdout
 
     res = runner.invoke(_backlog_cli(), ["--help"])
     assert res.exit_code == 0
