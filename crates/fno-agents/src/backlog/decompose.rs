@@ -9,7 +9,7 @@
 
 use super::workflows::text_at;
 use crate::plans_path::PinnedTimestamp;
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The validated group spec. All fields are guaranteed present; `project` and
