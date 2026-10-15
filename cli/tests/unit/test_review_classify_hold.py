@@ -78,8 +78,36 @@ def hold_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_no_pr_review_holds_findings_on_branch_and_head(
-    hold_env: Path, tmp_path: Path
+    hold_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The classifier is native; hand classify a canned record so the hold
+    wiring runs without the binary."""
+    from fno.review import cli as review_cli
+
+    monkeypatch.setattr(
+        review_cli,
+        "build_emit_record",
+        lambda findings_file: {
+            "findings_blocking": 2,
+            "findings_nonblocking": 0,
+            "findings": [
+                {
+                    "category": "correctness",
+                    "verdict": None,
+                    "blocking": True,
+                    "has_required_fields": True,
+                    "finding_key": "b0.py:1:correctness",
+                },
+                {
+                    "category": "correctness",
+                    "verdict": None,
+                    "blocking": True,
+                    "has_required_fields": True,
+                    "finding_key": "b1.py:2:correctness",
+                },
+            ],
+        },
+    )
     findings = tmp_path / "findings.json"
     findings.write_text(_two_findings(), encoding="utf-8")
 

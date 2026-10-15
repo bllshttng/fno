@@ -1065,18 +1065,26 @@ def attestation_chain(
 
 
 def _resolved_categories(cwd: str) -> frozenset[str]:
-    """The configured allowlist, extended per the shipped default."""
+    """The configured allowlist, extended per the shipped default.
+
+    The resolution lives in the native classifier (the categories door);
+    a door failure keeps the shipped list, which is what the old unreadable
+    config arm returned.
+    """
     try:
-        from fno.config import load_settings_for_repo
-        from fno.review.findings import resolve_nonblocking_categories
+        from fno.rust_binary import call_binary_json
 
         root = _repo_root(cwd)
         _log_config_receipt(root, "config.review.nonblocking_categories")
-        return resolve_nonblocking_categories(
-            getattr(
-                load_settings_for_repo(root).review, "nonblocking_categories", None
-            )
+        error, payload = call_binary_json(
+            "review-level", ["findings", "categories", "--root", str(root)]
         )
+        names = payload.get("categories") if isinstance(payload, dict) else None
+        if error is None and isinstance(names, list) and all(
+            isinstance(name, str) for name in names
+        ):
+            return frozenset(names)
+        return GATE_NONBLOCKING_CATEGORIES
     except Exception:  # noqa: BLE001 - unreadable config keeps the shipped default
         return GATE_NONBLOCKING_CATEGORIES
 
