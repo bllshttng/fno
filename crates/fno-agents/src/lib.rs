@@ -1903,6 +1903,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (unknown session / third distinct id) without storing.
     "session_report_stored",
     "session_report_dropped",
+    // A foreground SessionStart report bound its row to a proven pane claim
+    // (pane_claim.rs), moving it off a stale or absent mux ref.
+    "session_pane_rebound",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",
