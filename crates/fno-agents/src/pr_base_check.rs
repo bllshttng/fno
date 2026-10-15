@@ -421,17 +421,17 @@ mod tests {
         // The fetch argv carries the bare ref beside its remote: the guard
         // compared `origin/main`, never a local `main` the fetch never touched.
         let probe = run_of(&c);
-        let mut fetch_args: Option<Vec<String>> = None;
+        let fetch_args = std::cell::RefCell::new(None);
         let spy = |args: &[&str], dir: &Path| {
             if args.get(1) == Some(&"fetch") {
-                fetch_args = Some(args.iter().map(|s| s.to_string()).collect());
+                *fetch_args.borrow_mut() = Some(args.iter().map(|s| s.to_string()).collect());
             }
             probe(args, dir)
         };
         let (code, _) = check_stale_base("main", Path::new("/repo"), &spy, false);
         assert_eq!(code, 3);
         assert_eq!(
-            fetch_args,
+            *fetch_args.borrow(),
             Some(vec![
                 "git".into(),
                 "fetch".into(),
@@ -455,10 +455,10 @@ mod tests {
         };
         // `releases` is not a git remote, so the whole ref fetches from origin.
         let probe = run_of(&c);
-        let mut fetch_args: Option<Vec<String>> = None;
+        let fetch_args = std::cell::RefCell::new(None);
         let spy = |args: &[&str], dir: &Path| {
             if args.get(1) == Some(&"fetch") {
-                fetch_args = Some(args.iter().map(|s| s.to_string()).collect());
+                *fetch_args.borrow_mut() = Some(args.iter().map(|s| s.to_string()).collect());
             }
             probe(args, dir)
         };
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(code, 3);
         assert!(msg.unwrap_or_default().contains("days behind"));
         assert_eq!(
-            fetch_args,
+            *fetch_args.borrow(),
             Some(vec![
                 "git".into(),
                 "fetch".into(),
