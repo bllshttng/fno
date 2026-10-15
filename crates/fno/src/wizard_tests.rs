@@ -395,12 +395,14 @@ fn back_navigation_and_the_write_latch() {
 
 #[test]
 fn the_harness_gate_loops_until_a_pass_or_the_skip() {
-    // Both default ticks fail twice: retry once, then take Skip for now,
-    // which lands on done with an empty proposal set and nothing written.
+    // The checklist takes the defaults, then both gate asks fail twice:
+    // retry once, then take Skip for now, which lands on done with an
+    // empty proposal set and nothing written.
     let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
     let mut pr = Script::queued(vec![
-        Que::P(Pick::Ok(0)), // Retry
-        Que::P(Pick::Ok(3)), // Skip for now
+        Que::T(Ticks::Ok(vec![0, 2])), // harnesses: accept the defaults
+        Que::P(Pick::Ok(0)),           // gate: Retry
+        Que::P(Pick::Ok(3)),           // gate: Skip for now
     ]);
     let mut pb = FixedProbes {
         que: [Probe::Fail("auth"), Probe::Fail("timeout")].into(),
