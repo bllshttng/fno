@@ -44,7 +44,7 @@ So a burst grows by about one worker a minute. The next waiter sees a worker you
 
 What still bounds a burst: the fleet incident stop, the runaway brake, the 400-process attributed ceiling, the account and lane quota locks, the provider lane caps, the CPU hold (a turning machine re-holds the spawn, which then needs two consecutive under-ceiling samples), the RAM floor re-read at dequeue, lead_share, which divides the burst cap, the per-territory cap, the blueprint cap and the 240-second queue timeout. The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only on a worker exit or a reaper removal of done-idle rows.
 
-The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`; only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
+The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`. Only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
 
 ## A waiting spawn names its place
 
