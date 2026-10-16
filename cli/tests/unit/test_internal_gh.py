@@ -461,16 +461,9 @@ def test_real_runner_serves_plain_rest_gets_through_the_conditional_door(monkeyp
     assert len(spawned) == 3
     assert len(asked) == 3
 
-
-def test_injected_runner_never_reaches_the_conditional_door(monkeypatch):
-    import fno.rust_binary as rust_binary
-
-    def door(*args, **kwargs):
-        raise AssertionError("the door is for the real process runner only")
-
-    monkeypatch.setattr(rust_binary, "verb_call", door)
-    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
-    invoke = _internal_gh._rest_runner(
+    # A caller-supplied runner keeps its own transport and never meets the door.
+    injected = _internal_gh._rest_runner(
         "/real/gh", lambda cmd, **kwargs: Result(0, "fake", "")
     )
-    assert invoke(["gh", "api", "repos/o/r/pulls/1"], cwd=None).stdout == "fake"
+    assert injected(["gh", "api", "repos/o/r/pulls/1"], cwd=None).stdout == "fake"
+    assert len(asked) == 3
