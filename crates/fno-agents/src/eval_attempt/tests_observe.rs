@@ -22,7 +22,7 @@ fn observe_payload(lane: Value, extra: Value) -> Value {
     p
 }
 
-fn plant_claude(root: &Path, dir_name: &str, name: &str, body: &str, mtime: u64) -> PathBuf {
+fn plant_jsonl(root: &Path, dir_name: &str, name: &str, body: &str, mtime: u64) -> PathBuf {
     let dir = root.join(dir_name);
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
@@ -59,7 +59,7 @@ fn observe_claude_finds_transcript_by_workdir_and_sums_usage() {
         claude_line(WD, "glm-5.3-flash", 100, 20, 30, 5),
         claude_line(WD, "glm-5.3-flash", 50, 10, 0, 0),
     );
-    plant_claude(
+    plant_jsonl(
         tmp.path(),
         "-repo-wt",
         &format!("{uuid}.jsonl"),
@@ -122,7 +122,7 @@ fn observe_claude_model_mismatch_is_substituted() {
         json!({"type": "user", "cwd": WD, "message": {"role": "user"}}),
         claude_line(WD, "claude-sonnet-5", 10, 2, 0, 0),
     );
-    plant_claude(
+    plant_jsonl(
         tmp.path(),
         "-repo-wt",
         &format!("{uuid}.jsonl"),
@@ -147,7 +147,7 @@ fn observe_claude_model_mismatch_is_substituted() {
         json!({"type": "user", "cwd": WD, "message": {"role": "user"}}),
         claude_line(WD, "glm-5.3-flash", 10, 2, 0, 0),
     );
-    plant_claude(
+    plant_jsonl(
         tmp.path(),
         "-repo-wt",
         &format!("{uuid}.jsonl"),
@@ -224,6 +224,76 @@ fn observe_opencode_reads_session_and_sums_tokens() {
     assert_eq!(out["lane_status"], "ok", "out: {out}");
 }
 
+fn footnote_line(seq: u64, ty: &str, data: Value) -> String {
+    json!({"v": 1, "seq": seq, "id": format!("r{seq}"),
+        "ts": "2026-10-09T00:00:00.000Z", "session_id": "fn-s1", "type": ty, "data": data})
+    .to_string()
+}
+
+fn footnote_body(provider_id: Value) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n",
+        footnote_line(0, "header", json!({"cwd": WD, "session_id": "fn-s1"})),
+        footnote_line(
+            1,
+            "model_request",
+            json!({"turn": 1, "provider_id": provider_id})
+        ),
+        footnote_line(
+            2,
+            "model_response",
+            json!({"reported_model": "glm-5.3-flash"})
+        ),
+        footnote_line(
+            3,
+            "usage",
+            json!({"input_tokens": 100, "output_tokens": 20,
+            "cache_read_tokens": 3, "cache_write_tokens": 1})
+        ),
+    )
+}
+
+fn observe_footnote_joins_provider_with_reported_model() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    plant_jsonl(
+        tmp.path(),
+        "proj",
+        "fn-s1.jsonl",
+        &footnote_body(json!("zai")),
+        1_700_000_050,
+    );
+    let lane = json!({"name": "fn", "harness": "footnote", "model": "zai/glm-5.3-flash"});
+    let out = observe(&observe_payload(
+        lane,
+        json!({"footnote_sessions_root": tmp.path().to_str().unwrap()}),
+    ));
+    assert_eq!(out["lane_status"], "ok", "out: {out}");
+    assert_eq!(out["observed_model"], "zai/glm-5.3-flash");
+    assert_eq!(out["observed_session_id"], "fn-s1");
+    assert_eq!(out["substituted"], false);
+    assert_eq!(out["usage"]["input"], 100);
+    assert_eq!(out["usage"]["output"], 20);
+    assert_eq!(out["usage_source"], "footnote-transcript");
+}
+
+fn observe_footnote_without_provider_stays_bare_and_substituted() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    plant_jsonl(
+        tmp.path(),
+        "proj",
+        "fn-s1.jsonl",
+        &footnote_body(Value::Null),
+        1_700_000_050,
+    );
+    let lane = json!({"name": "fn", "harness": "footnote", "model": "zai/glm-5.3-flash"});
+    let out = observe(&observe_payload(
+        lane,
+        json!({"footnote_sessions_root": tmp.path().to_str().unwrap()}),
+    ));
+    assert_eq!(out["observed_model"], "glm-5.3-flash");
+    assert_eq!(out["lane_status"], "substituted", "out: {out}");
+}
+
 #[test]
 fn all_contracts_in_one_declaration() {
     observe_claude_finds_transcript_by_workdir_and_sums_usage();
@@ -231,4 +301,6 @@ fn all_contracts_in_one_declaration() {
     observe_claude_model_mismatch_is_substituted();
     observe_statuses_before_any_worker();
     observe_opencode_reads_session_and_sums_tokens();
+    observe_footnote_joins_provider_with_reported_model();
+    observe_footnote_without_provider_stays_bare_and_substituted();
 }
