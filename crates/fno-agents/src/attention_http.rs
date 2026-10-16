@@ -457,6 +457,15 @@ fn delivery_body(
     }
 }
 
+/// ntfy's JSON publish takes an integer 1-5; a word is refused with 400.
+fn ntfy_priority(item: &AttentionItem) -> u8 {
+    if item.priority == "high" {
+        4
+    } else {
+        3
+    }
+}
+
 /// The ntfy notification for one item: at most three actions, the
 /// recommended option first as `http` actions, the view link in `click`
 /// (and a literal `view` button when a slot is free). A pin gets one
@@ -469,7 +478,7 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
             "topic": sink.topic.clone().unwrap_or_default(),
             "title": item.title,
             "message": if sink.full_body { full_message(item) } else { item.title.clone() },
-            "priority": if item.priority == "high" { "high" } else { "default" },
+            "priority": ntfy_priority(item),
         })
         .to_string();
     };
@@ -487,7 +496,7 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
         "topic": sink.topic.clone().unwrap_or_default(),
         "title": item.title,
         "message": message,
-        "priority": if item.priority == "high" { "high" } else { "default" },
+        "priority": ntfy_priority(item),
         "click": view_url,
         "actions": [],
     });
@@ -692,6 +701,7 @@ mod tests {
             body["click"],
             "https://reach.example/v1/attention/items/q-4"
         );
+        assert_eq!(body["priority"], 3, "default priority is the integer 3");
     }
 
     #[test]
@@ -705,6 +715,21 @@ mod tests {
         assert_eq!(actions.len(), 3, "two http + one view: {actions:?}");
         assert_eq!(actions[2]["action"], "view");
         assert_eq!(actions[0]["body"]["option"], 2, "recommended first");
+    }
+
+    #[test]
+    fn text_only_and_high_priority_bodies_send_integer_priority() {
+        let mut item = four_option_item();
+        let mut sink = sink_ntfy("phone", "https://reach.example");
+        sink.answer_base_url = None;
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 3);
+        item.priority = "high".to_string();
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 4);
+        sink.answer_base_url = Some("https://reach.example".to_string());
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 4);
     }
 
     struct ScriptedPost {

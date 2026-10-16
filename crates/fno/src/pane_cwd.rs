@@ -52,6 +52,12 @@ fn process_cwd(_pid: u32) -> Option<String> {
     None
 }
 
+/// The listing's `pane_cwd`: the pane's own directory. It parts from the squad
+/// root when `pane run --cwd` names a subdir of the repo.
+pub fn listed(child_pid: Option<u32>, spawn_cwd: &str) -> Option<String> {
+    Some(live_or_spawn(child_pid, spawn_cwd))
+}
+
 /// A pane's cwd at capture: the live process cwd when `child_pid` still
 /// resolves, else `spawn_cwd` (the pane's own recorded spawn cwd).
 pub fn live_or_spawn(child_pid: Option<u32>, spawn_cwd: &str) -> String {
