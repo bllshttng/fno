@@ -26,7 +26,9 @@ const CLOCK_SLACK_S: f64 = 60.0;
 /// The argv shapes the door serves: exactly `["api", path]` where path is a
 /// plain REST read under `repos/`. A flag in the second token (write,
 /// method, paginate, jq - anything starting `-`) fails the prefix check, so
-/// writes never qualify; `graphql` is not under `repos/`.
+/// writes never qualify; `graphql` is not under `repos/`. A `{` in the path
+/// is a gh template placeholder gh substitutes from the cwd, so the row key
+/// would name a resource other than the one read; those stay plain.
 pub(crate) fn eligible(args: &[String]) -> Option<&str> {
     let [bin, path] = args else {
         return None;
@@ -35,7 +37,11 @@ pub(crate) fn eligible(args: &[String]) -> Option<&str> {
         return None;
     }
     let path = path.as_str();
-    if !path.starts_with("repos/") || path.contains("/logs") || past_first_page(path) {
+    if !path.starts_with("repos/")
+        || path.contains("/logs")
+        || path.contains('{')
+        || past_first_page(path)
+    {
         return None;
     }
     Some(path)
@@ -73,12 +79,18 @@ struct Row {
 }
 
 fn read_row_at(root: &Path, path: &str, now: f64) -> Option<Row> {
-    let text = fs::read_to_string(row_path(root, path)).ok()?;
+    let file = row_path(root, path);
+    let text = fs::read_to_string(&file).ok()?;
     let row: serde_json::Value = serde_json::from_str(&text).ok()?;
     let etag = row.get("etag")?.as_str()?.to_string();
     let body = row.get("body")?.as_str()?.to_string();
     let ts = row.get("ts")?.as_f64()?;
-    if ts <= 0.0 || ts - now > CLOCK_SLACK_S || now - ts >= ROW_TTL_S {
+    let expired = ts <= 0.0 || ts - now > CLOCK_SLACK_S || now - ts >= ROW_TTL_S;
+    if expired {
+        // A parsed stamp past its TTL (or a nonsense one) self-cleans on
+        // this touch. An unparseable row leaves before this, so a corrupt
+        // file stays for the plain read to bypass.
+        drop(fs::remove_file(&file));
         return None;
     }
     Some(Row { etag, body })
@@ -175,6 +187,13 @@ pub(crate) fn conditional_api_get_at(
             None => Ok((ok, body, stderr)),
         },
         200 => {
+            // A failed transfer can still carry a 200 envelope with a
+            // truncated body (reset mid-read). Caching it would pin the
+            // bad body behind a 304 for the row's whole TTL, so a
+            // non-zero exit caches nothing and keeps the caller's error.
+            if !ok {
+                return Ok((ok, body, stderr));
+            }
             if let Some(etag) = header_value(&headers, "etag") {
                 write_row_at(root, path, &etag, &body);
             }
@@ -240,6 +259,23 @@ mod tests {
         .unwrap();
         let now = crate::gh_cache::now_secs();
         assert!(read_row_at(root.path(), "repos/o/r/pulls/4", now).is_none());
+        // An expired row with a parsed stamp self-cleans on its next touch.
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn failed_200_transfer_caches_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let counter = AtomicUsize::new(0);
+        // Headers arrived; the body read was cut short and gh exited 1.
+        let spawn = spawn_of("HTTP/2.0 200 OK\r\nETag: W/\"cut\"\r\n\r\n{\"trunc", false);
+        let (ok, body, _) =
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/5", &counter, spawn).unwrap();
+        assert!(!ok);
+        assert_eq!(body, "{\"trunc");
+        let now = crate::gh_cache::now_secs();
+        assert!(read_row_at(root.path(), "repos/o/r/pulls/5", now).is_none());
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -302,6 +338,11 @@ mod tests {
         );
         let logs = vec![api.clone(), "repos/o/r/actions/jobs/9/logs".to_string()];
         assert_eq!(eligible(&logs), None);
+        let placeholder = vec![
+            api.clone(),
+            "repos/{owner}/{repo}/rules/branches/main".to_string(),
+        ];
+        assert_eq!(eligible(&placeholder), None);
         let not_repos = vec![api, "graphql".to_string()];
         assert_eq!(eligible(&not_repos), None);
     }
