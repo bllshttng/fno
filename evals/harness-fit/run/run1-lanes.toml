@@ -34,3 +34,9 @@ harness = "zcode"
 model = "GLM-5.3-Flash"
 effort = "high"
 band = "medium"
+
+[[routing.models]]
+name = "harness-fit-footnote"
+harness = "footnote"
+model = "zai/glm-5.3-flash"
+band = "medium"
