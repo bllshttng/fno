@@ -1485,7 +1485,8 @@ fn decide_gate(
     let mut announced = false;
     let mut last_slots: usize = 0;
     // What the slot axis last read about a burst past the user's ceiling.
-    let mut last_burst: Option<crate::spawn_gate_slots::Burst> = None;
+    // Uninitialized: every queue pass resets it before any read.
+    let mut last_burst: Option<crate::spawn_gate_slots::Burst>;
     let mut last_succession_error: Option<&'static str>;
     // LD4: a fleet-over sample holds, and admission after a hold is
     // debounced to CPU_ADMIT_SAMPLES consecutive under-ceiling samples.
