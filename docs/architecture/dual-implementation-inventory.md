@@ -73,22 +73,30 @@ All eight are finished ports. Their oracle legs are gone. Each converted case no
 
 **The review invocation parser, sidecar and mint.** Dual, disposition dual-logic, RETIRED by the review-port wave 5 (2026-10).
 
-
-
 The four former legs: `cli/src/fno/review/invocation.py`, whole, plus its callers in `cli/src/fno/mail/cli.py`, `cli/src/fno/doctor.py` and `hooks/review-hold.sh`.
+
 A second leg was the codex copy in `crates/fno-agents/src/codex_inject.rs`: the private mint, the sidecar reader and writer, and the hand-rolled flag table.
+
 The third leg was the mux verb parse (`review_invocation_command` in `crates/fno/src/review_invocation.rs`).
+
 The fourth was the shell id fallback in `hooks/review-hold.sh`, kept as the version-skew degrade, never an owner.
 
 The ONE owner is `fno::review_invocation`.
+
 It owns `parse_review_invocation`, `canonical_flag`, `VERIFY_FIXES`, `mint_invocation_id`, `pending_invocation_path`, `adopt_pending_invocation` and `write_pending_invocation`.
+
 The `review-level invocations` door serves `parse`, `join`, `reserve`, `emit` and `settle`.
+
 Every caller reads that door now.
 
 RECORDED behavior change on the codex leg.
-Its hand-rolled table read any `--` token as a flag; it knew no em-dash or bare-word alias.
+
+Its hand-rolled table read any `--` token as a flag. It knew no em-dash or bare-word alias.
+
 The shared parser's table governs it now.
+
 A bare `fix` (or `fix` led by one U+2014 character) records as `--fix` on codex too.
+
 An unknown `--` token is preserved verbatim.
 
 **The gate config gap.** Dual, disposition dual-logic, LIVE. The producer and the Python coverage gate extend the harmless-category allowlist from `review.nonblocking_categories`, the gate reading it through the categories door since the wave-4 port. The Rust disposition gate (`disposition_gate.rs` `gate_finding_blocks`) reads the shipped list only and never the key. A project configuring an extra harmless category gets a producer that counts it nonblocking and a Rust gate that still blocks on it. Loosening a merge gate is not a port. The gap closes with the coverage-gate family's own port.
