@@ -103,7 +103,7 @@ A worker renews its node claim at every stop. One turn can run for hours, and no
 
 GitHub's secondary limit counts requests for the account, not for the machine. Two hosts that read one PR inside one status TTL spend two requests where one is enough. With `store.remote_url` set, one host reads GitHub for both (`crates/fno-agents/src/gh_poller.rs`).
 
-The host holds a lease: the row `gh-budget:poller` in the `claims` table on the primary. The lease is two status TTLs long, 120 seconds by default. Only a publish renews it. Each live status read writes a local row and then takes or renews the lease. The host that holds the lease copies the row to the table `gh_status_rows` on the primary. The daemon heartbeat skips every `gh-budget:` row. A poller that stops reading GitHub therefore goes quiet and loses the lease after two TTLs.
+The host holds a lease: the row `gh-budget:poller` in the `claims` table on the primary. The lease is two status TTLs long, 120 seconds by default. Only a publish renews it. Each live status read writes a local row and then takes or renews the lease. The host that holds the lease copies the row to the table `gh_status_rows` on the primary. The row names no pid, so the daemon heartbeat never renews it. A poller that stops reading GitHub therefore goes quiet and loses the lease after two TTLs.
 
 Every other host asks the primary first. Suppose a peer holds a live lease, and the shared row for the PR is under two TTLs old. The host then serves that row with zero gh calls. It keeps a copy in its local cache. Past that age the host reads GitHub itself. Its publish then takes the lease, because the old poller's lease ran out at the same moment as the row went stale. A holder that wakes after the takeover fails its renewal and publishes nothing.
 
@@ -111,7 +111,7 @@ Every lease expiry and every row age is computed in SQL on the store clock, as i
 
 An unset `store.remote_url` keeps today's behavior: each machine polls for itself, and no process opens a socket for this. A primary that errors does not stop a status read. The host writes the marker `poller-down` in its status cache directory, skips the primary for 60 seconds, and polls alone. A status read never fails closed here, because the worst case is today's request rate.
 
-A PR that only one host reads saves nothing. The lease moves no request from one host to another, so there is no arm that polls a follower's PRs. The saving is the overlap: reads of one PR by two hosts inside one TTL. The `pr status` and `pr wait` spend notes count it. `, {n} served from poller <host>` is the number of rows this process took from the poller. `, published {m}` is the number it shared. The loop-check adapter and the review count in `pr wait --until reviewed` do not use the shared rows.
+A shared row serves as a status verdict, so write access to the primary is trust, as it is for [review attestations](#what-moves-to-the-primary). A PR that only one host reads saves nothing. The lease moves no request from one host to another, so there is no arm that polls a follower's PRs. The saving is the overlap: reads of one PR by two hosts inside one TTL. The `pr status` and `pr wait` spend notes count it. `, {n} served from poller <host>` is the number of rows this process took from the poller. `, published {m}` is the number it shared. The loop-check adapter and the review count in `pr wait --until reviewed` do not use the shared rows.
 
 ## Failure: the primary is unreachable
 

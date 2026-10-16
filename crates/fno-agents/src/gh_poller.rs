@@ -83,14 +83,11 @@ fn primary(marker_dir: &Path) -> Option<(Remote, String)> {
     if let Some(routed) = TEST_PRIMARY.with(|p| p.borrow().clone()) {
         return Some(routed);
     }
+    // The key check comes first: a stock install must not pay the machine
+    // id read, which shells out on macOS.
+    let remote = crate::store_remote::configured().ok().flatten()?;
     let machine = claims::machine_id();
-    if machine.is_empty() {
-        return None;
-    }
-    crate::store_remote::configured()
-        .ok()
-        .flatten()
-        .map(|remote| (remote, machine))
+    (!machine.is_empty()).then_some((remote, machine))
 }
 
 /// One statement against the shared-row table, made on first use.
@@ -198,31 +195,6 @@ pub(crate) fn follow(marker_dir: &Path, slug: &str, pr: u64) -> Option<(String, 
     ))
 }
 
-/// True when a peer holds a live poller lease, so a wait tick skips its own
-/// head read and lets `cached_status` look for the shared row first.
-pub(crate) fn following(marker_dir: &Path) -> bool {
-    let Some((remote, machine)) = primary(marker_dir) else {
-        return false;
-    };
-    match remote.execute(
-        &format!(
-            "SELECT 1 FROM claims WHERE key = ?1 AND expires_at > {CLOCK} AND machine_id <> ?2"
-        ),
-        &[
-            SqlValue::Text(POLLER_KEY.to_string()),
-            SqlValue::Text(machine),
-        ],
-    ) {
-        Ok(reply) => !reply.rows.is_empty(),
-        Err(error) => {
-            if !error.contains("no such table") {
-                mark_down(marker_dir);
-            }
-            false
-        }
-    }
-}
-
 /// The spend-note suffix: `, {n} served from poller {host}` and
 /// `, published {m}` once this process has done either, empty before, so
 /// callers that parse the note never see a new shape on the plain path.
@@ -248,7 +220,6 @@ pub(crate) fn note_suffix() -> String {
 mod tests {
     use super::*;
     use crate::store_remote::test_primary;
-    use std::collections::BTreeMap;
 
     fn expire(primary: &test_primary::Primary) {
         primary
@@ -276,9 +247,9 @@ mod tests {
     }
 
     /// The lease is one row: a peer is refused until the row runs out on the
-    /// store clock, and the daemon heartbeat never stretches it.
+    /// store clock.
     #[test]
-    fn the_poller_lease_has_one_holder_and_the_heartbeat_leaves_it_alone() {
+    fn the_poller_lease_has_one_holder_until_it_runs_out_on_the_store_clock() {
         let primary = test_primary::start();
         let remote = &primary.remote;
         assert!(claim_store::poller_lease_take(remote, "mac-a", 120_000).unwrap());
@@ -287,31 +258,6 @@ mod tests {
         expire(&primary);
         assert!(claim_store::poller_lease_take(remote, "mac-b", 120_000).unwrap());
         assert_eq!(lease_holder(&primary), "mac-b");
-
-        let me = claims::machine_id();
-        if me.is_empty() {
-            return;
-        }
-        let mine = test_primary::start();
-        assert!(claim_store::poller_lease_take(&mine.remote, &me, 120_000).unwrap());
-        let expiry = || -> i64 {
-            mine.db
-                .lock()
-                .unwrap()
-                .query_row(
-                    "SELECT expires_at FROM claims WHERE key = ?1",
-                    [POLLER_KEY],
-                    |r| r.get(0),
-                )
-                .unwrap()
-        };
-        let before = expiry();
-        crate::lease_heartbeat::beat(&mine.remote, &mut BTreeMap::new(), 600_000).unwrap();
-        assert_eq!(
-            expiry(),
-            before,
-            "the heartbeat must not renew the poller lease"
-        );
     }
 
     /// A failing primary stands the host down: follow returns None, writes the
@@ -335,7 +281,6 @@ mod tests {
         );
         route_to(Some((live.remote.clone(), "mac-a".into())));
         assert!(follow(dir.path(), "o/r", 7).is_none(), "the marker holds");
-        assert!(!following(dir.path()));
         std::fs::remove_file(dir.path().join(DOWN_MARKER)).unwrap();
         assert!(follow(dir.path(), "o/r", 7).is_some());
         route_to(None);
@@ -368,7 +313,6 @@ mod tests {
             "key-b",
             &json!({"exit": 1, "output": {"head": "h2"}}),
         );
-        assert!(following(b_dir.path()));
         let (key, row) = follow(b_dir.path(), "o/r", 7).expect("a peer's row serves");
         assert_eq!(key, "key-a");
         assert_eq!(row["exit"], 0);

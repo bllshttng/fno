@@ -1094,10 +1094,6 @@ pub(crate) fn leased_on(remote: &Remote, machine: &str) -> Result<Vec<ClaimRecor
         .iter()
         .filter_map(|row| decode(row).ok())
         .filter(|record| shared(&record.key))
-        // The budget rows end on their own deadline: stretching the poller
-        // lease would keep a dead poller's lease for ten minutes, and the
-        // fleet hold would outlast the refusal it records.
-        .filter(|record| !record.key.starts_with("gh-budget:"))
         .collect())
 }
 

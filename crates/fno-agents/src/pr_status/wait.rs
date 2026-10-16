@@ -280,14 +280,6 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         let hold_live = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
             .backoff_remaining_s
             > 0;
-        // A live peer poller shares its rows: the tick asks the cache without
-        // a head guard, so a fresh shared row answers with zero gh calls.
-        let follower = !hold_live
-            && crate::agents_config::pr_status_cache_dir(cwd)
-                .is_some_and(|dir| crate::gh_poller::following(&dir));
-        if follower {
-            return super::cache::cached_status(cwd_str, pr, false, None);
-        }
         let (head, head_calls) = if hold_live {
             (None, 0)
         } else {
