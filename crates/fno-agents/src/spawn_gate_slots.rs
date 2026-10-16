@@ -158,7 +158,7 @@ pub(crate) fn newest_slot_age_s(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<u64> {
     let mut newest: Option<u64> = None;
-    let mut note = |age_s: u64, newest: &mut Option<u64>| {
+    let note = |age_s: u64, newest: &mut Option<u64>| {
         *newest = Some(newest.map_or(age_s, |n| n.min(age_s)));
     };
     let now_ms = now.timestamp_millis();
