@@ -17,7 +17,6 @@
 //! clean-sounding answer stand in for a partial one.
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 const JOURNAL_NAME: &str = "github-request-spend.jsonl";
 const ROTATE_BYTES: u64 = 8 * 1024 * 1024;
@@ -239,7 +238,8 @@ fn label_word(argv: &[String]) -> Label {
     // child label as `loop-check`, so both spellings are poll-class.
     for w in argv.iter().take(2) {
         if w.contains("/.claude/jobs/") && w.ends_with(".sh") {
-            let stem = file_basename(w).trim_end_matches(".sh");
+            let base = file_basename(w);
+            let stem = base.trim_end_matches(".sh");
             return Label::Name(format!("worker-script {stem}"));
         }
         if w.contains("/hooks/") && w.ends_with(".sh") && file_basename(w).contains("stop") {
@@ -452,7 +452,7 @@ pub(crate) fn rate_limit_probe() -> Result<Value, String> {
         "spend rate_limit",
         std::time::Duration::from_secs(120),
     )
-    .map_err(|e| format!("{e}"))?;
+    .map_err(|e| crate::loopcheck::bounded_read_diagnostic("spend rate_limit", &e))?;
     if !out.status.success() {
         let tail: String = String::from_utf8_lossy(&out.stderr_tail)
             .chars()

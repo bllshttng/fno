@@ -937,7 +937,8 @@ fn maybe_tick_with(
         }
         let (_outcome, named) = emit_one(&home, run);
         if let Some(page) = named {
-            *last_page.lock().unwrap_or_else(|e| e.into_inner()) = Some(page);
+            *last_page.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(std::path::PathBuf::from(page));
         }
     });
 }

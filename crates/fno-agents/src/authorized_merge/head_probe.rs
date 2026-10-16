@@ -1,4 +1,5 @@
 use super::{parse_pr_facts, PrFacts};
+use crate::pr_status_facts::GhProbe;
 use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::path::Path;
