@@ -48,6 +48,16 @@ pub(crate) fn default_graph_path() -> PathBuf {
     var_os_home().join(".fno").join("graph.json")
 }
 
+/// The store an owner at `cwd` reads: the configured Python state root
+/// (`config.state_dir` included) through the layout table, else the
+/// env-and-HOME default. A hook process without `FNO_STATE_DIR` still finds
+/// the store the config names.
+pub(crate) fn graph_path_for(cwd: &std::path::Path) -> PathBuf {
+    crate::agents_config::state_dir(cwd)
+        .map(|root| crate::state_layout::place(&root, "graph.json"))
+        .unwrap_or_else(default_graph_path)
+}
+
 fn var_os_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
