@@ -214,8 +214,9 @@ fn argv_of(payload: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Whether the argv pins the one-shot headless lane: the long spelling, or
-/// the pre-substrate `--once`/-o the client maps to headless. A fence ends
+/// Whether the argv pins the one-shot headless lane: the long spelling, the
+/// pre-substrate `--once`/-o the client maps to headless, or the trailing
+/// positional the seam normalizes into `--substrate headless`. A fence ends
 /// the scan: past `--`/`--argv` every token is seed or provider payload,
 /// never one of fno's flags (the same boundary the Python seam's substrate
 /// scan draws).
@@ -240,7 +241,12 @@ fn explicit_headless(argv: &[String]) -> bool {
         }
         i += 1;
     }
-    false
+    // The trailing-positional spelling: `... <seed> headless` normalizes to
+    // the flag form before any lane is chosen, so the raw argv names
+    // headless only in this last token. A non-verb one-token seed spelled
+    // `headless` derives no node either way, so a stray match there is
+    // harmless.
+    argv.last().map(String::as_str) == Some("headless")
 }
 
 pub fn decide(payload: &Value) -> Value {
@@ -1070,6 +1076,17 @@ mod tests {
         p["seed_index"] = json!(1);
         let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
         assert_eq!(out["action"], "compose");
+    }
+
+    #[test]
+    fn trailing_positional_headless_keeps_the_lane() {
+        // `... <seed> headless` normalizes into the flag form; the raw argv
+        // the derive sees names headless only as the last token.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!(["spawn", "-H", "footnote", "/fno:target x-aaaa", "headless"]);
+        p["seed_index"] = json!(3);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
     }
 
     #[test]
