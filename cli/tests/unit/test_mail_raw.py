@@ -1443,11 +1443,12 @@ def test_raw_injects_unwrapped_on_claude_keystroke_lane(mailbox, monkeypatch, ca
 
 
 _DOOR_PARSE_TABLE = {
-    "/code-review medium --comment": {
+    # <level> per the single-source gate: the stub never sizes a review.
+    "/code-review <level> --comment": {
         "verb": "/code-review",
-        "args_raw": "medium --comment",
-        "level": "medium",
-        "level_source": "explicit",
+        "args_raw": "<level> --comment",
+        "level": "unset",
+        "level_source": "fallback",
         "flags": ["--comment"],
         "target": None,
         "pr_number": None,
@@ -1492,8 +1493,7 @@ def test_raw_review_emits_started_transport_observation_with_literal_receipt(
     _patch_invocation_door(monkeypatch, seen)
 
     with pytest.raises(typer.Exit) as sent:
-        review_level = "medium"
-        _raw_send("claudepeer", f"/code-review {review_level} --comment", self_ok=False)
+        _raw_send("claudepeer", "/code-review <level> --comment", self_ok=False)
 
     assert sent.value.exit_code == 0
     assert capsys.readouterr().out.strip() == "injected"
@@ -1501,8 +1501,8 @@ def test_raw_review_emits_started_transport_observation_with_literal_receipt(
     observation = seen[0]
     assert observation["stage"] == "sent"
     assert observation["verb"] == "/code-review"
-    assert observation["level"] == "medium"
-    assert observation["level_source"] == "explicit"
+    assert observation["level"] == "unset"
+    assert observation["level_source"] == "fallback"
     assert observation["transport"] == "mail_send_raw"
     assert observation["receipt"] == "delivered (hosted)"
     assert observation["submit_required"] is False

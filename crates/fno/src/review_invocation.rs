@@ -226,5 +226,4 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("db"));
         let _ = std::fs::remove_file(path);
     }
-
-    
+}

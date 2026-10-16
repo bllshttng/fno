@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod owner {
+// crate-visible: codex_inject paths through `review_invocation::owner` for
+// the shared parse, sidecar and mint.
+pub(crate) mod owner {
     // The pure core, vendored byte-identical from crates/fno (the parity
     // test pins the equality). The crates do not link in production: fno
     // shells this binary, so a shared module travels as a pinned copy.
@@ -257,9 +259,9 @@ fn settle_lost(
     let mut answered: HashSet<String> = HashSet::new();
     // A missing or unreadable store reads as empty: settling nothing is the
     // honest answer when no journal exists to read.
-    let Ok(rows) = fno::event_store::query_events(
+    let Ok(rows) = crate::event_store::query_events(
         journal,
-        &fno::event_store::EventQuery::of_types(&["review_invocation", "review_attestation"]),
+        &crate::event_store::EventQuery::of_types(&["review_invocation", "review_attestation"]),
     ) else {
         return Vec::new();
     };
