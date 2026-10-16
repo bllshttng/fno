@@ -1207,35 +1207,35 @@ mod tests {
 
     #[test]
     fn client_refuses_a_payload_verb_the_node_does_not_derive() {
-        let row = json!({"id": "x-1be2", "dispatch_verb": "/blueprint", "difficulty": "high"});
-        let msg = payload_verb_refusal("$fno:target x-1be2", None, false, Some(&row), "high")
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        let msg = payload_verb_refusal("$fno:target x-aaaa", None, false, Some(&row), "high")
             .expect("a /target payload on a /blueprint node refuses");
         assert!(
-            msg.contains("the payload names /target x-1be2, but x-1be2 derives /blueprint"),
+            msg.contains("the payload names /target x-aaaa, but x-aaaa derives /blueprint"),
             "{msg}"
         );
-        assert!(msg.contains("spawn /fno:blueprint x-1be2 instead"), "{msg}");
+        assert!(msg.contains("spawn /fno:blueprint x-aaaa instead"), "{msg}");
         let flagged = payload_verb_refusal(
-            "$fno:target x-1be2",
-            Some("x-1be2"),
+            "$fno:target x-aaaa",
+            Some("x-aaaa"),
             false,
             Some(&row),
             "high",
         )
         .expect("--node refuses too");
         assert!(
-            flagged.contains("--node x-1be2 derives /blueprint"),
+            flagged.contains("--node x-aaaa derives /blueprint"),
             "{flagged}"
         );
     }
 
     #[test]
     fn client_lets_the_seam_own_every_other_answer() {
-        let row = json!({"id": "x-1be2", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
         for (seed, row, resume) in [
-            ("$fno:blueprint x-1be2", Some(&row), false),
-            ("$fno:target x-1be2", None, false),
-            ("$fno:target x-1be2", Some(&row), true),
+            ("$fno:blueprint x-aaaa", Some(&row), false),
+            ("$fno:target x-aaaa", None, false),
+            ("$fno:target x-aaaa", Some(&row), true),
             ("port the parser", Some(&row), false),
         ] {
             assert_eq!(
