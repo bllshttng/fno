@@ -1,0 +1,102 @@
+[
+  {
+    "label": "owned_row",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "type": "execution",
+        "completed": "2026-10-01T12:00:00Z",
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": ["s1", "s1", "s2"]
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "url_case_forms",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "HTTPS://GitHub.Com/O/R/Pull/507/?q=1#frag",
+        "sessions": ["u1"]
+      }
+    ],
+    "pr": 507,
+    "slug": "O/R"
+  },
+  {
+    "label": "url_less_row",
+    "subject": "pr-sessions",
+    "ledger": [
+      {"sessions": ["sp"]},
+      {"pr_url": "https://github.com/o/r/pull/507", "sessions": ["ok1"]}
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "stray_string_sessions",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": "not-a-list"
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "unresolved_sentinel_only",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": ["unresolved:no-harness-session"]
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "missing_ledger",
+    "subject": "pr-sessions",
+    "ledger_kind": "missing",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "corrupt_ledger",
+    "subject": "pr-sessions",
+    "ledger_kind": "corrupt",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "dict_without_entries",
+    "subject": "pr-sessions",
+    "ledger_kind": "dict-no-entries",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "no_slug",
+    "subject": "pr-sessions",
+    "ledger_kind": "missing",
+    "pr": 507,
+    "slug": null
+  },
+  {
+    "label": "singular_session_id_key",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "session_id": "sid-only"
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  }
+]

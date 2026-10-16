@@ -7,6 +7,7 @@ mod heal;
 mod install;
 pub(crate) mod refresh;
 mod render;
+mod sessions;
 mod status;
 
 use std::path::Path;
@@ -18,9 +19,10 @@ pub fn run(args: &[String]) -> i32 {
         Some("install") => install::run(&args[1..]),
         Some("uninstall") => install::run_uninstall(&args[1..]),
         Some("heal") => heal::run(&args[1..]),
+        Some("pr-sessions") => sessions::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions> [--json|-J] [-N]"
             );
             2
         }

@@ -86,17 +86,30 @@ def _resolve_pr_session_ids(
 
     Returns ``[]`` on any failure (missing/unreadable/malformed ledger, no repo
     scope, no match), so the caller treats "no owning session" as the read-only
-    case rather than crashing the harvest. The join itself lives in
-    :mod:`fno.ledger_join` (shared with ``fno backlog carveout list --pr-number``); this
-    wrapper keeps retro's flatten-to-empty contract.
+    case rather than crashing the harvest. The join itself is the native
+    ``fno-agents pr-watch pr-sessions`` op (crates/fno-agents/src/ledger_axes.rs,
+    shared with ``fno backlog carveout list --pr-number``); this wrapper keeps
+    retro's flatten-to-empty contract.
     """
-    from fno.ledger_join import reason_is_infra_failure, resolve_pr_sessions
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    sessions, reason = resolve_pr_sessions(ledger_path, pr, repo_slug)
+    try:
+        out = verb_call(
+            ["pr-watch", "pr-sessions"],
+            {"ledger": str(ledger_path), "pr": pr, "repo_slug": repo_slug},
+        )
+    except VerbUnavailable as exc:
+        # A missing native op is the same broken environment an unreadable
+        # ledger is: name it, keep the read-only contract.
+        sessions, reason, infra = [], f"ledger unreadable: {exc}", True
+    else:
+        sessions = list(out.get("sessions") or [])
+        reason = out.get("reason")
+        infra = bool(out.get("infra"))
     # Flattening to [] hides WHY. A benign no-match is the designed read-only
     # case and stays quiet; a broken environment must not read as "no owning
     # session", or nobody ever investigates it.
-    if reason_is_infra_failure(reason):
+    if infra and reason:
         typer.echo(f"WARN {reason}", err=True)
     return sessions
 

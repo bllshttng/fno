@@ -681,6 +681,164 @@ fn index_receipts(registry_path: Option<&str>) -> HashMap<String, ReceiptAxes> {
     map
 }
 
+// ---------------------------------------------------------------------------
+// The ledger join (`fno.ledger_join`), ported. `pr-watch pr-sessions` is its
+// transport door; retro and carveout call the op through `verb_call`.
+// ---------------------------------------------------------------------------
+
+/// Opening words of every reason that names an INFRA failure - something that
+/// should have worked did not - as opposed to a benign no-match. Kept beside
+/// the return sites that produce them so the two cannot drift apart silently.
+const INFRA_REASON_OPENERS: [&str; 3] = [
+    "repo slug unresolved",
+    "ledger unreadable",
+    "ledger malformed",
+];
+
+/// Whether `reason` names a broken environment rather than a clean miss.
+///
+/// A caller that flattens the result to a bare list needs this: without it a
+/// ledger that would not parse reads exactly like "this PR has no owning
+/// session", and the infra failure is never investigated.
+pub(crate) fn reason_is_infra_failure(reason: Option<&str>) -> bool {
+    reason.is_some_and(|r| INFRA_REASON_OPENERS.iter().any(|op| r.starts_with(op)))
+}
+
+/// Python truthiness over a JSON value: a falsy `session_id` (null, empty
+/// string, 0, empty list) contributes nothing, the same as `if e.get(...)`.
+fn truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
+/// Python `str()` over a JSON scalar: strings stay bare, everything else gets
+/// its JSON spelling. The join only ever feeds the result through `.strip()`.
+fn python_str(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Whether `entry`'s `pr_url` names PR `pr` in the repo `slug_l`.
+///
+/// The url is the ONLY attribution signal. A url-less row carries no repo, and
+/// this ledger is GLOBAL, so a bare `pr`/`pr_number` match can claim a
+/// foreign repo's session for this PR - it attributes nothing and the caller
+/// takes its designed read-only path instead.
+fn entry_owns_pr(entry: &Value, pr: i64, slug_l: &str) -> bool {
+    // A hand-written url may carry a query, fragment, or trailing slash, and
+    // the owner/repo slug is case-insensitive. Normalizing here prevents a
+    // false "no owning session" - the same silently-wrong-empty this join
+    // replaces.
+    let url_s = entry
+        .get("pr_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('#')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('/')
+        .to_lowercase();
+    !url_s.is_empty() && url_s.ends_with(&format!("/{slug_l}/pull/{pr}"))
+}
+
+/// Return `(session_ids, reason)` for the PR's owning ledger entries.
+///
+/// `reason` is None when ids were resolved, and otherwise a printable phrase
+/// naming why none were: an unresolvable repo, an absent/unreadable/malformed
+/// ledger, or a genuine no-match. Callers MUST surface it - "no owning
+/// session" that is really "the ledger would not parse" is the failure this
+/// returns for. Attribution needs a `pr_url`; a url-less row resolves nothing
+/// for every caller alike.
+pub(crate) fn pr_sessions(
+    ledger: Option<&Path>,
+    pr: i64,
+    repo_slug: Option<&str>,
+) -> (Vec<String>, Option<String>) {
+    let Some(slug) = repo_slug.filter(|s| !s.is_empty()) else {
+        return (
+            Vec::new(),
+            Some(format!(
+                "repo slug unresolved, so PR #{pr} cannot be attributed across repos"
+            )),
+        );
+    };
+    let Some(path) = ledger else {
+        return (Vec::new(), Some("no ledger at <unset>".to_string()));
+    };
+    if !path.exists() {
+        return (Vec::new(), Some(format!("no ledger at {}", path.display())));
+    }
+    let data: Value = match std::fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+    {
+        Ok(data) => data,
+        Err(exc) => return (Vec::new(), Some(format!("ledger unreadable: {exc}"))),
+    };
+    let entries = if data.is_object() {
+        data.get("entries")
+    } else {
+        Some(&data)
+    };
+    let Some(entries) = entries.and_then(Value::as_array) else {
+        return (
+            Vec::new(),
+            Some("ledger malformed: no entries list".to_string()),
+        );
+    };
+
+    let slug_l = slug.to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for e in entries {
+        if !e.is_object() || !entry_owns_pr(e, pr, &slug_l) {
+            continue;
+        }
+        // Defensive: a non-list `sessions` (e.g. a stray string) must NOT be
+        // spread into per-character ids - guard the type before iterating.
+        let mut sids: Vec<String> = e
+            .get("sessions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(python_str).collect())
+            .unwrap_or_default();
+        if e.get("session_id").is_some_and(truthy) {
+            sids.push(python_str(e.get("session_id").unwrap()));
+        }
+        for s in sids {
+            // Strip: a whitespace-padded id would not match the same id
+            // elsewhere, and a whitespace-only one is junk that must not
+            // become a filter.
+            let s = s.trim().to_string();
+            // The unresolved marker says "we looked and found nothing"; it is
+            // not a session and must never reach a consumer's id filter. When
+            // it is the only value, `out` stays empty and the honest
+            // `no ledger entry` reason below is the answer.
+            if s == UNRESOLVED {
+                continue;
+            }
+            if !s.is_empty() && seen.insert(s.clone()) {
+                out.push(s);
+            }
+        }
+    }
+    if out.is_empty() {
+        return (Vec::new(), Some(format!("no ledger entry for PR #{pr}")));
+    }
+    (out, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -982,15 +1140,45 @@ mod tests {
         assert_eq!(r["sessions"], json!(["unresolved:no-harness-session"]));
         assert_eq!(r["completed"], Value::Null);
 
-        // A MISSING ledger reads as empty and the write creates it (the
-        // ported `_load_ledger_data` behavior).
-        std::fs::remove_file(w.ledger_path()).unwrap();
-        w.run(
-            &[],
-            json!({"node_id": "x-12", "pr_number": 4, "project": "p"}),
+        // A MISSING ledger shapes: the reason embeds the path, so the corpus
+        // masks the case dir; here the full path is asserted directly.
+        let (out, reason) = pr_sessions(Some(&w.dir.path().join("absent.json")), 7, Some("o/r"));
+        assert_eq!(out, Vec::<String>::new());
+        assert_eq!(
+            reason,
+            Some(format!(
+                "no ledger at {}",
+                w.dir.path().join("absent.json").display()
+            ))
         );
-        let rows = w.read_entries();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["graph_node_id"], "x-12");
+
+        // A bare list ledger parses (entries = the list itself).
+        std::fs::write(
+            w.dir.path().join("bare.json"),
+            json!([{"pr_url": "https://github.com/o/r/pull/9", "sessions": ["z1"]}]).to_string(),
+        )
+        .unwrap();
+        let (out, reason) = pr_sessions(Some(&w.dir.path().join("bare.json")), 9, Some("o/r"));
+        assert_eq!(out, vec!["z1"]);
+        assert_eq!(reason, None);
+
+        // A dict without an entries list is malformed.
+        std::fs::write(w.dir.path().join("bad.json"), "{}").unwrap();
+        let (out, reason) = pr_sessions(Some(&w.dir.path().join("bad.json")), 9, Some("o/r"));
+        assert_eq!(out, Vec::<String>::new());
+        assert_eq!(
+            reason,
+            Some("ledger malformed: no entries list".to_string())
+        );
+        assert!(reason_is_infra_failure(reason.as_deref()));
+
+        // A corrupt ledger reads as unreadable, classified infra.
+        std::fs::write(w.dir.path().join("junk.json"), "not json").unwrap();
+        let (out, reason) = pr_sessions(Some(&w.dir.path().join("junk.json")), 9, Some("o/r"));
+        assert_eq!(out, Vec::<String>::new());
+        assert!(reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("ledger unreadable: ")));
+        assert!(reason_is_infra_failure(reason.as_deref()));
     }
 }
