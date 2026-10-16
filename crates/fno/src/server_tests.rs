@@ -2871,9 +2871,9 @@ fn pane_ls_can_join_a_fresh_registry_snapshot_without_viewers() {
             assert_eq!(pane.fno_id.as_deref(), Some("019fb024-fresh"));
             let spawn_cwd = core.panes[&pane_id].cwd.clone();
             assert_eq!(
-                pane.cwd,
-                crate::pane_cwd::live_or_spawn(pane.child_pid, &spawn_cwd),
-                "cwd is the pane's own directory, not its squad's root"
+                pane.pane_cwd.as_deref(),
+                Some(crate::pane_cwd::live_or_spawn(pane.child_pid, &spawn_cwd).as_str()),
+                "pane_cwd is the pane's own directory; cwd stays the squad root"
             );
         }
         other => panic!("pane ls should carry OSC title, got {other:?}"),

@@ -2558,7 +2558,7 @@ impl Core {
             .panes
             .iter()
             .map(|(&pid, entry)| {
-                let (squad_id, squad_name, tab_id, tab_name, tab_ordinal) =
+                let (squad_id, squad_name, tab_id, cwd, tab_name, tab_ordinal) =
                     match self.session.find_pane(pid) {
                         Some((sid, ti)) => {
                             let sq = self.session.squad(sid).expect("find_pane live squad");
@@ -2567,16 +2567,17 @@ impl Core {
                                 sid,
                                 sq.name.clone(),
                                 sq.tabs[ti].id,
+                                sq.canonical_cwd().to_string(),
                                 dict.as_ref().and_then(|d| d.name.clone()),
                                 dict.map(|d| d.ordinal),
                             )
                         }
-                        None => (0, None, 0, None, None),
+                        None => (0, None, 0, String::new(), None, None),
                     };
-                // The pane's own directory, not its squad's root: a `pane run
-                // --cwd <subdir>` pane lives in <subdir> while the squad key
-                // resolves to the enclosing repo root.
-                let cwd = crate::pane_cwd::live_or_spawn(entry.pty.child_pid(), &entry.cwd);
+                // `cwd` above is the squad root. A `pane run --cwd <subdir>`
+                // pane lives in <subdir> while the squad key resolves to the
+                // enclosing repo root, so the pane's own directory rides apart.
+                let pane_cwd = crate::pane_cwd::live_or_spawn(entry.pty.child_pid(), &entry.cwd);
                 // The lineage join: when exactly ONE registry row
                 // hosts this pane, its identity fields ride the listing so
                 // the stable thread id (fno_id) and the CURRENT harness
@@ -2602,6 +2603,7 @@ impl Core {
                     squad_name,
                     tab_id,
                     cwd,
+                    pane_cwd: Some(pane_cwd),
                     child_pid: entry.pty.child_pid(),
                     title: entry.vt.osc_title().map(str::to_string),
                     // A portal seat never reads pristine: the seat is
