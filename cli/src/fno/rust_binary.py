@@ -472,14 +472,14 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
 # ---------------------------------------------------------------------------
 # Claim transport client + sweep instruments.
 #
-# Moved verbatim out of the ``fno.claims`` package (core.py, io.py, types.py,
-# roster.py, cli.py) so the agents family can talk to the native claim store
-# without importing the package: the package is scheduled for deletion by the
+# Moved out of the ``fno.claims`` package (core.py, io.py, types.py, roster.py,
+# cli.py) so the agents family can talk to the native claim store without
+# importing the package: the package is scheduled for deletion by the
 # claims-port deletion wave, and this module is the one Python seam every
-# family keeps. The bodies are unchanged; only their home moved. Rust owns the
-# protocol (crates/fno-agents/src/claims.rs, claim_cli/); this section is
-# transport and instrumentation only. Module-level imports stay stdlib-only:
-# every ``fno.*`` import below is function-local, exactly as in the originals.
+# family keeps. Rust owns the protocol (crates/fno-agents/src/claims.rs,
+# claim_cli/); this section is transport and instrumentation only.
+# Module-level imports stay stdlib-only: every ``fno.*`` import below is
+# function-local.
 # ---------------------------------------------------------------------------
 
 from enum import Enum
@@ -491,39 +491,22 @@ import subprocess
 
 CLAIMS_DIRNAME = ".fno/claims"
 
-# Env var naming the base dir under which GLOBAL (node-level) claims live.
-# Node ids are global (like ~/.fno/graph.json), so a node:<id> lock must
-# coordinate across worktrees rather than land in a worktree-local cwd. Shell
-# call sites that manage node claims set this to "$HOME" so the claim lands at
-# ~/.fno/claims.
+# Env var naming the base dir under which GLOBAL (node-level) claims live;
+# a node:<id> lock must coordinate across worktrees, not land cwd-local.
 CLAIMS_ROOT_ENV = "FNO_CLAIMS_ROOT"
 
-# Raw key cap. The on-disk filename is `quote(key, safe="") + ".lock"`,
-# which can expand non-ASCII / reserved chars up to ~3x. We validate
-# the encoded filename length separately at acquire-time against
-# MAX_ENCODED_FILENAME_BYTES, so MAX_KEY_LENGTH only needs to keep raw
-# keys human-readable and prevent obvious denial-of-service strings.
+# Raw key cap; the URL-encoded filename is checked separately at acquire time
+# against MAX_ENCODED_FILENAME_BYTES (the 255-byte filesystem limit).
 MAX_KEY_LENGTH = 256
-
-# Filesystem hard cap. ext4, HFS+, APFS all have 255-byte filename limits.
-# acquire_claim rejects any key that would encode past this bound.
 MAX_ENCODED_FILENAME_BYTES = 240  # 240 + ".lock" suffix = 245 bytes
 MIN_TTL_MS = 60_000        # 1 minute
 MAX_TTL_MS = 86_400_000    # 24 hours
 
 
 class ClaimState(str, Enum):
-    """Classification of a key's current state.
-
-    - free: no claim file exists
-    - live: claim exists and holder process is verifiably alive
-    - suspect: TTL unexpired but holder not provably alive (dead/replaced pid).
-      The respawned-worker case: TTL still protects the slot, so acquire/
-      dispatch treat it like `live` (never steal); only TTL expiry (-> stale)
-      frees it.
-    - stale: claim exists but holder is dead or expired (recoverable)
-    - corrupted: claim file present but cannot be parsed
-    """
+    """Classification of a key's current state: free, live, suspect (TTL
+    unexpired but holder not provably alive - the respawned-worker slot,
+    never steal), stale (recoverable), corrupted."""
 
     FREE = "free"
     LIVE = "live"
@@ -570,26 +553,16 @@ class ClaimContended(Exception):
     contention retries on the same key's recovery mutex.
 
     A distinct type from ClaimHeldByOther (a live claim is held by someone
-    else) even though a caller usually treats both the same way ("can't have
-    this one right now, retry later") - the recovery mutex being contended
-    says nothing about who, if anyone, ends up holding the claim. Callers
-    that only catch this narrow type cannot accidentally reclassify an
-    unrelated RuntimeError raised deeper in the call stack (pydantic,
-    resolve_self_identity, serialize_claim, ...) as contention.
-
-    Callers of acquire_claim/refresh_claim should catch this ALONGSIDE
-    ClaimHeldByOther, not instead of it - an except clause naming only one of
-    the two lets the other escape uncaught.
+    else): callers that only catch this narrow type cannot accidentally
+    reclassify an unrelated RuntimeError as contention. Catch it ALONGSIDE
+    ClaimHeldByOther, not instead of it.
     """
 
 
-# Every acquire_claim/refresh_claim caller that treats "someone else has this
-# right now" and "the recovery mutex is too busy to tell" the same way
-# ("can't have this one right now, retry/skip") should catch this tuple
-# instead of hand-rolling `except (ClaimHeldByOther, ClaimContended):` plus a
-# restated comment at each site. A caller that needs to read `.holder`/`.pid`/
-# `.host` (ClaimHeldByOther-only attributes) still needs its own separate
-# `except ClaimHeldByOther as exc:` block ahead of this one.
+# Treat "someone else has this right now" and "the recovery mutex is too busy
+# to tell" the same way by catching this tuple. A caller that needs to read
+# `.holder`/`.pid`/`.host` still needs its own `except ClaimHeldByOther` block
+# ahead of this one.
 CLAIM_UNAVAILABLE = (
     ClaimHeldByOther,
     ClaimContended,
@@ -1024,20 +997,16 @@ def _finished_row_states() -> frozenset:
 
 
 def _node_settlement(reading: Optional[RosterReading] = None):
-    """The closure-shaped reading ``sweep_verdict`` runs FIRST on a node claim
-    : is this claim's own node still the holder's workplace?
+    """Is this ``node:`` claim's own node still the holder's workplace?
 
-    Two positive findings, both proven by FINDING things, never by failing to:
+    Runs FIRST in the sweep verdict. Two positive findings, both proven by
+    FINDING things, never by failing to:
 
-      * The claim's node is terminal in the graph (done/superseded) and the
-        holder cannot be proven alive. The closure release should have
-        dropped the claim already; one that outlived its node (pre-fix
-        leaks, a closer that crashed mid-release) protects nothing once its
-        lease is spent or its pid is gone. A LIVE holder keeps the claim
-        until its own lease ends: measured 2026-09-05, this arm reaped four
-        unexpired, live-pid claims on closed nodes (twice,
-        -node) on every sweep, killing active loop-check leases and
-        opening the dup-PR window each time.
+      * The claim's node is terminal in the graph and the holder cannot be
+        proven alive (expired lease, or dead pid). A LIVE holder keeps the
+        claim: measured 2026-09-05, reaping unexpired live-pid claims on
+        closed nodes killed active loop-check leases and opened the dup-PR
+        window each time.
       * The lease is EXPIRED and the holder's roster row resolves to a
         DIFFERENT node. An expired lease is the holder's own statement that
         it stopped renewing; a row on another node is where it went. An
@@ -1058,9 +1027,8 @@ def _node_settlement(reading: Optional[RosterReading] = None):
                 from fno.tracker import active_backend_name
 
                 if active_backend_name() != "graph":
-                    # graph.json is not the store under an external tracker
-                    # backend; a terminal reading taken from it would be a
-                    # wrong answer, and unknown keeps.
+                    # An external tracker backend: graph.json answers nothing,
+                    # and unknown keeps.
                     cache["terminal"] = None
                     return None
                 from fno.graph.statuses import is_terminal_entry
@@ -1088,15 +1056,9 @@ def _node_settlement(reading: Optional[RosterReading] = None):
         terminal = _terminal_ids()
         if terminal is not None and node_id in terminal:
             # Closure settles a holder that cannot be proven alive, never one
-            # that can. Measured 2026-09-05 on four premature reaps (
-            # twice, -node): every one was an UNEXPIRED lease
-            # with a live recorded pid on a node the graph had closed, reaped
-            # by this arm on each sweep - a live session's loop-check lease
-            # (the follow-up-work shape) died with it, and every reap opened
-            # the dup-PR window the claim exists to close. An expired lease
-            # still settles here, as does a dead pid: the holder named its
-            # own end or the pid table ends it, and a closure release that
-            # crashed mid-way is exactly the leak this arm heals.
+            # that can (the 2026-09-05 premature-reap lesson in the
+            # docstring). An expired lease still settles here, as does a dead
+            # pid; a proven-live holder keeps until its own lease ends.
             if native_verdict is not None and (
                 native_verdict.get("expired") is not True
                 and native_verdict.get("bucket") != "suspect"
@@ -1191,28 +1153,23 @@ def _holder_session_id(holder: str) -> Optional[str]:
 def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optional[bool]:
     """True when the mux enumerated its panes and none plausibly hosts WORKER.
 
-    The evidence a handover claim's death leaves outside the claim: the
-    spawner launched the worker into a mux pane. Presence is matched against
-    EVERY identity a spawned worker's pane can carry, because a miss on any
-    one of them reaps a LIVE worker's claim (the ``reaped_a_live_worker``
-    disaster): the pane's ``fno_id`` is the SESSION uuid, not the worker
-    name (mux_spawn stamps ``fno_id=stored_session_uuid or name``), the OSC
-    ``title`` is whatever the pane's shell set, and the load-bearing join is
-    the worktree: dispatch names the worker's worktree after the NODE id, so
-    ``basename(pane.cwd) == node_id`` is the normal live-launch marker, with
-    a worker-named tree still possible from older spawns. Follows
-    ``_pane_absent_from_listing``'s empty-is-ambiguous rule: ``pane ls``
-    prints ``[]`` both for a session with no panes and for an unreachable
-    socket, so only a NON-EMPTY listing somewhere proves the instrument ran
-    and absence from it is a finding. True = positively absent, False =
-    present, None = cannot tell (and None keeps the claim).
+    Presence is matched against EVERY identity a spawned worker's pane can
+    carry, because a miss on any one of them reaps a LIVE worker's claim: the
+    pane's ``fno_id`` is the SESSION uuid (mux_spawn stamps
+    ``fno_id=stored_session_uuid or name``), the OSC ``title`` is whatever the
+    pane's shell set, and dispatch names the worker's worktree after the NODE
+    id, so ``basename(pane.cwd) == node_id`` is the normal live-launch marker.
+    ``pane ls`` prints ``[]`` both for a session with no panes and for an
+    unreachable socket, so only a NON-EMPTY listing somewhere proves the
+    instrument ran. True = positively absent, False = present, None = cannot
+    tell (and None keeps the claim).
 
-    Residual, named: a ``worktree.policy = never`` project launches the
-    worker at its repo root, where no pane identity names the worker - there
-    this helper can read absence while a live worker runs, so the handover
-    early-reap arm must not be the only thing standing between that worker
-    and a steal (its TTL expiry still governs, and the pid check still
-    refuses while the spawner lives).
+    Residual, named: a ``worktree.policy = never`` project launches the worker
+    at its repo root, where no pane identity names the worker - there this
+    helper can read absence while a live worker runs, so the handover
+    early-reap arm must not be the only thing standing between that worker and
+    a steal (its TTL expiry still governs, and the pid check still refuses
+    while the spawner lives).
     """
     import json as _json
     import subprocess as _subprocess
@@ -1254,8 +1211,7 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
         except (TypeError, ValueError):
             return None
         if not n_panes:
-            # A zero-pane session would only contribute an
-            # ambiguous []; the probe never raises on a malformed row.
+            # A zero-pane session only contributes an ambiguous []; skip it.
             continue
         panes = _mux("mux", "pane", "ls", "--server", str(session), "--json")
         if panes is None or getattr(panes, "returncode", 1) != 0:
@@ -1322,39 +1278,21 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
 
     ABANDONMENT IS PROVEN BY FINDING THE HOLDER, NEVER BY FAILING TO FIND IT.
     The probe resolves the claim's own holder session id and requires its roster
-    row to exist and read terminal. An absent row answers ``None``.
+    row to exist and read terminal. An absent row answers ``None``. That
+    asymmetry is the whole safety argument: ``fleet_rows`` drops interactive
+    rows, so a codex worker, an opencode worker, and any hand-started session
+    are invisible to the roster BY CONSTRUCTION. A row count validates the
+    INSTRUMENT, never the TARGET; reaping on it archives a live worker's claim
+    (the ``reaped_a_live_worker`` kill criterion). The roster's coverage gap
+    therefore costs a missed reap - an unreaped claim expires on its own TTL -
+    rather than a wrongly archived one.
 
-    That asymmetry is the whole safety argument, and an earlier version of this
-    function got it wrong in the exact way the third pitfalls entry describes.
-    It asked "does any row resolve to this node", read the empty answer as
-    abandonment, and defended it with a scanned-row count. But a row count
-    validates the INSTRUMENT, never the TARGET. ``fleet_rows`` enumerates
-    ``claude agents --json --all`` and drops interactive rows, so a codex worker,
-    an opencode worker, and any hand-started session are invisible to it BY
-    CONSTRUCTION. A forty-row scan that cannot represent the holder at all would
-    have read as forty rows of proof, and reaping on it archives a live worker's
-    claim - disaster from the other side, which the
-    ``reaped_a_live_worker`` kill criterion exists to stop.
-
-    So the roster's coverage gap now costs a missed reap rather than a wrongly
-    archived claim. That is the correct direction to fail: an unreaped claim
-    expires on its own TTL, and a wrongly reaped one hands a live worker's node
-    to a second worker.
-
-    THREE additions feed it evidence that lives outside the claim (the lead's
-    2026-08-23 specimens, both of which needed a manual --force release):
-
-    1. A handover holder is no longer unconditionally unprovable. Its launch
-       window is observable: the mux pane the spawner created is ABSENT from
-       every live listing AND the recorded pid is dead. Both absences together
-       are the window over - a positive finding, never a failed lookup.
-    2. A roster reading that degraded (``roster not consulted``) is retried
-       ONCE before the sweep answers, so a transient ``claude not on PATH``
-       does not strand the whole pass.
-    3. A dead recorded pid with a parseable session id continues to the
-       transcript check even without a roster row, when the claim carries a
-       worktree path to find the tree with. A finished tree is a positive
-       finding.
+    Three additions feed it evidence that lives outside the claim: a handover
+    holder's launch window is observable (mux pane ABSENT from every live
+    listing AND recorded pid dead); a degraded roster reading is retried ONCE;
+    and a dead recorded pid with a parseable session id continues to the
+    transcript check on the claim's stamped worktree path, where a finished
+    tree is a positive finding.
     """
     cache: dict = {}
     # One token per None answer, folded into kept_suspect_unprobed_by.
@@ -1384,14 +1322,10 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
             return None
 
         if claim.holder.startswith(HANDOVER_HOLDER_PREFIX):
-            # The launch window, not an abandoned session - but the window is
-            # observable from outside: the pane the spawner created and the
-            # spawner's own pid. BOTH absent is the window over (a positive
-            # finding); a pane that still hosts the worker, a live spawner
-            # pid, or a mux that cannot answer all keep the claim. The pid
-            # check is local and cheap, so it runs before the pane subprocess;
-            # the pane answer is cached per worker for the sweep's lifetime,
-            # like the shared roster reading.
+            # The launch window is observable from outside: the pane the
+            # spawner created and the spawner's own pid. BOTH absent is the
+            # window over; anything else keeps the claim. The pane answer is
+            # cached per worker for the sweep's lifetime.
             if native is not None and native.get("state") == ClaimState.LIVE.value:
                 reasons[claim.key] = "handover-live"
                 return None
@@ -1418,11 +1352,10 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
             return None
         row = seen.row_for_session(session_id)
         if row is None:
-            # Not found is not gone - but with the holder's own pid dead, one
-            # more positive instrument remains: the transcript. It needs only
-            # a cwd to find the tree, and the claim carries one when its
-            # writer stamped it. A finished tree is abandonment proven by
-            # FINDING the end, never by failing to find the worker.
+            # Not found is not gone - but with the holder's own pid dead, the
+            # transcript on the claim's stamped worktree path is one more
+            # positive instrument: a finished tree is abandonment proven by
+            # FINDING the end.
             if native is not None and native.get("state") == ClaimState.LIVE.value:
                 reasons[claim.key] = "row-absent-native-live"
                 return None
@@ -1436,13 +1369,10 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
             return True
         if row.get("state") not in _finished_row_states():
             return False
-        # The row state alone does NOT authorize a reap. `_TERMINAL_STATES`
-        # carries its own warning: the roster called a WORKING session done on
-        # 2026-08-15, and occupancy stopped keying on it for exactly that
-        # reason. Reaping on a field known to lie in this direction archives a
-        # live worker's claim, which is the `reaped_a_live_worker` kill
-        # criterion. So the row narrows the candidates and the transcript
-        # decides, which is the instrument the watchdog itself trusts.
+        # The row state alone does NOT authorize a reap: the roster has called
+        # a WORKING session done before (2026-08-15). The row narrows the
+        # candidates and the transcript decides, which is the instrument the
+        # watchdog itself trusts.
         if not _transcript_says_finished(session_id, row.get("cwd") or ""):
             reasons[claim.key] = "row-transcript-unfinished"
             return False

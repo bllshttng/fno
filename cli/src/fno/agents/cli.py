@@ -126,96 +126,113 @@ def _reclaim_if_provably_dead(
     """Force-release KEY when its holder is PROVABLY dead.
 
     Returns ``(prior_holder, bucket)``. ``prior_holder`` is None whenever the
-    claim was not cleared, and ``bucket`` says why, so the caller can tell a
-    live holder (benign dedup) from one it merely could not measure (a wedge).
-    Those deserve opposite refusals: pointing an operator at a force-release for
-    a reservation whose spawner is mid-launch is worse advice than none.
+    claim was not cleared, and ``bucket`` says why: a live holder is benign
+    dedup, one we merely could not measure is a wedge, and they deserve
+    opposite refusals. Nothing is cleared on a read or probe failure - an
+    instrument that could not run is not a finding, and clearing on one hands
+    a live worker's node to a second worker.
 
-    Nothing is cleared on a read failure or a probe failure. An instrument that
-    could not run is not a finding, and clearing a claim on one hands a live
-    worker's node to a second worker.
-
-    The proof itself is :func:`fno.claims.core.sweep_verdict`, the same single
-    authority the reaper uses, called on exactly the one key we were asked
-    about. This never sweeps: a dispatch deciding to prune the whole store as a
-    side effect is a blast radius nobody asked for.
+    The proof is the native sweep row for exactly this one key - the same
+    authority the reaper classifies with, run on one key so this never sweeps
+    the store as a side effect. ``probe``/``settlement`` are the shared roster
+    instruments, run in the shared sweep-verdict order, so a caller holding a
+    reading from outside its lock hands it in rather than re-reading under one.
     """
-    from fno.claims.core import (
-        force_release_claim,
-        sweep_verdict,
+    from types import SimpleNamespace
+
+    from fno.rust_binary import (
+        ClaimVerdictError,
+        ClaimVerdictUnavailable,
+        claim_op,
+        native_force_release,
     )
     from fno.agents.lock import _pid_is_alive
-    from fno.claims.core import native_claims_root
-    from fno.claims.io import claim_path, read_claim_file
-    from fno.claims.verdict import claim_verdicts
 
     try:
-        path = claim_path(key, root=native_claims_root(key))
-    except Exception:  # noqa: BLE001 - an unmeasurable store clears nothing
+        payload = claim_op("sweep", "", ["--key", key])
+    except (ClaimVerdictError, ClaimVerdictUnavailable, OSError):
         return None, "unreadable"
-    try:
-        claim = read_claim_file(path)
-    except Exception:  # noqa: BLE001 - unreadable is unproven
+    rows = payload.get("claims") if isinstance(payload, dict) else None
+    native = (
+        rows[0]
+        if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict)
+        else None
+    )
+    if native is None or native.get("key") != key:
+        # A sweep that cannot name the one key it was asked about proves
+        # nothing; unknown keeps.
         return None, "unreadable"
-    native = claim_verdicts([key]).get(key)
-    if native is None:
-        return None, "unreadable"
+    holder = str(native.get("holder") or "")
+    claim_view = SimpleNamespace(
+        key=key, holder=holder, metadata=native.get("metadata") or {}
+    )
     if key.startswith("dispatch:"):
         # The reservation's own predicate, deliberately NOT in the shared
         # sweep classifier. `spawn-cli:<pid>` launches a worker and exits, so
-        # a dead pid means no launch is in flight from that process (the TTL
-        # is the boot window; see the native classify_for_sweep decision),
-        # but THIS caller is the next dispatcher, standing at the moment of
-        # launch: the node claim it takes covers the window the reservation
-        # protected. ONLY this dispatcher's own holder shape. `fno backlog
-        # advance` reserves the same key as `advance:<pid>` and spawns
-        # WITHOUT --node, so that reservation is the only barrier its
-        # booting worker has; its pid is dead by design too, so a predicate
-        # reading dead-pid-and-same-host alone cleared it and launched a
-        # second worker onto the node advance had just staffed. LIVENESS
-        # FIRST. A live holder is benign dedup whoever wrote it: answering
+        # a dead pid means no launch is in flight - but THIS caller is the
+        # next dispatcher, and the node claim it takes covers the window the
+        # reservation protected. `fno backlog advance` reserves the same key
+        # as `advance:<pid>` and spawns WITHOUT --node, so its reservation is
+        # the only barrier its booting worker has. LIVENESS FIRST: a live
+        # holder is benign dedup whoever wrote it, and answering
         # `foreign-reservation` there would print force-release advice
         # against a reservation somebody is actively launching under.
         if native.get("state") == "live":
             if (
                 native.get("session_basis") != "registry-served-live"
-                or _pid_is_alive(claim.pid)
+                or _pid_is_alive(native.get("pid"))
             ):
                 return None, _HOLDER_ALIVE
-            # A registry-served live verdict names the DISPATCHER's session
-            # (the subprocess stamps its caller's session id), which
-            # outlives the holder by design. Only the spawn-cli shape may
-            # clear on the holder pid: an advance:<pid> reservation stays
-            # the only barrier its booting worker has, and its pid is dead
-            # by design too.
-            if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
+            # A registry-served live verdict names the DISPATCHER's session,
+            # which outlives the holder by design. Only the spawn-cli shape
+            # may clear on the holder pid.
+            if not holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
                 return None, "foreign-reservation"
         elif native.get("bucket") == "offhost":
             return None, "offhost"
-        if not claim.holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
+        if not holder.startswith(_SPAWN_CLI_HOLDER_PREFIX):
             return None, "foreign-reservation"
         provably_dead, bucket = True, ""
     else:
-        try:
-            provably_dead, bucket = sweep_verdict(
-                claim,
-                abandonment_probe=probe,
-                node_settlement=settlement,
-                native_verdict=native,
-            )
-        except Exception:  # noqa: BLE001 - a probe blowing up clears nothing
-            return None, "unprobed"
+        # The same contract as the shared ``sweep_verdict`` with the
+        # native verdict already in hand: settlement first on ``node:``,
+        # then the row's verdict, then a suspect bucket falls to the probe.
+        provably_dead, bucket = False, "suspect"
+        if settlement is not None and key.startswith("node:"):
+            try:
+                if settlement(claim_view, native_verdict=native) is True:
+                    provably_dead, bucket = True, ""
+            except Exception:  # noqa: BLE001 - unknown keeps
+                pass
+        if not provably_dead:
+            row_dead = bool(native.get("provably_dead"))
+            row_bucket = str(native.get("bucket") or "")
+            if row_dead or row_bucket != "suspect":
+                provably_dead, bucket = row_dead, row_bucket
+            elif probe is None or not key.startswith("node:"):
+                provably_dead, bucket = False, "suspect"
+            else:
+                try:
+                    probe_verdict = probe(claim_view, native_verdict=native)
+                except Exception:  # noqa: BLE001 - a probe blowing up clears nothing
+                    return None, "unprobed"
+                if probe_verdict is True:
+                    provably_dead, bucket = True, ""
+                else:
+                    # False: a live worker holds this node. None: the probe
+                    # could not run, which is unknown, and unknown keeps.
+                    bucket = "suspect_alive" if probe_verdict is False else "suspect_unprobed"
     if not provably_dead:
         return None, bucket
     try:
-        outcome = force_release_claim(
-            key=key,
-            reason=f"holder {claim.holder} (pid {claim.pid}) proven dead at dispatch",
-            expected_claim=claim,
+        outcome = native_force_release(
+            key,
+            f"holder {holder} (pid {native.get('pid')}) proven dead at dispatch",
+            expected_claim=native,
         )
     except Exception:  # noqa: BLE001 - a failed release just leaves the refusal
         return None, "release-failed"
-    return (claim.holder, "") if outcome.archived else (None, "contended")
+    return (holder, "") if outcome.archived else (None, "contended")
 
 
 
@@ -301,14 +318,18 @@ def _spawn_guard_decision(
     it, so a batch sweep that probes each node one at a time changes nothing
     until it actually launches.
     """
-    from fno.claims.cli import _parse_ttl
-    from fno.claims.core import CLAIM_UNAVAILABLE, acquire_claim, claim_status
+    from fno.rust_binary import (
+        CLAIM_UNAVAILABLE,
+        claim_status_payload,
+        native_acquire,
+        parse_ttl_ms,
+    )
 
     node_key = f"node:{node_id}"
     res_key = f"dispatch:{node_id}"
 
     try:
-        info = claim_status(node_key)
+        info = claim_status_payload(node_key)
     except Exception as exc:  # pragma: no cover - claim_status never raises today
         return {
             "verdict": "error",
@@ -369,7 +390,7 @@ def _spawn_guard_decision(
             # invoke the real `fno agents spawn`, which runs this guard again
             # WITH a reservation, and the recovery happens there - at the moment
             # of launch, by the caller that is about to launch.
-            from fno.claims.cli import (
+            from fno.rust_binary import (
                 RosterReading,
                 _abandonment_probe,
                 _node_settlement,
@@ -426,7 +447,7 @@ def _spawn_guard_decision(
             # rendering it as a wedge here would put the exemption on one of two
             # paths and hand an operator force-release advice for a launch that
             # is proceeding normally.
-            from fno.claims.cli import HANDOVER_HOLDER_PREFIX
+            from fno.rust_binary import HANDOVER_HOLDER_PREFIX
 
             in_launch_window = str(observation.holder or "").startswith(
                 HANDOVER_HOLDER_PREFIX
@@ -440,7 +461,7 @@ def _spawn_guard_decision(
             # render as a wedge with force-release advice against a claim that
             # is now genuinely held.
             try:
-                current = claim_status(node_key).get("state")
+                current = claim_status_payload(node_key).get("state")
             except Exception:  # noqa: BLE001 - an unreadable probe keeps the first reading
                 current = state
             wedged = current == "suspect" and not in_launch_window
@@ -527,11 +548,11 @@ def _spawn_guard_decision(
     reservation_recovered = False
 
     def _reserve_dispatch_slot() -> None:
-        acquire_claim(
+        native_acquire(
             res_key,
             holder,
             reason=f"bg-dispatch reservation for {node_id}",
-            ttl_ms=_parse_ttl(ttl),
+            ttl_ms=parse_ttl_ms(ttl),
         )
 
     try:
@@ -614,8 +635,8 @@ def _spawn_guard_decision(
     # exact holder is observable on disk. A peer that won a visibility-lagged
     # race launches; this caller returns the durable duplicate receipt.
     try:
-        post = claim_status(res_key)
-    except Exception:  # pragma: no cover - claim_status never raises today
+        post = claim_status_payload(res_key)
+    except Exception:  # pragma: no cover - claim_status_payload never raises today
         post = {}
     if post.get("holder") != holder:
         return {
@@ -645,11 +666,11 @@ def _spawn_guard_decision(
         # turning a claim hiccup into a dead launch would trade a visibility bug
         # for an availability one.
         try:
-            acquire_claim(
+            native_acquire(
                 node_key,
                 handover_holder,
                 reason=f"spawn handover window for {node_id}",
-                ttl_ms=_parse_ttl(HANDOVER_TTL),
+                ttl_ms=parse_ttl_ms(HANDOVER_TTL),
             )
         except CLAIM_UNAVAILABLE as exc:
             # SOMEBODY ELSE HOLDS THE NODE, and that is not a hiccup. The
@@ -731,14 +752,14 @@ def _release_dispatch_claims(*claims) -> None:
     exact wedge this file exists to delete - so the no-op path names the key it
     failed to free instead of reporting the same nothing as success.
     """
-    from fno.claims.core import release_claim
+    from fno.rust_binary import native_release
 
     for pair in claims:
         if pair is None:
             continue
         key, holder = pair
         try:
-            release_claim(key, holder)
+            native_release(key, holder)
         except Exception as exc:  # noqa: BLE001 - must not mask the real error
             print(
                 f"WARNING: could not release {key} held by {holder} ({exc}); "
@@ -2231,7 +2252,7 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         guard_holder = f"spawn-cli:{os.getpid()}"
-        from fno.claims.cli import HANDOVER_HOLDER_PREFIX
+        from fno.rust_binary import HANDOVER_HOLDER_PREFIX
 
         # The worker's name is the whole proof. A bare `spawn-handover:` is a
         # string anyone can type, and naming it back is exactly what
@@ -2466,7 +2487,7 @@ def cmd_spawn(
             if pane_result.pane_observation is not None:
                 receipt_obj["pane_observation"] = pane_result.pane_observation
             if getattr(pane_result, "claim_store_writable", None) is False:
-                from fno.claims.io import claims_dir, global_claims_root
+                from fno.rust_binary import claims_dir, global_claims_root
 
                 receipt_obj["claim_store_writable"] = False
                 receipt_obj["claim_store_path"] = str(
