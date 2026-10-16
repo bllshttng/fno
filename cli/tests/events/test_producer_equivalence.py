@@ -211,7 +211,7 @@ def _drive_peer(repo: Path) -> None:
     )
     r = subprocess.run(
         ["bash", str(_CONSUME_PEER), str(verdict_file)],
-        cwd=repo, env=_base_env(), capture_output=True, text=True,
+        cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
 
@@ -456,7 +456,7 @@ def test_producer_emits_review_attestation_with_no_second_call(
         f"'{reviewer}' is named a producer at SKILL.md:112 but this test has no "
         "real-world driver for it - add one to _SURFACES, do not just widen the doc"
     )
-    if reviewer == "code-review" and _NEEDS_FRONT_SKIP:
+    if reviewer in ("code-review", "peer") and _NEEDS_FRONT_SKIP:
         pytest.skip(_FRONT_REASON)
     repo = _temp_git_repo(tmp_path)
     head = _head(repo)
