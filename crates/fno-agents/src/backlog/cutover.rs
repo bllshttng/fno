@@ -531,7 +531,7 @@ fn truthy(row: &Value, key: &str) -> bool {
 fn demand_rows(entries: &[&Value], board: &super::projections::Board) -> Vec<DemandRow> {
     let mut out: Vec<DemandRow> = Vec::new();
     for e in entries {
-        let voters = encounter_voters(e);
+        let voters = crate::backlog_ready::encounter_voters(e);
         if voters.is_empty() {
             continue;
         }
@@ -576,27 +576,6 @@ fn divergence_score(entry: &Value, weight: i64, voters: usize) -> i64 {
         weight *= 2;
     }
     voters as i64 * weight
-}
-
-fn encounter_voters(entry: &Value) -> std::collections::BTreeSet<String> {
-    let mut out = std::collections::BTreeSet::new();
-    for r in entry
-        .get("encounters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let key = r
-            .get("voter_key")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .or_else(|| r.get("session_id").and_then(Value::as_str))
-            .unwrap_or("");
-        if !key.is_empty() {
-            out.insert(key.to_string());
-        }
-    }
-    out
 }
 
 fn operator_voters(entry: &Value) -> std::collections::BTreeSet<String> {

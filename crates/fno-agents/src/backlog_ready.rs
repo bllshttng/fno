@@ -1063,9 +1063,14 @@ pub(crate) fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64)
         return true;
     }
     // An encounter inside the window is somebody saying this node cost them
-    // time recently (`demand.recent_encounter`).
+    // time recently (`demand.recent_encounter`). An outside vote is a
+    // visitor's signal, not the fleet's: it never counts as movement, by
+    // the same rule that keeps it out of demand ranking.
     if let Some(encounters) = entry.get("encounters").and_then(Value::as_array) {
         for r in encounters {
+            if r.get("voter_kind").and_then(Value::as_str) == Some("external") {
+                continue;
+            }
             let stamp = r.get("created_at").or_else(|| r.get("ts"));
             if let Some(ts) = stamp.and_then(parse_iso_ms) {
                 if days_between(now_ms, ts) <= staleness_days {
@@ -1402,13 +1407,19 @@ fn voter_key(record: &Value) -> String {
         .to_string()
 }
 
-fn encounter_voters(entry: &Value) -> BTreeSet<String> {
+/// The distinct ranking voters: every non-empty voter key except an outside
+/// vote. An external vote stays out of demand ranking, out of the board and
+/// selection order this score feeds, and keeps no row out of the stale
+/// drain (node_has_movement skips it by the same rule). cutover's
+/// demand_rows calls this shared body; its own copy is deleted.
+pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
     entry
         .get("encounters")
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
                 .filter(|r| r.is_object())
+                .filter(|r| r.get("voter_kind").and_then(Value::as_str) != Some("external"))
                 .map(voter_key)
                 .filter(|k| !k.is_empty())
                 .collect()
@@ -2095,6 +2106,53 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 #[cfg(test)]
 mod tests {
     // --- the hold reader (the contracts the Python ladder tests carried) ---
+
+    /// The ranking-and-drain rule for outside votes: one voter set, one
+    /// movement read, with and without the external records.
+    #[test]
+    fn an_outside_vote_counts_nowhere_in_ranking_or_the_stale_drain() {
+        let row = |encs: serde_json::Value| {
+            json!({
+                "id": "x-voted",
+                "encounters": encs,
+            })
+        };
+        let ranked = encounter_voters(&row(json!([
+            {"voter_key": "agent-a", "voter_kind": "agent"},
+            {"voter_key": "github:v1", "voter_kind": "external"},
+            {"voter_key": "github:v2", "voter_kind": "external"},
+        ])));
+        assert_eq!(ranked.len(), 1, "the two outside votes are one zero");
+        assert_eq!(ranked, BTreeSet::from(["agent-a".to_string()]));
+        assert_eq!(
+            encounter_voters(&row(
+                json!([{"voter_key": "agent-a", "voter_kind": "agent"}])
+            )),
+            ranked,
+            "the board order is the same with and without the outside votes"
+        );
+        let now_ms = parse_iso_ms("2026-10-16T00:00:00Z").unwrap_or(0);
+        let day = 86_400_000i64;
+        let recent = |voter_key: &str, voter_kind: &str| {
+            json!({
+                "id": "x-drain",
+                "encounters": [{
+                    "voter_key": voter_key,
+                    "voter_kind": voter_kind,
+                    "created_at": "2026-10-15T00:00:00Z",
+                }],
+            })
+        };
+        assert!(
+            !node_has_movement(&recent("github:v1", "external"), now_ms + day, 14),
+            "an outside vote keeps no row out of the stale drain"
+        );
+        assert!(node_has_movement(
+            &recent("agent-b", "agent"),
+            now_ms + day,
+            14
+        ));
+    }
 
     fn hold_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
