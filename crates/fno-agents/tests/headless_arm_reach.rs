@@ -34,13 +34,14 @@ fn client_bin() -> Option<PathBuf> {
     bin.exists().then_some(bin)
 }
 
-fn spawn_headless(bin: &PathBuf, harness: &str, path: String) -> Output {
+fn spawn_headless(bin: &PathBuf, harness: &str, path: String, extra: &[&str]) -> Output {
     Command::new(bin)
         .envs(fno_agents::test_run::self_owner_env())
         .args(["spawn", "reach-worker", "hello", "--harness", harness])
         .args(["--substrate", "headless"])
         .arg("--cwd")
         .arg(temp_dir("cwd"))
+        .args(extra)
         .env("FNO_SPAWN_GATE", "0")
         .env("FNO_E2E", "1")
         .env("FNO_AGENTS_HOME", temp_dir("home"))
@@ -70,7 +71,12 @@ fn pi_headless_runs_one_print_turn_and_returns_its_reply() {
     .unwrap();
     fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = spawn_headless(&bin, "pi", format!("{}:/usr/bin:/bin", bin_dir.display()));
+    let output = spawn_headless(
+        &bin,
+        "pi",
+        format!("{}:/usr/bin:/bin", bin_dir.display()),
+        &[],
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(0), "{stderr}");
@@ -89,12 +95,19 @@ fn footnote_headless_reaches_its_own_turn_loop() {
         eprintln!("skipping: fno-agents binary unavailable");
         return;
     };
-    let output = spawn_headless(&bin, "footnote", "/usr/bin:/bin".to_string());
+    // footnote's own arm demands -m (footnote_harness/mod.rs), so pass a bare
+    // model id: split_model names no provider, and with the endpoint envs
+    // scrubbed the loop refuses "no model endpoint" (endpoint.rs). A gate or a
+    // daemon fall-through would print a thread-lane or PTY-hosting refusal
+    // instead.
+    let output = spawn_headless(
+        &bin,
+        "footnote",
+        "/usr/bin:/bin".to_string(),
+        &["--model", "glm-5.3-flash"],
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // With no model endpoint configured, footnote's loop refuses by name. A
-    // gate or a daemon fall-through would print a thread-lane or PTY-hosting
-    // refusal instead.
     assert!(stderr.contains("no model endpoint"), "{stderr}");
     assert!(!stderr.contains("thread lane"), "{stderr}");
     assert!(!stderr.contains("PTY hosting"), "{stderr}");

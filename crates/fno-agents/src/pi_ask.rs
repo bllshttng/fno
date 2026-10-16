@@ -11,41 +11,12 @@
 //! reply, so [`parse_pi_stream`] reads the stream and the exit code is the
 //! second check.
 
-use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
 
-/// Ceiling for a one-shot turn when the caller passes no `--timeout`.
-const DEFAULT_PI_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// Stdout/stderr/exit triple returned to the client (each provider module
-/// owns its own nominal type).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AskOutcome {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-}
-
-impl AskOutcome {
-    fn ok_reply(reply: String) -> Self {
-        Self {
-            stdout: format!("{reply}\n"),
-            stderr: String::new(),
-            exit_code: 0,
-        }
-    }
-    fn err(msg: impl Into<String>, code: i32) -> Self {
-        Self {
-            stdout: String::new(),
-            stderr: format!("{}\n", msg.into()),
-            exit_code: code,
-        }
-    }
-}
+use crate::opencode_ask::{AskOutcome, DEFAULT_ONE_SHOT_TIMEOUT};
 
 /// A footnote verb seed (`/fno:verb`, either sigil) is a command, so it rides
 /// bare; a prose message keeps the `[from:]` envelope.
@@ -131,109 +102,6 @@ fn parse_pi_stream(stdout: &str) -> Result<String, String> {
     }
 }
 
-/// Last `n` (> 0) characters of `s`, for the stderr tail of a failed run.
-fn tail_chars(s: &str, n: usize) -> &str {
-    s.char_indices()
-        .rev()
-        .nth(n - 1)
-        .map_or(s, |(idx, _)| &s[idx..])
-}
-
-/// Drive one `pi` subprocess: stdin `/dev/null`, stdout teed to the worker log
-/// and parsed, stderr drained on a thread, the whole call bounded by the shared
-/// watchdog. Returns the reply, or `(exit_code, message)`.
-fn run_pi(
-    argv: &[String],
-    log_path: &Path,
-    timeout: Option<Duration>,
-    cwd: &Path,
-    agent_self: &str,
-) -> Result<String, (i32, String)> {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    let tee = crate::subprocess_ask::open_tee(log_path).ok();
-    let argv = crate::spawn_gate::qos_wrap(cwd, argv.to_vec());
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd.current_dir(cwd);
-    // pi resolves its project from $PWD, not the process cwd.
-    cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(agent_self), "pi", None);
-    // Own process group so SIGTERM/SIGKILL/SIGINT reach pi's subshells.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setpgid(0, 0);
-            Ok(())
-        });
-    }
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err((13, "pi binary not found on PATH".to_string()));
-        }
-        Err(e) => return Err((2, format!("OSError invoking pi: {e}"))),
-    };
-    let pid = child.id();
-    // RAII guard held for the whole function: do NOT discard to `_`.
-    let _sigint_guard = crate::subprocess_ask::SigintForwarder::install(pid);
-
-    let mut stdout_pipe = child.stdout.take().expect("stdout piped");
-    let stderr_pipe = child.stderr.take().expect("stderr piped");
-    let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let cap = stderr_buf.clone();
-    let stderr_handle = std::thread::spawn(move || {
-        let mut r = stderr_pipe;
-        let mut s = String::new();
-        let _ = r.read_to_string(&mut s);
-        if let Ok(mut g) = cap.lock() {
-            *g = s;
-        }
-    });
-
-    let mut watchdog = crate::subprocess_ask::AskWatchdog::spawn(pid, timeout);
-    let mut stdout_bytes: Vec<u8> = Vec::new();
-    let _ = stdout_pipe.read_to_end(&mut stdout_bytes);
-    let stdout_text = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    if let Some(mut fh) = tee {
-        let _ = fh.write_all(stdout_text.as_bytes());
-    }
-
-    watchdog.cancel();
-    let (exit_code, sigkill_escalated) =
-        crate::subprocess_ask::wait_with_grace(pid, &mut child, 5.0);
-    watchdog.join();
-    let _ = stderr_handle.join();
-    let stderr_text = stderr_buf.lock().map(|s| s.clone()).unwrap_or_default();
-
-    if crate::subprocess_ask::ask_interrupted() {
-        return Err((130, "interrupted".to_string()));
-    }
-    if watchdog.timed_out() || sigkill_escalated {
-        return Err((
-            12,
-            format!(
-                "pi --print timed out after {:.0}s",
-                timeout.unwrap_or(DEFAULT_PI_TIMEOUT).as_secs_f64()
-            ),
-        ));
-    }
-    if exit_code != 0 {
-        return Err((
-            exit_code,
-            format!(
-                "pi --print exited {exit_code}: {}",
-                tail_chars(stderr_text.trim(), 400)
-            ),
-        ));
-    }
-    parse_pi_stream(&stdout_text).map_err(|msg| (1, msg))
-}
-
 /// Orchestrate one `spawn --substrate headless --harness pi`: validate, check
 /// the registry (fail-closed) for a name collision, then run the turn.
 #[allow(clippy::too_many_arguments)]
@@ -286,9 +154,11 @@ pub fn dispatch_pi_once(
         .join("agents")
         .join("logs")
         .join(format!("{name}.jsonl"));
-    let timeout = timeout.or(Some(DEFAULT_PI_TIMEOUT));
-    match run_pi(&argv, &log_path, timeout, cwd, name) {
-        Ok(reply) => AskOutcome::ok_reply(reply),
+    let timeout = timeout.or(Some(DEFAULT_ONE_SHOT_TIMEOUT));
+    let run = crate::opencode_ask::run_one_shot("pi", &argv, &log_path, timeout, cwd, name)
+        .and_then(|stdout| parse_pi_stream(&stdout).map_err(|msg| (1, msg)));
+    match run {
+        Ok(reply) => AskOutcome::ok_reply(format!("{reply}\n")),
         Err((code, msg)) => {
             emit_event(
                 &events,
