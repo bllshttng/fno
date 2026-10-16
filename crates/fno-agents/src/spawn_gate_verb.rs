@@ -564,7 +564,18 @@ mod probe {
                 // The burst may still apply past the ceiling: fall through to
                 // the machine rows when the memory axis is on and the fleet
                 // has settled. Refuse at the ceiling otherwise, naming the
-                // burst word that held it.
+                // burst word that held it. The floor check comes first, so a
+                // floor-off refusal reads nothing it will not use.
+                if floor_gb <= 0.0 {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": "memory_off"}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
                 let newest = crate::spawn_gate_slots::newest_slot_age_s(
                     &slot_row_entries,
                     &slot_reservations,
@@ -576,11 +587,9 @@ mod probe {
                     newest,
                     Some(s) if s >= crate::spawn_gate_slots::BURST_SETTLE.as_secs()
                 );
-                if !settled || floor_gb <= 0.0 {
+                if !settled {
                     let top = crate::spawn_gate_slots::at_ceiling(&learned);
-                    let word = if floor_gb <= 0.0 {
-                        "memory_off"
-                    } else if newest.is_none() {
+                    let word = if newest.is_none() {
                         "settle_unread"
                     } else {
                         "settling"
