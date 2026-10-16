@@ -79,8 +79,8 @@ A dispatch that was sent and never answered used to read as "never asked": the g
 
 ## Where the code lives
 
-- The producer-side classifier: `cli/src/fno/review/findings.py`.
-- The gate-side re-derivation and the four states: `crates/fno-agents/src/loopcheck/coverage_gate.rs` (the Python leg retired with the coverage-gate port).
+ - The producer-side classifier: `crates/fno-agents/src/review_findings.rs`.
+ - The gate-side re-derivation and the four states: `crates/fno-agents/src/loopcheck/coverage_gate.rs` (the Python gate leg retired with the coverage-gate port).
 - The freshness predicate and its interdiff-carry arm: `crates/fno-agents/src/review_freshness.rs`.
 - The Rust gate twin (tiling, dispositions, rounds, human approvals): `crates/fno-agents/src/loopcheck.rs`.
 - The settle sweep: `cli/src/fno/review/invocation.py`.

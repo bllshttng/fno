@@ -1380,6 +1380,35 @@ pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
     .unwrap_or(true)
 }
 
+/// Resolve `[auto_merge] remediation` (default `attempt`). The only other
+/// legal value is `verify_only`, which the verify verb's remediation arm
+/// refuses on; anything else coerces to `attempt`, exactly the Python
+/// validator's stance - a config error never grants a merge attempt.
+pub fn auto_merge_remediation(cwd: &Path) -> String {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("remediation")?
+            .as_str()
+            .map(|s| s.trim().to_string())
+    })
+    .filter(|v| matches!(v.as_str(), "attempt" | "verify_only"))
+    .unwrap_or_else(|| "attempt".to_string())
+}
+
+/// Resolve `[auto_merge] delete_branch_on_merge` (default ON). The verify
+/// remediation's post-merge cleanup reads the same switch the merge verb does,
+/// so both executors treat cleanup identically.
+pub fn auto_merge_delete_branch_on_merge(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("delete_branch_on_merge")?
+            .as_bool()
+    })
+    .unwrap_or(true)
+}
+
 /// The normalized raw scalar for a direct child of `agents:`, so each caller
 /// applies its own coercion.
 pub(crate) fn resolve_agents_value(cwd: &Path, key: &str) -> Option<String> {

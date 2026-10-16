@@ -23,9 +23,22 @@ fn the_argv_surface_parses_and_refuses() {
     ] {
         assert!(classify(&oss(&sibling)).is_none());
     }
-    // Defaults: the whole run, both layers, no flags.
+    // Defaults: the whole run, both layers, no flags, no preview.
     let o = parse_opts(&oss(&[])).unwrap();
-    assert!(!o.yes && !o.once && !o.list && !o.json && o.only.is_empty());
+    assert!(
+        !o.yes
+            && !o.once
+            && !o.list
+            && !o.json
+            && !o.dry_run
+            && !o.scan
+            && o.scan_dirs.is_empty()
+            && o.only.is_empty()
+            && !o.export
+            && o.out.is_none()
+            && o.join.is_none()
+            && !o.check
+    );
     assert_eq!(o.scope, Scope::Both);
     // Every flag reads.
     let o = parse_opts(&oss(&[
@@ -37,9 +50,23 @@ fn the_argv_surface_parses_and_refuses() {
         "gh-auth,backlog-prefix",
         "--list",
         "--json",
+        "--dry-run",
+        "--check",
+        "--scan-repos",
+        "--scan-dirs",
+        "code,src",
+        "--export",
+        "--out",
+        "profile.toml",
+        "--join",
+        "-",
     ]))
     .unwrap();
-    assert!(o.yes && o.once && o.list && o.json);
+    assert!(o.yes && o.once && o.list && o.json && o.dry_run && o.scan && o.check);
+    assert!(o.export);
+    assert_eq!(o.out.as_deref(), Some("profile.toml"));
+    assert_eq!(o.join.as_deref(), Some("-"));
+    assert_eq!(o.scan_dirs, vec!["code".to_string(), "src".to_string()]);
     assert_eq!(o.scope, Scope::Global);
     assert_eq!(o.only, vec!["gh-auth", "backlog-prefix"]);
     // Refusals: unknown flag, unknown scope, missing values.
@@ -47,6 +74,8 @@ fn the_argv_surface_parses_and_refuses() {
     assert!(parse_opts(&oss(&["--scope", "side"])).is_err());
     assert!(parse_opts(&oss(&["--scope"])).is_err());
     assert!(parse_opts(&oss(&["--only"])).is_err());
+    assert!(parse_opts(&oss(&["--join"])).is_err());
+    assert!(parse_opts(&oss(&["--out"])).is_err());
 }
 
 #[test]
@@ -76,6 +105,24 @@ fn step_selection_offers_both_layers_and_filters() {
     }
     assert!(STEPS.iter().any(|s| s.layer == Layer::Global));
     assert!(STEPS.iter().any(|s| s.layer == Layer::Project));
+    // The service and report rows: the approve gate owns the first five's
+    // proposals, the last two only ever report.
+    for id in [
+        "pr-watcher",
+        "auto-heal",
+        "groom-agent",
+        "projects",
+        "review-merge",
+    ] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Approve && s.layer == Layer::Global));
+    }
+    for id in ["machine-tools", "permission-rules"] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Report && s.layer == Layer::Global));
+    }
     // --only selects known ids and refuses unknown ones.
     let mut opts = Opts::default();
     opts.only = vec!["gh-auth".into(), "backlog-prefix".into()];
@@ -85,6 +132,21 @@ fn step_selection_offers_both_layers_and_filters() {
     assert!(select_steps(&bad, Path::new("."))
         .unwrap_err()
         .contains("no-such-step"));
+    // The join lane: out of the default pool, so a plain run never sees
+    // it; an explicit `--only join` without --join refuses, naming the
+    // flag; with the file, the lane selects alone, as an approve-kind
+    // global.
+    let mut join_opts = Opts::default();
+    join_opts.only = vec!["join".into()];
+    assert!(select_steps(&join_opts, Path::new("."))
+        .unwrap_err()
+        .contains("--join"));
+    join_opts.join = Some("-".into());
+    let selected = select_steps(&join_opts, Path::new(".")).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, "join");
+    assert_eq!(selected[0].kind, Kind::Approve);
+    assert_eq!(selected[0].layer, Layer::Global);
     // A global scope never carries project or contributor rows.
     let mut global = Opts::default();
     global.scope = Scope::Global;
@@ -92,11 +154,16 @@ fn step_selection_offers_both_layers_and_filters() {
         .unwrap()
         .iter()
         .all(|s| s.layer == Layer::Global));
+    // Every kind renders its stable name, approve included.
+    assert_eq!(kind_name(Kind::Act), "act");
+    assert_eq!(kind_name(Kind::Approve), "approve");
+    assert_eq!(kind_name(Kind::Report), "report");
+    assert_eq!(kind_name(Kind::Human), "human");
 }
 
 #[test]
 fn the_report_shape_and_wire_fold_hold() {
-    // The JSON report carries exactly the five fields an agent parses.
+    // The JSON report carries exactly the fourteen fields an agent parses.
     let mut rep = Report::default();
     rep.done
         .push("harness-wiring: Claude Code: installed".into());
@@ -107,10 +174,28 @@ fn the_report_shape_and_wire_fold_hold() {
     rep.restart_needed = true;
     let v = rep.to_json();
     let keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
-    assert_eq!(keys.len(), 5);
-    for k in ["done", "skipped", "needs_human", "paths", "restart_needed"] {
+    assert_eq!(keys.len(), 14);
+    for k in [
+        "schema",
+        "run_id",
+        "host",
+        "status",
+        "done",
+        "skipped",
+        "needs_human",
+        "paths",
+        "restart_needed",
+        "undo",
+        "proposed",
+        "verified",
+        "rows",
+        "next_action",
+    ] {
         assert!(keys.contains(&k), "missing {k}");
     }
+    assert_eq!(v["schema"], json!(1));
+    assert_eq!(v["host"], "agent");
+    assert_eq!(v["status"], "finished");
     assert_eq!(v["restart_needed"], true);
     // Wire lines fold by their status words: an install is done plus a
     // restart ask, already-installed is done without one, and a manual
@@ -132,11 +217,72 @@ fn the_report_shape_and_wire_fold_hold() {
     assert_eq!(rep.needs_human.len(), 2);
     assert_eq!(rep.skipped.len(), 1);
     assert!(rep.restart_needed, "a fresh install must ask for a restart");
+    // Every blocking wire line carries a stable code, its fix, and the
+    // needs_human list, in line order.
+    let codes: Vec<&str> = rep.rows.iter().map(|r| r.code).collect();
+    assert_eq!(codes, vec!["wiring_manual", "wiring_failed"]);
+    assert!(rep.rows.iter().all(|r| !r.fix.is_empty()));
+    assert!(rep.rows.iter().all(|r| r.list == "needs_human"));
     let mut rep = Report::default();
     fold_wire_line("  Codex CLI: already installed", &mut rep);
     assert!(
         !rep.restart_needed,
         "an already-installed line changed nothing"
+    );
+    // The dry-run envelope: seven keys, the first red row's fix as the
+    // next action, the fallback when nothing blocks, and `services`
+    // lifted out of detection (absent here, so null).
+    assert!(!run_id().is_empty());
+    assert!(CODES.iter().any(|(c, _)| *c == "gh_not_signed_in"));
+    let rows = vec![row("needs_human", "gh_not_signed_in", "sign in".into())];
+    assert_eq!(next_action(&rows, "fallback"), "gh auth login");
+    assert_eq!(next_action(&[], "fallback"), "fallback");
+    let proposed = vec![Proposal {
+        id: "concurrency-band",
+        key: "agents.max_live".into(),
+        value: "4".into(),
+        scope: "global",
+        reason: "the measured band".into(),
+        source: "sample",
+    }];
+    let body = dry_run_json(json!({}), &proposed, &rows, &["sign in".into()], "fallback");
+    let keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(keys.len(), 8);
+    for k in [
+        "detected",
+        "proposed",
+        "services",
+        "needs_human",
+        "key_gap",
+        "rows",
+        "verified",
+        "next_action",
+    ] {
+        assert!(keys.contains(&k), "missing {k}");
+    }
+    assert_eq!(body["key_gap"], json!(1));
+    assert_eq!(body["next_action"], "gh auth login");
+    assert!(body["services"].is_null());
+    let body = dry_run_json(json!({}), &[], &[], &[], "fallback");
+    assert_eq!(body["next_action"], "fallback");
+    assert_eq!(body["key_gap"], json!(0));
+    // The three join codes are reportable, and `undo` rides the report:
+    // null until a join sets it, then the restore hint round-trips.
+    for code in ["join_backup_failed", "join_restored", "join_pending"] {
+        assert!(CODES.iter().any(|(c, _)| *c == code), "missing {code}");
+        assert_eq!(row("needs_human", code, "fix".into()).code, code);
+    }
+    assert!(Report::default().to_json()["undo"].is_null());
+    let mut rep = Report::default();
+    rep.undo = Some("undo: cp /b/config.toml.x /g/config.toml".into());
+    assert_eq!(
+        rep.to_json()["undo"],
+        "undo: cp /b/config.toml.x /g/config.toml"
     );
 }
 
@@ -172,10 +318,21 @@ fn markers_name_owned_dirs_and_stamp_iso() {
 
 #[test]
 fn the_recommendation_shapers_hold() {
-    // The repo name shapes into a <=7-char lowercase prefix.
-    assert_eq!(slug_prefix(Path::new("/tmp/My-Repo_X")), "myrepox");
-    assert_eq!(slug_prefix(Path::new("/home/x/footnote")), "footnot");
-    assert_eq!(slug_prefix(Path::new("/")), "");
+    // The band-clause parser is the one both hosts share: the integer
+    // after `budget max_live`, nothing else.
+    assert_eq!(
+        crate::setup_detect::parse_budget_clause("x · budget max_live 4 (2 leads + 2 workers)"),
+        Some(4)
+    );
+    assert_eq!(
+        crate::setup_detect::parse_budget_clause("no clause here"),
+        None
+    );
+    // The guardrail proposal: the shipped default already reads standard,
+    // so it never proposes (deterministic - the example ships compiled in).
+    let mut skips = Vec::new();
+    assert!(propose_guardrails(&mut skips).is_none());
+    assert_eq!(skips, vec!["guardrails: guards.preset already standard"]);
     // A footnote checkout is the fno crate manifest under crates/.
     let dir = std::env::temp_dir().join(format!("fno-setup-run-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -196,4 +353,55 @@ fn once_needs_every_covered_layers_marker() {
     assert!(!all_markers_present_in(Scope::Project, true, false));
     assert!(all_markers_present_in(Scope::Both, true, true));
     assert!(!all_markers_present_in(Scope::Both, true, false));
+}
+
+/// The check-side helpers hold without a platform: the step outcome reads
+/// from the slices this pass appended to, a proposal token parses bare or
+/// quoted, the drift word spells strings bare, and the workspace-list
+/// reader passes a missing key and a real array through while refusing
+/// every hand-set non-array.
+#[test]
+fn the_check_side_helpers_parse_and_refuse() {
+    // An explicit skip beats done: the step's own words carry the reason.
+    let declined = ["join: declined".to_string()];
+    let (kind, reason) = step_outcome("join", &["join: restored".to_string()], &declined);
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("declined"));
+    // Done without a skip is a done step; nothing at all is blocked.
+    let (kind, reason) = step_outcome("gh-auth", &["gh-auth: signed in".into()], &[]);
+    assert_eq!(kind, "done");
+    assert_eq!(reason, None);
+    let (kind, reason) = step_outcome("gh-auth", &[], &[]);
+    assert_eq!(kind, "blocked");
+    assert_eq!(reason, None);
+    // A skip line that never carried the prefix stays whole.
+    let no_prefix = ["no prefix".to_string()];
+    let (kind, reason) = step_outcome("x", &[], &no_prefix);
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("no prefix"));
+    // Numbers read bare; bare words read after the Rust quote fallback; a
+    // token neither form reads (a control char breaks bare text and the
+    // \u{7} debug spelling TOML never accepts alike) answers None.
+    assert_eq!(proposal_token("3"), Some(toml::Value::Integer(3)));
+    assert_eq!(
+        proposal_token("standard"),
+        Some(toml::Value::String("standard".into()))
+    );
+    assert_eq!(proposal_token("a\u{7}b"), None);
+    // The workspace-list reader passes a missing key and a real array
+    // through and refuses every other hand-set shape, so setup never
+    // overwrites a hand-set value with its own array.
+    assert!(projects_rows(None).unwrap().is_empty());
+    let array = toml::Value::Array(vec![toml::Value::String("stale".into())]);
+    assert_eq!(projects_rows(Some(&array)).unwrap().len(), 1);
+    for bad in [
+        toml::Value::String("my-dir".into()),
+        toml::Value::Integer(3),
+        toml::Value::Table(toml::map::Map::new()),
+    ] {
+        assert!(projects_rows(Some(&bad)).is_err());
+    }
+    // The drift word spells strings bare and keeps TOML's other forms.
+    assert_eq!(value_word(&toml::Value::String("fn".into())), "fn");
+    assert_eq!(value_word(&toml::Value::Boolean(true)), "true");
 }

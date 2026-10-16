@@ -106,6 +106,7 @@ run_init() {
         env TARGET_START=1 TARGET_SESSION_ID=review-gate-test-session \
             CLAUDE_PLUGIN_ROOT="$REPO_ROOT" HOME="$home" \
             FNO_TEST_SPACE="$cwd/space" \
+            FNO_AGENTS_BIN="$STUB_BIN/fno-agents" \
             PATH="$STUB_BIN:$PATH" "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?

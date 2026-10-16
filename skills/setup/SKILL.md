@@ -1,269 +1,64 @@
 ---
 name: setup
-description: Configure Footnote settings through the schema-driven setup wizard.
+description: Set up a machine for Footnote by launching the interactive setup wizard and reading its report.
 ---
 
-# Setup Wizard
+# Setup
 
-Creates / updates `config.toml` by asking only the handful of decisions that
-genuinely vary per project, then writing each answer through the validated
-`fno config set` path. Everything else is defaulted by the model.
+Setup is `fno do wizard`, an interactive terminal program. It detects the machine, measures a concurrency band, probes each harness and model, and writes the config in one grouped apply. This skill launches the wizard and reads the report. It asks no setup question itself.
 
-**Single source of truth.** This skill does NOT hardcode a question
-list. It asks `fno` for the questions, so the wizard can never drift from the
-schema and can never write a key that does not exist:
+## Launch inside the mux
+
+When `FNO_PANE` is set, open a split beside this pane and run the wizard there:
 
 ```bash
-fno config setup plan              # the ~4-6 "always" decisions, as JSON
-fno config setup plan --advanced   # also the "advanced" tier
+fno mux pane run --at current --split right --json -- fno do wizard
 ```
 
-Each emitted field carries `{path, type, default, tier, question, default_source, doc}`.
+Keep the pane id from the receipt. Tell the person the wizard is in the split and that they answer there. Wait for the run to end:
+
+```bash
+fno mux pane wait <pane> --pattern 'wizard-report: ' --timeout 1800
+```
+
+`fno mux pane read <pane>` shows the wizard screens when the person asks what it shows. `fno mux pane send <pane> --text <key> --raw` types one key. Send a key only when the person asks for that exact answer, never to pick for them.
+
+## Launch outside the mux
+
+A session with no pane cannot host a terminal program. Print the command for the person to run in their own terminal:
+
+```
+fno do wizard
+```
+
+Do steps "Read the report" and "Say the result" below when they say the run is done.
+
+## No person at all
+
+An unattended machine cannot answer the wizard. Run the batch probe and report it:
+
+```bash
+fno config setup run --dry-run --json
+```
+
+Apply nothing of kind `approve`. An approve needs a person.
+
+## Read the report
+
+The run writes `<state_dir>/sidecar/wizard-report.json` and prints `wizard-report: <path>` as its last line. Check two things before you speak for the run: `run_id` is newer than your launch, and `status` is not `running` (a run writes a running stub first and the final report over it). Then say three things: the red rows with their fix, the files written, and `next_action`.
 
 ## Modes
 
-| Command | Layers asked | Questions |
-|---------|--------------|-----------|
-| `/setup` | global + project (always both) | the one step table (`fno config setup run --list --json`) |
-| `/setup advanced` | both | the step table plus the advanced config tier (`fno config setup plan --advanced`) |
-
-There is no `/setup local` and no choose-one: both layers run in one pass, and setup writes only keys whose value differs from the default. There is also no hand-maintained question table: the step table lives in `fno config setup run`, and the advanced config tier still comes from the schema walker.
-
-## Dependency matrix
-
-Each dependency, who needs it, what breaks without it, and how setup gets it:
-
-| Dependency | Who needs it | Breaks without it | How setup covers it |
-|------------|--------------|-------------------|---------------------|
-| bash, curl, the plugin tree | everyone | nothing installs | always present; the zero-binary `bootstrap.sh` reports the gaps |
-| uv | everyone (release path) | no `fno` CLI at all | `scripts/install/fno.sh ensure_uv` installs it, then the wheel with prebuilt binaries |
-| the `fno` wheel + Rust binaries | everyone | every verb | the installer provisions both; `harness-wiring` runs right after |
-| `gh` auth | PR work only | no PR, review, or merge: local-only (plan, build, commit) | `gh-auth` probes `gh auth status`; a miss lands in `needs_human` because login opens a browser |
-| harness CLIs (claude, codex, ...) | whoever uses them | that harness gets no `/fno:*` commands | `harness-wiring` wires each CLI found on PATH and names every outcome |
-| cargo + the crates | contributors only | no source builds (release users never need it) | the three `contributor` steps are `report`: they print the commands, never run them |
-
-## Step -1: the CLI itself
-
-Run `command -v fno`. A failure means the footnote CLI is not installed, and every step below fails with it. Tell the user what the installer does, then ask. It installs uv from astral.sh, which edits the shell profile. Then it installs the `fno` package from PyPI into the tool bin directory. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"` and let it finish. Output ending `installer exit 0` means done. Cap the wait at 5 minutes. A non-zero exit line is a failed install: report the output tail to the user and stop. Never run any install without the user's yes. The session-start hook never installs anything itself.
-
-## Step 0: Get the step table
-
-```bash
-fno config setup run --list --json
-```
-
-Each step carries `{id, layer (global|project|contributor), kind (act|report|human), question, effect}`. `act` steps can write config through `fno config set`. `report` steps only ever print a command. `human` steps need a person at a browser. Both layers are always offered: there is no global-or-project choice any more.
-
-## Step 1: Ask, then run
-
-For each `act` step, ask the user its `question`, naming the `effect` (an AskUserQuestion choice, `Accept` / `Keep default`). Collect every accepted id. `report` and `human` steps are never asked. Their text relays as-is.
-
-Then run the accepted steps in one pass, no-prompt:
-
-```bash
-fno config setup run --yes --only <accepted-ids-comma-separated> --json
-```
-
-Relay the JSON report verbatim: `done`, `skipped`, `needs_human`, `paths` (absolute), `restart_needed`. A `needs_human` row is a real blocker for that step (gh login opens a browser). Do not silently retry it. Do not summarize it away. When nothing needs a human, the run writes a done marker per layer. A later `--once` never papers over a blocked step.
-
-The config detail questions (a value, not a yes/no: the Obsidian vault name, the project vision) still come from the schema plan:
-
-```bash
-fno config setup plan              # the ~4-6 "always" decisions, as JSON
-fno config setup plan --advanced   # /setup advanced adds this tier
-```
-
-Before asking, read each field's current value from the target file (`fno config get <path>`). A field with a present, valid value uses it as the pre-filled answer, so only missing consequential choices are asked fresh. For each remaining field, ask using its `question` text. Use the `default` and `default_source` as an inference hint:
-
-- `repo-slug`  -> default from `basename $(git rev-parse --show-toplevel)`.
-- `readme`     -> infer a one-line vision from the README's first paragraph.
-- `auto-detect`-> detect from the repo (vault name, workspace topology).
-
-Today the `always` set is small. It covers Obsidian on/off (plus vault name), project vision, backlog id_prefix, external reviewer(s), and auto-merge on/off. The plan is the whole scalar question set. The only questions outside it are the two named exceptions below - the Step 2b review gate and the Step 3 workspace topology map.
-
-Question pages need no setup: the attention arm writes one page per open question to the vault's questions folder whenever it beats. See [attention-items](../../docs/architecture/attention-items.md).
-
-## Step 2: Write each answer through `fno config set`
-
-Write the GLOBAL scope by default; pass `--local` to pin a value to this repo's `.fno/config.toml` (the project layer):
-
-```bash
-fno config set <path> <value>            # global
-fno config set <path> <value> --local    # project layer
-```
-
-`fno config set` coerces and schema-validates the value, then writes atomically
-under a lock. Type handling:
-
-- **bool**: `true` / `false`.
-- **int**: a bare number.
-- **list** (e.g. `config.review.external_reviewers`): a comma-separated string
-  (`gemini,codex`) or a JSON array (`["gemini","codex"]`). An empty value is an
-  empty list (external review disabled).
-- **string**: as typed.
-
-A rejected value (e.g. a reserved `id_prefix` like `tgt-`, or a length/charset violation) exits non-zero and leaves the file unchanged. Re-prompt and retry. NEVER hand-write a scalar leaf to bypass validation. The one sanctioned exception is the Step 3 `config.work` structural map, validated by `fno config doctor` immediately after.
-
-Example writes:
-
-```bash
-fno config set config.obsidian.enabled true
-fno config set config.obsidian.vault myvault
-fno config set config.project.vision "A footnote-style delivery pipeline."
-fno config set config.backlog.id_prefix myproj      # normalized; reserved families rejected
-fno config set config.review.external_reviewers gemini,codex
-fno config set config.auto_merge.enabled false
-```
-
-## Step 2b: Review gate (how a PR is allowed to go green)
-
-`fno config setup plan` asks about `config.review.external_reviewers` (which logins to *request* and *recognize*). The GATE - what `fno-agents loop-check` REQUIRES before `/target` promises - lives in three `advanced`-tier keys the default plan does not surface. Most users never learn the bot-less options exist. Offer the choice explicitly. Default = none / PR + CI only. These are additive - a repo can require both a bot AND a local review-lane pass:
-
-> "How does review gate a PR before `/target` considers it done?
->  1. **GitHub App bots** - a bot login (e.g. `chatgpt-codex-connector`) must post a review. Needs the bot installed on the repo.
->  2. **Local attestation** - `/target` runs the owned `/fno:review` lane in-session and attests on a clean pass; no GitHub bot needed. Best for a solo / claude-only harness. (`declare` is a bare 'I looked' self-cert, not a review - offer it only as an escape hatch.)
->  3. **CLI peers** - a codex/gemini CLI posts a real PR review under a distinct machine account.
->  4. **None** - PR + CI only (default)."
-
-Map the answer to keys and write them (use `--local` for a per-repo gate; global otherwise). `/target` runs whatever you set here before it promises - so a `reviewers`/`peers` gate always has a producer and never hangs the loop:
-
-```bash
-# 1. GitHub bots (the gate list, distinct from external_reviewers)
-fno config set config.review.github_apps chatgpt-codex-connector --local
-# 2. Local attestation (code-review = the owned fno review lane; declare = self-cert escape hatch)
-fno config set config.review.reviewers code-review --local      # or: declare
-# 3. CLI peers (also set the identity the review posts under + its PAT env var)
-fno config set config.review.peers codex --local
-fno config set config.review.peer_identity fno-peer-bot --local
-fno config set config.review.peer_token_env GH_PEER_TOKEN --local
-```
-
-Leaving all three empty keeps today's PR + CI-only behavior.
-
-## Step 2c: Test command and guardrail preset (what this project wants guarded)
-
-Ask for the project's own test command and write the existing key, then note whether `.github/workflows` exists (CI is the enforcement backstop either way):
-
-```bash
-fno config set worktree.test_command "<the command>" --local
-```
-
-Then offer the guardrail preset: how many of footnote's own incident guards this project inherits. One line each:
-
-> 1. **strict** - every gatable guard on, including the ones built from footnote fleet incidents (recursive grep, raw test runs, binary installs, background processes).
-> 2. **standard** (default) - keeps the two destructive-write guards (pipe exit-hiding, git protection) and turns the four fleet-incident guards off.
-> 3. **off** - none of the gatable guards; the state-integrity guards (graph write protection and friends) stay on in every preset.
-
-Write the answer to the project config (the reader prefers `FNO_GUARD_PRESET`, then this key):
-
-```bash
-fno config set guards.preset <strict|standard|off> --local
-```
-
-## Step 2d: Concurrency budget
-
-Run `fno agents status` and read the `budget max_live` clause on the machine line. The number is a guess: memory headroom and cores divided by the measured per-session cost, or the band defaults when no session rows exist yet.
-
-Ask the user whether to write it as the cap. On yes:
-
-```bash
-fno config set agents.max_live <n> --local
-```
-
-The leads/workers split in the clause is guidance; no config key caps leads. With no machine sample yet, say the daemon files the same question in the mux sideline questions block within five minutes, and skip the write.
-
-## Step 3: Workspace / project topology (`config.work.workspaces`)
-
-The `config.work` map (workspace -> projects[]) is topology, not a scalar leaf, so it is not asked via `fno config setup plan`. When setting up a workspace, auto-detect the current project and confirm it:
-
-```bash
-NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
-# detect type/stack/package_manager from package.json / pyproject.toml / Cargo.toml / go.mod
-```
-
-Show a one-shot summary (name, path, type, stack, package manager) and confirm.
-Offer to add related projects in the same workspace (loop, auto-detecting each).
-This block is written as a single `config.work.workspaces.<slug>` map; if `fno
-config set` cannot express the nested list in one call, write the `config.work`
-block directly to the target settings file (it is the one structural
-exception), then re-run `fno config doctor` to confirm it validates. The `name`
-field under each project is the cross-project routing identity (what `fno agents mail
---to-project <name>` uses); it is distinct from `config.project.id`.
-
-## Step 4: Post-merge parking-lot (per repo)
-
-The post-merge ritual needs a repo-relative parking-lot path that is NOT derived
-from the project name (the vault area often differs). Delegate to the dedicated
-scaffold rather than guessing:
-
-```bash
-fno config setup post-merge
-```
-
-## Step 4b: Offer global shell integration (OPTIONAL, consent-gated)
-
-The mux (`fno mux`) auto-injects OSC 133 command-block markers into the shells
-IT spawns (`config.mux.shell_integration: mux-panes`, on by default), so blocks
-"just work" in mux panes with zero config and WITHOUT touching the user's rc.
-
-Blocks in the user's OTHER terminals (iTerm, Terminal.app, a non-mux tab) need
-the markers too, and the same eval line registers shell completion for the
-native `fno` command tree (tab completion falls back to the shell default for
-the roots that still forward to Python). Offer to add ONE eval line to their
-shell rc - never silently, always reversible:
-
-```bash
-# Detect their shell, then OFFER (ask [y/N], default no):
-#   "Add OSC 133 block markers and fno shell completion to your global <zsh|bash>
-#    rc so blocks and completion work in every terminal, not just mux panes?
-#    This appends one commented line to ~/.zshrc (or ~/.bashrc). [y/N]"
-# On y ONLY, append (idempotent - skip if _FNO_OSC133 already present):
-grep -q _FNO_OSC133 ~/.zshrc 2>/dev/null || {
-  printf '\n# fno OSC 133 block markers + shell completion (remove this line + the next to undo)\n' >> ~/.zshrc
-  echo 'eval "$(fno mux shell-init zsh)"' >> ~/.zshrc
-}
-```
-
-Never edit the global rc without an explicit yes. `off` in `config.mux.shell_integration`
-disables the mux-pane injection too; the manual `fno mux shell-init` eval always works.
-
-Show the resulting config and validate:
-
-```bash
-fno config doctor
-fno config get config.review.external_reviewers
-fno doctor --blockers
-```
-
-`fno config doctor` checks your paths. `fno doctor --blockers` checks this machine: stale install, dead LaunchAgents, low open-file limit, and the other findings that make the fleet misbehave. Relay its lines to the user verbatim. Do not summarize them away. A blocker is exactly the thing a new user needs to see and act on.
-
-For the full, generated reference of every key (type, default, doc), point the user at `docs/configuration-guide.md` (regenerated by `fno config schema --markdown`).
-
-## What this wizard does NOT write
-
-The following legacy keys are gone: `external_reviewer` (singular -
-use the `external_reviewers` list), `budget_cap`, `commit_style`, `profile`,
-`default_size`, `docs.*`, `schema_sources.*`, `linear.*`, `expertise`,
-`plans.full_path`. They are not in the schema, so the wizard cannot write them.
-A CI guard (`cli/tests/test_config_schema_drift.py`) fails the build if the
-wizard ever surfaces a key that is not a real model leaf.
-
-## Companions (RTK)
-
-If RTK is detected (e.g. `~/code/dotfiles/bin/rtk-claude-hook.sh`), note that it
-is already wired and do NOT run `rtk init -g` (it would double-wire). This is
-informational only; it is not a `config.toml` key.
-
-## Companions (code index)
-
-When the repo has a code index, a blueprint asks it before it searches. footnote ships no indexer and never installs one. From the repo root, run `bash "${SKILL_DIR}/scripts/lib/code-index-detect.sh"`. It prints one line per index it finds: the name, the roles, `ready` or `unavailable:<reason>`, and the manifest path.
-
-- A `ready` line: tell the user a blueprint will ask that index. Read the `refresh` line in its manifest and name it as the command that keeps the index current. Do not run it.
-- An `unavailable` line: the index exists, but its CLI is not on PATH. Name the reason. A blueprint records the index as unavailable and continues.
-- No line: tell the user a blueprint works without an index. Name codegraph for code and graphify for docs as examples they can install. For a provider of their own, link [code-index-providers.md](../../docs/code-index-providers.md).
-
-This is informational only. It writes no `config.toml` key.
+| Invocation | Effect |
+|------------|--------|
+| `/setup` | launch `fno do wizard` |
+| `/setup join <file>` | launch with `--join <file>`: apply a profile exported on another machine |
+| `/setup check` | run `fno config setup run --check --json` and show the drift with each fix |
+
+## The keys the wizard does not ask
+
+For the advanced config tier and the post-merge parking lot, `fno config setup plan --advanced` and `fno config setup post-merge` remain the verbs.
 
 ## Known Limitations and Deferred Work
 
-- New policy waits for a shipped schema field. See [LIMITATIONS.md](LIMITATIONS.md).
+- The wizard needs a terminal on stdin, and an approve-kind step always waits for a person. See [LIMITATIONS.md](LIMITATIONS.md).

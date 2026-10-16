@@ -205,6 +205,7 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
 pub mod git_paths;
 #[cfg(test)]
@@ -241,7 +242,6 @@ pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
 pub mod lanes;
-pub mod launch_exec;
 pub mod launch_record;
 pub mod launch_workdir;
 pub mod law_match;
@@ -346,6 +346,7 @@ pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
 pub(crate) mod owner_ladder;
+pub mod pane_claim;
 pub mod pane_keeper;
 pub mod pane_rebind;
 pub mod pane_relaunch;
@@ -365,10 +366,13 @@ pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
 pub mod pr_admission;
+pub mod pr_base_check;
 pub mod pr_body_check;
 pub mod pr_create;
+pub mod pr_door;
 pub mod pr_draft_ready;
 pub mod pr_list;
+pub mod pr_merge_result;
 pub mod pr_nudge;
 pub mod pr_park;
 pub mod pr_push;
@@ -376,6 +380,7 @@ pub mod pr_rebase;
 pub mod pr_status;
 pub mod pr_status_facts;
 pub mod pr_steward;
+pub mod pr_verify;
 pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
@@ -423,6 +428,7 @@ pub mod resume_wake;
 pub mod retask;
 pub mod review_capability;
 pub mod review_doors;
+pub mod review_findings;
 pub mod review_freshness;
 pub mod review_level;
 pub mod review_policy;
@@ -511,6 +517,11 @@ pub mod supervisor;
 pub mod surface_check;
 pub mod sync_canonical;
 pub mod system_sender;
+pub mod target_blast;
+pub mod target_denominator;
+pub mod target_init;
+pub mod target_orient;
+pub mod target_start;
 pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
@@ -1127,11 +1138,14 @@ mod tests {
         let mut scanned_calls = 0usize;
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            // Production code only: truncate at the first `#[cfg(test)]` marker.
-            // Tests live at the bottom by Rust convention, so test fixtures like
-            // `.emit("tick")` are excluded. (Verified: every production emit in
-            // this crate precedes its file's first `#[cfg(test)]`.)
-            let prod = match text.find("#[cfg(test)]") {
+            // Production code only: truncate at the first `#[cfg(test)]` that
+            // gates a test MODULE. Tests live at the bottom by Rust convention,
+            // so test fixtures like `.emit("tick")` are excluded. An item-level
+            // `#[cfg(test)]` higher up (a test seam const or fn) is not a
+            // boundary: truncating there would hide every production emit
+            // after it, which is exactly what backlog_share.rs's
+            // `route_to_primary` seam did to this scan.
+            let prod = match test_module_boundary(&text) {
                 Some(i) => &text[..i],
                 None => &text[..],
             };
@@ -1186,7 +1200,7 @@ mod tests {
         let mut below_only: Vec<String> = Vec::new();
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            let boundary = match text.find("#[cfg(test)]") {
+            let boundary = match test_module_boundary(&text) {
                 Some(i) => i,
                 None => continue,
             };
@@ -1261,6 +1275,31 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    /// The byte offset of the first `#[cfg(test)]` that gates a test MODULE.
+    /// An item-level `#[cfg(test)]` (a seam const or fn above the module) is
+    /// not a boundary: truncating there hides every production emit after it.
+    /// `None` when the file has no test module at all.
+    fn test_module_boundary(text: &str) -> Option<usize> {
+        const MARKER: &str = "#[cfg(test)]";
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(MARKER) {
+            let pos = from + rel;
+            let rest = text[pos + MARKER.len()..].trim_start();
+            // `mod tests` and its visibility-spelled forms gate the same way;
+            // four files in this crate spell `pub mod` / `pub(crate) mod`.
+            let rest = rest
+                .strip_prefix("pub(crate) ")
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest)
+                .trim_start();
+            if rest.starts_with("mod ") {
+                return Some(pos);
+            }
+            from = pos + 1;
+        }
+        None
     }
 
     /// Extract `(kind, line)` for every `.emit` / `.emit_fields` call with a
@@ -1541,6 +1580,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
+    // A refused shared-backlog flush took this machine's rows back: the
+    // operator notice beside the retained batch (backlog_share::repair).
+    "backlog_refused_flush",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.
@@ -1907,6 +1949,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (unknown session / third distinct id) without storing.
     "session_report_stored",
     "session_report_dropped",
+    // A foreground SessionStart report bound its row to a proven pane claim
+    // (pane_claim.rs), moving it off a stale or absent mux ref.
+    "session_pane_rebound",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",

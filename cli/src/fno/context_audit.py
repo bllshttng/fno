@@ -577,7 +577,7 @@ def _command_path(command: str, repo_root: Path) -> Path | None:
     return None
 
 
-_CONTEXT_RUN_RE = re.compile(r"context-run\.sh\s+(\S+)")
+_CONTEXT_RUN_RE = re.compile(r"""context-run\.sh["']?\s+(\S+)""")
 
 
 def _expand_runner_commands(

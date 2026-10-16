@@ -1132,13 +1132,12 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "pr-push") {
         return fno_agents::pr_push::run_push(&args[1..]);
     }
-    // `pr-body-check`: the repo's body guards, run before `gh pr create`.
-    if matches!(verb, "pr-body-check") {
-        return fno_agents::pr_body_check::run(&args[1..]);
-    }
-    // `pr-create`: the duplicate-guarded create (see pr_create.rs doc).
-    if matches!(verb, "pr-create") {
-        return fno_agents::pr_create::run_pr_create_verb(&args[1..]);
+    // The binary-direct `pr-*` verbs (body-check, create, base-lineage-check,
+    // and the ports that follow them) route through one door, so a new verb
+    // costs a match arm in pr_door.rs, not routing lines against this file's
+    // shrink-only budget.
+    if let Some(code) = fno_agents::pr_door::run_verb(verb, &args) {
+        return code;
     }
     // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
     // the produce verbs ported from Python (branch-ids, ensure, trailer,
@@ -2268,6 +2267,14 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // converges.
     if let Some(message) = params.get("message").and_then(|v| v.as_str()) {
         fno_agents::merge_posture::apply_env_from_message(message);
+    }
+
+    // A payload verb the node does not derive refuses before the registry,
+    // the launch and the claim transfer: a refused spawn leaves nothing behind.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(refusal) = fno_agents::node_seed::spawn_payload_verb_refusal(params, &cwd) {
+        eprintln!("fno-agents spawn: {refusal}");
+        return Some(2);
     }
 
     let provider_param = params.get("provider").and_then(|v| v.as_str());

@@ -45,6 +45,15 @@ const IN_SCOPE: [&str; 14] = [
     "merge_grant_held",
 ];
 
+/// The check-stage cases: the hold door's three frozen legs. The hold and
+/// merge-result families carry their own parity targets, so these run beside
+/// the stage-1 merge set.
+const IN_SCOPE_HOLD: [&str; 3] = [
+    "hold_no_graph_clear",
+    "hold_graph_with_hold_row",
+    "hold_corrupt_graph",
+];
+
 /// Session identity stripped before the leg runs, mirroring STRIP_VARS in
 /// capture_driver.py: a cargo-test parent carries live-session pins
 /// (harness ids, plugin roots, this crate's own capture switch) that would
@@ -107,11 +116,23 @@ fn merge_verb_matches_python_goldens() {
         .map(|entry| (entry["slug"].as_str().expect("case slug"), entry))
         .collect();
 
-    for slug in IN_SCOPE {
+    for slug in IN_SCOPE.into_iter().chain(IN_SCOPE_HOLD) {
         let entry = cases[slug];
         let case_dir = PathBuf::from(entry["dir"].as_str().expect("case dir"));
         run_case(&case_dir, &stubbin);
     }
+}
+
+/// The case's pr argument in the corpus's two spellings: the merge family
+/// froze strings, the hold and result families froze ints. The Python
+/// driver int()s either, so the harness mirrors that instead of assuming
+/// one JSON type.
+fn case_pr(case: &Value) -> Option<String> {
+    case["pr"]
+        .as_str()
+        .filter(|pr| !pr.is_empty())
+        .map(str::to_string)
+        .or_else(|| case["pr"].as_i64().map(|pr| pr.to_string()))
 }
 
 /// Run one case's operand child on the fixture and compare streams + folds.
@@ -126,13 +147,28 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     // The keeper-reap guard requires every triad-spawning test to declare
     // its owner, so the spawned client is attributed to this test process.
     cmd.envs(fno_agents::test_run::self_owner_env());
-    cmd.args(["authorized-merge", "merge"]);
-    if let Some(pr) = case["pr"].as_str().filter(|pr| !pr.is_empty()) {
-        cmd.arg(pr);
-    }
-    if let Some(argv) = case["argv"].as_array() {
-        for arg in argv {
-            cmd.arg(arg.as_str().expect("argv entries are strings"));
+    // `authorized-merge` is the registered top-level verb; the entry word
+    // below is its operand door, never a verb of its own.
+    cmd.arg("authorized-merge");
+    // The door word follows the case's entry: the hold cases drive the
+    // check-stage door the deleted Python leaf answered.
+    match case["entry"].as_str().unwrap_or("merge") {
+        "hold" => {
+            cmd.arg("hold-check");
+            if let Some(pr) = case_pr(&case) {
+                cmd.arg(pr);
+            }
+        }
+        _ => {
+            cmd.arg("merge");
+            if let Some(pr) = case_pr(&case) {
+                cmd.arg(pr);
+            }
+            if let Some(argv) = case["argv"].as_array() {
+                for arg in argv {
+                    cmd.arg(arg.as_str().expect("argv entries are strings"));
+                }
+            }
         }
     }
 
@@ -170,7 +206,7 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
             cmd.env("PATH", case_dir.join("gitbin"));
         }
         _ => {
-            cmd.env("PATH", format!("{}/usr/bin:/bin", stubbin.display()));
+            cmd.env("PATH", format!("{}:/usr/bin:/bin", stubbin.display()));
         }
     }
     if let Some(env) = case["env"].as_object() {

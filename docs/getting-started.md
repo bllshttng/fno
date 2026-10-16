@@ -139,6 +139,44 @@ These are real keys in `config.toml` (run `fno config get <key>` to read any of 
 
 Budget and skip behavior are not config keys; they're flags you pass to a run, for example `/fno:target --budget 25 "..."` or `/fno:target --no-external "..."`. See [the target guide](guides/target.md) for the full flag list.
 
+## Set up a machine
+
+A second machine does not re-answer every question. Export the setup from a machine that already works, copy the profile over, and join it on the new one.
+
+On the set-up machine:
+
+```bash
+fno config setup run --export --out fno-profile.toml
+```
+
+On the new machine, pick the join that fits who is present:
+
+| Who runs it | Command |
+|---|---|
+| A person, in a terminal | `fno do wizard --join fno-profile.toml` |
+| A person, in a session | `/fno:setup join fno-profile.toml` |
+| A script, no person | `fno config setup run --yes --only join --join fno-profile.toml` |
+
+The join prints the diff first, then applies. The previous global config is backed up to `~/.fno/sidecar/setup-backup/`. Later, `fno config setup run --check --json` shows how the machine has drifted, each row with its fix.
+
+What travels is decided per key, once, by `classify` in `crates/fno/src/setup_profile.rs`:
+
+| Class | Decided by | On a join |
+|---|---|---|
+| Secret | the leaf name carries `token`, `secret` or `password`, or ends `api_key` | never exported |
+| Local | machine paths and names: the `paths.`, `work.`, `user.`, `build.`, `accounts.`, `agents.provider_limits.`, `store.` families; the exact keys `state_dir`, `plans_dir`, `obsidian.vault`, `research.output_dir`, `lead.enabled`, `agents.max_live`, `agents.max_live_per_territory`; or any string value starting `/` or `~` | stays behind, listed in the diff |
+| Portable | everything else | travels |
+
+The machine-local rows still need answering here. The wizard handles the big one: tick its projects screen and it appends this checkout to `work.workspaces.main.projects` through the validated writer.
+
+When a person runs the wizard, a preset sets the pace. The preset screen opens with `balanced` highlighted; `--preset aggressive|balanced|user-reviewed` pre-answers it.
+
+| Preset | Decides | Harnesses | Models | Services | Auto-merge |
+|---|---|---|---|---|---|
+| aggressive | everything with safe answers | every detected one | the first catalog lane per harness | all three | on after review and CI |
+| balanced | the safe middle | the detected ones with credentials | each harness keeps its current model | the PR watcher and the groom | off |
+| user-reviewed | nothing without you | none ticked | each harness keeps its current model | none | off |
+
 ## Your first feature
 
 ### Option A: let target handle everything

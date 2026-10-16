@@ -766,8 +766,8 @@ def test_review_attestation_refuses_a_supplied_model_that_disagrees(
 
 
 # ---------------------------------------------------------------------------
-# the shared model stamp: one implementation both review_attestation writers
-# call (the emit chokepoint and classify --attest), tested directly
+# the shared model stamp: one implementation the review_attestation writer
+# (the emit chokepoint) calls, tested directly
 # ---------------------------------------------------------------------------
 
 

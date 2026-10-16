@@ -441,9 +441,16 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
     }
 
     assert_eq!(
-        golden_exit, rust.exit,
-        "[{label}] exit differs from golden: golden={golden_exit:?} rust={:?}",
-        rust.exit
+        golden_exit,
+        rust.exit,
+        "[{label}] exit differs from golden: golden={golden_exit:?} rust={:?}\nrust streams:\n{}",
+        rust.exit,
+        rust.streams
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("  [{i}] {s:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert_eq!(
         golden_streams.len(),

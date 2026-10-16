@@ -348,9 +348,8 @@ def stamp_review_attestation_model(
     that disagrees with the transcript is refused naming both, the same rule
     attester_session_id follows.
 
-    Both review_attestation writers call this - the `fno doctor event emit`
-    chokepoint below and `fno do review classify --attest` - so two rows can
-    never disagree about the rule.
+    The `fno doctor event emit` chokepoint stamps it, so all rows of the
+    type carry the same rule and two writers can never disagree about it.
     """
     import os
 

@@ -1,0 +1,1 @@
+fno do target start: <TMP>/home/.fno/spaces/<TMPD_REPO>/worktrees/<NODE>/target-state.md belongs to node <NODE>, not <NODE_OTHER>; refusing to run in place under another node's session. Cancel it (fno do target cancel) or isolate a worktree.

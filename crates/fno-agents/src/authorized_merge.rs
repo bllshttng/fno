@@ -1831,16 +1831,9 @@ impl Probes for RealProbes {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
-        if crate::gh_budget::admission_armed() {
-            if let Some(line) = crate::gh_budget::admit_fleet(args) {
-                return Ok((false, line));
-            }
-        }
-        let out = Command::new("gh")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .map_err(|error| error.to_string())?;
+        let mut cmd = Command::new("gh");
+        cmd.args(args).current_dir(cwd);
+        let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok((out.status.success(), combined))
@@ -2472,9 +2465,19 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
             String::new(),
         );
     }
-    // The hold ops are merge-authority writes riding this verb's payload, not
-    // a new top-level root: `{"op": "hold-set"|"freeze-set"|..., ...}` answers
-    // with one receipt instead of a merge verdict.
+    // The check-stage door: `{"op": "hold-check", "pr": ..., "cwd": ...}`
+    // answers the plan-hold read in process, the transport the status
+    // cache-key op and the seams probe ride instead of spawning the Python
+    // leaf.
+    if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
+        return match crate::merge_verb::run_op("hold-check", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    // The hold ops are merge-authority writes and reads riding this verb's
+    // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
+    // ...}` answers with one receipt instead of a merge verdict.
     if payload
         .get("op")
         .and_then(Value::as_str)

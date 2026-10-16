@@ -71,6 +71,10 @@ READ_ALLOWLIST = (
     # The claims store's db-path builder (the layout place of the graph
     # anchor, swapped to its db sibling), never a read.
     "crates/fno-agents/src/claim_store.rs",
+    # The merge verb's store-path builder (the hold-verdict flow hands the
+    # resolved anchor to its worker rows read: the FNO_STATE_DIR layout
+    # place, else the scope default), never a read.
+    "crates/fno-agents/src/merge_verb/mod.rs",
     # The refresh verb's plist template names the polled store in its
     # launchd comment; the verb itself reads no graph.
     "crates/fno-agents/src/pr_watch/refresh.rs",
@@ -85,6 +89,14 @@ READ_ALLOWLIST = (
     # pattern-matches protected filenames in hook payloads to refuse
     # writes; it never opens the store.
     "crates/fno-agents/src/hook/write_gate.rs",
+    # The target-init port's dispatch-hold refusal prose names the store
+    # file ("restore graph.json and retry"); the module's own read routes
+    # through graph_store like the backlog namespace's.
+    "crates/fno-agents/src/target_init.rs",
+    # The target-start port's unreadable-graph refusal carries the same
+    # store-file prose as its init twin; its reads route through
+    # target_init::graph_rows like the module they were ported from.
+    "crates/fno-agents/src/target_start.rs",
 )
 
 # Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the

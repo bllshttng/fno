@@ -71,6 +71,12 @@ fn run_slug_cmd(argv: &[&str], cwd: Option<&str>) -> (i32, String) {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    // The fleet budget admits before the spawn: a refused gh slug read
+    // returns rc 75 with no slug, the unread shape the caller already has.
+    if let Some(_line) = crate::gh_budget::admit_spawn(std::ffi::OsStr::new(argv[0]), &argv[1..]) {
+        return (75, String::new());
+    }
+
     let mut cmd = Command::new(argv[0]);
     cmd.args(&argv[1..])
         .stdout(Stdio::piped())

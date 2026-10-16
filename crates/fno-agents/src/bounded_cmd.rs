@@ -47,6 +47,11 @@ pub(crate) fn output_with_timeout_result(
     secs: u64,
 ) -> std::io::Result<std::process::Output> {
     use std::os::unix::process::CommandExt;
+    // The fleet budget admits before the spawn: a gh Command refused here
+    // leaves no child, and the caller reads the ledger line as exit 75.
+    if let Some(line) = crate::gh_budget::admit_command(&cmd) {
+        return Ok(crate::gh_budget::refused_output(line));
+    }
     let mut child = cmd
         .process_group(0)
         .stdin(std::process::Stdio::null())
@@ -179,6 +184,11 @@ pub(crate) fn output_with_timeout_stdin(
 ) -> std::io::Result<std::process::Output> {
     use std::io::Write as _;
     use std::os::unix::process::CommandExt;
+    // Same admission as output_with_timeout_result: one transport, one
+    // consult, whichever stdin shape the caller needs.
+    if let Some(line) = crate::gh_budget::admit_command(&cmd) {
+        return Ok(crate::gh_budget::refused_output(line));
+    }
     let mut child = cmd
         .process_group(0)
         .stdin(std::process::Stdio::piped())

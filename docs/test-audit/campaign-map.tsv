@@ -1058,11 +1058,9 @@ K6	cli/tests/unit/test_publish_review.py	py	5
 K6	cli/tests/unit/test_register_pr_url.py	py	4
 K6	cli/tests/unit/test_review_classify_hold.py	py	1
 K6	cli/tests/unit/test_review_cli.py	py	21
-K6	cli/tests/unit/test_review_findings.py	py	39
 K6	cli/tests/unit/test_review_hold_wiring.py	py	9
 K6	cli/tests/unit/test_review_invocation.py	py	21
 K6	cli/tests/unit/test_review_invocation_settle.py	py	5
-K6	cli/tests/unit/test_review_post_dispositions.py	py	6
 K6	cli/tests/unit/test_setup_post_merge_scaffold.py	py	7
 K6	cli/tests/unit/test_target_init_review_gate.py	py	51
 K6	cli/tests/unit/test_target_review_default.py	py	8

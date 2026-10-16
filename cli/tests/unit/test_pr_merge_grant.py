@@ -206,13 +206,12 @@ def test_manifest_arm_ignores_the_durable_receipt(tmp_path, monkeypatch, capsys)
 
     # The refusal is the owner's now, so this case has to reach it: the guards
     # between the posture read and the owner are other nodes' and are stubbed
-    # to their clear answers here.
-    from fno.pr import _base_lineage
+    # to their clear answers here. Base lineage probes inside the Rust
+    # authorized-merge, which `_authorized` replaces wholesale below.
 
     monkeypatch.setattr(
         _merge, "_pr_head_ref_and_oid", lambda pr, repo: ("feature/x", "abc123", "OPEN")
     )
-    monkeypatch.setattr(_base_lineage, "lineage_verdict", lambda pr, cwd: ("ok", ""))
 
     seen: dict = {}
 

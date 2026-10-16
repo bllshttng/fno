@@ -45,12 +45,11 @@ PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$PLUGIN_ROOT/hooks/helpers/join_partition_guard.py"
 [[ -f "$HELPER" ]] || _approve
 
-# The judged half needs fno's own deps (pydantic), so it runs in the plugin's
-# project env - the same shape the law-authority gate uses on the Bash
-# matcher. The helper prints exactly one decision JSON and always exits 0; a
+# The judge uses only the standard library. Disable bytecode writes so the
+# installed plugin remains read-only. The helper always exits 0; a
 # stage that cannot even run approves, because an unjailed worker is the LD3
 # default, never a wedge (the OS layer still covers a real joiner).
-out="$(uv run --project "$PLUGIN_ROOT/cli/pyproject.toml" python3 "$HELPER" <<< "$PAYLOAD" 2>/dev/null)"
+out="$(python3 -B "$HELPER" <<< "$PAYLOAD" 2>/dev/null)"
 if [[ $? -eq 0 && -n "$out" ]]; then
     # The helper owns this decision; mark which way it went before relaying it.
     if [[ "$out" == *'permissionDecision": "deny'* || "$out" == *'permissionDecision":"deny'* ]]; then

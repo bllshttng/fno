@@ -151,142 +151,16 @@ def _stub_run(calls, rc=0):
     return _run
 
 
-def test_bind_node_plan_path_first_bind_calls_backlog_update(monkeypatch, capsys):
-    calls: list = []
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run(calls))
-
-    target_cli._bind_node_plan_path({"id": "x-7649", "plan_path": None}, "/plans/p.md")
-
-    assert calls == [["fno", "backlog", "update", "x-7649", "--plan-path", "/plans/p.md"]]
-    assert "bound" in capsys.readouterr().err
 
 
-def test_bind_node_plan_path_never_overwrites_a_different_plan(monkeypatch, capsys):
-    calls: list = []
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run(calls))
-
-    target_cli._bind_node_plan_path(
-        {"id": "x-a", "plan_path": "/other/q.md"}, "/plans/p.md"
-    )
-
-    assert calls == []
-    assert "already bound" in capsys.readouterr().err
 
 
-def test_bind_node_plan_path_same_path_is_a_silent_noop(monkeypatch, capsys):
-    calls: list = []
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run(calls))
-
-    target_cli._bind_node_plan_path(
-        {"id": "x-a", "plan_path": "/plans/p.md"}, "/plans/p.md"
-    )
-
-    assert calls == []
-    assert capsys.readouterr().err == ""
 
 
-def test_bind_node_plan_path_failure_is_non_fatal(monkeypatch, capsys):
-    calls: list = []
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run(calls, rc=1))
-
-    target_cli._bind_node_plan_path({"id": "x-a", "plan_path": None}, "/plans/p.md")
-
-    assert calls
-    assert "WARNING: could not bind" in capsys.readouterr().err
 
 
-def test_init_binds_graph_for_node_input(tmp_path, monkeypatch):
-    """The bind fires from cmd_init on a resolved node, before the script runs.
-
-    The call site carries no claim condition by construction (x-7649's init
-    was claim-refused and a bind behind that gate would have missed it), so
-    the route test pins the fires-anyway half.
-    """
-    calls: list = []
-    node = {"id": "x-b1d7", "plan_path": None, "title": "t", "cwd": str(tmp_path)}
-    monkeypatch.setattr(target_cli, "_graph_entries_or_none", lambda: [node])
-
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # captured before the stub replaces it
-
-    class _Result:
-        returncode = 0
-
-    def _run(cmd, *a, **k):
-        calls.append(list(cmd))
-        if any(str(part).endswith("fno-agents") for part in cmd[:1]):
-            # The hold verdict's receipt call is real infrastructure.
-            return real_run(cmd, capture_output=True, text=True, check=False)
-        return _Result()
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _run)
-    fake_root = tmp_path / "plugin"
-    (fake_root / "hooks" / "helpers").mkdir(parents=True)
-    (fake_root / "hooks" / "helpers" / "init-target-state.sh").write_text("#!/bin/bash\n")
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    plan = tmp_path / "plans" / "x-b1d7.md"
-    plan.parent.mkdir()
-    plan.write_text("# Plan\n", encoding="utf-8")
-
-    from fno.cli import app
-    from typer.testing import CliRunner
-
-    result = CliRunner().invoke(
-        app, ["do", "target", "init", "--input", "x-b1d7", "--plan-path", str(plan)]
-    )
-
-    assert result.exit_code == 0, result.output
-    bind_calls = [c for c in calls if c[:3] == ["fno", "backlog", "update"]]
-    assert bind_calls == [["fno", "backlog", "update", "x-b1d7", "--plan-path", str(plan)]]
 
 
-def test_init_warns_on_prebound_different_plan(tmp_path, monkeypatch):
-    calls: list = []
-    node = {
-        "id": "x-b1d7",
-        "plan_path": "/other/epic-plan.md",
-        "title": "t",
-        "cwd": str(tmp_path),
-    }
-    monkeypatch.setattr(target_cli, "_graph_entries_or_none", lambda: [node])
-
-    class _Result:
-        returncode = 0
-
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # captured before the stub replaces it
-
-    def _lambda_run(cmd, *a, **k):
-        calls.append(list(cmd))
-        if any(str(part).endswith("fno-agents") for part in cmd[:1]):
-            # The hold verdict's receipt call is real infrastructure.
-            return real_run(cmd, capture_output=True, text=True, check=False)
-        return _Result()
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _lambda_run)
-    fake_root = tmp_path / "plugin"
-    (fake_root / "hooks" / "helpers").mkdir(parents=True)
-    (fake_root / "hooks" / "helpers" / "init-target-state.sh").write_text("#!/bin/bash\n")
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    plan = tmp_path / "plans" / "x-b1d7.md"
-    plan.parent.mkdir()
-    plan.write_text("# Plan\n", encoding="utf-8")
-
-    from fno.cli import app
-    from typer.testing import CliRunner
-
-    result = CliRunner().invoke(
-        app, ["do", "target", "init", "--input", "x-b1d7", "--plan-path", str(plan)]
-    )
-
-    assert result.exit_code == 0, result.output
-    assert not [c for c in calls if c[:3] == ["fno", "backlog", "update"]]
-    # The stored value is left untouched and the run says so on stderr.
-    assert "already bound" in result.stderr
 
 
 # -- change 3: the validator names the bind it cannot perform --
