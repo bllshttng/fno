@@ -22,7 +22,6 @@ from typing import Literal, Optional
 
 import yaml
 
-from fno import _subprocess_util
 from fno.llm import llm_call
 from fno.inbox.store import (
     ThreadHandle,
@@ -158,8 +157,16 @@ def _build_prompt(handle: ThreadHandle, receiver: str, cwd: Path) -> str:
     backlog_failed = False
     backlog_failure_reason = ""
     try:
+        # The ready verb answers natively; resolve fno-agents the way every
+        # wheel door does (a stale or absent fno-py wheel surface would
+        # answer "No such command" for a verb the binary owns).
+        from fno import rust_binary
+
+        binary = rust_binary.resolve_binary()
+        if binary is None:
+            raise FileNotFoundError("fno-agents (no binary available to answer backlog ready)")
         result = subprocess.run(
-            [*_subprocess_util.fno_py_cmd(), "backlog", "ready", "--project", receiver, "--json"],
+            [str(binary), "backlog", "ready", "--project", receiver, "--json"],
             capture_output=True,
             text=True,
             timeout=5,

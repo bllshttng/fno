@@ -50,12 +50,14 @@ GLOBAL_LONG_TO_SHORT: dict[str, str] = {v: k for k, v in GLOBAL_REGISTER.items()
 #: Lowercase letters are per-command under the convention, so each pair is
 #: pinned to its HOME declaration site (file suffix); another command may
 #: legally reuse the letter for a different long (e.g. ``-b --body`` on
-#: ``inbox send`` vs ``-b --blocked`` on ``backlog pick``). The uppercase
-#: pair (``-I``) stays codebase-exclusive like the global register.
+#: ``inbox send``, while the native ``backlog pick`` arm keeps ``-b
+#: --blocked``). The uppercase pair (``-I``) stays codebase-exclusive like
+#: the global register.
 PRE_EXISTING_SHORTS: dict[str, tuple[str, str]] = {
     "-A": ("--all", ""),  # exclusivity enforced by the global-register tests
     "-I": ("--ideas", "graph/cli.py"),
-    "-b": ("--blocked", "graph/cli.py"),
+    # The -b --blocked row moved with the pick port: the native arm owns the
+    # surface now, and the wheel-side scan can no longer see a Rust flag decl.
     "-n": ("--tail", "agents/cli.py"),
     "-f": ("--follow", "agents/cli.py"),
     "-m": ("--note", "done/cli.py"),
@@ -79,8 +81,8 @@ PHASE2_LOWERCASE_MAP: dict[tuple[str, str], dict[str, str]] = {
     # cmd_add's and cmd_idea's rows moved with the create port: the native
     # binary owns the surface now, and their -p/-c/-d/-t pins ride the
     # committed ADD_HELP/IDEA_HELP goldens, the only scan that can see a Rust
-    # flag decl.
-    ("graph/cli.py", "cmd_intake"): {"--title": "-t", "--priority": "-p"},
+    # flag decl. cmd_intake's row (-t/-p) moved with the intake port; its
+    # pins ride the committed intake_help.txt usage text the same way.
     # cmd_update's row moved with the update port: the native binary owns
     # the surface now, and its short pins ride the committed UPDATE_HELP
     # golden, the only scan that can see a Rust flag decl.
@@ -89,9 +91,10 @@ PHASE2_LOWERCASE_MAP: dict[tuple[str, str], dict[str, str]] = {
     # the surface now, and its -p/-s/-d pins live in
     # test_short_flag_dispatch.py's native-find parity test, the only scan
     # that can see a Rust flag decl.
-    ("backlog/capture.py", "cmd_add"): {
-        "--source": "-s", "--where": "-w", "--priority": "-p",
-    },
+    # cmd_add's row moved with the capture port: the native binary owns
+    # the surface now, and its -s/-w/-p pins ride the committed
+    # capture_help.txt usage text, the only scan that can see a Rust flag
+    # decl.
     # cmd_send moved from agents/cli.py to mail/cli.py in ab-cee91152 (messaging
     # extracted into the dedicated `fno agents mail` namespace); its lowercase shorts
     # moved with it (-k --kind, -b --body, plus the pre-existing -p/-c).
@@ -353,6 +356,20 @@ def test_phase2_commands_carry_their_lowercase_shorts(decls: list[Decl]) -> None
                 )
     assert not missing, "Phase 2 lowercase map not satisfied:\n" + "\n".join(missing)
 
+
+
+def test_capture_add_shorts_live_in_the_native_help() -> None:
+    """The capture port moved cmd_add's shorts to the native binary; the
+    committed usage text is the only scan that can see a Rust flag decl,
+    the same contract the ADD_HELP/IDEA_HELP goldens carry for create."""
+    from pathlib import Path
+
+    help_text = (
+        Path(__file__).resolve().parents[2]
+        / "crates" / "fno-agents" / "src" / "backlog" / "capture_help.txt"
+    ).read_text(encoding="utf-8")
+    for short in ("-s source", "-w where", "-p priority"):
+        assert short in help_text, f"capture add help lost its {short} pin"
 
 # --------------------------------------------------------------------------- #
 # Phase 3 (US3) - two-spelling canonicalization (AC5 declaration shape).
