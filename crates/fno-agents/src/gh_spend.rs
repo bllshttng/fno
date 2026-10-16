@@ -233,11 +233,17 @@ enum Label {
 
 fn label_word(argv: &[String]) -> Label {
     // A jobs script reads as its own caller whether it runs via a shebang
-    // (argv0 is the script) or through a shell (argv1 is the script).
+    // (argv0 is the script) or through a shell (argv1 is the script). A
+    // stop-hook script names the poll-class caller the reserve stands
+    // down; the in-process admissions of the stop hook's own fno-agents
+    // child label as `loop-check`, so both spellings are poll-class.
     for w in argv.iter().take(2) {
         if w.contains("/.claude/jobs/") && w.ends_with(".sh") {
             let stem = file_basename(w).trim_end_matches(".sh");
             return Label::Name(format!("worker-script {stem}"));
+        }
+        if w.contains("/hooks/") && w.ends_with(".sh") && file_basename(w).contains("stop") {
+            return Label::Name("hook stop".to_string());
         }
     }
     let Some((idx, prog)) = effective_program(argv) else {
@@ -359,6 +365,7 @@ fn file_basename(word: &str) -> String {
 pub(crate) fn is_poll_class(label: &str) -> bool {
     label.starts_with("daemon ")
         || label == "hook stop"
+        || label == "loop-check"
         || label == "fno do pr wait"
         || label == "fno do pr watch"
         || label == "lead-rundown"
@@ -461,7 +468,16 @@ pub(crate) fn rate_limit_probe() -> Result<Value, String> {
 }
 
 /// The journal rows (the `.1` generation first) newer than `since_ms`.
+/// The real journal's read takes the ledger's flock, so a rotation mid-read
+/// cannot make one generation's rows vanish from the report.
 fn read_rows(journal: &std::path::Path, since_ms: i64) -> Vec<Value> {
+    let _lock = if journal == journal_path().as_path() {
+        Some(crate::gh_budget::FileLock::try_acquire(
+            &crate::gh_budget::lock_path(&crate::gh_budget::ledger_path()),
+        ))
+    } else {
+        None
+    };
     let older = PathBuf::from(format!("{}.1", journal.display()));
     let mut rows = Vec::new();
     for path in [older, journal.to_path_buf()] {
@@ -555,9 +571,14 @@ pub(crate) fn spend_report_at(
             }
             _ => {}
         }
-        *by_shape
-            .entry((caller, shape.to_string(), bucket.to_string(), conditional))
-            .or_default() += 1;
+        if verdict == "admitted" {
+            // The shape table names spend: refused rows already sit in the
+            // refused-by-cause map, and mixing them here would let a
+            // refusal storm name the top shape.
+            *by_shape
+                .entry((caller, shape.to_string(), bucket.to_string(), conditional))
+                .or_default() += 1;
+        }
     }
 
     let mut callers: Vec<(String, CallerAgg)> = by_caller.into_iter().collect();

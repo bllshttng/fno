@@ -1981,13 +1981,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let page = dir.path().join("rundown.html");
         std::fs::write(&page, b"<html></html>").unwrap();
-        assert!(!served_since_render(&page), "no marker: never served");
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Mtimes are SET, not slept on: equal timestamps on a coarse
+        // filesystem cannot flake the strict comparison.
+        let set_mtime = |path: &std::path::Path, secs: u64| {
+            std::fs::File::options()
+                .append(true)
+                .open(path)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                )
+                .unwrap();
+        };
         let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
         std::fs::write(&marker, b"").unwrap();
+        set_mtime(&page, 1_000);
+        assert!(!served_since_render(&page), "no fresh marker: not served");
+        set_mtime(&marker, 2_000);
         assert!(served_since_render(&page), "a fresh marker ungates");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(&page, b"<html>fresh</html>").unwrap();
+        set_mtime(&page, 3_000);
         assert!(
             !served_since_render(&page),
             "a fresh render re-gates the arm"
