@@ -32,7 +32,7 @@ pub struct FeedRow {
     /// `question_asked` | `question_closed` | `decision_recorded` |
     /// `node_created` | `node_started` | `node_shipped` | `node_ended` |
     /// `session_spawned` | `session_reaped` | `team_granted` |
-    /// `team_vacated` | `day_boundary`
+    /// `team_vacated` | `mail_to_user` | `day_boundary`
     pub kind: String,
     pub node: Option<String>,
     /// The node's project directory. Present on `node_created` rows so a
@@ -731,7 +731,8 @@ pub fn project(
                 | "blocked"
                 | "fno_update_started"
                 | "fno_update_installed"
-                | "fno_update_failed"),
+                | "fno_update_failed"
+                | "mail_escalation"),
             ) => k,
             _ => continue,
         };
@@ -740,6 +741,20 @@ pub fn project(
             continue;
         };
         match kind {
+            "mail_escalation" => {
+                let reason = s_field(data, "reason").unwrap_or_default();
+                let sender = s_field(data, "sender").unwrap_or_default();
+                let recipient = s_field(data, "recipient").unwrap_or_default();
+                let summary = s_field(data, "summary").unwrap_or_default();
+                rows.push(FeedRow {
+                    ts,
+                    kind: "mail_to_user".into(),
+                    r#ref: s_field(data, "msg_id"),
+                    title: format!("{sender} to {recipient}: {}", one_line(&summary)),
+                    reason: Some(reason),
+                    ..FeedRow::default()
+                });
+            }
             "spawn_gate_refused" => {
                 let reason = s_field(data, "reason").unwrap_or_else(|| "unknown".into());
                 let name = s_field(data, "name").unwrap_or_default();
@@ -1369,9 +1384,11 @@ pub(crate) fn filter_rows(
 /// unit test fails if any kind the projection emits lands there.
 pub(crate) fn area_of(kind: &str) -> &'static str {
     match kind {
-        "question_asked" | "question_closed" | "decision_recorded" | "sendmessage_fallback" => {
-            "mail"
-        }
+        "question_asked"
+        | "question_closed"
+        | "decision_recorded"
+        | "sendmessage_fallback"
+        | "mail_to_user" => "mail",
         "node_created" | "node_started" | "node_ended" => "backlog",
         "node_shipped" | "pr_merged" => "ship",
         "session_spawned"
@@ -1405,11 +1422,13 @@ pub(crate) const GRAPH_KINDS: &[&str] = &[
 ];
 pub(crate) const REMOVAL_KINDS: &[&str] = &["session_reaped"];
 /// The feed kinds the main store leg derives (its store kinds are
-/// spawn_gate_refused, worker_silent, blocked and the fno_update_* trio).
+/// spawn_gate_refused, worker_silent, blocked, mail_escalation and the
+/// fno_update_* trio).
 pub(crate) const MAIN_KINDS: &[&str] = &[
     "session_spawn_refused",
     "worker_stalled",
     "help_emitted",
+    "mail_to_user",
     "update_started",
     "update_finished",
 ];
@@ -1646,6 +1665,7 @@ fn main_store_journal(
                 "fno_update_started",
                 "fno_update_installed",
                 "fno_update_failed",
+                "mail_escalation",
             ])
         },
     ) {
@@ -2474,6 +2494,7 @@ mod tests {
             "update_finished",
             "main_ci_changed",
             "pr_merged",
+            "mail_to_user",
         ] {
             assert_ne!(area_of(k), "other", "{k} has no area");
         }
@@ -2595,6 +2616,10 @@ mod tests {
             r#"{"ts":"2026-09-30T10:04:00Z","type":"fno_update_installed","source":"python","data":{"new_rev":"55f04eda70a99c3f4e72a3cfe62e80d219c66d6f"}}"#,
             "\n",
             r#"{"ts":"2026-09-30T10:05:00Z","type":"fno_update_failed","source":"python","data":{"rc":"1","stage":"install","reason":"install exited 1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:07:00Z","type":"mail_escalation","source":"target","data":{"reason":"attended-miss","sender":"c698b69a","recipient":"operator","summary":"mux test was a flake\nsecond line","msg_id":"msg-1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:08:00Z","type":"mail_escalation","source":"target","data":{"reason":"question","sender":"c698b69a","recipient":"operator","summary":"which branch?"}}"#,
         );
         let daemon = r#"{"ts":"2026-09-30T10:06:00Z","type":"daemon_started","source":"daemon","data":{"pid":15714,"version":"0.4.1","recovery_mode":"preserve"}}"#;
         let p = project("", &[], &[], "", "", daemon, main, None);
@@ -2630,6 +2655,20 @@ mod tests {
             "installed and failed both fold into update_finished"
         );
         assert_eq!(find("daemon_restarted").title, "daemon 0.4.1 pid 15714");
+        let mail = find("mail_to_user");
+        assert_eq!(mail.title, "c698b69a to operator: mux test was a flake");
+        assert_eq!(mail.area, "mail");
+        assert_eq!(mail.reason.as_deref(), Some("attended-miss"));
+        assert_eq!(mail.r#ref.as_deref(), Some("msg-1"));
+        assert_eq!(
+            p.rows
+                .iter()
+                .filter(|r| r.kind == "mail_to_user")
+                .map(|r| r.reason.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["attended-miss", "question"],
+            "every escalation reason projects: a mail question has no question_asked row"
+        );
 
         let mut entry = graph_fixture().remove(0);
         entry
