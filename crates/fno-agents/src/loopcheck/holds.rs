@@ -198,6 +198,15 @@ pub(crate) fn scan_open_holds(
             }
         }
     }
+    // One graph read per distinct node per scan, however many questions name it.
+    let done_cache: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    let node_done = |id: &str| {
+        *done_cache
+            .borrow_mut()
+            .entry(id.to_string())
+            .or_insert_with(|| node_done(id))
+    };
     let mut holds: Vec<OpenHold> = asked
         .into_iter()
         .filter(|(qid, data)| {
