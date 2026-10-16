@@ -10,10 +10,10 @@ def open_row(rows, name):
 def close_row(rows, name):
     for row in rows:
         if row["name"] == name:
-            row["status"] = row.get("closing_status")
+            row["status"] = "closed"
 
 
 def cancel_row(rows, name):
     for row in rows:
         if row["name"] == name:
-            row["status"] = row.get("cancelling_status")
+            row["status"] = "cancelled"
