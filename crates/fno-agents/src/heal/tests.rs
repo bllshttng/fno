@@ -1445,6 +1445,87 @@ echo '[]'
     assert_eq!(fno.matches("do pr push").count(), 6, "{fno}");
     let events = log_of(d, "events.jsonl");
     assert!(events.contains("\"skip_rebase_budget\":1"), "{events}");
+
+    // A push that moved nothing is receipted skip_rebase_noop, never
+    // rebased: no acted row, no per-run budget spent, and the checks of
+    // the live sha classify below.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=3 integrate=none sha=abc pushed=0 nothing to push",
+        0,
+        "",
+    );
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
+    let events = log_of(d, "events.jsonl");
+    assert!(events.contains("\"skip_rebase_noop\":1"), "{events}");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_noop\""),
+        "{events}"
+    );
+    assert!(!events.contains("\"rebased\":1"), "{events}");
+}
+
+#[test]
+fn rebase_cap_rows() {
+    // A conflicting PR rebased within the last 24h is not rebased again:
+    // no push runs and the receipt reads skip_rebase_cap. The same PR
+    // holding merge-slot:main is exempt: the slot holder is next to merge,
+    // so the push runs.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=0 preflight=skipped sha=abc pushed=1",
+        0,
+        "",
+    );
+    // Seed one pr_heal_pr `rebased` row for PR 1, one hour old, the shape
+    // the receipt closure writes.
+    let past = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .saturating_sub(3600);
+    let (y, mo, dd, h, mi, s) = crate::events::civil_from_unix(past);
+    let ts = format!("{y:04}-{mo:02}-{dd:02}T{h:02}:{mi:02}:{s:02}.000Z");
+    std::fs::write(
+        d.join("events.jsonl"),
+        format!(
+            "{{\"ts\":\"{ts}\",\"type\":\"pr_heal_pr\",\"source\":\"pr-heal\",\"data\":{{\"pr\":\"1\",\"action\":\"rebased\",\"reason\":\"conflicting; behind 3 -> 0\"}}}}\n"
+        ),
+    )
+    .unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert!(
+        !fno.contains("do pr push"),
+        "the 24h cap skips the push: {fno}"
+    );
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
+    assert!(!events.contains("\"skip_rebase_noop\":1"), "{events}");
+
+    // The merge-slot exemption: the same journal, the same conflicting PR,
+    // and the push runs.
+    hold_slot_claim(d, 1);
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
 }
 
 /// The drive stub with PR 1's one red check a failing pytest shard: the
