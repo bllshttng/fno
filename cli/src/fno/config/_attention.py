@@ -16,5 +16,4 @@ class AttentionBlock(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _ignore_retired_rows(cls, v: Any) -> Any:
-        """A leftover ``[[attention]]`` list is dead config, never a load failure."""
         return {} if isinstance(v, list) else v
