@@ -260,6 +260,9 @@ pub fn adopt_pending_invocation(target_session_id: &str, home: Option<&Path>) ->
     invocation_id
 }
 
+/// The fno transport stamps its journal rows with this; the fno-agents
+/// door lets the emitter stamp, so the vendored copy reads unused there.
+#[allow(dead_code)]
 pub fn review_invocation_timestamp() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
