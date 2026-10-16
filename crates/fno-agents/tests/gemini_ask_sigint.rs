@@ -34,12 +34,22 @@ fn tmpdir(tag: &str) -> PathBuf {
     p
 }
 
+/// A no-op SIGINT handler for the dispatch's pre-install window: between the
+/// child spawn and `SigintForwarder::install`, the process disposition is
+/// still ours, and a delivery there must be swallowed, not honored at the
+/// default disposition (which terminates the whole test binary; that is how
+/// the 2026-10-16 cli-ci integration shard died).
+extern "C" fn swallow_sigint(_sig: libc::c_int) {}
+
 /// Fake `gemini` that traps SIGINT/SIGTERM, writes "caught" to the sentinel,
 /// and exits 130. It sleeps long enough that the forwarded signal lands while
-/// the Rust client is blocked reading the (not-yet-emitted) stdout blob.
+/// the Rust client is blocked reading the (not-yet-emitted) stdout blob. Once
+/// its `trap` is installed it writes the READY sentinel, so the test delivers
+/// SIGINT against an observed child state instead of a fixed startup delay.
 fn install_fake_gemini_sigint(bin_dir: &Path) {
     let script = r#"#!/bin/sh
 trap 'printf caught > "$FAKE_GEMINI_SIGINT_SENTINEL"; exit 130' INT TERM
+if [ -n "$FAKE_GEMINI_READY_SENTINEL" ]; then printf ready > "$FAKE_GEMINI_READY_SENTINEL"; fi
 sleep "${FAKE_GEMINI_SLEEP:-10}"
 printf '{"session_id":"%s","response":"done","stats":{}}' "$FAKE_GEMINI_SESSION_ID"
 "#;
@@ -79,6 +89,8 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
 
     let sentinel = tmpdir("sentinel").join("caught.txt");
     let sentinel_str = sentinel.to_string_lossy().to_string();
+    let ready = tmpdir("sentinel").join("ready.txt");
+    let ready_str = ready.to_string_lossy().to_string();
 
     let old_path = std::env::var_os("PATH");
     let new_path = format!("{}:/usr/bin:/bin:/usr/local/bin", bin_dir.display());
@@ -91,12 +103,42 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     };
     unsafe { std::env::set_var("FAKE_GEMINI_SLEEP", "10") };
     unsafe { std::env::set_var("FAKE_GEMINI_SIGINT_SENTINEL", &sentinel_str) };
+    unsafe { std::env::set_var("FAKE_GEMINI_READY_SENTINEL", &ready_str) };
 
-    let signal_thread = std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_millis(1000));
-        // SAFETY: kill(2) with our own pid is async-signal-safe and standard.
-        unsafe {
-            libc::kill(libc::getpid(), libc::SIGINT);
+    // The guard handler must precede the signal thread: a delivery in the
+    // dispatch's pre-install window is swallowed here and retried below,
+    // never honored at the default disposition (which would kill the whole
+    // test binary).
+    // SAFETY: standard libc signal calls, serialized by SIGNAL_TEST_LOCK.
+    let original = unsafe {
+        libc::signal(
+            libc::SIGINT,
+            swallow_sigint as *const () as libc::sighandler_t,
+        )
+    };
+
+    // Deliver SIGINT once the fake proves its `trap` is installed (READY
+    // sentinel), then retry until the fake proves the forward landed (caught
+    // sentinel). No fixed delay guesses at the dispatch's startup latency
+    // under load; the 20s bound is a diagnostic ceiling, not a sleep.
+    let thread_sentinel = sentinel.clone();
+    let signal_thread = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !ready.exists() {
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        while !thread_sentinel.exists() {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            // SAFETY: kill(2) with our own pid is async-signal-safe and standard.
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGINT);
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
     });
 
@@ -112,6 +154,8 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
 
     let _ = signal_thread.join();
+    // SAFETY: restore the saved disposition before the assertions run.
+    unsafe { libc::signal(libc::SIGINT, original) };
 
     match old_path {
         Some(p) => unsafe { std::env::set_var("PATH", p) },
@@ -120,6 +164,7 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     unsafe { std::env::remove_var("FAKE_GEMINI_SESSION_ID") };
     unsafe { std::env::remove_var("FAKE_GEMINI_SLEEP") };
     unsafe { std::env::remove_var("FAKE_GEMINI_SIGINT_SENTINEL") };
+    unsafe { std::env::remove_var("FAKE_GEMINI_READY_SENTINEL") };
     restore_config(old_config);
 
     assert_eq!(
@@ -129,7 +174,8 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
     assert!(
         sentinel.exists(),
-        "SIGINT must be forwarded to the gemini process group (sentinel not written) — gemini would be orphaned"
+        "SIGINT must be forwarded to the gemini process group (sentinel not written, ready written: {}) — gemini would be orphaned",
+        ready.exists()
     );
 }
 

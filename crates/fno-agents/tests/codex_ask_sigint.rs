@@ -9,8 +9,10 @@
 //! Keeping this as the SOLE test in its own binary makes the scenario
 //! deterministic: nothing else runs in this process, so the only window in
 //! which the signal can land is while the single `run_codex` call is mid-flight
-//! (the fake codex sleeps 10s; we signal at 1s). `codex_ask_dispatch.rs` keeps
-//! the rest of the hardening tests, which never touch process signals.
+//! (the fake codex sleeps 10s; the test signals against the fake's READY
+//! sentinel and retries until the catch sentinel proves the forward landed).
+//! `codex_ask_dispatch.rs` keeps the rest of the hardening tests, which never
+//! touch process signals.
 
 // Task 1.3a: `ask` never creates, so these tests drive the retained create
 // machinery through `dispatch_codex_once` (spawn --once), which is the path
@@ -26,6 +28,13 @@ use std::time::Duration;
 /// must not run concurrently. cargo runs tests in a binary on parallel threads
 /// by default; this lock serializes them within the process.
 static SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A no-op SIGINT handler for the dispatch's pre-install window: between the
+/// child spawn and `SigintForwarder::install`, the process disposition is
+/// still ours, and a delivery there must be swallowed, not honored at the
+/// default disposition (which terminates the whole test binary; that is how
+/// the 2026-10-16 cli-ci integration shard died).
+extern "C" fn swallow_sigint(_sig: libc::c_int) {}
 
 fn tmpdir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
@@ -46,11 +55,14 @@ fn tmpdir(tag: &str) -> PathBuf {
 /// test's forwarded signal lands mid-turn (before turn.completed).
 fn install_fake_codex_sigint(bin_dir: &Path) {
     // Answers the spawn's version probe at once, as the real CLI does; only a
-    // turn sleeps into the forwarded signal.
+    // turn sleeps into the forwarded signal. Once its `trap` is installed it
+    // writes the READY sentinel, so the test delivers SIGINT against an
+    // observed child state instead of a fixed startup delay.
     let script = r#"#!/bin/sh
 set -e
 if [ "$1" = "--version" ]; then echo "codex-cli 0.162.0"; exit 0; fi
 trap 'printf caught > "$FAKE_CODEX_SIGINT_SENTINEL"; exit 130' INT TERM
+if [ -n "$FAKE_CODEX_READY_SENTINEL" ]; then printf ready > "$FAKE_CODEX_READY_SENTINEL"; fi
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$FAKE_CODEX_SESSION_ID"
 printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n' "$FAKE_CODEX_REPLY"
 sleep "${FAKE_CODEX_SLEEP:-10}"
@@ -77,6 +89,8 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
 
     let sentinel = tmpdir("sentinel").join("caught.txt");
     let sentinel_str = sentinel.to_string_lossy().to_string();
+    let ready = tmpdir("sentinel").join("ready.txt");
+    let ready_str = ready.to_string_lossy().to_string();
 
     let old_path = std::env::var_os("PATH");
     let new_path = format!("{}:/usr/bin:/bin:/usr/local/bin", bin_dir.display());
@@ -90,14 +104,42 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     unsafe { std::env::set_var("FAKE_CODEX_REPLY", "interrupt me") };
     unsafe { std::env::set_var("FAKE_CODEX_SLEEP", "10") }; // sleep long; we interrupt
     unsafe { std::env::set_var("FAKE_CODEX_SIGINT_SENTINEL", &sentinel_str) };
+    unsafe { std::env::set_var("FAKE_CODEX_READY_SENTINEL", &ready_str) };
 
-    // Deliver SIGINT to ourselves ~1s in, while the single run_codex call (and
-    // thus the SIGINT-forwarding handler) is mid-flight on the 10s codex sleep.
-    let signal_thread = std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_millis(1000));
-        // SAFETY: kill(2) with our own pid is async-signal-safe and standard.
-        unsafe {
-            libc::kill(libc::getpid(), libc::SIGINT);
+    // The guard handler must precede the signal thread: a delivery in the
+    // dispatch's pre-install window is swallowed here and retried below,
+    // never honored at the default disposition (which would kill the whole
+    // test binary).
+    // SAFETY: standard libc signal calls, serialized by SIGNAL_TEST_LOCK.
+    let original = unsafe {
+        libc::signal(
+            libc::SIGINT,
+            swallow_sigint as *const () as libc::sighandler_t,
+        )
+    };
+
+    // Deliver SIGINT once the fake proves its `trap` is installed (READY
+    // sentinel), then retry until the fake proves the forward landed (caught
+    // sentinel). No fixed delay guesses at the dispatch's startup latency
+    // under load; the 20s bound is a diagnostic ceiling, not a sleep.
+    let thread_sentinel = sentinel.clone();
+    let signal_thread = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !ready.exists() {
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        while !thread_sentinel.exists() {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            // SAFETY: kill(2) with our own pid is async-signal-safe and standard.
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGINT);
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
     });
 
@@ -116,6 +158,8 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
 
     let _ = signal_thread.join();
+    // SAFETY: restore the saved disposition before the assertions run.
+    unsafe { libc::signal(libc::SIGINT, original) };
 
     match old_path {
         Some(p) => unsafe { std::env::set_var("PATH", p) },
@@ -125,6 +169,7 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     unsafe { std::env::remove_var("FAKE_CODEX_REPLY") };
     unsafe { std::env::remove_var("FAKE_CODEX_SLEEP") };
     unsafe { std::env::remove_var("FAKE_CODEX_SIGINT_SENTINEL") };
+    unsafe { std::env::remove_var("FAKE_CODEX_READY_SENTINEL") };
 
     assert_eq!(
         outcome.exit_code, 130,
@@ -133,7 +178,8 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
     assert!(
         sentinel.exists(),
-        "SIGINT must be forwarded to the codex process group (sentinel not written) — codex would be orphaned"
+        "SIGINT must be forwarded to the codex process group (sentinel not written, ready written: {}) — codex would be orphaned",
+        ready.exists()
     );
 }
 
