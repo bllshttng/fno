@@ -523,3 +523,26 @@ Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-
 ```
 
 Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.
+
+## Take requests from the public board
+
+With `--requests`, `fno backlog publish` renders two links on the page: a header link to a prefilled issue form and an Upvote link on each open card. The links appear only when you pass the flag, and only on a project whose origin is a GitHub repo; anything else refuses naming the reason. The label is `fno-request` by default and `--label` renames it.
+
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo. fno never writes it for you. The form applies the request label to every visitor issue.
+
+Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported; only a maintainer with triage rights can do that, so the label is the trust signal. The import reads it with `--approved-label` if you named yours differently. Never list the approval label in any issue template, yours or your organization's: a template that applies it would let a visitor approve their own issue, and the import refuses to run when it finds the label in a template file it can see.
+
+The import verb is `fno backlog add requests`. It is a dry run by default and prints what it would file; pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+
+Four limits hold on every run:
+
+- `--limit` (100): at most this many issues read per run.
+- `--max-new` (20): at most this many new rows filed per run.
+- `--max-open` (50): at most this many open imported rows per project; at the ceiling the import refuses naming the count.
+- `--max-per-author` (3): at most this many open requests from one author.
+
+An imported row is born `idea`, priority `p3`, marked private, tagged `external-request`, with no difficulty and no plan. Its details open with a fixed warning and hold the visitor's text quoted line by line; the title starts `Request: `. Nothing from the visitor runs anywhere. To accept a request, write a new title and details in your own words on the row, then publish it with `--public`. Never promote the visitor's text. To reject one, close the issue on GitHub or remove the approval label, and defer the row.
+
+One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
+
+An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
