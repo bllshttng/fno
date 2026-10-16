@@ -90,6 +90,7 @@ fn proto_v4_control_replies_roundtrip() {
                 squad_name: None,
                 tab_id: 7,
                 cwd: "/code/footnote".into(),
+                pane_cwd: None,
                 child_pid: Some(4242),
                 title: None,
                 pristine_idle_shell: false,

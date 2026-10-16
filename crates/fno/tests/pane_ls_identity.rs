@@ -15,6 +15,7 @@ fn pane(fno_id: Option<&str>, name: Option<&str>) -> PaneInfo {
         squad_name: None,
         tab_id: 1,
         cwd: "/tmp".into(),
+        pane_cwd: None,
         child_pid: Some(40859),
         title: None,
         pristine_idle_shell: false,
