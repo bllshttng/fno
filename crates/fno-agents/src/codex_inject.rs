@@ -868,13 +868,13 @@ fn review_invocation_event_fields(
     receipt: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
     // The one parser answers here too: level, flags and args_raw come from
-    // fno::review_invocation::parse_review_invocation, so the codex leg
+    // crate::review_invocation::owner::parse_review_invocation, so the codex leg
     // records the same table as the mail and hook legs. Recorded behavior
     // change: a bare `fix` (or `fix` led by one U+2014 character) now reads
     // as --fix on codex, and an unknown -- token is recorded verbatim
     // instead of matched loosely.
     let command = audit_payload.unwrap_or("/review");
-    let parsed = fno::review_invocation::parse_review_invocation(command);
+    let parsed = crate::review_invocation::owner::parse_review_invocation(command);
     let verb = parsed
         .as_ref()
         .map(|p| p.verb.clone())
@@ -1095,9 +1095,9 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let invocation_id = fno::review_invocation::adopt_pending_invocation(&thread_id, None)
-        .unwrap_or_else(fno::review_invocation::mint_invocation_id);
-    fno::review_invocation::write_pending_invocation(&thread_id, &invocation_id, None);
+    let invocation_id = crate::review_invocation::owner::adopt_pending_invocation(&thread_id, None)
+        .unwrap_or_else(crate::review_invocation::owner::mint_invocation_id);
+    crate::review_invocation::owner::write_pending_invocation(&thread_id, &invocation_id, None);
     let outcome = match deliver_via_hosted_codex_thread(&thread_id, &target_raw, delivery).await {
         Some(outcome) => outcome,
         None => deliver_via_codex_review_start(&thread_id, &target, delivery).await,

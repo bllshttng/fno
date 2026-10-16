@@ -331,7 +331,7 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         .unwrap_or_default()
         .as_millis() as i64;
     let rows_spec = case["rows"].as_array().cloned().unwrap_or_default();
-    let mut envelopes: Vec<String> = rows_spec
+    let envelopes: Vec<String> = rows_spec
         .iter()
         .map(|row| fixture_envelope(row, now))
         .collect();
@@ -453,6 +453,23 @@ fn cases() -> Vec<Value> {
         &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cases.json unreadable: {e}")),
     )
     .expect("cases.json parses")
+}
+
+/// The vendored core is the fno crate's file, byte for byte: the pure owner
+/// (parse, flags, mint, sidecar) has one canonical copy, and the copy this
+/// crate splices in drifts only by a failed test.
+#[test]
+fn owner_core_is_vendored_byte_identical() {
+    let canonical = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fno/src/review_invocation_core.rs"
+    ))
+    .expect("the fno crate's core file sits beside this checkout");
+    let vendored = include_bytes!("../src/review_invocation_owner.rs");
+    assert_eq!(
+        vendored, canonical.as_slice(),
+        "review_invocation_owner.rs drifted from crates/fno/src/review_invocation_core.rs; copy the file, never fork it"
+    );
 }
 
 #[test]

@@ -8,7 +8,14 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fno::review_invocation::{
+mod owner {
+    // The pure core, vendored byte-identical from crates/fno (the parity
+    // test pins the equality). The crates do not link in production: fno
+    // shells this binary, so a shared module travels as a pinned copy.
+    include!("review_invocation_owner.rs");
+}
+
+use owner::{
     adopt_pending_invocation, mint_invocation_id, parse_review_invocation, write_pending_invocation,
 };
 

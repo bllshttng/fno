@@ -118,11 +118,6 @@ serde_yaml_ng = "0.10"
 # Typed argv for the migrated client verbs: one derive declaration
 # per flag replaces the per-verb hand-rolled scans.
 clap = { version = "4", features = ["derive"] }
-# The review invocation owner: fno-agents links the fno crate's pub module
-# (parse, sidecar, mint) instead of vendoring a third copy. The crates
-# release in lockstep, so the version pin satisfies the publish gate the
-# old dev-only link waited on; fno itself still never links fno-agents.
-fno = { path = "../fno", version = "0.4.1" }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -138,3 +133,11 @@ serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"
+# Tests feed a refusal's printed `fno mux pane kill ...` command to the real
+# parser rather than a copy of its grammar, so the two cannot drift apart.
+# Dev-only: fno never links fno-agents, it shells the binary at runtime, and
+# the production side travels the other way as the vendored
+# review_invocation_owner.rs copy the parity test pins byte-identical. A
+# real dependency stays blocked on the publish gate until the two crates
+# release a synchronized version whose registry copy carries the pub module.
+fno = { path = "../fno" }
