@@ -32,7 +32,7 @@ const UPVOTE_TITLE: &str = r"^Upvote ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
 const LOGIN_PATTERN: &str = r"^[A-Za-z0-9-]{1,39}$";
 
 struct Limits {
-    limit: u32,
+    limit: usize,
     max_new: usize,
     max_open: usize,
     max_per_author: usize,
@@ -94,46 +94,24 @@ pub fn run(args: &[String]) -> i32 {
                 Some(v) => parsed.approved_label = v,
                 None => return 2,
             },
-            "--limit" => match take(&mut i, "--limit") {
-                Some(v) => match positive_u32(&v) {
-                    Some(n) => parsed.limits.limit = n,
-                    None => {
-                        eprintln!("requests: --limit needs a positive integer, got {v:?}");
-                        return 2;
+            "--limit" | "--max-new" | "--max-open" | "--max-per-author" => {
+                let name = args[i].as_str();
+                match take(&mut i, name) {
+                    Some(v) => {
+                        let Some(n) = positive_usize(&v) else {
+                            eprintln!("requests: {name} needs a positive integer, got {v:?}");
+                            return 2;
+                        };
+                        match name {
+                            "--limit" => parsed.limits.limit = n,
+                            "--max-new" => parsed.limits.max_new = n,
+                            "--max-open" => parsed.limits.max_open = n,
+                            _ => parsed.limits.max_per_author = n,
+                        }
                     }
-                },
-                None => return 2,
-            },
-            "--max-new" => match take(&mut i, "--max-new") {
-                Some(v) => match positive_usize(&v) {
-                    Some(n) => parsed.limits.max_new = n,
-                    None => {
-                        eprintln!("requests: --max-new needs a positive integer, got {v:?}");
-                        return 2;
-                    }
-                },
-                None => return 2,
-            },
-            "--max-open" => match take(&mut i, "--max-open") {
-                Some(v) => match positive_usize(&v) {
-                    Some(n) => parsed.limits.max_open = n,
-                    None => {
-                        eprintln!("requests: --max-open needs a positive integer, got {v:?}");
-                        return 2;
-                    }
-                },
-                None => return 2,
-            },
-            "--max-per-author" => match take(&mut i, "--max-per-author") {
-                Some(v) => match positive_usize(&v) {
-                    Some(n) => parsed.limits.max_per_author = n,
-                    None => {
-                        eprintln!("requests: --max-per-author needs a positive integer, got {v:?}");
-                        return 2;
-                    }
-                },
-                None => return 2,
-            },
+                    None => return 2,
+                }
+            }
             "--apply" => parsed.apply = true,
             "--json" => parsed.json = true,
             other => {
@@ -240,7 +218,7 @@ pub fn run(args: &[String]) -> i32 {
             &repo,
             &parsed.label,
             &parsed.approved_label,
-            parsed.limits.limit,
+            parsed.limits.limit as u32,
         ) {
             Ok(issues) => issues,
             Err(e) => {
@@ -302,10 +280,6 @@ fn help_text() -> String {
         .to_string()
 }
 
-fn positive_u32(raw: &str) -> Option<u32> {
-    raw.parse::<u32>().ok().filter(|n| *n > 0)
-}
-
 fn positive_usize(raw: &str) -> Option<usize> {
     raw.parse::<usize>().ok().filter(|n| *n > 0)
 }
@@ -331,7 +305,11 @@ fn origin_repo(root: &Path) -> Option<String> {
 /// template directory passes; an unreadable file holds nothing.
 fn template_refusal(project: &str, approved_label: &str) -> Option<String> {
     let root = super::settings::project_root(project)?;
-    let dir = Path::new(&root).join(".github").join("ISSUE_TEMPLATE");
+    template_refusal_in(Path::new(&root), approved_label)
+}
+
+fn template_refusal_in(root: &Path, approved_label: &str) -> Option<String> {
+    let dir = root.join(".github").join("ISSUE_TEMPLATE");
     let entries = std::fs::read_dir(&dir).ok()?;
     let lower = approved_label.to_lowercase();
     let mut files: Vec<_> = entries.flatten().collect();
@@ -1040,32 +1018,8 @@ mod tests {
         let tpl = dir.path().join(".github").join("ISSUE_TEMPLATE");
         std::fs::create_dir_all(&tpl).unwrap();
         std::fs::write(tpl.join("request.yml"), "labels: [fno-approved]\n").unwrap();
-        let refusal = template_refusal_for_root(dir.path(), "fno-approved");
+        let refusal = template_refusal_in(dir.path(), "fno-approved");
         assert!(refusal.is_some());
-        assert!(template_refusal_for_root(dir.path(), "fno-other").is_none());
+        assert!(template_refusal_in(dir.path(), "fno-other").is_none());
     }
-}
-
-/// Test seam beside `template_refusal`, which resolves the root through
-/// settings: the rule under test is the file walk, not the lookup.
-#[cfg(test)]
-fn template_refusal_for_root(root: &Path, approved_label: &str) -> Option<String> {
-    let dir = root.join(".github").join("ISSUE_TEMPLATE");
-    let entries = std::fs::read_dir(&dir).ok()?;
-    let lower = approved_label.to_lowercase();
-    let mut files: Vec<_> = entries.flatten().collect();
-    files.sort_by_key(|e| e.file_name());
-    for entry in files {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if names_whole_word(&text.to_lowercase(), &lower) {
-            return Some(path.display().to_string());
-        }
-    }
-    None
 }
