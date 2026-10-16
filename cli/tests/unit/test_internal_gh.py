@@ -376,3 +376,59 @@ def test_execute_turns_a_proxy_identity_failure_into_a_result(monkeypatch):
     result = _internal_gh.execute("discretionary", ["auth", "status"])
     assert result.returncode == 2
     assert "cannot identify its own install directory" in result.stderr
+
+
+def test_real_runner_serves_plain_rest_gets_through_the_conditional_door(monkeypatch):
+    import fno.rust_binary as rust_binary
+
+    spawned: list[list[str]] = []
+    asked: list[dict] = []
+    answers = iter(
+        [
+            {"eligible": True, "ok": True, "stdout": '{"n":1}', "stderr": ""},
+            {"eligible": False},
+            rust_binary.VerbUnavailable("no binary"),
+        ]
+    )
+
+    def door(verb, payload, **kwargs):
+        asked.append(payload)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def spawn(cmd, **kwargs):
+        spawned.append(list(cmd))
+        return Result(0, "plain", "")
+
+    monkeypatch.setattr(rust_binary, "verb_call", door)
+    monkeypatch.setattr(_internal_gh, "run", spawn)
+    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
+    invoke = _internal_gh._rest_runner("/real/gh", spawn)
+
+    served = invoke(["gh", "api", "repos/o/r/pulls/1"], cwd="/repo")
+    assert (served.returncode, served.stdout) == (0, '{"n":1}')
+    assert asked[0] == {"op": "status-rest-get", "cwd": "/repo", "path": "repos/o/r/pulls/1"}
+    assert spawned == []
+
+    # An ineligible path, an unreachable door, and a non-GET shape all run here.
+    assert invoke(["gh", "api", "rate_limit"], cwd="/repo").stdout == "plain"
+    assert invoke(["gh", "api", "repos/o/r/pulls/2"], cwd="/repo").stdout == "plain"
+    assert invoke(["gh", "api", "-X", "POST", "repos/o/r/x"], cwd="/repo").stdout == "plain"
+    assert len(spawned) == 3
+    assert len(asked) == 3
+
+
+def test_injected_runner_never_reaches_the_conditional_door(monkeypatch):
+    import fno.rust_binary as rust_binary
+
+    def door(*args, **kwargs):
+        raise AssertionError("the door is for the real process runner only")
+
+    monkeypatch.setattr(rust_binary, "verb_call", door)
+    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
+    invoke = _internal_gh._rest_runner(
+        "/real/gh", lambda cmd, **kwargs: Result(0, "fake", "")
+    )
+    assert invoke(["gh", "api", "repos/o/r/pulls/1"], cwd=None).stdout == "fake"
