@@ -330,7 +330,7 @@ def _spawn_guard_decision(
 
     try:
         info = claim_status_payload(node_key)
-    except Exception as exc:  # pragma: no cover - claim_status never raises today
+    except Exception as exc:  # pragma: no cover - the status read never raises today
         return {
             "verdict": "error",
             "detail": f"claim probe failed ({exc}); not dispatching to avoid a double-launch",

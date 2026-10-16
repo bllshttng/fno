@@ -32,6 +32,7 @@ from fno.rust_binary import (
     claim_op as _native_claim,
     claim_status_payload,
     native_acquire,
+    native_claims_root,
     native_force_release,
     native_release,
     native_root_flags as _native_root_flags,
@@ -138,19 +139,15 @@ def compare_and_rebind(
 
 
 #: Holder prefix marking a claim taken by `fno agents spawn --node` on behalf of
-#: a worker that does not exist yet. The handover branch above accepts ONLY this
-#: prefix as a replaceable prior holder, which is why the constant lives here
-#: rather than in the command module that re-exports it.
-#:
-#: WHAT THIS IS NOT: a secret. `fno agents claim status` publishes every holder, so
-#: naming one back proves nothing about who is asking. What the prefix restricts
-#: is the BLAST RADIUS - only a launch-window claim can be taken over this way,
-#: never a working session's `target-session:` claim, which `ClaimHeldByOther`
-#: still protects. The window is TTL-bound (`HANDOVER_TTL`), so the exposure is
-#: bounded to it, and before this change that same window carried NO claim at
-#: all. Closing it properly needs a secret the worker alone holds, which is its
-#: own change.
-from fno.rust_binary import HANDOVER_HOLDER_PREFIX  # re-export; defined beside the claim transport
+#: a worker that does not exist yet. The handover branch accepts ONLY this
+#: prefix as a replaceable prior holder. WHAT THIS IS NOT: a secret - what the
+#: prefix restricts is the BLAST RADIUS: only a launch-window claim can be
+#: taken over this way, never a working session's `target-session:` claim,
+#: which `ClaimHeldByOther` still protects. The window is TTL-bound, so the
+#: exposure is bounded. Closing it properly needs a secret the worker alone
+#: holds, which is its own change. The constant lives in :mod:`fno.rust_binary`
+#: beside the transport; this module re-exports it.
+from fno.rust_binary import HANDOVER_HOLDER_PREFIX  # noqa: E402 - re-export
 
 #: The requeue pseudo-holder (`backlog/requeue`): the session that takes the
 #: node, not an agent. `holder_agent_name` is the one resolver.
@@ -216,22 +213,6 @@ def _claim_state(claim: Claim, *, root: Optional[Path] = None) -> ClaimState:
         return ClaimState.CORRUPTED
 
 
-def _existing_is_live(existing: Claim, *, root: Optional[Path] = None) -> bool:
-    """Authoritative acquire/recovery liveness predicate.
-
-    Delegates to ``classify`` so the mutex honors the SAME hybrid TTL-or-pid
-    liveness as the selection/status reads : an expired TTL claim
-    whose recorded pid is alive on this host is LIVE and must NOT be reclaimed
-    by a peer (otherwise a suspended-but-alive session's node is stolen). One
-    predicate means acquire and ``status``/``list`` can never diverge.
-
-    SUSPECT counts as live here: a TTL-unexpired claim with a dead pid
-    is a respawned worker's protected slot, so acquire must refuse it exactly
-    like LIVE (never steal). Only TTL expiry (-> STALE) makes it reclaimable.
-    """
-    return _claim_state(existing, root=root) in (ClaimState.LIVE, ClaimState.SUSPECT)
-
-
 def sweep_verdict(
     claim: Claim,
     *,
@@ -285,18 +266,6 @@ def sweep_verdict(
     # False: a live worker holds this node. None: the probe could not run,
     # which is unknown, and unknown keeps.
     return False, "suspect_alive" if probe_verdict is False else "suspect_unprobed"
-
-
-def native_claims_root(key: str) -> Optional[Path]:
-    """The claims root the native leg resolves ``key`` against, or None for a
-    repo-local key. The ONE routing read for callers that need the PATH (the
-    prefix list lives once, in the Rust
-    ``claims_root.rs``); the lockfile operations themselves never needed it.
-    Raises :class:`ClaimVerdictUnavailable` when the fno-agents binary is
-    missing, like every native claim call."""
-    payload = _native_claim("root", key, [])
-    root = payload.get("root")
-    return Path(str(root)) if root else None
 
 
 def _native_claim_model(payload: dict[str, Any]) -> Claim:

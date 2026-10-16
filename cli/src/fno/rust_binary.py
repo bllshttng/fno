@@ -590,12 +590,9 @@ _TTL_PATTERN = re.compile(r"^\s*(\d+)\s*([smh]?)\s*$", re.IGNORECASE)
 def parse_ttl_ms(value: Optional[str]) -> Optional[int]:
     """Convert "1h" / "30m" / "3600s" / "5000" into milliseconds.
 
-    Empty string and None return None (caller decides default).
-    Plain digits are interpreted as seconds, matching ``sleep`` convention.
-
-    The one ttl parser: `fno.claims.cli._parse_ttl` wraps this so its CLI
-    flags keep raising typer.BadParameter.
-    """
+    Empty string and None return None (caller decides default). Plain digits
+    are seconds, matching ``sleep`` convention. `fno.claims.cli._parse_ttl`
+    wraps this so its CLI flags keep raising typer.BadParameter."""
     if value is None or value == "":
         return None
     m = _TTL_PATTERN.match(value)
@@ -753,13 +750,9 @@ def native_acquire(
     harness_session_id: Optional[str] = None,
     root: Optional[Path] = None,
 ) -> dict[str, Any]:
-    """Take one claim natively; the payload-level acquire.
-
-    Returns the receipt payload; raises ClaimHeldByOther (with `.holder`/
-    `.pid`/`.host`) when a live claim blocks, per `claim_op`. The Claim-typed
-    wrapper lives in ``fno.claims.core`` until the package deletion moves the
-    last importers.
-    """
+    """Payload-level acquire; raises ClaimHeldByOther when a live claim blocks.
+    The Claim-typed wrapper lives in ``fno.claims.core`` until the package
+    deletion moves the last importers."""
     _validate_inputs(key, holder, ttl_ms, pid=pid, pid_unavailable=pid_unavailable)
     native_root = root or _configured_claim_root()
     flags = ["--holder", holder]
@@ -802,10 +795,8 @@ def native_release(
     if prior_payload.get("state") not in {None, "free"} and prior_payload.get("holder"):
         if prior_payload["holder"] != holder and strict:
             raise HolderMismatch(holder, prior_payload["holder"], key)
-    # --with-claim: the wave-2 leaf port moved the release surface into
-    # claim_cli; the operator --json receipt is the frozen two-field shape,
-    # and the engine leg asks for the removed record so this parse is
-    # unchanged.
+    # --with-claim: the operator receipt is the frozen two-field shape, and the
+    # engine leg asks for the removed record so the wrapper's parse is unchanged.
     receipt = claim_op(
         "release", key, ["--holder", holder, "--with-claim", *native_root_flags(native_root)]
     )
@@ -851,8 +842,7 @@ def native_force_release(
 
     ``expected_claim`` is the previously read record payload (a native sweep
     row round-trips: serde ignores the row's computed fields), arming the
-    compare-and-release so a claim that changed between read and release is
-    refused instead of stolen.
+    compare-and-release.
     """
     if not key:
         raise ClaimValidationError("key must be non-empty")
@@ -878,11 +868,10 @@ def native_force_release(
 
 def native_claims_root(key: str) -> Optional[Path]:
     """The claims root the native leg resolves ``key`` against, or None for a
-    repo-local key. The ONE routing read for callers that need the PATH (the
-    prefix list lives once, in the Rust
-    ``claims_root.rs``); the lockfile operations themselves never needed it.
-    Raises :class:`ClaimVerdictUnavailable` when the fno-agents binary is
-    missing, like every native claim call."""
+    repo-local key. The ONE routing read for callers that need the PATH; the
+    prefix list lives once, in the Rust ``claims_root.rs``. Raises
+    :class:`ClaimVerdictUnavailable` when the fno-agents binary is missing,
+    like every native claim call."""
     payload = claim_op("root", key, [])
     root = payload.get("root")
     return Path(str(root)) if root else None
@@ -890,12 +879,11 @@ def native_claims_root(key: str) -> Optional[Path]:
 
 # --- Sweep instruments: the roster-backed settlement and abandonment probes.
 #
-# The Python half of the reap decision. The native sweep verdict
-# (`claim_op("sweep", ...)` rows) carries `provably_dead`/`bucket`, and these
-# instruments refine it with evidence that lives outside the claim store: the
-# fleet roster, the transcript tails, the mux pane listing, the graph's
-# terminal nodes. Their Rust twins live in crates/fno-agents/src/claim_cli/
-# reap.rs; until the sweep callers go native, this is the one home.
+# The Python half of the reap decision: evidence that lives outside the claim
+# store (fleet roster, transcript tails, mux panes, the graph's terminal
+# nodes) refining the native sweep row's `provably_dead`/`bucket`. Their Rust
+# twins live in crates/fno-agents/src/claim_cli/reap.rs; until the sweep
+# callers go native, this is the one home.
 
 #: Seconds the roster cross-check may spend shelling out to the harness.
 #: A status read is interactive, so it must answer late-but-honestly
@@ -1235,13 +1223,9 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
 def _claim_worktree_cwd(claim) -> Optional[str]:
     """The worktree path a claim's writer stamped into metadata, if any.
 
-    The transcript fallback needs a cwd to find the session's tree; the
-    roster row (the usual source) is absent on exactly the paths that need
-    the fallback, so the claim itself carries it when its writer could.
-    Accepts a Claim object OR a plain dict row (list_cmd's shape) - a bare
-    `getattr(a_dict, "metadata", None)` silently returns None for every
-    dict, so the two shapes need this one branch to share an implementation.
-    """
+    Accepts a Claim object OR a plain dict row: a bare
+    `getattr(a_dict, "metadata", None)` silently returns None for every dict,
+    so the two shapes need this one branch to share an implementation."""
     meta = claim.get("metadata") if isinstance(claim, dict) else getattr(claim, "metadata", None)
     meta = meta or {}
     for key in ("worktree", "cwd"):
