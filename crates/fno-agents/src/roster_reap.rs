@@ -378,6 +378,18 @@ pub(crate) fn run_with_scope_workers(
             ));
             continue;
         }
+        // The user's keep mark on the session itself: an unowned session the
+        // user ruled kept. The class is owned - the user owns it by ruling.
+        if let Some(why) = row
+            .session_id
+            .as_deref()
+            .and_then(|sid| crate::keep_mark::for_session(home, sid))
+        {
+            summary
+                .kept
+                .push(judgement_class(&ident, None, why, false, "owned"));
+            continue;
+        }
         // Scope off retires nothing and judges nothing: no graph read, no
         // transcript probe.
         if scope == crate::agents_config::RosterScope::Off {
@@ -1200,7 +1212,11 @@ mod tests {
         let home = crate::paths::AgentsHome::at(dir.join("home"));
         home.ensure_root().unwrap();
         let transcript = quiet_transcript(&dir, "sid-1");
-        let rows = vec![row("ab12cd34", Some("sid-1"), Some("hand-typed-name"))];
+        let transcript2 = quiet_transcript(&dir, "sid-2");
+        let rows = vec![
+            row("ab12cd34", Some("sid-1"), Some("hand-typed-name")),
+            row("ef56ab78", Some("sid-2"), Some("hand-typed-2")),
+        ];
         // Stage the receipt under a hermetic HOME: the receipt builder reads
         // the harness store index for the resume locator.
         let store_home = tempfile::tempdir().unwrap();
@@ -1216,6 +1232,17 @@ mod tests {
             crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
                 .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        let mut entry = RegistryEntry::new(
+            Some("sid-2".into()),
+            crate::state::Lineage::unproven("test receipt staging"),
+        );
+        entry.harness = Some("claude".into());
+        entry.short_id = "ef56ab78".into();
+        let receipt =
+            crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
+                .expect("receipt builds");
+        crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        crate::keep_mark::set(&home, "sid-2", "hand-typed-2").unwrap();
         let summary = run(
             &home,
             900,
@@ -1245,6 +1272,14 @@ mod tests {
                 .contains("no provenance; harness state done"),
             "{summary:?}"
         );
+
+        // AC3-HP: the marked twin is kept, the reason names the mark.
+        let marked = summary
+            .kept
+            .iter()
+            .find(|j| j.short_id == "sid-2")
+            .expect("the marked session is kept");
+        assert!(marked.reason.starts_with("keep mark:"), "{marked:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
