@@ -130,37 +130,47 @@ fn bind_session(sid: &str, cwd: &str, node: String) -> BindOutcome {
     let existing = entries
         .entries
         .iter()
-        .position(|e| e.harness_session_id.as_deref() == Some(sid));
-    match existing {
-        // Re-locate by sid INSIDE the locked write: the snapshot index can
-        // go stale on a concurrent writer, and the second emptiness check
-        // honors a node another writer stamped between load and lock.
-        Some(_) => {
-            let wrote = crate::state::update_registry(&registry_path, |reg| {
-                if let Some(row) = reg
-                    .entries
-                    .iter_mut()
-                    .find(|e| e.harness_session_id.as_deref() == Some(sid))
-                {
-                    if row.node.as_deref().is_none_or(|n| n.is_empty()) {
-                        row.node = Some(node.clone());
-                        row.node_basis = Some("first-turn".to_string());
-                    }
+        .any(|e| e.harness_session_id.as_deref() == Some(sid));
+    let wrote = if existing {
+        // Re-locate by sid INSIDE the locked write: the load-time snapshot
+        // can go stale on a concurrent writer. A row another writer stamped
+        // between load and lock keeps its node and stays silent; a row the
+        // reaper removed between load and lock falls through to the mint
+        // below, so the confirm line never describes a write that did not
+        // happen.
+        let found = std::cell::Cell::new(false);
+        let held = std::cell::Cell::new(false);
+        let wrote = crate::state::update_registry(&registry_path, |reg| {
+            if let Some(row) = reg
+                .entries
+                .iter_mut()
+                .find(|e| e.harness_session_id.as_deref() == Some(sid))
+            {
+                found.set(true);
+                if row.node.as_deref().is_none_or(|n| n.is_empty()) {
+                    row.node = Some(node.clone());
+                    row.node_basis = Some("first-turn".to_string());
+                } else {
+                    held.set(true);
                 }
-            });
-            if let Err(e) = wrote {
+            }
+        });
+        match wrote {
+            Ok(()) if held.get() => return BindOutcome::Silent,
+            Ok(()) if found.get() => None,
+            Ok(()) => Some(()),
+            Err(e) => {
                 eprintln!("node-bind: registry write failed, no bind: {e}");
                 return BindOutcome::Silent;
             }
         }
-        None => {
-            let mut minted = mint_for_session(sid, cwd);
-            minted.node = Some(node.clone());
-            minted.node_basis = Some("first-turn".to_string());
-            if let Err(e) = crate::client_verbs::upsert_synthesized_row(&registry_path, minted) {
-                eprintln!("node-bind: registry write failed, no bind: {e}");
-                return BindOutcome::Silent;
-            }
+    } else {
+        Some(())
+    };
+    if let Some(()) = wrote {
+        if let Err(e) = mint_and_upsert(&registry_path, sid, cwd, &node) {
+            eprintln!("node-bind: registry write failed, no bind: {e}");
+            return BindOutcome::Silent;
         }
     }
     BindOutcome::Bound(format!(
@@ -183,6 +193,20 @@ fn mint_for_session(sid: &str, cwd: &str) -> crate::state::RegistryEntry {
         },
         &crate::daemon::now_rfc3339_like(),
     )
+}
+
+/// Mint the row and stamp the bind on it in one upsert. Also the fallback
+/// for a row that vanished between the load and the locked write.
+fn mint_and_upsert(
+    registry_path: &std::path::Path,
+    sid: &str,
+    cwd: &str,
+    node: &str,
+) -> Result<(), crate::state::StateError> {
+    let mut minted = mint_for_session(sid, cwd);
+    minted.node = Some(node.to_string());
+    minted.node_basis = Some("first-turn".to_string());
+    crate::client_verbs::upsert_synthesized_row(registry_path, minted)
 }
 
 #[cfg(test)]

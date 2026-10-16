@@ -457,7 +457,9 @@ pub(crate) fn first_user_turn(harness: &str, sid: &str) -> Option<String> {
             continue;
         };
         let is_user = match event.get("type").and_then(Value::as_str) {
-            Some("user") => true,
+            // A claude meta event (the harness's own preamble line) is not a
+            // person's turn, so it never starts the session.
+            Some("user") => event.get("isMeta") != Some(&Value::Bool(true)),
             Some("response_item") => {
                 event
                     .get("payload")
