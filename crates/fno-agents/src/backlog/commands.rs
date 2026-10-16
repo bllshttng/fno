@@ -54,6 +54,7 @@ pub const GROUPS: &[Group] = &[
             ("provenance", "provenance"),
             ("project-root", "project-root"),
             ("version", "version"),
+            ("calibration", "calibration"),
         ],
     },
     Group {

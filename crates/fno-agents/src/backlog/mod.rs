@@ -17,6 +17,8 @@ pub mod autobrief;
 pub mod autolink;
 pub(crate) mod binding;
 pub mod birth;
+pub mod calibration;
+pub mod calibration_cli;
 pub mod cli;
 pub(crate) mod closures;
 pub mod collision;
