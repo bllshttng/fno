@@ -294,7 +294,6 @@ fn a_loop_seed_creates_once_then_resumes_each_tick_until_the_row_is_removed() {
             &h,
             "fx-loop",
             prompt,
-            "tester",
             &cwd,
             "glm-test",
             None,

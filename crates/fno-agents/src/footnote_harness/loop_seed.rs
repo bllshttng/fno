@@ -90,7 +90,13 @@ pub fn drive(
     let mut ticks = 1u64;
     let mut failures = 0u32;
     loop {
-        sleep(seed.interval);
+        // A huge interval never out-sleeps the cap: each sleep is bound by
+        // the lifetime the row has left.
+        let elapsed = now().duration_since(started).unwrap_or_default();
+        let Some(remaining) = MAX_LIFETIME.checked_sub(elapsed) else {
+            return stopped(0, ticks, "7 days elapsed");
+        };
+        sleep(seed.interval.min(remaining));
         if !row_alive() {
             return stopped(0, ticks, "row removed");
         }
@@ -107,12 +113,6 @@ pub fn drive(
         failures = if out.exit_code == 0 { 0 } else { failures + 1 };
         if failures >= MAX_FAILURE_STREAK {
             return stopped(out.exit_code, ticks, "3 failed ticks in a row");
-        }
-        if now()
-            .duration_since(started)
-            .is_ok_and(|age| age >= MAX_LIFETIME)
-        {
-            return stopped(0, ticks, "7 days elapsed");
         }
     }
 }

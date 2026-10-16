@@ -9,15 +9,32 @@ use crate::paths::AgentsHome;
 /// One ask turn on a headless-only row. The text is required: a resume with
 /// no message has nothing to run (fnh's UserPromptSubmit hook only posts a
 /// mail notice), and `--message-already-queued` still sends the text for
-/// the same reason.
-pub(crate) fn run(home: &AgentsHome, entry: &Value, name: &str, message: Option<&str>) -> i32 {
+/// the same reason. `cwd_override` is the caller's `--cwd`: a moved or
+/// deleted checkout resumes there instead of refusing on the recorded path.
+pub(crate) fn run(
+    home: &AgentsHome,
+    entry: &Value,
+    name: &str,
+    message: Option<&str>,
+    cwd_override: Option<&str>,
+) -> i32 {
     let Some(message) = message.filter(|m| !m.is_empty()) else {
         eprintln!(
             "fno agents resume {name}: a headless-only session resumes one turn at a time; pass --message <text>"
         );
         return 2;
     };
-    let cwd = entry.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let cwd = cwd_override
+        .filter(|c| !c.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            entry
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        });
+    let cwd = cwd.as_str();
     let harness = entry
         .get("harness")
         .and_then(Value::as_str)
@@ -32,9 +49,8 @@ pub(crate) fn run(home: &AgentsHome, entry: &Value, name: &str, message: Option<
     {
         return code;
     }
-    // The zcode lane runs its child in params.cwd, and a wake's process cwd
-    // is not the row's, so hand the recorded one over. The footnote lane
-    // reads the row's cwd from the entry and ignores the param.
+    // Both lanes run their child in params.cwd when the ask carries one, and
+    // a wake's process cwd is not the row's, so hand the effective one over.
     let params = serde_json::json!({ "message": message, "cwd": cwd });
     if let Some(code) = crate::footnote_harness::maybe_run_ask(home, &params, name) {
         return code;

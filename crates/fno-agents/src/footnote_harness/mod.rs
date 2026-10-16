@@ -297,13 +297,13 @@ pub fn dispatch_once(
         Some(Ok(seed)) => {
             return loop_seed::drive(
                 &seed,
-                |prompt| create_turn(home, name, prompt, from_name, cwd, model, timeout, params),
+                |prompt| create_turn(home, name, prompt, cwd, model, timeout, params),
                 |prompt| {
                     // resume_turn, not maybe_run_ask: the ask lane re-parses
                     // its message, so a prompt that itself begins with
                     // `/loop` would start a nested driver. The plain turn is
                     // what a tick means.
-                    match resume_turn(home, name, prompt, timeout) {
+                    match resume_turn(home, name, prompt, timeout, None) {
                         Some(o) => outcome(o.exit_code, o.stdout, o.stderr),
                         None => outcome(12, String::new(), String::new()),
                     }
@@ -319,19 +319,19 @@ pub fn dispatch_once(
         }
         None => {}
     }
-    create_turn(home, name, message, from_name, cwd, model, timeout, params)
+    create_turn(home, name, message, cwd, model, timeout, params)
 }
 
 /// One create turn: the pre-loop body of `dispatch_once`, unchanged - it
 /// refuses a duplicate row, mints the session id, runs the binary once and
 /// settles the row's terminal state. The loop's first turn is this with the
-/// seed's prompt.
+/// seed's prompt. `from_name` never reaches it: the spawn-input validation
+/// stayed in `dispatch_once`.
 #[allow(clippy::too_many_arguments)]
 fn create_turn(
     home: &AgentsHome,
     name: &str,
     message: &str,
-    from_name: &str,
     cwd: &Path,
     model: &str,
     timeout: Option<Duration>,
@@ -450,15 +450,16 @@ fn ask_turn(home: &AgentsHome, params: &Value, name: &str) -> Option<AskOutcome>
     }
     let message = params["message"].as_str().unwrap_or("").to_string();
     let timeout = params["timeout"].as_u64().map(Duration::from_secs);
+    let cwd_override = params["cwd"].as_str().filter(|c| !c.is_empty());
     let Some(parsed) = loop_seed::parse(&message) else {
-        return resume_turn(home, name, &message, timeout);
+        return resume_turn(home, name, &message, timeout, cwd_override);
     };
     let seed = match parsed {
         Ok(seed) => seed,
         Err(e) => return Some(outcome(2, String::new(), format!("{e}\n"))),
     };
     let turn = |prompt: &str| {
-        resume_turn(home, name, prompt, timeout)
+        resume_turn(home, name, prompt, timeout, None)
             .unwrap_or_else(|| outcome(12, String::new(), String::new()))
     };
     let row_alive = || {
@@ -478,14 +479,17 @@ fn ask_turn(home: &AgentsHome, params: &Value, name: &str) -> Option<AskOutcome>
 
 /// One resumed footnote turn: the row goes Busy for the child and back to
 /// its terminal state after; a refusal (exit 2: a live writer holds the
-/// session, or the spec was refused) never rewrites the row. Returns the
-/// outcome without printing; `None` for a non-footnote row (fall through)
-/// or an unreadable registry.
+/// session, or the spec was refused) never rewrites the row. The child runs
+/// in `cwd_override` when the ask carries one (the ask lanes' `params.cwd`
+/// contract), else the row's recorded cwd. Returns the outcome without
+/// printing; `None` for a non-footnote row (fall through) or an unreadable
+/// registry.
 fn resume_turn(
     home: &AgentsHome,
     name: &str,
     message: &str,
     timeout: Option<Duration>,
+    cwd_override: Option<&str>,
 ) -> Option<AskOutcome> {
     let reg = load_registry(&home.registry_json()).ok()?;
     let entry = reg.find_name_or_full_session_id(name)?;
@@ -497,7 +501,9 @@ fn resume_turn(
         .clone()
         .or_else(|| entry.harness_session_id.clone())?;
     let row_name = entry.name.clone();
-    let cwd = PathBuf::from(&entry.cwd);
+    let cwd = cwd_override
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&entry.cwd));
     let model = entry.requested_model.clone().unwrap_or_default();
     // A resume keeps the mode the session was spawned with.
     let mode = entry.requested_permission_mode.clone();
