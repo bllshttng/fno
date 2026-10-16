@@ -16,7 +16,7 @@ use std::path::Path;
 
 const DEFAULT_LABEL: &str = "fno-request";
 const DEFAULT_APPROVED_LABEL: &str = "fno-approved";
-const DEFAULT_LIMIT: u32 = 100;
+const DEFAULT_LIMIT: usize = 100;
 const DEFAULT_MAX_NEW: usize = 20;
 const DEFAULT_MAX_OPEN: usize = 50;
 const DEFAULT_MAX_PER_AUTHOR: usize = 3;
@@ -560,7 +560,7 @@ fn record_upvote(
 fn in_open_set(row: &Value) -> bool {
     if !matches!(
         row.get("status").and_then(Value::as_str),
-        "in_progress" | "ready" | "blocked" | "idea"
+        Some("in_progress" | "ready" | "blocked" | "idea")
     ) {
         return false;
     }
