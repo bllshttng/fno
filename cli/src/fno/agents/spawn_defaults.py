@@ -15,6 +15,10 @@ import re
 import sys
 from typing import IO, Callable, List, Mapping, Optional, Sequence, Set, Tuple
 
+#: The take-over reason the Rust compose consumed from the argv, in process
+#: only: the environment never carries it (lead ruling, 2026-10-16).
+PENDING_TAKE_OVER: List[str] = []
+
 # Flags that consume the FOLLOWING token. Scanning for our three flags skips a
 # value flag's value so a value that looks like `--model` / `--effort` can never
 # masquerade as one of ours. Mirrors client.rs VALUE_FLAGS + the short aliases
@@ -829,6 +833,7 @@ def compose_spawn_argv(
         from fno.agents import events
 
         events.emit("model_vendor_mismatch", **event)
+    PENDING_TAKE_OVER[:] = [str(answer.get("take_over") or "")] if answer.get("take_over") else []
     answer_argv = [str(t) for t in answer.get("argv") or out]
     return answer_argv
 

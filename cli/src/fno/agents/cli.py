@@ -1343,21 +1343,17 @@ def cmd_spawn(
     promote: list[str] = typer.Option(
         [],
         "--promote",
-        help=(
-            "Promote the spawned worker to a titled role over a territory: "
-            "epic id(s), one project, or several. Contract: "
-            "docs/guides/agents-spawn-flags.md."
-        ),
+        help=("Promote the spawned worker to a titled role over a territory: "
+              "epic id(s), one project, or several. Contract: "
+              "docs/guides/agents-spawn-flags.md."),
     ),
     hand_off: bool = typer.Option(
         False,
         "--hand-off",
         "--succeed",
-        help=(
-            "Hand the caller-held role to the spawned worker. Without it, a "
-            "same-scope promote is refused and the caller keeps its role. "
-            "--succeed is the retired spelling."
-        ),
+        help=("Hand the caller-held role to the spawned worker. Without it, a "
+              "same-scope promote is refused and the caller keeps its role. "
+              "--succeed is the retired spelling."),
     ),
     node: str | None = typer.Option(
         None,
@@ -1550,6 +1546,10 @@ def cmd_spawn(
             "--succeed is now --hand-off; the old spelling answers for one release.",
             file=sys.stderr,
         )
+
+    from fno.agents.spawn_defaults import PENDING_TAKE_OVER
+
+    take_over = PENDING_TAKE_OVER.pop() if PENDING_TAKE_OVER else None
 
     substrate = resolve_spawn_gates(substrate, monitor, once=once, harness=harness)
     seedless = seedless_thread_refusal(
@@ -2229,6 +2229,7 @@ def cmd_spawn(
                     role_level=role_level,
                     role_scope=role_scope,
                     succession=hand_off,
+                    take_over=take_over,
                     provenance=prov_env,
                     account_env=account_env,
                     route_env=route_env,
@@ -2561,6 +2562,7 @@ def cmd_spawn(
                 role_level=role_level,
                 role_scope=role_scope,
                 succession=hand_off,
+                take_over=take_over,
                 route_provider=route_provider,
                 provider_gate=gate,
                 sandbox_settings=sandbox_settings,
