@@ -46,7 +46,11 @@ fn spend_note(calls: usize, ticks: usize, noun: &str) -> String {
          fleet budget {} of {} points in the last 60s{}\n",
         snap.points_60s,
         snap.cap,
-        crate::gh_etag::note_suffix()
+        format!(
+            "{}{}",
+            crate::gh_etag::note_suffix(),
+            crate::gh_poller::note_suffix()
+        )
     )
 }
 
