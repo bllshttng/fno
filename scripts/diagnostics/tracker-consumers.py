@@ -93,6 +93,10 @@ READ_ALLOWLIST = (
     # file ("restore graph.json and retry"); the module's own read routes
     # through graph_store like the backlog namespace's.
     "crates/fno-agents/src/target_init.rs",
+    # The target-start port's unreadable-graph refusal carries the same
+    # store-file prose as its init twin; its reads route through
+    # target_init::graph_rows like the module they were ported from.
+    "crates/fno-agents/src/target_start.rs",
 )
 
 # Known-positive controls (task 4.2 / AC9): verbs the census must FIND in the

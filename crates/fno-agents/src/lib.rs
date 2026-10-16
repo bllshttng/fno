@@ -205,6 +205,7 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
 pub mod git_paths;
 #[cfg(test)]
@@ -520,6 +521,7 @@ pub mod target_blast;
 pub mod target_denominator;
 pub mod target_init;
 pub mod target_orient;
+pub mod target_start;
 pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;

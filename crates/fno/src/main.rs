@@ -193,6 +193,10 @@ enum Role {
     /// sibling fno-agents `target-init` door. The bash helper stays; the
     /// parity goldens characterize the port.
     TargetInit(Vec<OsString>),
+    /// `fno do target start ...`: the one-verb cold start, exec'd through the
+    /// sibling fno-agents `target-start` door. The ensure verb and the bash
+    /// helper stay; `--steps` rides the argv, never the environment.
+    TargetStart(Vec<OsString>),
     /// `fno do target blast-check <plan>`: the blast classifier is native
     /// (target_blast.rs); the Python verb is a thin forward.
     TargetBlastCheck(Vec<OsString>),
@@ -413,6 +417,19 @@ fn classify_target_init(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target start ...`: the start verb's cold-start door. The same
+/// literal three-token prefix rule as init.
+fn classify_target_start(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "start"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do target blast-check <plan> [--quiet]`: the same literal three-token
 /// prefix rule as init, so the Python verb only ever serves as the forward.
 fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
@@ -586,6 +603,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_target_init(args) {
         return Role::TargetInit(rest);
+    }
+    if let Some(rest) = classify_target_start(args) {
+        return Role::TargetStart(rest);
     }
     if let Some(rest) = classify_target_blast_check(args) {
         return Role::TargetBlastCheck(rest);
@@ -967,6 +987,11 @@ fn main() {
         Role::TargetInit(rest) => std::process::exit(fno_agents_exec(
             "fno do target init",
             &["target-init"],
+            &rest,
+        )),
+        Role::TargetStart(rest) => std::process::exit(fno_agents_exec(
+            "fno do target start",
+            &["target-start"],
             &rest,
         )),
         Role::TargetBlastCheck(rest) => std::process::exit(fno_agents_exec(

@@ -33,16 +33,10 @@ def _binding_answers(monkeypatch, receipt):
     return calls
 
 
-def test_target_init_help_documents_inputs():
+def test_target_init_left_the_python_registry():
+    """The verb resolves through the native front door now (main.rs)."""
     result = runner.invoke(app, ["do", "target", "init", "--help"])
-    assert result.exit_code == 0
-    assert "--input" in result.stdout
-    assert "--plan-path" in result.stdout
-
-
-
-
-
+    assert result.exit_code != 0
 
 def _fake_plugin_root(tmp_path):
     fake_root = tmp_path / "plugin"
@@ -199,77 +193,6 @@ def test_retro_dispatch_preflight_attended_overlap_is_advisory_only(tmp_path):
 
 
 
-def test_target_init_empty_model_rejected(monkeypatch, tmp_path):
-    """AC2-ERR: an empty --model exits 2. The usage refusal is the native
-    door's wording (the parity goldens characterize it); the forward's
-    observable surface is the propagated exit code."""
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--model", "  "])
-    assert result.exit_code == 2
-
-
-def test_target_init_rejects_invalid_size(monkeypatch, tmp_path):
-    """Invalid --size exits 2. Same shape as the empty-model test: the wording
-    is the native door's, the propagated code is the seam's contract."""
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x", "--size", "XL"])
-    assert result.exit_code == 2
-
-
-def test_target_init_help_documents_size():
-    result = runner.invoke(app, ["do", "target", "init", "--help"])
-    assert result.exit_code == 0
-    assert "--size" in result.stdout
-
-
-def test_target_init_missing_script_exits_2(monkeypatch, tmp_path):
-    """AC3-ERR: bare-install degrade is actionable, exits 2, no traceback.
-    FNO_REPO_ROOT is authoritative. The refusal text is the native door's now
-    (the thin forward only propagates its exit code), so the wording is
-    characterized by the parity goldens, not re-asserted here."""
-    fake_root = tmp_path / "empty"
-    fake_root.mkdir()
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 2
-
-
-def test_target_init_degrade_writes_no_state(monkeypatch, tmp_path):
-    """AC3-FR / AC3-EDGE: when the init script is unresolvable (bare install or
-    binary-present-but-skills-absent), the run exits 2, writes no partial
-    target-state.md, and the bash writer never runs."""
-    fake_root = tmp_path / "empty"
-    fake_root.mkdir()
-    proj = tmp_path / "proj"
-    proj.mkdir()
-    monkeypatch.chdir(proj)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-
-    bash_calls = []
-    real_run = target_cli.subprocess.run
-
-    def _record_run(cmd, *a, **k):
-        # The forward may exec the native decision layer; the bash writer
-        # must never run when the init script is missing.
-        cmd = list(cmd)
-        if cmd and cmd[0] == "bash":
-            bash_calls.append(cmd)
-        return real_run(cmd, *a, **k)
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _record_run)
-    result = runner.invoke(app, ["do", "target", "init", "--input", "x"])
-    assert result.exit_code == 2
-    assert bash_calls == []
-    assert not (proj / ".fno").exists()
-
-
-
 
 def test_state_init_redirects_target_bootstrap():
     """AC (redirect): bare `state init` (default type=target) -> non-zero redirect."""
@@ -292,129 +215,6 @@ def test_state_init_allow_stub_escape(tmp_path, monkeypatch):
     result = runner.invoke(app, ["do", "state", "init", "--allow-stub"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / ".fno" / "target-state.md").exists()
-
-
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-def test_target_start_forwards_harness_and_never_launches_in_place(tmp_path, monkeypatch):
-    """A `never` project: ensure returns the repo root, so `fno do target start`
-    launches in place, forwards --harness claude, and does NOT run the setup hook
-    on the canonical checkout (Locked Decision 4: no worktree-only side effect on
-    path == repo root, which would corrupt canonical .fno)."""
-    import subprocess as _real_subprocess
-    from fno.harness_identity import HarnessIdentity
-
-    repo = tmp_path / "vault"
-    repo.mkdir()
-    _real_subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
-    _real_subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "init"], check=True
-    )
-    monkeypatch.chdir(repo)
-
-    seen = {"ensure": None, "setup_called": False, "init": False}
-    real_run = _real_subprocess.run
-
-    def _dispatch(cmd, *a, **k):
-        cmd = list(cmd)
-        if cmd and cmd[0] == "git":
-            return real_run(cmd, *a, **k)
-        seen["init"] = True  # target init
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    def _dispatch_bounded(cmd, **k):
-        cmd = list(cmd)
-        if "ensure" in cmd:  # simulate policy=never: repo root on stdout, exit 0
-            seen["ensure"] = cmd
-            return _real_subprocess.CompletedProcess(cmd, 0, stdout=f"{repo.resolve()}\n", stderr="")
-        seen["init"] = True  # target init
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _dispatch)
-    monkeypatch.setattr(target_cli, "run_bounded", _dispatch_bounded)
-    monkeypatch.setattr(
-        "fno.harness_identity.resolve_harness_identity",
-        lambda *a, **k: HarnessIdentity(session_id="s", harness="claude"),
-    )
-
-    def _setup_hook(*a, **k):
-        seen["setup_called"] = True
-        return (0, "")
-
-    monkeypatch.setattr("fno.worktree._run_setup_worktree_hook", _setup_hook)
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(target_cli, "_resolve_node_model", lambda *a, **k: (None, "none"))
-
-    result = runner.invoke(app, ["do", "target", "start", "x-nev"])
-    assert result.exit_code == 0, result.output
-    assert seen["ensure"] is not None
-    assert "--harness" in seen["ensure"] and "claude" in seen["ensure"]
-    assert seen["init"] is True                     # init still runs, in place
-    assert seen["setup_called"] is False            # canonical .fno never touched
-    assert "base=in-place" in result.output
-
-
-def test_target_start_forwards_beastmode_to_init(tmp_path, monkeypatch):
-    """x-6390: `/target beastmode` cold-starts through `start`, not `init`, so the
-    forward is the link that actually carries the grant in real use. Without it
-    the feature is inert while every init-level test stays green."""
-    import subprocess as _real_subprocess
-    from fno.harness_identity import HarnessIdentity
-
-    repo = tmp_path / "vault"
-    repo.mkdir()
-    _real_subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
-    _real_subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "init"], check=True
-    )
-    monkeypatch.chdir(repo)
-
-    seen = {"init_cmd": None}
-    real_run = _real_subprocess.run
-
-    def _dispatch(cmd, *a, **k):
-        cmd = list(cmd)
-        if cmd and cmd[0] == "git":
-            return real_run(cmd, *a, **k)
-        seen["init_cmd"] = cmd
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    def _dispatch_bounded(cmd, **k):
-        cmd = list(cmd)
-        if "ensure" in cmd:
-            return _real_subprocess.CompletedProcess(cmd, 0, stdout=f"{repo.resolve()}\n", stderr="")
-        seen["init_cmd"] = cmd
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _dispatch)
-    monkeypatch.setattr(target_cli, "run_bounded", _dispatch_bounded)
-    monkeypatch.setattr(
-        "fno.harness_identity.resolve_harness_identity",
-        lambda *a, **k: HarnessIdentity(session_id="s", harness="claude"),
-    )
-    monkeypatch.setattr("fno.worktree._run_setup_worktree_hook", lambda *a, **k: (0, ""))
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(target_cli, "_resolve_node_model", lambda *a, **k: (None, "none"))
-
-    result = runner.invoke(app, ["do", "target", "start", "x-yol", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "--beastmode" in (seen["init_cmd"] or []), f"start did not forward --beastmode: {seen['init_cmd']}"
-
-    seen["init_cmd"] = None
-    result = runner.invoke(app, ["do", "target", "start", "x-yol"])
-    assert result.exit_code == 0, result.output
-    assert "--beastmode" not in (seen["init_cmd"] or []), "start forwarded --beastmode without the flag"
 
 
 def test_resolve_node_model_defers_difficulty_to_grid(monkeypatch):
@@ -475,169 +275,6 @@ def _inv(rows):
     assert result.stdout.strip() == "glm-4.7"
 
 
-def test_target_start_beastmode_noop_when_already_isolated_is_named(tmp_path, monkeypatch):
-    """x-6390, updated for the bind branch: with no manifest the isolated
-    `start` FORWARDS --beastmode to init, so nothing is dropped and no warning
-    prints; with an existing manifest (write-once) the flag cannot land, and
-    the bind path must still say it did NOT take rather than print a
-    normal-looking receipt."""
-    fake_root = _fake_plugin_root(tmp_path)
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("FNO_REPO_ROOT", str(fake_root))
-
-    monkeypatch.chdir(fake_root)
-    monkeypatch.setattr(target_cli, "_is_linked_worktree", lambda _p: True)
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(target_cli, "_foreign_live_holder", lambda _n: None)
-    monkeypatch.setattr(target_cli, "_remote_base_ref", lambda _p: "origin/main")
-    monkeypatch.setattr(target_cli, "_resolve_fno_cmd", lambda: ["fno"])
-    monkeypatch.setattr(target_cli, "_truthful_base", lambda cwd, b, **k: b)
-    monkeypatch.setattr(
-        target_cli, "_resolve_node_model",
-        lambda node, explicit=None, provider=None, include_difficulty=False: (None, ""),
-    )
-    init_args = []
-
-    def fake_run(args, **kwargs):
-        if "init" in args:
-            init_args.append(list(args))
-            return target_cli.subprocess.CompletedProcess(args, 0)
-        return target_cli.subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(target_cli, "run_bounded", fake_run)
-
-    result = runner.invoke(app, ["do", "target", "start", "x-yol", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "already isolated" in result.output
-    assert "--beastmode" in init_args[0]
-    assert "did NOT take" not in result.output
-
-    manifest = fake_root / ".fno" / "target-state.md"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text("---\nattended: true\n---\n")
-    monkeypatch.setattr(
-        target_cli, "_classify_node_claim",
-        lambda node: ("ours", {"holder": "s1", "state": "live"}),
-    )
-
-    result = runner.invoke(app, ["do", "target", "start", "x-yol", "--beastmode"])
-    assert result.exit_code == 0, result.output
-    assert "already isolated" in result.output
-    assert "did NOT take" in result.output, result.output
-
-    result = runner.invoke(app, ["do", "target", "start", "x-yol"])
-    assert result.exit_code == 0, result.output
-    assert "did NOT take" not in result.output, "warned without the flag"
-
-
-
-
-
-
-def test_target_start_never_refuses_mismatched_inplace_manifest(tmp_path, monkeypatch):
-    """In-place (policy=never) uses the SHARED canonical .fno, so a manifest for a
-    DIFFERENT node must refuse rather than report already-claimed and run under
-    another node's session state."""
-    import subprocess as _real_subprocess
-    from fno.harness_identity import HarnessIdentity
-
-    repo = tmp_path / "vault"
-    repo.mkdir()
-    _real_subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
-    _real_subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "init"], check=True
-    )
-    # a manifest belonging to a DIFFERENT node already in the canonical .fno
-    (repo / ".fno").mkdir()
-    (repo / ".fno" / "target-state.md").write_text("---\ngraph_node_id: x-other\n---\n")
-    monkeypatch.chdir(repo)
-
-    seen = {"init": False}
-    real_run = _real_subprocess.run
-
-    def _dispatch(cmd, *a, **k):
-        cmd = list(cmd)
-        if cmd and cmd[0] == "git":
-            return real_run(cmd, *a, **k)
-        seen["init"] = True
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    def _dispatch_bounded(cmd, **k):
-        cmd = list(cmd)
-        if "ensure" in cmd:  # never -> repo root
-            return _real_subprocess.CompletedProcess(cmd, 0, stdout=f"{repo.resolve()}\n", stderr="")
-        seen["init"] = True
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _dispatch)
-    monkeypatch.setattr(target_cli, "run_bounded", _dispatch_bounded)
-    monkeypatch.setattr(
-        "fno.harness_identity.resolve_harness_identity",
-        lambda *a, **k: HarnessIdentity(session_id="s", harness="claude"),
-    )
-    monkeypatch.setattr("fno.worktree._run_setup_worktree_hook", lambda *a, **k: (0, ""))
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(target_cli, "_foreign_live_holder", lambda n: None)
-
-    result = runner.invoke(app, ["do", "target", "start", "x-nev"])
-    assert result.exit_code == 1                    # refused, not already-claimed
-    assert seen["init"] is False                    # never ran init under x-other
-    combined = result.output + (getattr(result, "stderr", "") or "")
-    assert "x-other" in combined
-
-
-# ---------------------------------------------------------------------------
-# x-e957 task 1.3b: a NAMED contained node is redirected, not claimed
-# ---------------------------------------------------------------------------
-
-
-def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
-    """A graph with one delivery unit and one node contained in it.
-
-    The owner binds a real plan file. A bound, resolving plan is one of the two
-    scope denominators, so the denominator gate at init must see it resolve; a
-    placeholder path gets emptied at back-fill and the node reads as plan-less.
-    """
-    plan = tmp_path / "one.md"
-    plan.write_text("# plan\n", encoding="utf-8")
-    plan_path = str(plan)
-    gp = tmp_path / "graph.json"
-    seed_graph(gp, {"entries": [
-        {"id": owner, "plan_path": plan_path, "status": "ready"},
-        {"id": "x-261c", "plan_path": plan_path, "status": "ready",
-         "contained_in": owner},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    return gp
-
-
-
-
-def _held_graph(tmp_path, monkeypatch):
-    plan = tmp_path / "held.md"
-    plan.write_text(
-        "---\nstatus: ready\ndispatch_hold:\n"
-        "  reason: Blocking review finding is unresolved\n"
-        "  release_when: The finding is fixed and re-reviewed\n"
-        "  review_on: 2099-08-20\n"
-        "  set_by: lead:119e3c52\n---\n",
-        encoding="utf-8",
-    )
-    gp = tmp_path / "graph-held.json"
-    seed_graph(gp, {"entries": [
-        {"id": "x-5a5c", "status": "ready", "plan_path": str(plan)},
-        {"id": "x-1a2b", "status": "ready", "contained_in": "x-5a5c"},
-    ]})
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-    return gp
-
-
-
-
-
-
 def test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap(tmp_path, monkeypatch):
     _held_graph(tmp_path, monkeypatch)
     monkeypatch.setenv("TARGET_INPUT", "x-5a5c")
@@ -668,51 +305,6 @@ def test_check_dispatch_hold_refuses_named_node_when_graph_unreadable(tmp_path, 
     assert result.exit_code == 9, result.output
     assert "backlog graph is unreadable" in result.output
     assert "refusing to assume unheld" in result.output
-
-
-def test_target_start_refuses_node_when_graph_unreadable(tmp_path, monkeypatch):
-    """The start path shared the same hole via best-effort _find_node: an
-    unreadable graph returned None and the hold gate skipped. It must refuse
-    before any worktree is allocated."""
-    import subprocess as _real_subprocess
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _real_subprocess.run(["git", "-C", str(repo), "init", "-q", "-b", "main"], check=True)
-    _real_subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "init"], check=True
-    )
-    monkeypatch.chdir(repo)
-    _unreadable_graph(tmp_path, monkeypatch)
-
-    seen = {"ensure": False}
-    real_run = _real_subprocess.run
-
-    def _dispatch(cmd, *a, **k):
-        cmd = list(cmd)
-        if cmd and cmd[0] == "git":
-            return real_run(cmd, *a, **k)
-        if "ensure" in cmd:
-            seen["ensure"] = True
-        return _real_subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _dispatch)
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-
-    result = runner.invoke(app, ["do", "target", "start", "x-5a5c"])
-    assert result.exit_code == 2, result.output
-    assert "dispatch-hold-invalid" in result.output
-    assert "backlog graph is unreadable" in result.output
-    assert seen["ensure"] is False, "no worktree may be allocated before the refusal"
-
-
-
-
-
-
-
-
 
 
 def test_redirect_helper_ignores_non_contained_and_malformed_input():
@@ -747,6 +339,45 @@ def test_dispatch_node_resolves_dashless_literal_id():
     assert not target_cli._TARGET_NODE_TOKEN_RE.fullmatch("4d12")  # digit-led stays out
     entry = {"id": "x4d12", "title": "legacy id"}
     assert target_cli._resolve_dispatch_node("x4d12", None, entries=[entry]) == entry
+
+
+def _contained_graph(tmp_path, monkeypatch, *, owner="x-6320"):
+    """A graph with one delivery unit and one node contained in it.
+
+    The owner binds a real plan file. A bound, resolving plan is one of the two
+    scope denominators, so the denominator gate at init must see it resolve; a
+    placeholder path gets emptied at back-fill and the node reads as plan-less.
+    """
+    plan = tmp_path / "one.md"
+    plan.write_text("# plan\n", encoding="utf-8")
+    plan_path = str(plan)
+    gp = tmp_path / "graph.json"
+    seed_graph(gp, {"entries": [
+        {"id": owner, "plan_path": plan_path, "status": "ready"},
+        {"id": "x-261c", "plan_path": plan_path, "status": "ready",
+         "contained_in": owner},
+    ]})
+    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
+    return gp
+
+
+def _held_graph(tmp_path, monkeypatch):
+    plan = tmp_path / "held.md"
+    plan.write_text(
+        "---\nstatus: ready\ndispatch_hold:\n"
+        "  reason: Blocking review finding is unresolved\n"
+        "  release_when: The finding is fixed and re-reviewed\n"
+        "  review_on: 2099-08-20\n"
+        "  set_by: lead:119e3c52\n---\n",
+        encoding="utf-8",
+    )
+    gp = tmp_path / "graph-held.json"
+    seed_graph(gp, {"entries": [
+        {"id": "x-5a5c", "status": "ready", "plan_path": str(plan)},
+        {"id": "x-1a2b", "status": "ready", "contained_in": "x-5a5c"},
+    ]})
+    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
+    return gp
 
 
 def test_shared_plan_path_resolves_to_the_delivery_unit(tmp_path, monkeypatch):
@@ -839,63 +470,6 @@ def test_contained_nodes_naming_different_owners_stay_ambiguous(tmp_path, monkey
     assert target_cli._resolve_dispatch_node(None, "/p/one.md") is None
 
 
-
-
-def test_target_start_refusals_and_forks_land_before_a_worktree(tmp_path, monkeypatch):
-    """sigma: `init` caught it, but only after `start` allocated the worktree.
-
-    The operator got a refusal saying "Nothing was claimed" sitting next to an
-    orphan directory and branch they had to remove by hand. The binding
-    verdict holds the same line: a refusal allocates nothing, and a fork
-    starts the child instead of the parent.
-    """
-    _contained_graph(tmp_path, monkeypatch)
-    ensured = []
-
-    def _stub_run(cmd, *a, **k):
-        if "worktree" in list(cmd) and "ensure" in list(cmd):
-            ensured.append(list(cmd))
-
-        class _R:
-            returncode = 0
-            stdout = str(tmp_path / "wt")
-            stderr = ""
-        return _R()
-
-    monkeypatch.setattr(target_cli.subprocess, "run", _stub_run)
-    monkeypatch.setattr(target_cli, "_is_linked_worktree", lambda cwd: False)
-    monkeypatch.setattr(target_cli, "_git_out", lambda *a, **k: str(tmp_path))
-    monkeypatch.setattr(target_cli, "_resolve_node_id", lambda n, entries=None: n)
-    monkeypatch.setattr(target_cli, "_codex_desktop_handoff_policy", lambda r: None)
-
-    result = runner.invoke(app, ["do", "target", "start", "x-261c"])
-    assert result.exit_code == 2, result.output
-    assert ensured == [], "worktree was allocated before the redirect fired"
-
-    calls = _binding_answers(monkeypatch, {"verdict": "continue"})
-    result = runner.invoke(app, ["do", "target", "start", "x-4fb6"])
-    assert calls == [], "a bare id leaves binding to init"
-    ensured.clear()
-
-    calls = _binding_answers(monkeypatch, {
-        "verdict": "refused", "message": "target binding: REFUSED: node x-4fb6",
-        "next": 'fno do target start "x-4fb6 <scope>"',
-    })
-    monkeypatch.setenv("TARGET_ALLOW_IN_REVIEW", "1")
-    result = runner.invoke(app, ["do", "target", "start", "x-4fb6"])
-    assert result.exit_code == 1, result.output
-    assert calls[0][1]["phase"] == "start" and calls[0][1]["allow_in_review"] is True
-    assert ensured == [], "worktree was allocated before the binding refusal"
-    monkeypatch.delenv("TARGET_ALLOW_IN_REVIEW")
-
-    _binding_answers(monkeypatch, {
-        "verdict": "forked", "effective_node": "x-261c", "effective_plan": None,
-        "message": "target binding: FORKED",
-    })
-    result = runner.invoke(app, ["do", "target", "start", "x-4fb6 watch expiry"])
-    # The child (here a contained node) is what start goes on to resolve.
-    assert result.exit_code == 2, result.output
-    assert ensured == []
 
 
 def test_check_contained_reads_through_the_keeper(tmp_path, monkeypatch):
@@ -1099,67 +673,6 @@ def test_resolve_owned_identity_absent_registry_degrades(tmp_path, monkeypatch) 
     }
     assert fields["DISPOSITION"] == "ambiguous"
     assert fields["COLLISION"] == ""
-
-
-def test_holder_is_ours_recognizes_own_pid_unavailable_claim(monkeypatch):
-    """The transcript-identity arm: init minted ``target-session:<sid>`` from the
-    proven harness session when no env id existed, and the pid walk failed, so
-    the v2 claim carries no pid for the pid arm to compare. A rerun in the same
-    session must still read it as ours instead of parking on its own claim."""
-    monkeypatch.delenv("TARGET_SESSION_ID", raising=False)
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda env=None: SimpleNamespace(session_id="aaaa1111-mine"),
-    )
-    info = {"pid_unavailable": True, "host": "other-box", "machine_id": "m2"}
-    assert target_cli._holder_is_ours("target-session:aaaa1111-mine", info)
-    assert not target_cli._holder_is_ours("target-session:zzz999-not-mine", info)
-
-
-def test_holder_is_ours_identity_arm_fails_closed(monkeypatch):
-    """No provable identity -> no recognition: the claim stays foreign to this
-    rerun (park / re-acquire), never assumed ours."""
-    monkeypatch.delenv("TARGET_SESSION_ID", raising=False)
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda env=None: SimpleNamespace(session_id=""),
-    )
-    info = {"pid_unavailable": True, "host": "h", "machine_id": "m"}
-    assert not target_cli._holder_is_ours("target-session:anything", info)
-
-
-def test_worktree_occupancy_defers_to_finished_with_the_tree(monkeypatch, tmp_path):
-    """The gate must answer 'is this session done with its tree' through the
-    shared helper, not its own threshold: takeover and reap disagreed about
-    the same session when each derived it (a silent-but-engaged tail read
-    available here while reap refused to touch the tree)."""
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    row = SimpleNamespace(cwd=str(wt), harness_session_id="s-1", harness="claude")
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-    monkeypatch.setattr(
-        "fno.worktree_gate.reapable_receipt",
-        lambda p: SimpleNamespace(reapable=False, reason="dirty", detail=""),
-    )
-    facts = SimpleNamespace(last_event_epoch=1.0, last_role="assistant", last_text="x")
-    monkeypatch.setattr("fno.agents.watchdog.tail_facts", lambda *a, **k: facts)
-    calls = {}
-
-    def fake_finished(f, now_s, quiet_after_s):
-        calls["quiet"] = quiet_after_s
-        return calls.get("done", False)
-
-    monkeypatch.setattr("fno.agents.watchdog.finished_with_the_tree", fake_finished)
-    from fno.agents.watchdog import QUIET_AFTER_S
-
-    verdict, info = target_cli._classify_worktree_occupancy(wt)
-    assert verdict == "occupied_worktree"
-    assert info["session_id"] == "s-1"
-    assert calls["quiet"] == QUIET_AFTER_S
-    calls["done"] = True
-    assert target_cli._classify_worktree_occupancy(wt)[0] == "available"
 
 
 def test_force_supersede_dispatch_node_records_its_reason(monkeypatch):

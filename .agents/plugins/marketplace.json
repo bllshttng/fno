@@ -7,8 +7,9 @@
     {
       "name": "fno",
       "source": {
-        "source": "local",
-        "path": "."
+        "source": "url",
+        "url": "https://github.com/bllshttng/footnote.git",
+        "ref": "stable"
       },
       "policy": {
         "installation": "AVAILABLE",
