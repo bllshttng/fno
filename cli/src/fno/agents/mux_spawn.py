@@ -513,6 +513,7 @@ PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
     "pi",
     "cursor-agent",
     "grok",
+    "footnote",
 )
 
 #: : the token shape an UNDECLARED harness name must match before the
@@ -1208,14 +1209,12 @@ def build_pane_argv(
         argv += perm
         return argv
     if provider == "pi":
-        # pi's WATCHING lane: the plain interactive TUI, never `--mode rpc`
-        # (mutually exclusive per process). The pinned `--session-id` makes this
-        # a JOIN onto a live rpc session (measured 2026-08-28: one session
-        # file). Opening a NOT-yet-existing id is a CREATE, the unserialised
-        # half - the spawn lane serialises via
-        # `fno.agents.harnesses.pi.create_decision`; this builder only composes
-        # argv. The ONE pi route owner (keeper and pane share it). pi ships
-        # no permission popups, so `yolo` maps to nothing.
+        # pi's WATCHING lane: the plain TUI, never `--mode rpc` (mutually
+        # exclusive per process). The pinned `--session-id` JOINS a live rpc
+        # session (measured 2026-08-28); a not-yet-existing id is a CREATE,
+        # serialised by `fno.agents.harnesses.pi.create_decision`. The ONE pi
+        # route owner (keeper and pane share it). No permission popups, so
+        # `yolo` maps to nothing.
         from fno.agents.spawn_axes_client import spawn_axes_call
         from fno.agents.keeper_thread import _pi_axes
 
@@ -1234,16 +1233,13 @@ def build_pane_argv(
             argv += [message]
         return argv
     if provider == "cursor-agent":
-        # cursor-agent has no bidirectional local transport. Its stream-json
-        # mode is output-only, so fno drives it through a hosted pty: the pane,
-        # or the keeper that hosts the same argv on the thread lane.
-        # create-chat mints the UUID before this builder runs; the declared
-        # form then joins that exact remote chat. --trust rides the DECLARED
-        # form itself (never appended here: a second --trust is a duplicated
-        # flag, not a stronger one) and is NOT the bypass: in an untrusted
-        # cwd cursor-agent refuses with Workspace Trust Required and does no
-        # work, and fno always spawns into a fresh worktree. -w/--worktree is
-        # never passed; the worktree is fno's.
+        # cursor-agent's stream-json mode is output-only, so fno drives it
+        # through a hosted pty: the pane, or the keeper on the thread lane.
+        # create-chat mints the UUID first; the declared form joins that chat.
+        # --trust rides the DECLARED form (a second one is a duplicate, not a
+        # stronger one) and is NOT the bypass: an untrusted cwd refuses with
+        # Workspace Trust Required. -w/--worktree is never passed; the
+        # worktree is fno's.
         argv = identity
         if model:
             argv += ["--model", model]
@@ -1257,13 +1253,18 @@ def build_pane_argv(
         refuse_cursor_native_worktree_tokens(passthrough)
         argv += pane_passthrough_tokens(passthrough, argv)
         return argv
+    if provider == "footnote":
+        # The TUI takes one launch spec, not a session flag; the Rust owner
+        # resolves the endpoint and writes the 0600 file.
+        from fno.agents.spawn_axes_client import _answer_or_raise, spawn_axes_call
+
+        ask = {"cwd": str(cwd), "model": model or "", "permission_mode": permission_mode or ""}
+        return [*identity, _answer_or_raise(spawn_axes_call({"footnote_pane_spec": ask}), "path")]
     if provider == "grok":
-        # grok's pane hosts the plain TUI; the declared interactive_create
-        # form carries the caller-assigned `--session-id` and nothing else.
-        # The bypass (--always-approve), the one model axis and the effort
-        # axis are appended here, so pane and keeper compose the same argv.
-        # grok maps no --add-dir, and its permission vocabulary is claude's,
-        # so permission_pane_tokens passes it through exactly.
+        # grok's pane hosts the plain TUI; the declared form carries only the
+        # caller-assigned `--session-id`. The bypass, model and effort axes
+        # append here so pane and keeper compose the same argv. grok maps no
+        # --add-dir and its permission vocabulary is claude's.
         argv = identity
         if permission_mode:
             argv += permission_pane_tokens("grok", permission_mode)
