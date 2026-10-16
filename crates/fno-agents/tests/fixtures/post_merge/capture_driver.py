@@ -437,7 +437,12 @@ def build_only(root_arg):
     for index, case in enumerate(load_cases()):
         case_dir = build_case(root_path, case, index)
         listing.append(
-            {"label": case["label"], "slug": slug(case["label"]), "dir": str(case_dir)}
+            {
+                "label": case["label"],
+                "slug": slug(case["label"]),
+                "dir": str(case_dir),
+                "subject": case.get("subject") or "pr-sessions",
+            }
         )
     print(
         json.dumps({"root": str(root_path), "cases": listing}, indent=2),

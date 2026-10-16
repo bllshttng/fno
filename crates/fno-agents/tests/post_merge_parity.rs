@@ -75,6 +75,11 @@ fn pr_sessions_matches_python_goldens() {
         .as_array()
         .expect("cases list")
         .iter()
+        .filter(|entry| {
+            // Only this subject's cases carry a stdin payload; the mint and
+            // ritual families build case dirs without one.
+            entry["subject"].as_str().unwrap_or("pr-sessions") == SUBJECT
+        })
         .map(|entry| {
             (
                 entry["slug"].as_str().expect("case slug").to_string(),
