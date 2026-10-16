@@ -123,9 +123,10 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     // sentinel). No fixed delay guesses at the dispatch's startup latency
     // under load; the 20s bound is a diagnostic ceiling, not a sleep.
     let thread_sentinel = sentinel.clone();
+    let thread_ready = ready.clone();
     let signal_thread = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !ready.exists() {
+        while !thread_ready.exists() {
             if std::time::Instant::now() >= deadline {
                 return;
             }
