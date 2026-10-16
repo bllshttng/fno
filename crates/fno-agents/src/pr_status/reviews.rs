@@ -826,8 +826,8 @@ pub(crate) fn payload_is_code(cwd: &Path, pr: u64) -> bool {
             break;
         }
     }
-    names.is_empty()
-        || names
+    !names.is_empty()
+        && names
             .iter()
             .any(|p| !crate::loopcheck::is_documentation_path(p))
 }
