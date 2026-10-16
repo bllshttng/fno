@@ -501,9 +501,13 @@ fn dispatch_claim_root(
         return r;
     }
     let flight_key = format!("post-merge-ritual:{dispatch_id}");
+    // Unique per invocation, matching the python leg: a same-holder acquire
+    // reads as an idempotent reacquire, so a literal would let two concurrent
+    // watchers both pass this gate. The release below must name the same one.
+    let flight_holder = format!("pr-watch:{}", std::process::id());
     let flight = crate::flight_gate::acquire_flight(
         &flight_key,
-        "pr-watch",
+        &flight_holder,
         DISPATCH_TTL_MS,
         "post-merge ritual dispatch",
         Some(std::process::id()),
@@ -531,7 +535,7 @@ fn dispatch_claim_root(
         seams,
     );
     // This process holds the dispatch lease for its whole run.
-    let _ = crate::claims::release(&flight_key, "pr-watch", Some(canonical), None);
+    let _ = crate::claims::release(&flight_key, &flight_holder, Some(canonical), None);
     outcome
 }
 
@@ -906,7 +910,8 @@ fn real_seams() -> Seams {
                     }
                 }
                 "codex" => {
-                    let entry = codex_registry_entry(sid)?;
+                    // No registry row means no codex lane to deliver through.
+                    codex_registry_entry(sid)?;
                     let state = family1_state(sid).unwrap_or_default();
                     if ["working", "watching", "your-move"].contains(&state.as_str()) {
                         Some(sid.to_string())

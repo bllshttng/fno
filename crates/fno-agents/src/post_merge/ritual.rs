@@ -619,14 +619,17 @@ impl Ritual {
         );
         if let Some(err) = &r.spawn_error {
             self.emit("reconcile", FAILED, err);
+            self.leg_plan_reconcile();
             return;
         }
         if r.timed_out {
             self.emit("reconcile", FAILED, "timeout");
+            self.leg_plan_reconcile();
             return;
         }
         if !r.ok() {
             self.emit("reconcile", FAILED, &format!("exit={}", r.code));
+            self.leg_plan_reconcile();
             return;
         }
         let obj: Value = serde_json::from_str(r.stdout.trim()).unwrap_or(json!({}));
@@ -645,6 +648,9 @@ impl Ritual {
         self.node_ids.extend(closed.iter().cloned());
         let unmet_rows = obj.get("promise_unmet").cloned().unwrap_or(json!([]));
         let unknown_rows = obj.get("promise_unknown").cloned().unwrap_or(json!([]));
+        // Counted before the move into the held array below.
+        let unmet_len = unmet_rows.as_array().map(|a| a.len()).unwrap_or(0);
+        let unknown_len = unknown_rows.as_array().map(|a| a.len()).unwrap_or(0);
         let held: Vec<String> = [unmet_rows, unknown_rows]
             .iter()
             .flat_map(|rows| rows.as_array().cloned().unwrap_or_default())
@@ -691,8 +697,8 @@ impl Ritual {
                 "closed={} held_open={} (unmet={} unknown={}): {}{}",
                 closed.len(),
                 held.len(),
-                unmet_rows.as_array().map(|a| a.len()).unwrap_or(0),
-                unknown_rows.as_array().map(|a| a.len()).unwrap_or(0),
+                unmet_len,
+                unknown_len,
                 ids.join(", "),
                 more,
             );
@@ -739,6 +745,12 @@ impl Ritual {
             self.emit("reconcile", OK, "no-drift");
         }
         // Step 2a: plan frontmatter. Idempotent.
+        self.leg_plan_reconcile();
+    }
+
+    /// Plan-frontmatter stamp, independent of the backlog leg: run even when
+    /// reconcile failed, so one broken leg cannot starve the other.
+    fn leg_plan_reconcile(&mut self) {
         let argv: Vec<String> = ["do", "plan", "reconcile-status", "--apply"]
             .iter()
             .map(|s| s.to_string())
@@ -1246,7 +1258,36 @@ Self-end when done; never spawn further work."
         };
         let progress = Arc::new(Mutex::new(0usize));
         let reader_progress = Arc::clone(&progress);
+        let err_progress = Arc::clone(&progress);
         let step_owned = step.to_string();
+        let step_err = step_owned.clone();
+        // stderr is drained on its own thread: an undrained pipe fills the
+        // OS buffer and blocks the child until the deadline kills it. Lines
+        // echo like stdout's, matching the merged-stream python leg.
+        let err_reader = child.stderr.take().map(|mut errp| {
+            std::thread::spawn(move || {
+                let mut pending = String::new();
+                let mut chunk = [0u8; 65536];
+                loop {
+                    match errp.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            pending.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                            while let Some(pos) = pending.find('\n') {
+                                let line: String = pending.drain(..pos + 1).collect();
+                                let line = line.trim_end();
+                                if !line.is_empty() {
+                                    println!("  {step_err}: {line}");
+                                    if let Ok(mut p) = err_progress.lock() {
+                                        *p += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        });
         let reader = std::thread::spawn(move || {
             let mut pending = String::new();
             let mut chunk = [0u8; 65536];
@@ -1295,6 +1336,9 @@ Self-end when done; never spawn further work."
             }
         }
         let _ = reader.join();
+        if let Some(err_reader) = err_reader {
+            let _ = err_reader.join();
+        }
         let lines = progress.lock().map(|p| *p).unwrap_or(0);
         if timed_out {
             self.emit(
