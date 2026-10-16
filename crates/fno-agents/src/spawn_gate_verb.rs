@@ -561,14 +561,38 @@ mod probe {
             // user's max_live refuses here; the learned cap waits for the
             // machine gates below, and yields when they read room.
             if slots >= learned.ceiling {
-                let top = crate::spawn_gate_slots::at_ceiling(&learned);
-                return refuse_with(
-                    "max_live",
-                    format!("{slots} live worker slots >= {}", top.clause()),
-                    json!({"count": slots, "max_live": top.cap}),
-                    &[fleet_row(slots, top.cap, yours)],
-                    out,
+                // The burst may still apply past the ceiling: fall through to
+                // the machine rows when the memory axis is on and the fleet
+                // has settled. Refuse at the ceiling otherwise, naming the
+                // burst word that held it.
+                let newest = crate::spawn_gate_slots::newest_slot_age_s(
+                    &slot_row_entries,
+                    &slot_reservations,
+                    "",
+                    registry_path.parent(),
+                    chrono::Utc::now(),
                 );
+                let settled = matches!(
+                    newest,
+                    Some(s) if s >= crate::spawn_gate_slots::BURST_SETTLE.as_secs()
+                );
+                if !settled || floor_gb <= 0.0 {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    let word = if floor_gb <= 0.0 {
+                        "memory_off"
+                    } else if newest.is_none() {
+                        "settle_unread"
+                    } else {
+                        "settling"
+                    };
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": word}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
@@ -673,7 +697,58 @@ mod probe {
             }
             cpu = Some(admission.payload);
             if slots >= cap {
-                if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap) {
+                if slots >= learned.ceiling && learned.cap >= learned.ceiling {
+                    // The machine rows read room; only the settle window
+                    // decides. The fold returns the burst cap and the read.
+                    let (applied, burst) = crate::spawn_gate_slots::burst_pass(
+                        slots,
+                        learned,
+                        floor_gb,
+                        swap_cap,
+                        &slot_row_entries,
+                        &slot_reservations,
+                        "",
+                        registry_path.parent(),
+                    );
+                    match burst {
+                        Some(crate::spawn_gate_slots::Burst::Yields) => {
+                            let pre_clause = applied.clause();
+                            learned = applied;
+                            cap = learned.cap;
+                            out.insert("max_live".into(), json!(cap));
+                            out.insert(
+                                "cap_clause".into(),
+                                json!(format!(
+                                    "{pre_clause}{lead_note}; burst past agents.max_live {}: CPU and RAM have room",
+                                    learned.ceiling
+                                )),
+                            );
+                        }
+                        Some(b) => {
+                            return refuse_with(
+                                "max_live",
+                                format!(
+                                    "{slots} live worker slots >= {} ({})",
+                                    applied.clause(),
+                                    b.word()
+                                ),
+                                json!({"count": slots, "max_live": cap, "burst": b.word()}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                        None => {
+                            return refuse_with(
+                                "max_live",
+                                format!("{slots} live worker slots >= {}", applied.clause()),
+                                json!({"count": slots, "max_live": cap}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                    }
+                } else if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap)
+                {
                     return refuse_with(
                         "max_live",
                         format!("{slots} live worker slots >= {}", learned.clause()),
@@ -681,17 +756,18 @@ mod probe {
                         &[fleet_row(slots, cap, yours)],
                         out,
                     );
+                } else {
+                    out.insert(
+                        "cap_clause".into(),
+                        json!(format!(
+                            "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                            learned.clause()
+                        )),
+                    );
+                    learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                    cap = learned.cap;
+                    out.insert("max_live".into(), json!(cap));
                 }
-                out.insert(
-                    "cap_clause".into(),
-                    json!(format!(
-                        "{}{lead_note}; the learned cap yields: CPU and RAM have room",
-                        learned.clause()
-                    )),
-                );
-                learned = crate::spawn_gate_slots::at_ceiling(&learned);
-                cap = learned.cap;
-                out.insert("max_live".into(), json!(cap));
             }
         }
 
