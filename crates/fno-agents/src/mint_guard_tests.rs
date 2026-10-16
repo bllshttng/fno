@@ -571,21 +571,3 @@ fn production_tree_has_no_default_based_mints() {
         offenders.join("\n")
     );
 }
-
-#[test]
-fn production_tree_has_no_default_based_mints() {
-    let (offenders, sites, files) = scan_real_tree();
-    assert!(
-        files > 20,
-        "scan saw only {files} files; the walk is broken"
-    );
-    assert!(
-        sites >= 4,
-        "scanner matched only {sites} production RegistryEntry literal sites; the symbol match is broken"
-    );
-    assert!(
-        offenders.is_empty(),
-        "RegistryEntry literals minting from ..Default::default() or naming fno_id outside test code:\n{}",
-        offenders.join("\n")
-    );
-}
