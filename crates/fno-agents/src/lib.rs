@@ -205,6 +205,7 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
 pub mod git_paths;
 #[cfg(test)]
