@@ -4,3 +4,4 @@
 //! and the merge verb keeps its spelling (`fno do pr ritual`).
 
 pub mod ritual;
+pub mod route;

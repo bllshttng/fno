@@ -174,7 +174,7 @@ fn parking_lot_path(canon: Option<&Path>, pm: &PostMergeConfig) -> Option<PathBu
 
 /// One bounded child run: exit code, streams, and how it ended. A hang reads
 /// as a timeout, never as a wedge - the Python legs' whole point.
-struct LegRun {
+pub(crate) struct LegRun {
     code: i32,
     stdout: String,
     stderr: String,
@@ -183,7 +183,7 @@ struct LegRun {
 }
 
 impl LegRun {
-    fn ok(&self) -> bool {
+    pub(crate) fn ok(&self) -> bool {
         !self.timed_out && self.spawn_error.is_none() && self.code == 0
     }
     fn last_line(&self) -> String {
@@ -234,7 +234,7 @@ fn run_leg(
 /// The bounded-run core: spawn, drain both pipes on reader threads, wait
 /// under the bound, kill at the deadline. A hang reads as `timed_out`, never
 /// as a wedge - the Python legs' whole point.
-fn bounded(mut cmd: Command, timeout: Duration) -> LegRun {
+pub(crate) fn bounded(mut cmd: Command, timeout: Duration) -> LegRun {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {

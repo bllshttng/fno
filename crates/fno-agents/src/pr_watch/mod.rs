@@ -23,9 +23,10 @@ pub fn run(args: &[String]) -> i32 {
         Some("pr-sessions") => sessions::run(&args[1..]),
         Some("merge-cleanup-mint") => mint::run(&args[1..]),
         Some("ritual") => crate::post_merge::ritual::run(&args[1..]),
+        Some("post-merge-dispatch") => crate::post_merge::route::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions|merge-cleanup-mint|ritual> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions|merge-cleanup-mint|ritual|post-merge-dispatch> [--json|-J] [-N]"
             );
             2
         }
