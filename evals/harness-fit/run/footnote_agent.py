@@ -59,7 +59,9 @@ class Footnote(BaseInstalledAgent):
         if not key:
             raise ValueError("ZAI_API_KEY is not set; launch.py puts it in the harbor env")
         fno_id = f"tb2-{uuid.uuid4().hex[:20]}"
-        spec_path = f"{SESSIONS_DIR}/launch-spec.json"
+        # /tmp, not /logs/agent: the spec carries the API key, and Harbor syncs
+        # /logs/agent to the host trial dir. The transcript copy stays behind.
+        spec_path = f"/tmp/footnote-launch-spec-{fno_id}.json"
         pwd = await self.exec_as_agent(environment, command="pwd")
         spec = {
             "v": SPEC_V,
