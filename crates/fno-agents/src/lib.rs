@@ -1590,6 +1590,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The pr-watch sweep flipped an open fno-bound draft PR back to ready
     // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
     "pr_watch_draft_flip",
+    // The post-merge route's per-attempt attribution receipt (route.rs);
+    // observability only, never a dedup input.
+    "post_merge_dispatch_receipt",
     // The question intake's journal write (the ask port): the durable half
     // of `fno inbox outstanding ask`.
     "operator_question",

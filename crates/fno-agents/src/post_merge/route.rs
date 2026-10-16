@@ -1086,9 +1086,20 @@ mod tests {
             detail: Some(long_detail),
         };
         assert!(emit_receipt(Some(&path), &r));
-        let row: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("row")).expect("json");
-        let data = &row["data"];
+        // The store derives <stem>.db beside the journal for a path outside
+        // the state root, so rows read back through the query, never as a
+        // jsonl file.
+        let rows = crate::event_store::query_events(
+            &path,
+            &crate::event_store::EventQuery {
+                types: vec![RECEIPT_EVENT.to_string()],
+                ..Default::default()
+            },
+        )
+        .expect("store read");
+        let row = rows.last().expect("one receipt row");
+        let row_json: Value = serde_json::from_str(&row.line).expect("json");
+        let data = &row_json["data"];
         assert!(data.get("node_id").is_none(), "absent ids are omitted");
         assert!(data.get("delivering_harness").is_none());
         assert!(data.get("borrowed_session_id").is_none());
@@ -1188,7 +1199,12 @@ mod tests {
         let out = dispatch_all(44, true, canon.path(), &ok_seams);
         assert_eq!(out.outcome, "dispatched");
         assert_eq!(out.short_id, "verb");
-        assert_eq!(out.detail.as_deref(), Some("cold: no-live-source-session"));
+        // No ship provenance on the dispatch_all path: the reason carries
+        // the suffix decide() appends when ship_session_id is absent.
+        assert_eq!(
+            out.detail.as_deref(),
+            Some("cold: no-live-source-session; no-ship-provenance")
+        );
         assert!(marker_path(canon.path(), "sha-44").exists());
         assert_eq!(
             ok_log.lock().unwrap().as_slice(),
