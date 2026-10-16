@@ -1090,3 +1090,117 @@ fn bound_manifest_reading(matched_path: &str) -> Value {
     }
     reading
 }
+
+#[cfg(test)]
+mod shape_review_coverage_tests {
+    use super::*;
+
+    /// The row shape the producer writes: one reviewed verdict whose
+    /// freshness and chain membership the shaper re-derives from.
+    fn row(
+        freshness: &str,
+        reviewed_sha: &str,
+        tiling: Option<(bool, Vec<&str>)>,
+        spent: Option<bool>,
+    ) -> Value {
+        let mut data = json!({
+            "pr": 1,
+            "coverage": "covered",
+            "reviewed_count": 1,
+            "head_sha": reviewed_sha,
+            "verdicts": [{
+                "producer": "local_attestation",
+                "name": "code-review",
+                "verdict": "reviewed",
+                "reviewed_sha": reviewed_sha,
+                "freshness": freshness,
+                "scope": "attested_branch",
+            }],
+        });
+        if let Some((tiled, chain)) = tiling {
+            data["range_tiling"] = json!({
+                "tiled": tiled,
+                "gaps": if tiled { [] } else { ["c1..c3"] },
+                "dropped": [],
+                "chain_heads": chain,
+            });
+        }
+        if let Some(spent) = spent {
+            data["rounds_exhausted"] = json!(spent);
+        }
+        data
+    }
+
+    #[test]
+    fn stale_verdict_inside_the_tiled_chain_stays_covered() {
+        let shaped = shape_review_coverage(
+            &row("stale", "c3", Some((true, vec!["c3"])), None),
+            None,
+            false,
+        );
+        assert_eq!(shaped["coverage"], "covered");
+        assert_eq!(shaped["review_state"], "reviewed");
+        assert_eq!(shaped["reviewed_count"], 1);
+    }
+
+    #[test]
+    fn stale_verdict_without_tiling_reads_uncovered() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, None), None, false);
+        assert_eq!(shaped["coverage"], "uncovered");
+        assert_eq!(shaped["review_state"], "unreviewed");
+    }
+
+    #[test]
+    fn verdict_outside_the_chain_is_not_rescued() {
+        let shaped = shape_review_coverage(
+            &row("stale", "c3", Some((true, vec!["c9"])), None),
+            None,
+            false,
+        );
+        assert_eq!(shaped["coverage"], "uncovered");
+    }
+
+    #[test]
+    fn spent_row_keeps_the_producers_covered_word_and_names_it_reviewed() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(true)), None, false);
+        assert_eq!(shaped["coverage"], "covered");
+        assert_eq!(shaped["review_state"], "reviewed");
+    }
+
+    #[test]
+    fn the_same_row_unspent_reads_uncovered() {
+        let shaped = shape_review_coverage(&row("stale", "c3", None, Some(false)), None, false);
+        assert_eq!(shaped["coverage"], "uncovered");
+        assert_eq!(shaped["review_state"], "unreviewed");
+        assert_eq!(shaped["reviewed_count"], 1);
+    }
+
+    #[test]
+    fn malformed_verdict_names_no_state() {
+        let mut data = row("stale", "c3", None, Some(true));
+        data["verdicts"] = json!([{"producer": "local_attestation", "verdict": "junk"}]);
+        let shaped = shape_review_coverage(&data, None, false);
+        assert!(shaped.get("review_state").is_none());
+    }
+
+    #[test]
+    fn fresh_verdict_counts_without_any_chain() {
+        let shaped = shape_review_coverage(&row("fresh", "head", None, None), None, false);
+        assert_eq!(shaped["coverage"], "covered");
+    }
+
+    #[test]
+    fn malformed_tiling_reads_an_empty_chain() {
+        assert!(tiling_chain(&json!({"range_tiling": {"tiled": "yes"}})).is_empty());
+        assert!(tiling_chain(&json!({"range_tiling": null})).is_empty());
+        assert!(
+            tiling_chain(&json!({"range_tiling": {"tiled": true, "chain_heads": "c1"}})).is_empty()
+        );
+        assert_eq!(
+            tiling_chain(&json!({
+                "range_tiling": {"tiled": true, "chain_heads": ["c1", 7, null, ""]}
+            })),
+            vec!["c1".to_string()]
+        );
+    }
+}
