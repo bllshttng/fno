@@ -2462,10 +2462,10 @@ def dispatch_spawn(
     # the narrower ask vocabulary and the wider pane-hostable set, and the
     # check is substrate-aware: pi passes on thread and refuses on headless.
     _check_spawn_harness(harness, headless=headless)
-    if harness == "pi" and (once or headless):
+    if harness in ("opencode", "pi") and (once or headless):
         raise DispatchAskError(
-            "pi one-shot spawns run through the Rust runtime's headless lane; "
-            "the Python path carries --substrate thread only",
+            f"{harness} one-shot spawns run through the Rust runtime's headless "
+            "lane; the Python path carries --substrate thread only",
             exit_code=2,
         )
 
@@ -2915,13 +2915,6 @@ def dispatch_spawn(
                 # have no carrier on the serve row yet, so they are refused
                 # here rather than silently lost.
                 if harness == "opencode":
-                    if once or headless:
-                        raise DispatchAskError(
-                            "opencode one-shot spawns run through the Rust "
-                            "runtime's headless lane; the Python path carries "
-                            "--substrate thread only",
-                            exit_code=2,
-                        )
                     if resume_session_id:
                         raise DispatchAskError(
                             "--resume is not carried on the opencode serve lane "
