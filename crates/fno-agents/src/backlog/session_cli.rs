@@ -768,6 +768,14 @@ pass --session-id (and --harness) with it."
         );
         return 2;
     }
+    if origin && harness.is_none() {
+        eprintln!(
+            "session add: --origin needs --harness. An explicit --session-id \
+paired with the ambient harness reads the EARLIER session under this \
+session's harness, and its transcript is stored under the other one."
+        );
+        return 2;
+    }
     if origin && started_at.is_none() {
         match crate::session_backfill::first_user_turn(&h, &s) {
             Some(ts) => started_at = Some(ts),
@@ -937,7 +945,12 @@ claims; agreement not evaluated for {resolved}."
         match first_fill_origin(&graph, &node_id, &h, &s) {
             Ok(Some(holder)) => origin_note = format!("origin held by {holder}; left alone"),
             Ok(None) => origin_note = format!("origin first-filled with {h}:{s}"),
-            Err(e) => eprintln!("session add: origin first-fill failed: {e}"),
+            Err(e) => {
+                // The row already appended; the fill is idempotent, so a
+                // retry lands it. Silence would read as a completed origin.
+                eprintln!("session add: origin first-fill failed: {e}");
+                return 2;
+            }
         }
     }
     if json_out {
