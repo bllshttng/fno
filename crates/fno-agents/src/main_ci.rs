@@ -101,16 +101,24 @@ fn main_ci_token_from_pages<'a>(
     // pointer the in-flight check below reads - so an in-flight nightly of a
     // workflow that already finished its push run never holds the verdict
     // pending, and a workflow with no push row at the head (a pure-schedule
-    // release) never joins the verdict through this pass.
+    // release) never joins the verdict through this pass. Matched by the
+    // run's stable `workflow_id`, never the display `name` alone: two
+    // different workflow files can share a `name`, and a completed run of
+    // one must never supersede the other's seeded push run.
     for run in on_main.iter().filter(|run| at_head(run) && !is_push(run)) {
         let name = run.get("name").and_then(Value::as_str).unwrap_or("");
         if name.is_empty() || run.get("status").and_then(Value::as_str) != Some("completed") {
             continue;
         }
-        let Some((_, _, newest_completed)) = head.iter_mut().find(|(seen, _, _)| *seen == name)
+        let Some((_, newest, newest_completed)) =
+            head.iter_mut().find(|(seen, _, _)| *seen == name)
         else {
             continue;
         };
+        let wf_id = run.get("workflow_id").and_then(Value::as_u64);
+        if wf_id.is_none() || wf_id != newest.get("workflow_id").and_then(Value::as_u64) {
+            continue;
+        }
         let created = run.get("created_at").and_then(Value::as_str).unwrap_or("");
         let is_newer = match *newest_completed {
             Some(c) => created > c.get("created_at").and_then(Value::as_str).unwrap_or(""),
@@ -430,6 +438,26 @@ mod tests {
         })
     }
 
+    /// The same row with an explicit `workflow_id`: the stable id a
+    /// non-push row must match before it can supersede an already-seeded
+    /// workflow's newest completed run - two different workflow files can
+    /// share a display `name`, so the id is what tells them apart.
+    fn wf_run_with_id(
+        name: &str,
+        sha: &str,
+        status: &str,
+        conclusion: &str,
+        created: &str,
+        event: &str,
+        workflow_id: u64,
+    ) -> Value {
+        let mut run = wf_run_event(name, sha, status, conclusion, created, event);
+        run.as_object_mut()
+            .expect("wf_run_event builds an object")
+            .insert("workflow_id".into(), serde_json::json!(workflow_id));
+        run
+    }
+
     /// The reducer at the tests' fixed clock, 2026-09-30T12:00:00Z, so the
     /// stale window's boundary never drifts under a hardcoded date.
     fn token_at(head_sha: &str, at_sha: &[Value], on_main: &[Value]) -> Value {
@@ -639,35 +667,80 @@ mod tests {
     /// the verdict reads green.
     #[test]
     fn a_push_run_cancelled_by_concurrency_is_superseded_by_a_later_schedule_completion() {
-        let at_sha = vec![wf_run_event(
+        let at_sha = vec![wf_run_with_id(
             "cli-ci",
             "head",
             "completed",
             "cancelled",
             "2026-09-28T07:00:00Z",
             "push",
+            42,
         )];
         let on_main = vec![
-            wf_run_event(
+            wf_run_with_id(
                 "cli-ci",
                 "head",
                 "completed",
                 "cancelled",
                 "2026-09-28T07:00:00Z",
                 "push",
+                42,
             ),
-            wf_run_event(
+            wf_run_with_id(
                 "cli-ci",
                 "head",
                 "completed",
                 "success",
                 "2026-09-28T07:30:00Z",
                 "schedule",
+                42,
             ),
         ];
         assert_eq!(
             token_at("head", &at_sha, &on_main),
             serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// Codex's finding on this fix (PR #3484): two different workflow files
+    /// can share a display `name`. A completed schedule-only run of one
+    /// (`workflow_id` 99) must never supersede the other's seeded, cancelled
+    /// push run (`workflow_id` 42) just because both happen to be named
+    /// "cli-ci" - the verdict stays red on the genuinely cancelled push run.
+    #[test]
+    fn a_different_workflow_sharing_the_same_name_never_supersedes() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-09-28T07:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-09-28T07:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-28T07:30:00Z",
+                "schedule",
+                99,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
         );
     }
 
