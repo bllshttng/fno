@@ -1019,6 +1019,9 @@ pub(crate) fn create_node(
     // so two concurrent filings both persist.
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
+    // The filing session's identity, captured per retry and read after the
+    // loop: the filing session's own think row rides on it.
+    let mut filing_think: (Option<String>, Option<String>) = (None, None);
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
         let base_version = crate::graph_store::base_version(&graph)
@@ -1068,7 +1071,7 @@ pub(crate) fn create_node(
         ) = provenance;
         // Captured before the node json! consumes the pair: the filing
         // session's think row rides on it.
-        let filing_think = (source_session_id.clone(), source_harness.clone());
+        filing_think = (source_session_id.clone(), source_harness.clone());
         // The creating session's registry row AT BIRTH: the lane facts the
         // activity feed's provenance view prints for a node_created row. A
         // session no registry row holds (a human filing by hand) reads as
@@ -1328,7 +1331,10 @@ pub(crate) fn create_node(
 fn append_filing_think_row(graph: &Path, node_id: &str, harness: &str, sid: &str) {
     let ended = crate::graph_store::now_isoformat();
     let (started, basis) = match super::super::session_backfill::first_user_turn(harness, sid) {
-        Some(ts) => (ts, format!("first turn {ts}")),
+        Some(ts) => {
+            let basis = format!("first turn {ts}");
+            (ts, basis)
+        }
         None => (
             ended.clone(),
             "transcript unreadable; started_at = filing time".to_string(),

@@ -934,12 +934,10 @@ claims; agreement not evaluated for {resolved}."
         && ended_at.is_some();
     let mut origin_note = String::new();
     if origin {
-        if let Some(nid) = &node_id {
-            match first_fill_origin(&graph, nid, &h, &s) {
-                Ok(Some(holder)) => origin_note = format!("origin held by {holder}; left alone"),
-                Ok(None) => origin_note = format!("origin first-filled with {h}:{s}"),
-                Err(e) => eprintln!("session add: origin first-fill failed: {e}"),
-            }
+        match first_fill_origin(&graph, &node_id, &h, &s) {
+            Ok(Some(holder)) => origin_note = format!("origin held by {holder}; left alone"),
+            Ok(None) => origin_note = format!("origin first-filled with {h}:{s}"),
+            Err(e) => eprintln!("session add: origin first-fill failed: {e}"),
         }
     }
     if json_out {
