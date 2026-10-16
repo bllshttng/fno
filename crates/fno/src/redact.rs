@@ -1,7 +1,10 @@
 //! Best-effort masking of secrets and home paths in pane text before it
-//! leaves the machine. One regex set serves the intel report scrub and the
-//! pane share. Over-masking is the safe direction: the generic 40-character
-//! run also masks git shas and long base64 blobs.
+//! leaves the machine. Over-masking is the safe direction: the generic
+//! 40-character run also masks git shas and long base64 blobs.
+//!
+//! The intel report scrub in fno-agents (`intel_html.rs`) carries the same
+//! shapes. fno-agents links this crate only as a dev-dependency until the two
+//! crates release together, so it cannot import these yet.
 
 use regex::Regex;
 use std::sync::OnceLock;

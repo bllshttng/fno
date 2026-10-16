@@ -9,7 +9,6 @@
 //! so no PDF library rides along.
 
 use crate::claude_ask::html_escape_quote;
-use fno::redact::{path_rx, secret_rx};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -249,6 +248,33 @@ impl<'a> Renderer<'a> {
             chart_notes: Vec::new(),
         }
     }
+}
+
+/// The secret shapes the scrub replaces with `[redacted]`. Leftmost-first:
+/// the named shapes win before the generic 40-character run can touch them.
+const SECRET_SHAPES: &str = concat!(
+    "(?i)(",
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    "|eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+",
+    "|sk-[A-Za-z0-9_-]{20,}",
+    "|gh[pousr]_[A-Za-z0-9]{20,}",
+    "|github_pat_[A-Za-z0-9_]{20,}",
+    "|AKIA[0-9A-Z]{16}",
+    "|xox[abprs]-[A-Za-z0-9-]{10,}",
+    "|bearer\\s+\\S{16,}",
+    "|((?:password|passwd|secret|token|api[_-]?key)\\s*[=:]\\s*)(\\S+)",
+    "|[A-Za-z0-9+/_=-]{40,}",
+    ")"
+);
+
+fn secret_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    RX.get_or_init(|| Regex::new(SECRET_SHAPES).expect("static regex"))
+}
+
+fn path_rx() -> &'static Regex {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    RX.get_or_init(|| Regex::new(r"(?:/Users|/home)/[A-Za-z0-9._-]+").expect("static regex"))
 }
 
 /// Straight and curly double-quoted spans. A quote preceded by `=` is an
