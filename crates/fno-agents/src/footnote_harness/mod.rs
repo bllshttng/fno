@@ -196,7 +196,8 @@ fn mark_row(home: &AgentsHome, name: &str, transcript: &Path) {
 /// The base launch spec a pane's TUI reads (`footnote --spec <file>`): the
 /// spec the headless lane pipes on stdin, written 0600 because it carries the
 /// endpoint key. The TUI opens its own sessions from it, so `fno_id` here is
-/// only a label for the file. Specs older than a day are swept on each write.
+/// only a label for the file. The TUI copies the spec at start, so specs older
+/// than an hour are swept on each write.
 pub fn write_pane_spec(
     cwd: &Path,
     model: &str,
@@ -224,13 +225,13 @@ pub fn write_pane_spec(
         provider.as_deref(),
     )?;
     std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-    let day = Duration::from_secs(86_400);
+    let hour = Duration::from_secs(3_600);
     for old in std::fs::read_dir(&root).into_iter().flatten().flatten() {
         let stale = old.file_name().to_string_lossy().starts_with(".pane-spec-")
             && old
                 .metadata()
                 .and_then(|m| m.modified())
-                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > day));
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > hour));
         if stale {
             let _ = std::fs::remove_file(old.path());
         }
