@@ -7,6 +7,10 @@ pub(crate) enum ResumeRoute {
     ClientResume,
     ServerResume,
     TerminalExec,
+    /// A headless-only harness (no interactive resume form, a declared
+    /// headless one): the door resumes the row as one ask turn from any
+    /// caller, terminal or not.
+    HeadlessAsk,
     /// An exited thread row whose keeper lane carries a proven same-id
     /// revival (`resume_session_id`): the door routes it to
     /// `keeper_revival::revive`.
@@ -71,6 +75,25 @@ pub(crate) fn resume_route(
         };
     }
 
+    // A headless-only harness (no interactive resume form, a declared
+    // headless one) resumes as one ask turn; no terminal is needed. The
+    // route keys on contract data, never on a harness name, so the next
+    // headless-only harness inherits it.
+    let forms = contract
+        .capabilities(harness)
+        .ok()
+        .map(|caps| &caps.resume_strategy.forms);
+    let headless_only = forms.is_some_and(|forms| {
+        forms
+            .get("interactive_resume")
+            .is_some_and(|form| form.kind == "unsupported")
+            && forms
+                .get("headless_resume")
+                .is_some_and(|form| form.kind != "unsupported")
+    });
+    if headless_only {
+        return ResumeRoute::HeadlessAsk;
+    }
     if caller_has_terminal {
         ResumeRoute::TerminalExec
     } else if !has_mux_ref && conversion.strategy == "client-resume" {
@@ -169,6 +192,11 @@ pub(crate) fn print_resume_command(
     if cwd.is_empty() {
         return crate::resume_gate::missing_cwd_refusal(name, form_session_id);
     }
+    let lane = if matches!(route, ResumeRoute::HeadlessAsk) {
+        "headless_resume"
+    } else {
+        "interactive_resume"
+    };
     let argv = if harness == "codex" {
         crate::pane_relaunch::build_resume_argv_tokens_split(
             harness,
@@ -178,7 +206,7 @@ pub(crate) fn print_resume_command(
         )
     } else {
         contract
-            .render_session_argv_raw(harness, "interactive_resume", Some(form_session_id))
+            .render_session_argv_raw(harness, lane, Some(form_session_id))
             .ok()
     };
     let Some(mut argv) = argv else {
@@ -421,6 +449,42 @@ mod tests {
                 "fno agents resume: harness 'unknown' resume not supported by this fno version."
                     .to_string()
             )
+        );
+    }
+
+    /// A headless-only harness (no interactive resume form, a declared
+    /// headless one) routes to the ask turn from any caller; its thread rows
+    /// keep the thread branch's refusal.
+    #[test]
+    fn headless_only_harnesses_ask_without_a_terminal_and_threads_keep_their_refusal() {
+        let contract = contract();
+        assert_eq!(
+            resume_route("footnote", None, false, false, "f", "f-session", &contract),
+            ResumeRoute::HeadlessAsk
+        );
+        assert_eq!(
+            resume_route("zcode", None, false, false, "z", "z-session", &contract),
+            ResumeRoute::HeadlessAsk
+        );
+        assert_eq!(
+            resume_route("footnote", None, false, true, "f", "f-session", &contract),
+            ResumeRoute::HeadlessAsk,
+            "the ask lane needs no terminal, so a terminal caller takes the same route"
+        );
+        assert!(
+            matches!(
+                resume_route(
+                    "footnote",
+                    Some("thread"),
+                    false,
+                    false,
+                    "f",
+                    "f-session",
+                    &contract
+                ),
+                ResumeRoute::Refused(_)
+            ),
+            "footnote declares no conversion, so its thread rows refuse as before"
         );
     }
 }

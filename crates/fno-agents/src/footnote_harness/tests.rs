@@ -430,3 +430,68 @@ fn a_loop_stops_on_a_refusal_and_after_three_failures_in_a_row() {
         out.stderr
     );
 }
+
+/// The resume door routes a footnote row to one ask turn: `--message hi`
+/// feeds the binary one resume spec and exits with its code; no message
+/// refuses exit 2 without launching anything.
+#[test]
+fn a_headless_row_resumes_one_ask_turn_and_refuses_without_a_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let scratch = tmp.path().join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let script = [
+        "#!/bin/sh",
+        "n=$(cat '__D__/count' 2>/dev/null || echo 0)",
+        "n=$((n+1))",
+        "echo \"$n\" > '__D__/count'",
+        "cat > \"__D__/spec-$n.json\"",
+        "spec=\"__D__/spec-$n.json\"",
+        "d=$(sed -n 's/.*\"session_dir\":\"\\([^\"]*\\)\".*/\\1/p' \"$spec\" | head -1)",
+        "i=$(sed -n 's/.*\"fno_id\":\"\\([^\"]*\\)\".*/\\1/p' \"$spec\" | head -1)",
+        "mkdir -p \"$d\" && : > \"$d/$i.jsonl\"",
+        "exit 0",
+        "",
+    ]
+    .join("\n")
+    .replace("__D__", scratch.to_str().unwrap());
+    let bin = crate::write_exec_stub(tmp.path(), "footnote", &script);
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("ZAI_API_KEY", "zk"),
+    ]);
+    let created = dispatch_once(
+        &home,
+        "fx-head",
+        "hi",
+        "tester",
+        tmp.path(),
+        Some("glm-test"),
+        None,
+        &serde_json::json!({}),
+    );
+    restore_env(saved);
+    assert_eq!(created.exit_code, 0, "{}", created.stderr);
+    let resumed = crate::client_verbs::run_resume(
+        &[
+            "fx-head".to_string(),
+            "--message".to_string(),
+            "hi".to_string(),
+        ],
+        &home,
+    );
+    assert_eq!(resumed, 0, "resume with a message must run one ask turn");
+    let resumed_spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(scratch.join("spec-2.json")).unwrap())
+            .unwrap();
+    assert_eq!(resumed_spec["mode"], "resume");
+    assert_eq!(resumed_spec["message"], "hi");
+    let refused = crate::client_verbs::run_resume(&["fx-head".to_string()], &home);
+    assert_eq!(refused, 2, "no --message must refuse");
+    restore_env(saved);
+    let count = std::fs::read_to_string(scratch.join("count")).unwrap();
+    assert_eq!(count.trim(), "2", "the refusal must launch nothing");
+}

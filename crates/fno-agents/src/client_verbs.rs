@@ -1898,6 +1898,9 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         eprintln!("{line}");
         return 13;
     }
+    if matches!(&route, ResumeRoute::HeadlessAsk) {
+        return crate::headless_resume::run(home, entry, &name, message.as_deref());
+    }
     // Codex route args belong after the executable token. Keep terminal argv
     // raw until route resolution; composing pre_exec first would put those
     // args into the outer `sh -c` invocation.

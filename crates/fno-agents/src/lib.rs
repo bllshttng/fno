@@ -223,6 +223,7 @@ pub mod harness_matrix;
 pub mod harness_reader;
 pub mod harness_roster;
 pub mod harness_verbs;
+pub(crate) mod headless_resume;
 pub mod heal;
 pub mod heal_pid;
 pub mod heal_sweep;
