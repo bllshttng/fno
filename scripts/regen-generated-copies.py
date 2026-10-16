@@ -15,11 +15,12 @@ Handled shapes (matching build.rs):
 - a file carrying "\n#[cfg(test)]\nmod tests {" splits there
   (sync_module_copy)
 - neither marker feeds over verbatim (observation.rs, validate.rs)
-- a .toml row feeds over byte for byte (sync_harness_capabilities passes
-  the source bytes straight through; no shape logic exists to reproduce)
+- a .toml row feeds over byte for byte (sync_harness_capabilities and
+  sync_registry_schema pass the source bytes straight through; no shape
+  logic exists to reproduce)
 
 Everything else is refused by name: otel_read.rs embeds the OTEL schema via
-a Rust Debug literal (build-only), and the schema, codegen, and doc rows
+a Rust Debug literal (build-only), and the codegen and doc rows
 have their own generators.
 """
 
@@ -41,12 +42,15 @@ def rows():
             yield cols[0], cols[1]
 
 
-#: The one source build.rs copies VERBATIM today (sync_harness_capabilities
-#: passes the bytes straight to write_if_different). Rows are matched on the
-#: source, never on the extension: events_limits.toml is also a .toml row
-#: with the same regen command, but build.rs generates it from schema.yaml
-#: with shape logic a blind byte copy would destroy.
-BYTE_COPY_SOURCES = ("crates/fno-agents/src/harness_capabilities.toml",)
+#: The sources build.rs copies VERBATIM (sync_harness_capabilities and
+#: sync_registry_schema pass the bytes straight to write_if_different). Rows
+#: are matched on the source, never on the extension: events_limits.toml is
+#: also a .toml row with the same regen command, but build.rs generates it
+#: from schema.yaml with shape logic a blind byte copy would destroy.
+BYTE_COPY_SOURCES = (
+    "crates/fno-agents/src/harness_capabilities.toml",
+    "crates/fno-agents/src/registry_schema.toml",
+)
 
 
 def byte_copy_rows():

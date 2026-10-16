@@ -320,6 +320,7 @@ pub mod name_draw;
 pub mod naming;
 pub mod native_adopt;
 pub mod needs;
+pub mod node_bind;
 pub mod node_branch;
 pub mod node_origin;
 pub mod node_reading;

@@ -632,6 +632,14 @@ class AgentEntry:
     # additive-optional passthrough so a daemon write-back preserves the stamp.
     node: Optional[str] = None
     node_reason: Optional[str] = None
+    # v42: where the row's `node` came from when fno did not mint it that way -
+    # "first-turn" when the claude first-prompt hook bound the node the
+    # session's first user turn named. Stamped only by the `node-bind` door
+    # beside a node it just wrote; absence means the node arrived through the
+    # spawn or target paths (claimed or dispatched work). ABSENCE MEANS
+    # UNKNOWN, the `node` discipline. Rust's RegistryEntry mirrors it as
+    # additive-optional passthrough so a daemon write-back preserves the stamp.
+    node_basis: Optional[str] = None
     # v23: the spawn REQUEST, verbatim as the flags spelled it (any
     # [1m] suffix included), stamped once at birth beside the observed axes.
     # `model`/`model_basis` flip to a verified observation; these three never

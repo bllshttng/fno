@@ -960,6 +960,15 @@ pub struct RegistryEntry {
     /// same X3 passthrough duty as `node` itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_reason: Option<String>,
+    /// v42: WHERE a row's `node` came from when fno did not mint it that way -
+    /// `"first-turn"` when the claude first-prompt hook bound the node the
+    /// session's first user turn named. Set only by the `node-bind` door and
+    /// only beside a node it just stamped, so a spawn, a target init, or an
+    /// adopt reads as claimed-or-dispatched work by absence alone. ABSENCE
+    /// MEANS UNKNOWN, the `node` discipline. Mirrors Python's
+    /// `AgentEntry.node_basis`; same X3 passthrough duty as `node` itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_basis: Option<String>,
     /// The sessions row a spawn owed but could not open because no harness
     /// session id existed yet (`{phase, merge_grant?}`): parked by Python's
     /// spawn stamp, consumed and cleared by SessionStart's first id

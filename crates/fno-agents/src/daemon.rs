@@ -4155,8 +4155,12 @@ where
                     "current_session_id": e.harness_session_id,
                     // `node_reason` beside `node` is the sibling receipt:
                     // why a mint could not bind the node the seed named.
+                    // `node_basis` beside it names the non-mint writer that
+                    // did bind one (the first-turn hook); absence reads as
+                    // spawn/target work.
                     "node": e.node,
                     "node_reason": e.node_reason,
+                    "node_basis": e.node_basis,
                     "pr": pr,
                     "pr_basis": pr_basis,
                     "predecessor_session_ids": e.predecessor_session_ids,

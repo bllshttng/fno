@@ -2212,4 +2212,56 @@ mod tests {
         assert_eq!(summary.retired[0].class, "fleet");
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    // AC15: a first-turn bind is not an ownership marker. The row holds a
+    // node from the door, not from fno's own spawn or target path, so the
+    // reaper reads it exactly like a session that names no node at all: it
+    // keeps at every scope and never retires as fleet work.
+    #[test]
+    fn first_turn_bind_reads_as_a_plain_session_to_the_reaper() {
+        for scope in [RosterScope::Provenanced, RosterScope::All] {
+            let dir = tmpdir("first-turn-bind");
+            let transcript = quiet_transcript(&dir, "sid-1");
+            let mut bound = RegistryEntry::default();
+            bound.name = "w-bound".into();
+            bound.harness_session_id = Some("sid-1".into());
+            bound.node = Some("x-bbbb".into());
+            bound.node_basis = Some("first-turn".into());
+            let summary = run(
+                &no_home(),
+                900,
+                scope,
+                true,
+                &roster(vec![row("ab12cd34", Some("sid-1"), Some("hand-typed"))]),
+                &[bound],
+                &|| {
+                    Some(GraphRead {
+                        statuses: [("x-bbbb".to_string(), "ready".to_string())].into(),
+                        ..Default::default()
+                    })
+                },
+                &|_| Some(vec![transcript.clone()]),
+                &|entries| {
+                    entries
+                        .iter()
+                        .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                        .collect::<HashMap<_, _>>()
+                },
+                crate::daemon::now_epoch_secs(),
+                &|_| CascadeOutcome::NotApplicable,
+            );
+            assert!(
+                summary.retired.is_empty(),
+                "scope {scope:?} retired a first-turn-bound row: {summary:?}"
+            );
+            let kept = summary
+                .kept
+                .iter()
+                .find(|j| j.short_id == "ab12cd34")
+                .expect("the bound row was judged");
+            assert_eq!(kept.class, "unmarked", "scope {scope:?}: {summary:?}");
+            assert_eq!(kept.node.as_deref(), Some("x-bbbb"));
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
 }
