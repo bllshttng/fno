@@ -1020,7 +1020,11 @@ pub(crate) fn create_node(
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
     // The filing session's identity, captured per retry and read after the
-    // loop: the filing session's own think row rides on it.
+    // loop: the filing session's own think row rides on it. The initializer
+    // is always overwritten before the first read (the capture runs in every
+    // iteration, before any break), which is exactly the shape
+    // unused_assignments names.
+    #[allow(unused_assignments)]
     let mut filing_think: (Option<String>, Option<String>) = (None, None);
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
