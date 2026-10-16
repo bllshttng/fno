@@ -375,7 +375,9 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # `--` is reserved for the passthrough lane (pane substrate only), so no
     # fence or equal-form exists; the prompt is template-rendered in
     # spawn_verifier, never user input, and message-last is the positional's
-    # legal spot in a click parser.
-    assert counts.get("exempt", 0) == 14, counts
+    # legal spot in a click parser. Fifteen: the pi headless one-shot's argv
+    # tail in pi_ask.rs, on the same probed reason as pi_run_tail, and its
+    # prompt always starts with `[from:` or a verb sigil.
+    assert counts.get("exempt", 0) == 15, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

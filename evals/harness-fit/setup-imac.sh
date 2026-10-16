@@ -87,7 +87,9 @@ if grep -qs '^ZAI_API_KEY=.' "$ENV_FILE"; then ok "ZAI_API_KEY in $ENV_FILE (060
 echo "== fno and this branch's fno-agents (Run 1)"
 have fno || run uv tool install --compile-bytecode fno
 bin="$REPO/crates/fno-agents/target/release/fno-agents"
-[ -x "$bin" ] || run cargo build --release --manifest-path "$REPO/crates/fno-agents/Cargo.toml"
+# Rebuild on every setup run: a leftover release binary from an older branch
+# would stale-serve FNO_AGENTS_BIN and the observe door with it.
+run cargo build --release --manifest-path "$REPO/crates/fno-agents/Cargo.toml"
 if [ "$CHECK" = 0 ] && ! grep -q '^FNO_AGENTS_BIN=' "$ENV_FILE"; then printf 'FNO_AGENTS_BIN=%s\n' "$bin" >> "$ENV_FILE"; fi
 if [ -x "$bin" ]; then ok "fno-agents built at $bin"; else bad "fno-agents is not built"; fi
 
@@ -123,6 +125,16 @@ merge("~/.local/state/opencode/model.json",
 PY
 fi
 if [ -f "$WS/run1-config.toml" ]; then ok "run1-config.toml"; else bad "run1-config.toml is missing"; fi
+
+echo "== footnote binary (Run 1, Amendment 14)"
+# Pinned fnh sha; see manifest.json amendment_14. FNH_SHA overrides for a re-pin.
+FNH_SHA="${FNH_SHA:-ce42622f79567181361ae326a929dd69cab957b9}"
+if [ "$CHECK" = 1 ]; then
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote at $WS/bin/footnote"; else bad "footnote is not installed at $WS/bin/footnote"; fi
+else
+  run cargo install --locked --git https://github.com/bllshttng/fnh --rev "$FNH_SHA" --root "$WS"
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote built from bllshttng/fnh at $FNH_SHA"; else bad "footnote did not install at $WS/bin/footnote"; fi
+fi
 
 echo
 if [ "$fail" = 0 ]; then
