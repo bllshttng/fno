@@ -181,7 +181,7 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
             cmd.env("PATH", case_dir.join("gitbin"));
         }
         _ => {
-            cmd.env("PATH", format!("{}/usr/bin:/bin", stubbin.display()));
+            cmd.env("PATH", format!("{}:/usr/bin:/bin", stubbin.display()));
         }
     }
     if let Some(env) = case["env"].as_object() {
