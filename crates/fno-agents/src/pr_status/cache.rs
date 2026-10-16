@@ -488,7 +488,14 @@ fn read_head<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Result<V
             rate_limit_class: String::new(),
         });
     }
-    let state = match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
+    Ok(json!({"head_sha": head_sha, "state": pr_state_word(&pulls), "pulls": pulls}))
+}
+
+/// The PR state word the cache rows and the head probe both carry: open
+/// reads OPEN; closed with a merge marker reads MERGED; closed otherwise
+/// CLOSED. One mapping, two callers - never a second one.
+pub(crate) fn pr_state_word(pulls: &Value) -> String {
+    match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
         "open" => "OPEN".to_string(),
         "closed" => {
             if pulls.get("merged").and_then(Value::as_bool) == Some(true)
@@ -500,8 +507,7 @@ fn read_head<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Result<V
             }
         }
         _ => "UNKNOWN".to_string(),
-    };
-    Ok(json!({"head_sha": head_sha, "state": state, "pulls": pulls}))
+    }
 }
 
 /// The cache-key material for a hold verdict: changes whenever the hold
