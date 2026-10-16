@@ -90,7 +90,14 @@ pub fn compute(
             .first()
             .and_then(|e| e.get("value").and_then(Value::as_str))
             .map(str::to_string);
-        let re_estimated = difficulty_history.len() > 1;
+        // A blueprint confirmation appends a history row too (same value,
+        // source "blueprint"), so `len() > 1` alone would flag an
+        // unrevised node as re-estimated. Compare values: only a later
+        // entry that actually differs from the filed one counts.
+        let re_estimated = difficulty_history
+            .iter()
+            .skip(1)
+            .any(|e| e.get("value").and_then(Value::as_str) != planned_difficulty.as_deref());
         let planned_size = node.get("size").and_then(Value::as_str).map(str::to_string);
         let actual_cost_usd: f64 = cost_sessions
             .iter()
@@ -250,6 +257,21 @@ mod tests {
         ]);
         let rows = compute(&[revised], &BTreeMap::new());
         assert!(rows[0].re_estimated && !rows[0].smooth);
+    }
+
+    #[test]
+    fn a_confirmation_entry_is_not_a_re_estimate() {
+        // A blueprint that re-confirms the filed band still appends a
+        // history row (same value, different source) - this must stay
+        // smooth, not read as revised.
+        let mut confirmed = done_node("x-ffff", "code", "medium", 5.0);
+        confirmed["difficulty_history"] = json!([
+            {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
+            {"value": "medium", "source": "blueprint", "ts": "2026-01-02T00:00:00Z"}
+        ]);
+        let rows = compute(&[confirmed], &BTreeMap::new());
+        assert!(!rows[0].re_estimated);
+        assert!(rows[0].smooth);
     }
 
     #[test]
