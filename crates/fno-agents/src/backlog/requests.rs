@@ -218,7 +218,7 @@ pub fn run(args: &[String]) -> i32 {
             &repo,
             &parsed.label,
             &parsed.approved_label,
-            parsed.limits.limit as u32,
+            u32::try_from(parsed.limits.limit).unwrap_or(u32::MAX),
         ) {
             Ok(issues) => issues,
             Err(e) => {
@@ -400,25 +400,17 @@ fn apply_issues(
             .and_then(|c| c.get(1))
             .map(|m| m.as_str())
         {
-            let ok = record_upvote(
-                &mut outcome,
-                rows,
-                target,
-                repo,
-                project,
-                &voter_key,
-                &link,
-                issue.number,
-            );
-            if ok {
-                outcome.votes += 1;
-                outcome.receipt.push(format!("vote {target}"));
-            } else {
-                outcome.skipped += 1;
-                outcome.receipt.push(format!(
-                    "skipped issue {}: no such open public row {target}",
-                    issue.number
-                ));
+            match record_upvote(rows, target, project, &voter_key, &link, issue.number) {
+                Ok(true) => {
+                    outcome.votes += 1;
+                    outcome.receipt.push(format!("vote {target}"));
+                }
+                Err(reason) => {
+                    outcome.skipped += 1;
+                    outcome
+                        .receipt
+                        .push(format!("skipped issue {}: {reason}", issue.number));
+                }
             }
             continue;
         }
@@ -525,27 +517,25 @@ fn apply_issues(
 
 /// One upvote, when the named card is a live open row of this project that
 /// would publish, and the voter has not already voted. The visitor's own
-/// request rows are born private, so they never take an upvote.
-#[allow(clippy::too_many_arguments)]
+/// request rows are born private, so they never take an upvote. `Ok(true)`
+/// lands the vote; `Err` carries the one skip reason the receipt names.
 fn record_upvote(
-    outcome: &mut Outcome,
     rows: &mut [Value],
     target: &str,
-    _repo: &str,
     project: &str,
     voter_key: &str,
     link: &str,
     issue: i64,
-) -> bool {
+) -> Result<bool, String> {
     let Some(row) = rows.iter().find(|r| {
         crate::graph_store::entry_id(r) == Some(target)
             && r.get("project").and_then(Value::as_str) == Some(project)
     }) else {
-        return false;
+        return Err(format!("no such open public row {target}"));
     };
     let open = in_open_set(row) && would_publish(row);
     if !open {
-        return false;
+        return Err(format!("{target} is not an open public row"));
     }
     let record = json!({
         "created_at": crate::graph_store::now_isoformat(),
@@ -556,13 +546,12 @@ fn record_upvote(
     });
     let verdict = super::encounters::append_refusing_duplicate(rows, target, record);
     if verdict["appended"] == Value::Bool(true) {
-        true
+        Ok(true)
     } else {
-        outcome.receipt.push(format!(
-            "skipped issue {issue}: {}",
-            verdict["error"].as_str().unwrap_or("the vote did not land")
-        ));
-        false
+        Err(verdict["error"]
+            .as_str()
+            .unwrap_or("the vote did not land")
+            .to_string())
     }
 }
 
