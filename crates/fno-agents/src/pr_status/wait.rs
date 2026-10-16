@@ -43,8 +43,10 @@ fn spend_note(calls: usize, ticks: usize, noun: &str) -> String {
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     format!(
         "note: {calls} gh call(s) over {ticks} {noun} read(s) this invocation, \
-         fleet budget {} of {} points in the last 60s\n",
-        snap.points_60s, snap.cap
+         fleet budget {} of {} points in the last 60s{}\n",
+        snap.points_60s,
+        snap.cap,
+        crate::gh_etag::note_suffix()
     )
 }
 
