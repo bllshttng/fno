@@ -115,7 +115,7 @@ pub(crate) fn now_ms() -> i64 {
 
 /// Port of `fno.pr._quota.command_args`: drop gh-wide options so equivalent
 /// command spellings share one cost.
-fn command_args(args: &[String]) -> Vec<String> {
+pub(crate) fn command_args(args: &[String]) -> Vec<String> {
     fn strip(tokens: &[String]) -> Vec<String> {
         let mut rest = tokens.to_vec();
         while let Some(first) = rest.first() {
@@ -416,13 +416,14 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
 
     if now < backoff_until_ms {
-        // One request per 30s as a half-open probe, so recovery gets noticed
-        // instead of waited out; the rest are refused with cause `backoff`.
+        // One request per 30s as a half-open probe, so recovery at the top
+        // gets noticed instead of waited out; the rest are refused with
+        // cause `backoff`.
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
             ledger.last_half_open_ms = now;
             ledger.stamps.push((now, points));
             write_ledger(path, &ledger, now).ok();
-            return Verdict {
+            let v = Verdict {
                 admitted: true,
                 cause: None,
                 retry_after_s: 0,
@@ -431,6 +432,8 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 ledger: state,
                 refusal: None,
             };
+            crate::gh_spend::journal_verdict(path, argv, now, &v);
+            return v;
         }
         let retry_after_s = ((backoff_until_ms - now) / 1000).max(1);
         let mut verdict = Verdict {
@@ -443,6 +446,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             refusal: None,
         };
         verdict.refusal = Some(refusal_line(&verdict));
+        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
 
@@ -460,12 +464,13 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             refusal: None,
         };
         verdict.refusal = Some(refusal_line(&verdict));
+        crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
 
     ledger.stamps.push((now, points));
     write_ledger(path, &ledger, now).ok();
-    Verdict {
+    let v = Verdict {
         admitted: true,
         cause: None,
         retry_after_s: 0,
@@ -473,7 +478,9 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         cap,
         ledger: state,
         refusal: None,
-    }
+    };
+    crate::gh_spend::journal_verdict(path, argv, now, &v);
+    v
 }
 
 /// The one-door admission for Rust-side callers: `Some(refusal line)` when

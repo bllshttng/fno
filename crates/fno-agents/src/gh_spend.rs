@@ -1,0 +1,530 @@
+//! The spend journal beside the request budget: who spent which GitHub
+//! bucket, on what shape, admitted or refused.
+//!
+//! The budget ledger (`gh_budget.rs`) stamps `(ms, points)` and prunes at
+//! 60 s, so it can never answer the question an hourly outage asks: WHO
+//! drained the core bucket. This module appends one JSON line per
+//! non-exempt verdict to `machine_locks_dir()/github-request-spend.jsonl`,
+//! rotated at 8 MiB to one `.1` generation - about 22 hours of rows at the
+//! measured 5,000 lines an hour. Like the ledger, a journal failure never
+//! changes a verdict: append errors are ignored on the admission path.
+//!
+//! The journal is machine-local by construction (it sits beside the
+//! ledger) and blind to every caller that never reaches admission: gh
+//! spawned by Python `fno-py` straight off PATH, the Python proxy when
+//! `FNO_AGENT_SELF` is unset, worker shells, and every other machine. The
+//! `spend` op names those blind spots in each report rather than letting a
+//! clean-sounding answer stand in for a partial one.
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+const JOURNAL_NAME: &str = "github-request-spend.jsonl";
+const ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+const CALLER_HOPS: usize = 6;
+
+/// Which GitHub bucket one argv spends from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bucket {
+    Core,
+    GraphQL,
+    Exempt,
+}
+
+impl Bucket {
+    fn word(self) -> &'static str {
+        match self {
+            Bucket::Core => "core",
+            Bucket::GraphQL => "graphql",
+            Bucket::Exempt => "exempt",
+        }
+    }
+}
+
+/// The bucket plus whether the read rides a conditional `If-None-Match`
+/// header (a 304 on one costs no core).
+pub(crate) fn bucket_for(argv: &[String]) -> (Bucket, bool) {
+    if crate::gh_budget::points_for(argv) == 0 {
+        return (Bucket::Exempt, false);
+    }
+    let conditional = is_conditional(argv);
+    let cmd = crate::gh_budget::command_args(argv);
+    match cmd.first().map(String::as_str) {
+        // gh implements these over GraphQL, so they drain the GraphQL
+        // bucket, not core.
+        Some("api") if cmd.get(1).map(String::as_str) == Some("graphql") => {
+            (Bucket::GraphQL, conditional)
+        }
+        Some("pr") => match cmd.get(1).map(String::as_str) {
+            Some("view" | "list" | "status" | "checks" | "merge" | "ready" | "edit" | "review") => {
+                (Bucket::GraphQL, conditional)
+            }
+            _ => (Bucket::Core, conditional),
+        },
+        _ => (Bucket::Core, conditional),
+    }
+}
+
+/// A conditional read carries `-i` and an `If-None-Match:` header - the
+/// exact shape `gh_etag::conditional_api_get` sends.
+fn is_conditional(argv: &[String]) -> bool {
+    let has_include = argv.iter().any(|a| a == "-i" || a == "--include");
+    let has_match = argv.iter().enumerate().any(|(i, a)| {
+        a.starts_with("If-None-Match:")
+            || a.starts_with("--header=If-None-Match:")
+            || ((a == "-H" || a == "--header")
+                && argv
+                    .get(i + 1)
+                    .is_some_and(|n| n.starts_with("If-None-Match:")))
+    });
+    has_include && has_match
+}
+
+/// The shape a journal row names: for `api`, the path with the repo and
+/// every unstable id folded out; otherwise the first two words. Flags and
+/// `--jq` values drop, so one poller's 500 reads share one shape.
+pub(crate) fn shape(argv: &[String]) -> String {
+    let cmd = crate::gh_budget::command_args(argv);
+    let mut body = if cmd.first().map(String::as_str) == Some("api") {
+        match first_positional(&cmd[1..]) {
+            Some(path) => format!("api {}", fold_path(path)),
+            None => "api".to_string(),
+        }
+    } else {
+        cmd.iter()
+            .take(2)
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    if is_conditional(argv) {
+        body.push_str(" [conditional]");
+    }
+    body
+}
+
+/// The first non-flag token, honoring the api flags that consume a value.
+fn first_positional(tokens: &[String]) -> Option<&str> {
+    let mut skip_next = false;
+    for t in tokens {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if t.starts_with('-') {
+            skip_next = matches!(
+                t.as_str(),
+                "-X" | "--method"
+                    | "-H"
+                    | "--header"
+                    | "-f"
+                    | "-F"
+                    | "--field"
+                    | "--raw-field"
+                    | "--jq"
+                    | "--cache"
+                    | "--input"
+            );
+            continue;
+        }
+        return Some(t);
+    }
+    None
+}
+
+/// `repos/<owner>/<repo>`, `repos/{owner}/{repo}` and `repos/:owner/:repo`
+/// fold to `repos/{repo}`; a digit run after a `/` folds to `N`; a 40-hex
+/// run folds to `SHA`; `head=<x>` folds to `head=B`. Every other query
+/// parameter stays verbatim.
+fn fold_path(path: &str) -> String {
+    let (route, query) = match path.split_once('?') {
+        Some((r, q)) => (r, Some(q)),
+        None => (path, None),
+    };
+    let mut segs: Vec<String> = route.split('/').map(str::to_string).collect();
+    if segs.first().map(String::as_str) == Some("repos") && segs.len() >= 3 {
+        segs[1] = "{repo}".to_string();
+        segs.remove(2);
+    }
+    for seg in segs.iter_mut().skip(1) {
+        if seg.len() == 40 && seg.chars().all(|c| c.is_ascii_hexdigit()) {
+            *seg = "SHA".to_string();
+        } else if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
+            *seg = "N".to_string();
+        }
+    }
+    let mut out = segs.join("/");
+    if let Some(q) = query {
+        out.push('?');
+        out.push_str(
+            &q.split('&')
+                .map(|kv| {
+                    if kv.starts_with("head=") {
+                        "head=B"
+                    } else {
+                        kv
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("&"),
+        );
+    }
+    out
+}
+
+/// The caller label for THIS process, computed once: `FNO_GH_CALLER` wins
+/// outright when set (checked per call, so a test can pin it), otherwise
+/// the process ancestry names the caller.
+pub(crate) fn caller_label() -> String {
+    if let Ok(v) = std::env::var("FNO_GH_CALLER") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    caller_label_from(&|pid| {
+        crate::census::process_argv(pid).map(|argv| {
+            let parent = crate::census::parent_pid(pid).unwrap_or(0);
+            (argv, parent)
+        })
+    })
+}
+
+/// The caller walk over an injected ancestry, so the test fixtures and the
+/// live census share one spelling. At most `CALLER_HOPS` hops: the
+/// interesting caller is always the near ancestry, and a long chain is a
+/// shell anyway. The first ancestor that is not a transport names the
+/// caller; a `fno-agents-daemon` anywhere in the window prefixes `daemon `.
+pub(crate) fn caller_label_from(lookup: &dyn Fn(u32) -> Option<(Vec<String>, u32)>) -> String {
+    let mut pid = std::process::id();
+    let mut label: Option<String> = None;
+    let mut daemon = false;
+    for _ in 0..CALLER_HOPS {
+        let Some((argv, parent)) = lookup(pid) else {
+            break;
+        };
+        if argv
+            .first()
+            .is_some_and(|a| file_basename(a) == "fno-agents-daemon")
+        {
+            daemon = true;
+        }
+        if label.is_none() {
+            if let Label::Name(word) = label_word(&argv) {
+                label = Some(word);
+            }
+        }
+        if parent == 0 || parent == pid || (label.is_some() && daemon) {
+            break;
+        }
+        pid = parent;
+    }
+    match (label, daemon) {
+        (Some(word), true) => format!("daemon {word}"),
+        (Some(word), false) => word,
+        (None, true) => "daemon unknown".to_string(),
+        (None, false) => "unknown".to_string(),
+    }
+}
+
+enum Label {
+    Skip,
+    Name(String),
+}
+
+fn label_word(argv: &[String]) -> Label {
+    // A jobs script reads as its own caller whether it runs via a shebang
+    // (argv0 is the script) or through a shell (argv1 is the script).
+    for w in argv.iter().take(2) {
+        if w.contains("/.claude/jobs/") && w.ends_with(".sh") {
+            let stem = file_basename(w).trim_end_matches(".sh");
+            return Label::Name(format!("worker-script {stem}"));
+        }
+    }
+    let Some((idx, prog)) = effective_program(argv) else {
+        return Label::Skip;
+    };
+    let rest = &argv[(idx + 1).min(argv.len())..];
+    match file_basename(prog).as_str() {
+        // Transports: the door's own process, the adapters, the proxy, gh.
+        "gh" | "fno-gh-loopcheck" | "fno-gh-coverage" | "fno-gh-proxy" | "fno-agents-daemon" => {
+            Label::Skip
+        }
+        "fno-agents" => fno_agents_label(rest),
+        // The Python twin and the Rust front door name the caller the same
+        // way: the `fno` word plus the subcommand chain (do pr merge).
+        "fno" | "fno-py" => {
+            let words: Vec<&str> = rest
+                .iter()
+                .map(String::as_str)
+                .filter(|w| !w.starts_with('-'))
+                .take(3)
+                .collect();
+            Label::Name(
+                format!("fno {}", words.join(" ").trim_end().to_string())
+                    .trim_end()
+                    .to_string(),
+            )
+        }
+        base => {
+            if matches!(base, "zsh" | "bash" | "sh" | "dash" | "ksh") {
+                Label::Name("worker-shell".to_string())
+            } else {
+                let arg = rest
+                    .iter()
+                    .map(String::as_str)
+                    .find(|w| !w.starts_with('-') && !w.starts_with('{'))
+                    .unwrap_or("");
+                if arg.is_empty() {
+                    Label::Name(base.to_string())
+                } else {
+                    Label::Name(format!("{base} {arg}"))
+                }
+            }
+        }
+    }
+}
+
+/// The program word: argv0, or argv1 under a script interpreter (`python3
+/// fno-py ...` is fno-py traffic).
+fn effective_program(argv: &[String]) -> Option<(usize, &str)> {
+    let first = argv.first()?;
+    if is_interpreter(file_basename(first).as_str()) {
+        argv.get(1).map(|p| (1usize, p.as_str()))
+    } else {
+        Some((0usize, first.as_str()))
+    }
+}
+
+fn is_interpreter(base: &str) -> bool {
+    base == "python"
+        || base == "python3"
+        || base.starts_with("python3.")
+        || base == "perl"
+        || base == "ruby"
+        || base == "node"
+}
+
+fn fno_agents_label(args: &[String]) -> Label {
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    match sub {
+        "" | "fleet-incident" | "pr-worktree" => Label::Skip,
+        "authorized-merge" => {
+            // The spawner wrapper carries no JSON op and skips; an op names
+            // the caller down to the wait flavor.
+            let Some(payload) = args
+                .iter()
+                .skip(1)
+                .find(|t| t.trim_start().starts_with('{'))
+            else {
+                return Label::Skip;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(payload) else {
+                return Label::Skip;
+            };
+            let Some(op) = v.get("op").and_then(Value::as_str) else {
+                return Label::Skip;
+            };
+            match v.get("until").and_then(Value::as_str) {
+                Some(until) => Label::Name(format!("authorized-merge {op} {until}")),
+                None => Label::Name(format!("authorized-merge {op}")),
+            }
+        }
+        _ => {
+            let arg = args
+                .iter()
+                .skip(1)
+                .map(String::as_str)
+                .find(|w| !w.starts_with('-') && !w.starts_with('{') && !w.starts_with('['))
+                .unwrap_or("");
+            if arg.is_empty() {
+                Label::Name(sub.to_string())
+            } else {
+                Label::Name(format!("{sub} {arg}"))
+            }
+        }
+    }
+}
+
+fn file_basename(word: &str) -> String {
+    std::path::Path::new(word)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(word)
+        .to_string()
+}
+
+/// The recurring pollers the core reserve stands down first: everything
+/// else (merge, push, create, finalize, operator shells) keeps the last
+/// requests of the bucket.
+pub(crate) fn is_poll_class(label: &str) -> bool {
+    label.starts_with("daemon ")
+        || label == "hook stop"
+        || label == "fno do pr wait"
+        || label == "fno do pr watch"
+        || label == "lead-rundown"
+        || label == "lead-checkin"
+        || label == "pr-heal"
+        || label == "backlog reconcile"
+        || label == "authorized-merge status-read"
+        || label.starts_with("authorized-merge status-wait")
+}
+
+/// The journal beside the ledger: the same directory contract, so a budget
+/// that protects the machine never moves with a project's config.
+pub fn journal_path() -> PathBuf {
+    crate::agents_config::machine_locks_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("fno-locks"))
+        .join(JOURNAL_NAME)
+}
+
+/// One verdict's row, appended under the ledger flock `admit` already
+/// holds. Exempt shapes never journal (a version probe is not spend), and
+/// a temp-ledger caller (every unit test) writes nothing.
+pub(crate) fn journal_verdict(
+    path: &std::path::Path,
+    argv: &[String],
+    now: i64,
+    verdict: &crate::gh_budget::Verdict,
+) {
+    if path != crate::gh_budget::ledger_path().as_path() {
+        return;
+    }
+    let (bucket, conditional) = bucket_for(argv);
+    if bucket == Bucket::Exempt {
+        return;
+    }
+    let row = json!({
+        "ts_ms": now,
+        "caller": caller_label(),
+        "shape": shape(argv),
+        "bucket": bucket.word(),
+        "conditional": conditional,
+        "points": crate::gh_budget::points_for(argv),
+        "verdict": if verdict.admitted { "admitted" } else { "refused" },
+        "cause": verdict.cause,
+    });
+    let _ = append(&journal_path(), &row.to_string());
+}
+
+/// One JSON line, O_APPEND in a single `write_all` (a row stays under 512
+/// bytes, so lines stay whole without a lock). Past 8 MiB the file renames
+/// to `.1` first, replacing any older generation.
+pub(crate) fn append(path: &std::path::Path, line: &str) -> Result<(), String> {
+    use std::io::Write;
+    if std::fs::metadata(path)
+        .map(|m| m.len() > ROTATE_BYTES)
+        .unwrap_or(false)
+    {
+        let rotated = PathBuf::from(format!("{}.1", path.display()));
+        let _ = std::fs::rename(path, rotated);
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let mut buf = String::with_capacity(line.len() + 1);
+    buf.push_str(line);
+    buf.push('\n');
+    file.write_all(buf.as_bytes())
+        .map_err(|e| format!("cannot append {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn caller_walk_buckets_and_shapes_match_the_contract() {
+        // AC1-HP, walked from fixture rows: the door skips itself, the
+        // proxy skips, and the python twin names the fno caller.
+        let chain: std::collections::HashMap<u32, (Vec<String>, u32)> = [
+            (
+                100,
+                (argv(&["fno-agents", "fleet-incident", "gh-budget"]), 200),
+            ),
+            (
+                200,
+                (argv(&["python3", "fno-gh-proxy", "pr", "view", "7"]), 300),
+            ),
+            (
+                300,
+                (argv(&["python3", "fno-py", "do", "pr", "merge", "7"]), 400),
+            ),
+            (400, (argv(&["zsh", "-c", "fno-py do pr merge 7"]), 1)),
+        ]
+        .into_iter()
+        .collect();
+        let label = caller_label_from(&|pid| chain.get(&pid).cloned());
+        assert_eq!(label, "fno do pr merge", "the nearest real caller names it");
+
+        // A daemon ancestor prefixes, and a labeled ancestor still reads.
+        let chain2: std::collections::HashMap<u32, (Vec<String>, u32)> = [
+            (10, (argv(&["fno-agents", "pr-heal"]), 20)),
+            (20, (argv(&["fno-agents-daemon"]), 1)),
+        ]
+        .into_iter()
+        .collect();
+        let label = caller_label_from(&|pid| chain2.get(&pid).cloned());
+        assert_eq!(label, "daemon pr-heal", "the daemon beat is named");
+
+        // Unreadable ancestry is unknown, never a guess.
+        let label = caller_label_from(&|_| None);
+        assert_eq!(label, "unknown");
+
+        // The conditional bucketing: -i plus If-None-Match is a conditional
+        // core read, and the shape folds repo and number out.
+        let (bucket, conditional) = bucket_for(&argv(&[
+            "api",
+            "-i",
+            "repos/o/r/pulls/12",
+            "-H",
+            "If-None-Match: W/\"x\"",
+        ]));
+        assert_eq!(bucket, Bucket::Core);
+        assert!(conditional);
+        assert_eq!(
+            shape(&argv(&[
+                "api",
+                "-i",
+                "repos/o/r/pulls/12",
+                "-H",
+                "If-None-Match: W/\"x\"",
+            ])),
+            "api repos/{repo}/pulls/N [conditional]"
+        );
+
+        // GraphQL and the gh-over-GraphQL pr verbs bucket away from core.
+        assert_eq!(
+            bucket_for(&argv(&["api", "graphql", "-f", "query=query { x }"])).0,
+            Bucket::GraphQL
+        );
+        assert_eq!(bucket_for(&argv(&["pr", "view", "7"])).0, Bucket::GraphQL);
+        assert_eq!(bucket_for(&argv(&["pr", "merge", "7"])).0, Bucket::GraphQL);
+        assert_eq!(bucket_for(&argv(&["api", "user"])).0, Bucket::Core);
+        assert_eq!(bucket_for(&argv(&["api", "rate_limit"])).0, Bucket::Exempt);
+
+        // Shape folding: template placeholders and shas collapse too.
+        assert_eq!(
+            shape(&argv(&["api", "repos/o/r/commits/1234567890123456789012345678901234567890/check-runs?per_page=100"])),
+            "api repos/{repo}/commits/SHA/check-runs?per_page=100"
+        );
+        assert_eq!(shape(&argv(&["run", "list", "--limit", "5"])), "run list");
+    }
+
+    #[test]
+    fn append_survives_an_unwritable_journal_dir() {
+        // AC1-EDGE: an unwritable directory is an Err, never a panic - the
+        // admission path ignores it, so the verdict and the ledger write
+        // stand unchanged.
+        let file = tempfile::tempdir().unwrap();
+        let target = file.path().join("not-a-dir");
+        std::fs::write(&target, b"file, so children under it fail").unwrap();
+        let err = append(&target.join("github-request-spend.jsonl"), "{}");
+        assert!(err.is_err(), "append into a file-named dir must fail");
+    }
+}
