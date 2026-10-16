@@ -440,9 +440,9 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         };
     }
 
-    // The shared hold rides only the REAL ledger: tests stage temp paths,
-    // and a test's world must not read (or inherit) the dev machine's fleet
-    // hold.
+    // The core gate sits before the secondary backoff: an exhausted or
+    // reserved core bucket refuses core-shaped requests regardless of the
+    // secondary window, while GraphQL reads ride the untouched bucket.
     let (bucket, _) = crate::gh_spend::bucket_for(argv);
     if bucket == crate::gh_spend::Bucket::Core
         && now < ledger.core_reset_ms
@@ -473,6 +473,9 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         }
     }
 
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold.
     let shared_until = if path == ledger_path().as_path() {
         shared_hold_until(now)
     } else {
