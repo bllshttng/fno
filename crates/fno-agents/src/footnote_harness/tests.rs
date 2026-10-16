@@ -250,3 +250,183 @@ fn restore_env(saved: Vec<(&'static str, Option<std::ffi::OsString>)>) {
         }
     }
 }
+
+/// A `/loop` seed creates once, then resumes once per tick until the row is
+/// removed: the binary saw one create spec and two resume specs with the
+/// seed's prompt, and the driver exits 0 naming `row removed` and 3 ticks.
+/// The fake binary also writes the transcript file the real one writes, so
+/// the ask lane can find the session again.
+#[test]
+fn a_loop_seed_creates_once_then_resumes_each_tick_until_the_row_is_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let scratch = tmp.path().join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let script = [
+        "#!/bin/sh",
+        "n=$(cat '__D__/count' 2>/dev/null || echo 0)",
+        "n=$((n+1))",
+        "echo \"$n\" > '__D__/count'",
+        "cat > \"__D__/spec-$n.json\"",
+        "spec=\"__D__/spec-$n.json\"",
+        "d=$(sed -n 's/.*\"session_dir\":\"\\([^\"]*\\)\".*/\\1/p' \"$spec\" | head -1)",
+        "i=$(sed -n 's/.*\"fno_id\":\"\\([^\"]*\\)\".*/\\1/p' \"$spec\" | head -1)",
+        "mkdir -p \"$d\" && : > \"$d/$i.jsonl\"",
+        "exit 0",
+        "",
+    ]
+    .join("\n")
+    .replace("__D__", scratch.to_str().unwrap());
+    let bin = crate::write_exec_stub(tmp.path(), "footnote", &script);
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("ZAI_API_KEY", "zk"),
+    ]);
+    let seed = super::loop_seed::parse("/loop 5m Reply TICK")
+        .unwrap()
+        .unwrap();
+    let (h, cwd) = (home.clone(), tmp.path().to_path_buf());
+    let first = |prompt: &str| {
+        create_turn(
+            &h,
+            "fx-loop",
+            prompt,
+            "tester",
+            &cwd,
+            "glm-test",
+            None,
+            &serde_json::json!({}),
+        )
+    };
+    let tick = |prompt: &str| {
+        let code =
+            maybe_run_ask(&h, &serde_json::json!({ "message": prompt }), "fx-loop").unwrap_or(12);
+        outcome(code, String::new(), String::new())
+    };
+    let row_alive = || {
+        load_registry(&h.registry_json())
+            .ok()
+            .is_some_and(|reg| reg.find_name_or_full_session_id("fx-loop").is_some())
+    };
+    let mut sleeps = 0u32;
+    let out = super::loop_seed::drive(
+        &seed,
+        first,
+        tick,
+        row_alive,
+        |_| {
+            sleeps += 1;
+            if sleeps >= 3 {
+                let _ = update_registry(&h.registry_json(), |reg| {
+                    let before = reg.entries.len();
+                    reg.entries.retain(|e| e.name != "fx-loop");
+                    reg.entries.len() != before
+                });
+            }
+        },
+        std::time::SystemTime::now,
+    );
+    restore_env(saved);
+    assert_eq!(out.exit_code, 0, "{}", out.stderr);
+    assert!(out.stderr.contains("row removed"), "{}", out.stderr);
+    assert!(out.stderr.contains("3 ticks"), "{}", out.stderr);
+    let spec = |n: &str| {
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(scratch.join(format!("spec-{n}.json"))).unwrap(),
+        )
+        .unwrap()
+    };
+    let created = spec("1");
+    assert_eq!(created["mode"], "create");
+    assert_eq!(created["message"], "Reply TICK");
+    for n in ["2", "3"] {
+        let resumed = spec(n);
+        assert_eq!(resumed["mode"], "resume", "{n}");
+        assert_eq!(resumed["message"], "Reply TICK", "{n}");
+    }
+}
+
+/// A seed with a missing, sub-minute or unterminated interval refuses with
+/// the usage line before any child or registry write; a `/loopy` prefix or
+/// a plain prompt is not a seed and keeps the one-turn path.
+#[test]
+fn a_loop_seed_refuses_bad_intervals_and_leaves_plain_prompts_alone() {
+    for bad in ["/loop Reply TICK", "/loop 30s x", "/loop 5m", "/loop"] {
+        let err = super::loop_seed::parse(bad).unwrap().unwrap_err();
+        assert!(err.contains("/loop <N>s|m|h|d <prompt>"), "{bad}: {err}");
+    }
+    assert!(super::loop_seed::parse("/loopy 5m x").is_none());
+    assert!(super::loop_seed::parse("Reply TICK").is_none());
+    assert!(super::loop_seed::parse("/loop 90s Reply TICK")
+        .unwrap()
+        .is_ok());
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", "/nonexistent/footnote"),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
+    let o = dispatch_once(
+        &home,
+        "fx-bad",
+        "/loop Reply TICK",
+        "tester",
+        tmp.path(),
+        Some("glm-test"),
+        None,
+        &serde_json::json!({}),
+    );
+    restore_env(saved);
+    assert_eq!(o.exit_code, 2, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("/loop <N>s|m|h|d <prompt>"),
+        "{}",
+        o.stderr
+    );
+    let reg = load_registry(&home.registry_json()).unwrap();
+    assert!(reg.find("fx-bad").is_none());
+}
+
+/// A refused tick (exit 2) stops the loop at once; three failed ticks in a
+/// row stop it carrying the last code.
+#[test]
+fn a_loop_stops_on_a_refusal_and_after_three_failures_in_a_row() {
+    let seed = super::loop_seed::LoopSeed {
+        interval: Duration::from_secs(60),
+        prompt: "x".into(),
+    };
+    let out = super::loop_seed::drive(
+        &seed,
+        |_| outcome(0, String::new(), String::new()),
+        |_| outcome(2, String::new(), String::new()),
+        || true,
+        |_| {},
+        || std::time::SystemTime::UNIX_EPOCH,
+    );
+    assert_eq!(out.exit_code, 2);
+    assert!(out.stderr.contains("refused"), "{}", out.stderr);
+    let mut ticks = 0u32;
+    let out = super::loop_seed::drive(
+        &seed,
+        |_| outcome(0, String::new(), String::new()),
+        |_| {
+            ticks += 1;
+            outcome(1, String::new(), String::new())
+        },
+        || true,
+        |_| {},
+        || std::time::SystemTime::UNIX_EPOCH,
+    );
+    assert_eq!(ticks, 3);
+    assert_eq!(out.exit_code, 1);
+    assert!(
+        out.stderr.contains("3 failed ticks in a row"),
+        "{}",
+        out.stderr
+    );
+}

@@ -4,6 +4,7 @@
 //! `zcode_ask` launches zcode.
 
 pub mod endpoint;
+pub mod loop_seed;
 pub mod source;
 pub mod transcript;
 
@@ -272,7 +273,8 @@ pub(crate) async fn stop_confirmed(pid: u32, started: Option<u64>) -> bool {
 
 /// `fno agents spawn -H footnote --substrate headless`: mint the id, start
 /// the binary, register the row with the child's pid, run, mark it Exited.
-/// `params` is the spawn request; it supplies `node` and `permission_mode`.
+/// A `/loop` seed routes to the interval driver instead; `params` is the
+/// spawn request and supplies `node` and `permission_mode`.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_once(
     home: &AgentsHome,
@@ -290,6 +292,53 @@ pub fn dispatch_once(
     let Some(model) = model.filter(|m| !m.is_empty()) else {
         return outcome(2, String::new(), "-H footnote needs -m <model>\n".into());
     };
+    match loop_seed::parse(message) {
+        Some(Err(e)) => return outcome(2, String::new(), format!("{e}\n")),
+        Some(Ok(seed)) => {
+            return loop_seed::drive(
+                &seed,
+                |prompt| create_turn(home, name, prompt, from_name, cwd, model, timeout, params),
+                |prompt| {
+                    let code = maybe_run_ask(
+                        home,
+                        &serde_json::json!({
+                            "message": prompt,
+                            "timeout": timeout.map(|d| d.as_secs()),
+                        }),
+                        name,
+                    )
+                    .unwrap_or(12);
+                    outcome(code, String::new(), String::new())
+                },
+                || {
+                    load_registry(&home.registry_json())
+                        .ok()
+                        .is_some_and(|reg| reg.find_name_or_full_session_id(name).is_some())
+                },
+                std::thread::sleep,
+                std::time::SystemTime::now,
+            );
+        }
+        None => {}
+    }
+    create_turn(home, name, message, from_name, cwd, model, timeout, params)
+}
+
+/// One create turn: the pre-loop body of `dispatch_once`, unchanged - it
+/// refuses a duplicate row, mints the session id, runs the binary once and
+/// settles the row's terminal state. The loop's first turn is this with the
+/// seed's prompt.
+#[allow(clippy::too_many_arguments)]
+fn create_turn(
+    home: &AgentsHome,
+    name: &str,
+    message: &str,
+    from_name: &str,
+    cwd: &Path,
+    model: &str,
+    timeout: Option<Duration>,
+    params: &Value,
+) -> AskOutcome {
     let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     match load_registry(&home.registry_json()) {
         Ok(reg) if reg.find(name).is_some() => {
@@ -383,8 +432,63 @@ pub fn dispatch_once(
 }
 
 /// `fno agents ask <name>` on a footnote row: resume by name, then the input.
-/// Returns None for any other harness (fall through).
+/// Returns None for any other harness (fall through). A `/loop` seed in the
+/// message turns the ask into the interval driver instead.
 pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+    let o = ask_turn(home, params, name)?;
+    print!("{}", o.stdout);
+    eprint!("{}", o.stderr);
+    Some(o.exit_code)
+}
+
+/// The ask body: harness check, `/loop` dispatch, else one resumed turn.
+/// Returns the outcome without printing it, so the loop's driver prints
+/// each turn as it runs and the plain ask prints once, at the end.
+fn ask_turn(home: &AgentsHome, params: &Value, name: &str) -> Option<AskOutcome> {
+    let reg = load_registry(&home.registry_json()).ok()?;
+    let entry = reg.find_name_or_full_session_id(name)?;
+    if entry.harness_name() != "footnote" {
+        return None;
+    }
+    let message = params["message"].as_str().unwrap_or("").to_string();
+    let timeout = params["timeout"].as_u64().map(Duration::from_secs);
+    let Some(parsed) = loop_seed::parse(&message) else {
+        return resume_turn(home, name, &message, timeout);
+    };
+    let seed = match parsed {
+        Ok(seed) => seed,
+        Err(e) => return Some(outcome(2, String::new(), format!("{e}\n"))),
+    };
+    let turn = |prompt: &str| {
+        resume_turn(home, name, prompt, timeout)
+            .unwrap_or_else(|| outcome(12, String::new(), String::new()))
+    };
+    let row_alive = || {
+        load_registry(&home.registry_json())
+            .ok()
+            .is_some_and(|reg| reg.find_name_or_full_session_id(name).is_some())
+    };
+    Some(loop_seed::drive(
+        &seed,
+        turn,
+        turn,
+        row_alive,
+        std::thread::sleep,
+        std::time::SystemTime::now,
+    ))
+}
+
+/// One resumed footnote turn: the row goes Busy for the child and back to
+/// its terminal state after; a refusal (exit 2: a live writer holds the
+/// session, or the spec was refused) never rewrites the row. Returns the
+/// outcome without printing; `None` for a non-footnote row (fall through)
+/// or an unreadable registry.
+fn resume_turn(
+    home: &AgentsHome,
+    name: &str,
+    message: &str,
+    timeout: Option<Duration>,
+) -> Option<AskOutcome> {
     let reg = load_registry(&home.registry_json()).ok()?;
     let entry = reg.find_name_or_full_session_id(name)?;
     if entry.harness_name() != "footnote" {
@@ -402,11 +506,9 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     // A resume reaches the provider the row recorded, whatever stamp the
     // asking session carries.
     let provider = entry.route_provider_id.clone();
-    let message = params["message"].as_str().unwrap_or("").to_string();
-    let timeout = params["timeout"].as_u64().map(Duration::from_secs);
     let Some(dir) = transcript::find_session_dir(&transcript::sessions_root(), &fno_id) else {
         eprintln!("fno-agents: footnote session {fno_id} has no transcript on disk");
-        return Some(2);
+        return Some(outcome(2, String::new(), String::new()));
     };
     let record = transcript::transcript_file(&dir, &fno_id);
     let spec = match launch_spec(
@@ -424,15 +526,12 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
         Ok(s) => s,
         Err(e) => {
             eprintln!("fno-agents: {e}");
-            return Some(2);
+            return Some(outcome(2, String::new(), String::new()));
         }
     };
     let child = match spawn(&cwd) {
         Ok(c) => c,
-        Err(o) => {
-            eprint!("{}", o.stderr);
-            return Some(o.exit_code);
-        }
+        Err(o) => return Some(o),
     };
     let pid = child.id();
     let prior = (entry.status, entry.pid, entry.pid_start_time);
@@ -460,9 +559,7 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
     } else {
         mark_row(home, &row_name, &record);
     }
-    print!("{}", o.stdout);
-    eprint!("{}", o.stderr);
-    Some(o.exit_code)
+    Some(o)
 }
 
 /// The roster's `footnote` row. Spawn and ask never reach these argv
