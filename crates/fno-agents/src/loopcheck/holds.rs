@@ -261,12 +261,16 @@ pub(crate) fn scan_open_holds(
     holds
 }
 
-/// A node whose graph row reads done or superseded. An unreadable store, a
+/// A node whose graph row reads done or superseded, in the store the owner
+/// cwd resolves (a configured `state_dir` included). An unreadable store, a
 /// missing row or any other status is NOT done, so a failed read leaves the
 /// hold standing instead of silently releasing a session.
-pub(crate) fn node_is_done(id: &str) -> bool {
+pub(crate) fn node_is_done(cwd: &std::path::Path, id: &str) -> bool {
     use crate::backlog::model::Status;
-    let store = crate::backlog::api::Store::new(&crate::graph_get::default_graph_path());
+    let graph = crate::agents_config::state_dir(cwd)
+        .map(|root| crate::state_layout::place(&root, "graph.json"))
+        .unwrap_or_else(crate::graph_get::default_graph_path);
+    let store = crate::backlog::api::Store::new(&graph);
     matches!(
         crate::backlog::api::node(&store, id),
         Ok(Some(n)) if matches!(n.status, Status::Done | Status::Superseded)

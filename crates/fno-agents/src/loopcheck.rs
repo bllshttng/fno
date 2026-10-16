@@ -751,7 +751,7 @@ pub(crate) fn decide_with_payload(
             &cwd,
             &session_id,
             node_id.as_deref().unwrap_or(""),
-            &holds::node_is_done,
+            &|id| holds::node_is_done(&cwd, id),
             &emit,
         ) {
             holds::QuestionGateStop::None => {}
