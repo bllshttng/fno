@@ -1028,6 +1028,13 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     if st.rundown_republish && team_needs_republish(authorized, modified, SystemTime::now()) {
         start_team_republish(&st.rundown_html);
     }
+    // Option A (ruling recorded on the node): the daemon arm renders only
+    // after a viewer was served the page, so an authorized serve stamps
+    // the sibling marker the arm reads. Best effort: a failed stamp just
+    // means the arm's next render waits for another serve.
+    if authorized {
+        let _ = std::fs::write(served_marker(&st.rundown_html), b"");
+    }
     let notice = if st.rundown_republish {
         "fno agents org rundown (a render has started; reload in about a minute)"
     } else {
@@ -1459,6 +1466,14 @@ fn team_needs_republish(authorized: bool, modified: Option<SystemTime>, now: Sys
             .map(|age| age > TEAM_REPUBLISH_AFTER)
             .unwrap_or(false),
     }
+}
+
+/// The marker the /team route stamps on an authorized serve and the
+/// daemon's team_ledger arm reads: marker mtime newer than the page mtime
+/// means a viewer arrived since the last render (the option-A cadence, the
+/// ruling recorded on the node).
+fn served_marker(page: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.served", page.display()))
 }
 
 /// Single-flight background render. `--out` names the exact path the bridge
@@ -2829,6 +2844,20 @@ console.log("recent searches: 12 cases ok");
         // Exactly at the threshold is still fresh ("older than" is strict).
         let boundary = now.checked_sub(TEAM_REPUBLISH_AFTER).unwrap();
         assert!(!team_needs_republish(true, Some(boundary), now));
+    }
+
+    #[test]
+    fn the_served_marker_names_a_page_sibling() {
+        // The daemon arm reads `<page>.served` by this exact shape: drift
+        // on either side stands the arm down forever (the feature fails
+        // silent in production, every test green).
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        assert_eq!(served_marker(&page), dir.path().join("rundown.html.served"));
+        std::fs::write(&page, b"<html></html>").unwrap();
+        assert!(!served_marker(&page).exists());
+        let _ = std::fs::write(served_marker(&page), b"");
+        assert!(served_marker(&page).exists());
     }
 
     #[tokio::test]

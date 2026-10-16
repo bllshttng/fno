@@ -800,14 +800,18 @@ pub(crate) const PAGE_RELOAD_JS: &str = include_str!("page_reload.js");
 
 /// The team_ledger arm's beat: the age after which the /team route in
 /// crates/fno/src/web.rs starts its own render, so the file on disk and the
-/// served page age alike.
+/// served page age alike. Option A (the ruling recorded on the node): the
+/// arm renders only after a viewer was served the page, so the interval is
+/// the re-check cadence for the served marker, not a render timer.
 pub const TEAM_LEDGER_INTERVAL_S: u64 = 300;
 
-/// The arm as the daemon holds it: cadence stamp plus one-in-flight gate.
+/// The arm as the daemon holds it: cadence stamp plus one-in-flight gate,
+/// plus the page the last render named (option A's served-since check).
 #[derive(Default)]
 pub struct Arm {
     last_tick: std::sync::Mutex<Option<std::time::Instant>>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_page: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 /// The production runner: the page render, cwd-bound (config, the graph and
@@ -849,22 +853,30 @@ fn run_ledger() -> Result<String, String> {
 }
 
 /// One pass of the arm body: the run, then exactly one tick row - on every
-/// path, so a silent tick cannot be told from one that never ran.
+/// path, so a silent tick cannot be told from one that never ran. Returns
+/// the page the run named, so the arm can ask whether a viewer was served
+/// since (option A's served-since check).
 fn emit_one(
     home: &crate::paths::AgentsHome,
     run: impl FnOnce() -> Result<String, String>,
-) -> crate::merge_close::CloseOutcome {
-    let outcome = match run() {
-        Ok(path) => crate::merge_close::CloseOutcome {
-            acted: 1,
-            skip_reason: None,
-            detail: format!("{path} rendered"),
-        },
-        Err(e) => crate::merge_close::CloseOutcome {
-            acted: 0,
-            skip_reason: Some("error".to_string()),
-            detail: e.chars().take(200).collect(),
-        },
+) -> (crate::merge_close::CloseOutcome, Option<String>) {
+    let (outcome, named) = match run() {
+        Ok(path) => (
+            crate::merge_close::CloseOutcome {
+                acted: 1,
+                skip_reason: None,
+                detail: format!("{path} rendered"),
+            },
+            Some(path),
+        ),
+        Err(e) => (
+            crate::merge_close::CloseOutcome {
+                acted: 0,
+                skip_reason: Some("error".to_string()),
+                detail: e.chars().take(200).collect(),
+            },
+            None,
+        ),
     };
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
@@ -879,13 +891,14 @@ fn emit_one(
         Some(&outcome.detail),
         TEAM_LEDGER_INTERVAL_S,
     );
-    outcome
+    (outcome, named)
 }
 
 /// The daemon-facing wrapper: due-check plus one-in-flight gate. A page
-/// render is not dispatch, so there is no pause gate: the arm renders even
-/// when no team is live, so an empty org reads "no live teams" rather
-/// than a stale team.
+/// render is not dispatch, so there is no pause gate. Option A (the ruling
+/// recorded on the node) gates the render on viewership: a tick renders
+/// only after a viewer was served the page since the last render, so an
+/// unread page stops spending the core bucket's requests.
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     maybe_tick_with(arm, home, run_ledger);
 }
@@ -908,10 +921,60 @@ fn maybe_tick_with(
         *last = Some(std::time::Instant::now());
     }
     let flag = std::sync::Arc::clone(&arm.in_flight);
+    let last_page = std::sync::Arc::clone(&arm.last_page);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        emit_one(&home, run);
+        // Option A: nobody served the page since the last render, so the
+        // tick stands down with one journal row - a standing-down arm is
+        // never told from a dead one.
+        let skip = match last_page.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            Some(page) => !served_since_render(&page),
+            None => false,
+        };
+        if skip {
+            emit_skip_row(&home);
+            return;
+        }
+        let (_outcome, named) = emit_one(&home, run);
+        if let Some(page) = named {
+            *last_page.lock().unwrap_or_else(|e| e.into_inner()) = Some(page);
+        }
     });
+}
+
+/// Whether a viewer was served `page` since its last render: the
+/// `<page>.served` marker (stamped by the /team route's authorized serves)
+/// is newer than the page itself. A missing page is maximally stale and
+/// always renders, matching the web route's staleness rule; a missing
+/// marker is a page nobody ever served, so nothing renders.
+fn served_since_render(page: &std::path::Path) -> bool {
+    let page_mtime = std::fs::metadata(page).and_then(|m| m.modified()).ok();
+    let Some(page_mtime) = page_mtime else {
+        return true;
+    };
+    let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
+    std::fs::metadata(&marker)
+        .and_then(|m| m.modified())
+        .map(|marker_mtime| marker_mtime > page_mtime)
+        .unwrap_or(false)
+}
+
+/// The standing-down tick's row: acted 0, `not served`, so the beat stays
+/// visible in the journal while the render itself waits for a viewer.
+fn emit_skip_row(home: &crate::paths::AgentsHome) {
+    let journal = crate::loop_runtime::Journal::new_raw(
+        home.events_jsonl(),
+        crate::daemon::global_events_path(home),
+    );
+    crate::tick_ledger::emit_tick(
+        &journal,
+        "team_ledger",
+        crate::tick_ledger::SCHED_DAEMON,
+        0,
+        Some("not served"),
+        Some("no viewer was served the page since the last render"),
+        TEAM_LEDGER_INTERVAL_S,
+    );
 }
 
 /// `backlog.page_reload_s`: seconds between self-reloads of an open page.
@@ -1852,10 +1915,11 @@ mod tests {
         std::env::set_var("FNO_BIN", &stub);
         std::env::set_var("FNO_PY", "/nonexistent/fno-py-sentinel");
         let h = home();
-        let o = emit_one(&h, run_ledger);
+        let (o, named) = emit_one(&h, run_ledger);
         assert_eq!(o.acted, 1);
         assert_eq!(o.skip_reason, None);
         assert_eq!(o.detail, format!("{} rendered", page.display()));
+        assert_eq!(named, Some(page.display().to_string()));
         // The wrong-page defense: exit 0 naming an absent page is an error
         // row, so a rename can never again read as rendered.
         let ghost = crate::write_exec_stub(
@@ -1889,8 +1953,9 @@ mod tests {
     #[test]
     fn team_ledger_failure_is_an_error_row() {
         let h = home();
-        let o = emit_one(&h, || Err("exit 1: graph unreadable".to_string()));
+        let (o, named) = emit_one(&h, || Err("exit 1: graph unreadable".to_string()));
         assert_eq!(o.acted, 0);
+        assert_eq!(named, None);
         assert_eq!(o.skip_reason.as_deref(), Some("error"));
         let log = crate::events::committed_journal_text(&h.events_jsonl());
         assert!(log.contains("\"acted\":0"), "log: {log}");
@@ -1904,7 +1969,33 @@ mod tests {
         let h = home();
         *arm.last_tick.lock().unwrap() = Some(std::time::Instant::now());
         maybe_tick_with(&arm, h.clone(), || panic!("arm must be gated"));
-        assert!(!h.events_jsonl().exists(), "a gated tick wrote no row");
+        assert!(!h.events_jsonl().exists(), "a gated tick says nothing");
+    }
+
+    #[test]
+    fn a_page_served_since_its_render_ungates_the_next_tick() {
+        // Option A's mtime verdict: no marker reads never-served; a fresh
+        // marker ungates; a fresh render (the page newer than the marker)
+        // re-gates. The skip row keeps the beat visible while standing
+        // down, so a standing-down arm is never told from a dead one.
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        std::fs::write(&page, b"<html></html>").unwrap();
+        assert!(!served_since_render(&page), "no marker: never served");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
+        std::fs::write(&marker, b"").unwrap();
+        assert!(served_since_render(&page), "a fresh marker ungates");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&page, b"<html>fresh</html>").unwrap();
+        assert!(
+            !served_since_render(&page),
+            "a fresh render re-gates the arm"
+        );
+        let h = home();
+        emit_skip_row(&h);
+        let log = crate::events::committed_journal_text(&h.events_jsonl());
+        assert!(log.contains("\"skip_reason\":\"not served\""), "log: {log}");
     }
 
     #[test]
