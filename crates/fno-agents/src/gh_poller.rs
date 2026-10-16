@@ -8,7 +8,8 @@
 //! The lease is renewed only by a publish: a poller that stops reading
 //! GitHub goes quiet and loses the lease after two status TTLs, and the next
 //! live read on another host takes it. Every expiry and row age is computed
-//! in SQL on the store clock, never on a host clock. An unset
+//! in SQL on the store clock, never on a host clock. The lease assumes one
+//! GitHub account behind a primary, as the `gh-budget:fleet` hold does. An unset
 //! `store.remote_url`, or a primary that errors, keeps today's per-machine
 //! polling: a failed call writes a `poller-down` marker and the module skips
 //! the primary for a minute.

@@ -187,7 +187,9 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (code, out, stderr_lines, calls) = cached_status(cwd_str, pr, refresh, None);
+    // The verb's readers act on `ready` and the local gates, so it composes
+    // here and never serves a peer's row.
+    let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {
@@ -219,6 +221,18 @@ pub(crate) fn cached_status(
     pr: u64,
     refresh: bool,
     head_read: Option<&Value>,
+) -> (i32, Value, Vec<String>, usize) {
+    cached_status_via(cwd_str, pr, refresh, head_read, true)
+}
+
+/// `cached_status` with the shared-row follow switched by `follow`. Only the
+/// callers that read the verdict and the settled flag follow a peer poller.
+fn cached_status_via(
+    cwd_str: &str,
+    pr: u64,
+    refresh: bool,
+    head_read: Option<&Value>,
+    follow: bool,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
@@ -252,7 +266,10 @@ pub(crate) fn cached_status(
         if let Some(answer) = fresh_serve(&dir, &slug_key, &pr.to_string(), now, require_head) {
             return into_answer(answer, 0);
         }
-        if let Some(answer) = follower_serve(&dir, &slug, &slug_key, pr, require_head) {
+        if let Some(answer) = follow
+            .then(|| follower_serve(&dir, &slug, &slug_key, pr, require_head))
+            .flatten()
+        {
             return into_answer(answer, 0);
         }
     }
@@ -374,7 +391,8 @@ fn follower_serve(
     pr: u64,
     require_head: Option<&str>,
 ) -> Option<(i32, String, String)> {
-    let (key, row) = crate::gh_poller::follow(dir, slug, pr)?;
+    let (key, mut row) = crate::gh_poller::follow(dir, slug, pr)?;
+    without_publisher_gates(&mut row);
     if key.contains(['/', '\\']) || !serve_head_ok(&row, require_head) {
         return None;
     }
@@ -382,6 +400,33 @@ fn follower_serve(
     write_row(dir, &key, &row);
     prune_rows(dir, slug_key, &pr.to_string(), &key);
     Some(answer)
+}
+
+/// The fields a peer composed from its own journal, graph and merge config.
+/// They say nothing about this host, so a shared row drops them and reads as
+/// not ready: the verdict and the check counts are the GitHub facts.
+fn without_publisher_gates(row: &mut Value) {
+    let Some(out) = row.get_mut("output").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for key in [
+        "review_coverage",
+        "review_posture",
+        "merge_authority",
+        "merge_execution",
+        "review_activity",
+        "dispatch_hold",
+        "merge_decision",
+        "coverage_waiver",
+        "rounds_used",
+        "max_rounds",
+        "rounds_exhausted",
+        "rounds_note",
+    ] {
+        out.remove(key);
+    }
+    out.insert("ready".into(), json!(false));
+    out.insert("ready_blockers".into(), json!(["status_shared"]));
 }
 
 fn fresh_probe() -> CountingProbe<crate::pr_status_facts::RealGhProbe> {
@@ -677,6 +722,8 @@ mod tests {
             .expect("a live peer lease and a young row serve");
         assert_eq!(code, 0);
         assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(stdout.contains("status_shared"), "{stdout}");
+        assert!(!stdout.contains("merge_execution"), "{stdout}");
         assert!(dir.join("Owner--Repo-7-h1.json").exists());
 
         let sql = format!(
