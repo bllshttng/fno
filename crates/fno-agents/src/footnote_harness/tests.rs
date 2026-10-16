@@ -1,5 +1,59 @@
 use super::*;
 
+/// The spend in a session's newest `terminal` lands in the ledger as one
+/// execution row, which a resume replaces rather than adds to; a heartbeat
+/// under 90 s old reads fresh, an older or absent one does not.
+#[test]
+fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
+    use serde_json::json;
+    let tmp = tempfile::tempdir().unwrap();
+    let ledger = tmp.path().join("ledger.json");
+    let rec = |seq: u64, ty: &str, data: Value| json!({"seq": seq, "ts": format!("2026-10-16T10:0{seq}:00.000Z"), "type": ty, "data": data});
+    let spec: LaunchSpec = serde_json::from_value(json!({"v": 2, "mode": "resume", "fno_id": "s1",
+        "session_dir": "/s1", "cwd": "/", "model": "glm-x", "message": "hi", "timeout_secs": null,
+        "node": null, "plan_path": "/plans/p.md", "cost_cap_usd": null, "wall_cap_minutes": null,
+        "plugin_root": null, "parent_session_id": null, "permission_mode": null, "price_cache": "/p",
+        "context_window": 1, "endpoint": {"base_url": "u", "key": "k", "bearer": true, "wire": "anthropic",
+            "provider_id": null, "route": "env"}}))
+    .unwrap();
+    let mut records = vec![rec(0, "header", json!({"node": "x-1"}))];
+    assert!(execution_row(&records, &spec, None).is_none());
+    for (seq, cost) in [(1, 0.25), (2, 0.42)] {
+        records.push(rec(
+            seq,
+            "terminal",
+            json!({"state": "done", "turns": seq, "cost_usd": cost}),
+        ));
+        let row = execution_row(&records, &spec, Some("glm-y")).unwrap();
+        crate::ledger_axes::upsert_execution(&ledger, row).unwrap();
+    }
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&ledger).unwrap()).unwrap();
+    let rows = data["entries"].as_array().unwrap();
+    let row = &rows[0];
+    assert_eq!((rows.len(), row["cost_usd"].as_f64()), (1, Some(0.42)));
+    assert_eq!(
+        (row["graph_node_id"].as_str(), row["model"].as_str()),
+        (Some("x-1"), Some("glm-y"))
+    );
+    std::fs::write(&ledger, "not json").unwrap();
+    let row = execution_row(&records, &spec, None).unwrap();
+    assert!(crate::ledger_axes::upsert_execution(&ledger, row).is_err());
+    assert_eq!(std::fs::read_to_string(&ledger).unwrap(), "not json");
+
+    let path = tmp.path().join("s1.jsonl");
+    let beat = rec(3, "heartbeat", json!({"state": "idle"}));
+    std::fs::write(&path, format!("{}\n{beat}\n", records[0])).unwrap();
+    let at = crate::state::rfc3339_like_to_secs("2026-10-16T10:03:00Z").unwrap();
+    assert!(transcript::heartbeat_fresh(&path, at + 30));
+    assert!(!transcript::heartbeat_fresh(&path, at + 120));
+    std::fs::write(&path, format!("{}\n", records[0])).unwrap();
+    assert!(!transcript::heartbeat_fresh(&path, at));
+    assert!(!transcript::heartbeat_fresh(
+        &tmp.path().join("gone.jsonl"),
+        at
+    ));
+}
+
 /// A Claude.ai login never reaches api.anthropic.com; a route env does. A
 /// spawn whose footnote binary is missing refuses with the install command
 /// and leaves no registry row. A spawn hands the binary a v2 spec that
