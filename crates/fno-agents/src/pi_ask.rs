@@ -45,6 +45,11 @@ fn build_pi_argv(
         .collect();
     argv.extend(route.tokens);
     argv.extend(harness_args.iter().cloned());
+    // argv-fence: exempt. Probed on pi 0.84.2: `pi -- --version` PRINTS the
+    // version, so `--` is not an end-of-options marker and a fence would be
+    // decoration (see `pi_run_tail` in provider.rs). `--print` is a boolean
+    // flag, so there is no equal-form either. The prompt is never
+    // flag-shaped: `pi_prompt` makes it start with `[from:` or a verb sigil.
     argv.push(prompt.to_string());
     argv
 }
