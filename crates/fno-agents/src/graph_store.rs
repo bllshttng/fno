@@ -1919,6 +1919,28 @@ pub fn recompute_statuses_with_plan_rungs(
                 .as_object_mut()
                 .unwrap()
                 .insert("status".to_string(), Value::String("in_progress".into()));
+        } else if child_statuses.iter().any(|s| s.as_deref() == Some("ready")) {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("ready".into()));
+        } else {
+            // "Open" = not terminal (done/superseded). A container with at
+            // least one open child, none of them building/in_review/ready,
+            // where every open child reads literally "blocked", rolls up to
+            // blocked. Falling through (no open children, or a mix that is
+            // neither all-blocked nor done/building/ready, e.g. idea/design)
+            // leaves the parent's own leaf-derived status untouched.
+            let open: Vec<&Option<String>> = child_statuses
+                .iter()
+                .filter(|s| !matches!(s.as_deref(), Some("done") | Some("superseded")))
+                .collect();
+            if !open.is_empty() && open.iter().all(|s| s.as_deref() == Some("blocked")) {
+                entries[pidx]
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("status".to_string(), Value::String("blocked".into()));
+            }
         }
     }
 }
@@ -3638,6 +3660,48 @@ mod tests {
             s_str(&entries[8], "status"),
             Some("done"),
             "a naive child close postdating the reopen re-closes"
+        );
+    }
+
+    #[test]
+    fn container_rollup_covers_ready_and_blocked_arms() {
+        let mut entries = vec![
+            // One done, one ready: neither "all done" nor "any building" -
+            // this is the live specimen the rollup used to miss. Must read
+            // ready, never fall through to the plan-less leaf default ("idea").
+            json!({"id": "mixed-parent", "parent": null}),
+            json!({"id": "mixed-done", "parent": "mixed-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "mixed-ready", "parent": "mixed-parent", "status": "ready"}),
+            // Every open (non-terminal) child is blocked -> parent blocked.
+            json!({"id": "blocked-parent", "parent": null}),
+            json!({"id": "blocked-done", "parent": "blocked-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "blocked-kid-1", "parent": "blocked-parent", "status": "blocked"}),
+            json!({"id": "blocked-kid-2", "parent": "blocked-parent", "status": "blocked"}),
+            // No child is ready/blocked/building and not all are done - a
+            // mix of done/idea children falls through to the parent's own
+            // leaf status, unchanged from today.
+            json!({"id": "idea-mix-parent", "parent": null, "status": "idea"}),
+            json!({"id": "idea-mix-done", "parent": "idea-mix-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "idea-mix-idea", "parent": "idea-mix-parent", "status": "idea"}),
+        ];
+        recompute_statuses(&mut entries);
+        assert_eq!(
+            s_str(&entries[0], "status"),
+            Some("ready"),
+            "a done child plus a ready child rolls up to ready, not idea"
+        );
+        assert_eq!(
+            s_str(&entries[3], "status"),
+            Some("blocked"),
+            "every open child blocked rolls up to blocked"
+        );
+        assert_eq!(
+            s_str(&entries[7], "status"),
+            Some("idea"),
+            "no ready/blocked/building child leaves the parent's own leaf status untouched"
         );
     }
 

@@ -1,0 +1,35 @@
+fno backlog capture - the capture tier below idea nodes
+
+The inbox is a markdown holding-pen (fno.paths.inbox_path) of self-contained
+checkbox items, each with a stable fu-id. Capture is a cheap markdown append,
+not a graph mutation; triage promotes warranted items into real graph nodes.
+Struck lines are never deleted, so provenance survives.
+
+Verbs:
+  add TITLE --source SUBSTRATE --why TEXT [--where AREA] [--priority p0-p3]
+      Shorts: -s source, -w where, -p priority.
+      Capture an item (dedup: an open item covering title+where is reused).
+  list [--json] [--all] [--by-type]
+      Shorts: -J json, -A all.
+      List inbox items (open by default; --by-type is the four-bucket lens).
+  scan [TRANSCRIPT]
+      Mechanical regex pre-filter for deferral language; reads stdin when
+      the transcript path is omitted. Emits JSON candidates.
+  empty-pass --reason TEXT [--session-id ID] [--scan-candidates N]
+      Short: -R reason.
+      Declare an honest empty deferrals pass (the reason is mandatory).
+  capture-pass [--session-id ID]
+      Seal a deferrals pass (>=1 capture_add event) as the gate artifact.
+  promote FU_ID [--difficulty low|medium|high] [--priority p] [--source-kind K]
+      Promote an inbox item to a graph node (idempotent; strikes the line).
+  dismiss FU_ID --reason TEXT
+      Short: -R reason.
+      Dismiss an item (struck [-], preserved for provenance).
+  archive
+      Sweep struck (promoted/dismissed) items into a sibling archive file.
+  tidy [--json] [--include-deferred]
+      Short: -J json.
+      One idempotent pass: eject completed filed nodes, dedup (report-only),
+      normalize separators, rebuild the pinned digest.
+
+Exit codes: 0 ok; 1 lock/graph failure; 2 validation or usage.

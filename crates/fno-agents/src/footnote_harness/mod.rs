@@ -168,16 +168,20 @@ fn outcome(code: i32, stdout: String, stderr: String) -> AskOutcome {
     }
 }
 
-fn mark_row(home: &AgentsHome, name: &str, transcript: &Path) {
-    let reported = transcript::read_records(transcript)
-        .ok()
-        .and_then(|records| {
-            records
-                .iter()
-                .find(|r| r["type"] == "model_response")
-                .and_then(|r| r["data"]["reported_model"].as_str())
-                .map(str::to_string)
-        });
+/// Mark the row Exited, and write the session's spend from its newest
+/// `terminal` to the ledger, where the node's cost rolls up.
+fn mark_row(home: &AgentsHome, name: &str, transcript: &Path, spec: &LaunchSpec, ledger: &Path) {
+    let records = transcript::read_records(transcript).unwrap_or_default();
+    let reported = records
+        .iter()
+        .find(|r| r["type"] == "model_response")
+        .and_then(|r| r["data"]["reported_model"].as_str())
+        .map(str::to_string);
+    if let Some(row) = execution_row(&records, spec, reported.as_deref()) {
+        if let Err(e) = crate::ledger_axes::upsert_execution(ledger, row) {
+            eprintln!("fno-agents: footnote spend not recorded: {e}");
+        }
+    }
     let _ = update_registry(&home.registry_json(), |reg| {
         let Some(e) = reg.find_mut(name) else {
             return false;
@@ -191,6 +195,42 @@ fn mark_row(home: &AgentsHome, name: &str, transcript: &Path) {
         }
         true
     });
+}
+
+/// The ledger's execution row for one footnote session, or None before the
+/// session wrote a `terminal`.
+fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -> Option<Value> {
+    let rec = crate::footnote_transcript::last_of(records, "terminal")?;
+    let end: crate::footnote_transcript::Terminal =
+        serde_json::from_value(rec["data"].clone()).ok()?;
+    // A resume's spec may name no node; the header kept the first run's.
+    let header = &records.first()?["data"];
+    let node = spec
+        .node
+        .clone()
+        .or_else(|| header["node"].as_str().map(str::to_string));
+    // The merge backstop stamps a PR only onto a row outside NON_DELIVERY.
+    let reason = match end.state.as_str() {
+        "done" => "Done",
+        "budget" => "Budget",
+        "interrupted" => "Interrupted",
+        _ => "Aborted",
+    };
+    Some(serde_json::json!({
+        "type": "execution",
+        "harness": "footnote",
+        "fno_id": spec.fno_id,
+        "session_id": spec.fno_id,
+        "sessions": [spec.fno_id],
+        "graph_node_id": node,
+        "plan_path": spec.plan_path,
+        "model": reported.unwrap_or(&spec.model),
+        "started": records.first().map(|r| r["ts"].clone()),
+        "completed": rec["ts"],
+        "cost_usd": end.cost_usd,
+        "termination_reason": reason,
+        "footnote_terminal": end,
+    }))
 }
 
 /// The base launch spec a pane's TUI reads (`footnote --spec <file>`): the
@@ -377,7 +417,8 @@ pub fn dispatch_once(
             reg.entries.len() != before
         });
     } else {
-        mark_row(home, name, &record);
+        let ledger = crate::paths_cli::ledger_json(cwd);
+        mark_row(home, name, &record, &spec, &ledger);
     }
     out
 }
@@ -458,7 +499,8 @@ pub fn maybe_run_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i3
             true
         });
     } else {
-        mark_row(home, &row_name, &record);
+        let ledger = crate::paths_cli::ledger_json(&cwd);
+        mark_row(home, &row_name, &record, &spec, &ledger);
     }
     print!("{}", o.stdout);
     eprint!("{}", o.stderr);

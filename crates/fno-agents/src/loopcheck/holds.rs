@@ -137,11 +137,15 @@ pub(crate) struct OpenHold {
 
 /// The open questions that hold this run: a question holds when it names
 /// this node in `blocks`, or when this session asked it with a non-empty
-/// `blocks`. Everything else a question row may carry is out of scope here.
+/// `blocks`. A blocked node that `node_done` reads as finished no longer
+/// holds anything: the question is mooted, so it is skipped rather than
+/// left to wedge the asking session. Everything else a question row may
+/// carry is out of scope here.
 pub(crate) fn scan_open_holds(
     journals: &[PathBuf],
     session_id: &str,
     node_id: &str,
+    node_done: &dyn Fn(&str) -> bool,
 ) -> Vec<OpenHold> {
     let mut asked: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -194,6 +198,15 @@ pub(crate) fn scan_open_holds(
             }
         }
     }
+    // One graph read per distinct node per scan, however many questions name it.
+    let done_cache: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    let node_done = |id: &str| {
+        *done_cache
+            .borrow_mut()
+            .entry(id.to_string())
+            .or_insert_with(|| node_done(id))
+    };
     let mut holds: Vec<OpenHold> = asked
         .into_iter()
         .filter(|(qid, data)| {
@@ -212,7 +225,8 @@ pub(crate) fn scan_open_holds(
                 .unwrap_or_default();
             let asked_by_session =
                 data.get("session_id").and_then(|v| v.as_str()) == Some(session_id);
-            node_in(node_id, &blocks) || (asked_by_session && !blocks.is_empty())
+            (node_in(node_id, &blocks) && !node_done(node_id))
+                || (asked_by_session && blocks.iter().any(|b| !node_done(b)))
         })
         .map(|(qid, data)| {
             let question = data
@@ -247,6 +261,19 @@ pub(crate) fn scan_open_holds(
     holds
 }
 
+/// A node whose graph row reads done or superseded, in the store the owner
+/// cwd resolves (a configured `state_dir` included). An unreadable store, a
+/// missing row or any other status is NOT done, so a failed read leaves the
+/// hold standing instead of silently releasing a session.
+pub(crate) fn node_is_done(cwd: &std::path::Path, id: &str) -> bool {
+    use crate::backlog::model::Status;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    matches!(
+        crate::backlog::api::node(&store, id),
+        Ok(Some(n)) if matches!(n.status, Status::Done | Status::Superseded)
+    )
+}
+
 fn node_in(node_id: &str, blocks: &[String]) -> bool {
     blocks.iter().any(|b| b == node_id)
 }
@@ -278,6 +305,7 @@ pub(crate) fn question_gates(
     cwd: &std::path::Path,
     session_id: &str,
     node_id: &str,
+    node_done: &dyn Fn(&str) -> bool,
     emit: &dyn Fn(&str, serde_json::Value),
 ) -> QuestionGateStop {
     let mut journals = vec![project_events.to_path_buf(), global_events.to_path_buf()];
@@ -319,7 +347,7 @@ pub(crate) fn question_gates(
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
     // id and the user-side remedies; the second fire on the same still-open
     // question terminates, so a held node stops once and is never re-asked.
-    let held = scan_open_holds(&journals, session_id, node_id);
+    let held = scan_open_holds(&journals, session_id, node_id, node_done);
     if !held.is_empty() {
         let qids = held
             .iter()
@@ -414,7 +442,7 @@ mod tests {
         let emit = |t: &str, d: Value| crate::loopcheck::emit_to_both(&project, &global, t, d);
 
         let QuestionGateStop::Block { reason } =
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &emit)
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
         else {
             panic!("first fire must block");
         };
@@ -425,7 +453,7 @@ mod tests {
         assert!(!reason.contains("backlog decide"), "{reason}");
 
         let QuestionGateStop::Terminate { reason, message } =
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &emit)
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
         else {
             panic!("second fire must terminate");
         };
@@ -457,7 +485,7 @@ mod tests {
         let drop_rows = |_: &str, _: Value| {};
         for _ in 0..2 {
             assert!(matches!(
-                question_gates(&lost, &lost, &cwd, "sess-b", "x-n", &drop_rows),
+                question_gates(&lost, &lost, &cwd, "sess-b", "x-n", &|_| false, &drop_rows),
                 QuestionGateStop::Block { .. }
             ));
         }
@@ -507,12 +535,32 @@ mod tests {
         ));
         std::fs::write(&path, format!("{raw}\n")).unwrap();
         let journals = vec![path.clone()];
-        let mine = scan_open_holds(&journals, "sess-c", "x-n");
+        let mine = scan_open_holds(&journals, "sess-c", "x-n", &|_| false);
         assert_eq!(mine.len(), 1, "only the open one holds");
         assert_eq!(mine[0].question_id, "q-4");
         // A node the blocks never names, and a session that did not ask:
-        let other = scan_open_holds(&journals, "sess-z", "x-other");
+        let other = scan_open_holds(&journals, "sess-z", "x-other", &|_| false);
         assert!(other.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn question_on_a_done_node_holds_nothing_but_a_live_sibling_still_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let raw = [
+            qrow("q-5", "sess-d", &["x-merged"]),
+            qrow("q-6", "sess-d", &["x-merged", "x-live"]),
+        ]
+        .join("\n");
+        std::fs::write(&path, format!("{raw}\n")).unwrap();
+        let journals = vec![path];
+        let done = |id: &str| id == "x-merged";
+        // The asking session: q-5 is mooted, q-6 still blocks x-live.
+        let asker = scan_open_holds(&journals, "sess-d", "x-merged", &done);
+        let ids: Vec<&str> = asker.iter().map(|h| h.question_id.as_str()).collect();
+        assert_eq!(ids, ["q-6"]);
+        // A session whose own node merged is not held by a question naming it.
+        assert!(scan_open_holds(&journals, "sess-z", "x-merged", &done).is_empty());
     }
 }

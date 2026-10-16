@@ -12,8 +12,21 @@ printf '{"entries": []}\n' | uv run python tests/fixtures/graph_seed.py "$TMP/.f
 
 export HOME="$TMP"
 
-# fno backlog new creates an entry and emits the id on stdout
-new_id=$(uv run fno-py backlog new "Smoke research task" --domain research 2>/dev/null)
+# find and new are native-owned: the Python legs are deleted, so both drive
+# the fno-agents binary through the same resolver the parity tests use.
+FIND_BIN=$(uv run python -c "
+from fno.rust_binary import find_dev_binary, resolve_binary
+binary = find_dev_binary() or resolve_binary()
+print(str(binary) if binary else '')
+")
+if [[ -z "$FIND_BIN" ]]; then
+  echo "SKIP: no fno-agents dev build (run: cargo build --manifest-path crates/fno-agents/Cargo.toml)"
+  exit 0
+fi
+
+# fno backlog new creates an entry; the create door's stdout receipt carries
+# the id in its JSON body
+new_id=$("$FIND_BIN" backlog new "Smoke research task" --domain research 2>/dev/null | uv run python -c "import json, sys; print(json.load(sys.stdin)['id'])")
 if [[ ! "$new_id" =~ ^ab-[0-9a-f]{8}$ ]]; then
   echo "FAIL: fno backlog new did not emit a valid ab- id: $new_id"
   exit 1
@@ -27,19 +40,6 @@ print(sum(1 for e in read_graph_strict('$TMP/.fno/graph.json') if e['id'] == '$n
 if [[ "$count" != "1" ]]; then
   echo "FAIL: expected 1 entry with id $new_id, got $count"
   exit 1
-fi
-
-# `fno backlog find` is native-owned since the find port: the Python leg is
-# deleted, so the find steps drive the fno-agents binary through the same
-# resolver the parity tests use.
-FIND_BIN=$(uv run python -c "
-from fno.rust_binary import find_dev_binary, resolve_binary
-binary = find_dev_binary() or resolve_binary()
-print(str(binary) if binary else '')
-")
-if [[ -z "$FIND_BIN" ]]; then
-  echo "SKIP: no fno-agents dev build (run: cargo build --manifest-path crates/fno-agents/Cargo.toml)"
-  exit 0
 fi
 
 # fno backlog find resolves the entry
@@ -71,7 +71,7 @@ fi
 
 # fno backlog new --domain fuzzy-match triggers suggestion and exits 2
 set +e
-uv run fno-py backlog new "Another task" --domain res 2>/dev/null >/dev/null
+"$FIND_BIN" backlog new "Another task" --domain res 2>/dev/null >/dev/null
 new_rc=$?
 set -e
 if [[ "$new_rc" -ne 2 ]]; then
@@ -80,7 +80,7 @@ if [[ "$new_rc" -ne 2 ]]; then
 fi
 
 # --force-domain bypasses the suggestion
-force_id=$(uv run fno-py backlog new "Forced task" --domain res --force-domain 2>/dev/null)
+force_id=$("$FIND_BIN" backlog new "Forced task" --domain res --force-domain 2>/dev/null | uv run python -c "import json, sys; print(json.load(sys.stdin)['id'])")
 if [[ ! "$force_id" =~ ^ab-[0-9a-f]{8}$ ]]; then
   echo "FAIL: fno backlog new --force-domain did not emit a valid id"
   exit 1

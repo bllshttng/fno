@@ -8,8 +8,12 @@ import subprocess
 import pytest
 
 
-def run_native(*args: str) -> tuple[int, str, str]:
-    """Run `fno-agents <args>`; skip when this checkout has no dev build."""
+def run_native(*args: str, cwd=None) -> tuple[int, str, str]:
+    """Run `fno-agents <args>`; skip when this checkout has no dev build.
+
+    ``cwd`` pins the child's working directory (config candidates start at
+    ``cwd/.fno``); None inherits the test process's.
+    """
     from fno.rust_binary import find_dev_binary, resolve_binary
 
     binary = find_dev_binary() or resolve_binary()
@@ -20,5 +24,6 @@ def run_native(*args: str) -> tuple[int, str, str]:
         capture_output=True,
         text=True,
         env={**os.environ, "FNO_TRACKER_BACKEND": "graph"},
+        cwd=None if cwd is None else str(cwd),
     )
     return proc.returncode, proc.stdout, proc.stderr

@@ -293,7 +293,11 @@ fn newest_mtime(paths: &[PathBuf]) -> Option<PathBuf> {
 
 /// Resolve a provenance pointer to its on-disk transcript path. Never fails;
 /// an unresolved pointer degrades the seed to the stored triple.
-fn resolve_transcript(harness: &str, session_id: &str, cwd: &str) -> (Option<PathBuf>, bool) {
+pub(crate) fn resolve_transcript(
+    harness: &str,
+    session_id: &str,
+    cwd: &str,
+) -> (Option<PathBuf>, bool) {
     if session_id.is_empty() {
         return (None, false);
     }

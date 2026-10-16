@@ -1,0 +1,12 @@
+step=resolve status=ok detail=pr=42 source=caller
+step=mutex status=ok detail=acquired
+step=reconcile status=ok detail=closed=1
+step=plan-reconcile status=ok detail=exit=0
+step=retro status=ok detail=exit=0
+  advance: tick: dispatch check
+step=advance status=ok detail=exit=0 (1 progress lines)
+step=skill-diff status=ok detail=exit=0
+step=sync-canonical status=skipped detail=not configured
+step=archive status=deferred detail=cleanup-requested request_id=merge-cleanup-4544744fb6a354746332; merged-pr; daemon resolves the tree from feature/x
+step=judgment status=ok detail=spawned headless; deferred=0 files=2 lines=15 parking_lot=unset bar=above
+step=reap-rows status=ok detail=no lingering rows

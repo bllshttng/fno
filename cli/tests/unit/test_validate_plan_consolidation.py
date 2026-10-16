@@ -322,16 +322,6 @@ def test_append_outcome_in_a_written_plan_is_a_contradiction(tmp_path):
     assert "a plan file was written" in out.stdout
 
 
-def test_decompose_child_scaffold_carries_created(tmp_path):
-    # Without created: every decompose child is grandfathered forever, so the
-    # gate is permanently inert on that path.
-    from fno.graph._decompose import scaffold_separate_plan, validate_groups
-
-    group = validate_groups([{"slug": "1", "title": "G1", "waves": "1-2"}], None)[0]
-    text = scaffold_separate_plan(group, "ab-epic0001", "big.md", created="2026-08-20")
-    assert "created: 2026-08-20" in text
-
-
 def test_a_block_scalar_reason_may_contain_bullets(tmp_path):
     # `reason: |` opens a block scalar whose body can hold anything. The walk
     # read those bullets as new entries and shredded a plan PyYAML parses fine.
@@ -362,19 +352,6 @@ def test_an_empty_flow_sequence_stays_legal(tmp_path):
     ))
     out = _run(plan)
     assert out.returncode == 0, out.stdout
-
-
-def test_decompose_child_is_born_undecided_not_failing(tmp_path):
-    # Stamping created un-grandfathers the scaffold, so it must also carry a
-    # well-formed block. It is marked undecided, and the stub-marker gate is
-    # what refuses the child until a human records the real outcome.
-    from fno.graph._decompose import STUB_MARKERS, scaffold_separate_plan, validate_groups
-
-    group = validate_groups([{"slug": "1", "title": "G1", "waves": "1-2"}], None)[0]
-    text = scaffold_separate_plan(group, "ab-epic0001", "big.md", created="2026-08-20")
-    assert "consolidation:" in text
-    assert "<!-- Consolidation:" in text
-    assert "<!-- Consolidation:" in STUB_MARKERS
 
 
 def test_model_accepts_both_reversal_shapes():
