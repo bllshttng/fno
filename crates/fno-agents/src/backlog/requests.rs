@@ -65,7 +65,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     let mut i = 0;
     while i < args.len() {
-        let mut take = |i: &mut usize, name: &str| -> Option<String> {
+        let take = |i: &mut usize, name: &str| -> Option<String> {
             *i += 1;
             let value = args.get(*i).cloned();
             if value.is_none() {
