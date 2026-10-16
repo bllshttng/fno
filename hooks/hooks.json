@@ -189,7 +189,7 @@
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/transcript-push.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/transcript-push.sh\""
           }
         ]
       }

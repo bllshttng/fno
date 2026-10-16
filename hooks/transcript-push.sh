@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: the sandboxed-session transcript lane's producer shim.
+# fno hook: Stop - the sandboxed-session transcript lane's producer shim.
 # hooks/transcript-push.sh - one line of policy: exec the
 # `fno-agents hook transcript-push` entry. All logic (cursor, delta read,
 # RPC) lives in the binary entry; this shim carries the same 2s bound and
