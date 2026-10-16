@@ -1873,16 +1873,13 @@ mod tests {
     }
 
     #[test]
-    fn constant_time_eq_matches_only_identical_bytes() {
+    fn auth_helpers_hold() {
         assert!(constant_time_eq(b"abc123", b"abc123"));
         assert!(!constant_time_eq(b"abc123", b"abc124"));
         assert!(!constant_time_eq(b"abc123", b"abc12")); // length mismatch
         assert!(!constant_time_eq(b"", b"x"));
         assert!(constant_time_eq(b"", b""));
-    }
 
-    #[test]
-    fn mint_token_is_64_hex_chars_and_fresh() {
         let a = mint_token().expect("/dev/urandom readable in test env");
         let b = mint_token().expect("/dev/urandom readable in test env");
         assert_eq!(a.len(), 64, "32 bytes -> 64 hex chars");
@@ -3136,15 +3133,13 @@ console.log("recent searches: 12 cases ok");
     }
 
     #[test]
-    fn status_web_exits_one_with_no_state_file() {
+    fn status_web_rows() {
+        // No state file: no bridge.
         let dir = temp_state_dir("status-none");
-        let socket = dir.join("t.sock");
-        assert_eq!(status_web("t", &socket), 1);
+        assert_eq!(status_web("t", &dir.join("t.sock")), 1);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_exits_zero_for_a_live_own_pid_record() {
+        // A live record under this process's own pid and start token: up.
         let dir = temp_state_dir("status-live");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
@@ -3162,15 +3157,12 @@ console.log("recent searches: 12 cases ok");
         .unwrap();
         assert_eq!(status_web("t", &socket), 0);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_refuses_a_recycled_pid_record() {
+        // This live test process under a WRONG start token: the record reads
+        // stale, so status reports no bridge instead of a stranger's pid.
         let dir = temp_state_dir("status-recycled");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
-        // This live test process under a WRONG start token: the record reads
-        // stale, so status reports no bridge instead of a stranger's pid.
         std::fs::write(
             &state,
             serde_json::json!({
