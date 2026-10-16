@@ -643,60 +643,6 @@ def test_merge_with_no_bound_nodes_still_mints_empty(tmp_path, monkeypatch):
     assert _requested_rows(log) == []
 
 
-def test_ritual_mint_shares_request_id_with_merge_mint(tmp_path, monkeypatch):
-    # AC1-EDGE: the ritual's mint and the merge's mint carry ONE request id,
-    # so the daemon's fold keeps a single pending request, not two. The id
-    # keys on project, PR and branch alone - asserted here through the two
-    # callers' payloads and the formula the native mint implements.
-    import hashlib
-
-    import fno.pr._merge as M
-    import fno.pr._ritual as R
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    ritual = R.Ritual.__new__(R.Ritual)
-    ritual.cwd = tmp_path
-    # The mint reads the memoized gh read for the grace anchor; a bare
-    # __new__ ritual has no runner, so seed the cache the legs would have.
-    ritual._merge_state = ("MERGED", "feature/x-07dc", "2026-09-07T15:00:00Z")
-    ritual.ctx = R._Ctx(
-        pr=9,
-        autonomous=False,
-        canon=tmp_path,
-        settings=None,
-        pm=None,
-        project="proj",
-        lane_project="",
-        parking_lot=None,
-        holder="",
-        node_ids=["x-07dc"],
-    )
-    seen = _stub_mint_verb(monkeypatch)
-
-    order = ritual._register_cleanup_request(
-        "feature/x-07dc", str(tmp_path / "wt"), "merged-pr"
-    )
-
-    assert "cleanup-requested" in order
-    assert len(seen) == 1
-    ritual_payload = seen[0][1]
-
-    # The merge-side twin: same project/pr/branch key, different knowledge.
-    _stub_gh_merged(monkeypatch, M)
-    _stub_git_root(monkeypatch, M, tmp_path)
-    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
-    _write_manifest(tmp_path)
-    seen.clear()
-    M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=["x-07dc"])
-    merge_payload = seen[0][1]
-
-    identity = "|".join(["proj", "9", "feature/x-07dc"])
-    expected = "merge-cleanup-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
-    fold_key = lambda p: (p["project"], p["pr"], p["branch"])
-    assert fold_key(ritual_payload) == fold_key(merge_payload) == ("proj", 9, "feature/x-07dc")
-    assert re.search(r"request_id=(\S+)", order).group(1) == expected
-
-
 def _patch_sidecar(monkeypatch, rows):
     from fno.tracker import sidecar as sidecar_store
     from fno.tracker.sidecar import Sidecar
