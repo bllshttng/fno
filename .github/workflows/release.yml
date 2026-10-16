@@ -28,9 +28,9 @@ name: release
 #   stable   - dispatch only: promotes the newest v*rc* tag (or
 #              inputs.sha) in the approved job: PyPI, crates.io, the tag,
 #              the GitHub Release, the Homebrew tap, the `stable` branch
-#              the plugin marketplaces pin, and a one-patch version sync
-#              of main (nightly refuses while v<src> exists, so without
-#              the sync every promotion wedges the nightly).
+#              the plugin marketplaces pin. Main is not touched: a
+#              repository rule rejects the release job's push, and
+#              release-version.sh skips every released v<src> instead.
 #
 # The cadence is backed by a nudge, not a memory act: the remind job opens
 # one issue once a candidate has waited a day on the approval click, and
@@ -629,42 +629,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "fno ${VERSION}: bump url + sha256 (auto, x-0afe)"
           git push
-
-      - name: Sync main past the release (stable only)
-        if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
-        # Nightly refuses (exit 1, naming the sync-version bump) for as long
-        # as v<src> exists, so a shipped stable wedges every later nightly
-        # until main's version moves past it. On a weekly cadence that wedge
-        # would be permanent. Bump main one patch here, inside the same
-        # approved job: the click authorized the promotion, and this is its
-        # tail. Best effort: a rejected push (main moved mid-promotion)
-        # warns instead of failing a release that already shipped, and the
-        # next promotion or a manual sync-version heals it.
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          next="$(printf '%s' "$VERSION" | awk -F. -v OFS=. '{$NF += 1; print}')"
-          echo "bumping main to ${next} after v${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          bash scripts/release/sync-version.sh "$next"
-          git add cli/src/fno/__init__.py \
-            crates/fno/Cargo.toml crates/fno/Cargo.lock \
-            crates/fno-agents/Cargo.toml crates/fno-agents/Cargo.lock \
-            .claude-plugin/plugin.json .claude-plugin/marketplace.json \
-            gemini-extension.json .codex-plugin/plugin.json \
-            .opencode/package.json plugins/openclaw/promise-tag-reader/package.json
-          if git diff --cached --quiet; then
-            echo "main already carries ${next} - nothing to sync"
-            exit 0
-          fi
-          git commit -m "chore(release): sync main to ${next} after v${VERSION}"
-          if git push origin "HEAD:${DEFAULT_BRANCH}"; then
-            echo "main synced to ${next}; the nightly is unblocked"
-          else
-            echo "::warning::could not push the version sync to ${DEFAULT_BRANCH} (main moved mid-promotion?); nightly stays wedged until a manual scripts/release/sync-version.sh ${next} lands"
-          fi
 
   remind-stable:
     name: remind when a candidate waits on promotion
