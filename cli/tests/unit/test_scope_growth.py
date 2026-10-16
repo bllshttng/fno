@@ -7,18 +7,15 @@ process. So coverage travels with the number and the number is withheld below a
 floor.
 """
 from __future__ import annotations
+from tests._native_door import run_native
 from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.rollup import SCOPE_GROWTH_COVERAGE_FLOOR, scope_growth
-
-runner = CliRunner()
 
 EPIC_BORN = "2026-01-01T00:00:00+00:00"
 LATER = "2026-02-01T00:00:00+00:00"
@@ -184,37 +181,35 @@ def test_the_floor_is_a_real_constant_not_zero():
 
 
 @pytest.fixture
-def graph(tmp_path, monkeypatch):
+def graph(tmp_path, monkeypatch, _plan_hermetic_events_journal):
     g = tmp_path / "graph.json"
 
     def seed(entries: list[dict]) -> Path:
         seed_graph(g, json.dumps({"entries": entries}, indent=2) + "\n")
         return g
 
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
-    # Seam readers (guarded metadata/display reads) resolve paths.graph_json
-    # at call time; pin the resolver to the same hermetic file.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
+    # The verb answers natively: the binary reads the store through the tmp
+    # state root, and its events reads sit under the pinned HOME (the global
+    # mirror is HOME/.fno/events.jsonl, absent here; FNO_EVENTS_PATH is the
+    # conftest journal pin).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     return seed
 
 
 def test_epic_status_states_why_a_figure_is_withheld(graph):
     graph(_window(with_origin=1, without_origin=9))
-    out = runner.invoke(app, ["backlog", "epic", "status", "x-epic"]).output
+    code, out, err = run_native("backlog", "epic", "status", "x-epic")
+    assert code == 0, out + err
     assert "scope growth: withheld" in out
     assert "below the" in out and "floor" in out
 
 
 def test_epic_status_json_never_emits_a_count_it_cannot_support(graph):
     graph(_window(with_origin=1, without_origin=9))
-    payload = json.loads(
-        runner.invoke(app, ["backlog", "epic", "status", "x-epic", "--json"]).stdout
-    )
+    code, out, err = run_native("backlog", "epic", "status", "x-epic", "--json")
+    assert code == 0, out + err
+    payload = json.loads(out)
     sg = payload["scope_growth"]
     assert sg["reportable"] is False
     assert sg["follow_ups"] is None, "a suppressed figure must be null, not 0"
@@ -251,7 +246,8 @@ def test_an_undated_epic_has_no_window_rather_than_the_whole_graph():
 def test_epic_status_renders_the_reportable_line(graph):
     """The happy-path line is user-facing surface and needs rendering at least once."""
     graph(_window(with_origin=9, without_origin=1))
-    out = runner.invoke(app, ["backlog", "epic", "status", "x-epic"]).output
+    code, out, err = run_native("backlog", "epic", "status", "x-epic")
+    assert code == 0, out + err
     assert "scope growth: 1 follow-ups" in out
     assert "origin capture" in out
     assert "realized" in out
@@ -279,8 +275,8 @@ def test_scope_growth_reads_through_the_archive(graph, tmp_path, monkeypatch):
     swept["archived_at"] = "2026-01-01T00:00:00Z"
     graph([_epic(), _node("x-c1", parent="x-epic", pr_number=1), swept])
 
-    payload = json.loads(
-        runner.invoke(app, ["backlog", "epic", "status", "x-epic", "--json"]).stdout
-    )
+    code, out, err = run_native("backlog", "epic", "status", "x-epic", "--json")
+    assert code == 0, out + err
+    payload = json.loads(out)
     assert payload["scope_growth"]["realized_nodes"] == 2
     assert payload["scope_growth"]["realized_prs"] == 2

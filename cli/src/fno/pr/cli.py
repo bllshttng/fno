@@ -134,13 +134,10 @@ def verify(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number"),
     state_file: str = typer.Option(..., "--state-file", help="Path to target-state.md"),
 ) -> None:
-    from fno.pr import _verify
-
-    if kind is VerifyKind.merged:
-        rc = _verify.run_verify_merged(str(pr_number), state_file)
-    else:
-        rc = _verify.run_verify_reviews(str(pr_number), state_file)
-    raise typer.Exit(code=rc)
+    _forward_to_binary(
+        "pr-verify",
+        ["--kind", kind.value, "--pr-number", str(pr_number), "--state-file", state_file],
+    )
 
 
 @pr_app.command(
@@ -423,10 +420,7 @@ def base_check(
         "origin/main", "--base", help="Base ref to compare the branch against"
     ),
 ) -> None:
-    from fno.pr import _preflight
-
-    rc = _preflight.run_base_check(base=base)
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-check", ["--base", base])
 
 
 @pr_app.command(
@@ -442,15 +436,7 @@ def base_check(
 def base_lineage_check(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
 ) -> None:
-    from fno.pr import _base_lineage
-    from fno.pr._proc import ToolMissing
-
-    try:
-        rc = _base_lineage.run_base_lineage_check(pr_number)
-    except ToolMissing as exc:
-        typer.echo(f"fno do pr base-lineage-check: {exc.tool} not found on PATH", err=True)
-        rc = 127
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-lineage-check", [str(pr_number)])
 
 
 @pr_app.command(
@@ -463,9 +449,7 @@ def base_lineage_check(
     ),
 )
 def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR number")) -> None:
-    from fno.pr import _merge_result
-
-    raise typer.Exit(code=_merge_result.run_merge_result_check(pr_number))
+    _forward_to_binary("pr-merge-result-check", [str(pr_number)])
 
 
 @pr_app.command(
@@ -714,18 +698,10 @@ def hold_check(
     repo: Optional[str] = typer.Option(None, "--repo", help="Repository working directory."),
 ) -> None:
     """Refuse a PR whose bound plan ancestry carries an active or unreadable hold."""
-    from fno.pr import _hold, _review_hold
-
-    worktree = _review_hold.resolve_pr_worktree(pr_number, repo or os.getcwd())
-    # "" = no local worktree on the PR branch. The hold reader is
-    # graph-resident and runs from the caller's checkout (its cwd only
-    # resolves the canonical root), so an empty path hands it that checkout -
-    # a graph-bound hold still gates a PR that is not checked out here.
-    reason = _hold.merge_hold_reason(pr_number, worktree or repo or os.getcwd())
-    if reason:
-        typer.echo(reason, err=True)
-        raise typer.Exit(code=3)
-    typer.echo(f"PR {pr_number}: no plan dispatch hold")
+    args = [str(pr_number)]
+    if repo:
+        args += ["--repo", repo]
+    _forward_to_binary("authorized-merge", ["hold-check", *args])
 
 
 @pr_app.command(
@@ -801,10 +777,25 @@ def global_receipt_events_path() -> None:
 def sync_canonical(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number of the merged PR"),
 ) -> None:
-    from fno.pr import _sync_canonical
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    rc = _sync_canonical.run_sync_canonical(pr_number)
-    raise typer.Exit(code=rc)
+    try:
+        answer = verb_call(
+            "sync-canonical",
+            {"action": "sync", "cwd": os.getcwd(), "pr": pr_number},
+            timeout=900.0,
+        )
+    except VerbUnavailable as exc:
+        # The marker stays withheld, so the next reconcile retries.
+        typer.echo(
+            f"post-merge sync: native verb unavailable ({exc}); skipping", err=True
+        )
+        raise typer.Exit(code=1)
+    for line in answer.get("stdout") or []:
+        typer.echo(line)
+    for line in answer.get("stderr") or []:
+        typer.echo(line, err=True)
+    raise typer.Exit(code=int(answer.get("exit", 1)))
 
 
 @pr_app.command(
@@ -920,12 +911,12 @@ def ritual(
         "when its inputs are non-empty. Mirrors the POST_MERGE_NONINTERACTIVE=1 env.",
     ),
 ) -> None:
-    from fno.pr import _ritual
-
-    if os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
-        autonomous = True
-    rc = _ritual.run_ritual(pr_number, autonomous)
-    raise typer.Exit(code=rc)
+    args: list[str] = []
+    if pr_number is not None:
+        args.append(str(pr_number))
+    if autonomous or os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
+        args.append("--autonomous")
+    _forward_to_binary("pr-watch", ["ritual", *args])
 
 
 @pr_app.command(

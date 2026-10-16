@@ -28,21 +28,43 @@ def _sandbox_bounce_receipts(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _hermetic_post_merge(monkeypatch):
-    """Keep tick tests hermetic after the verb-first cutover.
+    """Keep tick tests hermetic after the native cutover.
 
-    The default ``_default_dispatch_ritual`` now shells ``fno do pr ritual`` and
-    appends receipts to the global events log. Tests that exercise the real
-    default dispatch (those that do NOT inject ``dispatch_ritual_fn``) would
-    otherwise spawn a subprocess and pollute ~/.fno/events.jsonl. Redirect both
-    to no-ops; tests injecting ``dispatch_ritual_fn`` never reach them.
+    The default ``_default_dispatch_ritual`` now speaks to the native
+    ``pr-watch post-merge-dispatch`` arm through verb_call. The stub mirrors
+    the arm's own fail-closed auto_run read so the arming tests stay
+    meaningful; tests injecting ``dispatch_ritual_fn`` never reach it.
     """
-    import fno.post_merge_route as pmr
+    import tomllib
 
-    monkeypatch.setattr(
-        pmr, "_default_run_ritual_verb",
-        lambda pr, cwd, **_kw: pmr.ColdRitualResult(ok=True, tail="ok"),
-    )
-    monkeypatch.setattr(pmr, "emit_receipt", lambda *a, **k: True)
+    import fno.rust_binary as rb
+
+    def _stub(verb, payload, **_kw):
+        pr = payload.get("pr_number")
+        cwd = payload.get("node_cwd")
+        armed = False
+        if cwd:
+            cfg = Path(cwd) / ".fno" / "config.toml"
+            if cfg.is_file():
+                with open(cfg, "rb") as fh:
+                    armed = bool(
+                        tomllib.load(fh).get("post_merge", {}).get("auto_run", False)
+                    )
+        if not armed:
+            return {
+                "outcome": "disabled",
+                "pr_number": pr,
+                "short_id": "",
+                "detail": "auto-run-disabled",
+            }
+        return {
+            "outcome": "dispatched",
+            "pr_number": pr,
+            "short_id": "verb",
+            "detail": "cold: no-live-source-session",
+        }
+
+    monkeypatch.setattr(rb, "verb_call", _stub)
 
 
 @pytest.fixture(autouse=True)
@@ -1114,14 +1136,19 @@ class TestTickOrchestrator:
 
     def test_merge_fire_failure_is_receipted_before_terminal_eviction(self, tmp_path, monkeypatch):
         """A failed hand-off is explicit; terminal cache state still cannot linger."""
-        import fno.post_merge_route as pmr
+        import fno.rust_binary as rb
         from fno.pr_watch._dispatch import tick
         from fno.pr_watch._state import WatermarkStore
 
         # Override the autouse success verb so the dispatch returns 'failed'.
         monkeypatch.setattr(
-            pmr, "_default_run_ritual_verb",
-            lambda pr, cwd, **_kw: pmr.ColdRitualResult(ok=False, tail="fail"),
+            rb, "verb_call",
+            lambda verb, payload, **_kw: {
+                "outcome": "failed",
+                "pr_number": payload.get("pr_number"),
+                "short_id": "",
+                "detail": "fail",
+            },
         )
 
         store_path = tmp_path / "state.json"
@@ -1985,7 +2012,6 @@ class TestWarmMergeRouting:
     """The tick's merge branch routes through the shared post-merge dispatcher."""
 
     def _run_merge_tick(self, tmp_path, ritual_outcome, ritual_detail=None, *, ticks=1):
-        from fno.post_merge_route import PostMergeDispatchResult
         from fno.pr_watch._dispatch import tick
         from fno.pr_watch._state import WatermarkStore
 
@@ -2006,9 +2032,14 @@ class TestWarmMergeRouting:
         ritual_calls: list[tuple] = []
 
         def fake_ritual(cand, obs, fire):
+            from types import SimpleNamespace
+
             ritual_calls.append((cand.pr_number, getattr(obs, "merge_sha", None)))
-            return PostMergeDispatchResult(
-                ritual_outcome, cand.pr_number, short_id="abcd1234", detail=ritual_detail
+            return SimpleNamespace(
+                outcome=ritual_outcome,
+                pr_number=cand.pr_number,
+                short_id="abcd1234",
+                detail=ritual_detail,
             )
 
         for _ in range(ticks):
@@ -2588,8 +2619,6 @@ class TestTickRecordsAndDeadline:
         """AC3-HP: notify_watch, heal and stranded share the tick's one
         sidecar scan - three consumers, one call, the same list. The catchup
         leg is gone from the tick; its sync must never be called."""
-        from types import SimpleNamespace as _NS
-
         from fno.pr_watch import cli as prcli
 
         calls = []
@@ -2621,12 +2650,6 @@ class TestTickRecordsAndDeadline:
         )
         monkeypatch.setattr(
             "fno.branch_provenance_cache.write_cache", lambda root, rows: False,
-            raising=True,
-        )
-        monkeypatch.setattr(
-            "fno.pr._sync_canonical.run_sync_catchup",
-            lambda settings, canonical_root: catchup_seen.append(canonical_root)
-            or _NS(outcome="disabled", stale=False, detail=""),
             raising=True,
         )
         monkeypatch.setattr(
@@ -4690,7 +4713,6 @@ class TestCandidateReadDiscipline:
     def test_handled_candidate_skips_the_rich_read(self, tmp_path):
         """A merged candidate whose ritual already ran is read once; the memo
         then silences it while the listing keeps saying NOT_OPEN."""
-        from fno.post_merge_route import PostMergeDispatchResult
         from fno.pr_watch._dispatch import _delivery_state_path
         from fno.pr_watch._state import WatermarkStore
 
@@ -4709,9 +4731,13 @@ class TestCandidateReadDiscipline:
         reads = self._counting_reads(deps, {"t": 0.0})
 
         def fake_ritual(cand, obs, fire):
-            return PostMergeDispatchResult(
-                "already-dispatched", cand.pr_number,
-                short_id="abcd1234", detail="marker-exists",
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                outcome="already-dispatched",
+                pr_number=cand.pr_number,
+                short_id="abcd1234",
+                detail="marker-exists",
             )
 
         listing = self._listing({"owner/repo#1"})

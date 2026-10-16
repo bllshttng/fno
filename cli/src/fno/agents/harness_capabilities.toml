@@ -1000,14 +1000,15 @@ session_binding = { strategy = "caller-assigned-cwd-scoped", required = true, ti
 # thread is unsandboxed by that same reading, earned rather than borrowed: the
 # restart journey ran a real keeper-hosted pi child on this lane, and that
 # process is as ordinary and unsandboxed as a pane child. headless stays
-# `unmeasured` - nothing has run pi headless yet, so no claim write has ever
-# been observed there, and a lane nothing dispatches must not inherit a stance
-# from the lanes that do. The spawn arm shipped and enforces that
-# stance in code: `_check_spawn_harness` refuses the unmeasured substrate by
-# name, and the lane opens only when its own journey lands.
+# headless is measured the same way, by running it: on 2026-10-16 a headless
+# `pi --print --mode json --no-session --model openai-codex/gpt-6.1-sol`
+# turn, run from one directory, wrote a file in a sibling directory outside its
+# cwd and replied `done`. That is the lane `pi_ask.rs` builds. The lane stayed
+# `unmeasured` until that run, because a lane nothing dispatches must not
+# inherit a stance from the lanes that do.
 pane = "unsandboxed"
 thread = "unsandboxed"
-headless = "unmeasured"
+headless = "unsandboxed"
 
 # pi has no approval UI, so there is no keystroke answer to record and all
 # three actions are unsupported. This is an absence in pi, not an unmeasured
@@ -1690,9 +1691,9 @@ state = "native"
 measured_by = { reader = "session-id resume journey", version = "3.14.3", date = "2026-09-29" }
 
 # footnote: footnote's own turn loop (the fnh binary), a child binary the
-# client launches with one launch spec on stdin. Headless only:
-# no pane, no thread, no TUI. The id is footnote's own fno_id, minted before
-# the first record, so the binding is preassigned.
+# client launches with one launch spec on stdin. A pane hosts its TUI:
+# `footnote --spec <file>`, no thread lane. The id is footnote's own fno_id,
+# minted before the first record, so the binding is preassigned.
 [harness.footnote]
 mail_header_at = true
 permission_bypass = []
@@ -1732,10 +1733,12 @@ supported = false
 rule_ids = []
 keys = []
 
-# No TUI exists: the loop is a one-shot child process per input.
+# The TUI (a terminal stdin) takes no session flag: it opens its own
+# sessions from one launch spec file, `--spec <path>` (fnh src/tui/mod.rs).
+# The pane arm appends the path of the spec the Rust owner writes.
 [harness.footnote.resume_strategy.forms.interactive_create]
-kind = "unsupported"
-tokens = []
+kind = "flag"
+tokens = ["footnote", "--spec"]
 
 [harness.footnote.resume_strategy.forms.interactive_resume]
 kind = "unsupported"

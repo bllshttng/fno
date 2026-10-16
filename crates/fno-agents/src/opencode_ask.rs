@@ -97,7 +97,7 @@ use std::time::Duration;
 /// Default one-shot timeout; the outer watchdog bounds a headless `opencode run`
 /// so a hang can't wedge the caller (a full /target run is long, so this is
 /// generous). Caller may override via `timeout`.
-const DEFAULT_OPENCODE_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const DEFAULT_ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(600);
 pub(crate) const OPENCODE_DEFAULT_MODEL: &str = "zai-coding-plan/glm-5.3";
 
 /// Stdout/stderr/exit triple returned to the client (mirror of the sibling
@@ -283,14 +283,16 @@ fn derive_log_path(home: &crate::paths::AgentsHome, name: &str) -> std::path::Pa
         .join(format!("{}.jsonl", name))
 }
 
-/// Drive one `opencode run` subprocess: stdin `/dev/null` (never block on a
-/// non-TTS input wait), stdout captured as plain text, stderr drained on a
+/// Drive one one-shot subprocess (opencode here, pi through `pi_ask`): stdin
+/// `/dev/null` (never block on a non-TTS input wait), stdout captured as plain text, stderr drained on a
 /// thread (bounded pipe), the whole call bounded by the shared watchdog. Lean
 /// mirror of `agy_ask::run_agy` - same shape, no elaborate stderr taxonomy: a
 /// non-zero exit surfaces the stderr tail, a hang maps to the timeout code.
 ///
-/// Returns the plain-text reply on a clean exit, or `(exit_code, message)`.
-fn run_opencode(
+/// Returns the stdout text on a clean exit, or `(exit_code, message)`. `harness`
+/// names the binary in every refusal and stamps the child's identity env.
+pub(crate) fn run_one_shot(
+    harness: &str,
     argv: &[String],
     output_path: &Path,
     timeout: Option<Duration>,
@@ -309,10 +311,10 @@ fn run_opencode(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.current_dir(cwd);
-    // opencode resolves its project from $PWD, not the process cwd.
+    // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(agent_self), "opencode", None);
-    // Own process group so SIGTERM/SIGKILL/SIGINT reach opencode's subshells.
+    crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
+    // Own process group so SIGTERM/SIGKILL/SIGINT reach the child's subshells.
     unsafe {
         cmd.pre_exec(|| {
             libc::setpgid(0, 0);
@@ -323,12 +325,12 @@ fn run_opencode(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err((13, "opencode binary not found on PATH".to_string()));
+            return Err((13, format!("{harness} binary not found on PATH")));
         }
-        Err(e) => return Err((2, format!("OSError invoking opencode: {}", e))),
+        Err(e) => return Err((2, format!("OSError invoking {harness}: {e}"))),
     };
     let pid = child.id();
-    // Forward operator Ctrl-C to opencode's process group for this call. RAII
+    // Forward operator Ctrl-C to the child's process group for this call. RAII
     // guard held for the whole function - do NOT discard to `_`.
     let _sigint_guard = crate::subprocess_ask::SigintForwarder::install(pid);
 
@@ -372,8 +374,8 @@ fn run_opencode(
         return Err((
             12,
             format!(
-                "opencode run timed out after {:.0}s",
-                timeout.unwrap_or(DEFAULT_OPENCODE_TIMEOUT).as_secs_f64()
+                "{harness} run timed out after {:.0}s",
+                timeout.unwrap_or(DEFAULT_ONE_SHOT_TIMEOUT).as_secs_f64()
             ),
         ));
     }
@@ -381,7 +383,7 @@ fn run_opencode(
         return Err((
             exit_code,
             format!(
-                "opencode run exited {}: {}",
+                "{harness} run exited {}: {}",
                 exit_code,
                 tail_chars(stderr_text.trim(), 400)
             ),
@@ -463,9 +465,9 @@ pub fn dispatch_opencode_once(
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let eff_timeout = timeout.or(Some(DEFAULT_OPENCODE_TIMEOUT));
+    let eff_timeout = timeout.or(Some(DEFAULT_ONE_SHOT_TIMEOUT));
 
-    match run_opencode(&argv, &log_path, eff_timeout, cwd, name) {
+    match run_one_shot("opencode", &argv, &log_path, eff_timeout, cwd, name) {
         Ok(reply) => AskOutcome::ok_reply(reply),
         Err((code, msg)) => {
             emit_event(

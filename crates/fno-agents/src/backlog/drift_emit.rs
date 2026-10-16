@@ -240,8 +240,7 @@ fn fetch_pr_review_logins(
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.current_dir(cwd);
     }
-    let out = cmd
-        .output()
+    let out = crate::gh_budget::output(cmd)
         .map_err(|e| PrReadError::new(format!("gh subprocess failed to launch: {e}"), ""))?;
     if !out.status.success() {
         return Err(PrReadError::new(

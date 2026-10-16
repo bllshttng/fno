@@ -263,6 +263,32 @@ fn fno_py_in_tools_dir(base: &std::path::Path) -> Option<std::path::PathBuf> {
     is_executable_file(&script).then_some(script)
 }
 
+/// Exec the Python CLI (`fno_py`) with the verb words leading, stdio
+/// inherited, exit code returned. Unix execs in place; elsewhere it spawns
+/// and waits. `label` names the caller in the refusal lines. Lifted from
+/// the backlog forward so the mail relay's verbatim forwards share one
+/// door with it.
+pub fn exec_python(label: &str, argv: Vec<String>) -> i32 {
+    let mut cmd = std::process::Command::new(fno_py());
+    cmd.args(argv);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        eprintln!("{label}: the Python CLI could not be exec'd: {err}");
+        eprintln!("       reinstall fno, run `fno doctor update --rust`, or set FNO_PY.");
+        2
+    }
+    #[cfg(not(unix))]
+    match cmd.status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(err) => {
+            eprintln!("{label}: the Python CLI could not be run: {err}");
+            2
+        }
+    }
+}
+
 /// uv's DEFAULT tools dir: `$XDG_DATA_HOME/uv` when set, else
 /// `$HOME/.local/share/uv`. ponytail: a stat, not the `uv tool dir`
 /// subprocess bootstrap.rs runs - no PATH dependency on uv, and a customized

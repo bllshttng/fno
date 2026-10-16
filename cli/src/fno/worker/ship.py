@@ -197,9 +197,13 @@ def ship(
         # Stale-base guard: a branch cut from a stale local HEAD ships a PR full
         # of phantom deletions. Refuse before gh pr create (the same check the
         # /fno:ship pr create router runs; bypass FNO_PR_BASE_OK=stale-acknowledged).
-        from fno.pr._preflight import check_stale_base
+        from fno.rust_binary import verb_call
 
-        base_code, base_msg = check_stale_base(base=f"origin/{base_branch}")
+        answer = verb_call(
+            "pr-base-check",
+            {"base": f"origin/{base_branch}", "cwd": os.getcwd()},
+        )
+        base_code, base_msg = answer["code"], answer["message"]
         if base_msg and base_code == 0:
             # Fail-open path: the guard was SKIPPED (fetch flake / git missing).
             # Say so - a silently-skipped guard must not read as a clean pass.

@@ -1,0 +1,1 @@
+{"findings_blocking": 0, "findings_nonblocking": 1, "category_histogram": {"typo": 1}, "findings": [{"category": "Typo", "verdict": null, "blocking": false, "has_required_fields": true, "finding_key": "f1.py:1:typo", "summary": "summary 1", "autofix_class": null, "owner": null}]}

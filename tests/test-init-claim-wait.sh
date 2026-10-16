@@ -196,9 +196,11 @@ ABIEOF
   chmod +x "$sbx/stub-bin/fno"
 
   # State-path stub: init resolves its manifest, events and cancel sentinel
-  # into the sandbox space dir. Other verbs delegate to the real fno-agents
-  # when one is on the ambient PATH; init only calls `fno` (the stub above)
-  # for claims, so the fiction of this sandbox is unchanged.
+  # into the sandbox space dir. FNO_AGENTS_BIN outranks PATH in the init
+  # script and the smoke runner pins it to the checkout binary, so run_init
+  # points that env at this stub too. Other verbs delegate to the real
+  # fno-agents when one is on the ambient PATH; init only calls `fno` (the
+  # stub above) for claims, so the fiction of this sandbox is unchanged.
   mkdir -p "$sbx/space"
   cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$sbx/stub-bin/fno-agents"
   chmod +x "$sbx/stub-bin/fno-agents"
@@ -220,6 +222,7 @@ run_init() {
         TARGET_TRANSCRIPT_ID="${session_id}" \
         CLAUDE_PLUGIN_ROOT="$REPO_ROOT" \
         PATH="$sbx/stub-bin:$PATH" \
+        FNO_AGENTS_BIN="$sbx/stub-bin/fno-agents" \
         FNO_TEST_SPACE="$sbx/space" \
         CALL_LOG="$sbx/call-log" \
         "$@" \

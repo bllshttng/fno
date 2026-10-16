@@ -26,7 +26,6 @@ use serde_json::Value;
 use crate::agents_config;
 use crate::claims;
 use crate::claude_roster::ClaudeRoster;
-use crate::daemon::pid_is_ours;
 use crate::footprint_cache::{footprint_cause_cached, FOOTPRINT_CACHE_FRESH};
 use crate::spawn_gate_lanes;
 use crate::spawn_gate_lanes::{
@@ -34,7 +33,7 @@ use crate::spawn_gate_lanes::{
 };
 use crate::spawn_gate_queue::slot_refusal_line;
 use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
-use crate::state::{load_registry, Registry, RegistryEntry};
+use crate::state::RegistryEntry;
 use crate::AgentStatus;
 use std::collections::HashSet;
 
@@ -245,7 +244,9 @@ fn fleet_incident_gate() -> Result<(), Refusal> {
 
 /// Queue mechanics (Claude's Discretion 2: targets, not contracts).
 const QUEUE_POLL: Duration = Duration::from_secs(2);
-const QUEUE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Under the first-turn watch's 4 minute notice: a queued spawn answers its
+/// caller with its place and reason before the watch would have to.
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(240);
 /// LD4: the CPU-hold re-sample gap and the admission debounce. Longer
 /// than the slot poll because the `ps` CPU column is a decaying average on
 /// macOS - two reads 2s apart are one sample twice. Mirrors
@@ -546,50 +547,10 @@ pub fn gate_node() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// The liveness-filtered registry rows behind [`slot_count`], exposed so the
-/// per-territory cap can read the rows' worked NODES without a second
-/// liveness implementation.
-pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec<RegistryEntry> {
-    let live_roster_short_ids: std::collections::HashSet<String> =
-        match ClaudeRoster::load_default() {
-            Ok(roster) => roster
-                .workers_deduped()
-                .iter()
-                .filter(|w| w.pid.map(|p| pid_is_ours(p, w.proc_start)).unwrap_or(false))
-                .map(|w| w.short_id().to_string())
-                .collect(),
-            Err(e) => {
-                warnings.push(format!(
-                    "{NOTE} claude roster unreadable ({e}); pid-less bg rows uncounted"
-                ));
-                Default::default()
-            }
-        };
-    let mut rows = Vec::new();
-    match load_registry(registry_path) {
-        Ok(Registry { entries, .. }) => {
-            for e in entries {
-                if !status_is_liveish(&e.status) {
-                    continue;
-                }
-                let alive = match e.pid {
-                    Some(p) => pid_is_ours(p, e.pid_start_time),
-                    None => e
-                        .transport_short()
-                        .map(|sid| live_roster_short_ids.contains(sid))
-                        .unwrap_or(false),
-                };
-                if alive {
-                    rows.push(e);
-                }
-            }
-        }
-        Err(e) => warnings.push(format!(
-            "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
-        )),
-    }
-    rows
-}
+// The cap's one liveness filter lives in `cap_liveness` (the file budget
+// moved it out of this over-budget file); re-exported so every existing
+// reader keeps its `spawn_gate::live_rows` path.
+pub(crate) use crate::cap_liveness::live_rows;
 
 /// Count fno WORKER SLOTS in use for the `max_live` cap: liveness-filtered fno
 /// registry rows + live `worker:<name>` headless slot claims. A lead row (it
@@ -606,13 +567,9 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
 /// already reflects every process the roster holds.
 ///
 /// The roster IS still read here, but only as a LIVENESS ORACLE, not as a
-/// population to count: a fno `claude --bg` row is minted with a jobId in
-/// `short_id` but NO local `pid` (its process lives in the claude daemon, so
-/// liveness is in the roster — see `claude_ask.rs`). Such a row's liveness is
-/// resolved by looking its `short_id` up in the roster. This counts real fno bg
-/// workers (which a pid-only filter would drop, letting the cap admit unbounded
-/// bg workers — Codex P1 on PR #235) WITHOUT counting non-fno sessions: a
-/// memory-plugin observer has no registry row, so it is never reached.
+/// population to count. The full filter, its freshness arm and its tests
+/// live on `crate::cap_liveness::live_rows` (moved under the file budget);
+/// read them there.
 ///
 /// Read-only; a registry read failure degrades to a 0 contribution with one
 /// warning line pushed to `warnings` (LD5, fail open).
@@ -3797,52 +3754,6 @@ Swapouts: 3444531.\n";
             refusal.receipt.as_ref().unwrap()["reason"],
             "provider_quota_lock"
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn queue_timeout_refuses_with_receipt_and_exit_code() {
-        let _g = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-gate-timeout-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let root = dir.join("claims-root");
-        std::fs::create_dir_all(&root).unwrap();
-        std::env::set_var("FNO_CLAIMS_ROOT", &root);
-        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
-        std::env::remove_var("FNO_SPAWN_GATE");
-        let fnodir = dir.join(".fno");
-        std::fs::create_dir_all(&fnodir).unwrap();
-        std::fs::write(
-            fnodir.join("config.toml"),
-            "[agents]\nmax_live = 1\nmin_free_gb = 0\nmax_swap_pct = 0\n",
-        )
-        .unwrap();
-
-        // 1 worker in registry with alive pid -> cap full at 1/1
-        let reg = dir.join("registry.json");
-        std::fs::write(
-            &reg,
-            format!(
-                r#"{{"schema_version":1,"entries":[{{"name":"w1","provider":"claude","cwd":"/tmp","status":"live","pid":{},"created_at":"2026-01-01T00:00:00Z"}}]}}"#,
-                std::process::id()
-            ),
-        )
-        .unwrap();
-
-        // With QUEUE_TIMEOUT, full cap, not no_wait, and mock timeout:
-        // verify slot_count sees 1 slot >= max_live 1
-        let mut warnings = Vec::new();
-        let slots = slot_count(&reg, &mut warnings);
-        assert_eq!(slots, 1);
-        assert_eq!(EXIT_QUEUE_TIMEOUT, 75);
-
-        std::env::remove_var("FNO_CLAIMS_ROOT");
-        match prior_spawn_gate {
-            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
-            None => std::env::remove_var("FNO_SPAWN_GATE"),
-        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

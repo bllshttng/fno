@@ -4,7 +4,19 @@
 use super::*;
 use serde_json::Value;
 
-const PANEL_W: usize = 48;
+/// The panel's width until the operator drags its border; persisted after.
+const DEFAULT_W: u16 = 48;
+/// The narrowest drag; the tab strip still reads at this width.
+const MIN_W: u16 = 32;
+
+/// The three widths the panel takes: the dragged width, the wide
+/// three-fifths toggle, and the whole terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Size {
+    Normal,
+    Wide,
+    Full,
+}
 
 pub(crate) struct Panel {
     pub(super) open: bool,
@@ -13,10 +25,21 @@ pub(crate) struct Panel {
     inflight: bool,
     last_read: Option<Instant>,
     generation: u64,
-    selected: usize,
+    pub(super) selected: usize,
     esc: Vec<u8>,
     unread: bool,
-    tab: Tab,
+    pub(super) tab: Tab,
+    /// The operator's dragged width inside the Normal size: loaded from
+    /// mux-view.json at startup, persisted after a drag.
+    width: u16,
+    /// Which of the three widths paints now; holds across open and close.
+    pub(super) size: Size,
+    /// The size `F` returns to.
+    restore: Size,
+    /// The width at grab while a border drag is live.
+    drag_from: Option<u16>,
+    /// The Questions tab's marked rows, sent by `c` and dropped on close.
+    pub(super) marks: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -61,6 +84,17 @@ impl Tab {
     }
 }
 
+/// Columns the panel covers on a `cols`-wide terminal. The clamp is
+/// transient: `width` keeps the operator's choice across a shrink and grow.
+fn panel_width(view: &View, cols: usize) -> usize {
+    let max = cols.saturating_sub(1).max(1);
+    match view.bell.size {
+        Size::Full => cols,
+        Size::Wide => (cols * 3 / 5).max(MIN_W as usize).min(max),
+        Size::Normal => (view.bell.width as usize).max(MIN_W as usize).min(max),
+    }
+}
+
 impl Panel {
     pub(crate) fn initial() -> Self {
         Self {
@@ -74,6 +108,11 @@ impl Panel {
             esc: Vec::new(),
             unread: false,
             tab: Tab::All,
+            width: crate::view_store::load_bell_width().unwrap_or(DEFAULT_W),
+            size: Size::Normal,
+            restore: Size::Normal,
+            drag_from: None,
+            marks: std::collections::BTreeSet::new(),
         }
     }
 }
@@ -102,6 +141,8 @@ pub(crate) fn close(view: &mut View) {
     if view.bell.open {
         view.bell.open = false;
         view.bell.generation = view.bell.generation.wrapping_add(1);
+        view.bell.drag_from = None;
+        view.bell.marks.clear();
     }
 }
 
@@ -403,7 +444,9 @@ fn push_announcement(view: &View, out: &mut Vec<Row>, item: &Value) {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        let width = PANEL_W.min(view.term.1 as usize).saturating_sub(4).max(1);
+        let width = panel_width(view, view.term.1 as usize)
+            .saturating_sub(4)
+            .max(1);
         out.extend(
             wrap_body(body, width)
                 .into_iter()
@@ -491,7 +534,7 @@ fn split_announcements(view: &View) -> Option<(usize, usize)> {
 /// the same labels the draw paints (pass the one `tab_counts` read), so the
 /// two never drift.
 fn tab_spans(view: &View, counts: &[String; 4]) -> Vec<(Tab, std::ops::Range<usize>)> {
-    let width = PANEL_W.min(view.term.1 as usize);
+    let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     let mut col = x0 + 4;
     TABS.iter()
@@ -510,7 +553,7 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     if !panel.open {
         return None;
     }
-    let width = PANEL_W.min(view.term.1 as usize);
+    let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     if (col as usize) < x0 || row as usize >= view.term.0 as usize {
         return None;
@@ -544,6 +587,72 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
     }
 }
 
+/// Begin a width drag when a left press lands on the border column. Full
+/// screen has no border to grab.
+pub(super) fn begin_drag(view: &mut View, col: u16) -> bool {
+    if !view.bell.open || view.bell.size == Size::Full {
+        return false;
+    }
+    let cols = view.term.1 as usize;
+    if col as usize != cols - panel_width(view, cols) {
+        return false;
+    }
+    view.bell.drag_from = Some(view.bell.width);
+    true
+}
+
+/// Set the width from the dragged border column; true when the painted
+/// width changed. A drag out of Wide drops to Normal at the dragged width.
+fn drag_to(view: &mut View, col: u16) -> bool {
+    let cols = view.term.1 as usize;
+    let max = cols.saturating_sub(1);
+    if (MIN_W as usize) > max {
+        return false;
+    }
+    let before = panel_width(view, cols);
+    let want = cols.saturating_sub(col as usize).clamp(MIN_W as usize, max);
+    view.bell.size = Size::Normal;
+    view.bell.width = want as u16;
+    clamp_selection(view);
+    panel_width(view, cols) != before
+}
+
+/// End the drag; persist the width when it moved.
+fn end_drag(view: &mut View) {
+    if let Some(from) = view.bell.drag_from.take() {
+        if view.bell.width != from {
+            crate::view_store::save_bell_width(view.bell.width);
+        }
+    }
+}
+
+/// The first question row's id, for the snapshot seam's marked-row shot.
+pub(super) fn first_question_id(view: &View) -> Option<String> {
+    question_rows(view).into_iter().find_map(|r| match r {
+        Row::Question(id) => Some(id),
+        _ => None,
+    })
+}
+
+/// The live drag owns every mouse event: Drag(Left) moves the border,
+/// anything else ends it. False when no drag is live, so a panel with no
+/// drag falls through to the hit and close lines the block ends with.
+pub(super) fn drag_mouse(view: &mut View, col: u16, kind: MouseKind) -> bool {
+    if view.bell.drag_from.is_none() {
+        return false;
+    }
+    match kind {
+        MouseKind::Drag(MouseButton::Left) => {
+            drag_to(view, col);
+            true
+        }
+        _ => {
+            end_drag(view);
+            true
+        }
+    }
+}
+
 pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
     if let Some(projection) = view.bell.projection.as_ref() {
         mark_seen(projection);
@@ -573,6 +682,16 @@ fn question_title(view: &View, id: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(id)
         .to_string()
+}
+
+/// Whether the merged fold still lists `id` as an open question: the
+/// archive door refuses settled ids, so marks and sends gate on this.
+fn question_open(view: &View, id: &str) -> bool {
+    view.questions_merged().is_some_and(|fold| {
+        fold.items
+            .iter()
+            .any(|q| q.id == id && q.state == "open" && !q.settled)
+    })
 }
 
 fn wrap_body(body: &str, width: usize) -> Vec<String> {
@@ -648,8 +767,66 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
             b'k' => {
                 view.bell.selected = view.bell.selected.saturating_sub(1);
             }
+            b'w' => {
+                view.bell.size = if view.bell.size == Size::Wide {
+                    Size::Normal
+                } else {
+                    Size::Wide
+                };
+                // A wider panel rewraps announcement bodies into fewer
+                // rows, so the cursor can fall off the end.
+                clamp_selection(view);
+            }
+            b'F' => {
+                if view.bell.size == Size::Full {
+                    view.bell.size = view.bell.restore;
+                } else {
+                    view.bell.restore = view.bell.size;
+                    view.bell.size = Size::Full;
+                }
+                clamp_selection(view);
+            }
+            b' ' => {
+                let selected = view.bell.selected;
+                if view.bell.tab == Tab::Questions {
+                    if let Some(Row::Question(id)) = rows(view).get(selected).cloned() {
+                        // Only an open question marks: the archive door
+                        // refuses settled ids, so a marked Answered row
+                        // would turn c into a refusal instead of a clear.
+                        if question_open(view, &id) {
+                            if !view.bell.marks.remove(&id) {
+                                view.bell.marks.insert(id);
+                            }
+                            // A mark advances the cursor, so space space
+                            // space marks three rows.
+                            view.bell.selected =
+                                (view.bell.selected + 1).min(rows(view).len().saturating_sub(1));
+                        }
+                    }
+                }
+            }
             b'c' => {
-                if rows(view).iter().any(|r| matches!(r, Row::Clear(_))) && !view.question_acting {
+                let listed: Vec<String> = question_rows(view)
+                    .into_iter()
+                    .filter_map(|r| match r {
+                        Row::Question(id) => Some(id),
+                        _ => None,
+                    })
+                    .filter(|id| question_open(view, id))
+                    .collect();
+                view.bell.marks.retain(|id| listed.contains(id));
+                if !view.bell.marks.is_empty() && !view.question_acting {
+                    let ids: Vec<String> = listed
+                        .iter()
+                        .filter(|id| view.bell.marks.contains(*id))
+                        .cloned()
+                        .collect();
+                    view.question_archive = Some(ids);
+                    view.question_acting = true;
+                    view.bell.marks.clear();
+                } else if rows(view).iter().any(|r| matches!(r, Row::Clear(_)))
+                    && !view.question_acting
+                {
                     view.question_clear_settled = true;
                     view.question_acting = true;
                 }
@@ -682,7 +859,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
     if rows_n == 0 || cols == 0 {
         return;
     }
-    let width = PANEL_W.min(cols);
+    let width = panel_width(view, cols);
     let x0 = cols - width;
     let mut lines = rows(view);
     if lines.is_empty() {
@@ -737,24 +914,35 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 );
             }
         } else if r == rows_n - 1 {
+            let footer = if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() {
+                format!(
+                    "{} marked · c clear marked · space mark · Esc close",
+                    view.bell.marks.len()
+                )
+            } else {
+                "1-4/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
+            };
             paint(
                 cells,
                 cols,
                 r,
                 x0 + 2,
                 width.saturating_sub(2),
-                "1-4/Tab tab · j/k move · Enter open · c clear · q close",
+                &footer,
                 Color::Default,
                 false,
             );
         } else if let Some(row) = lines.get(start + r - 1) {
             let (label, color, bold) = match row {
                 Row::Header(s) => (s.clone(), view.theme.brand, true),
-                Row::Question(id) => (
-                    format!("? {}", question_title(view, id)),
-                    Color::Default,
-                    true,
-                ),
+                Row::Question(id) => {
+                    let (glyph, color) = if view.bell.marks.contains(id) {
+                        ("● ", view.theme.brand)
+                    } else {
+                        ("? ", Color::Default)
+                    };
+                    (format!("{glyph}{}", question_title(view, id)), color, true)
+                }
                 Row::Clear(n) => (format!("Clear all {n} answered"), view.theme.brand, true),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),
                 Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
@@ -1003,5 +1191,198 @@ mod tests {
         assert!(!stale(&v), "the index backs the list; no stale banner");
         v.questions_index = None;
         assert!(stale(&v), "no index: the banner says so");
+    }
+
+    #[test]
+    fn panel_sizes_drag_and_rewrap() {
+        // A body of one 44-, one 21- and one 20-column word: at the default
+        // width the wrap packs 44 and 42 on two lines; after the drag one
+        // line packs 44 + 1 + 21 = 66, so the rewrap is measurable.
+        let body = format!("{} {} {}", "a".repeat(44), "b".repeat(21), "c".repeat(20));
+        let mut v = view_with_announcements(vec![serde_json::json!({
+            "ts": "2026-10-14T10:00:00Z",
+            "from": "fno/fleet-incident",
+            "summary": "rollout",
+            "body": body,
+            "expires": "2027-01-01T00:00:00Z",
+            "system": true,
+        })]);
+        v.bell.open = true;
+        let x0 = |v: &View| (v.term.1 as usize) - panel_width(v, v.term.1 as usize);
+        let widest_info = |v: &View| {
+            rows(v)
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Info(s) if s.starts_with("  ") => Some(s.chars().count()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0)
+        };
+
+        // AC1: the default paints 48 wide (x0 52 on 100 columns), and the
+        // announcement body wraps at the painted width less 4.
+        assert_eq!(x0(&v), 52, "the default panel paints 48 wide");
+        assert_eq!(widest_info(&v), 46, "the body wraps at 44 columns");
+
+        // AC2: w paints three fifths of the terminal and back.
+        keys(&mut v, b"w");
+        assert_eq!(x0(&v), 40, "wide paints 60 of 100 columns");
+        keys(&mut v, b"w");
+        assert_eq!(x0(&v), 52, "a second w returns to the dragged width");
+
+        // AC4: a stored 90 clamps transiently on 60 columns and survives.
+        v.bell.width = 90;
+        v.term = (24, 60);
+        assert_eq!(
+            60 - panel_width(&v, 60),
+            1,
+            "a stored 90 paints 59 on 60 columns"
+        );
+        v.term = (24, 100);
+        assert_eq!(v.bell.width, 90, "the stored width survives the clamp");
+
+        // AC6: grab the border at column 52 and drag to 30: the panel paints
+        // 70 columns, the body rewraps to 66, and release leaves 70 stored.
+        v.bell.width = 48;
+        v.bell.size = Size::Normal;
+        assert!(begin_drag(&mut v, 52), "the border column starts a drag");
+        assert!(
+            drag_mouse(&mut v, 30, MouseKind::Drag(MouseButton::Left)),
+            "the drag consumes its own report"
+        );
+        assert!(
+            v.bell.open,
+            "a drag report left of the old border keeps the panel open"
+        );
+        assert_eq!(x0(&v), 30, "the border rides the pointer to column 30");
+        assert_eq!(widest_info(&v), 68, "the body rewraps to 66 columns");
+        end_drag(&mut v);
+        assert_eq!(v.bell.width, 70, "release leaves the dragged width");
+        assert!(v.bell.drag_from.is_none(), "the drag is over");
+
+        // AC7: a grab-release with no movement changes nothing.
+        assert!(begin_drag(&mut v, 30));
+        assert!(drag_mouse(
+            &mut v,
+            31,
+            MouseKind::Release(MouseButton::Left)
+        ));
+        assert_eq!(v.bell.width, 70, "no movement, no change");
+    }
+
+    #[test]
+    fn questions_marks_clear_through_archive() {
+        let q = |id: &str| crate::needs_overlay::QuestionItem {
+            id: id.into(),
+            title: id.into(),
+            state: "open".into(),
+            ready: true,
+            ..Default::default()
+        };
+        let marks = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| id.to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        // AC8: space marks and advances, so three spaces mark the three open
+        // rows and the footer names the count.
+        let mut v = view_with_agents(vec![]);
+        v.term = (24, 100);
+        v.bell.open = true;
+        v.bell.tab = Tab::Questions;
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                q("q-a1"),
+                q("q-b2"),
+                q("q-c3"),
+                crate::needs_overlay::QuestionItem {
+                    settled: true,
+                    ..q("q-d4")
+                },
+            ],
+            ..Default::default()
+        });
+        keys(&mut v, b"   ");
+        assert_eq!(
+            v.bell.marks,
+            marks(&["q-a1", "q-b2", "q-c3"]),
+            "space toggles each open row in turn"
+        );
+        assert_eq!(v.bell.selected, 3, "each mark advanced the cursor");
+        let text = crate::vt::frame_text(&v.compose());
+        assert!(
+            text.contains("3 marked"),
+            "the footer names the count: {text:?}"
+        );
+        assert!(
+            text.contains("● q-a1"),
+            "marked rows paint the dot: {text:?}"
+        );
+        assert!(
+            !text.contains("? q-a1"),
+            "the unmarked glyph is gone: {text:?}"
+        );
+
+        // AC9: c archives the marked ids in row order and clears the marks.
+        keys(&mut v, b"c");
+        assert_eq!(
+            v.question_archive,
+            Some(vec![
+                "q-a1".to_string(),
+                "q-b2".to_string(),
+                "q-c3".to_string()
+            ]),
+            "c archives the marked ids in row order"
+        );
+        assert!(v.question_acting, "the archive rides the acting latch");
+        assert!(v.bell.marks.is_empty(), "the marks clear");
+        assert!(
+            !v.question_clear_settled,
+            "the clear-settled fallback did not fire beside it"
+        );
+
+        // AC10: no marks with an Answered section falls back to today's
+        // clear-settled; a mark on a question that left the list is not sent.
+        let mut v2 = view_with_agents(vec![]);
+        v2.term = (24, 100);
+        v2.bell.open = true;
+        v2.bell.tab = Tab::Questions;
+        v2.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![
+                q("q-e5"),
+                crate::needs_overlay::QuestionItem {
+                    settled: true,
+                    ..q("q-f6")
+                },
+            ],
+            ..Default::default()
+        });
+        // A settled row never marks: the archive door would refuse it, and
+        // space on it neither marks nor advances.
+        v2.bell.selected = 2;
+        keys(&mut v2, b" ");
+        assert!(v2.bell.marks.is_empty(), "a settled row does not mark");
+        assert_eq!(v2.bell.selected, 2, "no mark, no advance");
+        keys(&mut v2, b"c");
+        assert!(v2.question_clear_settled, "no marks: clear settled fires");
+        assert_eq!(v2.question_archive, None);
+
+        let mut v3 = view_with_agents(vec![]);
+        v3.term = (24, 100);
+        v3.bell.open = true;
+        v3.bell.tab = Tab::Questions;
+        v3.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![q("q-a1")],
+            ..Default::default()
+        });
+        v3.bell.marks = marks(&["q-a1", "q-gone"]);
+        keys(&mut v3, b"c");
+        assert_eq!(
+            v3.question_archive,
+            Some(vec!["q-a1".to_string()]),
+            "the vanished id is pruned, not sent"
+        );
     }
 }

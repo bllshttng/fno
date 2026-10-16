@@ -35,11 +35,19 @@ Options:
                           bare hex). Overrides ambient capture. Refuses if it
                           does not resolve.
   --source-kind TEXT      organic|from_inbox|from_observation|from_supervisor|
-                          operator_request. Mark an operator ask with
-                          operator_request.  [default: organic]
-  --related TEXT          Related node ids/slugs (asserted, symmetric, non-
-                          blocking). Repeat or comma-separate. Refuses an id
-                          that does not resolve.
+                          operator_request. The `new` word also files from an
+                          inbox: mark an operator ask with operator_request.
+                          [default: organic]
+  --source-project TEXT   Source project name (the new word's provenance).
+  --source-inbox-msg TEXT Source inbox message ID (the new word's provenance).
+  --source-inbox-thread TEXT
+                          Source inbox thread file path (the new word's
+                          provenance; `fno inbox drain` probes --help for it).
+  --source-session-id TEXT Source session ID override (the new word).
+  --unscoped              Create with project=null and cwd=null; skips the
+                          auto-scope to the current git repo (the new word).
+  --force-domain          Use --domain verbatim; skips the domain suggestion
+                          (the new word).
   --help                  Show this message and exit.
 
   Paired verb: `fno backlog remove <id>` deletes it (hidden; run its own

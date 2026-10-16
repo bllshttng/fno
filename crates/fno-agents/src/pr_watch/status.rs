@@ -597,9 +597,16 @@ pub(crate) fn verdict(inp: &Inputs, marks: &Marks, leg: &LegFacts) -> Verdict {
     };
 
     let tick_epoch = parse_ts(marks.last_tick.as_deref());
+    // The ts parse truncates to whole seconds, so the tie favors the tick: a
+    // tick inside the plist's own second covers it, and only a plist at or
+    // after the tick's next second boundary reads as a bounce still pending
+    // its first tick. On whole-second values this is the strict `>` it
+    // replaced.
     let bounce_pending = broke.is_none()
         && (inp.now - plist_mtime) < threshold as f64
-        && tick_epoch.map(|tick| plist_mtime > tick).unwrap_or(true);
+        && tick_epoch
+            .map(|tick| plist_mtime >= tick + 1.0)
+            .unwrap_or(true);
     if bounce_pending {
         let streak = broken_streak(&marks.recent_ends);
         if streak >= inp.cfg.wedged_after_ticks.max(1) as usize {

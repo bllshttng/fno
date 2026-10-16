@@ -713,10 +713,14 @@ fn observe_footnote(root: &Path, workdir: &str, started: f64, now: f64) -> Optio
     let records = crate::footnote_harness::transcript::read_records(&path).ok()?;
     let header = &records.first()?["data"];
     let mut model = None;
+    let mut provider = None;
     let mut usage: Option<UsageSum> = None;
     for r in &records {
         let d = &r["data"];
         match r["type"].as_str() {
+            Some("model_request") => {
+                provider = d["provider_id"].as_str().map(str::to_string).or(provider)
+            }
             Some("model_response") => {
                 model = d["reported_model"].as_str().map(str::to_string).or(model)
             }
@@ -735,6 +739,13 @@ fn observe_footnote(root: &Path, workdir: &str, started: f64, now: f64) -> Optio
             _ => {}
         }
     }
+    // The lane asks `provider/model`; the transcript stores a bare model,
+    // and fnh's model_request rows carry the endpoint's provider_id. Join
+    // the two the way observe_opencode does (Amendment 4).
+    model = match (&provider, &model) {
+        (Some(p), Some(m)) if !m.contains('/') => Some(format!("{p}/{m}")),
+        (_, other) => other.clone(),
+    };
     Some(Observed {
         harness: "footnote",
         model,

@@ -36,7 +36,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.81x | 29 | 16 | `cli/src/fno/config/__init__.py:3525` | `_settings_yaml_locations` |
 | 1.78x | 32 | 18 | `cli/src/fno/agents/rust_runtime.py:542` | `_pick_account_at_seam` |
 | 1.77x | 23 | 13 | `cli/src/fno/agents/model_routing.py:776` | `read_route_settings` |
-| 1.75x | 21 | 12 | `cli/src/fno/pr/_ritual.py:550` | `_spawn_judgment` |
 | 1.68x | 37 | 22 | `cli/src/fno/paths.py:120` | `resolve_canonical_worktree` |
 | 1.67x | 20 | 12 | `cli/src/fno/adapters/providers/test_loader.py:213` | `test_global_config_pollution_does_not_leak` |
 
@@ -178,7 +177,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.83x | 11 | 6 | `cli/src/fno/agents/trace_cli.py:41` | `_parse_iso8601` |
 | 1.83x | 11 | 6 | `cli/src/fno/config/__init__.py:411` | `_coerce_self_reap` |
 | 1.83x | 11 | 6 | `cli/src/fno/graph/cli.py:4381` | `cmd_project_root` |
-| 1.83x | 11 | 6 | `cli/src/fno/ledger_join.py:41` | `_entry_owns_pr` |
 | 1.83x | 11 | 6 | `cli/src/fno/retro/cli.py:530` | `drain_postmortems` |
 | 1.81x | 29 | 16 | `cli/src/fno/config/__init__.py:3525` | `_settings_yaml_locations` |
 | 1.8x | 9 | 5 | `cli/src/fno/agents/harnesses/_claude_session_registry.py:286` | `read_state_json` |
@@ -207,7 +205,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.75x | 7 | 4 | `cli/src/fno/graph/maintain.py:807` | `parse_retro_trailer` |
 | 1.75x | 7 | 4 | `cli/src/fno/graph/render.py:41` | `_orphan_ids` |
 | 1.75x | 7 | 4 | `cli/src/fno/paths.py:793` | `retro_pending_dir` |
-| 1.75x | 21 | 12 | `cli/src/fno/pr/_ritual.py:550` | `_spawn_judgment` |
 | 1.75x | 7 | 4 | `cli/src/fno/recovery.py:332` | `load_counts` |
 | 1.75x | 7 | 4 | `cli/src/fno/research/core.py:398` | `acquire_topic` |
 | 1.75x | 7 | 4 | `cli/src/fno/rust_binary.py:38` | `_env_binary` |
@@ -346,7 +343,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.36x | 15 | 11 | `cli/src/fno/inbox/store.py:224` | `inbox_dir_for` |
 | 1.36x | 19 | 14 | `cli/src/fno/plan/cli.py:410` | `rung` |
 | 1.35x | 23 | 17 | `cli/src/fno/backlog/advance.py:1339` | `_seed_lane_local_settings` |
-| 1.35x | 23 | 17 | `cli/src/fno/review_capability.py:176` | `detect_session` |
 | 1.35x | 23 | 17 | `cli/src/fno/update.py:858` | `_install_then_mark` |
 | 1.33x | 20 | 15 | `cli/src/fno/adapters/providers/managed.py:327` | `principal_of_blobs` |
 | 1.33x | 8 | 6 | `cli/src/fno/adapters/providers/managed.py:1562` | `reconcile_backoff_active` |
@@ -493,7 +489,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.14x | 8 | 7 | `cli/src/fno/harness_identity.py:253` | `present_harness_markers` |
 | 1.14x | 25 | 22 | `cli/src/fno/mcp/channel.py:83` | `build_channel_notification` |
 | 1.14x | 8 | 7 | `cli/src/fno/paths.py:1110` | `_read_persisted_plugin_root` |
-| 1.14x | 8 | 7 | `cli/src/fno/pr/_ritual.py:632` | `_recover_node_for_pr` |
 | 1.14x | 24 | 21 | `cli/src/fno/pr/_status.py:81` | `_latest_per_name` |
 | 1.14x | 8 | 7 | `cli/src/fno/recovery.py:451` | `_node_is_done` |
 | 1.14x | 16 | 14 | `cli/src/fno/review/cache.py:87` | `git_sha` |
@@ -512,7 +507,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.12x | 19 | 17 | `cli/src/fno/graph/failure.py:68` | `emit_undefer_boundary` |
 | 1.12x | 19 | 17 | `cli/src/fno/paths.py:562` | `observer_reports_dir` |
 | 1.12x | 19 | 17 | `cli/src/fno/pr/_merge.py:63` | `_emit` |
-| 1.12x | 9 | 8 | `cli/src/fno/pr/_ritual.py:115` | `_canonical_root` |
 | 1.12x | 9 | 8 | `cli/src/fno/provenance/autobrief.py:368` | `_apply_window` |
 | 1.12x | 9 | 8 | `cli/src/fno/retro/keep_going.py:111` | `classify_followup` |
 | 1.12x | 9 | 8 | `cli/src/fno/stub_manifest.py:231` | `_run_contract_test` |
@@ -531,7 +525,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.1x | 11 | 10 | `cli/src/fno/target_cli.py:2303` | `_classify_node_claim` |
 | 1.09x | 12 | 11 | `cli/src/fno/graph/store.py:1018` | `_node_matches_repo_pr` |
 | 1.09x | 12 | 11 | `cli/src/fno/mail/envelope.py:67` | `wrap_fno_mail` |
-| 1.09x | 12 | 11 | `cli/src/fno/post_merge_route.py:37` | `_live_codex_registry_entry` |
 | 1.09x | 12 | 11 | `cli/src/fno/provenance/spawn_think.py:186` | `think_spawn_enabled` |
 | 1.09x | 12 | 11 | `cli/src/fno/target_cli.py:2258` | `_holder_is_ours` |
 | 1.08x | 14 | 13 | `cli/src/fno/agents/model_routing.py:635` | `resolve_explicit_route` |

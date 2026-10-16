@@ -66,6 +66,7 @@ run_init() {
   (cd "$_dir" && \
     HOME="${_dir}/home" \
     PATH="${_dir}/bin:$PATH" \
+    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
     FNO_TEST_SPACE="${_dir}/space" \
     FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
     FNO_TARGET_INIT_GATED=1 \

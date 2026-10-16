@@ -64,7 +64,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
     "target": (
         "fno.target_cli:target_app",
-        "Target session bootstrap (fno do target init)",
+        "Target sessions: status, resolve-model, and check gates",
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
@@ -317,7 +317,7 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "skill-diff": set(),
     "state": set(),
     "stub-manifest": set(),
-    "target": {"init"},
+    "target": set(),
     "think": set(),
     "worker": set(),
     "worktree": set(),

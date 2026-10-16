@@ -133,6 +133,11 @@ pub(crate) fn run_with_timeout_accepting(
     use std::io::Read;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
+    // The fleet budget admits before the spawn: a gh argv refused here reads
+    // as a failed run carrying the ledger line.
+    if let Some(line) = crate::gh_budget::admit_spawn(std::ffi::OsStr::new(&cmd[0]), &cmd[1..]) {
+        return Err(RunFailure::Failed(format!("exit 75: {line}")));
+    }
     let mut child = Command::new(&cmd[0])
         .args(&cmd[1..])
         .current_dir(cwd)

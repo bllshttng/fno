@@ -281,6 +281,7 @@ fn gate_answer(payload: &Value) -> Value {
         seed: opt_str_of(payload, "seed"),
         session_phase: opt_str_of(payload, "session_phase"),
     };
+    let (caller, name) = (input.caller_session.clone(), input.name.clone());
     match spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
         Ok(mut guard) => {
             // A `hold: false` caller (the mux revival door) wants the verdict,
@@ -310,12 +311,23 @@ fn gate_answer(payload: &Value) -> Value {
                 "worker_holder": worker_holder,
             })
         }
-        Err(refusal) => json!({
-            "status": "refused",
-            "exit_code": refusal.exit_code,
-            "receipt": refusal.receipt,
-            "event": refusal.event,
-        }),
+        Err(refusal) => {
+            // The caller holds this refusal, so the first-turn watch owes it
+            // no gate notice for the same launch.
+            let reason = refusal
+                .receipt
+                .as_ref()
+                .and_then(|r| r.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("refused");
+            crate::spawn_watch::settle_refused(&home, caller.as_deref(), &name, reason);
+            json!({
+                "status": "refused",
+                "exit_code": refusal.exit_code,
+                "receipt": refusal.receipt,
+                "event": refusal.event,
+            })
+        }
     }
 }
 
