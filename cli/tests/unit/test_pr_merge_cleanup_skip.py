@@ -116,10 +116,24 @@ def test_every_unmet_precondition_speaks_its_reason(
     assert data["harness"] == "claude"
 
 
+def _stub_mint_verb(monkeypatch):
+    """Stub the verb_call seam the mint rides: record payloads, answer the
+    receipt shape. The envelope itself is pinned by the Rust goldens."""
+    import fno.rust_binary as rust_binary
+
+    seen = []
+
+    def fake_verb_call(verb, payload, *args, **kwargs):
+        seen.append((tuple(verb), payload))
+        return {"request_id": "merge-cleanup-stubbed"}
+
+    monkeypatch.setattr(rust_binary, "verb_call", fake_verb_call)
+    return seen
+
+
 def test_a_confirmed_merge_still_mints_its_request(tmp_path, monkeypatch):
     # The positive control for the absence assertions above: the same
-    # instrument, the same journal, one request row and no skip row.
-    import fno.agents.events as E
+    # instrument, one mint call carrying the confirmed merge, and no skip row.
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -127,26 +141,24 @@ def test_a_confirmed_merge_still_mints_its_request(tmp_path, monkeypatch):
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     manifest = _write_manifest(tmp_path)
-    monkeypatch.setattr(
-        E, "rows_for_cleanup", lambda worktree, node_ids, runner=None: []
-    )
+    seen = _stub_mint_verb(monkeypatch)
 
     M._emit_merge_cleanup_request(11, str(tmp_path), str(manifest), [])
 
-    requested = _rows(log, "merge_cleanup_requested")
-    assert len(requested) == 1
-    assert requested[0]["data"]["branch"] == "feature/x"
+    assert len(seen) == 1
+    verb, payload = seen[0]
+    assert verb == ("pr-watch", "merge-cleanup-mint")
+    assert payload["branch"] == "feature/x"
+    assert payload["pr"] == 11
     assert _rows(log, "merge_cleanup_skipped") == []
 
 
 def test_the_request_stamps_the_prs_merged_at_not_the_emission_time(
     tmp_path, monkeypatch
 ):
-    # The reaper's grace window anchors on merged_at, so a row stamped at
-    # emission starts the window late by the whole emission lag. The
-    # fixture merge time is in the past, so equality with the envelope ts
-    # would mean the bug is back, never a coincidence.
-    import fno.agents.events as E
+    # The reaper's grace window anchors on merged_at, so the payload carries
+    # the PR's merge time, never the emission time. The envelope's ts-vs-
+    # merged_at split is pinned by the Rust goldens.
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -160,18 +172,12 @@ def test_the_request_stamps_the_prs_merged_at_not_the_emission_time(
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     manifest = _write_manifest(tmp_path)
-    monkeypatch.setattr(
-        E, "rows_for_cleanup", lambda worktree, node_ids, runner=None: []
-    )
+    seen = _stub_mint_verb(monkeypatch)
 
     M._emit_merge_cleanup_request(11, str(tmp_path), str(manifest), [])
 
-    requested = _rows(log, "merge_cleanup_requested")
-    assert len(requested) == 1
-    row = requested[0]
-    assert row["data"]["merged_at"] == "2026-09-12T15:06:31Z"
-    # ts is the emission time; the two stamps must differ in this fixture.
-    assert row["ts"] != row["data"]["merged_at"]
+    assert len(seen) == 1
+    assert seen[0][1]["merged_at"] == "2026-09-12T15:06:31Z"
 
 
 def test_a_raising_mint_speaks_emit_failed_and_the_merge_stands(tmp_path, monkeypatch):
@@ -201,7 +207,6 @@ def test_the_request_row_names_the_ambient_session_when_no_manifest_exists(
 ):
     # A canonical checkout is not a session, so it has no manifest; the
     # merging process (here: the lead's shell) names itself instead.
-    import fno.agents.events as E
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -209,19 +214,16 @@ def test_the_request_row_names_the_ambient_session_when_no_manifest_exists(
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-lead")
-    monkeypatch.setattr(
-        E, "rows_for_cleanup", lambda worktree, node_ids, runner=None: []
-    )
+    seen = _stub_mint_verb(monkeypatch)
 
     M._emit_merge_cleanup_request(
         11, str(tmp_path), str(tmp_path / ".fno" / "target-state.md"), []
     )
 
-    requested = _rows(log, "merge_cleanup_requested")
-    assert len(requested) == 1
-    data = requested[0]["data"]
-    assert data["session_id"] == "sess-lead"
-    assert data["harness"] == "claude"
+    assert len(seen) == 1
+    payload = seen[0][1]
+    assert payload["session_id"] == "sess-lead"
+    assert payload["harness"] == "claude"
 
 
 def test_an_unknown_reason_is_refused_rather_than_written(tmp_path, monkeypatch):

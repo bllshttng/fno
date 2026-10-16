@@ -4465,11 +4465,9 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"already_exited": true, "short_id": entry.short_id}),
         );
     }
-    // A pane-hosted row's ONE live ref is the mux pane; the refusal text and
-    // its branch table live in stop_refusal_detail. Above the claude branch on
-    // purpose: stop_claude's no-transport-id fallback signals the recorded pid
-    // instead, which kills the process inside the pane and leaves the pane
-    // itself.
+    // A pane-hosted row's ONE live ref is the mux pane (refusal text in
+    // stop_refusal_detail). Above the claude branch on purpose: stop_claude's
+    // fallback signals the recorded pid and leaves the pane.
     if let Some(mux) = entry.mux.as_ref() {
         let (probe, precheck) = stop_refusal_detail::pane_verdict(&entry);
         return Response::err(
@@ -4551,11 +4549,9 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             }),
         );
     }
-    // A lane-B keeper thread: fno's own keeper hosts the child and
-    // the row's short_id is empty, so without this arm the no-op arm below
-    // reports a stop that stopped nothing (PR 1332 review finding). Kill is
-    // delivered over the row's own socket and CONFIRMED before the row goes
-    // terminal; a keeper that will not die leaves the row non-terminal.
+    // A lane-B keeper thread: its short_id is empty, so the no-op arm below
+    // would report a stop that stopped nothing. Kill goes over the row's own
+    // socket and is CONFIRMED before the row goes terminal.
     if let Some(sock) = keeper_thread_sock(&entry) {
         if !stop_keeper_confirmed(&sock).await {
             let _ = ctx.emitter.emit(
@@ -4592,14 +4588,22 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         );
         return Response::ok(req.id, json!({"stopped": true, "backend": "keeper-thread"}));
     }
-    // A non-PTY row (empty short_id == Python-authored; the daemon's create path
-    // always derives a non-empty short_id) for codex/gemini has no daemon worker
-    // to stop. Mirror Python `stop_agent`: these providers are "synchronous
-    // between asks (no persistent process to stop)" -- emit `agent_stopped` and
-    // return cleanly, leaving the registry UNCHANGED. Falling through to the PTY
-    // path would probe the agents-root `worker.sock` (absent -> "confirmed
-    // down") and then write `status = Exited`, a status Python's loader rejects,
-    // corrupting a Python-readable registry (Codex P1, PR #364).
+    // A headless footnote child is a plain process in its own group. End it
+    // before the row goes terminal, or the stop reports a pid still running.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
+            return Response::err(
+                req.id,
+                ErrorCode::Internal,
+                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
+            );
+        }
+    }
+    // An empty short_id (Python-authored; the daemon's create path always
+    // derives one) is a codex/gemini row with no daemon worker. Mirror Python
+    // `stop_agent`: emit `agent_stopped` and leave the registry UNCHANGED. The
+    // PTY path below would write `status = Exited`, which Python's loader
+    // rejects (Codex P1, PR #364).
     if entry.short_id.is_empty() {
         let _ = ctx.emitter.emit(
             "agent_stopped",
@@ -4610,10 +4614,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"stopped": true, "provider": entry.harness_name(), "no_op": true}),
         );
     }
-    // Ask the worker to shut down its PTY child gracefully, then CONFIRM it
-    // actually went away before reporting success: a swallowed shutdown
-    // failure would mark the agent exited while the PTY keeps running (Codex
-    // P1). A worker that shut down removes its socket and exits.
+    // Ask the worker to shut down its PTY child, then CONFIRM it went away: a
+    // swallowed failure would mark the agent exited while the PTY keeps running.
     if !stop_worker_confirmed(ctx, &entry).await {
         return Response::err(
             req.id,
@@ -4621,10 +4623,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             format!("agent {name}: worker did not confirm shutdown; it may still be running"),
         );
     }
-    // Surface a registry-write failure rather than reporting a clean stop while
-    // the on-disk status still reads live: the worker is confirmed dead, but if
-    // the status flip does not persist the registry diverges from reality
-    // (silent-failure review). Mirrors handle_register_channel's house style.
+    // Surface a registry-write failure rather than reporting a clean stop
+    // while the on-disk status still reads live.
     let stop_name = name.clone();
     let wake_home = ctx.home.clone();
     if let Err(e) = update_registry_offloaded(ctx.home.registry_json(), move |r| {

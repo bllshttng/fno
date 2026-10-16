@@ -940,8 +940,8 @@ def _emit_merge_cleanup_request(
 
     Every call writes exactly one journal row, a request or a skip. Silence
     is not a legal outcome: a merge that mints nothing must say why."""
-    from fno.agents.events import emit_merge_cleanup_requested, rows_for_cleanup
     from fno.graph._reconcile import repo_slug_from_url
+    from fno.rust_binary import VerbUnavailable, verb_call
 
     res = _gh(["pr", "view", str(pr_number), "--json", "state,headRefName,url,mergedAt"], cwd)
     if not res.ok:
@@ -978,21 +978,29 @@ def _emit_merge_cleanup_request(
     # directory. Inlined from the deleted Python gate: one line, so
     # the import that kept a second implementation alive went with it.
     worktree = cwd if (Path(cwd) / ".git").is_file() else None
-    emit_merge_cleanup_requested(
-        repo=repo,
-        project=project,
-        pr=pr_number,
-        branch=branch,
-        worktree=worktree,
-        node_ids=bound_node_ids,
-        repo_slug=repo_slug_from_url(meta.get("url") or ""),
-        session_id=session_id,
-        harness=harness,
-        merged_at=meta.get("mergedAt") or None,
-        # always emit the exact candidates - name-matched rows count
-        # even when the merge ran outside a linked worktree.
-        candidate_row_names=rows_for_cleanup(worktree, bound_node_ids),
-    )
+    try:
+        verb_call(
+            ["pr-watch", "merge-cleanup-mint"],
+            {
+                "repo": repo,
+                "project": project,
+                "pr": pr_number,
+                "branch": branch,
+                "worktree": worktree,
+                "node_ids": [str(node) for node in bound_node_ids],
+                "repo_slug": repo_slug_from_url(meta.get("url") or ""),
+                "session_id": session_id,
+                "harness": harness,
+                "merged_at": meta.get("mergedAt") or None,
+            },
+        )
+    except VerbUnavailable as exc:
+        # Silence is not a legal outcome: the mint's own refusal is a skip row
+        # naming it, the same "every call writes a request or a skip" contract.
+        _emit_merge_cleanup_skip(
+            pr_number, cwd, state_file, "emit-failed",
+            detail=str(exc)[:200],
+        )
 
 
 def _run_post_merge_followups(

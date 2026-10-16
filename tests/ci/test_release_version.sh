@@ -169,18 +169,26 @@ run "$work/o" "$work/e" rver rc 0.4.0 20260925
 grep -q '^tag=v0.4.0rc11$' "$work/o"
 check "rc after v0.4.0rc10 prints v0.4.0rc11" $?
 
-# A released v<src> refuses nightly only; rcN keeps cutting past it.
+# A released v<src> moves nightly and rc to the next unreleased patch, so a
+# shipped stable never wedges them while main's __version__ lags.
 git -C "$rv" tag v0.4.0
 run "$work/o" "$work/e" rver nightly 0.4.0 20260925
 rc=$?
-check_rc "nightly at a released v0.4.0 exits 1" "$rc" "1"
-grep -q "sync-version" "$work/e"
-check "refusal names the sync-version bump" $?
+check_rc "nightly at a released v0.4.0 exits 0" "$rc" "0"
+grep -q '^version=0.4.1.dev20260925$' "$work/o" && grep -q '^tag=nightly$' "$work/o"
+check "nightly past released v0.4.0 prints version=0.4.1.dev20260925" $?
 run "$work/o" "$work/e" rver rc 0.4.0 20260925
 rc=$?
 check_rc "rc at a released v0.4.0 exits 0" "$rc" "0"
-grep -q '^tag=v0.4.0rc11$' "$work/o"
-check "rc still prints v0.4.0rc11 past the released base" $?
+grep -q '^tag=v0.4.1rc1$' "$work/o"
+check "rc past released v0.4.0 prints v0.4.1rc1" $?
+
+# Several released patches in a row skip together.
+git -C "$rv" tag v0.4.1
+run "$work/o" "$work/e" rver nightly 0.4.0 20260925
+grep -q '^version=0.4.2.dev20260925$' "$work/o"
+check "nightly past released v0.4.0 and v0.4.1 prints 0.4.2.dev20260925" $?
+git -C "$rv" tag -d v0.4.1 >/dev/null
 
 # Stable promotes the newest candidate; its base is released -> idempotent 3.
 run "$work/o" "$work/e" rver stable 0.4.0 20260925

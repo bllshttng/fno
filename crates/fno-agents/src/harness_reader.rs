@@ -797,7 +797,7 @@ fn dry_run_argv(contract: &HarnessContract, harness: &str) -> Result<Vec<String>
 
 /// The substrate the live SPAWN asks for, read from the harness's declared
 /// create forms. A harness with no interactive create form and a declared
-/// headless one (footnote) spawns headless; every other harness keeps the
+/// headless one (zcode) spawns headless; every other harness keeps the
 /// spawn default.
 pub fn probe_substrate(contract: &HarnessContract, harness: &str) -> Option<&'static str> {
     let caps = contract.capabilities(harness).ok()?;

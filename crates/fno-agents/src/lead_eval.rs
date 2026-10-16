@@ -441,7 +441,13 @@ fn fold_transcript(
             ) {
                 let payload = row.get("payload").unwrap_or(&Value::Null);
                 let text = crate::session_activity::codex_output_text(payload);
-                note_refusal_text(&mut fold, window_idx, &text);
+                // codex carries no `is_error` flag, so this reuses the same
+                // header-or-flag call `refusal_rate::is_refused` makes for a
+                // claude row without one, decided in that one place so this
+                // fold's refusal buckets cannot drift from that reading.
+                if crate::refusal_rate::is_refused(&text, None) {
+                    note_refusal_text(&mut fold, window_idx, &text);
+                }
             }
         } else if let Some(content) = row.pointer("/message/content").and_then(Value::as_array) {
             for block in content {
@@ -449,7 +455,14 @@ fn fold_transcript(
                     continue;
                 }
                 let text = content_text(block.get("content").unwrap_or(&Value::Null));
-                note_refusal_text(&mut fold, window_idx, &text);
+                let is_error = block.get("is_error").and_then(Value::as_bool);
+                // A result's own `is_error` flag is not the whole story (a
+                // clean exit can still carry a refusal as its answer), so
+                // this defers to the same `refusal_rate::is_refused` call
+                // the refusal_rate reading makes, rather than re-deriving it.
+                if crate::refusal_rate::is_refused(&text, is_error) {
+                    note_refusal_text(&mut fold, window_idx, &text);
+                }
             }
         }
     }
@@ -467,25 +480,30 @@ fn fold_transcript(
 }
 
 /// One tool-result text into the window's refusal buckets and the fold's
-/// repeated-refusal table; shared by the claude and codex row shapes.
+/// repeated-refusal table; shared by the claude and codex row shapes. Every
+/// caller already gated this on `refusal_rate::is_refused`, so the text is
+/// a known refusal here even when it matches none of the 7 named buckets -
+/// "other" is where that one still lands, so it is never silently absent
+/// from both tables.
 fn note_refusal_text(fold: &mut Fold, window_idx: usize, text: &str) {
-    let buckets = crate::refusal_rate::buckets_of(text).collect::<Vec<_>>();
+    let mut buckets = crate::refusal_rate::buckets_of(text).collect::<Vec<_>>();
+    if buckets.is_empty() {
+        buckets.push("other");
+    }
     for bucket in &buckets {
         add(&mut fold.windows[window_idx].buckets, bucket);
     }
-    if !buckets.is_empty() {
-        let key = normalized_lead(text);
-        let refusal = fold
-            .repeated_refusals
-            .entry(key.clone())
-            .or_insert_with(|| RepeatedRefusal {
-                lead: key,
-                count: 0,
-                windows: BTreeSet::new(),
-            });
-        refusal.count += 1;
-        refusal.windows.insert(fold.windows[window_idx].n);
-    }
+    let key = normalized_lead(text);
+    let refusal = fold
+        .repeated_refusals
+        .entry(key.clone())
+        .or_insert_with(|| RepeatedRefusal {
+            lead: key,
+            count: 0,
+            windows: BTreeSet::new(),
+        });
+    refusal.count += 1;
+    refusal.windows.insert(fold.windows[window_idx].n);
 }
 
 fn fold_subagents(transcript: &Path, session: &str) -> Result<Value, String> {
@@ -1528,6 +1546,68 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.session.as_deref(), Some("s"));
         assert!(parsed.json);
+    }
+
+    /// A successful (`is_error: false`) tool result that quotes a past
+    /// gate refusal well past its header, in its own multi-line report,
+    /// must never land in the window's refusal buckets or the
+    /// repeated-refusals table.
+    #[test]
+    fn a_successful_result_quoting_gate_words_past_its_header_is_not_a_refusal() {
+        let checkin_report = "machine: beat 12 clean, context 42%, drift 1.2, tokens 128 out\n\
+             telemetry: ok, queue depth 0, otel exporter healthy\n\
+             board: open_prs 2, free_claim_no_driver 0, blocked 0, ready 4\n\
+             capacity: footprint admit / gate refused on provider_cap, cpu pass";
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let rows = vec![
+            json!({"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}),
+            json!({"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":checkin_report}]}}),
+        ];
+        for row in rows {
+            writeln!(file, "{row}").unwrap();
+        }
+        let fold = fold_transcript(
+            "test-session",
+            "claude",
+            file.path(),
+            None,
+            None,
+            3,
+            &BusIndex::empty(),
+            &mut crate::operator_witness::SubmitIndex::empty(),
+        )
+        .unwrap();
+        assert!(fold.windows[0].buckets.is_empty());
+        assert!(fold.repeated_refusals.is_empty());
+    }
+
+    /// A genuinely failed call (`is_error: true`) whose text matches none
+    /// of the 7 named bucket patterns is still a refusal -
+    /// `refusal_rate::is_refused` trusts the flag alone - so it needs a
+    /// slot (`"other"`), or it is invisible in both tables.
+    #[test]
+    fn an_is_error_failure_with_no_matching_bucket_lands_as_other() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let rows = vec![
+            json!({"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}),
+            json!({"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Permission denied: cannot write to /etc/hosts"}]}}),
+        ];
+        for row in rows {
+            writeln!(file, "{row}").unwrap();
+        }
+        let fold = fold_transcript(
+            "test-session",
+            "claude",
+            file.path(),
+            None,
+            None,
+            3,
+            &BusIndex::empty(),
+            &mut crate::operator_witness::SubmitIndex::empty(),
+        )
+        .unwrap();
+        assert_eq!(fold.windows[0].buckets.get("other"), Some(&1));
+        assert_eq!(fold.repeated_refusals.len(), 1);
     }
 
     #[test]
