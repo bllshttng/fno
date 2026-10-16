@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS claim_meta (
   value TEXT NOT NULL
 );";
 
-const CLOCK: &str = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+pub(crate) const CLOCK: &str = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
 const COLUMNS: &str = "key, holder, schema_version, acquired_at, expires_at, pid, pid_unavailable, host, machine_id, reason, harness, session_id, pid_provenance, metadata";
 
 pub(crate) fn database_path(root: Option<&Path>) -> Result<PathBuf, String> {
@@ -681,6 +681,41 @@ pub(crate) fn budget_hold_write(
     Ok(())
 }
 
+/// The GitHub status poller's lease: one `gh-budget:poller` row beside the
+/// fleet hold. The machine that holds it reads GitHub for every host and
+/// publishes the composed rows; the others serve those rows.
+pub(crate) const POLLER_KEY: &str = "gh-budget:poller";
+
+/// Take or renew the poller lease for `machine`, judged on the store clock.
+/// The upsert applies only when the row is this machine's or has run out, so
+/// two hosts never both hold it. True when `machine` holds the lease after.
+pub(crate) fn poller_lease_take(
+    remote: &Remote,
+    machine: &str,
+    lease_ms: i64,
+) -> Result<bool, String> {
+    let sql = format!(
+        "INSERT INTO claims (key, holder, schema_version, acquired_at, expires_at, \
+                             pid_unavailable, host, machine_id, reason) \
+         VALUES (?1, 'gh-poller:' || ?2, 1, {CLOCK}, {CLOCK} + ?3, 1, ?2, ?2, 'github status poller') \
+         ON CONFLICT(key) DO UPDATE SET \
+             holder = excluded.holder, \
+             acquired_at = CASE WHEN claims.machine_id = excluded.machine_id \
+                                THEN claims.acquired_at ELSE excluded.acquired_at END, \
+             expires_at = excluded.expires_at, \
+             host = excluded.host, \
+             machine_id = excluded.machine_id \
+         WHERE claims.machine_id = excluded.machine_id OR claims.expires_at <= {CLOCK} \
+         RETURNING machine_id"
+    );
+    let reply = on_primary(
+        remote,
+        &sql,
+        &[text(POLLER_KEY), text(machine), int(lease_ms)],
+    )?;
+    Ok(!reply.rows.is_empty())
+}
+
 pub(crate) fn read_at_path(path: &Path) -> Result<Option<ClaimRecord>, String> {
     let dir = path
         .parent()
@@ -1059,6 +1094,10 @@ pub(crate) fn leased_on(remote: &Remote, machine: &str) -> Result<Vec<ClaimRecor
         .iter()
         .filter_map(|row| decode(row).ok())
         .filter(|record| shared(&record.key))
+        // The budget rows end on their own deadline: stretching the poller
+        // lease would keep a dead poller's lease for ten minutes, and the
+        // fleet hold would outlast the refusal it records.
+        .filter(|record| !record.key.starts_with("gh-budget:"))
         .collect())
 }
 
