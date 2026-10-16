@@ -668,7 +668,7 @@ fn run_dispatch(
 }
 
 impl Receipt<'_> {
-    fn clone_receipt<'a>(&self, phase: &'a str, outcome: &'a str) -> Receipt<'a> {
+    fn clone_receipt<'a>(&'a self, phase: &'a str, outcome: &'a str) -> Receipt<'a> {
         Receipt {
             phase,
             outcome,

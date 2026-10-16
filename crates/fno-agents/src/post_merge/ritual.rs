@@ -129,6 +129,17 @@ fn truthy(v: Option<&toml::Value>) -> bool {
     }
 }
 
+fn truthy_json(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => matches!(
+            s.trim().to_lowercase().as_str(),
+            "true" | "1" | "yes" | "on"
+        ),
+        _ => false,
+    }
+}
+
 fn post_merge_config(canon: &Path) -> Option<PostMergeConfig> {
     let table = crate::agents_config::config_table_merged(canon, &["post_merge"])?;
     let pm = table.get("post_merge")?;
@@ -361,6 +372,9 @@ impl Ritual {
         } else {
             resolve_most_recent_merge(canon.as_deref().unwrap_or(cwd))
         };
+        let parking_lot = pm
+            .as_ref()
+            .and_then(|cfg| parking_lot_path(canon.as_deref(), cfg));
         Ritual {
             pr: resolved.unwrap_or(0),
             pr_supplied,
@@ -370,9 +384,7 @@ impl Ritual {
             project,
             canon,
             pm,
-            parking_lot: pm
-                .as_ref()
-                .and_then(|cfg| parking_lot_path(canon.as_deref(), cfg)),
+            parking_lot,
             holder: session_holder(),
             owns_claim: false,
             node_ids: Vec::new(),
@@ -653,7 +665,7 @@ impl Ritual {
             .and_then(|s| s.get("outcome"))
             .and_then(Value::as_str);
         let closure_refused = obj.get("closure_refused");
-        if obj.get("held").is_some_and(|v| truthy(Some(v))) {
+        if obj.get("held").is_some_and(|v| truthy_json(Some(v))) {
             // A held sweep (one-in-flight gate): another reconcile was still
             // running, so this one stood down without scanning. DEFERRED keeps
             // the work visibly owed rather than reading as a no-drift run.
@@ -685,7 +697,7 @@ impl Ritual {
                 more,
             );
             self.emit("reconcile", DEFERRED, &detail);
-        } else if closure_refused.is_some_and(|v| truthy(Some(v))) {
+        } else if closure_refused.is_some_and(|v| truthy_json(Some(v))) {
             // The trailer-claimed nodes never got bound: a flaky gh query,
             // cross-repo mismatch, or unmerged PR refusal. Never silently
             // readable as "no-drift".
