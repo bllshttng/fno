@@ -141,10 +141,3 @@ class TestCachedNegativeNamesItsInput:
         assert pin == "coverage row pinned to abc123def at 2026-08-28T07:15:38Z"
         assert _reviews.split_pin_note("") == ("", "")
         assert _reviews.split_pin_note("recomputed") == ("recomputed", "")
-
-
-    def test_an_unparseable_timestamp_falls_back_without_raising(self):
-        """A malformed line fails quiet, the same as the chain read does."""
-        assert _reviews._instant("not-a-timestamp") is None
-        assert _reviews._is_after("zzz", "aaa", None) is True
-        assert _reviews._is_after("aaa", "zzz", None) is False

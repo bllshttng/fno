@@ -493,6 +493,16 @@ fn latest_coverage_row(_cwd: &Path, inputs: &ReviewInputs, pr: u64) -> (Option<V
     (best, best_ts)
 }
 
+/// The overtaken read on timestamps: parse both sides, and when either
+/// fails to parse, fall back to the raw strings - a malformed line fails
+/// quiet, never panics, and the lexical order still decides.
+fn ts_after(ts: &str, row_ts: &str, row_at: Option<i64>) -> bool {
+    match (row_at, crate::event_store::parse_rfc3339_ms(ts)) {
+        (Some(base), Some(other)) => other > base,
+        _ => ts > row_ts,
+    }
+}
+
 /// Whether a head-matching stored NO row was overtaken by a later in-scope
 /// attestation at the same head. Any verdict overtakes: a later fail moved
 /// the round and the count the row reports.
@@ -529,10 +539,7 @@ fn uncovered_row_overtaken(data: &Value, row_ts: &str, inputs: &ReviewInputs, he
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let after = match (row_at, crate::event_store::parse_rfc3339_ms(&ts)) {
-                (Some(base), Some(other)) => other > base,
-                _ => ts.as_str() > row_ts,
-            };
+            let after = ts_after(&ts, row_ts, row_at);
             if after {
                 return true;
             }
@@ -1202,5 +1209,37 @@ mod shape_review_coverage_tests {
             })),
             vec!["c1".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod overtaken_ts_tests {
+    use super::*;
+
+    #[test]
+    fn an_unparseable_timestamp_still_overtakes_by_string_compare() {
+        // The Python pin this port carried: a malformed line fails quiet
+        // and the lexical order decides, so "zzz" is after "aaa" whatever
+        // the parse says - and a lexically earlier garbage ts does not
+        // overtake.
+        assert!(ts_after("zzz", "aaa", None));
+        assert!(!ts_after("aaa", "zzz", None));
+    }
+
+    #[test]
+    fn parsed_timestamps_compare_by_instant_not_string() {
+        // Both sides parseable: the instant wins, so 09:00 on the 2nd
+        // sorts after 23:00 on the 1st even though the string sorts first.
+        let base = crate::event_store::parse_rfc3339_ms("2026-10-01T23:00:00Z");
+        assert!(ts_after(
+            "2026-10-02T09:00:00Z",
+            "2026-10-01T23:00:00Z",
+            base
+        ));
+        assert!(!ts_after(
+            "2026-10-01T10:00:00Z",
+            "2026-10-01T23:00:00Z",
+            base
+        ));
     }
 }
