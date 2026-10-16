@@ -20,7 +20,7 @@ from paths import HISTORY
 
 LOAD = loadlog.samples()
 OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
-LANES = ["claude", "opencode", "pi", "zcode"]
+LANES = ["claude", "opencode", "pi", "zcode", "footnote"]
 P = {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03, "cache_write_per_m": 0.15}
 
 

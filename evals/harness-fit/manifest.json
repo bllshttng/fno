@@ -155,5 +155,20 @@
     "new_retries": "the 7 missed opencode trials each run once more in the same job, settings and concurrency 4; a second rate limit stays excluded",
     "when_set": "after the second results were written and read, before the 7 retries started; none of those outcomes existed at commit",
     "run_1": "unchanged; its rate-limit check already reads the row's reason"
+  },
+  "amendment_14": {
+    "declared_at": "2026-10-16T06:43:41Z",
+    "scope": "a fifth Run 1 lane, footnote, before any footnote attempt or result; no grade or decision rule changes",
+    "lane": "harness-fit-footnote: harness footnote, model zai/glm-5.3-flash, no effort key, band medium; the zai/ prefix routes the spawn to the z.ai Anthropic endpoint",
+    "identity": "the observe door joins model_request.provider_id with the reported model, the footnote side of the Amendment 4 join; a transcript with no provider id reads the bare model and substituted against a prefixed lane",
+    "binary": "run1.sh exports FNO_FOOTNOTE_BIN, default $WS/bin/footnote; setup-imac.sh installs it with cargo install --locked --git https://github.com/bllshttng/fnh --rev $FNH_SHA --root $WS",
+    "fnh_sha": "ce42622f79567181361ae326a929dd69cab957b9",
+    "fnh_sha_note": "fnh origin/main when the amendment landed (2026-10-16); a run that starts after fnh moves updates the pin here and in README Amendment 14 before the first footnote attempt; FNH_SHA overrides without an edit",
+    "effort": "the footnote lane carries no effort key, so effort is the provider default for footnote and opencode alike, since opencode's --effort high never reached the model either",
+    "baseline": "the recorded iMac opencode rows, never a re-run: Run 1 opencode accepted 2 of 30 scored (results/run-1.md), Run 0 opencode passed 56 of the 88 paired tasks (results/decision.md); host opencode 1.18.33, recorded through 2026-10-03",
+    "baseline_rerun": "a footnote run that starts more than 30 days after 2026-10-03 re-runs the opencode smoke first",
+    "gate": "footnote minus opencode in points on paired tasks; PASS at -15.0 or better; the paired 95% bootstrap interval prints beside it (4,000 resamples, seed 272); an arm under 20 graded attempts fires no rule alone",
+    "smoke": "one attempt on replay-x-c911 before any paid footnote attempt: lane_status ok, usage_source footnote-transcript, and the footnote transcript header carries permission_mode bypassPermissions",
+    "spend": "before the lane, spent dollars plus the smoke cost per attempt times 30 (10 tasks times 3 repeats) must stay under the 200 USD ceiling, Amendment 1's stop rule"
   }
 }

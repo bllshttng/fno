@@ -124,6 +124,16 @@ PY
 fi
 if [ -f "$WS/run1-config.toml" ]; then ok "run1-config.toml"; else bad "run1-config.toml is missing"; fi
 
+echo "== footnote binary (Run 1, Amendment 14)"
+# Pinned fnh sha; see manifest.json amendment_14. FNH_SHA overrides for a re-pin.
+FNH_SHA="${FNH_SHA:-ce42622f79567181361ae326a929dd69cab957b9}"
+if [ "$CHECK" = 1 ]; then
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote at $WS/bin/footnote"; else bad "footnote is not installed at $WS/bin/footnote"; fi
+else
+  run cargo install --locked --git https://github.com/bllshttng/fnh --rev "$FNH_SHA" --root "$WS"
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote built from bllshttng/fnh at $FNH_SHA"; else bad "footnote did not install at $WS/bin/footnote"; fi
+fi
+
 echo
 if [ "$fail" = 0 ]; then
   echo "Ready. Start both runs:  bash $REPO/evals/harness-fit/run/start.sh"
