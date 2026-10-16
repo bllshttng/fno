@@ -31,7 +31,7 @@ On 2026-10-14 the gate refused at a load of 8 on 16 cores with 90 percent of RAM
 
 ## agents.max_live yields to the machine gates
 
-The user's own ceiling yields too, one spawn at a time. A spawn whose count sits at or above `agents.max_live` admits when four conditions hold.
+The user's own ceiling yields too, one spawn at a time. When the count sits at or above `agents.max_live`, a spawn admits on four conditions.
 
 1. The CPU axis admitted on this pass.
 2. The memory axis is on: `agents.min_free_gb` above 0. A disabled floor reads nothing, so it is not room.
@@ -42,9 +42,9 @@ When the rule holds, the cap for this pass becomes `counted + 1`. The admitted r
 
 So a burst grows by about one worker a minute. The next waiter sees a worker younger than 60 seconds and keeps waiting until it settles. A queue of 5 waiters at the ceiling gets 4 of them in before the fifth hits the 240-second timeout. The epic advance reads the probe's `max_live - live_workers`, so it dispatches one node per pass during a burst too.
 
-What still bounds a burst: the fleet incident stop, the runaway brake, the 400-process attributed ceiling, the account and lane quota locks, the provider lane caps, the CPU hold (a turning machine re-holds the spawn, which then needs two consecutive under-ceiling samples), the RAM floor re-read at dequeue, lead_share, which divides the burst cap, the per-territory cap, the blueprint cap and the 240-second queue timeout. The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only when workers exit or the reaper removes done-idle rows.
+What still bounds a burst: the fleet incident stop, the runaway brake, the 400-process attributed ceiling, the account and lane quota locks, the provider lane caps, the CPU hold (a turning machine re-holds the spawn, which then needs two consecutive under-ceiling samples), the RAM floor re-read at dequeue, lead_share, which divides the burst cap, the per-territory cap, the blueprint cap and the 240-second queue timeout. The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only on a worker exit or a reaper removal of done-idle rows.
 
-The caps stack lowest first: the learned cap, the user's floor, which holds the learned cap up but never above `agents.max_live`, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
+The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`; only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
 
 ## A waiting spawn names its place
 
