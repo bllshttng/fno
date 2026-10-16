@@ -217,7 +217,7 @@ def list_carveouts(
 
     from fno.carveout.core import read_carveouts, resolve_carveout_root
 
-    reason = None
+    reason: "str | None" = None
     if pr_number is not None:
         from fno.graph._reconcile import resolve_current_repo_slug
         from fno.paths import ledger_json
@@ -233,7 +233,10 @@ def list_carveouts(
                 },
             )
             session_id = list(out.get("sessions") or [])
-            reason = str(out.get("reason") or "")
+            # The JSON contract is null-when-clean: an empty string reads as
+            # a reason, so an absent one must stay None.
+            got_reason = out.get("reason")
+            reason = None if got_reason is None else str(got_reason)
         except VerbUnavailable as exc:
             session_id, reason = [], f"ledger unreadable: {exc}"
 
