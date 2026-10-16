@@ -531,6 +531,9 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
+          # Main's manifests can lag a shipped stable, so publish the version
+          # the resolve job printed: a workspace-only stamp, never committed.
+          bash scripts/release/sync-version.sh "$VERSION"
           # crates.io uploads are permanent: a version already there is an
           # idempotent skip, so a re-run after a partial publish never retries.
           for pair in "fno-agents:crates/fno-agents" "fno:crates/fno"; do
@@ -542,10 +545,10 @@ jobs:
               continue
             fi
             if [ "$DRY_RUN" = "true" ]; then
-              cargo publish --dry-run --manifest-path "${dir}/Cargo.toml"
+              cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml"
             else
               test -n "$CARGO_REGISTRY_TOKEN" || { echo "CARGO_REGISTRY_TOKEN not set; refusing to publish"; exit 1; }
-              cargo publish --manifest-path "${dir}/Cargo.toml"
+              cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml"
             fi
           done
 
