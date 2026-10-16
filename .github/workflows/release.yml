@@ -172,9 +172,11 @@ jobs:
             # against gh's pipe can SIGPIPE the producer, and pipefail would
             # turn that into a silent step failure. The client-side shape is
             # the rust pick's: the endpoint's server filters answer from the
-            # stale index.
+            # stale index. A cancelled run is a push the next push superseded,
+            # not a red shard, so it carries no verdict and the next older run
+            # decides.
             if ! runs="$(BRANCH="$default_branch" gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cli-ci.yml/runs?per_page=100" \
-              --jq '.workflow_runs[] | select(.head_branch == $ENV.BRANCH and .event == "push" and .conclusion != null and .conclusion != "") | "\(.head_sha) \(.conclusion)"')"; then
+              --jq '.workflow_runs[] | select(.head_branch == $ENV.BRANCH and .event == "push" and .conclusion != null and .conclusion != "" and .conclusion != "cancelled") | "\(.head_sha) \(.conclusion)"')"; then
               echo "::error::the cli-ci run list failed (see the gh error above); cannot gate on cli-ci" >&2
               exit 1
             fi
