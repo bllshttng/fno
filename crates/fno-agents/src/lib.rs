@@ -91,6 +91,7 @@ mod bounded_spawn;
 pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;
+pub(crate) mod cap_liveness;
 pub mod capability_leaves;
 pub mod capacity;
 pub mod cargo_build_dirs;

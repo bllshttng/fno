@@ -160,17 +160,19 @@ def test_a_dropped_stale_origin_is_reported_not_swallowed(tmp_graph, monkeypatch
     assert "dropped 'x-deleted'" in result.stderr
 
 
-def test_backlog_new_captures_an_ambient_origin_too(tmp_graph, monkeypatch):
-    """`new` builds its node inline, so capture must be wired there explicitly.
+def test_backlog_new_captures_an_ambient_origin_too(tmp_graph):
+    """`new` rides the native create door; ambient capture must stamp there too.
 
     Left out, this agent-oriented creation verb would be the one filing path
     outside the documented ambient-capture contract, writing a null origin.
     """
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-new")
-    monkeypatch.setenv("FNO_NODE", "x-aaaa")
-
-    result = runner.invoke(app, ["backlog", "new", "filed via new"])
-    assert result.exit_code == 0, result.output
-    node = _by_id(tmp_graph, result.stdout.strip())
+    result = run_native_create(
+        tmp_graph,
+        "new",
+        "filed via new",
+        extra_env={"CLAUDE_CODE_SESSION_ID": "sess-new", "FNO_NODE": "x-aaaa"},
+    )
+    assert result.exit_code == 0, result.stderr
+    node = _by_id(tmp_graph, json.loads(result.stdout)["id"])
     assert node["source_node_id"] == "x-aaaa"
     assert node["source_harness"] == "claude"

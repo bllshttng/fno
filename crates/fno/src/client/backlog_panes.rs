@@ -69,8 +69,15 @@ pub(crate) fn paint(
     // detail pane takes the focus presentation while a drill-down is open.
     let focus_pane = owner && b.detail.is_some();
     // The hint sheet is sized first: its wrapped height is the layout's
-    // floor, and the 4-row cap keeps the panes their rows.
+    // floor, and the 4-row cap keeps the panes their rows. Unowned, it dims
+    // the same way the title rows already do, so the side pane never reads
+    // as ready to act while typing lands somewhere else.
     let hint = hint_lines(b, focus_pane, w);
+    let hint: Vec<BLine> = if owner {
+        hint
+    } else {
+        hint.into_iter().map(BLine::dimmed).collect()
+    };
     let hint_h = if h >= 6 { hint.len().min(4) } else { 0 };
     let laid_out = regions(rect, hint_h);
     let bar_h = laid_out.bar.2;
@@ -465,6 +472,67 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("x-2")));
         assert!(follow.is_some(), "the cursor card is the follow line");
     }
+
+    // The footer dims with the rest of the pane when something else owns
+    // typing, the way the title rows already did; the hint had not.
+    #[test]
+    fn hint_dims_when_the_pane_is_not_the_input_owner() {
+        let b = board_with_fixture();
+        let theme = crate::theme::Theme::default_theme();
+        let rows = 24;
+        let cols = 40;
+        let mut cells = vec![Cell::default(); rows * cols];
+        paint(
+            &b,
+            &mut cells,
+            rows,
+            cols,
+            (0, 0, rows, cols),
+            false,
+            &theme,
+        );
+        let hint_h = hint_lines(&b, false, cols).len().min(4);
+        let hint_row = rows - hint_h;
+        // The dim slot's literal color, same as the existing title-row and
+        // meta-line assertions in backlog_board_tests.rs - not read back
+        // from `cell_style`, so a theme change that moved the slot would
+        // fail this test for the right reason instead of chasing itself.
+        let meta_fg = crate::proto::Color::Indexed(8);
+        let found = (hint_row..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
+            .any(|(r, c)| cells[r * cols + c].c.is_alphabetic());
+        assert!(found, "the hint painted some letters to check");
+        for r in hint_row..rows {
+            for c in 0..cols {
+                let cell = cells[r * cols + c];
+                if cell.c.is_alphabetic() {
+                    assert_eq!(cell.fg, meta_fg, "unowned hint char '{}' stays dim", cell.c);
+                }
+            }
+        }
+
+        let mut cells = vec![Cell::default(); rows * cols];
+        paint(&b, &mut cells, rows, cols, (0, 0, rows, cols), true, &theme);
+        let bold_found = (hint_row..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
+            .any(|(r, c)| {
+                let cell = cells[r * cols + c];
+                cell.c.is_alphabetic() && cell.fg != meta_fg
+            });
+        assert!(
+            bold_found,
+            "an owned hint keeps its normal key/body colors, not all-meta"
+        );
+    }
+
+    fn board_with_fixture() -> BoardView {
+        let rows = vec![serde_json::json!({"id": "x-1", "status": "ready", "priority": "p2"})];
+        let mut b = BoardView::new(0);
+        b.inputs = Some(crate::backlog_model::fixture(rows));
+        let q = b.query.to_query().expect("the default query parses");
+        b.body = Some(crate::backlog_model::board(b.inputs.as_ref().unwrap(), &q));
+        b
+    }
 }
 
 /// The two-row hint: words wrap onto two rows; a word that fits in neither
@@ -511,7 +579,9 @@ fn enter_word(b: &BoardView) -> String {
 /// The hint sheet: the key list for the board or the focused details.
 /// Every word lands (nothing drops off the bottom unseen); a sheet longer
 /// than 4 rows ends its last row in `? keys`, the full keys overlay one
-/// press away. Key words read bold, the text plain - nothing dims.
+/// press away. Key words read bold, the text plain; neither dims here - the
+/// caller ([`paint`]) flattens the whole sheet to the title rows' dim role
+/// when the pane does not own typing.
 pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<BLine> {
     let text = if detail_focus {
         format!(
