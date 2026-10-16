@@ -108,8 +108,14 @@ _get_from_settings() {
     # when both readers are unavailable, so the message stays true.
     if [[ "$key" == *.* ]]; then
         if command -v fno &>/dev/null; then
-            local value
-            value=$(fno config get "$key" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+            local raw value
+            raw=$(fno config get "$key" 2>&1) || return 1
+            # The CLI answers a schema default for an unset key and names it
+            # on the provenance line. An unset key must stay unset (init's
+            # presence probe separates "config said false" from "never
+            # set"), so a default read refuses, same as the yq path.
+            case "$raw" in *"source: default"*) return 1 ;; esac
+            value=$(printf '%s\n' "$raw" | grep -v '^source:' | tr '[:upper:]' '[:lower:]')
             if [[ -n "$value" ]]; then
                 echo "$value"
                 return 0
