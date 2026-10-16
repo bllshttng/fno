@@ -542,8 +542,9 @@ def _stub_gh_merged(monkeypatch, module, branch: str = "feature/x-07dc",
         r = _R()
         fields = next((a for a in args if a.startswith("state,headRefName")), "")
         if "--json" in args and fields:
-            r.stdout = json.dumps(
-                {"state": "MERGED", "headRefName": branch, "url": url})
+            r.stdout = json.dumps({
+                "state": "MERGED", "headRefName": branch, "url": url,
+                "mergedAt": "2026-09-07T15:00:00Z"})
         return r
 
     monkeypatch.setattr(module, "_gh", _gh)
