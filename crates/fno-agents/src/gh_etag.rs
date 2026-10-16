@@ -234,6 +234,22 @@ mod tests {
     }
 
     #[test]
+    fn budget_refusal_propagates_and_writes_no_row() {
+        let root = tempfile::tempdir().unwrap();
+        write_row_at(root.path(), "repos/o/r/pulls/3", "W/\"old\"", "{\"n\":0}");
+        let before = NOT_MODIFIED.load(Ordering::SeqCst);
+        let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
+            Err("pr-status: refused by the fleet request budget".to_string())
+        };
+        let err = conditional_api_get_at(root.path(), "repos/o/r/pulls/3", spawn).unwrap_err();
+        assert!(err.contains("refused"));
+        let now = crate::gh_cache::now_secs();
+        let row = read_row_at(root.path(), "repos/o/r/pulls/3", now).expect("row untouched");
+        assert_eq!(row.etag, "W/\"old\"");
+        assert_eq!(NOT_MODIFIED.load(Ordering::SeqCst), before);
+    }
+
+    #[test]
     fn eligible_rejects_writes_pages_and_logs() {
         let api = "api".to_string();
         let plain = vec![api.clone(), "repos/o/r/pulls/1".to_string()];
