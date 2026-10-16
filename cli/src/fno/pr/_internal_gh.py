@@ -65,6 +65,9 @@ def _rest_runner(real_gh: str, runner: Callable) -> Callable:
         argv = [real_gh, *cmd[1:]] if cmd and cmd[0] == "gh" else list(cmd)
         if argv and argv[0] == real_gh:
             kwargs.setdefault("env", _quota.delegate_environment())
+            refusal = _quota.admit(argv[1:])
+            if refusal:
+                return Result(_quota.REFUSED, "", refusal)
         return runner(argv, **kwargs)
 
     return invoke

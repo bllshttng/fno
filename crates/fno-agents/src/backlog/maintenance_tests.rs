@@ -257,7 +257,6 @@ fn stale_ideas_read_the_curation_touch_strictly_and_spare_movement() {
 #[test]
 fn stale_ready_exempts_undesigned_contained_blocked_and_moved_work() {
     let dir = tempfile::tempdir().unwrap();
-    let now = now_ms();
     let old = iso_days_ago(80);
     let design = dir.path().join("d.md");
     std::fs::write(&design, "---\nstatus: design\n---\n").unwrap();
@@ -280,6 +279,9 @@ fn stale_ready_exempts_undesigned_contained_blocked_and_moved_work() {
         ),
         node("h", json!({})),
     ];
+    // Read after the stamps: a clock read before them makes the 80-day
+    // stamp a millisecond short of 80 days, and the age floors to 79.
+    let now = now_ms();
     let got = detect_stale_ready(&entries, 21, now);
     assert_eq!(
         got,

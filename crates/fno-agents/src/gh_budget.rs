@@ -476,6 +476,26 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     }
 }
 
+/// The admit op's origin judgment. An agent-origin caller (a spawned worker,
+/// or an unattended claude thread whose supervisor stripped the identity) is
+/// held by the budget like any transport; the user's own typed verb is never
+/// held, and its verdict is read off the ledger without writing it.
+fn admit_for_origin(path: &Path, argv: &[String], now: i64, cap: u32, agent: bool) -> Verdict {
+    if !agent {
+        let (ledger, state) = read_ledger(path);
+        return Verdict {
+            admitted: true,
+            cause: None,
+            retry_after_s: 0,
+            points_60s: window_points(&ledger, now),
+            cap,
+            ledger: state,
+            refusal: None,
+        };
+    }
+    admit(path, argv, now, cap)
+}
+
 /// The one-door admission for Rust-side callers: `Some(refusal line)` when
 /// the fleet budget refuses this argv, None when it admits (including every
 /// ledger-trouble fail-open). Daemon reads carry no worker identity, so the
@@ -733,7 +753,16 @@ fn dispatch_op(payload: &Value) -> i32 {
                         .collect()
                 })
                 .unwrap_or_default();
-            let v = admit(&ledger_path(), &argv, now, cap_from_env());
+            // The op is the one place the Python doors' origin is judged;
+            // Rust transports keep charging daemon reads through
+            // admit/admit_fleet unchanged.
+            let v = admit_for_origin(
+                &ledger_path(),
+                &argv,
+                now,
+                cap_from_env(),
+                crate::spawn_gate_admission::gate_agent_origin(),
+            );
             println!(
                 "{}",
                 json!({
@@ -831,6 +860,32 @@ mod tests {
         let line = v.refusal.expect("refusal line");
         assert!(line.contains("rate limit"), "line: {line}");
         assert!(!line.contains("HTTP 403"), "line: {line}");
+    }
+
+    #[test]
+    fn admit_op_holds_agent_callers_and_never_the_user() {
+        // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
+        // the user's read admits and the ledger file is untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        let read = argv(&["pr", "view", "1", "--json", "state"]);
+        let v = admit(&path, &read, now, 1);
+        assert!(v.admitted, "the staging read is admitted: {v:?}");
+        let before = std::fs::read(&path).unwrap();
+
+        let v = admit_for_origin(&path, &read, now, 1, false);
+        assert!(v.admitted);
+        assert_eq!(v.points_60s, 1);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a user admit writes nothing"
+        );
+
+        let v = admit_for_origin(&path, &read, now, 1, true);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("budget"));
     }
 
     #[test]
