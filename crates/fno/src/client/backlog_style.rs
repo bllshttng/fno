@@ -194,6 +194,18 @@ impl BLine {
         }
         line
     }
+
+    /// Flatten every char to `Meta`, the same dim slot [`paint_title_row`]
+    /// gives an unfocused title: the hint reads as inert chrome while its
+    /// pane does not hold the keyboard, instead of looking equally ready to
+    /// act as a focused one's. Clearing `roles` is enough - paint_bline
+    /// falls back to `default_role` past the role walk's end, the same way
+    /// [`BLine::meta`] leaves it empty.
+    pub(crate) fn dimmed(mut self) -> BLine {
+        self.roles.clear();
+        self.default_role = BRole::Meta;
+        self
+    }
 }
 
 impl std::fmt::Display for BLine {
