@@ -337,6 +337,8 @@ A node carries `origin_evidence`, the producing-event reference the birth had: a
 
 Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
 
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session, with `started_at` at that session's first user turn and `ended_at` at the filing time; a transcript it cannot read stamps the filing time for both and says so in the receipt, and never fails the filing. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript, appends the row, and first-fills `source_session_id`/`source_harness` when empty - a filled origin is never overwritten and the receipt names the session that holds it; a missing transcript exits 2 and names `--started-at` as the by-hand door.
+
 On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
 
 **done = merged.** `fno backlog done` closes a node only when a referenced PR is

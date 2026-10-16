@@ -433,6 +433,46 @@ fn codex_rollouts() -> HashMap<String, PathBuf> {
         .collect()
 }
 
+/// The session's first user turn (its UTC stamp), read off the same
+/// transcript files [`run`] walks: claude's `user` events and codex's
+/// `response_item` user payloads. None when no transcript is on disk or no
+/// user turn in it carries a timestamp - the caller falls back to its own
+/// stamp and says so, and never fails a filing over it.
+pub(crate) fn first_user_turn(harness: &str, sid: &str) -> Option<String> {
+    let path = match harness {
+        "claude" => crate::claude_drive::find_transcript(sid)?,
+        "codex" => codex_rollouts().remove(&sid.to_ascii_lowercase())?,
+        _ => return None,
+    };
+    let file = std::fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::phase_close::utc)
+        else {
+            continue;
+        };
+        let is_user = match event.get("type").and_then(Value::as_str) {
+            Some("user") => true,
+            Some("response_item") => {
+                event
+                    .get("payload")
+                    .and_then(|p| p.get("role").and_then(Value::as_str))
+                    == Some("user")
+            }
+            _ => false,
+        };
+        if is_user {
+            return Some(ts);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
