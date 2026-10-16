@@ -29,7 +29,7 @@ const JUDGMENT_TIMEOUT_SECS: u64 = 600;
 const RECONCILE_TIMEOUT_SECS: u64 = 300;
 /// The mutex TTL: 15m bounds a run that finishes in 1-3 min; the TTL is the
 /// crash backstop.
-const CLAIM_TTL: &str = "15m";
+const CLAIM_TTL_MS: u64 = 15 * 60 * 1000;
 
 const OK: &str = "ok";
 const SKIPPED: &str = "skipped";
@@ -548,7 +548,7 @@ impl Ritual {
         let key = format!("reconcile:pr-{}", self.pr);
         let opts = crate::claims::AcquireOpts {
             pid: Some(std::process::id()),
-            ttl_ms: Some(900_000),
+            ttl_ms: Some(CLAIM_TTL_MS),
             reason: Some("post-merge ritual".to_string()),
             ..Default::default()
         };
