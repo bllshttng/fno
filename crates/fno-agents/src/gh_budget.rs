@@ -535,6 +535,28 @@ pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Optio
     admit_spawn_at(&ledger_path(), now_ms(), cap_from_env(), program, &argv)
 }
 
+/// admit_spawn for a caller whose origin is judged first: an agent-origin
+/// read is held by the budget, an attended user's never is. The door a
+/// Python adapter delegates to uses this in place of the origin-blind
+/// admission inside `bounded_read`.
+pub(crate) fn admit_spawn_for_origin(argv: &[String]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    let verdict = admit_for_origin(
+        &ledger_path(),
+        argv,
+        now_ms(),
+        cap_from_env(),
+        crate::spawn_gate_admission::gate_agent_origin(),
+    );
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
 /// The same question with the ledger path, clock and cap injected, so tests
 /// pass a temp ledger. The argv carries the subcommand and arguments, NOT
 /// the program name - the shape admit_fleet already takes and points_for
