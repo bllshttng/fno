@@ -738,18 +738,17 @@ mod tests {
             "api repos/{repo}/commits/SHA/check-runs?per_page=100"
         );
         assert_eq!(shape(&argv(&["run", "list", "--limit", "5"])), "run list");
-    }
 
-    #[test]
-    fn append_survives_an_unwritable_journal_dir() {
-        // AC1-EDGE: an unwritable directory is an Err, never a panic - the
-        // admission path ignores it, so the verdict and the ledger write
-        // stand unchanged.
-        let file = tempfile::tempdir().unwrap();
-        let target = file.path().join("not-a-dir");
+        // AC1-EDGE: an unwritable journal directory is an Err, never a
+        // panic - the admission path ignores it, so the verdict and the
+        // ledger write stand unchanged.
+        let jdir = tempfile::tempdir().unwrap();
+        let target = jdir.path().join("not-a-dir");
         std::fs::write(&target, b"file, so children under it fail").unwrap();
-        let err = append(&target.join("github-request-spend.jsonl"), "{}");
-        assert!(err.is_err(), "append into a file-named dir must fail");
+        assert!(
+            append(&target.join("github-request-spend.jsonl"), "{}").is_err(),
+            "append into a file-named dir must fail"
+        );
     }
 
     #[test]

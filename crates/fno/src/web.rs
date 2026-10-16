@@ -2844,13 +2844,10 @@ console.log("recent searches: 12 cases ok");
         // Exactly at the threshold is still fresh ("older than" is strict).
         let boundary = now.checked_sub(TEAM_REPUBLISH_AFTER).unwrap();
         assert!(!team_needs_republish(true, Some(boundary), now));
-    }
-
-    #[test]
-    fn the_served_marker_names_a_page_sibling() {
-        // The daemon arm reads `<page>.served` by this exact shape: drift
-        // on either side stands the arm down forever (the feature fails
-        // silent in production, every test green).
+        // The served marker names a page sibling by this exact shape, and
+        // the authorized serve stamps it: drift on either side stands the
+        // daemon arm down forever (the feature fails silent in production,
+        // every test green).
         let dir = tempfile::tempdir().unwrap();
         let page = dir.path().join("rundown.html");
         assert_eq!(served_marker(&page), dir.path().join("rundown.html.served"));
