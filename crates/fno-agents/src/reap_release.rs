@@ -129,7 +129,7 @@ pub(crate) fn witness_refusal(home: &AgentsHome, hold: &gc_sweep::Hold) -> Optio
 }
 
 /// The registry row a handle names: name, short id, or session id.
-fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
+pub(crate) fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
     let registry = state::load_registry(&home.registry_json()).ok()?;
     let handle_lc = handle.to_ascii_lowercase();
     registry.entries.into_iter().find(|e| {
