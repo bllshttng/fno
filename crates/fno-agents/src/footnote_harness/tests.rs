@@ -1,8 +1,9 @@
 use super::*;
 
 /// The spend in a session's newest `terminal` lands in the ledger as one
-/// execution row, which a resume replaces rather than adds to; a heartbeat
-/// under 90 s old reads fresh, an older or absent one does not.
+/// execution row, which a resume updates in place and never duplicates or
+/// strips of another writer's stamp; a heartbeat under 90 s old reads
+/// fresh, an older or absent one does not.
 #[test]
 fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
     use serde_json::json;
@@ -18,6 +19,8 @@ fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
     .unwrap();
     let mut records = vec![rec(0, "header", json!({"node": "x-1"}))];
     assert!(execution_row(&records, &spec, None).is_none());
+    let stamped = json!({"entries": [{"type": "execution", "fno_id": "s1", "pr_number": 7}]});
+    std::fs::write(&ledger, stamped.to_string()).unwrap();
     for (seq, cost) in [(1, 0.25), (2, 0.42)] {
         records.push(rec(
             seq,
@@ -31,6 +34,7 @@ fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
     let rows = data["entries"].as_array().unwrap();
     let row = &rows[0];
     assert_eq!((rows.len(), row["cost_usd"].as_f64()), (1, Some(0.42)));
+    assert_eq!(row["pr_number"], 7);
     assert_eq!(
         (row["graph_node_id"].as_str(), row["model"].as_str()),
         (Some("x-1"), Some("glm-y"))
@@ -40,12 +44,18 @@ fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
     assert!(crate::ledger_axes::upsert_execution(&ledger, row).is_err());
     assert_eq!(std::fs::read_to_string(&ledger).unwrap(), "not json");
 
+    // The freshness check reads the file's mtime, so the clock here is real.
     let path = tmp.path().join("s1.jsonl");
-    let beat = rec(3, "heartbeat", json!({"state": "idle"}));
-    std::fs::write(&path, format!("{}\n{beat}\n", records[0])).unwrap();
-    let at = crate::state::rfc3339_like_to_secs("2026-10-16T10:03:00Z").unwrap();
+    let at = chrono::Utc::now().timestamp() as u64;
+    let beat_at = |secs: u64| {
+        let ts = crate::provider_cap::epoch_to_rfc3339(secs as i64);
+        json!({"ts": ts, "type": "heartbeat", "data": {"state": "idle"}})
+    };
+    std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at))).unwrap();
     assert!(transcript::heartbeat_fresh(&path, at + 30));
     assert!(!transcript::heartbeat_fresh(&path, at + 120));
+    std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at - 120))).unwrap();
+    assert!(!transcript::heartbeat_fresh(&path, at));
     std::fs::write(&path, format!("{}\n", records[0])).unwrap();
     assert!(!transcript::heartbeat_fresh(&path, at));
     assert!(!transcript::heartbeat_fresh(

@@ -21,7 +21,19 @@ pub fn heartbeat_fresh(record: &Path, now_secs: u64) -> bool {
     let Ok(mut file) = std::fs::File::open(record) else {
         return false;
     };
-    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let Ok(meta) = file.metadata() else {
+        return false;
+    };
+    // No write inside the bound means no fresh heartbeat: skip the read.
+    let written = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    if now_secs.saturating_sub(written) >= HEARTBEAT_STALE_SECS {
+        return false;
+    }
+    let len = meta.len();
     let mut tail = Vec::new();
     if file
         .seek(SeekFrom::Start(len.saturating_sub(HEARTBEAT_TAIL_BYTES)))

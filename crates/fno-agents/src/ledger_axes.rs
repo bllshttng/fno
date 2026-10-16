@@ -286,7 +286,7 @@ fn sessions_or_unresolved(candidates: &[String]) -> Value {
 }
 
 /// Write one execution row keyed on `fno_id`, under the ledger lock. A
-/// session that reports its spend again replaces its row, so a resumed
+/// session that reports its spend again updates its row, so a resumed
 /// session never counts twice. An unreadable ledger refuses: never reset it.
 pub(crate) fn upsert_execution(ledger: &Path, row: Value) -> Result<(), String> {
     let fno_id = row
@@ -327,7 +327,12 @@ fn upsert_locked(ledger: &Path, fno_id: &str, row: Value) -> Result<(), String> 
         .iter_mut()
         .find(|e| e["type"] == "execution" && e["fno_id"] == fno_id)
     {
-        Some(existing) => *existing = row,
+        // Merge, never replace: other writers stamp the row (pr_number).
+        Some(existing) => {
+            if let (Some(old), Value::Object(new)) = (existing.as_object_mut(), row) {
+                old.extend(new);
+            }
+        }
         None => entries.push(row),
     }
     write_ledger(ledger, &data)
