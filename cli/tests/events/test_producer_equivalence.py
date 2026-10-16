@@ -107,6 +107,95 @@ def _base_env() -> dict:
     return {**os.environ, "FNO": "fno-py"}
 
 
+def _fno_agents_bin() -> Path | None:
+    env = os.environ.get("FNO_AGENTS_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno-agents" / "target" / profile / "fno-agents"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_AGENTS_BIN = _fno_agents_bin()
+
+
+def _fno_front_bin() -> Path | None:
+    env = os.environ.get("FNO_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_FRONT_BIN = _fno_front_bin()
+
+_FRONT_REASON = (
+    "the hook classifies through the Rust front (`do review classify` went "
+    "native); build crates/fno (cargo build -p fno --bin fno) and set "
+    "FNO_AGENTS_BIN, or set FNO_BIN"
+)
+_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None or _FNO_AGENTS_BIN is None
+
+
+def _hook_env() -> dict:
+    """The hook classifies through `$FNO do review classify`, and since the
+    Python leaf retired that verb answers only through the Rust front, which
+    execs the findings door. Point FNO at the checkout's front with the door
+    pinned beside it; the front forwards the hook's Python verbs to the wheel
+    unchanged. Without a front the positive hook tests skip rather than score
+    a silent no-event pass."""
+    env = _base_env()
+    if not _NEEDS_FRONT_SKIP:
+        env["FNO"] = str(_FNO_FRONT_BIN)
+        env["FNO_AGENTS_BIN"] = str(_FNO_AGENTS_BIN)
+    return env
+
+
+def _fno_front_bin() -> Path | None:
+    env = os.environ.get("FNO_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_FRONT_BIN = _fno_front_bin()
+
+_FRONT_REASON = (
+    "the hook classifies through the Rust front (`do review classify` went "
+    "native); build crates/fno (cargo build -p fno --bin fno) and set "
+    "FNO_AGENTS_BIN, or set FNO_BIN"
+)
+_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None
+
+
+def _hook_env() -> dict:
+    """The hook classifies through `$FNO do review classify`, and since the
+    Python leaf retired that verb answers only through the Rust front, which
+    execs the findings door. Point FNO at the checkout's front with the door
+    pinned beside it; the front forwards the hook's Python verbs to the wheel
+    unchanged. Without a front the positive hook tests skip rather than score
+    a silent no-event pass."""
+    env = _base_env()
+    if _FNO_FRONT_BIN is not None:
+        env["FNO"] = str(_FNO_FRONT_BIN)
+        door = _fno_agents_bin()
+        if door is not None:
+            env["FNO_AGENTS_BIN"] = str(door)
+    return env
+
+
 def _drive_declare(repo: Path) -> None:
     r = subprocess.run(
         ["bash", str(_EMIT), "declare"], cwd=repo, env=_base_env(), capture_output=True, text=True
@@ -448,57 +537,6 @@ def test_a_different_tool_report_emits_nothing() -> None:
 
 
 # ── resolver leg: what the gate actually reads back ─────────────────────────
-
-
-def _fno_agents_bin() -> Path | None:
-    env = os.environ.get("FNO_AGENTS_BIN", "")
-    if env:
-        p = Path(env)
-        return p if p.exists() else None
-    for profile in ("debug", "release"):
-        p = _REPO_ROOT / "crates" / "fno-agents" / "target" / profile / "fno-agents"
-        if p.exists():
-            return p
-    return None
-
-
-_FNO_AGENTS_BIN = _fno_agents_bin()
-
-
-def _fno_front_bin() -> Path | None:
-    env = os.environ.get("FNO_BIN", "")
-    if env:
-        p = Path(env)
-        return p if p.exists() else None
-    for profile in ("debug", "release"):
-        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
-        if p.exists():
-            return p
-    return None
-
-
-_FNO_FRONT_BIN = _fno_front_bin()
-
-_FRONT_REASON = (
-    "the hook classifies through the Rust front (`do review classify` went "
-    "native); build crates/fno (cargo build -p fno --bin fno) and set "
-    "FNO_AGENTS_BIN, or set FNO_BIN"
-)
-_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None or _FNO_AGENTS_BIN is None
-
-
-def _hook_env() -> dict:
-    """The hook classifies through `$FNO do review classify`, and since the
-    Python leaf retired that verb answers only through the Rust front, which
-    execs the findings door. Point FNO at the checkout's front with the door
-    pinned beside it; the front forwards the hook's Python verbs to the wheel
-    unchanged. Without a front the positive hook tests skip rather than score
-    a silent no-event pass."""
-    env = _base_env()
-    if not _NEEDS_FRONT_SKIP:
-        env["FNO"] = str(_FNO_FRONT_BIN)
-        env["FNO_AGENTS_BIN"] = str(_FNO_AGENTS_BIN)
-    return env
 
 
 def _make_script(dir_: Path, name: str, body: str) -> Path:
