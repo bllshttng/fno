@@ -62,7 +62,7 @@ The setup checks the prerequisites (`bash`, `git`, `gh`, `jq`, and `python3` 3.1
 
 ### Windows (WSL2)
 
-fno runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it, and most Windows devs who'd want fno already run their toolchain (and Claude Code) there.
+fno runs under [WSL2](https://learn.microsoft.com/windows/wsl/install), not native Windows. The loop leans on POSIX file locking, Unix sockets, and signals that Windows handles differently. WSL2 is real Linux, so everything here works unchanged inside it. Most Windows devs who want fno already run their toolchain there, including Claude Code.
 
 One-time setup, from PowerShell as Administrator:
 
