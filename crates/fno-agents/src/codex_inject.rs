@@ -1095,9 +1095,9 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let invocation_id =
-        read_pending_review_invocation(&thread_id).unwrap_or_else(|| review_invocation_id());
-    write_pending_review_invocation(&thread_id, &invocation_id);
+    let invocation_id = fno::review_invocation::adopt_pending_invocation(&thread_id, None)
+        .unwrap_or_else(fno::review_invocation::mint_invocation_id);
+    fno::review_invocation::write_pending_invocation(&thread_id, &invocation_id, None);
     let outcome = match deliver_via_hosted_codex_thread(&thread_id, &target_raw, delivery).await {
         Some(outcome) => outcome,
         None => deliver_via_codex_review_start(&thread_id, &target, delivery).await,

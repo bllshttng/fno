@@ -130,16 +130,15 @@ fn run_emit(tail: &[String]) -> i32 {
     let mut index = 0;
     while index < tail.len() {
         match tail.get(index).map(String::as_str) {
-            "--source" => {
+            Some("--source") => {
                 source = tail.get(index + 1).map(String::as_str);
                 index += 2;
             }
-            "--data" => {
+            Some("--data") => {
                 data = tail.get(index + 1).map(String::as_str);
                 index += 2;
             }
-            other => {
-                let _ = other;
+            _ => {
                 index += 1;
             }
         }
@@ -306,18 +305,20 @@ fn settle_lost(
             continue;
         }
         let reviewer = verb_reviewer(data);
-        let append = crate::events::EventEmitter::new(journal, "hook").emit_fields(
-            "review_attestation",
-            serde_json::json!({
-                "reviewer": reviewer,
-                "head_sha": head_sha,
-                "verdict": "fail",
-                "session_id": "settle",
-                "output_contract": "lost",
-                "invocation_id": id,
-                "settle_note": "invocation lost: sent, delivered, and never answered; emitted by the settle sweep",
-            }),
+        let mut fields = serde_json::Map::new();
+        fields.insert("reviewer".into(), reviewer.into());
+        fields.insert("head_sha".into(), head_sha.clone().into());
+        fields.insert("verdict".into(), "fail".into());
+        fields.insert("session_id".into(), "settle".into());
+        fields.insert("output_contract".into(), "lost".into());
+        fields.insert("invocation_id".into(), id.clone().into());
+        fields.insert(
+            "settle_note".into(),
+            "invocation lost: sent, delivered, and never answered; emitted by the settle sweep"
+                .into(),
         );
+        let append = crate::events::EventEmitter::new(journal, "hook")
+            .emit_fields("review_attestation", fields);
         match append {
             Ok(()) => out.push(serde_json::json!({
                 "invocation_id": id,
