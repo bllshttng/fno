@@ -208,11 +208,17 @@ pub fn write_pending_invocation(
     if std::fs::create_dir_all(parent).is_err() {
         return false;
     }
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    else {
+    // The Python writer created the sidecar 0600; keep the mode so the join
+    // id is readable only by the owner, as before.
+    #[allow(unused_mut)]
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let Ok(mut file) = options.open(&path) else {
         return false;
     };
     let value = serde_json::json!({

@@ -57,6 +57,20 @@ fn git(repo: &Path, args: &[&str]) {
     assert!(ok, "git {args:?} failed in {}", repo.display());
 }
 
+fn repo_head9(repo: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .expect("git spawns")
+        .stdout;
+    String::from_utf8_lossy(&out)
+        .trim()
+        .chars()
+        .take(9)
+        .collect()
+}
+
 fn git_args(args: &[&str]) -> Vec<String> {
     ["git".to_string()]
         .into_iter()
@@ -321,21 +335,11 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         .iter()
         .map(|row| fixture_envelope(row, now))
         .collect();
-    // Commit-order matters: sort by age descending (oldest first), the order
-    // the driver wrote them in.
-    envelopes.reverse();
     for envelope in &envelopes {
         fno::event_store::append_envelope(&runtime.journal, envelope, None)
             .expect("the fixture envelope commits");
     }
-    let head9 = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&runtime.repo)
-        .output()
-        .expect("git spawns")
-        .stdout;
-    let head9 = String::from_utf8_lossy(&head9).trim().to_string();
-    let head9 = head9.chars().take(9).collect::<String>();
+    let head9 = repo_head9(&runtime.repo);
     let run = |runtime: &Runtime| {
         scrubbed()
             .args(["review-level", "invocations", "settle", "--json"])
@@ -406,7 +410,8 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("fno-agents binary spawns");
-    let stdout3 = String::from_utf8_lossy(&out3.stdout).replace(&head9, "<head9>");
+    let stdout3 =
+        String::from_utf8_lossy(&out3.stdout).replace(&repo_head9(&runtime3.repo), "<head9>");
     let want3 = std::fs::read_to_string(golden.join(format!("{key}.receipt.txt")))
         .unwrap_or_else(|e| panic!("missing golden settle/{key}.receipt.txt: {e}"));
     if stdout3 != want3 {
