@@ -820,10 +820,14 @@ async fn ws_conn(mut socket: WebSocket, ctx: Ctx) {
             },
         }
     }
+    // A connection the hub still holds ended on the viewer's side. One the hub
+    // already dropped was closed by the driver (deny) or by the share ending,
+    // and needs no "stopped watching" line.
     let mut hub = ctx.hub.lock().unwrap();
-    hub.conns.remove(&id);
-    let effects = hub.machine.leave(id);
-    run_effects(&ctx, &mut hub, effects);
+    if hub.conns.remove(&id).is_some() {
+        let effects = hub.machine.leave(id);
+        run_effects(&ctx, &mut hub, effects);
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> &str {

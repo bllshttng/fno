@@ -548,8 +548,14 @@
     } catch (_) { shareNote("not sent: connection lost"); }
   }
   if (SHARE) {
-    $("share-coach-send").onclick = () => sharePost("coach", $("share-coach"), () => "note shown to the driver");
-    $("share-steer-send").onclick = () => sharePost("steer", $("share-steer"), (b) => `steer s${b.pending} waits for the driver`);
+    const coach = () => sharePost("coach", $("share-coach"), () => "note shown to the driver");
+    const steer = () => sharePost("steer", $("share-steer"), (b) => `steer s${b.pending} waits for the driver`);
+    $("share-coach-send").onclick = coach;
+    $("share-steer-send").onclick = steer;
+    // Enter sends the box it was typed in; the form itself never submits.
+    $("share-boxes").onsubmit = (e) => { e.preventDefault(); };
+    $("share-coach").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); coach(); } };
+    $("share-steer").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); steer(); } };
   }
 
   // ---- websocket ----
@@ -581,6 +587,11 @@
         setBar("ended", ev.code === 1001 ? "share ended" : "not admitted", ev.reason || "");
         showOverlay(ev.reason || "the share is closed");
         return;
+      }
+      if (SHARE) {
+        // A dropped socket loses its admission: the reconnect knocks again,
+        // and the driver admits it anew with a fresh viewer token.
+        viewerToken = ""; $("share-boxes").hidden = true;
       }
       // 1008 = policy violation: our token check refused the upgrade. A normal
       // socket close (server/bridge gone) just retries.
