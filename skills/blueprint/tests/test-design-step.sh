@@ -30,19 +30,11 @@ test_design_precedes_tasks() {
   consolidate="$(line_of "$MAIN" '2d. **Consolidation Gate**')"
   design="$(line_of "$MAIN" '2e. **Shape the design before the tasks**')"
   write="$(line_of "$MAIN" '3. **Write** the plan.')"
-  if [ -n "$design" ] && [ "$consolidate" -lt "$design" ] && [ "$design" -lt "$write" ]; then
-    pass "2d ($consolidate) < 2e ($design) < 3 ($write)"
+  if [ -n "$design" ] && [ "$consolidate" -lt "$design" ] && [ "$design" -lt "$write" ] \
+    && grep -qF -- 'A type never restates a count its data already holds.' "$MAIN"; then
+    pass "2d ($consolidate) < 2e ($design) < 3 ($write), and its Types rule rules out the fixed length"
   else
-    fail "design step missing or out of order (2d=$consolidate 2e=$design 3=$write)"
-  fi
-}
-
-test_types_rule_rejects_the_specimen() {
-  echo "== the Types rule names the restated-count shape that broke main"
-  if grep -qF -- 'A type never restates a count its data already holds.' "$MAIN"; then
-    pass "a fixed array length is ruled out before any task adds a key"
-  else
-    fail "Types rule no longer names the restated-count case"
+    fail "design step missing, out of order, or lost the restated-count rule (2d=$consolidate 2e=$design 3=$write)"
   fi
 }
 
@@ -63,7 +55,6 @@ test_template_places_design_before_changes() {
 }
 
 test_design_precedes_tasks
-test_types_rule_rejects_the_specimen
 test_template_places_design_before_changes
 
 echo

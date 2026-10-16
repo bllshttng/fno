@@ -63,56 +63,38 @@ cat > "$TMP/workspaces.json" <<JSON
  "other": {"projects": [{"name": "elsewhere", "path": "$TMP/elsewhere"}]}}
 JSON
 
-test_siblings_resolve_from_a_worktree() {
-  echo "== a review run inside a linked worktree lists the workspace siblings"
-  local out rc
+test_sibling_resolution() {
+  echo "== siblings resolve from a linked worktree; an unlisted repo exits 3, not a zero"
+  local out rc lonely_rc
   out="$(python3 "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")"
   rc=$?
-  if [ "$rc" -eq 0 ] && [ "$out" = "fno	$(cd "$TMP/fno" && pwd -P)" ]; then
-    pass "worktree resolves to its canonical repo; only the on-disk sibling in the same workspace is listed"
+  mkrepo "$TMP/lonely"
+  python3 "$HELPER" "$TMP/lonely" < "$TMP/workspaces.json" >/dev/null 2>&1
+  lonely_rc=$?
+  if [ "$rc" -eq 0 ] && [ "$out" = "fno	$(cd "$TMP/fno" && pwd -P)" ] && [ "$lonely_rc" -eq 3 ]; then
+    pass "only the on-disk, pathful sibling in the same workspace is listed; unlisted exits 3"
   else
-    fail "expected exactly the fno row, got rc=$rc out='$out'"
+    fail "rc=$rc out='$out' lonely_rc=$lonely_rc"
   fi
 }
 
-test_replay_lands_on_the_stale_claim() {
-  echo "== grepping each sibling for the changed surface finds the stale TUI claim"
+test_lane_replay_lands_on_the_stale_claim() {
+  echo "== the lane's sweep (helper, then git grep on each sibling ref) finds the stale TUI claim"
   local hits="" name path
   while IFS=$'\t' read -r name path; do
     hits+="$(git -C "$path" grep -n -F -e 'TUI' HEAD || true)"
   done < <(python3 "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")
-  case "$hits" in
-    *"harness_capabilities.toml:4:# No TUI exists"*) pass "sweep names the stale line by file:line" ;;
-    *) fail "sweep missed the stale claim; hits='$hits'" ;;
-  esac
-}
-
-test_unlisted_repo_is_not_a_measured_zero() {
-  echo "== a repo no workspace lists exits 3, so the report says unconfigured"
-  local rc
-  mkrepo "$TMP/lonely"
-  python3 "$HELPER" "$TMP/lonely" < "$TMP/workspaces.json" >/dev/null 2>&1
-  rc=$?
-  if [ "$rc" -eq 3 ] && grep -qF 'siblings: unconfigured' "$LANE"; then
-    pass "exit 3, and the lane maps it to 'siblings: unconfigured'"
+  if [[ "$hits" == *"harness_capabilities.toml:4:# No TUI exists"* ]] \
+    && grep -qF 'fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .' "$LANE" \
+    && grep -qF 'siblings: unconfigured' "$LANE"; then
+    pass "sweep names the stale line by file:line, and Angle G runs this helper and maps exit 3"
   else
-    fail "rc=$rc, or the lane lost the unconfigured mapping"
+    fail "sweep missed the claim, or Angle G no longer runs the helper; hits='$hits'"
   fi
 }
 
-test_lane_calls_the_helper() {
-  echo "== the lane's Angle G invokes this helper on the workspace config"
-  if grep -qF 'fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .' "$LANE"; then
-    pass "Angle G pipes the workspace config into sibling-roots.py"
-  else
-    fail "Angle G no longer calls sibling-roots.py; the helper is orphaned"
-  fi
-}
-
-test_siblings_resolve_from_a_worktree
-test_replay_lands_on_the_stale_claim
-test_unlisted_repo_is_not_a_measured_zero
-test_lane_calls_the_helper
+test_sibling_resolution
+test_lane_replay_lands_on_the_stale_claim
 
 echo
 echo "blast-radius: $PASS passed, $FAIL failed"

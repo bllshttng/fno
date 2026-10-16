@@ -39,26 +39,17 @@ test_specimen_sorts_as_illegitimate() {
   echo "== a stale row the code wrote itself sorts as illegitimate: fix the producer"
   if grep -qF -- '**illegitimate**: the code made this state itself, and no correct path makes it.' "$LOOP" \
     && grep -qF -- 'A defensive check at the consumer hides the defect' "$LOOP" \
-    && grep -qF -- 'a defensive check over a state that no correct path makes' "$LOOP"; then
-    pass "the reader-side waiver shape is discarded and re-queued, the producer is the repair"
+    && grep -qF -- 'a defensive check over a state that no correct path makes' "$LOOP" \
+    && grep -qF -- '- **Producer:** `file:line`' "$INVESTIGATE" \
+    && grep -qF -- '- **State:** legitimate | illegitimate' "$INVESTIGATE"; then
+    pass "the reader-side waiver shape is discarded, and investigate hands /fix the producer and verdict"
   else
     fail "the loop no longer sorts a self-made bad state to a producer fix"
   fi
 }
 
-test_debug_findings_carry_the_verdict() {
-  echo "== from-debug findings name the producer and the state verdict"
-  if grep -qF -- '- **Producer:** `file:line`' "$INVESTIGATE" \
-    && grep -qF -- '- **State:** legitimate | illegitimate' "$INVESTIGATE"; then
-    pass "investigate hands /fix the producer and the verdict"
-  else
-    fail "investigate findings lost the Producer or State field"
-  fi
-}
-
 test_cause_comes_before_the_edit
 test_specimen_sorts_as_illegitimate
-test_debug_findings_carry_the_verdict
 
 echo
 echo "root-cause: $PASS passed, $FAIL failed"
