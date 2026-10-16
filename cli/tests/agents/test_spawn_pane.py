@@ -748,6 +748,14 @@ def test_declared_pane_argv_is_byte_identical_after_the_generic_arm(
     assert opencode == ["opencode", "--prompt=task", "--model", "zai-coding-plan/glm-5.3"]
 
 
+def test_pane_refusal_names_headless_when_the_harness_has_a_one_shot_form(tmp_path: Path) -> None:
+    from fno.agents.dispatch import DispatchAskError
+    from fno.agents.mux_spawn import build_pane_argv
+
+    with pytest.raises(DispatchAskError, match="footnote' has no interactive pane form; --substrate headless"):
+        build_pane_argv("footnote", "", tmp_path, False, None)
+
+
 def test_terminal_raise_keeps_meaning_for_a_declared_harness_with_no_arm(
     tmp_path: Path, monkeypatch
 ) -> None:

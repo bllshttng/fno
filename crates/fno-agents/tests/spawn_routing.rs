@@ -1337,6 +1337,87 @@ fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
     );
 }
 
+/// `spawn --substrate headless` for `harness`, with `path_dir` first on PATH
+/// and the endpoint env scrubbed. Returns (exit code, stdout, stderr).
+fn run_headless_spawn(
+    harness: &str,
+    path_dir: &Path,
+    extra: &[&str],
+) -> Option<(Option<i32>, String, String)> {
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!("skipping headless spawn of {harness}: binary not found");
+        return None;
+    }
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["spawn", "reach", "hello", "--harness", harness])
+        .args(["--substrate", "headless"])
+        .arg("--cwd")
+        .arg(tmpdir("headless-cwd"))
+        .args(extra)
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1")
+        .env("FNO_AGENTS_HOME", tmpdir("headless-home"))
+        .env("HOME", tmpdir("headless-user-home"))
+        .env_remove("ANTHROPIC_BASE_URL")
+        .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .output()
+        .expect("failed to run fno-agents");
+    Some((
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+/// `--substrate headless --harness pi` runs one `pi --print --mode json` turn
+/// and returns the last assistant message. Before the arm existed the call fell
+/// through to the daemon and died on "use --substrate bg|headless".
+#[test]
+fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake_path = tmpdir("headless-pi-fakepath");
+    let argv_log = fake_path.join("argv");
+    let stream = r#"{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"pong"}],"stopReason":"stop"}]}"#;
+    let fake = fake_path.join("pi");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {argv_log:?}\nprintf '%s\\n' '{stream}'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[]) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "pong");
+    let argv = std::fs::read_to_string(&argv_log).expect("the pi arm ran the fake pi");
+    assert!(
+        argv.starts_with("--print\n--mode\njson\n--no-session\n--provider\n"),
+        "argv: {argv}"
+    );
+}
+
+/// `--substrate headless --harness footnote` reaches footnote's own turn loop.
+/// A bare model id names no provider, and with the endpoint env scrubbed the
+/// loop refuses "no model endpoint"; a gate or daemon fall-through would print
+/// a thread-lane or PTY-hosting refusal instead.
+#[test]
+fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
+    let Some((_, _, stderr)) = run_headless_spawn(
+        "footnote",
+        &tmpdir("headless-footnote-fakepath"),
+        &["--model", "glm-5.3-flash"],
+    ) else {
+        return;
+    };
+    assert!(stderr.contains("no model endpoint"), "stderr: {stderr}");
+    assert!(!stderr.contains("thread lane"), "stderr: {stderr}");
+    assert!(!stderr.contains("PTY hosting"), "stderr: {stderr}");
+}
+
 /// x-567d: `--substrate bg --harness opencode` still hard-errors (bg is
 /// claude-only) but now points at `--substrate headless` (the generic bg arm)
 /// x-d9f9: opencode's bg substrate is the serve-HTTP worker lane, so the
