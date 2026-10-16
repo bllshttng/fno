@@ -205,6 +205,7 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
 pub mod git_paths;
 #[cfg(test)]
@@ -356,6 +357,7 @@ pub mod paths_cli;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
+pub mod pi_ask;
 pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]

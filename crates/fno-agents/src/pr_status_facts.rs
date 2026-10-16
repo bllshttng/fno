@@ -35,12 +35,14 @@ pub(crate) struct RealGhProbe;
 /// not pace reads (the fleet budget ledger owns that).
 const GH_CALL_BOUND: std::time::Duration = std::time::Duration::from_secs(120);
 
-impl GhProbe for RealGhProbe {
-    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+impl RealGhProbe {
+    /// The one bounded gh spawn both paths share. The fleet budget admission
+    /// inside `bounded_read` still runs on the conditional path, so a live
+    /// hold refuses before the spawn exactly as it does today.
+    fn bounded_gh(refs: &[&str], cwd: &Path) -> Result<(bool, Vec<u8>, String), String> {
         let out = crate::loopcheck::bounded_read(
             std::ffi::OsStr::new("gh"),
-            &refs,
+            refs,
             cwd,
             "pr-status gh",
             GH_CALL_BOUND,
@@ -48,9 +50,22 @@ impl GhProbe for RealGhProbe {
         .map_err(|error| crate::loopcheck::bounded_read_diagnostic("pr-status", &error))?;
         Ok((
             out.status.success(),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
+            out.stdout,
             String::from_utf8_lossy(&out.stderr_tail).into_owned(),
         ))
+    }
+}
+
+impl GhProbe for RealGhProbe {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        if let Some(path) = crate::gh_etag::eligible(args) {
+            return crate::gh_etag::conditional_api_get(cwd, path, |spawn_args| {
+                Self::bounded_gh(spawn_args, cwd)
+            });
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd)?;
+        Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
     }
 }
 

@@ -40,7 +40,7 @@ fn run_review_level_door(rest: &[String]) -> i32 {
         && rest
             .get(1)
             .map(String::as_str)
-            .is_some_and(|action| matches!(action, "record" | "categories" | "post"))
+            .is_some_and(|action| matches!(action, "record" | "categories" | "post" | "classify"))
     {
         crate::review_findings::run_findings_door(&rest[1..])
     } else {

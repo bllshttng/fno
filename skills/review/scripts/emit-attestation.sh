@@ -30,11 +30,13 @@
 #   <reviewer>  a built-in (sigma | peer | code-review | declare) or any name declared
 #               in config.review.reviewer_registry (a leading '/' is stripped)
 #   [verdict]   pass (default) | fail; IGNORED when --findings-file is given -
-#               that path delegates to `fno do review classify --attest`, and
-#               the verdict is the one the classifier measured
+#               the verdict is the one the classifier measured from the
+#               record: pass only on zero blocking findings and a readable
+#               contract (prose_unparseable always rides a fail)
 #   [reviewer_context]  fresh | shared | unknown (default unknown); positive
 #                       context evidence only, never inferred from the sender
-#   [execution_context] inline (default) | fork; where the review ran
+#   [execution_context] inline (default) | fork; where the review ran; carried
+#                       on the row beside output_contract
 #   [output_contract]   json_block (default) | report_findings | prose_unparseable;
 #                       the contract the review's result surfaced under.
 #                       prose_unparseable means the review ANSWERED and its
@@ -436,54 +438,43 @@ if [[ -n "$findings_file" ]]; then
     echo "emit-attestation: classify produced no parsable record for $findings_file; no event emitted" >&2
     exit 2
   fi
+  # ONE WRITER: the verdict is the one the classifier measured from the
+  # record this script already built; the verdict typed on argv is ignored
+  # on this path, so a row can never read milder than the classified
+  # findings. The rule is the hook's (hooks/code-review-attest.sh):
+  # prose_unparseable is fail whatever the count classifies to, and an
+  # unreadable count is not zero findings.
+  blocking="$(printf '%s' "$classify_out" | jq -r '.findings_blocking // ""' 2>/dev/null || true)"
+  if [[ "$output_contract" == "prose_unparseable" || "$blocking" != "0" ]]; then
+    verdict="fail"
+  else
+    verdict="pass"
+  fi
 fi
 if [[ -n "$review_event_data" ]]; then
   "${FNO:-fno}" doctor event emit -t review_invocation -s daemon -d "$review_event_data" >/dev/null 2>&1 || true
 fi
-if [[ -n "$findings_file" ]]; then
-  # ONE WRITER: the verb re-classifies the same file and emits the row with
-  # the verdict IT measured; the verdict typed on argv is ignored on this
-  # path, so a row can never read milder than the classified findings. The
-  # verb's stderr line is the emit receipt. The typed-verdict emit below
-  # stays for `declare` and for hand runs with no findings file.
-  # The declared scope rides BOTH emit paths, and so does the branch: classify
-  # re-resolves the branch from cwd, which in a reviewer worktree names the
-  # LOCAL checkout, not the PR. The rewrite's result crosses through
-  # FNO_ATTEST_BRANCH - a new typer.Option is refused by the flag-surface
-  # ratchet (scripts/ci/check_flag_registry.py), so the producer passes the
-  # branch through the environment. The hold join/release inside classify
-  # still key on its own cwd-resolved local name, which is what the hook set
-  # the hold under.
-  if [[ -n "$review_round" ]]; then
-    FNO_ATTEST_BRANCH="$branch" "${FNO:-fno}" do review classify \
-      --findings-file "$findings_file" \
-      --emit-record --attest "$reviewer" --reviewer-context "$reviewer_context" \
-      --execution-context "$execution_context" --output-contract "$output_contract" \
-      --review-round "$review_round" >/dev/null
-  else
-    FNO_ATTEST_BRANCH="$branch" "${FNO:-fno}" do review classify \
-      --findings-file "$findings_file" \
-      --emit-record --attest "$reviewer" --reviewer-context "$reviewer_context" \
-      --execution-context "$execution_context" --output-contract "$output_contract" >/dev/null
-  fi
-else
-  data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdict "$verdict" \
-    --arg session_id "$session_id" --arg harness "$harness" \
-    --arg provider "$provider" \
-    --arg reviewer_context "$reviewer_context" \
-    --arg invocation_id "$invocation_id" \
-    --arg branch "$branch" \
-    --arg reviewed_base_sha "$reviewed_base_sha" \
-    --arg reviewed_head_sha "$reviewed_head_sha" \
-    --argjson reviewed_line_count "$reviewed_line_count" \
-    --argjson reviewed_file_count "$reviewed_file_count" \
-    --argjson findings "$findings_json" \
-    --arg review_round "$review_round" \
-    '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end)')"
-  # FNO overrides the binary (defaults to the mux); tests point it at fno-py,
-  # which is on PATH in the uv test env where the mux is not installed.
-  "${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
-fi
+# One emit for both paths: the typed-verdict run (declare, hand runs) and
+# the classified run read the same jq object, so rows of one shape come
+# from one writer through the one chokepoint.
+data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdict "$verdict" \
+  --arg session_id "$session_id" --arg harness "$harness" \
+  --arg provider "$provider" \
+  --arg reviewer_context "$reviewer_context" \
+  --arg execution_context "$execution_context" \
+  --arg output_contract "$output_contract" \
+  --arg invocation_id "$invocation_id" \
+  --arg branch "$branch" \
+  --arg reviewed_base_sha "$reviewed_base_sha" \
+  --arg reviewed_head_sha "$reviewed_head_sha" \
+  --argjson reviewed_line_count "$reviewed_line_count" \
+  --argjson reviewed_file_count "$reviewed_file_count" \
+  --argjson findings "$findings_json" \
+  --arg review_round "$review_round" \
+  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end)')"
+# FNO overrides the binary (defaults to the mux); tests point it at fno-py,
+# which is on PATH in the uv test env where the mux is not installed.
+"${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
 
 # The per-round disposition comment (the law's human-visible half): when the
 # findings file carried dispositions, the writer posts ONE machine-parseable
@@ -526,8 +517,6 @@ for _b in "${branch:-}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   "${FNO:-fno}" do pr review-hold release --branch "$_b" >/dev/null 2>&1 || true
 done
 
-# The typed-verdict path prints its own receipt; the delegated path's receipt
-# is the verb's stderr line.
-if [[ -z "$findings_file" ]]; then
-  echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2
-fi
+# The one receipt: the verdict shown is the measured one on the classified
+# path, the typed one when no findings file was given.
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2

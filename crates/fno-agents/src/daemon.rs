@@ -2024,12 +2024,12 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     // + mode=stream_json resumes an idle session as a held stream thread
     // (`claude -p --resume <uuid>`) for chat/switchboard/ask to drive -- and
     // attach-with-server thread spawns. Every interactive PTY host (codex,
-    // gemini, claude) moved to the mux, and bg/headless never reach the daemon,
-    // so any other spawn is a retired PTY-hosting request and errors with a
-    // mux pointer. The thread substrate is routed from the capability contract
-    // (`thread_lane` + `attach_needs_server`), never the harness name, and
-    // every arm other than attach-with-server refuses, so the daemon still
-    // hosts no agent PTYs.
+    // gemini, claude) moved to the mux. A harness with a client-side bg or
+    // headless arm never reaches the daemon; one without falls through here and
+    // errors, naming its harness and substrate. The thread substrate is routed
+    // from the capability contract (`thread_lane` + `attach_needs_server`),
+    // never the harness name, and every arm other than attach-with-server
+    // refuses, so the daemon still hosts no agent PTYs.
     let host_mode = p
         .get("host_mode")
         .and_then(|v| v.as_str())
@@ -2084,9 +2084,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     Response::err(
         req.id,
         ErrorCode::InvalidParams,
-        "daemon PTY hosting was retired at G4 : spawn a mux-hosted agent pane with \
-         `fno agents spawn --substrate pane`, or use `--substrate bg|headless`. The daemon \
-         serves only claude stream-json adoption (host_mode=interactive, mode=stream_json).",
+        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no `--substrate {substrate}` arm: spawn a mux-hosted agent pane with `fno agents spawn --substrate pane`. The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
     )
 }
 
