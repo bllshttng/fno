@@ -49,11 +49,14 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// Whether a handle reads as a full harness session id (hex and dashes, the
-/// claude uuid shape). A session id with no registry row is still legal to
-/// mark: the roster sweep judges sessions that no row owns.
+/// claude uuid shape: a uuid always carries at least one dash, while a row
+/// short id is bare hex, so the dash is what separates the two
+/// resolutions). A session id with no registry row is still legal to mark:
+/// the roster sweep judges sessions that no row owns.
 fn is_session_id(handle: &str) -> bool {
     !handle.is_empty()
         && handle.len() <= 64
+        && handle.contains('-')
         && handle.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
