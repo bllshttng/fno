@@ -39,15 +39,18 @@ pub(crate) fn eligible(args: &[String]) -> Option<&str> {
 
 /// Pages past the first stay unconditional: each page's row carries its own
 /// generation, so a 304-served page 2 could mix check-runs with a fresh
-/// page 1 into one inconsistent assembly.
+/// page 1 into one inconsistent assembly. Only a real `page=` query param
+/// counts; the `page=` inside `per_page=` must not.
 fn past_first_page(path: &str) -> bool {
     let mut rest = path;
     while let Some(i) = rest.find("page=") {
-        rest = &rest[i + "page=".len()..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if !digits.is_empty() && digits != "1" {
+        let is_param = i > 0 && matches!(rest.as_bytes()[i - 1], b'?' | b'&');
+        let value = &rest[i + "page=".len()..];
+        let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if is_param && !digits.is_empty() && digits != "1" {
             return true;
         }
+        rest = value;
     }
     false
 }
@@ -247,6 +250,14 @@ mod tests {
             "repos/o/r/commits/sha/check-runs?per_page=100&page=2".to_string(),
         ];
         assert_eq!(eligible(&page2), None);
+        let page1 = vec![
+            api.clone(),
+            "repos/o/r/commits/sha/check-runs?per_page=100&page=1".to_string(),
+        ];
+        assert_eq!(
+            eligible(&page1),
+            Some("repos/o/r/commits/sha/check-runs?per_page=100&page=1")
+        );
         let logs = vec![api.clone(), "repos/o/r/actions/jobs/9/logs".to_string()];
         assert_eq!(eligible(&logs), None);
         let not_repos = vec![api, "graphql".to_string()];
