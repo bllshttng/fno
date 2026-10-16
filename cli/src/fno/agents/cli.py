@@ -2642,59 +2642,6 @@ def cmd_spawn(
         # message-authoritative value; prov_prev restores it in the finally.
 
         try:
-            # The native lane: a routed claude bg spawn (bg is resolve_spawn_gates' canonical thread) execs the lane's own line; other axes fall through.
-            native_lane = (
-                harness == "claude"
-                and substrate == "bg"
-                and not (once or resume)
-                and bool(route_env)
-                and role_level is None
-                and not (model or add_dir or agent or tools
-                         or deny_tools or passthrough or yolo or monitor)
-            )
-            if native_lane:
-                from fno.agents.spawn_lineage import _capture_parent_edge
-
-                launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
-                if not launcher_session:
-                    print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
-                else:
-                    from fno.rust_binary import resolve_binary
-                    import subprocess as _subprocess
-
-                    ask: dict = {
-                        "kind": "launch",
-                        "harness": harness, "name": name, "payload": message or "",
-                        "route_env": route_env or {}, "account_env": account_env or {},
-                        "sandbox": sandbox_settings,
-                        "model": route_model or "", "effort": effort or "", "permission_mode": permission_mode or "",
-                        "cwd": str(workdir), "provider": route_provider or "",
-                        "node": (prov_env or {}).get("FNO_NODE") or "",
-                        "launcher_session": launcher_session,
-                    }
-                    if launcher_harness:
-                        ask["launcher_harness"] = launcher_harness
-                    if launcher_cwd and launcher_cwd.strip():
-                        ask["launcher_cwd"] = launcher_cwd
-                    proc = _subprocess.run(
-                        [str(resolve_binary()), "spawn-overlay"],
-                        input=json.dumps(ask), text=True, capture_output=True,
-                    )
-                    sys.stdout.write(proc.stdout or "")
-                    sys.stderr.write(proc.stderr or "")
-                    if proc.returncode != 0:
-                        raise typer.Exit(code=proc.returncode)
-                    # The launch kind answers {"exit": N} after the stream.
-                    try:
-                        answer = json.loads((proc.stdout or "").strip().rsplit("\n", 1)[-1])
-                    except ValueError:
-                        answer = {}
-                    if isinstance(answer, dict) and answer.get("exit"):
-                        raise typer.Exit(code=int(answer["exit"]))
-                    spawn_succeeded = True
-                    print(f"spawn: {name} launched on the native lane; the row lands at its SessionStart adopt", file=sys.stderr)
-                    return
-
             result: SpawnResult = dispatch_spawn(
                 name=name,
                 message=message,

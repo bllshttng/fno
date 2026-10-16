@@ -68,6 +68,7 @@ use crate::vt::{self, frame_text, Modes};
 
 mod agent_actions;
 pub(crate) mod agent_launch;
+mod agent_rows_apply;
 mod agent_rows_join;
 mod attach_argv;
 mod client_input;
@@ -102,6 +103,7 @@ mod shutdown_capture;
 mod slot_capture;
 mod squad_persistence;
 mod squad_sync;
+mod thread_pin;
 mod thread_workspace;
 mod truth_probe;
 mod visible_panes;
@@ -905,6 +907,9 @@ pub(crate) enum CoreMsg {
         /// rule, which must stay inert while the read state is unknown.
         read_ok: bool,
     },
+    /// The project of each live row cwd, sent ahead of the `AgentRows` that
+    /// needs it. Replaces the map wholesale.
+    ProjectRoots(HashMap<String, agent_rows_apply::ProjectRef>),
     /// Tails (and ctx, v91) moved with no row change behind them:
     /// transcripts grow independently of the registry, so when only this
     /// pass moved, it pushes alone rather than forcing a row set through.
@@ -1487,6 +1492,12 @@ pub(crate) struct Core {
     /// subline then degrades to the cwd tail. Display-only, so staleness across
     /// a git checkout is cosmetic.
     branch_by_cwd: HashMap<String, String>,
+    /// Latest cwd -> project (canonical root, declared id) map from the same
+    /// reader, read by the thread-workspace resolver.
+    project_by_cwd: HashMap<String, agent_rows_apply::ProjectRef>,
+    /// Operator moves of a session into a workspace: the workspace identity
+    /// (its name, else its durable key) beside the pinned session.
+    thread_pins: Vec<(String, crate::squad_store::StoredThreadPin)>,
     /// Latest session-uuid -> most-recent-assistant-line map from the
     /// off-loop reader, joined into each agent row's `tail` at layout time for
     /// the extended sideline table. A uuid absent from the map has no readable
@@ -2537,9 +2548,8 @@ impl Core {
         });
     }
 
-    /// Every pane's metadata for `pane ls`, ordered by pane id so the listing
-    /// is stable and machine-readable. A pane mid-teardown (not in the tree)
-    /// is still listed with what is known rather than dropped silently.
+    /// Every pane's metadata for `pane ls`, ordered by pane id (stable, machine-readable).
+    /// A pane mid-teardown is still listed with what is known rather than dropped silently.
     fn pane_infos_with_agents(&self, agents: &[RegistryAgent]) -> Vec<PaneInfo> {
         // (v71) One evidence read feeds every pane row's orphan verdict.
         let evidence = self.member_evidence();
@@ -2588,6 +2598,7 @@ impl Core {
                     squad_name,
                     tab_id,
                     cwd,
+                    pane_cwd: crate::pane_cwd::listed(entry.pty.child_pid(), &entry.cwd),
                     child_pid: entry.pty.child_pid(),
                     title: entry.vt.osc_title().map(str::to_string),
                     // A portal seat never reads pristine: the seat is
@@ -9426,11 +9437,7 @@ impl Core {
                     .find(|c| c.id == client_id)
                     .map(|c| c.dims)
                     .unwrap_or((vp.rows, vp.cols));
-                let squad_cwd = self
-                    .session
-                    .squad(view.0)
-                    .map(|s| s.canonical_cwd().to_string())
-                    .unwrap_or_default();
+                let squad_cwd = self.spawn_cwd(view.0);
                 let pid = match self.spawn_pane(rows, cols, &squad_cwd) {
                     Ok(p) => p,
                     Err(e) => {
@@ -10081,6 +10088,14 @@ impl Core {
             Command::NewSquad { name, origin } => {
                 self.handle_new_squad(client_id, view, vp, &name, origin)
             }
+            Command::PinThread {
+                squad,
+                harness,
+                harness_session_id,
+            } => self.handle_pin_thread(client_id, squad, harness, harness_session_id),
+            Command::AddWorkspaceFolder { squad, path } => {
+                self.handle_add_workspace_folder(client_id, squad, &path)
+            }
             Command::RenameTab { tab, name } => {
                 // Explicit tab rename. A stale/unknown id (the tab
                 // closed racing the overlay) is refused fail-closed with a
@@ -10445,12 +10460,12 @@ impl Core {
                                 .push(tab);
                         }
                         None => {
-                            // Create the named workspace (no origin) with this as
-                            // its first tab.
+                            // Create the named workspace with this as its first
+                            // tab, in the one folder the recruited rows share.
                             let ns = self.next_squad_id;
                             self.next_squad_id += 1;
-                            self.session
-                                .add_squad(ns, Vec::new(), Some(name.clone()), tab);
+                            let origins = self.recruit_origin(&ids);
+                            self.session.add_squad(ns, origins, Some(name.clone()), tab);
                             self.squad_members.insert(ns, Vec::new());
                             sid = Some(ns);
                         }
@@ -11678,57 +11693,9 @@ impl Core {
                 tails,
                 ctx,
                 read_ok,
-            } => {
-                self.agents_read_ok = read_ok;
-                let identity_published = self.worker_identity_published(&rows);
-                // Discoverability, once per server lifetime: the
-                // first paneless live row to appear with no portal open names
-                // the gesture. "Explicit and lazy" must not mean
-                // "undiscoverable". A notice is not state - the latch only
-                // mutes repetition, it never gates behavior. The
-                // notice names both doors, because opening a SECOND portal is
-                // the gesture an operator cannot guess from the first.
-                if !self.portal_noticed
-                    && self.portals.is_empty()
-                    && rows.iter().any(|a| a.mux.is_none() && !a.exited)
-                {
-                    // Latch on DELIVERY, not on the attempt: workers
-                    // register before an operator attaches in the ordinary
-                    // daemon startup, so a latch set with no client attached
-                    // would burn the once-per-lifetime notice on nobody.
-                    if self.notice_all(
-                        "thread row present: reach a row (Enter or click) to open portal 0; P opens another portal beside it",
-                    ) {
-                        self.portal_noticed = true;
-                    }
-                }
-                self.agents = rows;
-                self.branch_by_cwd = branches;
-                self.tail_by_session = tails;
-                self.ctx_by_session = ctx;
-                // Row changes are the journal's change signal: a
-                // spawn or removal writes both. Refresh the cached scan here,
-                // off the per-push paths that read it.
-                self.journal.refresh();
-                if identity_published {
-                    // A registry row can publish after a worker pane was
-                    // recorded. Force the existing debounce funnel to flush
-                    // the newly authoritative identity instead of waiting for
-                    // another topology mutation.
-                    self.mark_topology_dirty();
-                }
-                // The debounce flush for topology captures: a drag's
-                // events mark dirty without writing; the 1s registry tick is
-                // the coalescing timer that turns them into one store write.
-                self.flush_topology();
-                // The registry just refreshed: a queued template restore
-                // whose fno bindings now resolve gets applied here, binding live
-                // sessions instead of shells.
-                self.drain_template_restores();
-                // Rects are unchanged; only the Layout's agent rows moved -
-                // push without re-emitting frames (AC1-UI: visible within one
-                // layout push; AC2-UI: the read happened off-loop).
-                self.push_layout(false);
+            } => self.apply_agent_rows(rows, branches, tails, ctx, read_ok),
+            CoreMsg::ProjectRoots(projects) => {
+                self.project_by_cwd = projects;
                 Flow::Continue
             }
             CoreMsg::BacklogCards {

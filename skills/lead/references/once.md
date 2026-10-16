@@ -390,7 +390,7 @@ The holder is one of them, so a width of 1 leaves nothing to hand out.
 To read the width before you dispatch, run the same probe init uses:
 
 ```bash
-python -m fno.backlog.join_trigger width <plan-path>
+fno backlog join width <plan-path>
 ```
 
 It prints the int and exits 0.

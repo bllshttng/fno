@@ -15,9 +15,10 @@
 #            on a later patch than main's __version__ still promote.
 #            Refuses (exit 1) while no v*rc* tag exists: stable promotes a
 #            candidate.
-# - Nightly refuses (exit 1) when v<src> already exists, naming the
-#   sync-version bump. Stable exits 3 on an already-promoted candidate: the
-#   release already shipped, which the caller reads as an idempotent no-op.
+# - Nightly and rc skip every patch whose v<src> tag exists (src 0.4.1 with
+#   v0.4.1 released reads as 0.4.2). Stable exits 3 on an already-promoted
+#   candidate: the release already shipped, which the caller reads as an
+#   idempotent no-op.
 set -euo pipefail
 
 usage="usage: release-version.sh <nightly|rc|stable> <X.Y.Z> <yyyymmdd>"
@@ -39,12 +40,15 @@ case "$channel" in
   *) echo "release-version: channel '${channel}' must be nightly, rc or stable" >&2; exit 2 ;;
 esac
 
-# Nightly is the only channel pinned to src, so it is the only one a released
-# v<src> stops. Stable exits 3 on an already-promoted candidate, and rc's
-# daily-cadence math below always lands past both.
-if [ "$channel" = "nightly" ] && git rev-parse -q --verify "refs/tags/v${src}" >/dev/null; then
-  echo "release-version: v${src} is released; bump main with scripts/release/sync-version.sh <next>" >&2
-  exit 1
+# A released v<src> moves nightly and rc to the next unreleased patch. The
+# release job cannot push a version bump to main (a repository rule rejects
+# it), so main's __version__ lags a shipped stable until a person syncs it.
+# The builds stamp the version this script prints, so main need not move.
+# Stable promotes the newest candidate and ignores src.
+if [ "$channel" != "stable" ]; then
+  while git rev-parse -q --verify "refs/tags/v${src}" >/dev/null; do
+    src="${src%.*}.$(( ${src##*.} + 1 ))"
+  done
 fi
 
 case "$channel" in

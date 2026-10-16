@@ -394,21 +394,30 @@ def _report_review_capability(json_out: bool = False) -> int:
     """
     import json as _json
 
-    from fno.config import load_settings
-    from fno.review_capability import (
-        detect_session,
-        local_peers_refusal_message,
-        resolve_local_peers,
-        resolve_reviewers,
-    )
+    from dataclasses import asdict
 
-    session = detect_session()
+    from fno.config import load_settings, resolvable_reviewers
+    from fno.rust_binary import verb_call
+
     review = load_settings().review
     reviewers = list(review.reviewers or [])
-    verdicts = resolve_reviewers(reviewers, session, review.reviewer_registry)
-    peer_verdicts = resolve_local_peers(review.peers, review.peer_identity, session)
-    blocked = [v for v in verdicts if v.blocks_autonomy]
-    peer_blocked = local_peers_refusal_message(peer_verdicts, session) is not None
+    answer = verb_call(
+        ["review-level", "capability", "reviewers"],
+        {
+            "reviewers": reviewers,
+            "descriptors": {
+                name: asdict(d)
+                for name, d in resolvable_reviewers(review.reviewer_registry).items()
+            },
+            "peers": list(review.peers or []),
+            "peer_identity": review.peer_identity,
+        },
+    )
+    session = answer["session"]
+    verdicts = answer["reviewers"]
+    peer_verdicts = answer["local_peers"]
+    blocked = [r for r in verdicts if r["blocks_autonomy"]]
+    peer_blocked = answer.get("local_peers_refusal") is not None
 
     # Tier staleness: a band no configured provider can serve, and a tier id
     # no reachability row maps, are both routing holes an operator must see
@@ -426,28 +435,26 @@ def _report_review_capability(json_out: bool = False) -> int:
         typer.echo(
             _json.dumps(
                 {
-                    "harness": session.harness,
-                    "substrate": session.substrate,
-                    "attended": session.attended,
-                    "provider": session.provider,
+                    "harness": session["harness"],
+                    "substrate": session["substrate"],
+                    "attended": session["attended"],
+                    "provider": session["provider"],
                     "reviewers": [
                         {
-                            "name": v.name,
-                            "status": v.status,
-                            "kind": v.descriptor.kind if v.descriptor else None,
-                            "requires": v.descriptor.requires if v.descriptor else None,
-                            "asserts": v.descriptor.asserts if v.descriptor else None,
-                            "invocation": (
-                                v.descriptor.invocation if v.descriptor else None
-                            ),
-                            "reason": v.reason,
-                            "resolved_route": v.name,
+                            "name": r["name"],
+                            "status": r["status"],
+                            "kind": r["kind"],
+                            "requires": r["requires"],
+                            "asserts": r["asserts"],
+                            "invocation": r["invocation"],
+                            "reason": r["reason"],
+                            "resolved_route": r["name"],
                         }
-                        for v in verdicts
+                        for r in verdicts
                     ],
                     "local_peers": [
-                        {"name": v.name, "status": v.status, "reason": v.reason}
-                        for v in peer_verdicts
+                        {"name": r["name"], "status": r["status"], "reason": r["reason"]}
+                        for r in peer_verdicts
                     ],
                     "local_peer_gate": (
                         "unavailable"
@@ -465,12 +472,12 @@ def _report_review_capability(json_out: bool = False) -> int:
         )
         return 1 if blocked or peer_blocked else 0
 
-    typer.echo(f"review gate: {session.describe()} attended={session.attended}")
+    typer.echo(f"review gate: {session['describe']} attended={session['attended']}")
     if not reviewers:
         typer.echo("  config.review.reviewers is empty - no local reviewers gate.")
     else:
-        for reviewer_verdict in verdicts:
-            typer.echo(f"  {reviewer_verdict.line()}")
+        for row in verdicts:
+            typer.echo(f"  {row['line']}")
     if dead_ids:
         typer.echo(
             "  WARN tier staleness: ids no reachability row serves: "
@@ -483,8 +490,8 @@ def _report_review_capability(json_out: bool = False) -> int:
     if peer_verdicts:
         state = "unavailable" if peer_blocked else "satisfiable"
         typer.echo(f"  local peer gate: {state}")
-        for peer_verdict in peer_verdicts:
-            typer.echo(f"    {peer_verdict.line()}")
+        for row in peer_verdicts:
+            typer.echo(f"    {row['line']}")
     if blocked or peer_blocked:
         typer.echo("")
         typer.echo(
@@ -507,8 +514,10 @@ def _report_gates() -> None:
     resolved per session against its bound plan doc, which doctor has no
     business guessing at.
     """
-    from fno.config import load_settings
-    from fno.review_capability import detect_session, resolve_reviewers
+    from dataclasses import asdict
+
+    from fno.config import load_settings, resolvable_reviewers
+    from fno.rust_binary import verb_call
 
     settings = load_settings()
     probes = list(settings.done_probes or [])
@@ -522,11 +531,24 @@ def _report_gates() -> None:
         typer.echo(f"  probe (project): {cmd}")
     if not probes:
         typer.echo("  probe: none declared in config (a plan may still declare its own)")
-    for v in resolve_reviewers(
-        reviewers, detect_session(), settings.review.reviewer_registry
-    ):
-        rung = v.descriptor.asserts if v.descriptor else "unknown"
-        typer.echo(f"  reviewer: {v.name} - asserts {rung}{_RUNG_GLOSS.get(rung, '')}")
+    if reviewers:
+        answer = verb_call(
+            ["review-level", "capability", "reviewers"],
+            {
+                "reviewers": reviewers,
+                "descriptors": {
+                    name: asdict(d)
+                    for name, d in resolvable_reviewers(
+                        settings.review.reviewer_registry
+                    ).items()
+                },
+                "peers": [],
+                "peer_identity": None,
+            },
+        )
+        for row in answer["reviewers"]:
+            rung = row["asserts"] or "unknown"
+            typer.echo(f"  reviewer: {row['name']} - asserts {rung}{_RUNG_GLOSS.get(rung, '')}")
 
 
 _RUNG_GLOSS = {

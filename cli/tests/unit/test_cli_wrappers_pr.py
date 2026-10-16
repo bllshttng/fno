@@ -1,18 +1,17 @@
 """CLI-layer tests for `fno do pr verify` and `fno do pr rebase` after the
 in-package port (ab-d4c98550).
 
-The verify / rebase logic itself is characterized in test_pr_verify.py and
-test_pr_rebase.py. Here we only assert the Typer verbs dispatch into the
-in-package modules, propagate their exit codes, and keep their option
-validation (required --pr-number/--state-file, the kind enum). The old
-"forwards to verify-*.sh / rebase-resolve.sh" assertions are retired.
+The verify body is native now, so the CLI-layer contract is the forward: the
+same verb spelling hands `pr-verify` to the binary and propagates its exit
+code. The audits themselves are characterized by the Rust golden replay over
+the fixture the deleted Python leg froze.
 """
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.pr import _verify
 
 runner = CliRunner()
 
@@ -27,32 +26,42 @@ def test_verify_help_renders():
     assert result.exit_code == 0
 
 
-def test_verify_kind_dispatches_in_package(monkeypatch):
-    """--kind merged -> run_verify_merged; --kind reviews -> run_verify_reviews."""
+@pytest.fixture
+def _capture_forward(monkeypatch):
+    """Capture the forward instead of spawning a binary."""
     calls = {}
 
-    def _merged(pr, sf, cwd=None, **kw):
-        calls["merged"] = (pr, sf)
-        return 0
+    def _forward(verb, args):
+        calls["forward"] = (verb, args)
 
-    def _reviews(pr, sf, cwd=None, **kw):
-        calls["reviews"] = (pr, sf)
-        return 0
+    monkeypatch.setattr("fno.pr.cli._forward_to_binary", _forward)
+    return calls
 
-    monkeypatch.setattr(_verify, "run_verify_merged", _merged)
-    monkeypatch.setattr(_verify, "run_verify_reviews", _reviews)
 
+def test_verify_kind_forwards_to_the_binary(_capture_forward):
+    """--kind merged/reviews forward with the same flags."""
     r1 = runner.invoke(app, ["do", "pr", "verify", "--kind", "merged", "--pr-number", "42", "--state-file", "x.md"])
-    assert r1.exit_code == 0
-    assert calls["merged"] == ("42", "x.md")
+    assert r1.exit_code == 0, r1.exception
+    assert _capture_forward["forward"] == (
+        "pr-verify",
+        ["--kind", "merged", "--pr-number", "42", "--state-file", "x.md"],
+    )
 
     r2 = runner.invoke(app, ["do", "pr", "verify", "--kind", "reviews", "--pr-number", "7", "--state-file", "y.md"])
-    assert r2.exit_code == 0
-    assert calls["reviews"] == ("7", "y.md")
+    assert r2.exit_code == 0, r2.exception
+    assert _capture_forward["forward"] == (
+        "pr-verify",
+        ["--kind", "reviews", "--pr-number", "7", "--state-file", "y.md"],
+    )
 
 
 def test_verify_exit_code_propagates(monkeypatch):
-    monkeypatch.setattr(_verify, "run_verify_merged", lambda *a, **k: 1)
+    import typer
+
+    def _forward(verb, args):
+        raise typer.Exit(code=1)
+
+    monkeypatch.setattr("fno.pr.cli._forward_to_binary", _forward)
     result = runner.invoke(
         app, ["do", "pr", "verify", "--kind", "merged", "--pr-number", "1", "--state-file", "x.md"]
     )

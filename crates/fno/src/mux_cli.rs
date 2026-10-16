@@ -4407,10 +4407,7 @@ fn render_reply(
                     // stable thread id, with the lineage chain named when
                     // present - a successor's retired id must never read as
                     // current, and a branch's fork edge stays visible.
-                    let mut line = format!(
-                        "{} squad={} tab={} tab_id={} pid={} fno_id={} name={} cwd={}",
-                        p.pane_id, p.squad_id, tab, p.tab_id, pid, fno, name, p.cwd
-                    );
+                    let mut line = p.ls_head(&tab, &pid, &fno, name);
                     if let Some(cur) = p.harness_session_id.as_deref() {
                         line.push_str(&format!(" session={cur}"));
                     }

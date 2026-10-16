@@ -64,6 +64,8 @@ run_init_in() {
     # so the test double rides the same PATH install the 20 hook tests use.
     # FNO_TEST_SPACE pins the manifest at "$tmpdir/.fno", the file the
     # assertions read; without it the stub delegates to any real binary.
+    # FNO_AGENTS_BIN outranks PATH in the init script, so the runs pin that
+    # env to the double too - the smoke runner pins it to the checkout binary.
     mkdir -p "$tmpdir/bin"
     cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$tmpdir/bin/fno-agents"
     chmod 755 "$tmpdir/bin/fno-agents"
@@ -72,9 +74,9 @@ run_init_in() {
     (
       cd "$tmpdir"
       if [[ $# -gt 0 ]]; then
-        env PATH="$tmpdir/bin:$PATH" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" "$@" bash "$INIT_SCRIPT"
+        env PATH="$tmpdir/bin:$PATH" FNO_AGENTS_BIN="$tmpdir/bin/fno-agents" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" "$@" bash "$INIT_SCRIPT"
       else
-        PATH="$tmpdir/bin:$PATH" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" bash "$INIT_SCRIPT"
+        PATH="$tmpdir/bin:$PATH" FNO_AGENTS_BIN="$tmpdir/bin/fno-agents" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" bash "$INIT_SCRIPT"
       fi
     ) 2>/dev/null
 }

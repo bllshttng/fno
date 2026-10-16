@@ -107,6 +107,95 @@ def _base_env() -> dict:
     return {**os.environ, "FNO": "fno-py"}
 
 
+def _fno_agents_bin() -> Path | None:
+    env = os.environ.get("FNO_AGENTS_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno-agents" / "target" / profile / "fno-agents"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_AGENTS_BIN = _fno_agents_bin()
+
+
+def _fno_front_bin() -> Path | None:
+    env = os.environ.get("FNO_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_FRONT_BIN = _fno_front_bin()
+
+_FRONT_REASON = (
+    "the hook classifies through the Rust front (`do review classify` went "
+    "native); build crates/fno (cargo build -p fno --bin fno) and set "
+    "FNO_AGENTS_BIN, or set FNO_BIN"
+)
+_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None or _FNO_AGENTS_BIN is None
+
+
+def _hook_env() -> dict:
+    """The hook classifies through `$FNO do review classify`, and since the
+    Python leaf retired that verb answers only through the Rust front, which
+    execs the findings door. Point FNO at the checkout's front with the door
+    pinned beside it; the front forwards the hook's Python verbs to the wheel
+    unchanged. Without a front the positive hook tests skip rather than score
+    a silent no-event pass."""
+    env = _base_env()
+    if not _NEEDS_FRONT_SKIP:
+        env["FNO"] = str(_FNO_FRONT_BIN)
+        env["FNO_AGENTS_BIN"] = str(_FNO_AGENTS_BIN)
+    return env
+
+
+def _fno_front_bin() -> Path | None:
+    env = os.environ.get("FNO_BIN", "")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    for profile in ("debug", "release"):
+        p = _REPO_ROOT / "crates" / "fno" / "target" / profile / "fno"
+        if p.exists():
+            return p
+    return None
+
+
+_FNO_FRONT_BIN = _fno_front_bin()
+
+_FRONT_REASON = (
+    "the hook classifies through the Rust front (`do review classify` went "
+    "native); build crates/fno (cargo build -p fno --bin fno) and set "
+    "FNO_AGENTS_BIN, or set FNO_BIN"
+)
+_NEEDS_FRONT_SKIP = _FNO_FRONT_BIN is None
+
+
+def _hook_env() -> dict:
+    """The hook classifies through `$FNO do review classify`, and since the
+    Python leaf retired that verb answers only through the Rust front, which
+    execs the findings door. Point FNO at the checkout's front with the door
+    pinned beside it; the front forwards the hook's Python verbs to the wheel
+    unchanged. Without a front the positive hook tests skip rather than score
+    a silent no-event pass."""
+    env = _base_env()
+    if _FNO_FRONT_BIN is not None:
+        env["FNO"] = str(_FNO_FRONT_BIN)
+        door = _fno_agents_bin()
+        if door is not None:
+            env["FNO_AGENTS_BIN"] = str(door)
+    return env
+
+
 def _drive_declare(repo: Path) -> None:
     r = subprocess.run(
         ["bash", str(_EMIT), "declare"], cwd=repo, env=_base_env(), capture_output=True, text=True
@@ -122,7 +211,7 @@ def _drive_peer(repo: Path) -> None:
     )
     r = subprocess.run(
         ["bash", str(_CONSUME_PEER), str(verdict_file)],
-        cwd=repo, env=_base_env(), capture_output=True, text=True,
+        cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
 
@@ -151,7 +240,7 @@ def _drive_code_review(repo: Path) -> None:
     )
     r = subprocess.run(
         ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
+        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
 
@@ -186,13 +275,14 @@ def _drive_codex_code_review(repo: Path) -> None:
         ["bash", str(_HOOK)],
         input=payload,
         cwd=repo,
-        env=_base_env(),
+        env=_hook_env(),
         capture_output=True,
         text=True,
     )
     assert r.returncode == 0, r.stderr
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_codex_stop_path_reaches_the_same_attestation_producer(tmp_path: Path) -> None:
     repo = _temp_git_repo(tmp_path)
     head = _head(repo)
@@ -208,6 +298,7 @@ def test_codex_stop_path_reaches_the_same_attestation_producer(tmp_path: Path) -
     assert data["reviewer_context"] == "unknown"
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_report_findings_path_also_emits(tmp_path: Path) -> None:
     """The OTHER reachable path: a foreground pass that does call
     ReportFindings directly. A guard on only one of the two paths that can
@@ -226,7 +317,7 @@ def test_report_findings_path_also_emits(tmp_path: Path) -> None:
     )
     r = subprocess.run(
         ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
+        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
     events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
@@ -236,6 +327,7 @@ def test_report_findings_path_also_emits(tmp_path: Path) -> None:
     assert events[0]["data"]["reviewer_context"] == "shared"
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_claude_fork_marker_records_fresh_reviewer_context(tmp_path: Path) -> None:
     repo = _temp_git_repo(tmp_path)
     head = _head(repo)
@@ -257,7 +349,7 @@ def test_claude_fork_marker_records_fresh_reviewer_context(tmp_path: Path) -> No
         ["bash", str(_HOOK)],
         input=payload,
         cwd=repo,
-        env=_base_env(),
+        env=_hook_env(),
         capture_output=True,
         text=True,
     )
@@ -289,6 +381,7 @@ def test_subagent_stop_ignores_a_non_code_review_description(tmp_path: Path) -> 
     assert _events(repo) == []
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_subagent_stop_identifies_by_message_shape_alone(tmp_path: Path) -> None:
     """A second self-review of this exact PR (x-e97b) found the description
     field was a guess: Claude Code's docs confirm only a generic `agent_type`
@@ -308,7 +401,7 @@ def test_subagent_stop_identifies_by_message_shape_alone(tmp_path: Path) -> None
     )
     r = subprocess.run(
         ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
+        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
     events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
@@ -316,6 +409,7 @@ def test_subagent_stop_identifies_by_message_shape_alone(tmp_path: Path) -> None
     assert events[0]["data"]["head_sha"] == head
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_subagent_stop_with_findings_emits_failed_attestation(tmp_path: Path) -> None:
     repo = _temp_git_repo(tmp_path)
     head = _head(repo)
@@ -332,7 +426,7 @@ def test_subagent_stop_with_findings_emits_failed_attestation(tmp_path: Path) ->
     )
     r = subprocess.run(
         ["bash", str(_HOOK)],
-        input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
+        input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
     )
     assert r.returncode == 0, r.stderr
     events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
@@ -362,6 +456,8 @@ def test_producer_emits_review_attestation_with_no_second_call(
         f"'{reviewer}' is named a producer at SKILL.md:112 but this test has no "
         "real-world driver for it - add one to _SURFACES, do not just widen the doc"
     )
+    if reviewer in ("code-review", "peer") and _NEEDS_FRONT_SKIP:
+        pytest.skip(_FRONT_REASON)
     repo = _temp_git_repo(tmp_path)
     head = _head(repo)
 
@@ -377,6 +473,7 @@ def test_producer_emits_review_attestation_with_no_second_call(
     assert data["head_sha"] == head
 
 
+@pytest.mark.skipif(_NEEDS_FRONT_SKIP, reason=_FRONT_REASON)
 def test_a_non_empty_findings_report_attests_fail_with_the_record() -> None:
     """A review WITH findings emits `fail` carrying the classified record.
 
@@ -403,7 +500,7 @@ def test_a_non_empty_findings_report_attests_fail_with_the_record() -> None:
         )
         r = subprocess.run(
             ["bash", str(_HOOK)],
-            input=payload, cwd=repo, env=_base_env(), capture_output=True, text=True,
+            input=payload, cwd=repo, env=_hook_env(), capture_output=True, text=True,
         )
         assert r.returncode == 0, r.stderr
         events = [e for e in _events(repo) if e.get("type") == "review_attestation"]
@@ -442,21 +539,6 @@ def test_a_different_tool_report_emits_nothing() -> None:
 # ── resolver leg: what the gate actually reads back ─────────────────────────
 
 
-def _fno_agents_bin() -> Path | None:
-    env = os.environ.get("FNO_AGENTS_BIN", "")
-    if env:
-        p = Path(env)
-        return p if p.exists() else None
-    for profile in ("debug", "release"):
-        p = _REPO_ROOT / "crates" / "fno-agents" / "target" / profile / "fno-agents"
-        if p.exists():
-            return p
-    return None
-
-
-_FNO_AGENTS_BIN = _fno_agents_bin()
-
-
 def _make_script(dir_: Path, name: str, body: str) -> Path:
     p = dir_ / name
     p.write_text(f"#!/usr/bin/env bash\n{body}\n")
@@ -468,6 +550,7 @@ def _make_script(dir_: Path, name: str, body: str) -> Path:
     _FNO_AGENTS_BIN is None,
     reason="fno-agents binary not built (cargo build -p fno-agents); set FNO_AGENTS_BIN",
 )
+@pytest.mark.skipif(_FNO_FRONT_BIN is None, reason=_FRONT_REASON)
 def test_resolver_reads_the_code_review_attestation_at_head(tmp_path: Path) -> None:
     """Pin the DESTINATION, not the tag: prove `fno-agents review-coverage` -
     the exact resolver the reviewers gate reads - reports this PR's own

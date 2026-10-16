@@ -1870,8 +1870,11 @@ def test_capture_leg_reports_oldest_age_from_capture_add_events(capture_roots):
     old = (datetime.now(timezone.utc) - timedelta(days=62)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     events.write_text(
-        _capture_event("fu-aaaaaa", old) + "\n" + _capture_event("fu-bbbbbb", "2026-08-14T00:00:00Z") + "\n",
+        _capture_event("fu-aaaaaa", old) + "\n" + _capture_event("fu-bbbbbb", recent) + "\n",
         encoding="utf-8",
     )
 

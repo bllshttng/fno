@@ -145,6 +145,56 @@ fn parent_edge_join_never_resolves_through_an_absent_parent() {
     assert_eq!(row.squad, None);
 }
 
+// A portal seat or an Open Here viewer is a pane in the VIEWED workspace. The
+// row it shows keeps drawing under its own workspace, with the viewer or
+// without it; a row no rung answers reads `~ elsewhere`, never the viewer's.
+#[test]
+fn a_viewer_pane_never_moves_the_row_it_shows() {
+    let mut core = empty_core();
+    core.session_name = "main".into();
+    for (id, origin, pane) in [
+        (1u64, "/repo/a", 42u64),
+        (2, "/repo/b", 50),
+        (3, "/repo/c", 51),
+    ] {
+        core.session.add_squad(
+            id,
+            vec![origin.into()],
+            None,
+            Tab {
+                name: None,
+                id,
+                root: Node::Leaf(pane),
+                focus: pane,
+            },
+        );
+    }
+    core.agents = vec![
+        bg_row("seated", "/repo/a", Some("deadbee1")),
+        bg_row("orphan", "/nowhere", Some("deadbee2")),
+    ];
+    core.attached.insert("deadbee1".into(), 50);
+    core.attached.insert("deadbee2".into(), 51);
+    let rows = core.agent_rows();
+    let seated = rows.iter().find(|r| r.name == "seated").unwrap();
+    assert_eq!(
+        seated.squad,
+        Some(1),
+        "the viewer in workspace 2 decides nothing"
+    );
+    assert_eq!(seated.pane_id, Some(50), "a click still focuses the viewer");
+    let orphan = rows.iter().find(|r| r.name == "orphan").unwrap();
+    assert_eq!(
+        orphan.squad, None,
+        "no rung answers, so not the viewer's workspace"
+    );
+
+    core.attached.clear();
+    let rows = core.agent_rows();
+    let seated = rows.iter().find(|r| r.name == "seated").unwrap();
+    assert_eq!(seated.squad, Some(1), "retuning the viewer changes nothing");
+}
+
 // An id two parent rows claim that resolve to DIFFERENT squads is ambiguous:
 // the child reads as absent rather than picking a confident wrong squad.
 #[test]

@@ -72,6 +72,9 @@ make_git_repo() {
 
 # State-path stub: init resolves its manifest through `fno-agents state path`
 # when a binary answers, so install it per scenario and read the space path.
+# FNO_AGENTS_BIN outranks PATH in the init script, and the smoke runner pins
+# that env to the checkout binary, so every scenario must also point
+# FNO_AGENTS_BIN at the stub or the pin bypasses this directory entirely.
 install_stub() {
   local dir="$1"
   mkdir -p "$dir/bin" "$dir/space"
@@ -97,6 +100,7 @@ INIT_OUTPUT=$(
   TARGET_INPUT="smoke" \
   TARGET_SIZE=M \
   PATH="$_TMP/bin:$PATH" \
+  FNO_AGENTS_BIN="$_TMP/bin/fno-agents" \
   FNO_TEST_SPACE="$_TMP/space" \
   bash "$INIT_HOOK" 2>&1
 )
@@ -192,7 +196,7 @@ fi
 _TMP2=$(mktemp -d)
 make_git_repo "$_TMP2"
 MANIFEST2="$_TMP2/space/target-state.md"
-(cd "$_TMP2" && install_stub "$_TMP2" && TARGET_START=1 TARGET_INPUT="smoke-unattended" TARGET_UNATTENDED=1 PATH="$_TMP2/bin:$PATH" FNO_TEST_SPACE="$_TMP2/space" bash "$INIT_HOOK") 2>/dev/null || true
+(cd "$_TMP2" && install_stub "$_TMP2" && TARGET_START=1 TARGET_INPUT="smoke-unattended" TARGET_UNATTENDED=1 PATH="$_TMP2/bin:$PATH" FNO_AGENTS_BIN="$_TMP2/bin/fno-agents" FNO_TEST_SPACE="$_TMP2/space" bash "$INIT_HOOK") 2>/dev/null || true
 if [[ -f "$MANIFEST2" ]]; then
   ATTENDED2=$(grep -E "^attended:" "$MANIFEST2" | head -1 | sed 's/^attended:[[:space:]]*//')
   if [[ "$ATTENDED2" == "false" ]]; then
@@ -209,7 +213,7 @@ rm -rf "$_TMP2"
 _TMP3=$(mktemp -d)
 make_git_repo "$_TMP3"
 MANIFEST3="$_TMP3/space/target-state.md"
-(cd "$_TMP3" && install_stub "$_TMP3" && TARGET_START=1 TARGET_INPUT="smoke-advisory" TARGET_ADVISORY=1 PATH="$_TMP3/bin:$PATH" FNO_TEST_SPACE="$_TMP3/space" bash "$INIT_HOOK") 2>/dev/null || true
+(cd "$_TMP3" && install_stub "$_TMP3" && TARGET_START=1 TARGET_INPUT="smoke-advisory" TARGET_ADVISORY=1 PATH="$_TMP3/bin:$PATH" FNO_AGENTS_BIN="$_TMP3/bin/fno-agents" FNO_TEST_SPACE="$_TMP3/space" bash "$INIT_HOOK") 2>/dev/null || true
 if [[ -f "$MANIFEST3" ]]; then
   ADVISORY3=$(grep -E "^advisory:" "$MANIFEST3" | head -1 | sed 's/^advisory:[[:space:]]*//')
   if [[ "$ADVISORY3" == "true" ]]; then
@@ -233,7 +237,7 @@ else
   (
     cd "$_TMP4" && install_stub "$_TMP4" && \
     TARGET_START=1 TARGET_INPUT="write-once-test" \
-    PATH="$_TMP4/bin:$PATH" FNO_TEST_SPACE="$_TMP4/space" \
+    PATH="$_TMP4/bin:$PATH" FNO_AGENTS_BIN="$_TMP4/bin/fno-agents" FNO_TEST_SPACE="$_TMP4/space" \
     bash "$INIT_HOOK" 2>/dev/null
   ) || true
   MANIFEST4="$_TMP4/space/target-state.md"
@@ -267,7 +271,7 @@ else
   (
     cd "$_TMP5" && install_stub "$_TMP5" && \
     TARGET_START=1 TARGET_INPUT="plan-path-fill-test" \
-    PATH="$_TMP5/bin:$PATH" FNO_TEST_SPACE="$_TMP5/space" \
+    PATH="$_TMP5/bin:$PATH" FNO_AGENTS_BIN="$_TMP5/bin/fno-agents" FNO_TEST_SPACE="$_TMP5/space" \
     bash "$INIT_HOOK" 2>/dev/null
   ) || true
   MANIFEST5="$_TMP5/space/target-state.md"

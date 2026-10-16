@@ -1055,7 +1055,9 @@ case "${1:-status}" in
                 echo "worktree cleanup: --merged and --older-than are mutually exclusive" >&2
                 exit 1
             fi
-            ARCHIVE="$MAIN_DIR/scripts/setup/archive-worktree.sh"
+            # The archive helper ships beside this script, never in the swept
+            # repo: a project other than footnote has no scripts/setup.
+            ARCHIVE="${_WT_LIFECYCLE_DIR}/../setup/archive-worktree.sh"
             # True canonical checkout (first --porcelain entry), robust even when
             # the sweep runs from a worktree where --show-toplevel is the worktree.
             # Used only to guard job-record reaping off the canonical path.

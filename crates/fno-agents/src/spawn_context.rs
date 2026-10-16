@@ -447,7 +447,13 @@ pub fn harness_name_of_command(command: &str) -> Option<&'static str> {
         if SEGMENT_TOKENS.contains(&basename) {
             return Some(basename_into_harness(basename));
         }
-        let stem = basename.rsplit('.').next().unwrap_or("");
+        // The part BEFORE the last dot, not after: `rsplit('.').next()`
+        // answers the extension ("js", "exe"), the opposite of "gemini.js ->
+        // gemini" this is meant to implement. Measured against a live
+        // opencode install: its binary is literally `opencode.exe` (a
+        // bun-compiled executable), and the old `.next()` form matched
+        // neither it nor any other dotted name, ever.
+        let stem = basename.rsplit_once('.').map_or(basename, |(s, _)| s);
         if SEGMENT_TOKENS.contains(&stem) {
             return Some(basename_into_harness(stem));
         }
@@ -989,6 +995,50 @@ fn fill_spawn_record(owned: OwnedIdentity, cwd: &str, home: &AgentsHome) -> Owne
     }
 }
 
+/// The identity keys a name_only stamp's witness set holds: the ids a live
+/// rollout fd names, plus the cwd-keyed spawn row when it belongs to the
+/// stamp family.
+fn witnessed_keys(
+    fd_ids: &[String],
+    family: &str,
+    row: Option<(String, String)>,
+) -> std::collections::BTreeSet<String> {
+    let mut seen: std::collections::BTreeSet<String> =
+        fd_ids.iter().map(|s| session_identity_key(s)).collect();
+    if let Some((harness, session_id)) = row {
+        if harness == family {
+            seen.insert(session_identity_key(&session_id));
+        }
+    }
+    seen
+}
+
+/// The marker value the witness set vouches for: `CODEX_THREAD_ID` wins
+/// (`CODEX_SESSION_ID` is the ROOT session), else the one family marker in
+/// the set. Two candidates read as no answer.
+fn witnessed_marker_value(
+    get: &impl Fn(&str) -> Option<String>,
+    family: &str,
+    seen: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    let thread = get("CODEX_THREAD_ID")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if let Some(thread) = thread {
+        if seen.contains(&session_identity_key(&thread)) {
+            return Some(thread);
+        }
+    }
+    let mut candidates = present_markers(get)
+        .into_iter()
+        .filter(|(_, h, v)| h == family && seen.contains(&session_identity_key(v)))
+        .map(|(_, _, v)| v);
+    match (candidates.next(), candidates.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
+}
+
 /// The composition Python calls `resolve_self_identity`: the process-tree
 /// prover leads, the attester corroborates a COMPLETE stamp, the elimination
 /// ladder resolves the rest, and the cwd-keyed spawn record fills a session
@@ -1029,35 +1079,19 @@ pub fn resolve_self_identity(
         );
 
     // a name_only codex stamp carries no id; a rollout witness value
-    // seen in a live fd IS this process's id (the thread id wins).
+    // seen in a live fd IS this process's id (the thread id wins). The
+    // witness keys on the STAMP family: a silent walk (a thread worker whose
+    // ancestry hides the harness process) must not blind the spawn-row
+    // ground, and the cwd-keyed spawn record joins the witnessed set.
     let mut witnessed_value: Option<String> = None;
-    if let (Some(witness_hook), Some(th)) = (witness, true_harness) {
+    if let (Some(witness_hook), Some(family)) = (witness, stamp_harness.as_deref()) {
         if !canonical_proven
             && stamp_disposition == CanonicalDisposition::NameOnly
-            && stamp_harness.as_deref() == Some(th)
+            && true_harness.is_none_or(|t| t == family)
         {
-            let environ_thread = get("CODEX_THREAD_ID")
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty());
-            let seen: std::collections::BTreeSet<String> = witness_hook(th)
-                .iter()
-                .map(|s| session_identity_key(s))
-                .collect();
-            if let Some(thread) = environ_thread {
-                if seen.contains(&session_identity_key(&thread)) {
-                    witnessed_value = Some(thread);
-                }
-            }
-            if witnessed_value.is_none() {
-                let candidates: Vec<String> = present_markers(get)
-                    .iter()
-                    .filter(|(_, h, v)| h == th && seen.contains(&session_identity_key(v)))
-                    .map(|(_, _, v)| v.clone())
-                    .collect();
-                if candidates.len() == 1 {
-                    witnessed_value = candidates.into_iter().next();
-                }
-            }
+            let row = live_thread_row_for_cwd(&ambient_cwd(), home);
+            let seen = witnessed_keys(&witness_hook(family), family, row);
+            witnessed_value = witnessed_marker_value(get, family, &seen);
             if witnessed_value.is_some() {
                 canonical_session_id = witnessed_value.clone();
                 canonical_proven = true;
@@ -1352,6 +1386,22 @@ mod tests {
     }
 
     #[test]
+    fn harness_name_of_command_matches_a_dotted_executable_name() {
+        // The part BEFORE the last dot is the stem, not after: a bun/node
+        // compiled binary ships as `<name>.exe`, and a script ships as
+        // `<name>.js` - both name the harness, not the dot-suffix.
+        assert_eq!(
+            harness_name_of_command("/Users/x/.bun/install/global/node_modules/@opencode/cli/bin/opencode.exe serve --service"),
+            Some("opencode")
+        );
+        assert_eq!(harness_name_of_command("gemini.js --flag"), Some("gemini"));
+        // A bare name with no extension still matches on basename alone.
+        assert_eq!(harness_name_of_command("codex"), Some("codex"));
+        // An unrelated dotted name matches nothing.
+        assert_eq!(harness_name_of_command("node.exe server.js"), None);
+    }
+
+    #[test]
     fn identity_rows() {
         let get = env_of(&[("CODEX_THREAD_ID", "abc-123")]);
         let owned = resolve_owned_identity_from(&get, None, None);
@@ -1444,6 +1494,38 @@ mod tests {
             SpawnWork::new("w", "seed", "/repo"),
         );
         assert!(validate(&req).is_ok());
+    }
+
+    #[test]
+    fn name_only_witness_set_takes_the_stamp_family_spawn_row() {
+        let row = |h: &str, s: &str| Some((h.to_string(), s.to_string()));
+        // The cwd-keyed spawn row of the stamp family completes an empty fd set.
+        let seen = witnessed_keys(&[], "codex", row("codex", "thread-1"));
+        let get = env_of(&[("CODEX_THREAD_ID", "thread-1")]);
+        assert_eq!(
+            witnessed_marker_value(&get, "codex", &seen).as_deref(),
+            Some("thread-1")
+        );
+        // A bystander family's row never joins the set.
+        let seen = witnessed_keys(&[], "codex", row("claude", "thread-1"));
+        assert_eq!(witnessed_marker_value(&get, "codex", &seen), None);
+        // Both markers witnessed: the thread id wins over the root session.
+        let both = env_of(&[
+            ("CODEX_SESSION_ID", "root-1"),
+            ("CODEX_THREAD_ID", "thread-1"),
+        ]);
+        let seen = witnessed_keys(&["root-1".into(), "thread-1".into()], "codex", None);
+        assert_eq!(
+            witnessed_marker_value(&both, "codex", &seen).as_deref(),
+            Some("thread-1")
+        );
+        // An unwitnessed thread id falls through to the one witnessed marker.
+        let seen = witnessed_keys(&["root-1".into()], "codex", row("codex", "other-2"));
+        let sessions_only = env_of(&[("CODEX_SESSION_ID", "root-1"), ("CODEX_THREAD_ID", "t-9")]);
+        assert_eq!(
+            witnessed_marker_value(&sessions_only, "codex", &seen).as_deref(),
+            Some("root-1")
+        );
     }
 
     fn proc_row(pid: u32, ppid: u32, command: &str) -> ProcRow {

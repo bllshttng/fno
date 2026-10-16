@@ -655,6 +655,12 @@ pub fn run_collisions(tail: &[String]) -> i32 {
     let mut plan_path: Option<String> = None;
     let mut self_id: Option<String> = None;
     let mut json_out = false;
+    // The help names the `check` action word; without this it parsed as
+    // the plan path and the real path read as an extra argument.
+    let tail = match tail.split_first() {
+        Some((action, rest)) if action == "check" => rest,
+        _ => tail,
+    };
     let mut it = tail.iter();
     while let Some(arg) = it.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -1178,7 +1184,7 @@ fn is_open_do_row(row: &Value) -> bool {
 
 /// Best-effort release of the `node:<id>` lockfile. Releases stale or own
 /// holders; keeps a LIVE foreign holder. Never fails the verb.
-fn release_node_lockfile(node_id: &str) -> String {
+pub(crate) fn release_node_lockfile(node_id: &str) -> String {
     let key = format!("node:{node_id}");
     let roots: Vec<Option<PathBuf>> = {
         let mut roots = vec![crate::claims::claims_root_for(&key), None];
@@ -1232,7 +1238,7 @@ fn release_node_lockfile(node_id: &str) -> String {
 
 /// The holder id this invocation would hold: the target manifest's recorded
 /// claim holder, else `target-session:<the resolved session id>`.
-fn invoking_claim_holder() -> String {
+pub(crate) fn invoking_claim_holder() -> String {
     let manifest = std::env::current_dir()
         .ok()
         .map(|cwd| cwd.join(".fno/target-state.md"));
@@ -1256,7 +1262,7 @@ fn invoking_claim_holder() -> String {
 }
 
 /// Recompute + persist the released node's derived status (the settle).
-fn settle_released_node(graph: &Path, node_id: &str) -> Result<(), String> {
+pub(crate) fn settle_released_node(graph: &Path, node_id: &str) -> Result<(), String> {
     graph_store::mutate_rows(
         graph,
         std::time::Duration::from_secs(5),

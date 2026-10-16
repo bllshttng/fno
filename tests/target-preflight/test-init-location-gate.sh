@@ -32,7 +32,8 @@ trap 'rm -rf "$TMP_BASE"' EXIT
 # The mint stub: init mints its run id through `fno-agents state mint-id`, so
 # the test double rides the same PATH install the 20 hook tests use.
 # FNO_TEST_SPACE pins the manifest at "<repo>/.fno", the file the assertions
-# read; without it the stub delegates to any real binary on PATH.
+# read; without it the stub delegates to any real binary on PATH. The env pin
+# rides FNO_AGENTS_BIN, which outranks PATH in the init script.
 mkdir -p "$TMP_BASE/bin"
 cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$TMP_BASE/bin/fno-agents"
 chmod 755 "$TMP_BASE/bin/fno-agents"
@@ -68,7 +69,7 @@ run_init() {
         cd "$cwd"
         # Strip any pre-existing trigger/consent state to make scenarios deterministic.
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH TARGET_LOCATION_OK TARGET_SIZE
-        env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" PATH="$TMP_BASE/bin:$PATH" FNO_TEST_SPACE="$cwd/.fno" "$@" bash "$INIT_SCRIPT" 2>&1
+        env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" PATH="$TMP_BASE/bin:$PATH" FNO_AGENTS_BIN="$TMP_BASE/bin/fno-agents" FNO_TEST_SPACE="$cwd/.fno" "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?
 }

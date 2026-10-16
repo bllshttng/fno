@@ -3,8 +3,9 @@
 //! seam projects the lifecycle table's answer (never a copy of it), the
 //! seed's slot facts and the team/resume flags; this module answers
 //! pass / profile / compose / refuse, and the seam applies the answer
-//! verbatim before any lane is chosen. Pure over its input: no config,
-//! filesystem or network reads.
+//! verbatim before any lane is chosen. `decide_in` is pure over its input; the
+//! Rust client's own check (`spawn_payload_verb_refusal`) reads the node's
+//! graph row and the blueprint floor, then asks `decide` for the answer.
 
 use serde_json::{json, Value};
 use std::path::Path;
@@ -398,6 +399,87 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
         }
         _ => json!({"action": "profile", "verb": word}),
     }
+}
+
+/// The refusal for a payload whose family verb disagrees with the verb its
+/// node derives, for a caller that never crossed the Python seam. The seam
+/// refuses the same spawn first; this answer is the Rust client's own, so a
+/// direct client call (the seam marker, `FNO_SPAWN_GATE=0`) cannot launch a
+/// worker the seam would have refused. A node with no row, a derivation
+/// that abstains, and a seed outside the family all answer `None`: the seam
+/// owns those refusals, and this check only closes the mismatch.
+pub fn payload_verb_refusal(
+    seed: &str,
+    flag_node: Option<&str>,
+    skips_check: bool,
+    row: Option<&Value>,
+    floor: &str,
+) -> Option<String> {
+    let flag_node = flag_node.map(str::trim).filter(|n| !n.is_empty());
+    let node = match flag_node {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let verb = match crate::backlog_ready::effective_verb_with_floor(row?, floor) {
+        Ok((Some(verb), _)) => verb,
+        _ => return None,
+    };
+    let node_source = flag_node.map_or(json!("payload"), |_| Value::Null);
+    let payload = json!({
+        "node": node, "row_found": true, "effective_verb": verb,
+        "stored_verb": null, "derive_error": null,
+        "node_source": node_source,
+        "family": ["/target", "/blueprint"], "role": skips_check, "resume": false,
+        "argv": ["spawn", seed], "seed_index": 1, "seed_form": "positional",
+    });
+    let answer = decide_in(&payload, &[]);
+    (answer.get("action").and_then(Value::as_str) == Some("refuse")).then(|| {
+        answer
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("refused")
+            .to_string()
+    })
+}
+
+/// [`payload_verb_refusal`] over a spawn request's params: reads the node's
+/// graph row and the operator's blueprint floor from `cwd`'s config.
+pub fn spawn_payload_verb_refusal(params: &Value, cwd: &Path) -> Option<String> {
+    let seed = params.get("message").and_then(Value::as_str)?;
+    let flag_node = params.get("node").and_then(Value::as_str);
+    let node = match flag_node.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let row = crate::spawn_compose::graph_row_for(&node)?;
+    // The floor is the node's project's, the same config the Python door
+    // loads from the row's cwd; the caller's cwd answers only a row with none.
+    let project = row
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_dir())
+        .unwrap_or(cwd);
+    let floor = crate::agents_config::config_lookup(project, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    payload_verb_refusal(
+        seed,
+        flag_node,
+        spawn_skips_verb_check(params),
+        Some(&row),
+        &floor,
+    )
+}
+
+/// A resume or role-bearing spawn names its work profile by flag, so the seam
+/// passes it without comparing the payload verb. A promoted codex thread
+/// reaches the client carrying `role_level` / `role_scope`.
+fn spawn_skips_verb_check(params: &Value) -> bool {
+    ["resume_id", "role_level", "role_scope"]
+        .iter()
+        .any(|key| params.get(*key).is_some())
 }
 
 /// The spawn cwd guard's answer for a node-named spawn.
@@ -1141,6 +1223,53 @@ mod tests {
             "/repo/wt",
         );
         assert!(matches!(got, SpawnNodeCwd::Foreign(_)));
+    }
+
+    // --- the Rust client's own refusal ------------------------------------ //
+
+    #[test]
+    fn client_refuses_a_payload_verb_the_node_does_not_derive() {
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        let msg = payload_verb_refusal("$fno:target x-aaaa", None, false, Some(&row), "high")
+            .expect("a /target payload on a /blueprint node refuses");
+        assert!(
+            msg.contains("the payload names /target x-aaaa, but x-aaaa derives /blueprint"),
+            "{msg}"
+        );
+        assert!(msg.contains("spawn /fno:blueprint x-aaaa instead"), "{msg}");
+        let flagged = payload_verb_refusal(
+            "$fno:target x-aaaa",
+            Some("x-aaaa"),
+            false,
+            Some(&row),
+            "high",
+        )
+        .expect("--node refuses too");
+        assert!(
+            flagged.contains("--node x-aaaa derives /blueprint"),
+            "{flagged}"
+        );
+    }
+
+    #[test]
+    fn client_lets_the_seam_own_every_other_answer() {
+        let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
+        for (seed, row, skips) in [
+            ("$fno:blueprint x-aaaa", Some(&row), false),
+            ("$fno:target x-aaaa", None, false),
+            ("$fno:target x-aaaa", Some(&row), true),
+            ("port the parser", Some(&row), false),
+        ] {
+            assert_eq!(
+                payload_verb_refusal(seed, None, skips, row, "high"),
+                None,
+                "{seed}"
+            );
+        }
+        for key in ["resume_id", "role_level", "role_scope"] {
+            assert!(spawn_skips_verb_check(&json!({ (key): 1 })), "{key}");
+        }
+        assert!(!spawn_skips_verb_check(&json!({"message": "x"})));
     }
 
     // --- the production params shape ------------------------------------- //

@@ -1132,13 +1132,12 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "pr-push") {
         return fno_agents::pr_push::run_push(&args[1..]);
     }
-    // `pr-body-check`: the repo's body guards, run before `gh pr create`.
-    if matches!(verb, "pr-body-check") {
-        return fno_agents::pr_body_check::run(&args[1..]);
-    }
-    // `pr-create`: the duplicate-guarded create (see pr_create.rs doc).
-    if matches!(verb, "pr-create") {
-        return fno_agents::pr_create::run_pr_create_verb(&args[1..]);
+    // The binary-direct `pr-*` verbs (body-check, create, base-lineage-check,
+    // and the ports that follow them) route through one door, so a new verb
+    // costs a match arm in pr_door.rs, not routing lines against this file's
+    // shrink-only budget.
+    if let Some(code) = fno_agents::pr_door::run_verb(verb, &args) {
+        return code;
     }
     // `pr-closure-*`: the closure-line parser/renderer (parse, render) and
     // the produce verbs ported from Python (branch-ids, ensure, trailer,
@@ -2270,6 +2269,14 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         fno_agents::merge_posture::apply_env_from_message(message);
     }
 
+    // A payload verb the node does not derive refuses before the registry,
+    // the launch and the claim transfer: a refused spawn leaves nothing behind.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(refusal) = fno_agents::node_seed::spawn_payload_verb_refusal(params, &cwd) {
+        eprintln!("fno-agents spawn: {refusal}");
+        return Some(2);
+    }
+
     let provider_param = params.get("provider").and_then(|v| v.as_str());
     // `substrate` is a CLIENT-ONLY routing key: build_request validates and
     // inserts it (default `pane`) for the spawn verb and this is its sole
@@ -2756,14 +2763,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // gemini -p / agy -p).: --model is forwarded to each (exact
         // passthrough to the provider CLI's own --model).
         ("codex", "headless") => {
-            // The daemon receipt is teardown telemetry for a one-shot spawn
-            // (append_daemon_receipt only stamps stderr on success), never a
-            // precondition: a codex whose app-server cannot boot (a stubbed
-            // CLI on PATH, a partial install, CI) still runs `codex --exec`,
-            // exactly like the Python lane that has no daemon step - refusing
-            // here was exit-code drift against every such environment. The
-            // daemon stays mandatory where it is load-bearing (inject/mail
-            // ensure their own).
+            // The daemon receipt is teardown telemetry, never a precondition: a
+            // codex whose app-server cannot boot (stubbed CLI, partial install,
+            // CI) still runs `codex --exec`, like the Python lane. Inject and
+            // mail ensure their own daemon.
             let daemon_receipt = match fno_agents::codex_inject::ensure_codex_daemon() {
                 Ok(result) => Some(result.receipt),
                 Err(error) => {
@@ -2792,12 +2795,9 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         ("gemini", "headless") => emit!(dispatch_gemini_once(
             home, name, &message, from_name, &cwd, yolo, timeout, model,
         )),
-        // opencode headless: the client-side one-shot
-        // `opencode run --dangerously-skip-permissions` (wires the lane;
-        // the bare `opencode` TUI stays the `pane` form). Stateless plain-text,
-        // like agy. The flag is NOT `--auto`: that spelling is stale vendor
-        // docs, it does not exist in `run --help`, and a comment naming it has
-        // twice been read as proof this arm was never built.
+        // opencode headless: the client-side one-shot `opencode run
+        // --dangerously-skip-permissions` (the bare TUI stays the `pane` form).
+        // The flag is NOT `--auto`: that spelling is stale vendor docs.
         ("opencode", "headless") => emit!(dispatch_opencode_once(
             home,
             name,
@@ -2805,6 +2805,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             from_name,
             &cwd,
             yolo,
+            timeout,
+            model,
+            effort,
+            &harness_args,
+        )),
+
+        // pi headless: one `pi --print --mode json` turn (pi_ask.rs).
+        ("pi", "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
             timeout,
             model,
             effort,
@@ -2886,21 +2899,15 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // held app-server process and register its full thread identity.
         ("codex", "bg") => None,
 
-        // The three arms above stay NAMED rather than lane-routed, because
-        // they are three different ownership models: claude's thread is
-        // hosted by the detached client itself, codex's by its own
-        // app-server, and opencode's by a serve-hosted HTTP session -
-        // `thread_lane` classifies all three `attach` (each answers "the
-        // harness owns the live session; a client re-attaches"), but that one
-        // label can't tell a client-side re-attach apart from a daemon-owned
-        // serve process, and each needs its own dispatch call. (Before,
-        // opencode's row read `keeper` here - a stale answer this match arm
-        // had to route around by name; the row now agrees with the dispatch
-        // below.)
+        // The three arms above stay NAMED rather than lane-routed: claude's
+        // thread is hosted by the detached client, codex's by its own
+        // app-server, opencode's by a serve-hosted HTTP session. `thread_lane`
+        // classifies all three `attach`, and that one label cannot tell a
+        // client-side re-attach from a daemon-owned serve process, so each
+        // needs its own dispatch call.
         // The REFUSAL is derived, because a provider name list goes stale the
-        // moment a lane is built and then misdirects the reader it was meant
-        // to help. Hard error pointing to headless; never a silent substrate
-        // swap.
+        // moment a lane is built. Hard error pointing to headless; never a
+        // silent substrate swap.
         (other, "bg") => {
             eprintln!(
                 "{}",
