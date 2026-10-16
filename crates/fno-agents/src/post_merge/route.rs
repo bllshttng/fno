@@ -790,7 +790,10 @@ fn inject_codex(session: &str, pr: i64) -> (bool, String) {
     } else {
         match crate::codex_inject::deliver_via_codex_daemon_sync(session, &cmd) {
             Ok(()) => (true, "delivered".to_string()),
-            Err(_) => (false, "not-live".to_string()),
+            // A transportless row is a hosted thread: its delivery lane was
+            // the switchboard exchange, which has no native arm yet. Name
+            // the lane, not the session; the cold path still runs the verb.
+            Err(_) => (false, "unsupported-lane:codex-thread".to_string()),
         }
     }
 }
