@@ -117,6 +117,7 @@ pub(crate) const SRC_QUESTIONS: &str = "fno inbox outstanding --json";
 pub(crate) const SRC_NEEDS: &str = "fno agents needs --json";
 pub(crate) const SRC_DISTRESS: &str =
     "~/.fno/events.jsonl (blocked rows) + bus/messages.jsonl + fno agents distress-verdicts";
+pub(crate) const SRC_STRANDED: &str = "git worktree list --porcelain (per repo) + per-tree probe";
 
 fn worked_node_ids(read: &SourceRead) -> HashSet<String> {
     read.payload
@@ -575,6 +576,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let s_needs = budget.start(SRC_NEEDS);
     let s_truth = budget.start("truth probe");
     let s_blocked_child = budget.start(SRC_DISTRESS);
+    let s_stranded = budget.start(SRC_STRANDED);
 
     // Mostly in-process: graph already read; claims scan, claimed-node lookups,
     // the needs fold, and the lane file.
@@ -654,171 +656,17 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         }
     }
 
-    // Blocked child and stranded tree run HERE, on the main thread, before
-    // the concurrent block below spends real wall time on gh pr list / inbox
-    // outstanding / the truth probe / the needs fold. Both readers' own
-    // `.start()`/`spawn_bound` check the SAME shared board deadline every
-    // other source checks; there is no per-source reservation (see
-    // org_board/budget.rs). Running after that concurrent section meant
-    // these two were the last code to check the deadline, so on a loaded
-    // fleet they starved on every beat even though their own slice claim
-    // succeeded early (READER FAILED ... board budget exhausted after
-    // registry::load_registry). Moving the actual read this early, right
-    // after the registry load, gives them first crack at the deadline
-    // instead of last.
-
-    // Blocked child: read the global distress journal and resolve every
-    // candidate's answered/unanswered state HERE, where claims, the graph,
-    // and the verdict subprocess already live - build_board only
-    // scope-filters and renders what this collects. Gated on
-    // `s_blocked_child` like every other source, so an exhausted board
-    // budget skips it rather than running an unbounded read anyway - the
-    // ONE bound this module's own contract promises. Wrapped in
-    // catch_unwind for the same reason the needs thread's `.join()` is:
-    // `AgentsHome::from_env()` panics under a test process with no
-    // declared hermetic root (paths.rs), and this function's own contract
-    // is "never panics on a source" (see doc comment above).
-    let blocked_child = match s_blocked_child {
-        None => {
-            spent(&mut sources, "blocked_child", &budget);
-            budget.spent_read()
-        }
-        Some(dl) => {
-            if Budget::spawn_bound(dl).is_zero() {
-                spent(&mut sources, "blocked_child", &budget);
-                budget.spent_read()
-            } else {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let home = crate::paths::AgentsHome::from_env();
-                    let journal = crate::daemon::global_events_path(&home);
-                    match read_blocked_rows(&journal) {
-                        Err(e) => SourceRead::err(e),
-                        Ok(rows) => {
-                            let claim_rows = claims.rows();
-                            let claim_state_by_node: HashMap<String, String> = claim_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                    Some((
-                                        node.to_string(),
-                                        s_str(row, "state").unwrap_or("").to_string(),
-                                    ))
-                                })
-                                .collect();
-                            let status_by_node: HashMap<String, String> = entries
-                                .as_deref()
-                                .unwrap_or(&[])
-                                .iter()
-                                .filter_map(|n| {
-                                    Some((
-                                        s_str(n, "id")?.to_string(),
-                                        s_str(n, "status").unwrap_or("").to_string(),
-                                    ))
-                                })
-                                .collect();
-                            let candidates = queues::resolve_blocked_child_candidates(
-                                rows,
-                                &claim_state_by_node,
-                                &claim_acquired_at_by_node(&claim_rows),
-                                &status_by_node,
-                                blocked_child_grace_minutes(&cwd),
-                                now_secs_board() as i64,
-                            );
-                            if candidates.is_empty() {
-                                SourceRead::ok(Value::Array(Vec::new()))
-                            } else {
-                                // A row keyed by its run id is never bus-addressed;
-                                // the node's live claim names the harness session
-                                // the bus does address.
-                                let claim_session_by_node: HashMap<String, String> = claim_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                        Some((
-                                            node.to_string(),
-                                            s_str(row, "session_id")?.to_string(),
-                                        ))
-                                    })
-                                    .collect();
-                                let mail_candidates: Vec<(String, Option<String>, String)> =
-                                    candidates
-                                        .iter()
-                                        .map(|(row, _)| {
-                                            let holder = row
-                                                .node
-                                                .as_deref()
-                                                .and_then(|n| claim_session_by_node.get(n))
-                                                .cloned();
-                                            (row.session.clone(), holder, row.ts.clone())
-                                        })
-                                        .collect();
-                                let answered = queues::mail_answered_since(
-                                    &bus_live_log_path(),
-                                    &mail_candidates,
-                                );
-
-                                let mut sessions: Vec<String> = Vec::new();
-                                for (session, holder, _) in &mail_candidates {
-                                    for key in [Some(session.as_str()), holder.as_deref()]
-                                        .into_iter()
-                                        .flatten()
-                                    {
-                                        if !sessions.iter().any(|s| s == key) {
-                                            sessions.push(key.to_string());
-                                        }
-                                    }
-                                }
-                                let mut cmd = fno_py_cmd();
-                                cmd.extend([
-                                    "agents".to_string(),
-                                    "distress-verdicts".to_string(),
-                                    "--sessions".to_string(),
-                                    serde_json::to_string(&sessions)
-                                        .unwrap_or_else(|_| "[]".to_string()),
-                                ]);
-                                let verdict_bound = Budget::spawn_bound(dl);
-                                let verdict_payload = if verdict_bound.is_zero() {
-                                    SourceRead::err(budget.spent_error())
-                                } else {
-                                    run_json(cmd, &cwd, verdict_bound)
-                                };
-                                let verdicts: HashMap<String, String> = mail_candidates
-                                    .iter()
-                                    .filter_map(|(session, holder, _)| {
-                                        queues::verdict_for(
-                                            verdict_payload.payload.as_ref(),
-                                            session,
-                                            holder.as_deref(),
-                                        )
-                                        .map(|v| (session.clone(), v))
-                                    })
-                                    .collect();
-                                SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
-                                    candidates, &answered, &verdicts,
-                                )))
-                            }
-                        }
-                    }
-                }));
-                let read =
-                    result.unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked"));
-                mark(&mut sources, "blocked_child", &read, false);
-                read
-            }
-        }
-    };
-
-    // The stranded-tree read: which linked worktrees hold uncommitted or
-    // unpushed work under an open lead-priority node. Candidates come from
-    // the one graph read; repos from the workspace map plus this repo's
-    // canonical root, so a board run anywhere lands the same tree set.
-    let stranded_candidate_nodes = entries
-        .as_deref()
-        .map(|e| stranded_candidates(e))
-        .unwrap_or_default();
-    let stranded_repos = scope::project_repo_paths(&cwd);
-    let stranded = read_stranded_trees(&stranded_repos, &stranded_candidate_nodes, &mut budget);
-    mark(&mut sources, "stranded", &stranded, false);
+    // Blocked child and stranded tree ride the SAME concurrent thread pool
+    // as worked/prs/ready/outstanding/needs below (t_blocked_child,
+    // t_stranded), not a sequential step ahead of it: an earlier version of
+    // this fix ran them sequentially before that pool, which stopped them
+    // starving but meant their own wall time (the distress journal read, a
+    // `git worktree list` + per-tree probe per repo) now sat on the
+    // critical path ahead of every other source, so a slow repo could just
+    // as easily starve worked/prs/ready/outstanding/needs instead (P1,
+    // reviewed). True concurrency - every source bounded by the one shared
+    // deadline, none of them ordered ahead of or behind the others - is
+    // what actually fixes it rather than reassigning it.
 
     // The reads that can take real wall time run concurrently: gh pr
     // list, `fno inbox outstanding`, the batched truth
@@ -856,6 +704,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         holder_activity,
         holder_activity_error,
         holder_starved,
+        blocked_child,
+        stranded,
     ) = std::thread::scope(|s| {
         // The worked read answers in-process now: the authority is native
         // (backlog::worked), and the Python leg it used to shell out to is a
@@ -1081,6 +931,157 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             })
         });
 
+        // Blocked child: read the global distress journal and resolve every
+        // candidate's answered/unanswered state HERE, where claims, the
+        // graph, and the verdict subprocess already live - build_board only
+        // scope-filters and renders what this collects. Wrapped in
+        // catch_unwind for the same reason the needs thread's `.join()` is:
+        // `AgentsHome::from_env()` panics under a test process with no
+        // declared hermetic root (paths.rs), and this function's own
+        // contract is "never panics on a source" (see doc comment above).
+        let t_blocked_child = s_blocked_child.map(|dl| {
+            let claims = &claims;
+            let entries = entries_ref;
+            let cwd = cwd_for_threads.clone();
+            let spent_err = spent_err.clone();
+            s.spawn(move || {
+                if Budget::spawn_bound(dl).is_zero() {
+                    return SourceRead::over_budget(spent_err);
+                }
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let home = crate::paths::AgentsHome::from_env();
+                    let journal = crate::daemon::global_events_path(&home);
+                    match read_blocked_rows(&journal) {
+                        Err(e) => SourceRead::err(e),
+                        Ok(rows) => {
+                            let claim_rows = claims.rows();
+                            let claim_state_by_node: HashMap<String, String> = claim_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    let node = s_str(row, "key")?.strip_prefix("node:")?;
+                                    Some((
+                                        node.to_string(),
+                                        s_str(row, "state").unwrap_or("").to_string(),
+                                    ))
+                                })
+                                .collect();
+                            let status_by_node: HashMap<String, String> = entries
+                                .unwrap_or(&[])
+                                .iter()
+                                .filter_map(|n| {
+                                    Some((
+                                        s_str(n, "id")?.to_string(),
+                                        s_str(n, "status").unwrap_or("").to_string(),
+                                    ))
+                                })
+                                .collect();
+                            let candidates = queues::resolve_blocked_child_candidates(
+                                rows,
+                                &claim_state_by_node,
+                                &claim_acquired_at_by_node(&claim_rows),
+                                &status_by_node,
+                                blocked_child_grace_minutes(&cwd),
+                                now_secs_board() as i64,
+                            );
+                            if candidates.is_empty() {
+                                SourceRead::ok(Value::Array(Vec::new()))
+                            } else {
+                                // A row keyed by its run id is never bus-addressed;
+                                // the node's live claim names the harness session
+                                // the bus does address.
+                                let claim_session_by_node: HashMap<String, String> = claim_rows
+                                    .iter()
+                                    .filter_map(|row| {
+                                        let node = s_str(row, "key")?.strip_prefix("node:")?;
+                                        Some((
+                                            node.to_string(),
+                                            s_str(row, "session_id")?.to_string(),
+                                        ))
+                                    })
+                                    .collect();
+                                let mail_candidates: Vec<(String, Option<String>, String)> =
+                                    candidates
+                                        .iter()
+                                        .map(|(row, _)| {
+                                            let holder = row
+                                                .node
+                                                .as_deref()
+                                                .and_then(|n| claim_session_by_node.get(n))
+                                                .cloned();
+                                            (row.session.clone(), holder, row.ts.clone())
+                                        })
+                                        .collect();
+                                let answered = queues::mail_answered_since(
+                                    &bus_live_log_path(),
+                                    &mail_candidates,
+                                );
+
+                                let mut sessions: Vec<String> = Vec::new();
+                                for (session, holder, _) in &mail_candidates {
+                                    for key in [Some(session.as_str()), holder.as_deref()]
+                                        .into_iter()
+                                        .flatten()
+                                    {
+                                        if !sessions.iter().any(|s| s == key) {
+                                            sessions.push(key.to_string());
+                                        }
+                                    }
+                                }
+                                let mut cmd = fno_py_cmd();
+                                cmd.extend([
+                                    "agents".to_string(),
+                                    "distress-verdicts".to_string(),
+                                    "--sessions".to_string(),
+                                    serde_json::to_string(&sessions)
+                                        .unwrap_or_else(|_| "[]".to_string()),
+                                ]);
+                                let verdict_bound = Budget::spawn_bound(dl);
+                                let verdict_payload = if verdict_bound.is_zero() {
+                                    SourceRead::err(spent_err.clone())
+                                } else {
+                                    run_json(cmd, &cwd, verdict_bound)
+                                };
+                                let verdicts: HashMap<String, String> = mail_candidates
+                                    .iter()
+                                    .filter_map(|(session, holder, _)| {
+                                        queues::verdict_for(
+                                            verdict_payload.payload.as_ref(),
+                                            session,
+                                            holder.as_deref(),
+                                        )
+                                        .map(|v| (session.clone(), v))
+                                    })
+                                    .collect();
+                                SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
+                                    candidates, &answered, &verdicts,
+                                )))
+                            }
+                        }
+                    }
+                }));
+                result.unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked"))
+            })
+        });
+
+        // The stranded-tree read: which linked worktrees hold uncommitted or
+        // unpushed work under an open lead-priority node. Candidates come
+        // from the one graph read; repos from the workspace map plus this
+        // repo's canonical root, so a board run anywhere lands the same
+        // tree set.
+        let t_stranded = s_stranded.map(|dl| {
+            let entries = entries_ref;
+            let cwd = cwd_for_threads.clone();
+            let spent_err = spent_err.clone();
+            s.spawn(move || {
+                if Budget::spawn_bound(dl).is_zero() {
+                    return SourceRead::over_budget(spent_err);
+                }
+                let candidates = entries.map(stranded_candidates).unwrap_or_default();
+                let repos = scope::project_repo_paths(&cwd);
+                read_stranded_trees(&repos, &candidates, dl, &spent_err)
+            })
+        });
+
         let (prs, pr_nodes, pr_warnings, prs_truncated, pr_gates) = match t_prs {
             None => {
                 let err = budget.spent_error();
@@ -1130,6 +1131,20 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 .join()
                 .unwrap_or_else(|_| SourceRead::err("needs: reader panicked")),
         };
+        let blocked_child = match t_blocked_child {
+            None => budget.spent_read(),
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked")),
+        };
+        mark(&mut sources, "blocked_child", &blocked_child, false);
+        let stranded = match t_stranded {
+            None => budget.spent_read(),
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| SourceRead::err("stranded: reader panicked")),
+        };
+        mark(&mut sources, "stranded", &stranded, false);
         let (holder_activity, holder_activity_error, holder_starved): (
             HashMap<String, crate::truth_probe::TruthProbe>,
             Option<String>,
@@ -1211,6 +1226,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             holder_activity,
             holder_activity_error,
             holder_starved,
+            blocked_child,
+            stranded,
         )
     });
     warnings.extend(pr_warnings);
