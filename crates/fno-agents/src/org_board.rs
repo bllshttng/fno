@@ -1140,10 +1140,10 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         match compile_scope_ids(&scope, entries, &projects) {
             Ok(ids) => {
                 scope_ids = Some(ids);
-                foreign_owned = match budget.start(SRC_OWNERS) {
-                    None => budget.spent_read(),
-                    Some(_) => foreign_owned_read(&scope, entries, &projects),
-                };
+                // One registry file and an in-memory compile: no subprocess to
+                // bound, and a spent budget must not turn the unplanned queue
+                // blind for a read that costs milliseconds.
+                foreign_owned = foreign_owned_read(&scope, entries, &projects);
                 mark(&mut sources, "owners", &foreign_owned, false);
             }
             Err(e) => {
