@@ -309,7 +309,7 @@ event_types:
           description: "Human-readable provenance on a settle row: why the row exists (the invocation died unanswered) and that no review ran. Present only on output_contract lost."
         model:
           type: string
-          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit) and by classify --attest through the same helper, never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
+          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
         provider:
           type: string
           description: "The endpoint host the attesting session was pointed at (host only, derived from ANTHROPIC_BASE_URL at emit; scheme, path, and any userinfo are stripped so no key material lands here). Empty means not observable from the environment - the default Anthropic endpoint, or a lane that does not route via env. Same best-effort caveat as model."
@@ -317,6 +317,10 @@ event_types:
           type: string
           enum: [fresh, shared, unknown]
           description: "Positive evidence about the reviewer's execution context: fresh means a harness-recorded forked review context, shared means a same-context review tool result, and unknown means no positive context marker. Measures context independence, never who invoked the verb, and is not gating."
+        execution_context:
+          type: string
+          enum: [inline, fork]
+          description: "Where the review ran: inline is the attesting session's own context, fork a harness-recorded forked review context. OPTIONAL: rows before this field predate it, and its absence is the legacy shape."
         invocation_id:
           type: string
           description: "Join to the review_invocation attempt that produced this attestation."
@@ -6110,6 +6114,25 @@ event_types:
         detail:
           type: string
           description: "Bounded diagnostic: the warm miss reason or the ritual receipt tail."
+
+  - name: post_merge_archive
+    description: "One row per post-merge ritual archive attempt (worktree archived or refused). Written by the ritual verb's archive leg; Python's ritual emitted the same kind unregistered, so this entry lands with the port."
+    sources: [daemon]
+    data:
+      required: [pr, project, outcome, detail]
+      properties:
+        pr:
+          type: integer
+          description: "GitHub PR number the ritual archived against."
+        project:
+          type: string
+          description: "Project slug the ritual ran under."
+        outcome:
+          type: string
+          description: "The archive step's receipt status (ok | failed | skipped)."
+        detail:
+          type: string
+          description: "The archive step's receipt detail line."
 
   - name: merge_grant_execution
     description: "One attributable attempt by the PR watcher to execute a durable dispatch grant on an OPEN PR: reserved under the per-PR lock before the canonical merge core runs, then executed, held, or failed from the core's verdict. Held and failed rows carry the merge core's printed reason."

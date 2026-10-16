@@ -491,38 +491,14 @@ if [[ "$1" == "doctor" && "$2" == "event" && "$3" == "emit" ]]; then
   exit 0
 fi
 if [[ "$1" == "do" && "$2" == "review" && "$3" == "classify" ]]; then
-  f=""; attest=""; ctx="unknown"; xctx="inline"; contract="json_block"; shift 3
+  f=""; shift 3
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --findings-file) f="$2"; shift 2 ;;
-      --attest) attest="$2"; shift 2 ;;
-      --reviewer-context) ctx="$2"; shift 2 ;;
-      --execution-context) xctx="$2"; shift 2 ;;
-      --output-contract) contract="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
   record="$(bash "$stub_dir/classify-real.sh" "$f")" || exit $?
-  if [[ -n "$attest" ]]; then
-    # The verb's contract, stubbed against the fixture repo (cwd): measure
-    # the verdict from the classified record (prose_unparseable always fails),
-    # measure the diff, merge, and write the ONE emit the shell delegates to.
-    # FNO_ATTEST_BRANCH, when the producer set it, overrides the row's branch
-    # field ONLY - the verb's own contract under test, mirrored here.
-    if [[ "$contract" == "prose_unparseable" ]]; then
-      verdict="fail"
-    else
-      verdict="$(jq -r 'if (.findings_blocking // 1) == 0 then "pass" else "fail" end' <<<"$record")"
-    fi
-    merged="$(jq -cn --argjson rec "$record" --arg reviewer "$attest" --arg verdict "$verdict" \
-      --arg head "$(git rev-parse HEAD)" \
-      --arg branch "${FNO_ATTEST_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}" \
-      --arg base "$(git merge-base HEAD origin/main)" \
-      --arg ctx "$ctx" --arg xctx "$xctx" --arg contract "$contract" \
-      '$rec + {reviewer:$reviewer,head_sha:$head,verdict:$verdict,session_id:"",branch:$branch,reviewed_base_sha:$base,reviewed_head_sha:$head,reviewer_context:$ctx,execution_context:$xctx,output_contract:$contract,invocation_id:"UNJOINED"}')"
-    printf '%s\n' "doctor" "event" "emit" "-t" "review_attestation" "-s" "target" "-d" "$merged" \
-      > "$stub_dir/last-emit.txt"
-  fi
   echo "$record"
   exit 0
 fi
@@ -569,6 +545,15 @@ got="$(stored '.branch')"
 got="$(stored '.reviewer_context')"
 [[ "$got" == "shared" ]] && pass "reviewer_context unchanged by the record" \
   || fail "reviewer_context changed: '$got'"
+got="$(stored '.verdict')"
+[[ "$got" == "fail" ]] && pass "measured verdict fail on one blocking finding (typed pass ignored)" \
+  || fail "measured verdict: want fail, got '$got'"
+got="$(stored '.execution_context')"
+[[ "$got" == "inline" ]] && pass "row carries execution_context=inline" \
+  || fail "execution_context: want inline, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "json_block" ]] && pass "row carries output_contract=json_block" \
+  || fail "output_contract: want json_block, got '$got'"
 
 echo "== --findings-file refusals (AC2-ERR) =="
 for case in missing invalid notarray; do
@@ -589,6 +574,22 @@ for case in missing invalid notarray; do
     || fail "$case refusal lacks the file name: $(cat "$TMP/err.txt")"
 done
 
+echo "== prose_unparseable forces fail (AC2-ERR) =="
+F17="$TMP/findings-clean.json"
+cat > "$F17" <<'J'
+[{"category": "typo", "file": "t.py", "line": 1, "summary": "teh", "failure_scenario": "reader stumble"}]
+J
+rm -f "$TMP/last-emit.txt"
+emit_ff "inline prose_unparseable --findings-file $F17"
+[[ -f "$TMP/last-emit.txt" ]] && pass "prose_unparseable run emits" \
+  || fail "prose_unparseable run emitted nothing"
+got="$(stored '.verdict')"
+[[ "$got" == "fail" ]] && pass "prose_unparseable with zero blocking rides fail" \
+  || fail "prose_unparseable verdict: want fail, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "prose_unparseable" ]] && pass "row carries the prose_unparseable contract" \
+  || fail "output_contract: want prose_unparseable, got '$got'"
+
 echo "== no --findings-file stays byte-identical (AC2-EDGE) =="
 rm -f "$TMP/last-emit.txt"
 emit_ff ""
@@ -599,6 +600,12 @@ for key in findings_blocking findings_nonblocking findings review_round disposit
   [[ "$got" == "<missing>" ]] && pass "no-file payload omits $key" \
     || fail "no-file payload carries $key='$got'"
 done
+got="$(stored '.execution_context')"
+[[ "$got" == "inline" ]] && pass "no-file row carries execution_context=inline" \
+  || fail "no-file execution_context: want inline, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "json_block" ]] && pass "no-file row carries output_contract=json_block" \
+  || fail "no-file output_contract: want json_block, got '$got'"
 
 echo "== default-branch shapes + delegated-path branch parity (x-a8a1) =="
 git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
@@ -645,21 +652,21 @@ got="$(stored '.branch')"
 [[ "$got" == "main" ]] && pass "main-based work records branch=main (its true scope)" \
   || fail "main-based branch: want main, got '$got'"
 
-# 16. The delegated path (--findings-file) records the SAME branch the typed
-#     path resolves: the script passes its post-rewrite branch through
-#     --branch, so a reviewer worktree's LOCAL checkout name never reaches
-#     the row. Same worktree, same head, one flag apart used to produce two
+# 16. The classified path (--findings-file) records the SAME branch the typed
+#     path resolves: the emitter rewrites the branch once, before the one
+#     emit, so a reviewer worktree's LOCAL checkout name never reaches the
+#     row. Same worktree, same head, one flag apart used to produce two
 #     different branches (x-a8a1, node note 2).
 git -C "$REPO" checkout -q -B wt/r-4 origin/feature/x-e601
 git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-4 >/dev/null 2>&1
 rm -f "$TMP/last-emit.txt"
 emit_ff "--findings-file $F14"
-[[ -f "$TMP/last-emit.txt" ]] && pass "delegated emit from a reviewer-worktree branch lands" \
-  || fail "delegated emit wrote nothing"
+[[ -f "$TMP/last-emit.txt" ]] && pass "classified emit from a reviewer-worktree branch lands" \
+  || fail "classified emit wrote nothing"
 got="$(stored '.branch')"
 [[ "$got" == "feature/x-e601" ]] \
-  && pass "delegated path records the rewritten PR branch, not the local name" \
-  || fail "delegated branch: want feature/x-e601, got '$got'"
+  && pass "classified path records the rewritten PR branch, not the local name" \
+  || fail "classified branch: want feature/x-e601, got '$got'"
 
 echo ""
 echo "emit-attestation: $PASS passed, $FAIL failed"

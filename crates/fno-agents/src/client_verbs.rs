@@ -1490,6 +1490,8 @@ pub enum RowLiveness {
 ///    rung is silent on a row that carries an exit stamp: a rollout stays
 ///    fresh-written past its worker's stop, so on a stamped row freshness
 ///    would resurrect it - the stamp path owns that row instead.
+/// 5. **Footnote heartbeat** (footnote rows): a `heartbeat` record under
+///    90 s old in the session record. Silent on an exit-proven row.
 ///
 /// Rung 4's freshness window: a codex rollout jsonl written within
 /// this many seconds of now proves the session is advancing. A quiet rollout
@@ -1607,6 +1609,13 @@ where
             truth_fn(&handle).as_deref(),
             Some("working" | "watching" | "your-move")
         ) {
+            return RowLiveness::Alive;
+        }
+    }
+    if entry.harness_name() == "footnote" && !exit_proven {
+        let now = crate::claude_ask::now_epoch_secs();
+        let record = entry.log_path.as_deref().map(std::path::Path::new);
+        if record.is_some_and(|p| crate::footnote_harness::transcript::heartbeat_fresh(p, now)) {
             return RowLiveness::Alive;
         }
     }

@@ -91,6 +91,7 @@ mod bounded_spawn;
 pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;
+pub(crate) mod cap_liveness;
 pub mod capability_leaves;
 pub mod capacity;
 pub mod cargo_build_dirs;
@@ -205,7 +206,9 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
+pub mod gh_poller;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
@@ -355,6 +358,7 @@ pub mod paths_cli;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
+pub mod pi_ask;
 pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
@@ -364,6 +368,7 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod post_merge;
 pub mod pr_admission;
 pub mod pr_base_check;
 pub mod pr_body_check;
@@ -1589,6 +1594,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The pr-watch sweep flipped an open fno-bound draft PR back to ready
     // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
     "pr_watch_draft_flip",
+    // The post-merge route's per-attempt attribution receipt (route.rs);
+    // observability only, never a dedup input.
+    "post_merge_dispatch_receipt",
+    // One row per post-merge ritual archive attempt (ritual.rs archive leg);
+    // Python emitted the kind unregistered, the port registers it.
+    "post_merge_archive",
     // The question intake's journal write (the ask port): the durable half
     // of `fno inbox outstanding ask`.
     "operator_question",

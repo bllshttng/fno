@@ -88,38 +88,11 @@ CLASSIFY_MARKER="$TMP/classify.ran"
 CLAIM_JSON="$TMP/claims.json"
 RELEASED="$TMP/released.txt"
 printf '%s\n' '[]' > "$CLAIM_JSON"
-export CLASSIFY_PYTHONPATH="$REPO_ROOT/cli/src"
-# The interpreter that can import the real classifier, chosen POSITIVELY and
-# proven before any case runs.
-#
-# This was pinned to `$REPO_ROOT/cli/.venv/bin/python`, which exists in the
-# canonical checkout and in NO fresh worktree. Every positive case then failed
-# with "NO attestation emitted" - a missing interpreter wearing the exact
-# costume of the defect this suite guards, inside the suite that guards it. A
-# red that means "the harness could not run" must never be spelled the same as
-# a red that means "the hook stayed silent".
-#
-# So: try the candidates, keep the first that can actually import the module,
-# and if none can, exit 77 (the runner's skip) naming the reason. Never fall
-# through to a run that scores the hook against an interpreter it never had.
-CLASSIFY_PYTHON=""
-for candidate in \
-  "$REPO_ROOT/cli/.venv/bin/python" \
-  "$REPO_ROOT/../../../cli/.venv/bin/python" \
-  "$(command -v python3 || true)"; do
-  [[ -x "$candidate" ]] || continue
-  if PYTHONPATH="$CLASSIFY_PYTHONPATH" "$candidate" -c 'import fno.review.cli' 2>/dev/null; then
-    CLASSIFY_PYTHON="$candidate"
-    break
-  fi
-done
-if [[ -z "$CLASSIFY_PYTHON" ]]; then
-  echo "SKIP: no interpreter can import fno.review.cli from $CLASSIFY_PYTHONPATH" >&2
-  echo "  tried the worktree venv, the canonical venv, and python3 on PATH." >&2
-  echo "  Run 'uv sync --project cli' (or scripts/setup/setup-worktree.sh) first." >&2
-  exit 77
-fi
-export CLASSIFY_PYTHON
+# The classify leg runs the REAL record door through the native binary,
+# chosen POSITIVELY and proven before any case runs (the same rule the
+# retired Python interpreter hunt below it once served: a red that means
+# "the harness could not run" must never be spelled the same as a red that
+# means "the hook stayed silent").
 CLASSIFY_BIN=""
 for candidate in \
   "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
@@ -159,38 +132,15 @@ if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\
   exit 0
 fi
 if [[ "\${1:-}" == "do" && "\${2:-}" == "review" && "\${3:-}" == "classify" ]]; then
-  f=""; attest=""; contract="json_block"; xctx="inline"; ctx="unknown"; shift 3
+  f=""; shift 3
   while [[ \$# -gt 0 ]]; do
     case "\$1" in
       --findings-file) f="\$2"; shift 2 ;;
-      --attest) attest="\$2"; shift 2 ;;
-      --output-contract) contract="\$2"; shift 2 ;;
-      --execution-context) xctx="\$2"; shift 2 ;;
-      --reviewer-context) ctx="\$2"; shift 2 ;;
       *) shift ;;
     esac
   done
   printf '%s\n' "\$f" >> "$CLASSIFY_MARKER"
   record="\$("$CLASSIFY_BIN" review-level findings record --findings-file "\$f")" || exit \$?
-  if [[ -n "\$attest" ]]; then
-    # The shell delegates its findings-path emit to `classify --attest`; the
-    # stub mirrors the verb contract: verdict measured from the classified
-    # record, written as the one emit line the assertions grep. The injected
-    # emit failure fires here too, exactly as it does on the sink branch.
-    if [[ "\${FNO_TEST_EMIT_FAIL:-}" == "1" ]]; then
-      echo "injected event emit failure" >&2
-      exit 17
-    fi
-    if [[ "\$contract" == "prose_unparseable" ]]; then
-      verdict="fail"
-    else
-      verdict="\$(jq -r 'if (.findings_blocking // 1) == 0 then "pass" else "fail" end' <<<"\$record")"
-    fi
-    payload="\$(jq -cn --argjson rec "\$record" --arg verdict "\$verdict" --arg reviewer "\$attest" \
-      --arg contract "\$contract" --arg xctx "\$xctx" --arg ctx "\$ctx" \
-      '{reviewer:\$reviewer,head_sha:"stub",verdict:\$verdict,session_id:"",output_contract:\$contract,execution_context:\$xctx,reviewer_context:\$ctx} + \$rec')"
-    printf '%s\n' "doctor event emit -t review_attestation -s target -d \$payload" >> "$EMITTED"
-  fi
   echo "\$record"
   exit 0
 fi

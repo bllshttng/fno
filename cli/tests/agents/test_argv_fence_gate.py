@@ -380,7 +380,10 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # has no end-of-options fence, so a `--` element would die there as an
     # unknown argument; a flag-shaped payload also cannot deliver, because the
     # raw lane refuses any payload that does not start with / or $ and an
-    # unknown leading-dash argument exits 2 before the raw lane runs.
-    assert counts.get("exempt", 0) == 15, counts
+    # unknown leading-dash argument exits 2 before the raw lane runs. Sixteen:
+    # the pi headless one-shot's argv tail in pi_ask.rs, on the same probed
+    # reason as pi_run_tail, and its prompt always starts with `[from:` or a
+    # verb sigil.
+    assert counts.get("exempt", 0) == 16, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

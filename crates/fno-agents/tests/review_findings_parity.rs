@@ -386,3 +386,34 @@ fn review_findings_post_golden_parity() {
         problems.join("\n")
     );
 }
+
+/// The classify golden table, captured from the Python leaf right before
+/// this PR deleted it. The retired rows are rust-only and hand-written: the
+/// flags parameterized the deleted --attest body, so no Python oracle ever
+/// ran them.
+#[test]
+fn review_findings_classify_golden_parity() {
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_fno-agents"));
+    let base =
+        std::env::temp_dir().join(format!("review-findings-classify-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let mut ran = 0;
+    let mut problems: Vec<String> = Vec::new();
+    for case in cases() {
+        if case["action"].as_str() == Some("classify") {
+            compare_case(&bin, &base, &case, &mut problems);
+            ran += 1;
+        }
+    }
+    assert!(
+        ran > 0,
+        "the classify table ran no case: cases.json lost it"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} classify case(s) differ from the goldens:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
+}
