@@ -14,7 +14,6 @@ In emit order, inside the single plan doc's `## Execution Strategy` waves:
 
 | Header | Required | Purpose |
 |--------|----------|---------|
-| `## Design` | yes (step 2e) | Types, one owner per fact, and seams, written before any task. `none: <why>` when no type or boundary moves |
 | `## Execution Strategy` | yes | Machine-readable YAML wave manifest for `/execute waves` |
 | `## Wave N: <name>` (one per wave) | optional | Human or legacy wikilink target for a shippable unit |
 | `## Phase Dependencies` | optional | Human-readable phase DAG when YAML alone is insufficient |
