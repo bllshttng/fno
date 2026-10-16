@@ -200,10 +200,10 @@ The findings payload is a fenced JSON array, at most the level's cap, ranked mos
 
 `autofix_class` is `gated_auto`, `manual`, or `advisory`. `gated_auto` names a fix a machine can apply: mechanical, scoped to the reviewed diff, provable by a test. `manual` names a fix the author applies. `advisory` records judgment with no fix intended. When two candidates dedup to one, the survivor carries the more conservative class (advisory over manual over gated_auto). A disagreement about fixability resolves against the machine. An absent class reads as absent: nothing is auto-applied on a guess. `owner` names who acts (`author` or `reviewer`), and `--fix` prints it. The class rides the attestation ledger beside the finding, so the next round reads what can be applied without re-deriving it.
 
-Write the array to a temp file, classify it, and attest in the same command. The verb writes the `review_attestation` row with the verdict it measured from the classified findings (pass only on zero blocking), so the lane never counts its own findings and no separate pass step exists:
+Write the array to a temp file and attest in the same command. `emit-attestation.sh` classifies the findings and writes the `review_attestation` row. The row carries the verdict the emitter measured from the classified record: pass only on zero blocking findings and a readable contract. The lane never counts its own findings, and no separate pass step exists. Type no verdict word: the positional is ignored on this path:
 
 ```bash
-fno do review classify --findings-file "$FINDINGS" --emit-record --attest code-review
+bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review --findings-file "$FINDINGS"
 ```
 
 When earlier rounds on this branch raised blocking findings, the payload carries them and their dispositions: `{"findings": [...], "dispositions": [{"finding_key", "disposition", "reason"}]}`. Dispose each blocking finding as `fixed`, or as `declined` with a cited reason. A declined reason quotes the proving line at the current head as a double-quoted span, which the emit gate enforces. It also names the failure scenario that does not hold. The row records it as disposed-by-decline, and it counts against the round cap the same as a fix. A pass that leaves one out is refused at emit. Never drop a finding from the array to reach a pass. A round that declines its own finding stays a fail, and under the two-round law a fail row counts once the cap is reached. `nonblocking` never clears a finding the gate reads as blocking.
