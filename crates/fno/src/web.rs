@@ -2023,9 +2023,13 @@ mod tests {
             PAGE.contains("new WebSocket("),
             "the page still opens the read-only socket"
         );
+        // The one send is the share knock, and only in share mode. The mux
+        // view sends nothing upstream (Locked Decision 5), and the share
+        // bridge never writes to the mux socket either.
+        let sends: Vec<&str> = PAGE.lines().filter(|l| l.contains(".send(")).collect();
         assert!(
-            !PAGE.contains(".send("),
-            "the page sends nothing upstream at all (Locked Decision 5)"
+            sends.len() == 1 && sends[0].contains("if (SHARE) ws.send(JSON.stringify({ knock:"),
+            "only the share knock is sent: {sends:?}"
         );
         assert!(
             !PAGE.contains(r#""Resize""#),
