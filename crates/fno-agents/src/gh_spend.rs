@@ -17,6 +17,7 @@
 //! clean-sounding answer stand in for a partial one.
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const JOURNAL_NAME: &str = "github-request-spend.jsonl";
 const ROTATE_BYTES: u64 = 8 * 1024 * 1024;
@@ -173,17 +174,27 @@ fn fold_path(path: &str) -> String {
 
 /// The caller label for THIS process, computed once: `FNO_GH_CALLER` wins
 /// outright when set (checked per call, so a test can pin it), otherwise
-/// the process ancestry names the caller.
+/// the process ancestry names the caller. The walk caches: `journal_verdict`
+/// runs it under the ledger flock `admit` holds, and on a non-macOS host
+/// each hop is a `ps` probe - twelve subprocess launches per admission is
+/// serialization the budget cannot afford.
 pub(crate) fn caller_label() -> String {
     if let Ok(v) = std::env::var("FNO_GH_CALLER") {
         if !v.is_empty() {
             return v;
         }
     }
-    caller_label_from(&|pid| {
-        crate::census::process_argv(pid).map(|argv| {
-            let parent = crate::census::parent_pid(pid).unwrap_or(0);
-            (argv, parent)
+    caller_label_cached().clone()
+}
+
+fn caller_label_cached() -> &'static String {
+    static LABEL: OnceLock<String> = OnceLock::new();
+    LABEL.get_or_init(|| {
+        caller_label_from(&|pid| {
+            crate::census::process_argv(pid).map(|argv| {
+                let parent = crate::census::parent_pid(pid).unwrap_or(0);
+                (argv, parent)
+            })
         })
     })
 }

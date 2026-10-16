@@ -58,7 +58,7 @@ fn ledger_word(state: LedgerState) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Ledger {
     stamps: Vec<(i64, u32)>,
     backoff_until_ms: i64,
@@ -76,6 +76,25 @@ struct Ledger {
     core_reset_ms: i64,
     /// When the stored reading was observed; 0 never.
     core_seen_ms: i64,
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Ledger {
+            stamps: Vec::new(),
+            backoff_until_ms: 0,
+            backoff_step: 0,
+            last_refusal_ms: 0,
+            last_half_open_ms: 0,
+            // Unknown, never 0: an absent or unreadable ledger must not
+            // read as an exhausted account during outage diagnosis. The
+            // admit gate stays inert anyway (reset 0 is never in the
+            // future); this keeps `status` honest.
+            core_remaining: -1,
+            core_reset_ms: 0,
+            core_seen_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
