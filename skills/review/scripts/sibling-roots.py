@@ -59,8 +59,10 @@ def main() -> int:
             continue
         listed = True
         for p in projects:
-            path = norm(p.get("path", ""))
-            if path and path != root and os.path.isdir(path):
+            if not p.get("path"):
+                continue
+            path = norm(p["path"])
+            if path != root and os.path.isdir(path):
                 siblings.setdefault(p.get("name") or os.path.basename(path), path)
 
     if not listed:

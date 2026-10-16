@@ -92,7 +92,7 @@ A batched dispatch can run this skill up to three times in sequence. Each run st
 
 ## Amend (a plan that is already ready)
 
-An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. A ruling that moves a type or a module owner is not an amend: re-run step 2e for that part. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit.
+An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit. A ruling that moves a type or a module owner is not an amend: re-run step 2e for that part.
 
 1. A seat order that says "build wave one, then re-blueprint" means the first source edit comes first. Make it, then amend between waves. A seated worker never amends before its first edit.
 2. Read the live rulings once: `fno backlog decisions <node> --state live --json`. Add every missing `decisions_acknowledged` entry in one edit. Change only the tasks a ruling names.

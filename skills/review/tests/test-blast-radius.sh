@@ -47,6 +47,10 @@ supported = false
 [harness.footnote.resume_strategy.forms.interactive_create]
 kind = "unsupported"
 TOML
+git -C "$TMP/fno" add -A
+git -C "$TMP/fno" -c user.email=t@t -c user.name=t commit -q -m 'harness rows'
+# The checkout moves on without the claim; the committed ref still carries it.
+rm "$TMP/fno/harness_capabilities.toml"
 
 mkrepo "$TMP/elsewhere"
 
@@ -54,7 +58,8 @@ cat > "$TMP/workspaces.json" <<JSON
 {"footnote": {"projects": [
    {"name": "fnh", "path": "$TMP/fnh"},
    {"name": "fno", "path": "$TMP/fno"},
-   {"name": "gone", "path": "$TMP/not-on-disk"}]},
+   {"name": "gone", "path": "$TMP/not-on-disk"},
+   {"name": "pathless"}]},
  "other": {"projects": [{"name": "elsewhere", "path": "$TMP/elsewhere"}]}}
 JSON
 
@@ -74,7 +79,7 @@ test_replay_lands_on_the_stale_claim() {
   echo "== grepping each sibling for the changed surface finds the stale TUI claim"
   local hits="" name path
   while IFS=$'\t' read -r name path; do
-    hits+="$(grep -rnF --include='*.toml' -- 'TUI' "$path" || true)"
+    hits+="$(git -C "$path" grep -n -F -e 'TUI' HEAD || true)"
   done < <(python3 "$HELPER" "$TMP/fnh-wt" < "$TMP/workspaces.json")
   case "$hits" in
     *"harness_capabilities.toml:4:# No TUI exists"*) pass "sweep names the stale line by file:line" ;;
