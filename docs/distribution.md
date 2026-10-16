@@ -134,14 +134,14 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 ### Release candidate (one click a day)
 
 1. The candidate opens itself. The nightly publish dispatches `channel=rc` at the same green commit. That run builds and parks on the `release` approval. To open one by hand, run `gh workflow run release.yml -f channel=rc` for the newest green main commit. Add `-f sha=<commit>` for a specific one.
-2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job uploads `0.4.0rcN` to PyPI and creates the `v0.4.0rcN` tag and pre-release. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion syncs main past the base, the next candidate opens on the new base. crates.io is stable-only. A plain `pip install` skips rc versions. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
+2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job uploads `0.4.0rcN` to PyPI and creates the `v0.4.0rcN` tag and pre-release. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion, the next candidate opens on the next unreleased patch. Main's version can still read the released one. crates.io is stable-only. A plain `pip install` skips rc versions. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
 3. When a candidate sits unclicked for more than a day, the workflow opens one reminder issue naming the waiting run. It closes itself once a candidate ships. A waiting candidate never stacks: the next candidate parks and the stale pending run is cancelled. The click always holds the newest commit.
 
 ### Stable (one click)
 
 1. Promote: `gh workflow run release.yml -f channel=stable`.
 2. The one click uploads `0.4.0` to PyPI and crates.io. Both are permanent: a version cannot be re-uploaded. The click also creates the `v0.4.0` tag as Latest and bumps the Homebrew tap. It moves the `stable` branch and the `fno--v0.4.0` plugin tag. The plugin marketplaces pin those refs, and they move only on stable promotion.
-3. Bump main for the next cycle: `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
+3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. They need no bump. To move main's version, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
 
 ### Rehearsal (fork, `dry_run`)
 
