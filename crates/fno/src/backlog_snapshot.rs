@@ -524,6 +524,13 @@ fn select_public_rows(rows: &[Value], project: &str) -> Result<Vec<Value>, Strin
         .filter(|r| r.get("public").and_then(Value::as_bool) != Some(false))
         .filter(|r| project_key(r) == project)
         .filter(|r| in_public_backlog_set(r))
+        // The quarantine default-deny: an imported request row publishes
+        // only when the owner flipped it public. projections.rs is_public_in
+        // holds the fno-agents twin of this rule.
+        .filter(|r| {
+            r.get("source_kind").and_then(Value::as_str) != Some("external_request")
+                || r.get("public").and_then(Value::as_bool) == Some(true)
+        })
         .collect();
     let mut out = Vec::new();
     let mut omitted = 0usize;
@@ -953,10 +960,16 @@ mod tests {
             json!({"id": "x-6", "title": "Stale open", "slug": "so",
                    "status": "in_progress", "project": "fno",
                    "superseded_by": "x-1", "completed_at": "2026-01-01"}),
+            json!({"id": "x-ext-null", "title": "Visitor request", "slug": "vr",
+                   "status": "ready", "project": "fno", "type": "feature",
+                   "source_kind": "external_request"}),
+            json!({"id": "x-ext-pub", "title": "Visitor request published", "slug": "vrp",
+                   "status": "ready", "project": "fno", "type": "feature",
+                   "source_kind": "external_request", "public": true}),
         ];
         let selected = select_public_rows(&rows, "fno").unwrap();
         let ids: Vec<&str> = selected.iter().map(|r| r["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, vec!["x-1"]);
+        assert_eq!(ids, vec!["x-1", "x-ext-pub"]);
 
         let inputs = inputs_from_rows(&selected);
         let (private, _) = render_one(&inputs, None, None, None, false).unwrap();
@@ -966,7 +979,7 @@ mod tests {
             "the private page carries the recovery command"
         );
         let (page, count) = render_one(&inputs, None, None, None, true).unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2, "the published external row renders beside x-1");
         assert!(page.contains("Public thing"), "{page}");
         for secret in [
             "/Users/someone/secret",
