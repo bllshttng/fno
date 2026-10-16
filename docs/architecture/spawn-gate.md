@@ -42,7 +42,20 @@ When the rule holds, the cap for this pass becomes `counted + 1`. The admitted r
 
 So a burst grows by about one worker a minute. The next waiter sees a worker younger than 60 seconds and keeps waiting until it settles. A queue of 5 waiters at the ceiling gets 4 of them in before the fifth hits the 240-second timeout. The epic advance reads the probe's `max_live - live_workers`, so it dispatches one node per pass during a burst too.
 
-What still bounds a burst: the fleet incident stop, the runaway brake, the 400-process attributed ceiling, the account and lane quota locks, the provider lane caps, the CPU hold (a turning machine re-holds the spawn, which then needs two consecutive under-ceiling samples), the RAM floor re-read at dequeue, lead_share, which divides the burst cap, the per-territory cap, the blueprint cap and the 240-second queue timeout. The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only on a worker exit or a reaper removal of done-idle rows.
+What still bounds a burst:
+
+- the fleet incident stop
+- the runaway brake
+- the 400-process attributed ceiling
+- the account and lane quota locks
+- the provider lane caps
+- the CPU hold, which re-holds a turning machine's spawn until two consecutive under-ceiling samples
+- the RAM floor re-read at dequeue
+- lead_share, which divides the burst cap
+- the per-territory cap and the blueprint cap
+- the 240-second queue timeout
+
+The gate never kills work. A burst reverses by admitting nothing more while CPU or memory turns, and the fleet drains as workers finish. The slot count falls only on a worker exit or a reaper removal of done-idle rows.
 
 The caps stack lowest first: the learned cap, the user's floor, the learned-cap yield, `agents.max_live`, and the burst past it under the rule above. The floor holds the learned cap up but never above `agents.max_live`. Only the burst passes the ceiling. `--force` and the user's own typed spawn pass every capacity axis including the burst, and still meet the RAM floor. A scheduled eval run keeps deferring at `agents.max_live`: background evals never start a burst.
 
