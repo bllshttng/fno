@@ -3,7 +3,7 @@
 //! node-tagged `friction` event stream (crate::backlog::calibration owns the
 //! computation; this module owns argv, I/O and render).
 
-use super::calibration::{aggregate, compute, friction_counts_by_node, NodeCalibration};
+use super::calibration::{aggregate, compute, friction_counts_by_node};
 use serde_json::{json, Value};
 
 struct CalibrationArgs {
@@ -34,22 +34,6 @@ impl CalibrationArgs {
 }
 
 const CALIBRATION_HELP: &str = "Join a shipped node's filed difficulty/size against its actual cost and friction\n\nUsage: fno backlog calibration [OPTIONS]\n\nOptions:\n  -d, --domain <DOMAIN>  Filter to one domain\n  -J, --json             Emit {\"nodes\": [...], \"aggregate\": [...]}\n  -h, --help             Print help";
-
-fn row_to_json(row: &NodeCalibration) -> Value {
-    json!({
-        "id": row.id,
-        "title": row.title,
-        "domain": row.domain,
-        "planned_difficulty": row.planned_difficulty,
-        "re_estimated": row.re_estimated,
-        "planned_size": row.planned_size,
-        "actual_cost_usd": row.actual_cost_usd,
-        "session_count": row.session_count,
-        "duration_hours": row.duration_hours,
-        "friction": row.friction,
-        "smooth": row.smooth,
-    })
-}
 
 pub fn run(tail: &[String]) -> i32 {
     if tail.iter().any(|t| t == "--help" || t == "-h") {
@@ -90,23 +74,9 @@ pub fn run(tail: &[String]) -> i32 {
     let rows = compute(&nodes, &friction_by_node);
     let agg = aggregate(&rows);
     if args.json_out {
-        let nodes_json: Vec<Value> = rows.iter().map(row_to_json).collect();
-        let agg_json: Vec<Value> = agg
-            .iter()
-            .map(|a| {
-                json!({
-                    "domain": a.domain,
-                    "planned_difficulty": a.planned_difficulty,
-                    "node_count": a.node_count,
-                    "smooth_count": a.smooth_count,
-                    "avg_cost_usd": a.avg_cost_usd,
-                    "avg_duration_hours": a.avg_duration_hours,
-                })
-            })
-            .collect();
         println!(
             "{}",
-            super::render::py_json_pretty(&json!({"nodes": nodes_json, "aggregate": agg_json}))
+            super::render::py_json_pretty(&json!({"nodes": rows, "aggregate": agg}))
         );
         return 0;
     }

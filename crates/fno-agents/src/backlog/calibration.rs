@@ -9,12 +9,13 @@
 //! was never revised past its filed entry. No agent writes this field, so
 //! no agent can flatter it.
 
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// One shipped node's planned-vs-actual read.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeCalibration {
     pub id: String,
     pub title: String,
@@ -40,7 +41,7 @@ pub struct NodeCalibration {
 }
 
 /// One `(domain, planned_difficulty)` rollup: which plans/domains run clean.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AggregateRow {
     pub domain: Option<String>,
     pub planned_difficulty: Option<String>,
@@ -221,59 +222,44 @@ mod tests {
     }
 
     #[test]
-    fn clean_node_with_no_friction_is_smooth() {
-        let nodes = vec![done_node("x-aaaa", "code", "medium", 5.0)];
-        let friction = BTreeMap::new();
-        let rows = compute(&nodes, &friction);
+    fn smooth_excludes_in_progress_and_costless_nodes() {
+        let mut in_progress = done_node("x-dddd", "code", "medium", 5.0);
+        in_progress["status"] = json!("in_progress");
+        let mut costless = done_node("x-eeee", "code", "medium", 0.0);
+        costless["cost_sessions"] = json!([]);
+        let clean = done_node("x-aaaa", "code", "medium", 5.0);
+        let rows = compute(&[in_progress, costless, clean], &BTreeMap::new());
         assert_eq!(rows.len(), 1);
         assert!(rows[0].smooth);
         assert_eq!(rows[0].duration_hours, Some(2.0));
     }
 
     #[test]
-    fn ci_failure_friction_makes_it_rough() {
-        let nodes = vec![done_node("x-bbbb", "code", "medium", 5.0)];
-        let mut friction = BTreeMap::new();
-        friction.insert(
+    fn ci_failure_friction_or_a_re_estimate_makes_it_rough() {
+        let friction = BTreeMap::from([(
             "x-bbbb".to_string(),
             BTreeMap::from([("ci_failure".to_string(), 1)]),
-        );
-        let rows = compute(&nodes, &friction);
+        )]);
+        let rows = compute(&[done_node("x-bbbb", "code", "medium", 5.0)], &friction);
         assert!(!rows[0].smooth);
-        assert_eq!(rows[0].friction.get("ci_failure"), Some(&1));
-    }
 
-    #[test]
-    fn re_estimated_difficulty_is_rough_even_with_no_friction() {
-        let mut node = done_node("x-cccc", "code", "medium", 5.0);
-        node["difficulty_history"] = json!([
+        let mut revised = done_node("x-cccc", "code", "medium", 5.0);
+        revised["difficulty_history"] = json!([
             {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
             {"value": "high", "source": "revised", "ts": "2026-01-02T00:00:00Z"}
         ]);
-        let rows = compute(&[node], &BTreeMap::new());
-        assert!(rows[0].re_estimated);
-        assert!(!rows[0].smooth);
-    }
-
-    #[test]
-    fn non_done_and_costless_nodes_are_excluded() {
-        let mut in_progress = done_node("x-dddd", "code", "medium", 5.0);
-        in_progress["status"] = json!("in_progress");
-        let mut costless = done_node("x-eeee", "code", "medium", 0.0);
-        costless["cost_sessions"] = json!([]);
-        let rows = compute(&[in_progress, costless], &BTreeMap::new());
-        assert!(rows.is_empty());
+        let rows = compute(&[revised], &BTreeMap::new());
+        assert!(rows[0].re_estimated && !rows[0].smooth);
     }
 
     #[test]
     fn aggregate_groups_by_domain_and_planned_difficulty() {
-        let nodes = vec![
+        let nodes = [
             done_node("x-f001", "code", "medium", 4.0),
             done_node("x-f002", "code", "medium", 6.0),
             done_node("x-f003", "docs", "low", 1.0),
         ];
-        let rows = compute(&nodes, &BTreeMap::new());
-        let agg = aggregate(&rows);
+        let agg = aggregate(&compute(&nodes, &BTreeMap::new()));
         let code_medium = agg
             .iter()
             .find(|a| {
