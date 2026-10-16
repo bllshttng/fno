@@ -261,7 +261,6 @@ K2	cli/tests/integration/test_native_lane_bundles.py	py	4
 K2	cli/tests/integration/test_slot_policy_dispatch.py	py	3
 K2	cli/tests/integration/test_undispatched_order.py	py	4
 K2	cli/tests/test_mux_shell_integration.py	py	6
-K2	cli/tests/test_post_merge_dispatch.py	py	35
 K2	cli/tests/test_short_flag_dispatch.py	py	3
 K2	cli/tests/test_spawn_flag_owners_lint.py	py	3
 K2	cli/tests/test_spawn_guard.py	py	27
@@ -444,7 +443,6 @@ K3	cli/tests/unit/test_gate_registry_reachable.py	py	2
 K3	cli/tests/unit/test_lead_wake.py	py	13
 K3	cli/tests/unit/test_lead_wake_phase.py	py	77
 K3	cli/tests/unit/test_leak_census.py	py	4
-K3	cli/tests/unit/test_ledger_sessions.py	py	10
 K3	cli/tests/unit/test_registry.py	py	4
 K3	cli/tests/unit/test_registry_handle_invariant.py	py	11
 K3	cli/tests/unit/test_registry_mint_guard.py	py	7
@@ -956,7 +954,6 @@ K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
 K6	cli/tests/mcp/test_sidecar_lifecycle.py	py	15
 K6	cli/tests/relay/test_roundtrip.py	py	67
-K6	cli/tests/test_post_merge_route.py	py	39
 K6	cli/tests/test_pr_read_budget.py	py	6
 K6	cli/tests/test_pr_watch_cli_adapters.py	py	36
 K6	cli/tests/test_pr_watch_decide.py	py	26
@@ -1048,8 +1045,6 @@ K6	cli/tests/unit/test_pr_rest.py	py	37
 K6	cli/tests/unit/test_pr_review_hold.py	py	47
 K6	cli/tests/unit/test_pr_review_hold_verb.py	py	15
 K6	cli/tests/unit/test_pr_reviews.py	py	32
-K6	cli/tests/unit/test_pr_ritual.py	py	58
-K6	cli/tests/unit/test_pr_ritual_merge_guard.py	py	10
 K6	cli/tests/unit/test_pr_verify.py	py	29
 K6	cli/tests/unit/test_pr_watch_config_coupling.py	py	10
 K6	cli/tests/unit/test_pr_watch_merge_drain.py	py	12
@@ -1673,7 +1668,6 @@ K10	cli/tests/integration/test_selection_score.py	py	7
 K10	cli/tests/integration/test_state_cli.py	py	10
 K10	cli/tests/integration/test_test_run_lifecycle.py	py	3
 K10	cli/tests/test_autonomy_status.py	py	13
-K10	cli/tests/test_direct_finalize_rung.py	py	10
 K10	cli/tests/test_exit_codes.py	py	3
 K10	cli/tests/test_help_shorthands.py	py	7
 K10	cli/tests/test_menu_caps_lint.py	py	11

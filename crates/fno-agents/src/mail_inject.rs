@@ -897,7 +897,7 @@ fn resolve_target_in(
     Ok((sock, worker.short_id().to_string(), transcript))
 }
 
-fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static str> {
+pub(crate) fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static str> {
     resolve_target_in(
         session,
         &crate::claude_roster::daemon_dir(),
@@ -2002,7 +2002,7 @@ impl crate::claude_attach::ControlTransport for PaneTransport {
 /// lanes, with the pane transport underneath and the HOSTED harness's own
 /// accepted-turn record (claude transcript or codex rollout) as the confirm
 /// target -- the landing confirm the codex pane never had.
-fn deliver_via_pane(
+pub(crate) fn deliver_via_pane(
     session: &str,
     address: &str,
     hosted_harness: Option<&str>,
