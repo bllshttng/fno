@@ -1289,7 +1289,12 @@ def build_pane_argv(
         argv = [provider]
         argv += pane_passthrough_tokens(passthrough, argv)
         return argv
-    raise DispatchAskError(f"provider {provider!r} has no interactive pane form", exit_code=2)
+    try:
+        render_session_argv(provider, "headless_create", session_uuid)
+        hint = "; --substrate headless runs it as a one-shot"
+    except DispatchResolveError:
+        hint = ""
+    raise DispatchAskError(f"provider {provider!r} has no interactive pane form{hint}", exit_code=2)
 
 
 def _mesh_env_pairs(
