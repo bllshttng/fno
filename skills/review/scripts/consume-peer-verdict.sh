@@ -21,11 +21,12 @@ trap 'rm -f "$payload_file"' EXIT
 
 emit() {
   # $1 = verdict; $2 (optional) = findings-file for the classified record.
-  # With a findings file the VERB is the writer and the verdict is the one it
-  # measures (the classified count, never the argument); the typed-verdict
-  # shell path stays for the legacy-shape refusal, which carries no findings.
+  # One writer: emit-attestation.sh runs for both shapes and measures the
+  # verdict from the classified record on the findings path; the typed
+  # verdict matters only on the legacy-shape refusal, which carries no
+  # findings.
   if [[ -n "${2:-}" ]]; then
-    "${FNO:-fno}" do review classify --findings-file "$2" --emit-record --attest peer
+    bash "$script_dir/emit-attestation.sh" peer "$1" --findings-file "$2"
   else
     bash "$script_dir/emit-attestation.sh" peer "$1"
   fi
