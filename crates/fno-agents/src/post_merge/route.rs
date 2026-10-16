@@ -477,7 +477,9 @@ fn dispatch_claim_root(
             borrowed_harness: None,
         };
         let _ = (seams.emit)(events_path().as_deref(), &r);
-        return result("disabled", pr);
+        let mut out = result("disabled", pr);
+        out.detail = Some("auto-run-disabled".to_string());
+        return out;
     }
     let marker = marker_path(canonical, &dispatch_id);
     // Cross-session / cross-trigger dedup: a persisted marker means the
