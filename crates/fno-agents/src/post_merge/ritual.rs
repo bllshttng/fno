@@ -175,11 +175,11 @@ fn parking_lot_path(canon: Option<&Path>, pm: &PostMergeConfig) -> Option<PathBu
 /// One bounded child run: exit code, streams, and how it ended. A hang reads
 /// as a timeout, never as a wedge - the Python legs' whole point.
 pub(crate) struct LegRun {
-    code: i32,
-    stdout: String,
-    stderr: String,
-    timed_out: bool,
-    spawn_error: Option<String>,
+    pub(crate) code: i32,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) timed_out: bool,
+    pub(crate) spawn_error: Option<String>,
 }
 
 impl LegRun {

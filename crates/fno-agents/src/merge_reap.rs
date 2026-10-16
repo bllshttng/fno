@@ -281,7 +281,7 @@ pub(crate) fn scan_pr_nodes(entries: &[Value], pr: i64, slug: Option<&str>) -> V
 /// one answerer of "which nodes did this PR ship?" for both mint sites; an
 /// unreadable store degrades to no recovery.
 pub(crate) fn pr_node_ids(home: &AgentsHome, pr: i64, slug: Option<&str>) -> Vec<String> {
-    let store = crate::backlog::api::Store::new(&graph_path(home));
+    let store = crate::backlog::api::Store::new(&crate::gc_sweep::graph_path(home));
     let Ok(rows) = crate::backlog::api::rows(&store) else {
         return Vec::new();
     };
@@ -366,6 +366,7 @@ pub(crate) fn emit_merge_cleanup_requested(
         "merged_at".into(),
         json!(merged_at
             .filter(|s| !s.is_empty())
+            .map(str::to_string)
             .unwrap_or_else(crate::events::now_rfc3339)),
     );
     data.insert("session_id".into(), json!(session_id));

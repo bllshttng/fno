@@ -52,10 +52,11 @@ pub fn run(args: &[String]) -> i32 {
     let candidates: Option<Vec<String>> = payload
         .get("candidate_row_names")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect();
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<String>>()
+        });
     let request_id = crate::merge_reap::emit_merge_cleanup_requested(
         &home,
         repo,

@@ -223,7 +223,7 @@ fn emit_receipt(path: Option<&Path>, r: &Receipt) -> bool {
     // attribution is worse than a recorded miss. Alphabetical inserts keep
     // the row stable under the preserve-order map.
     for (k, v) in [
-        ("attempt_id", json!(r.attempt_id)),
+        ("attempt_id", Some(json!(r.attempt_id))),
         ("borrowed_harness", opt(r.borrowed_harness)),
         ("borrowed_session_id", opt(r.borrowed_session_id)),
         ("delivering_harness", opt(r.delivering_harness)),
@@ -242,14 +242,14 @@ fn emit_receipt(path: Option<&Path>, r: &Receipt) -> bool {
                 None => None,
             },
         ),
-        ("detector", json!("pr-watch")),
-        ("dispatch_id", json!(r.dispatch_id)),
+        ("detector", Some(json!("pr-watch"))),
+        ("dispatch_id", Some(json!(r.dispatch_id))),
         ("node_id", opt(r.node_id)),
-        ("outcome", json!(r.outcome)),
-        ("phase", json!(r.phase)),
-        ("pr", json!(r.pr)),
+        ("outcome", Some(json!(r.outcome))),
+        ("phase", Some(json!(r.phase))),
+        ("pr", Some(json!(r.pr))),
         ("repo_slug", opt(r.repo_slug)),
-        ("route", json!(r.route)),
+        ("route", Some(json!(r.route))),
     ] {
         if let Some(v) = v {
             data.insert(k.to_string(), v);
@@ -352,7 +352,7 @@ fn read_auto_run(canonical: &Path) -> Option<bool> {
         pm.get("auto_run")
             .and_then(Value::as_bool)
             .or_else(|| {
-                pm.get("auto_run").and_then(Value::as_str).and_then(|s| {
+                pm.get("auto_run").and_then(Value::as_str).map(|s| {
                     crate::ledger_axes::truthy(&serde_json::Value::String(s.to_string()))
                 })
             })
@@ -476,7 +476,7 @@ fn dispatch_claim_root(
             borrowed_session_id: None,
             borrowed_harness: None,
         };
-        let _ = (seams.emit)(&events_path(), &r);
+        let _ = (seams.emit)(events_path().as_deref(), &r);
         return result("disabled", pr);
     }
     let marker = marker_path(canonical, &dispatch_id);
@@ -587,7 +587,7 @@ fn run_dispatch(
     // Reserve the receipt BEFORE any action. Fail-closed: a write failure
     // starts no work and writes no marker, so the merge stays retryable.
     let reserved = base.clone_receipt("reserved", "reserved");
-    if !(seams.emit)(&events_path(), &reserved) {
+    if !(seams.emit)(events_path().as_deref(), &reserved) {
         let mut r = result("failed", pr);
         r.detail = Some("receipt-reservation-failed".to_string());
         return r;
@@ -607,7 +607,7 @@ fn run_dispatch(
                 };
                 let mut acc = base.clone_receipt("accepted", outcome);
                 acc.detail = Some(reason.clone());
-                let _ = (seams.emit)(&events_path(), &acc);
+                let _ = (seams.emit)(events_path().as_deref(), &acc);
                 let mut r = result("routed-warm", pr);
                 r.short_id = crate::identity::canonical_handle(borrowed);
                 r.detail = Some(if reason == "queue-timeout" {
@@ -640,7 +640,7 @@ fn run_dispatch(
     if !ok {
         let mut failed = base.clone_receipt("failed", "verb-nonzero");
         failed.detail = Some(tail.clone());
-        let _ = (seams.emit)(&events_path(), &failed);
+        let _ = (seams.emit)(events_path().as_deref(), &failed);
         let mut r = result("failed", pr);
         let cut: String = tail.chars().take(200).collect();
         r.detail = Some(if cut.is_empty() {
@@ -653,7 +653,7 @@ fn run_dispatch(
     persist_marker(canonical, dispatch_id);
     let mut accepted = base.clone_receipt("accepted", "completed");
     accepted.detail = Some(tail.clone());
-    let _ = (seams.emit)(&events_path(), &accepted);
+    let _ = (seams.emit)(events_path().as_deref(), &accepted);
     let mut r = result(
         if finalized_origin {
             "finalized-origin"
