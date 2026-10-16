@@ -34,7 +34,24 @@ fn mask(text: &str, case_dir: &PathBuf) -> String {
     if !real.is_empty() {
         text = text.replace(&real, "<CASE>");
     }
-    text
+    // The unreadable-ledger reason carries the language's own JSON error
+    // prose (msg-twin per the reachable-paths baseline): the golden pins
+    // the prefix and masks the exception, the way the capture froze it.
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        match line.find("ledger unreadable: ") {
+            Some(start) => {
+                let from = start + "ledger unreadable: ".len();
+                let tail = &line[from..];
+                match tail.find('"') {
+                    Some(end) => out.push_str(&format!("{}<ERR>{}", &line[..from], &tail[end..])),
+                    None => out.push_str(line),
+                }
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
 }
 
 fn golden(key: &str, ext: &str) -> Option<String> {

@@ -141,8 +141,11 @@ fn truthy_json(v: Option<&Value>) -> bool {
 }
 
 fn post_merge_config(canon: &Path) -> Option<PostMergeConfig> {
-    let table = crate::agents_config::config_table_merged(canon, &["post_merge"])?;
-    let pm = table.get("post_merge")?;
+    // config_table_merged returns the walked subtable's FIELDS, not the
+    // parent. A missing section materializes the defaults, like the Python
+    // settings model: no [post_merge] reads enabled-by-default, not as the
+    // config leg's failure.
+    let pm = crate::agents_config::config_table_merged(canon, &["post_merge"]).unwrap_or_default();
     Some(PostMergeConfig {
         enabled: match pm.get("enabled") {
             Some(v) => truthy(Some(v)),

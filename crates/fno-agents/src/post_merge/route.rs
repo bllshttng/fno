@@ -344,11 +344,12 @@ fn resolve_canonical(pinned: Option<PathBuf>, node_cwd: Option<&str>) -> PathBuf
 }
 
 /// The arm reads `post_merge.auto_run` itself, fail closed: a config-load
-/// error is an unconfigured repo, never an armed one.
+/// error is an unconfigured repo, never an armed one. The merged table IS
+/// the post_merge fields; the missing section reads false here because a
+/// repo that never opted in must not dispatch.
 fn read_auto_run(canonical: &Path) -> Option<bool> {
     let table = crate::agents_config::config_table_merged(canonical, &["post_merge"])?;
-    let pm = table.get("post_merge")?;
-    Some(match pm.get("auto_run") {
+    Some(match table.get("auto_run") {
         Some(toml::Value::Boolean(b)) => *b,
         Some(toml::Value::String(s)) => {
             matches!(
