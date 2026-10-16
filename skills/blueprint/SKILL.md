@@ -92,7 +92,7 @@ A batched dispatch can run this skill up to three times in sequence. Each run st
 
 ## Amend (a plan that is already ready)
 
-An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit.
+An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. A ruling that moves a type or a module owner is not an amend: re-run step 2e for that part. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit.
 
 1. A seat order that says "build wave one, then re-blueprint" means the first source edit comes first. Make it, then amend between waves. A seated worker never amends before its first edit.
 2. Read the live rulings once: `fno backlog decisions <node> --state live --json`. Add every missing `decisions_acknowledged` entry in one edit. Change only the tasks a ruling names.
@@ -210,6 +210,15 @@ fi
    The `## Law governing blueprint` block lists the project laws for this plan. Each of those needs a `decisions_acknowledged` entry too, because validate-plan checks the same list. When no block reached this session, print it yourself: `printf '{"mode":"stage","hook":{"tool_name":"Skill","tool_input":{"skill":"fno:blueprint","args":"<node>"}}}' | fno inbox law stage | jq -r '.hook_output.hookSpecificOutput.additionalContext // "no stage law"'`.
 
    Silence is not an outcome. A plan that ignores its sibling is the failure this gate exists to prevent. Do not build a second consolidator here: `fno backlog groom` already owns the daily levers-only pass and its allowlist already carries `supersede`. This gate is the pre-write half only.
+
+2e. **Shape the design before the tasks** - every plan, after 2d and before any task or wave exists. Tasks cut along the module lines you draw here. Cut tasks first and they draw the module lines for you, usually badly. Write a `## Design` section with four parts:
+
+   - **Types.** List each data shape the plan adds or changes. Give its fields, its states, and which states are illegal. Make an illegal state impossible to write where the language allows. One enum beats two booleans that must agree. One optional field beats two fields that must both be set or both be empty. A type never restates a count its data already holds. A fixed array length or a hand-kept total breaks on every add.
+   - **Owners.** One module owns each fact: one writer, and every other module reads through it. Take the count from 2b-bis. Two writers of one fact is a design defect. Fix it here, not in a later PR.
+   - **Seams.** For each touched module, name what callers see and what stays hidden. Callers see functions or verbs, errors, and ordering rules. A caller that must know an internal detail means the seam is in the wrong place.
+   - **Extends.** The existing module this design grows, from the fifth question in 2a-bis. A new module needs one line saying why no existing one fits.
+
+   Then cut the tasks. Each task in the Execution Strategy names the one module it owns. A task that edits two owners' modules is two tasks or a wrong boundary. A plan that changes no type and no module boundary (prose, docs, config values only) writes `## Design` with the single line `none: <why>`. A supplied design doc whose `## Architecture` already answers the four parts cites it under `## Design` and does not repeat it.
 
 3. **Write** the plan.
 
@@ -443,6 +452,9 @@ kill_criteria:
 ## Context
 [Problem, root cause, what we found]
 
+## Design
+[Step 2e: types and their illegal states, one owner per fact, seams, the module it extends. Or `none: <why>`.]
+
 ## Changes
 
 ### 1. [Change name]
@@ -465,7 +477,7 @@ kill_criteria:
 1. [Concrete runnable check]
 ```
 
-**Required sections:** Context, Changes, Files to Modify, Verification.
+**Required sections:** Context, Design, Changes, Files to Modify, Verification.
 **Optional sections:** Patterns to Reuse (omit if no relevant patterns exist).
 
 ### Writing Principles
@@ -545,6 +557,7 @@ When the input to `/blueprint` is a path to an existing design doc (produced by 
 ```
 1. Read design doc + frontmatter
 1b. Ask the code index: run the creation path's step 2-index against the doc's claims and write its `code_index:` block and `## Existence audit` table into the doc
+1c. Shape the design: run the creation path's step 2e. Cite the doc's `## Architecture` when it answers the four parts, else write `## Design`, before any task exists
 2. Validate: status must be "design" (or "ready" if `rewrite` passed)
 3. Detect codebase state (--mode greenfield|brownfield skips this):
    - Read ## Architecture section, extract file path mentions
