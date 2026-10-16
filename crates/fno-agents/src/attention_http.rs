@@ -299,13 +299,16 @@ pub fn tick_sinks(
             if state.contains_key(&did) {
                 continue;
             }
-            let body = delivery_body(
-                Some(sink),
-                &did,
-                "item.opened",
-                None,
-                Some(&serde_json::to_value(item).unwrap_or(json!({}))),
-            );
+            let body = match sink.kind {
+                SinkKind::Ntfy => ntfy_body(item, sink, &did),
+                SinkKind::Webhook => delivery_body(
+                    Some(sink),
+                    &did,
+                    "item.opened",
+                    None,
+                    Some(&serde_json::to_value(item).unwrap_or(json!({}))),
+                ),
+            };
             let result = post.post(
                 &sink.url,
                 &sink_headers(Some(sink)).unwrap_or_default(),
@@ -775,6 +778,23 @@ mod tests {
         let body2 = second.bodies.borrow()[0].clone();
         let id2: Value = serde_json::from_str(&body2).unwrap();
         assert_eq!(id2["delivery_id"].as_str(), Some(id1.as_str()));
+    }
+
+    #[test]
+    fn an_ntfy_item_opened_body_carries_the_item_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let items = ready_items();
+        let sinks = vec![sink_ntfy("phone", "https://reach.example")];
+        let mut post = ScriptedPost {
+            responses: RefCell::new(vec![]),
+            bodies: RefCell::new(vec![]),
+        };
+        let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut post);
+        assert_eq!(t.delivered, 1);
+        let body: Value = serde_json::from_str(&post.bodies.borrow()[0]).unwrap();
+        assert_eq!(body["title"], items[0].title.as_str());
+        assert_ne!(body["title"], "Question closed");
+        assert_eq!(body["topic"], "fleet");
     }
 
     #[test]
