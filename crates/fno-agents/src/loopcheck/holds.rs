@@ -267,10 +267,7 @@ pub(crate) fn scan_open_holds(
 /// hold standing instead of silently releasing a session.
 pub(crate) fn node_is_done(cwd: &std::path::Path, id: &str) -> bool {
     use crate::backlog::model::Status;
-    let graph = crate::agents_config::state_dir(cwd)
-        .map(|root| crate::state_layout::place(&root, "graph.json"))
-        .unwrap_or_else(crate::graph_get::default_graph_path);
-    let store = crate::backlog::api::Store::new(&graph);
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
     matches!(
         crate::backlog::api::node(&store, id),
         Ok(Some(n)) if matches!(n.status, Status::Done | Status::Superseded)
