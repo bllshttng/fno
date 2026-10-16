@@ -34,6 +34,8 @@ Work every angle in this same context, in one pass - do not skip angles for lack
 
 Angle F (sibling answerer) runs at every level, low through max, on top of the sets above: it reads the plan's `surface:` block rather than more hunks, so it costs one grep, not a wider pass.
 
+Angle G (blast radius) also runs at every level. It is the one angle that reads past the diff and past this repo.
+
 ### The low pass
 
 One tool call: read the unified diff from Phase 0. No full-file reads. Flag runtime-correctness bugs visible from the hunk alone: inverted/wrong condition, off-by-one, null/undefined deref where adjacent lines show the value can be absent, removed guard, falsy-zero check, missing `await`, wrong-variable copy-paste, error swallowed in a catch that should propagate. Also flag, still from the hunk alone, new code that duplicates an existing helper visible in the diff context, and dead code the diff leaves behind. Do not flag style, naming, perf, missing tests, or anything outside the hunk.
@@ -61,6 +63,16 @@ When the PR adds or modifies a type that wraps another (cache, proxy, decorator,
 ### Angle F - sibling answerer
 
 For the one question this diff answers (take it from the plan's `surface:` block when the PR has one; phrase it yourself when it does not), find one answerer the diff did not touch: another read or write of the same field, a second timeout on the same read, a second id format for the same thing, a second constant for the same limit. Grep the symbol, not the word. Grep it in every language tree, not only the diff's own. If you find one the block does not list, that is a candidate: the plan undercounted, and the next PR on this feature is already visible. If the block lists it as `out-of-scope`, check that the reason still holds against the diff.
+
+### Angle G - blast radius beyond the diff
+
+The other angles ask whether the diff is right. This one asks who else relies on what the diff changed and never saw it change. A staff engineer reads the consumers before the code.
+
+1. Name the surfaces. List each thing the diff changes that a reader outside the changed files can depend on: a verb, a flag, an output line, a file format, a config key, an event type, an exit code, a public type, a default, or a claim about what a tool can do. One line each, in the shape `<surface>: <old> -> <new>`. A diff that changes no such surface writes `surfaces: none` and the angle ends.
+2. Cross-repo contracts first. Another repo breaks silently, and no check in this repo fails. List the sibling repos: `fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .`. Exit 3 means no workspace lists this repo. Write `siblings: unconfigured` in the report, never `siblings: none`. For each sibling, grep the surface names with `rg -n -F` in its checkout. Also search THIS repo for text that describes a sibling: a capability table, a vendored schema, a pinned version, a doc naming the sibling. Check each hit against the sibling's current `origin/main`. A claim the sibling no longer makes true is a candidate.
+3. Then the in-repo readers that no call graph shows. Look at docs, `--help` text, refusal and receipt strings, tests, config defaults, generated copies, and the other language leg of a dual surface (`cli/src/fno` and `crates/` in this repo). A reader that still teaches the old behavior is a candidate.
+
+Each candidate names the consumer's `file:line`, quotes the stale line, and states the failure scenario as what that consumer now does wrong. The report carries one `Blast radius:` line. It names the surfaces, the siblings searched or `unconfigured`, and the hit count. A pass with no `Blast radius:` line skipped this angle.
 
 ### Test value
 
@@ -170,7 +182,7 @@ The report opens with one scope line and ends with one verdict line. The scope l
 
 The resolved route line comes from the one seam: `fno do review resolve-level <level>` prints the full record (level, level_source, band, effort, model, provider, degraded_max). Its `model`/`effort`/`provider` name the POLICY pick for this level - never what ran, because this lane never dispatches. Since the lane always executes inline in the invoking session (Phase 0 above), report the resolved route's `model`/`effort`/`provider` as a `resolved (not dispatched):` line, and separately state `executed inline as: <this session's own harness and model>` so a reader never mistakes the policy target for an attribution of the finished work. A session unable to name its own model states so rather than guessing.
 
-Between them the report carries, in order: the resolved-route line and the executed-inline line above, the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
+Between them the report carries, in order: the resolved-route line and the executed-inline line above, the `Blast radius:` line from Angle G, the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
 
 Each REFUTED entry is one line in the exact shape:
 
