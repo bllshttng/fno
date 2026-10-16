@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use fno_agents::authorized_merge::{
-    ChecksRead, Effect, Outcome, PrFacts, ProbeOutcome, Probes, Request, run,
+    run, ChecksRead, Effect, Outcome, PrFacts, ProbeOutcome, Probes, Request,
 };
 
 const HEAD: &str = "c0ffee1234567890";
@@ -119,9 +119,9 @@ impl Probes for FakeGitHub {
         &self,
         _cwd: &Path,
         _pr: u64,
-    ) -> crate::loopcheck::coverage_gate::GateVerdict {
-        crate::loopcheck::coverage_gate::GateVerdict {
-            state: crate::loopcheck::coverage_gate::GateState::Covered,
+    ) -> fno_agents::loopcheck::coverage_gate::GateVerdict {
+        fno_agents::loopcheck::coverage_gate::GateVerdict {
+            state: fno_agents::loopcheck::coverage_gate::GateState::Covered,
             refusal: String::new(),
             covered_head: self.head.borrow().clone(),
             note: String::new(),

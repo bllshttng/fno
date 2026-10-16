@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
-use common::{Golden, assert_golden};
-use serde_json::{Value, json};
+use common::{assert_golden, Golden};
+use serde_json::{json, Value};
 
 mod common;
 
