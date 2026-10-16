@@ -194,8 +194,10 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         stderr.push('\n');
     }
     stderr.push_str(&format!(
-        "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s\n",
-        snap.points_60s, snap.cap
+        "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s{}\n",
+        snap.points_60s,
+        snap.cap,
+        crate::gh_etag::note_suffix()
     ));
     let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
     (code, stdout, stderr)

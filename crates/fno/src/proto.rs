@@ -385,7 +385,9 @@ fn default_true() -> bool {
 /// `fno mux workspace origin`; floor stays 58.
 /// v114: `Command::PinThread` (move a session into a workspace by hand),
 /// `Command::AddWorkspaceFolder`, and `AgentRow.project_root`; floor stays 58.
-pub const PROTO_VERSION: u32 = 114;
+/// v115: `PaneInfo.pane_cwd` (serde default), the pane's own directory beside
+/// the squad-root `cwd` in `pane ls`; floor stays 58.
+pub const PROTO_VERSION: u32 = 115;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -4064,7 +4066,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 114);
+        assert_eq!(PROTO_VERSION, 115);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
