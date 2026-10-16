@@ -26,7 +26,7 @@ const BODY_MAX_CHARS: usize = 4000;
 const BODY_MAX_LINES: usize = 80;
 const EXTERNAL_KIND: &str = "external_request";
 const EXTERNAL_TAG: &str = "external-request";
-/// The board card id an upvote issue names: `Upvote x-ab12`.
+/// The board card id an upvote issue names: `Upvote c-ab12`.
 const UPVOTE_TITLE: &str = r"^Upvote ([a-z][a-z0-9]{0,7}-[0-9a-f]{4,8})$";
 /// A GitHub login, or the `unknown` placeholder.
 const LOGIN_PATTERN: &str = r"^[A-Za-z0-9-]{1,39}$";
@@ -833,7 +833,7 @@ mod tests {
     fn the_import_dedupes_and_holds_its_ceilings_over_one_snapshot() {
         let project = "p";
         let repo = "o/r";
-        let mut rows = vec![board_row("x-ab12", project)];
+        let mut rows = vec![board_row("c-ab12", project)];
         let limits = Limits {
             limit: 100,
             max_new: 20,
@@ -917,7 +917,7 @@ mod tests {
         // same voter is refused; a private row takes none.
         let mut out3 = apply_issues(
             &mut rows,
-            &[issue(3, "Upvote x-ab12", "", "Visitor-1")],
+            &[issue(3, "Upvote c-ab12", "", "Visitor-1")],
             repo,
             project,
             "/tmp/p",
@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(out3.votes, 1, "{:?}", out3.receipt);
         let card = rows
             .iter()
-            .find(|r| crate::graph_store::entry_id(r) == Some("x-ab12"))
+            .find(|r| crate::graph_store::entry_id(r) == Some("c-ab12"))
             .unwrap();
         let encs = card["encounters"].as_array().unwrap();
         assert_eq!(encs.len(), 1);
@@ -942,8 +942,8 @@ mod tests {
         out3 = apply_issues(
             &mut rows.clone(),
             &[
-                issue(4, "Upvote x-ab12", "", "Visitor-2"),
-                issue(5, "Upvote x-ab12", "", "Visitor-2"),
+                issue(4, "Upvote c-ab12", "", "Visitor-2"),
+                issue(5, "Upvote c-ab12", "", "Visitor-2"),
             ],
             repo,
             project,
@@ -954,14 +954,14 @@ mod tests {
         let mut private = rows.clone();
         if let Some(obj) = private
             .iter_mut()
-            .find(|r| crate::graph_store::entry_id(r) == Some("x-ab12"))
+            .find(|r| crate::graph_store::entry_id(r) == Some("c-ab12"))
             .and_then(Value::as_object_mut)
         {
             obj.insert("public".into(), Value::Bool(false));
         }
         let out4 = apply_issues(
             &mut private,
-            &[issue(6, "Upvote x-ab12", "", "Visitor-3")],
+            &[issue(6, "Upvote c-ab12", "", "Visitor-3")],
             repo,
             project,
             "/tmp/p",
@@ -970,7 +970,7 @@ mod tests {
         assert_eq!(out4.votes, 0, "a private row takes no upvote");
 
         // max-new files one and skips the second by name.
-        let mut fresh: Vec<Value> = vec![board_row("x-ab12", project)];
+        let mut fresh: Vec<Value> = vec![board_row("c-ab12", project)];
         let tight = Limits {
             limit: 100,
             max_new: 1,
@@ -995,7 +995,7 @@ mod tests {
             .any(|l| l.contains("max-new") && l.contains("12")));
 
         // The per-author ceiling skips the fourth open request by name.
-        let mut per_author_rows: Vec<Value> = vec![board_row("x-ab12", project)];
+        let mut per_author_rows: Vec<Value> = vec![board_row("c-ab12", project)];
         let author_issues: Vec<_> = (21..=24)
             .map(|n| issue(n, &format!("Ask number {n}"), "b", "chatty"))
             .collect();

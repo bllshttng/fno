@@ -2560,9 +2560,9 @@ const reqUrl = requestIssueUrl("o/r", "fno-request");
 eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
 eq(reqUrl.searchParams.get("label"), "fno-request", "the request label param");
 eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
-const upUrl = upvoteIssueUrl("o/r", "fno-request", "x-ab12");
+const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
 eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
-eq(upUrl.searchParams.get("title"), "Upvote x-ab12", "the upvote sends the card id only");
+eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
 eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
 console.log("snapshot page helpers: 38 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
