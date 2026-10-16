@@ -25,7 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fno import _subprocess_util
 from fno.graph._constants import extract_node_ids
 from fno.paths import resolve_canonical_worktree
 from fno.inbox.store import (
@@ -359,8 +358,20 @@ def _create_graph_node_from_plan(repo_root: Path, h: ThreadHandle, plan) -> str:
     (thread file path) when supported, so legacy graph queries that look up by
     msg-id keep working while new queries can resolve back to the full thread.
     """
+    # The native create door (the scoped word rides it since the wheel's
+    # cmd_new retired): resolve fno-agents the way every wheel door does -
+    # $FNO_AGENTS_BIN -> bundled -> sibling -> PATH -> dev build - never a
+    # PATH guess that dies in a sandbox without the mux on PATH.
+    from fno import rust_binary
+
+    binary = rust_binary.resolve_binary()
+    if binary is None:
+        raise RuntimeError(
+            "fno backlog new is the native create door and no fno-agents "
+            "binary is available to answer it"
+        )
     args = [
-        *_subprocess_util.fno_py_cmd(), "backlog", "new",
+        str(binary), "backlog", "new",
         plan.title,
         "--priority", plan.priority,
         "--difficulty", "medium",
@@ -373,7 +384,7 @@ def _create_graph_node_from_plan(repo_root: Path, h: ThreadHandle, plan) -> str:
     # `fno backlog new --help` is cheap; failing the probe only loses provenance breadth.
     try:
         help_out = subprocess.run(
-            [*_subprocess_util.fno_py_cmd(), "backlog", "new", "--help"],
+            [str(binary), "backlog", "new", "--help"],
             capture_output=True, text=True, check=False, cwd=repo_root,
             timeout=5,
         )

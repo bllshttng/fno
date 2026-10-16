@@ -911,12 +911,12 @@ def ritual(
         "when its inputs are non-empty. Mirrors the POST_MERGE_NONINTERACTIVE=1 env.",
     ),
 ) -> None:
-    from fno.pr import _ritual
-
-    if os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
-        autonomous = True
-    rc = _ritual.run_ritual(pr_number, autonomous)
-    raise typer.Exit(code=rc)
+    args: list[str] = []
+    if pr_number is not None:
+        args.append(str(pr_number))
+    if autonomous or os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
+        args.append("--autonomous")
+    _forward_to_binary("pr-watch", ["ritual", *args])
 
 
 @pr_app.command(

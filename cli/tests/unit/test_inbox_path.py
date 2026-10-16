@@ -98,7 +98,12 @@ def test_capture_add_without_internal_never_materializes_internal(
 
     add_item mkdirs the resolved parent, so the resolver decides whether a
     foreign repo grows internal/. Obsidian on globally, no vault link here.
+    The native writer resolves the inbox itself, so the door is the dev
+    binary with cwd and state pinned to the fixture root.
     """
+    import os as _os
+    import subprocess as _sp
+
     from fno.paths_testing import use_tmpdir
     settings = use_tmpdir(monkeypatch, tmp_path)
     settings.write_text(
@@ -110,16 +115,24 @@ def test_capture_add_without_internal_never_materializes_internal(
         f"    vault: {tmp_path}/vault\n",
         encoding="utf-8",
     )
-    import fno.paths as paths_mod
-    from fno.backlog.capture import add_item
+    from fno.rust_binary import find_dev_binary
 
-    add_item(
-        paths_mod.inbox_path(project_root=tmp_path),
-        title="follow up",
-        source="test",
-        why="the writer must not create internal/",
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no dev fno-agents build (the smoke shard deletes it on purpose)")
+    env = dict(_os.environ)
+    env["HOME"] = str(tmp_path)
+    env["FNO_STATE_DIR"] = str(tmp_path / ".fno")
+    proc = _sp.run(
+        [str(binary), "backlog", "capture", "add",
+         "follow up", "--source", "test", "--why", "the writer must not create internal/"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
-
+    assert proc.returncode == 0, proc.stderr
     assert (tmp_path / ".fno/backlog/parking-lot.md").exists()
     assert not (tmp_path / "internal").exists()
 

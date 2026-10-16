@@ -32,7 +32,7 @@ pub struct FeedRow {
     /// `question_asked` | `question_closed` | `decision_recorded` |
     /// `node_created` | `node_started` | `node_shipped` | `node_ended` |
     /// `session_spawned` | `session_reaped` | `team_granted` |
-    /// `team_vacated` | `day_boundary`
+    /// `team_vacated` | `mail_to_user` | `day_boundary`
     pub kind: String,
     pub node: Option<String>,
     /// The node's project directory. Present on `node_created` rows so a
@@ -731,7 +731,8 @@ pub fn project(
                 | "blocked"
                 | "fno_update_started"
                 | "fno_update_installed"
-                | "fno_update_failed"),
+                | "fno_update_failed"
+                | "mail_escalation"),
             ) => k,
             _ => continue,
         };
@@ -740,6 +741,21 @@ pub fn project(
             continue;
         };
         match kind {
+            "mail_escalation" => {
+                let reason = s_field(data, "reason").unwrap_or_default();
+                let sender = s_field(data, "sender").unwrap_or_default();
+                let recipient = s_field(data, "recipient").unwrap_or_default();
+                let summary = s_field(data, "summary").unwrap_or_default();
+                rows.push(FeedRow {
+                    ts,
+                    kind: "mail_to_user".into(),
+                    cwd: s_field(&v, "cwd"),
+                    r#ref: s_field(data, "msg_id"),
+                    title: format!("{sender} to {recipient}: {}", one_line(&summary)),
+                    reason: Some(reason),
+                    ..FeedRow::default()
+                });
+            }
             "spawn_gate_refused" => {
                 let reason = s_field(data, "reason").unwrap_or_else(|| "unknown".into());
                 let name = s_field(data, "name").unwrap_or_default();
@@ -1369,9 +1385,11 @@ pub(crate) fn filter_rows(
 /// unit test fails if any kind the projection emits lands there.
 pub(crate) fn area_of(kind: &str) -> &'static str {
     match kind {
-        "question_asked" | "question_closed" | "decision_recorded" | "sendmessage_fallback" => {
-            "mail"
-        }
+        "question_asked"
+        | "question_closed"
+        | "decision_recorded"
+        | "sendmessage_fallback"
+        | "mail_to_user" => "mail",
         "node_created" | "node_started" | "node_ended" => "backlog",
         "node_shipped" | "pr_merged" => "ship",
         "session_spawned"
@@ -1405,11 +1423,13 @@ pub(crate) const GRAPH_KINDS: &[&str] = &[
 ];
 pub(crate) const REMOVAL_KINDS: &[&str] = &["session_reaped"];
 /// The feed kinds the main store leg derives (its store kinds are
-/// spawn_gate_refused, worker_silent, blocked and the fno_update_* trio).
+/// spawn_gate_refused, worker_silent, blocked, mail_escalation and the
+/// fno_update_* trio).
 pub(crate) const MAIN_KINDS: &[&str] = &[
     "session_spawn_refused",
     "worker_stalled",
     "help_emitted",
+    "mail_to_user",
     "update_started",
     "update_finished",
 ];
@@ -1627,10 +1647,11 @@ fn main_store_journal(
     let Some(parent) = home.root().parent() else {
         return (String::new(), None);
     };
+    let mail = mail_escalation_text(&parent.join("spaces"), since_epoch, until_epoch);
     let path = parent.join("events.jsonl");
     if !path.is_file() && !crate::event_store::store_path(&path).is_file() {
         return (
-            String::new(),
+            mail,
             Some(format!("main store skipped (absent): {}", path.display())),
         );
     }
@@ -1649,9 +1670,55 @@ fn main_store_journal(
             ])
         },
     ) {
-        Ok(text) => (text, None),
-        Err(e) => (String::new(), Some(format!("main store skipped ({e})"))),
+        Ok(text) => (format!("{text}\n{mail}"), None),
+        Err(e) => (mail, Some(format!("main store skipped ({e})"))),
     }
+}
+
+/// The `mail_escalation` rows of every project space, one typed read each.
+/// The escalation emit writes the project store only, so the global store
+/// holds none. A space's directory name is its repository path with `/`
+/// swapped for `-`; each row gets that path as `cwd` when it decodes to a real
+/// directory. A store with no db reads as its whole journal, so a row of any
+/// other type is dropped here rather than projected twice.
+fn mail_escalation_text(
+    spaces: &std::path::Path,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> String {
+    let Ok(dirs) = std::fs::read_dir(spaces) else {
+        return String::new();
+    };
+    let query = crate::event_store::EventQuery {
+        since_ms: since_epoch.map(|s| s as i64 * 1000),
+        until_ms: until_epoch.map(|u| u as i64 * 1000),
+        ..crate::event_store::EventQuery::of_types(&["mail_escalation"])
+    };
+    let mut out = String::new();
+    for dir in dirs.flatten() {
+        let journal = dir.path().join("events.jsonl");
+        let Ok(text) = crate::event_store::journal_text_checked(&journal, &query) else {
+            continue;
+        };
+        let decoded = dir.file_name().to_string_lossy().replace('-', "/");
+        let cwd = std::path::Path::new(&decoded)
+            .is_dir()
+            .then(|| Value::String(decoded.clone()));
+        for line in text.lines() {
+            let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
+                continue;
+            }
+            if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
+                row.insert("cwd".into(), cwd.clone());
+            }
+            out.push_str(&v.to_string());
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// The questions leg: the four question kinds plus the empty type read typed
@@ -2474,6 +2541,7 @@ mod tests {
             "update_finished",
             "main_ci_changed",
             "pr_merged",
+            "mail_to_user",
         ] {
             assert_ne!(area_of(k), "other", "{k} has no area");
         }
@@ -2595,6 +2663,10 @@ mod tests {
             r#"{"ts":"2026-09-30T10:04:00Z","type":"fno_update_installed","source":"python","data":{"new_rev":"55f04eda70a99c3f4e72a3cfe62e80d219c66d6f"}}"#,
             "\n",
             r#"{"ts":"2026-09-30T10:05:00Z","type":"fno_update_failed","source":"python","data":{"rc":"1","stage":"install","reason":"install exited 1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:07:00Z","type":"mail_escalation","source":"target","cwd":"/work/repo","data":{"reason":"attended-miss","sender":"c698b69a","recipient":"operator","summary":"mux test was a flake\nsecond line","msg_id":"msg-1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:08:00Z","type":"mail_escalation","source":"target","data":{"reason":"question","sender":"c698b69a","recipient":"operator","summary":"which branch?"}}"#,
         );
         let daemon = r#"{"ts":"2026-09-30T10:06:00Z","type":"daemon_started","source":"daemon","data":{"pid":15714,"version":"0.4.1","recovery_mode":"preserve"}}"#;
         let p = project("", &[], &[], "", "", daemon, main, None);
@@ -2630,6 +2702,21 @@ mod tests {
             "installed and failed both fold into update_finished"
         );
         assert_eq!(find("daemon_restarted").title, "daemon 0.4.1 pid 15714");
+        let mail = find("mail_to_user");
+        assert_eq!(mail.title, "c698b69a to operator: mux test was a flake");
+        assert_eq!(mail.area, "mail");
+        assert_eq!(mail.cwd.as_deref(), Some("/work/repo"));
+        assert_eq!(mail.reason.as_deref(), Some("attended-miss"));
+        assert_eq!(mail.r#ref.as_deref(), Some("msg-1"));
+        assert_eq!(
+            p.rows
+                .iter()
+                .filter(|r| r.kind == "mail_to_user")
+                .map(|r| r.reason.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["attended-miss", "question"],
+            "every escalation reason projects: a mail question has no question_asked row"
+        );
 
         let mut entry = graph_fixture().remove(0);
         entry
@@ -2853,6 +2940,41 @@ mod tests {
         )
         .unwrap();
         assert!(raw.contains("q-feed-1"), "{raw}");
+
+        // mail_to_user reads each project space's own store. The space name
+        // decodes to cwd when it names a real directory, and a space with no
+        // db yields only its mail_escalation rows.
+        let spaces = tempfile::tempdir().unwrap();
+        let stored = spaces.path().join("-tmp");
+        std::fs::create_dir_all(&stored).unwrap();
+        let escalation = |sender: &str| {
+            serde_json::json!({
+                "ts": "2026-09-30T10:00:00Z", "type": "mail_escalation", "source": "target",
+                "data": {"reason": "attended-miss", "sender": sender, "recipient": "b", "summary": "hi"}
+            })
+            .to_string()
+        };
+        crate::event_store::append_envelope(&stored.join("events.jsonl"), &escalation("a"), None)
+            .unwrap();
+        let bare = spaces.path().join("-no-such-dir");
+        std::fs::create_dir_all(&bare).unwrap();
+        let other = r#"{"ts":"2026-09-30T10:01:00Z","type":"blocked","source":"target","data":{"kind":"help","reason":"x"}}"#;
+        std::fs::write(
+            bare.join("events.jsonl"),
+            format!("{}\n{other}\n", escalation("c")),
+        )
+        .unwrap();
+        let rows: Vec<Value> = mail_escalation_text(spaces.path(), None, None)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "one mail_escalation row per space: {rows:?}");
+        let by = |s: &str| rows.iter().find(|r| r["data"]["sender"] == s).unwrap();
+        assert_eq!(by("a")["cwd"], "/tmp");
+        assert!(
+            by("c").get("cwd").is_none(),
+            "an undecodable space sets no cwd"
+        );
 
         // AC2-EDGE: the typed questions read keeps the parser to the four
         // question kinds. Attention rows never reach it, so they stop reading
