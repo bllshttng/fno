@@ -2131,7 +2131,7 @@ mod tests {
             ranked,
             "the board order is the same with and without the outside votes"
         );
-        let now_ms = parse_iso_ms("2026-10-16T00:00:00Z").unwrap_or(0);
+        let now_ms = parse_iso_ms(&serde_json::json!("2026-10-16T00:00:00Z")).unwrap_or(0);
         let day = 86_400_000i64;
         let recent = |voter_key: &str, voter_kind: &str| {
             serde_json::json!({
