@@ -210,16 +210,22 @@ fn mint_matches_python_goldens() {
             String::from_utf8_lossy(&out.stderr)
         );
 
-        // The journal row: the last merge_cleanup_requested line under the
-        // agents home. Keys re-sort alphabetically (BTreeMap) to match the
+        // The journal row: the last merge_cleanup_requested envelope under
+        // the agents home. The store commit replaced the file append, so
+        // the row reads back through the store query against the same
+        // journal path. Keys re-sort alphabetically (BTreeMap) to match the
         // Python capture's sort_keys golden; the volatile merged_at masks.
-        let journal = fs::read_to_string(home.join("events.jsonl")).expect("journal");
-        let row: Value = journal
-            .lines()
-            .filter_map(|ln| serde_json::from_str(ln).ok())
-            .filter(|v: &Value| v["type"] == "merge_cleanup_requested")
-            .last()
-            .expect("the mint wrote one journal row");
+        let rows = fno_agents::event_store::query_events(
+            &home.join("events.jsonl"),
+            &fno_agents::event_store::EventQuery {
+                types: vec!["merge_cleanup_requested".to_string()],
+                ..Default::default()
+            },
+        )
+        .expect("store read");
+        let row: Value =
+            serde_json::from_str(&rows.last().expect("the mint wrote one journal row").line)
+                .expect("envelope json");
         let mut data = row["data"].clone();
         if slug == "mint_merged_at_missing" {
             data["merged_at"] = Value::String("<STAMP>".into());
