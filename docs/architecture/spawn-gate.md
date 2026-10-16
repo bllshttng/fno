@@ -36,7 +36,7 @@ The user's own ceiling yields too, one spawn at a time. When the count sits at o
 1. The CPU axis admitted on this pass.
 2. The memory axis is on: `agents.min_free_gb` above 0. A disabled floor reads nothing, so it is not room.
 3. The memory axis reads room: available RAM was read, and the floor and swap terms pass.
-4. The newest counted worker has settled: the youngest age over the counted rows' `created_at`, the live `worker:<name>` reservations, and the launch records written inside the window is at least 60 seconds old (the `BURST_SETTLE` constant). When no age reads at all, the burst does not yield.
+4. The newest counted worker has settled: the youngest age over the counted rows, the live reservations, and the recent launch records is at least 60 seconds old (the `BURST_SETTLE` constant). When no age reads at all, the burst does not yield.
 
 When the rule holds, the cap for this pass becomes `counted + 1`. The admitted receipt reads `slots: "32/33 ok (burst past agents.max_live 32: CPU and RAM have room)"`. When it fails, the spawn queues at `agents.max_live`, and the refusal names the reason in one word: `memory_off`, `memory_unread`, `memory_low`, `settling` or `settle_unread`.
 
