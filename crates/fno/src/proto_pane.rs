@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 /// One pane's metadata in a [`crate::proto::ServerMsg::PaneList`]. `cwd` is
-/// the squad's canonical root; `child_pid` is `None` only if the OS never
-/// reported one.
+/// the pane's own directory (live from the kernel, else its spawn cwd);
+/// `child_pid` is `None` only if the OS never reported one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneInfo {
     pub pane_id: u64,

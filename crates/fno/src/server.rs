@@ -2558,7 +2558,7 @@ impl Core {
             .panes
             .iter()
             .map(|(&pid, entry)| {
-                let (squad_id, squad_name, tab_id, cwd, tab_name, tab_ordinal) =
+                let (squad_id, squad_name, tab_id, tab_name, tab_ordinal) =
                     match self.session.find_pane(pid) {
                         Some((sid, ti)) => {
                             let sq = self.session.squad(sid).expect("find_pane live squad");
@@ -2567,13 +2567,16 @@ impl Core {
                                 sid,
                                 sq.name.clone(),
                                 sq.tabs[ti].id,
-                                sq.canonical_cwd().to_string(),
                                 dict.as_ref().and_then(|d| d.name.clone()),
                                 dict.map(|d| d.ordinal),
                             )
                         }
-                        None => (0, None, 0, String::new(), None, None),
+                        None => (0, None, 0, None, None),
                     };
+                // The pane's own directory, not its squad's root: a `pane run
+                // --cwd <subdir>` pane lives in <subdir> while the squad key
+                // resolves to the enclosing repo root.
+                let cwd = crate::pane_cwd::live_or_spawn(entry.pty.child_pid(), &entry.cwd);
                 // The lineage join: when exactly ONE registry row
                 // hosts this pane, its identity fields ride the listing so
                 // the stable thread id (fno_id) and the CURRENT harness
