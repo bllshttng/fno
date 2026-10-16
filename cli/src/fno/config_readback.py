@@ -35,7 +35,8 @@ _HONORED_LEGACY_KEYS = frozenset({"recovery.retire_grace_s"})
 _RUST_READ_KEYS = frozenset({"merge.visual_paint_paths"})
 #: Top-level blocks retired with the md attention arm (attention-items.md
 #: "Config keys"): a leftover row is dead config, named as retired.
-_RETIRED_BLOCKS = frozenset({"attention", "reach_me"})
+_RETIRED_BLOCKS = frozenset({"reach_me"})
+_RETIRED_ROWS = "[[{}]] rows are retired (set in {}): question pages need no setup. Delete the row."
 
 _Model = Optional[type[BaseModel]]
 
@@ -171,11 +172,12 @@ def unknown_key_problems(
             )
         except Exception:  # noqa: BLE001
             continue
+        if isinstance(flat.get("attention"), list):
+            problems.append(_RETIRED_ROWS.format("attention", path))
         for key in unknown:
             block = key.split(".", 1)[0]
             if block in _RETIRED_BLOCKS:
-                problems.append(f"[[{block}]] rows are retired (set in {path}): "
-                                "question pages need no setup. Delete the row.")
+                problems.append(_RETIRED_ROWS.format(block, path))
                 continue
             hints = _near_miss_keys(key)
             tail = f"did you mean {' or '.join(hints)}?" if hints else "ignored"
