@@ -1929,7 +1929,7 @@ mod tests {
             "#!/bin/sh\necho \"lead ledger: /nonexistent/ghost.html\"\n",
         );
         std::env::set_var("FNO_BIN", &ghost);
-        let o = emit_one(&h, run_ledger);
+        let (o, ghost_named) = emit_one(&h, run_ledger);
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
@@ -1938,6 +1938,7 @@ mod tests {
             Some(v) => std::env::set_var("FNO_PY", v),
             None => std::env::remove_var("FNO_PY"),
         }
+        assert_eq!(ghost_named, None, "a failed run names no page");
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("error"));
         assert!(o.detail.contains("named path missing"), "{}", o.detail);
