@@ -14,6 +14,8 @@ A malformed value refuses every shared claim, with a message that names the key.
 
 The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:` (`SHARED_PREFIXES` in `crates/fno-agents/src/claim_store.rs`). Every statement runs the same SQL on either store, so the local and remote legs cannot drift. Each claim is one conditional statement on the primary, and no decision reads a copy.
 
+Two `gh-budget:` rows live there too. `gh-budget:fleet` is the shared GitHub refusal hold. `gh-budget:poller` is the status poller lease, described in [One GitHub poller](#one-github-poller). Neither row decides dispatch.
+
 Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and `flight:` name resources of one machine. A cargo lock shared across machines serializes builds that never touch each other.
 
 The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
@@ -96,6 +98,20 @@ Host spellings normalize on write and on pull. Lowercase, and a trailing `.local
 ## The lease heartbeat
 
 A worker renews its node claim at every stop. One turn can run for hours, and no stop comes in that time. So the daemon renews too (`crates/fno-agents/src/lease_heartbeat.rs`). Every 60 seconds it reads the shared claims the primary records for this machine. It keeps the ones whose holder pid is alive here, and moves their leases to 10 minutes past the store clock, in one statement. A claim whose pid is dead is not renewed, so it lapses and a peer can take it.
+
+## One GitHub poller
+
+GitHub's secondary limit counts requests for the account, not for the machine. Two hosts that read one PR inside one status TTL spend two requests where one is enough. With `store.remote_url` set, one host reads GitHub for both (`crates/fno-agents/src/gh_poller.rs`).
+
+The host holds a lease: the row `gh-budget:poller` in the `claims` table on the primary. The lease is two status TTLs long, 120 seconds by default. Only a publish renews it. Each live status read that writes a local row also takes or renews the lease, and the host that holds it copies the row to the table `gh_status_rows` on the primary. The daemon heartbeat skips every `gh-budget:` row. A poller that stops reading GitHub therefore goes quiet and loses the lease after two TTLs.
+
+Every other host asks the primary first. When a peer holds a live lease and the shared row for the PR is under two TTLs old, the host serves that row with zero gh calls and keeps a copy in its local cache. Past that age the host reads GitHub itself. Its publish then takes the lease, because the old poller's lease ran out at the same moment as the row went stale. A holder that wakes after the takeover fails its renewal and publishes nothing.
+
+Every lease expiry and every row age is computed in SQL on the store clock, as in [the store clock decides a peer's lease](#the-store-clock-decides-a-peers-lease). Two hosts with skewed clocks agree on who holds the lease.
+
+An unset `store.remote_url` keeps today's behavior: each machine polls for itself, and no process opens a socket for this. A primary that errors does not stop a status read. The host writes the marker `poller-down` in its status cache directory, skips the primary for 60 seconds, and polls alone. A status read never fails closed here, because the worst case is today's request rate.
+
+A PR that only one host reads saves nothing. The lease moves no request from one host to another, so there is no arm that polls a follower's PRs. The saving is the overlap: reads of one PR by two hosts inside one TTL. The `pr status` and `pr wait` spend notes count it. `, {n} served from poller <host>` is the number of rows this process took from the poller. `, published {m}` is the number it shared. The loop-check adapter and the review count in `pr wait --until reviewed` do not use the shared rows.
 
 ## Failure: the primary is unreachable
 
