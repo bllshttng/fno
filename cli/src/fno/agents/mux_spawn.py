@@ -1256,10 +1256,9 @@ def build_pane_argv(
     if provider == "footnote":
         # The TUI takes one launch spec, not a session flag; the Rust owner
         # resolves the endpoint and writes the 0600 file.
-        from fno.agents.spawn_axes_client import _answer_or_raise, spawn_axes_call
+        from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        ask = {"cwd": str(cwd), "model": model or "", "permission_mode": permission_mode or ""}
-        return [*identity, _answer_or_raise(spawn_axes_call({"footnote_pane_spec": ask}), "path")]
+        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
