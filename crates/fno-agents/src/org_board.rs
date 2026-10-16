@@ -3481,7 +3481,7 @@ mod tests {
 
     #[test]
     fn blocked_child_and_stranded_read_ok_despite_a_slow_concurrent_source() {
-        // x-7057: blocked_child and stranded_tree used to run AFTER the
+        // blocked_child and stranded_tree used to run AFTER the
         // concurrent block (gh pr list / inbox outstanding / the truth
         // probe / the needs fold), so on a loaded fleet they checked the
         // one shared board deadline LAST and printed READER FAILED
