@@ -1997,6 +1997,7 @@ mod tests {
         };
         let marker = std::path::PathBuf::from(format!("{}.served", page.display()));
         std::fs::write(&marker, b"").unwrap();
+        set_mtime(&marker, 500);
         set_mtime(&page, 1_000);
         assert!(!served_since_render(&page), "no fresh marker: not served");
         set_mtime(&marker, 2_000);

@@ -205,7 +205,16 @@ fn caller_label_cached() -> &'static String {
 /// shell anyway. The first ancestor that is not a transport names the
 /// caller; a `fno-agents-daemon` anywhere in the window prefixes `daemon `.
 pub(crate) fn caller_label_from(lookup: &dyn Fn(u32) -> Option<(Vec<String>, u32)>) -> String {
-    let mut pid = std::process::id();
+    caller_label_from_at(std::process::id(), lookup)
+}
+
+/// The same walk from an explicit start pid, so a test can walk a
+/// synthetic ancestry instead of this process's real one.
+pub(crate) fn caller_label_from_at(
+    start: u32,
+    lookup: &dyn Fn(u32) -> Option<(Vec<String>, u32)>,
+) -> String {
+    let mut pid = start;
     let mut label: Option<String> = None;
     let mut daemon = false;
     for _ in 0..CALLER_HOPS {
@@ -715,7 +724,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let label = caller_label_from(&|pid| chain.get(&pid).cloned());
+        let label = caller_label_from_at(100, &|pid| chain.get(&pid).cloned());
         assert_eq!(label, "fno do pr merge", "the nearest real caller names it");
 
         // A daemon ancestor prefixes, and a labeled ancestor still reads.
@@ -725,11 +734,11 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let label = caller_label_from(&|pid| chain2.get(&pid).cloned());
+        let label = caller_label_from_at(10, &|pid| chain2.get(&pid).cloned());
         assert_eq!(label, "daemon pr-heal", "the daemon beat is named");
 
         // Unreadable ancestry is unknown, never a guess.
-        let label = caller_label_from(&|_| None);
+        let label = caller_label_from_at(999, &|_| None);
         assert_eq!(label, "unknown");
 
         // The conditional bucketing: -i plus If-None-Match is a conditional
