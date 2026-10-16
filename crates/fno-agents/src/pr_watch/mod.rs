@@ -5,8 +5,10 @@
 
 mod heal;
 mod install;
+mod mint;
 pub(crate) mod refresh;
 mod render;
+mod sessions;
 mod status;
 
 use std::path::Path;
@@ -18,9 +20,13 @@ pub fn run(args: &[String]) -> i32 {
         Some("install") => install::run(&args[1..]),
         Some("uninstall") => install::run_uninstall(&args[1..]),
         Some("heal") => heal::run(&args[1..]),
+        Some("pr-sessions") => sessions::run(&args[1..]),
+        Some("merge-cleanup-mint") => mint::run(&args[1..]),
+        Some("ritual") => crate::post_merge::ritual::run(&args[1..]),
+        Some("post-merge-dispatch") => crate::post_merge::route::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions|merge-cleanup-mint|ritual|post-merge-dispatch> [--json|-J] [-N]"
             );
             2
         }

@@ -28,7 +28,7 @@ CLAUDE_MODEL = f"{MODEL}[1m]"
 CLAUDE_VERSION = "2.1.286"  # Amendment 11: the Run 1 pin, in the Run 0 container too
 ZAI_ANTHROPIC = "https://api.z.ai/api/anthropic"
 ZAI_OPENAI = "https://api.z.ai/api/coding/paas/v4"
-ARMS = ["claude-code", "opencode", "pi", "terminus-2", "zcode"]
+ARMS = ["claude-code", "opencode", "pi", "terminus-2", "zcode", "footnote"]
 PROJECTION_FACTOR = 3
 TASKS = 89
 
@@ -71,6 +71,9 @@ def agent(arm: str, key: str) -> tuple[dict, list[str]]:
     if arm == "zcode":
         # The adapter stays out of the repo; copy zcode_agent.py and zcode-home into the workspace.
         return ({"import_path": "zcode_agent:ZCode", "model_name": MODEL}, [])
+    if arm == "footnote":
+        # setup-imac.sh copies footnote_agent.py and the linux/amd64 binary into the workspace.
+        return ({"import_path": "footnote_agent:Footnote", "model_name": MODEL}, [])
     raise SystemExit(f"unknown arm {arm!r}; arms: {ARMS}")
 
 
@@ -83,6 +86,9 @@ def host_env(key: str, arm: str) -> dict:
     if arm == "zcode":
         env["ZCODE_CREDENTIAL_SECRET"] = (f"zcode-credential-fallback:darwin:{Path.home()}:"
                                           f"{os.environ.get('USER', '')}")
+    if arm == "footnote":
+        # The adapter stamps the pinned fnh sha into agent_info.version.
+        env["FOOTNOTE_FNH_SHA"] = json.loads(MANIFEST.read_text()).get("amendment_14", {}).get("fnh_sha", "unknown")
     return env
 
 

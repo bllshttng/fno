@@ -302,7 +302,8 @@ def _pr_url_for(
     """The PR's GitHub url, or None when no repo slug can be resolved.
 
     A row that lands with a ``pr_number`` but no ``pr_url`` attributes no
-    ownership at read time (see :mod:`fno.ledger_join`), and no later writer
+    ownership at read time (the join is the native
+    ``fno-agents pr-watch pr-sessions`` op), and no later writer
     repairs it - ``upsert_ledger_pr`` returns early once a row carries the
     number. So the slug must be resolved as hard here as the read side resolves
     it: ``origin`` first, then the same ``gh repo view`` fallback

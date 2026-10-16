@@ -160,3 +160,29 @@ async fn full_screen_click_beyond_the_panel_never_sends_bytes() {
         .unwrap();
     assert!(buf.is_empty(), "no mouse bytes forwarded");
 }
+
+#[tokio::test]
+async fn bell_full_screen_covers_panes_and_toggles_back() {
+    // The bell is an overlay like the composer sheet: F covers the panes
+    // with no Resize (the bell path holds no socket writer at all), and a
+    // second F returns to the size the panel had. The pane glyph is ✗, not
+    // the sideline tests' Q: the panel's own "Questions" tab label prints a
+    // Q, so a Q probe would read the bell's own chrome.
+    let mut v = two_pane_view();
+    v.term = (40, 120);
+    v.frames.insert(10, text_frame(29, 35, '✗'));
+    v.frames.insert(11, text_frame(29, 36, '✗'));
+    bell::open(&mut v);
+    assert!(
+        frame_text(&v.compose()).contains('✗'),
+        "sanity: the normal panel leaves the panes visible"
+    );
+    bell::keys(&mut v, b"F");
+    let text = frame_text(&v.compose());
+    assert!(!text.contains('✗'), "no pane cell paints: {text:?}");
+    bell::keys(&mut v, b"F");
+    assert!(
+        frame_text(&v.compose()).contains('✗'),
+        "the panes paint again at their old size"
+    );
+}
