@@ -2763,14 +2763,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // gemini -p / agy -p).: --model is forwarded to each (exact
         // passthrough to the provider CLI's own --model).
         ("codex", "headless") => {
-            // The daemon receipt is teardown telemetry for a one-shot spawn
-            // (append_daemon_receipt only stamps stderr on success), never a
-            // precondition: a codex whose app-server cannot boot (a stubbed
-            // CLI on PATH, a partial install, CI) still runs `codex --exec`,
-            // exactly like the Python lane that has no daemon step - refusing
-            // here was exit-code drift against every such environment. The
-            // daemon stays mandatory where it is load-bearing (inject/mail
-            // ensure their own).
+            // The daemon receipt is teardown telemetry, never a precondition: a
+            // codex whose app-server cannot boot (stubbed CLI, partial install,
+            // CI) still runs `codex --exec`, like the Python lane. Inject and
+            // mail ensure their own daemon.
             let daemon_receipt = match fno_agents::codex_inject::ensure_codex_daemon() {
                 Ok(result) => Some(result.receipt),
                 Err(error) => {
@@ -2799,12 +2795,9 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         ("gemini", "headless") => emit!(dispatch_gemini_once(
             home, name, &message, from_name, &cwd, yolo, timeout, model,
         )),
-        // opencode headless: the client-side one-shot
-        // `opencode run --dangerously-skip-permissions` (wires the lane;
-        // the bare `opencode` TUI stays the `pane` form). Stateless plain-text,
-        // like agy. The flag is NOT `--auto`: that spelling is stale vendor
-        // docs, it does not exist in `run --help`, and a comment naming it has
-        // twice been read as proof this arm was never built.
+        // opencode headless: the client-side one-shot `opencode run
+        // --dangerously-skip-permissions` (the bare TUI stays the `pane` form).
+        // The flag is NOT `--auto`: that spelling is stale vendor docs.
         ("opencode", "headless") => emit!(dispatch_opencode_once(
             home,
             name,
@@ -2812,6 +2805,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             from_name,
             &cwd,
             yolo,
+            timeout,
+            model,
+            effort,
+            &harness_args,
+        )),
+
+        // pi headless: one `pi --print --mode json` turn (pi_ask.rs).
+        ("pi", "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
             timeout,
             model,
             effort,
@@ -2893,21 +2899,15 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // held app-server process and register its full thread identity.
         ("codex", "bg") => None,
 
-        // The three arms above stay NAMED rather than lane-routed, because
-        // they are three different ownership models: claude's thread is
-        // hosted by the detached client itself, codex's by its own
-        // app-server, and opencode's by a serve-hosted HTTP session -
-        // `thread_lane` classifies all three `attach` (each answers "the
-        // harness owns the live session; a client re-attaches"), but that one
-        // label can't tell a client-side re-attach apart from a daemon-owned
-        // serve process, and each needs its own dispatch call. (Before,
-        // opencode's row read `keeper` here - a stale answer this match arm
-        // had to route around by name; the row now agrees with the dispatch
-        // below.)
+        // The three arms above stay NAMED rather than lane-routed: claude's
+        // thread is hosted by the detached client, codex's by its own
+        // app-server, opencode's by a serve-hosted HTTP session. `thread_lane`
+        // classifies all three `attach`, and that one label cannot tell a
+        // client-side re-attach from a daemon-owned serve process, so each
+        // needs its own dispatch call.
         // The REFUSAL is derived, because a provider name list goes stale the
-        // moment a lane is built and then misdirects the reader it was meant
-        // to help. Hard error pointing to headless; never a silent substrate
-        // swap.
+        // moment a lane is built. Hard error pointing to headless; never a
+        // silent substrate swap.
         (other, "bg") => {
             eprintln!(
                 "{}",

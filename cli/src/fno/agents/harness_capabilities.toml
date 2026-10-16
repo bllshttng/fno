@@ -1000,14 +1000,15 @@ session_binding = { strategy = "caller-assigned-cwd-scoped", required = true, ti
 # thread is unsandboxed by that same reading, earned rather than borrowed: the
 # restart journey ran a real keeper-hosted pi child on this lane, and that
 # process is as ordinary and unsandboxed as a pane child. headless stays
-# `unmeasured` - nothing has run pi headless yet, so no claim write has ever
-# been observed there, and a lane nothing dispatches must not inherit a stance
-# from the lanes that do. The spawn arm shipped and enforces that
-# stance in code: `_check_spawn_harness` refuses the unmeasured substrate by
-# name, and the lane opens only when its own journey lands.
+# headless is measured the same way, by running it: on 2026-10-16 a headless
+# `pi --print --mode json --no-session --model openai-codex/gpt-6.1-sol`
+# turn, run from one directory, wrote a file in a sibling directory outside its
+# cwd and replied `done`. That is the lane `pi_ask.rs` builds. The lane stayed
+# `unmeasured` until that run, because a lane nothing dispatches must not
+# inherit a stance from the lanes that do.
 pane = "unsandboxed"
 thread = "unsandboxed"
-headless = "unmeasured"
+headless = "unsandboxed"
 
 # pi has no approval UI, so there is no keystroke answer to record and all
 # three actions are unsupported. This is an absence in pi, not an unmeasured
