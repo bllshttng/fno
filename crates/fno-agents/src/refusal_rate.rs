@@ -13,15 +13,18 @@
 //! `gate_refusal` - from the numerator: they rise with machine load, not
 //! lead quality (a 14.5 to 18 percent rise measured under load 100 to 200).
 //!
-//! A call is refused by its result's structural `is_error` flag when one
-//! exists, never by the bucket words alone - a successful, multi-line read
-//! (the lead check-in's own capacity line, which quotes a past gate verdict
-//! such as "gate refused on provider_cap") can bury those same words deep
-//! in otherwise-clean output. Only a result with no flag at all (codex has
-//! none, and a malformed claude row might omit it) falls back to the same
-//! bucket scan `buckets_of` uses for categorization - `is_refused` is the
-//! one place this decision is made, shared with `lead_eval.rs`'s identical
-//! read so the two readings can never diverge on the same transcript.
+//! A result marked `is_error: true` is always refused. Anything else -
+//! `is_error: false`, or no flag at all (codex has none) - still has to
+//! pass a text check, because a clean exit is not proof of a clean answer:
+//! `spawn-gate` exits 0 even when its own answer IS a refusal ("a refusal
+//! is data now, not a process exit", `spawn_gate_verb.rs`), so the words
+//! are the whole, short output. What a `false`/absent flag DOES rule out
+//! is matching those same words buried deep in an unrelated, multi-line
+//! successful read (the lead check-in's own capacity line, which quotes a
+//! past gate verdict such as "gate refused on provider_cap") - so the text
+//! check only looks at a short HEADER lead, not the whole thing. One
+//! function, `is_refused`, makes this call for both this reading and
+//! `lead_eval.rs`'s identical one, so the two cannot drift apart.
 
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -50,7 +53,19 @@ pub(crate) const REFUSAL_BUCKETS: [(&str, &str); 7] = [
 
 /// The first N chars of a tool_result's content text that the regex reads.
 /// Matches the 4000-char lead the lead-control retro measured against.
+/// `buckets_of` uses this WIDE lead to CATEGORIZE a call already known to
+/// be refused; `is_refused` below uses the much narrower `HEADER_LEAD_CHARS`
+/// to decide refused-or-not in the first place.
 const CONTENT_LEAD_CHARS: usize = 4000;
+
+/// The lead checked to decide whether an `is_error: false` (or absent)
+/// result is itself a refusal. A genuine refusal answer fronts its marker
+/// at the very start - `spawn-gate:`, a guard tag, `"status": "refused"` -
+/// because the marker-bearing line IS the whole short answer. A successful
+/// multi-line read that merely reports on a past gate event (the check-in's
+/// capacity line) buries the same words well past this lead, which is what
+/// tells the two apart.
+const HEADER_LEAD_CHARS: usize = 100;
 
 static BUCKET_SET: OnceLock<regex::RegexSet> = OnceLock::new();
 
@@ -69,19 +84,13 @@ pub(crate) fn buckets_of(text: &str) -> impl Iterator<Item = &'static str> + '_ 
         .filter_map(move |(idx, (bucket, _))| matches.matched(idx).then_some(*bucket))
 }
 
-/// A call is refused when its own `is_error` flag says so; a claude
-/// `tool_result` always carries one for a real failure (confirmed against
-/// `user_reject` and gate-refusal samples alike), so a `false` flag is
-/// trusted outright and never overridden by words the successful output
-/// happens to contain. `None` (no flag at all - codex has none, and a
-/// malformed claude row might omit it) falls back to the same bucket scan
-/// `buckets_of` runs for categorization: unchanged from before this fix,
-/// and the only option left once there is no structural signal to trust.
+/// `is_error: true` is always refused, whatever the text says. Everything
+/// else - `false`, or no flag at all - still runs the HEADER check: a clean
+/// exit is not proof of a clean answer (`spawn-gate` exits 0 even when its
+/// own answer is a refusal), but it DOES rule out a match that only shows
+/// up once the header lead is behind it.
 pub(crate) fn is_refused(text: &str, is_error: Option<bool>) -> bool {
-    match is_error {
-        Some(refused) => refused,
-        None => buckets_of(text).next().is_some(),
-    }
+    is_error == Some(true) || bucket_set().is_match(lead(text, HEADER_LEAD_CHARS))
 }
 
 /// The first `max_chars` characters of `text`, split on a char boundary.
@@ -485,16 +494,18 @@ mod tests {
         assert_eq!(result["refused"], 0);
     }
 
-    /// x-2c85: a lead's own check-in read of its capacity line ("gate
-    /// refused on provider_cap") is a SUCCESSFUL Bash result reporting on a
-    /// past gate event, not a refusal of the read itself. A successful
-    /// `is_error: false` result must never count as refused no matter what
-    /// gate words its later lines quote.
+    /// A lead's own check-in read of its capacity line ("gate refused on
+    /// provider_cap") is a SUCCESSFUL Bash result reporting on a past gate
+    /// event, not a refusal of the read itself - the words are buried well
+    /// past the header lead, in a multi-line report. The same words as a
+    /// call's OWN short answer, though, must still count: `spawn-gate`
+    /// exits 0 even when its answer is a refusal, so `is_error: false`
+    /// alone can never clear a call either - only the header position does.
     #[test]
-    fn a_successful_checkin_read_quoting_a_past_gate_refusal_does_not_count_as_refused() {
-        let checkin_report = "machine: beat 12 clean\n\
-             telemetry: ok\n\
-             board: open_prs 2, free_claim_no_driver 0, blocked 0\n\
+    fn is_error_false_clears_a_buried_refusal_but_not_the_calls_own_refusal_answer() {
+        let checkin_report = "machine: beat 12 clean, context 42%, drift 1.2, tokens 128 out\n\
+             telemetry: ok, queue depth 0, otel exporter healthy\n\
+             board: open_prs 2, free_claim_no_driver 0, blocked 0, ready 4\n\
              capacity: footprint admit / gate refused on provider_cap, cpu pass";
         let lines = vec![transcript_line_with_error(
             "t1",
@@ -513,17 +524,33 @@ mod tests {
         assert_eq!(result["total"], 1);
         assert_eq!(
             result["refused"], 0,
-            "a successful read is never refused by buried gate words"
+            "a successful read is never refused by gate words buried past its header"
         );
 
-        // The same words from a GENUINELY refused call (is_error: true)
-        // still count - the flag is what decides it, not the words' absence.
-        let refused_line = vec![transcript_line_with_error(
+        // spawn-gate's own answer IS a refusal, as its first words, despite
+        // exiting 0 (is_error: false) by design - the header still catches it.
+        let own_answer_line = vec![transcript_line_with_error(
             "t2",
             "Bash",
             "spawn-gate: refusing reserve w1: provider_cap already held",
-            true,
+            false,
         )];
+        let own_answer_file = write_transcript(&own_answer_line);
+        let own_answer_result = rate_from_text(
+            "claude",
+            &std::fs::read_to_string(own_answer_file.path()).unwrap(),
+            200,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            own_answer_result["refused"], 1,
+            "an exit-0 refusal answer still counts - is_error: false is not proof of a clean answer"
+        );
+
+        // The same words from an is_error: true call count too - the flag
+        // alone is also sufficient, whatever the text says.
+        let refused_line = vec![transcript_line_with_error("t3", "Bash", "boom", true)];
         let refused_file = write_transcript(&refused_line);
         let refused_result = rate_from_text(
             "claude",
