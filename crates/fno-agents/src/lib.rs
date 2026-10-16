@@ -355,6 +355,7 @@ pub mod paths_cli;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
+pub mod pi_ask;
 pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]

@@ -2810,6 +2810,19 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             &harness_args,
         )),
 
+        // pi headless: one `pi --print --mode json` turn (pi_ask.rs).
+        ("pi", "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+            home,
+            name,
+            &message,
+            from_name,
+            &cwd,
+            timeout,
+            model,
+            effort,
+            &harness_args,
+        )),
+
         // opencode bg: the serve-HTTP worker lane. A shared
         // `opencode serve` hosts a persistent session bound to the worker
         // cwd; a detached `opencode run --attach` writer streams the turn's
