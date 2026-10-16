@@ -63,12 +63,14 @@ The error line is where the bad state was noticed, not where it was made. Trace 
 
 Then sort the bad state into one of two kinds. Ask whether the system must expect this state from outside its own code.
 
-- **legitimate**: the world can hand the code this state. Examples: user input, a network failure, a missing optional config, a race the design allows. Here a defensive check is the fix. Kinds: early return, null check, skip, retry, fallback value, catch. Put the check where the state enters, not at the place that crashed.
+- **legitimate**: the world can hand the code this state. Examples: user input, a network failure, a missing optional config, a race the design allows. Here a defensive check is the fix. Kinds: early return, null check, skip, retry, raised timeout, fallback value, catch. Put the check where the state enters, not at the place that crashed.
 - **illegitimate**: the code made this state itself, and no correct path makes it. Examples: a writer stored a bad row. A reaped path was read as truth. A cache served a stale answer as fact. Fix the producer. A defensive check at the consumer hides the defect and lets the next reader hit it. Treat it like a suppression: discard it and re-queue the item.
 
 When the state a defensive check handles is legitimate, the check is a fix. Otherwise it is not. This check lives in the code. It is not the `--guard` regression command.
 
 When the producer is out of reach (another repo, or out of scope), block the item and name the producer. Never keep a consumer-side check as the repair.
+
+Then look for the pattern, not the instance. Grep for every other site with the same fault. Fix each one in this loop, or block each one by name. A class fixed at one site comes back from the next one.
 
 #### Per-iteration crumb (builder trail)
 

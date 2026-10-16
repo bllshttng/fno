@@ -5,7 +5,9 @@
 # row once one exists, so the first terminal recorded sticks and a merged PR
 # stays wedged in the stop gate. No correct path makes that state. The class
 # was answered with a fidelity waiver at the reader instead of a fix
-# to finalize, and it came back as a second specimen.
+# to finalize, and it came back as a second specimen. A sibling carveout fixed
+# one of 45 test files that shared one cache race and left the class, so the
+# loop also sweeps for the pattern, not the instance.
 #
 # The skill is prose, so the contract is the prompt bytes a /fix run reads:
 # the order of the loop, and the rule that sorts this specimen as
@@ -40,6 +42,7 @@ test_specimen_sorts_as_illegitimate() {
   if grep -qF -- '**illegitimate**: the code made this state itself, and no correct path makes it.' "$LOOP" \
     && grep -qF -- 'A defensive check at the consumer hides the defect' "$LOOP" \
     && grep -qF -- 'a defensive check over a state that no correct path makes' "$LOOP" \
+    && grep -qF -- 'Then look for the pattern, not the instance.' "$LOOP" \
     && grep -qF -- '- **Producer:** `file:line`' "$INVESTIGATE" \
     && grep -qF -- '- **State:** legitimate | illegitimate' "$INVESTIGATE"; then
     pass "the reader-side waiver shape is discarded, and investigate hands /fix the producer and verdict"
