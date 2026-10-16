@@ -99,9 +99,23 @@ _get_from_settings() {
         return 1
     fi
 
-    # yq-absent fallback: only a top-level simple key (`key = value`); a dotted
-    # (nested) key needs yq, so warn and give up.
+    # yq-absent fallback: a top-level simple key (`key = value`) is read with
+    # sed below; a dotted (nested) key falls to the fno CLI, which parses TOML
+    # natively (no yq) and resolves with the same local->global precedence, so
+    # a spawned worker without yq still answers auto_merge.enabled instead of
+    # stamping a default-off posture. The CLI prints the value on stdout and
+    # provenance on stderr; lowercased to match yq's TOML rendering. Warn only
+    # when both readers are unavailable, so the message stays true.
     if [[ "$key" == *.* ]]; then
+        if command -v fno &>/dev/null; then
+            local value
+            value=$(fno config get "$key" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+            if [[ -n "$value" ]]; then
+                echo "$value"
+                return 0
+            fi
+            return 1
+        fi
         _warn_no_yq_once "$key"
         return 1
     fi
