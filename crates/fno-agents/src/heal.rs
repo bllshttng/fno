@@ -1893,10 +1893,14 @@ fn journal_rerun_keys(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// PRs any tick rebased in the last 24 hours, out of the `pr_heal_pr`
-/// journal. The drive loop's one store read per run; the conflicting
-/// trigger's per-PR cap filters it per PR.
-fn journal_rebased_prs(path: &std::path::Path) -> std::collections::HashSet<String> {
+/// PRs whose conflicting-trigger refresh already ran in the last 24 hours,
+/// out of the `pr_heal_pr` journal: a real push (`rebased`), a push that
+/// moved nothing (`skip_rebase_noop`), or a rebase that still conflicts
+/// (`skip_rebase_conflict`). Rows filter on `root`, so one checkout's PR 12
+/// never caps another's, and on the 24-hour window. The drive loop's one
+/// store read per run; the conflicting trigger's per-PR cap filters it per
+/// PR.
+fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections::HashSet<String> {
     let _ = crate::event_store::import_all(path);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1914,7 +1918,13 @@ fn journal_rebased_prs(path: &std::path::Path) -> std::collections::HashSet<Stri
     };
     rows.iter()
         .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
-        .filter(|row| row.pointer("/data/action").and_then(Value::as_str) == Some("rebased"))
+        .filter(|row| row.pointer("/data/root").and_then(Value::as_str) == Some(root))
+        .filter(|row| {
+            matches!(
+                row.pointer("/data/action").and_then(Value::as_str),
+                Some("rebased") | Some("skip_rebase_noop") | Some("skip_rebase_conflict")
+            )
+        })
         .filter_map(|row| {
             row.pointer("/data/pr")
                 .and_then(Value::as_str)
@@ -2364,6 +2374,12 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             return;
         }
         let mut fields = serde_json::Map::new();
+        // The journal is machine-global: `root` scopes the per-PR cap to
+        // this checkout, the same field the tick row writes.
+        fields.insert(
+            "root".to_string(),
+            serde_json::json!(a.cwd.to_string_lossy()),
+        );
         fields.insert("pr".to_string(), serde_json::json!(pr));
         fields.insert("action".to_string(), serde_json::json!(action));
         fields.insert("reason".to_string(), serde_json::json!(reason));
@@ -2379,7 +2395,8 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
     let rerun_keys_ever = journal_rerun_keys(&journal_path(a));
     let flake_guards = journal_flake_guards(&journal_path(a));
     let prior_states = last_sweep_states(&journal_path(a), &a.cwd.to_string_lossy().as_ref());
-    let rebased_prs_24h = journal_rebased_prs(&journal_path(a));
+    let refreshed_prs_24h =
+        journal_refreshed_prs(&journal_path(a), a.cwd.to_string_lossy().as_ref());
     let mut sweep_states: std::collections::BTreeMap<String, PrSweepState> =
         std::collections::BTreeMap::new();
     let mut worst = EXIT_CLEAN;
@@ -2520,10 +2537,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             }
             // The 24h cap bounds the conflicting trigger only: the slot
             // holder is next to merge, so its refresh never ages out.
-            if trigger.as_deref() == Some("conflicting")
-                && !slot_holds_this_pr
-                && rebased_prs_24h.contains(&pr)
-            {
+            if trigger == "conflicting" && !slot_holds_this_pr && refreshed_prs_24h.contains(&pr) {
                 println!(
                     "skip rebase_cap: PR {pr} was rebased within the last 24h; the owner resolves it"
                 );

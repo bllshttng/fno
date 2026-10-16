@@ -1492,7 +1492,7 @@ fn rebase_cap_rows() {
         "",
     );
     // Seed one pr_heal_pr `rebased` row for PR 1, one hour old, the shape
-    // the receipt closure writes.
+    // the receipt closure writes (root stamped, per the tick row).
     let past = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -1500,13 +1500,13 @@ fn rebase_cap_rows() {
         .saturating_sub(3600);
     let (y, mo, dd, h, mi, s) = crate::events::civil_from_unix(past);
     let ts = format!("{y:04}-{mo:02}-{dd:02}T{h:02}:{mi:02}:{s:02}.000Z");
-    std::fs::write(
-        d.join("events.jsonl"),
+    let seed = |d: &Path, action: &str| {
         format!(
-            "{{\"ts\":\"{ts}\",\"type\":\"pr_heal_pr\",\"source\":\"pr-heal\",\"data\":{{\"pr\":\"1\",\"action\":\"rebased\",\"reason\":\"conflicting; behind 3 -> 0\"}}}}\n"
-        ),
-    )
-    .unwrap();
+            "{{\"ts\":\"{ts}\",\"type\":\"pr_heal_pr\",\"source\":\"pr-heal\",\"data\":{{\"root\":\"{root}\",\"pr\":\"1\",\"action\":\"{action}\",\"reason\":\"x\"}}}}\n",
+            root = d.to_string_lossy()
+        )
+    };
+    std::fs::write(d.join("events.jsonl"), seed(d, "rebased")).unwrap();
     run_heal(&drive_args(d, &[]));
     let fno = log_of(d, "fno.log");
     assert!(
@@ -1526,6 +1526,59 @@ fn rebase_cap_rows() {
     run_heal(&drive_args(d, &[]));
     let fno = log_of(d, "fno.log");
     assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
+
+    // The cap counts a still-conflicting rebase attempt (`skip_rebase_conflict`)
+    // as the refresh too: no second attempt within 24h.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "",
+        3,
+        "status needs_resolver; files: a, b). Resolve by hand, then re-run `fno do pr push`",
+    );
+    std::fs::write(d.join("events.jsonl"), seed(d, "skip_rebase_conflict")).unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert!(
+        !fno.contains("do pr push"),
+        "the cap covers a conflicting rebase attempt: {fno}"
+    );
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
+
+    // The cap counts a no-op refresh (`skip_rebase_noop`) the same way.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rebase(d, "false");
+    stub_git_drive(d);
+    stub_cargo(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    stub_fno_push(
+        d,
+        "pr-push: origin/main behind-before=3 behind-after=3 integrate=none sha=abc pushed=0 nothing to push",
+        0,
+        "",
+    );
+    std::fs::write(d.join("events.jsonl"), seed(d, "skip_rebase_noop")).unwrap();
+    run_heal(&drive_args(d, &[]));
+    let fno = log_of(d, "fno.log");
+    assert!(
+        !fno.contains("do pr push"),
+        "the cap covers a no-op refresh: {fno}"
+    );
+    let events = log_of(d, "events.jsonl");
+    assert!(
+        events.contains("\"action\":\"skip_rebase_cap\""),
+        "{events}"
+    );
 }
 
 /// The drive stub with PR 1's one red check a failing pytest shard: the

@@ -117,7 +117,8 @@ exit 0
 /// gate) answer a DIRTY PR by default, so the integrating tests keep
 /// exercising the rebase/merge leg: the list read resolves only the PR's
 /// number, and the single `pulls/7` read carries `mergeable_state`
-/// (`clean` under `clean-pr`); write `no-pr` for a branch with no open PR.
+/// (`clean` under `clean-pr`, null under `null-state`); write `no-pr` for a
+/// branch with no open PR.
 fn stub_gh(dir: &Path) {
     write_exec(
         dir,
@@ -133,6 +134,8 @@ for a in "$@"; do case "$a" in
   *pulls/7)
     if [ -f "$D/clean-pr" ]; then
       echo '{"number":7,"mergeable_state":"clean"}'
+    elif [ -f "$D/null-state" ]; then
+      echo '{"number":7,"mergeable_state":null}'
     else
       echo '{"number":7,"mergeable_state":"dirty"}'
     fi
@@ -287,6 +290,21 @@ fn behind_rows() {
     assert!(
         !gh.contains("cancel"),
         "a no-op never cancels a red run: {gh}"
+    );
+
+    // A null mergeable_state (GitHub still computing) integrates nothing:
+    // the branch pushes as it stands, with no rebase.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("null-state"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("integrate=none"), "{out}");
+    assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
+    assert!(out.contains("pushed=1"), "{out}");
+    assert!(
+        !log_of(&d, "git.log").contains("rebase origin/main"),
+        "no rebase on a null state: {:?}",
+        log_of(&d, "git.log")
     );
 }
 
