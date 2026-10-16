@@ -122,6 +122,10 @@ pub struct GcSummary {
     /// permanent keep behind the windowed attended hold. The row never
     /// retires on a sweep, like an operator row.
     pub kept_user_typed: Vec<(String, String)>,
+    /// `(id, detail)`: the user set a keep mark on this session
+    /// (`fno agents reap --keep`). The mark answers ahead of the origin
+    /// gate and the policy, and one command lifts it.
+    pub kept_marked: Vec<(String, String)>,
     /// `(id, detail)`: the fresh truth probe answered nothing within its
     /// bound and the in-process quiet witness could not lift the row either.
     /// An unread instrument is never reported as `active`, never an invented age.
@@ -320,6 +324,7 @@ impl GcSummary {
             + self.kept_active.len()
             + self.kept_attended.len()
             + self.kept_user_typed.len()
+            + self.kept_marked.len()
             + self.kept_probe_unread.len()
             + self.kept_transcript_unresolved.len()
             + self.kept_graph_unreadable.len()
@@ -1747,6 +1752,12 @@ pub(crate) fn run_with_release(
         }
         if e.role_level.is_some() || manifest_teams.holds(e) {
             summary.kept_teamed.push(id);
+            continue;
+        }
+        // The user's keep mark: one stat, answered ahead of the origin gate
+        // so a marked adopted row is named by its mark, not by its origin.
+        if let Some(why) = crate::keep_mark::for_row(home, e) {
+            summary.kept_marked.push((id, why));
             continue;
         }
         // The origin gate runs BEFORE the graph read so a row fno never
