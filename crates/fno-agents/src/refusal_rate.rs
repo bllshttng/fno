@@ -12,6 +12,14 @@
 //! hot, `discount_load` drops the two load-caused buckets - `timeout` and
 //! `gate_refusal` - from the numerator: they rise with machine load, not
 //! lead quality (a 14.5 to 18 percent rise measured under load 100 to 200).
+//!
+//! A call is refused by its result's structural `is_error` flag when one
+//! exists, never by the bucket words alone - a successful, multi-line read
+//! (the lead check-in's own capacity line, which quotes a past gate verdict
+//! such as "gate refused on provider_cap") can bury those same words deep
+//! in otherwise-clean output. Only a result with no flag at all (codex has
+//! none) falls back to a short header check, since a real refusal fronts
+//! its marker at the very start of the output.
 
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -42,18 +50,53 @@ pub(crate) const REFUSAL_BUCKETS: [(&str, &str); 7] = [
 /// Matches the 4000-char lead the lead-control retro measured against.
 const CONTENT_LEAD_CHARS: usize = 4000;
 
+/// The much shorter lead checked to decide whether a call was REFUSED at
+/// all, for a result with no structural error flag to trust (codex, or a
+/// claude row that omits `is_error`). A real refusal fronts its marker
+/// (`spawn-gate:`, a guard tag, `"status": "refused"`) at the very start of
+/// the output, because the whole output IS the refusal message. A
+/// successful multi-line read that merely reports on a past gate event
+/// (the lead check-in's capacity line quoting "gate refused on
+/// provider_cap") buries the same words well past this window, so this
+/// shorter lead is what tells the two apart - `buckets_of` above still
+/// scans the wider `CONTENT_LEAD_CHARS` lead, but only to CATEGORIZE a call
+/// already known to be refused.
+const HEADER_LEAD_CHARS: usize = 200;
+
 static BUCKET_SET: OnceLock<regex::RegexSet> = OnceLock::new();
 
-pub(crate) fn buckets_of(text: &str) -> impl Iterator<Item = &'static str> + '_ {
-    let set = BUCKET_SET.get_or_init(|| {
+fn bucket_set() -> &'static regex::RegexSet {
+    BUCKET_SET.get_or_init(|| {
         regex::RegexSet::new(REFUSAL_BUCKETS.map(|(_, pattern)| pattern))
             .expect("refusal bucket patterns are valid")
-    });
-    let matches = set.matches(lead(text, CONTENT_LEAD_CHARS));
+    })
+}
+
+pub(crate) fn buckets_of(text: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let matches = bucket_set().matches(lead(text, CONTENT_LEAD_CHARS));
     REFUSAL_BUCKETS
         .iter()
         .enumerate()
         .filter_map(move |(idx, (bucket, _))| matches.matched(idx).then_some(*bucket))
+}
+
+/// Whether the HEADER lead of `text` opens with a refusal marker. Used only
+/// when there is no structural error state to trust - see `is_refused`.
+fn has_refusal_header(text: &str) -> bool {
+    bucket_set().is_match(lead(text, HEADER_LEAD_CHARS))
+}
+
+/// A call is refused when its own `is_error` flag says so; a claude
+/// `tool_result` always carries one for a real failure (confirmed against
+/// `user_reject` and gate-refusal samples alike), so a `false` flag is
+/// trusted outright and never overridden by words the successful output
+/// happens to contain. `None` (no flag at all - codex has none, and a
+/// malformed claude row might omit it) falls back to the header check.
+fn is_refused(text: &str, is_error: Option<bool>) -> bool {
+    match is_error {
+        Some(refused) => refused,
+        None => has_refusal_header(text),
+    }
 }
 
 /// The first `max_chars` characters of `text`, split on a char boundary.
@@ -68,9 +111,14 @@ fn lead(text: &str, max_chars: usize) -> &str {
     }
 }
 
-fn trailing_calls(harness: &str, text: &str, window: usize) -> Vec<Option<String>> {
+/// Each trailing call paired with its result text and, when the transcript
+/// shape carries one, the result's structural `is_error` flag.
+fn trailing_calls(harness: &str, text: &str, window: usize) -> Vec<Option<(String, Option<bool>)>> {
     if harness == "codex" {
         codex_trailing_calls(text, window)
+            .into_iter()
+            .map(|call| call.map(|text| (text, None)))
+            .collect()
     } else {
         claude_trailing_calls(text, window)
     }
@@ -78,9 +126,10 @@ fn trailing_calls(harness: &str, text: &str, window: usize) -> Vec<Option<String
 
 /// The claude-shaped pairing: calls join to results by tool_use id, and a
 /// result may land rows after its call.
-fn claude_trailing_calls(text: &str, window: usize) -> Vec<Option<String>> {
+fn claude_trailing_calls(text: &str, window: usize) -> Vec<Option<(String, Option<bool>)>> {
     let mut order: Vec<String> = Vec::new();
-    let mut results: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut results: std::collections::HashMap<String, (String, Option<bool>)> =
+        std::collections::HashMap::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -114,7 +163,8 @@ fn claude_trailing_calls(text: &str, window: usize) -> Vec<Option<String>> {
                         .join(""),
                     _ => String::new(),
                 };
-                results.insert(id.to_string(), text);
+                let is_error = block.get("is_error").and_then(Value::as_bool);
+                results.insert(id.to_string(), (text, is_error));
             }
         }
     }
@@ -194,22 +244,29 @@ pub fn rate_from_text(
 ) -> Result<Value, String> {
     let trailing = trailing_calls(harness, text, window);
     let total = trailing.len();
-    let buckets: Vec<Vec<&'static str>> = trailing
+    // `refused` decides per-call via `is_refused` (structural flag, or a
+    // header check when there is none); `buckets_of` runs over the wider
+    // lead only to CATEGORIZE an already-refused call for the load discount
+    // below - it never decides refused-or-not on its own, so a successful
+    // read's buried gate words can no longer flip it.
+    let calls: Vec<(bool, Vec<&'static str>)> = trailing
         .iter()
-        .map(|call| {
-            call.as_ref()
-                .map(|text| buckets_of(text).collect())
-                .unwrap_or_default()
+        .map(|call| match call {
+            None => (false, Vec::new()),
+            Some((text, is_error)) => (is_refused(text, *is_error), buckets_of(text).collect()),
         })
         .collect();
-    let refused_full = buckets.iter().filter(|set| !set.is_empty()).count();
+    let refused_full = calls.iter().filter(|(refused, _)| *refused).count();
     let (refused, discounted) = if discount_load {
         (
-            buckets
+            calls
                 .iter()
-                .filter(|set| {
-                    set.iter()
-                        .any(|bucket| *bucket != "timeout" && *bucket != "gate_refusal")
+                .filter(|(refused, buckets)| {
+                    *refused
+                        && (buckets.is_empty()
+                            || buckets
+                                .iter()
+                                .any(|bucket| *bucket != "timeout" && *bucket != "gate_refusal"))
                 })
                 .count(),
             true,
@@ -264,6 +321,34 @@ mod tests {
             );
         }
         lines.join("\n")
+    }
+
+    /// Like `transcript_line`, but the result row also carries the
+    /// structural `is_error` flag a real claude transcript always sets.
+    fn transcript_line_with_error(
+        tool_use_id: &str,
+        name: &str,
+        result: &str,
+        is_error: bool,
+    ) -> String {
+        let call = json!({
+            "message": {
+                "content": [{"type": "tool_use", "id": tool_use_id, "name": name}]
+            }
+        })
+        .to_string();
+        let outcome = json!({
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "is_error": is_error,
+                    "content": result,
+                }]
+            }
+        })
+        .to_string();
+        format!("{call}\n{outcome}")
     }
 
     fn write_transcript(lines: &[String]) -> tempfile::NamedTempFile {
@@ -413,6 +498,56 @@ mod tests {
         .unwrap();
         assert_eq!(result["total"], 1);
         assert_eq!(result["refused"], 0);
+    }
+
+    /// x-2c85: a lead's own check-in read of its capacity line ("gate
+    /// refused on provider_cap") is a SUCCESSFUL Bash result reporting on a
+    /// past gate event, not a refusal of the read itself. A successful
+    /// `is_error: false` result must never count as refused no matter what
+    /// gate words its later lines quote.
+    #[test]
+    fn a_successful_checkin_read_quoting_a_past_gate_refusal_does_not_count_as_refused() {
+        let checkin_report = "machine: beat 12 clean\n\
+             telemetry: ok\n\
+             board: open_prs 2, free_claim_no_driver 0, blocked 0\n\
+             capacity: footprint admit / gate refused on provider_cap, cpu pass";
+        let lines = vec![transcript_line_with_error(
+            "t1",
+            "Bash",
+            checkin_report,
+            false,
+        )];
+        let file = write_transcript(&lines);
+        let result = rate_from_text(
+            "claude",
+            &std::fs::read_to_string(file.path()).unwrap(),
+            200,
+            false,
+        )
+        .unwrap();
+        assert_eq!(result["total"], 1);
+        assert_eq!(
+            result["refused"], 0,
+            "a successful read is never refused by buried gate words"
+        );
+
+        // The same words from a GENUINELY refused call (is_error: true)
+        // still count - the flag is what decides it, not the words' absence.
+        let refused_line = vec![transcript_line_with_error(
+            "t2",
+            "Bash",
+            "spawn-gate: refusing reserve w1: provider_cap already held",
+            true,
+        )];
+        let refused_file = write_transcript(&refused_line);
+        let refused_result = rate_from_text(
+            "claude",
+            &std::fs::read_to_string(refused_file.path()).unwrap(),
+            200,
+            false,
+        )
+        .unwrap();
+        assert_eq!(refused_result["refused"], 1);
     }
 
     // A byte-offset slice at exactly CONTENT_LEAD_CHARS bytes would panic

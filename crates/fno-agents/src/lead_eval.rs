@@ -448,6 +448,13 @@ fn fold_transcript(
                 if block.get("type").and_then(Value::as_str) != Some("tool_result") {
                     continue;
                 }
+                // A result explicitly marked successful (`is_error: false`)
+                // is never a refusal, whatever gate words its text quotes -
+                // the same x-2c85 fix `refusal_rate::is_refused` applies.
+                // No flag at all still falls through to the text buckets.
+                if block.get("is_error").and_then(Value::as_bool) == Some(false) {
+                    continue;
+                }
                 let text = content_text(block.get("content").unwrap_or(&Value::Null));
                 note_refusal_text(&mut fold, window_idx, &text);
             }
@@ -1528,6 +1535,34 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.session.as_deref(), Some("s"));
         assert!(parsed.json);
+    }
+
+    /// x-2c85: a successful (`is_error: false`) tool result that quotes a
+    /// past gate refusal in its own text must never land in the window's
+    /// refusal buckets or the repeated-refusals table.
+    #[test]
+    fn a_successful_result_quoting_gate_words_is_not_a_refusal() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let rows = vec![
+            json!({"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}),
+            json!({"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"capacity: footprint admit / gate refused on provider_cap, cpu pass"}]}}),
+        ];
+        for row in rows {
+            writeln!(file, "{row}").unwrap();
+        }
+        let fold = fold_transcript(
+            "test-session",
+            "claude",
+            file.path(),
+            None,
+            None,
+            3,
+            &BusIndex::empty(),
+            &mut crate::operator_witness::SubmitIndex::empty(),
+        )
+        .unwrap();
+        assert!(fold.windows[0].buckets.is_empty());
+        assert!(fold.repeated_refusals.is_empty());
     }
 
     #[test]
