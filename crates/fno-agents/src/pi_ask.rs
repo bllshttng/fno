@@ -81,11 +81,13 @@ fn parse_pi_stream(stdout: &str) -> Result<String, String> {
         .get("stopReason")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if matches!(stop, "error" | "aborted") {
+    // pi's stop reasons are stop | length | toolUse | error | aborted | deferred.
+    // Only `stop` is a finished reply: `length` is a cut-off answer.
+    if stop != "stop" {
         let detail = message
             .get("errorMessage")
             .and_then(Value::as_str)
-            .unwrap_or("no errorMessage in the stream");
+            .unwrap_or("the turn did not end on stop");
         return Err(format!("pi stopped with {stop}: {detail}"));
     }
     let text: String = message
@@ -197,6 +199,11 @@ mod tests {
         assert_eq!(
             err,
             "pi stopped with error: Codex error: model not supported"
+        );
+        let cut_off = r#"{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"par"}],"stopReason":"length"}}"#;
+        assert_eq!(
+            parse_pi_stream(cut_off).unwrap_err(),
+            "pi stopped with length: the turn did not end on stop"
         );
     }
 
