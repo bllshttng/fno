@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HOOKS_JSON = REPO_ROOT / "hooks" / "hooks.json"
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
+
+
+def _command(command: str) -> str:
+    return " ".join(shlex.split(command.removeprefix("PYTHONDONTWRITEBYTECODE=1 ")))
 
 
 def test_hooks_json_command_paths_resolve() -> None:
@@ -59,6 +63,9 @@ def test_codex_plugin_manifest_points_to_session_start_hook() -> None:
 
     data = json.loads(CODEX_HOOKS_JSON.read_text(encoding="utf-8"))
     hooks = data["hooks"]["SessionStart"]
+    for registration in hooks:
+        for hook in registration["hooks"]:
+            hook["command"] = _command(hook["command"])
     assert hooks == [
         {
             "matcher": "",
@@ -179,7 +186,7 @@ def test_write_guard_is_registered_once_per_harness(
         registration
         for registration in data["hooks"]["PreToolUse"]
         if registration.get("matcher") == "Edit|Write"
-        and any(hook.get("command") == command for hook in registration.get("hooks", []))
+        and any(_command(hook.get("command", "")) == command for hook in registration.get("hooks", []))
     ]
     assert len(registrations) == 1, (
         f"{config_path.name} must route Edit and Write through the worktree "
@@ -262,7 +269,7 @@ def test_edit_integrity_wired_on_both_posttooluse_manifests() -> None:
         assert (REPO_ROOT / "hooks" / "edit-integrity.sh").is_file()
 
 
-def test_release_codex_marketplace_points_at_repo_plugin_root() -> None:
+def test_release_codex_marketplace_points_at_shared_plugin_branch() -> None:
     marketplace = json.loads(
         (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
             encoding="utf-8"
@@ -271,10 +278,13 @@ def test_release_codex_marketplace_points_at_repo_plugin_root() -> None:
     assert marketplace["name"] == "footnote"
     entry = marketplace["plugins"][0]
     assert entry["name"] == "fno"
-    assert entry["source"] == {"source": "local", "path": "."}
-    plugin_root = (REPO_ROOT / entry["source"]["path"]).resolve()
-    assert plugin_root == REPO_ROOT
-    assert (plugin_root / ".codex-plugin" / "plugin.json").is_file()
+    assert entry["source"] == {
+        "source": "url",
+        "url": "https://github.com/bllshttng/footnote.git",
+        "ref": "stable",
+    }
+    claude = json.loads((REPO_ROOT / ".claude-plugin/marketplace.json").read_text())
+    assert entry["source"]["ref"] == claude["plugins"][0]["source"]["ref"]
 
 
 def test_drain_hook_wired_into_claude_and_codex_sessionstart() -> None:
@@ -328,7 +338,7 @@ def test_plan_location_guard_wired_into_claude_and_codex_pretooluse() -> None:
             for registration in registrations
             if registration.get("matcher") == matcher
             and any(
-                hook.get("command") == f"bash ${{{root_var}}}/{guard}"
+                _command(hook.get("command", "")) == f"bash ${{{root_var}}}/{guard}"
                 for hook in registration.get("hooks", [])
             )
         ]
@@ -467,7 +477,7 @@ def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> Non
             f"registration, found {len(registrations)}"
         )
         commands = [
-            hook.get("command") for hook in registrations[0].get("hooks", [])
+            _command(hook.get("command", "")) for hook in registrations[0].get("hooks", [])
         ]
         expected = [f"bash ${{{root_var}}}/hooks/pretooluse-bash-dispatch.sh"]
         assert commands == expected, (
@@ -543,10 +553,15 @@ def test_context_hooks_declaration() -> None:
     groups = _declaration_groups()
     named = set()
     for path in (HOOKS_JSON, CODEX_HOOKS_JSON):
-        for match in re.finditer(
-            r"context-run\.sh\s+([\w-]+)", path.read_text(encoding="utf-8")
-        ):
-            named.add(match.group(1))
+        manifest_named = set()
+        for registrations in json.loads(path.read_text(encoding="utf-8"))["hooks"].values():
+            for registration in registrations:
+                for hook in registration.get("hooks", []):
+                    match = re.search(r"context-run\.sh\s+([\w-]+)", _command(hook["command"]))
+                    if match:
+                        manifest_named.add(match.group(1))
+        assert manifest_named, f"{path.name} has no context runner registration"
+        named.update(manifest_named)
     assert named <= set(groups), f"manifest names unknown groups: {sorted(named - set(groups))}"
     for name, group in groups.items():
         ids = [producer["id"] for producer in group["producers"]]

@@ -267,6 +267,19 @@ pub struct StoredSquad {
     /// `#[serde(default)]`, same no-bump rule as `tab_trees`.
     #[serde(default)]
     pub active_tab: Option<usize>,
+    /// Sessions the operator moved into this workspace by hand. Keyed by
+    /// harness session id, never by row name. `#[serde(default)]`, same
+    /// no-bump rule as `tab_trees`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thread_pins: Vec<StoredThreadPin>,
+}
+
+/// One operator move of a session into a workspace. A paneless row has no
+/// member to carry the placement, so the pin does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredThreadPin {
+    pub harness: String,
+    pub harness_session_id: String,
 }
 
 /// One template-managed tab's persisted layout. Keyed by `tab_name`,
@@ -731,6 +744,55 @@ fn generation_key(name: &str, key: &str) -> Option<String> {
     }
 }
 
+/// The store's current generation counter for the identity `(name, key)`,
+/// keyed the way a server's baseline map is. `None` when the identity has no
+/// counter (never written, or no identity at all).
+pub fn current_generation(name: &str, key: &str) -> Option<(String, u64)> {
+    let id = generation_key(name, key)?;
+    let generation = load().generations.get(&id).copied()?;
+    Some((id, generation))
+}
+
+/// Replace the origins of the stored row named `name`, and nothing else on it:
+/// an origin edit must not carry a server's possibly stale members or layout
+/// over what another writer stored. The write is the operator's word, so it
+/// skips the baseline check. Returns whether the row exists, beside the
+/// batch whose generations the caller adopts.
+pub fn set_origins(name: &str, origins: &[String]) -> io::Result<(bool, SnapshotBatch)> {
+    let mut found = false;
+    let batch = mutate_generations(None, &[], false, |squads| {
+        if let Some(row) = squads.iter_mut().find(|s| s.name == name) {
+            row.origins = origins.to_vec();
+            found = true;
+        }
+    })?;
+    Ok((found, batch))
+}
+
+/// Pin the session `pin` to the stored row with identity `identity` (its
+/// name, or the durable key of an unnamed row), and drop the pin from every
+/// other row, in one locked mutation. The write is the operator's word, so it
+/// skips the baseline check. Returns whether the target row exists, beside the
+/// batch whose generations the caller adopts. A missing target changes
+/// nothing.
+pub fn pin_thread(identity: &str, pin: &StoredThreadPin) -> io::Result<(bool, SnapshotBatch)> {
+    let mut found = false;
+    let batch = mutate_generations(None, &[], false, |squads| {
+        let Some(target) = squads
+            .iter()
+            .position(|s| s.name == identity || (s.name.is_empty() && s.key == identity))
+        else {
+            return;
+        };
+        for row in squads.iter_mut() {
+            row.thread_pins.retain(|p| p != pin);
+        }
+        squads[target].thread_pins.push(pin.clone());
+        found = true;
+    })?;
+    Ok((found, batch))
+}
+
 /// Insert-or-replace the entry with this identity (`name` if named, else the
 /// durable `key`), preserving its `created_at` if it already exists (else
 /// stamping now). Write-through for `NewSquad`, recruit, member close, tombstone,
@@ -781,6 +843,7 @@ pub fn upsert_with_generations(
         let (tab_trees, active_tab) = existing
             .map(|s| (s.tab_trees.clone(), s.active_tab))
             .unwrap_or_default();
+        let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
         squads.retain(|s| !same_squad(s, name, key));
         squads.push(StoredSquad {
             name: name.to_string(),
@@ -791,6 +854,7 @@ pub fn upsert_with_generations(
             tab_specs,
             tab_trees,
             active_tab,
+            thread_pins,
         });
     })
 }
@@ -821,6 +885,7 @@ pub fn set_tab_specs_with_generations(
                 tab_specs: tab_specs.to_vec(),
                 tab_trees: Vec::new(),
                 active_tab: None,
+                thread_pins: Vec::new(),
             });
         }
     })
@@ -856,6 +921,7 @@ pub fn set_tab_trees(
                 tab_specs: Vec::new(),
                 tab_trees: tab_trees.to_vec(),
                 active_tab,
+                thread_pins: Vec::new(),
             });
         }
     })
@@ -907,6 +973,7 @@ fn set_snapshots_inner(
                 .filter(|stamp| !stamp.is_empty())
                 .unwrap_or_else(now_iso);
             let tab_specs = existing.map(|s| s.tab_specs.clone()).unwrap_or_default();
+            let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
             file.squads.retain(|s| !same_squad(s, &snapshot.name, key));
             file.squads.push(StoredSquad {
                 name: snapshot.name.clone(),
@@ -917,6 +984,7 @@ fn set_snapshots_inner(
                 tab_specs,
                 tab_trees: snapshot.tab_trees.clone(),
                 active_tab: snapshot.active_tab,
+                thread_pins,
             });
             let generation = file.generations.entry(generation_key.clone()).or_default();
             *generation = generation.saturating_add(1);
@@ -1918,6 +1986,7 @@ pub fn rename_with_generations(
         let (tab_trees, active_tab) = existing
             .map(|s| (s.tab_trees.clone(), s.active_tab))
             .unwrap_or_default();
+        let thread_pins = existing.map(|s| s.thread_pins.clone()).unwrap_or_default();
         squads.retain(|s| s.name != old && s.name != new);
         squads.push(StoredSquad {
             name: new.to_string(),
@@ -1928,6 +1997,7 @@ pub fn rename_with_generations(
             tab_specs,
             tab_trees,
             active_tab,
+            thread_pins,
         });
     })
 }

@@ -180,6 +180,16 @@ pub(crate) fn handle_session_report(
     let launch_record: Option<crate::launch_record::Record> =
         params_object(p, "launch_record").and_then(|v| serde_json::from_value(v.clone()).ok());
     let launch_child_name = str_field(p, "launch_child_name");
+    // A proven pane claim rides as {session, pane_id}; anything else (absent,
+    // malformed) is ignored - the report still stores normally, it just
+    // binds no pane.
+    let pane_claim: Option<crate::pane_claim::PaneClaim> = params_object(p, "pane").and_then(|v| {
+        let obj = v.as_object()?;
+        let session = obj.get("session")?.as_str()?.to_string();
+        let pane_id = obj.get("pane_id")?.as_u64()?;
+        Some(crate::pane_claim::PaneClaim { session, pane_id })
+    });
+    let mut pane_rebind: Option<(Option<crate::state::MuxRef>, crate::state::MuxRef)> = None;
     let wait_row = p
         .get("wait_row")
         .and_then(Value::as_bool)
@@ -213,6 +223,9 @@ pub(crate) fn handle_session_report(
 
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
+    // The freshness stamp every report leaves on the row: the capacity
+    // reader's liveness source for rows no probe reaches (d-d0c63de7).
+    let now_stamp = crate::daemon::now_rfc3339_like();
     // Set when this report is the successor's first self-identification: the
     // primary id filled on a promoted row. The manifest arm runs after the
     // registry write commits.
@@ -223,8 +236,14 @@ pub(crate) fn handle_session_report(
                 Some(mint) => {
                     let mut entry = mint.entry.clone();
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
+                    // The report that mints the row is its first report.
+                    entry.last_report_at = Some(now_stamp.clone());
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
+                    let new_idx = r.entries.len() - 1;
+                    if let Some(claim) = &pane_claim {
+                        pane_rebind = crate::pane_claim::bind(&mut r.entries, new_idx, claim);
+                    }
                     outcome = Outcome::Minted {
                         native: mint.native,
                     };
@@ -236,7 +255,17 @@ pub(crate) fn handle_session_report(
             return;
         };
         let idx = match find {
-            Find::Holds(i) => i,
+            Find::Holds(i) => {
+                // An operator row's own re-identification (`claude
+                // --resume` typed into a pane); a worker's mux is the
+                // keeper's business, not this report's.
+                if r.entries[i].origin.as_deref() == Some("operator") {
+                    if let Some(claim) = &pane_claim {
+                        pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
+                    }
+                }
+                i
+            }
             Find::Backfill(i) => {
                 // The same write the report store path makes: the canonical
                 // id plus the in-memory alias, named by the ROW's harness.
@@ -247,6 +276,14 @@ pub(crate) fn handle_session_report(
                     r.entries[i].claude_session_uuid = Some(session_id.clone());
                 }
                 promoted_first_fill(&r.entries[i], &mut manifest_arm);
+                // `wait_row` is the pane-worker marker (parity with the
+                // retired Python heal's `FNO_AGENT_ROW_PENDING` gate): only a
+                // pane-substrate worker's row may take a pane bind here.
+                if !wait_row.is_zero() {
+                    if let Some(claim) = &pane_claim {
+                        pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
+                    }
+                }
                 i
             }
             Find::Named(i) => {
@@ -272,6 +309,12 @@ pub(crate) fn handle_session_report(
                     };
                     return;
                 }
+                // Same pane-worker gate as the backfill arm above.
+                if !wait_row.is_zero() {
+                    if let Some(claim) = &pane_claim {
+                        pane_rebind = crate::pane_claim::bind(&mut r.entries, i, claim);
+                    }
+                }
                 i
             }
         };
@@ -291,6 +334,7 @@ pub(crate) fn handle_session_report(
         if let Some(src) = &source {
             entry.start_source = Some(src.clone());
         }
+        entry.last_report_at = Some(now_stamp.clone());
         row_name = Some(entry.name.clone());
     }) {
         return Response::err(
@@ -312,6 +356,22 @@ pub(crate) fn handle_session_report(
             &session_id,
             row_name.as_deref(),
             emitter,
+        );
+    }
+
+    // The row moved to a new pane: announce it, same kind and nested
+    // old/new shape the retired Python heal already emitted
+    // (`_heal_own_mux_ref`); the schema's legacy entry for this kind needs
+    // no change. A repeat report on the same pane leaves this unset.
+    if let Some((old, new)) = pane_rebind {
+        let _ = emitter.emit(
+            "session_pane_rebound",
+            &json!({
+                "old": old,
+                "new": new,
+                "name": row_name,
+                "harness": harness,
+            }),
         );
     }
 
@@ -797,6 +857,12 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
             params["launch_child_name"] = Value::String(name);
         }
     }
+    // A proven pane claim rides the request too: a session outside any
+    // pane, or one the ancestry walk cannot prove, pays nothing and adds
+    // nothing.
+    if let Some(claim) = crate::pane_claim::ambient() {
+        params["pane"] = json!({"session": claim.session, "pane_id": claim.pane_id});
+    }
     // --origin-only writes the record and sends nothing - EXCEPT for a child
     // that claimed a launch record: the adopt must never lose the parent edge
     // to the origin-only path, so the report rides with the record attached.
@@ -992,6 +1058,24 @@ mod tests {
     }
 
     #[test]
+    fn the_session_report_stamps_last_report_at() {
+        let (_d, home) = temp_home("report-stamp");
+        seed_registry(&home, claude_row());
+        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let row = &read_rows(&home)[0];
+        let stamp = row
+            .last_report_at
+            .as_deref()
+            .expect("the report stamps last_report_at");
+        assert!(
+            crate::state::rfc3339_like_to_secs(stamp).is_some(),
+            "the stamp parses: {stamp}"
+        );
+    }
+
+    #[test]
     fn named_row_takes_its_first_id_and_promotes_spawning() {
         let (_d, home) = temp_home("named-first");
         seed_registry(
@@ -1132,6 +1216,7 @@ mod tests {
                 name: Some("w1".into()),
                 node: Some("x-aaaa".into()),
                 slot: None,
+                provider: None,
                 cwd: "/repo".into(),
             },
             launcher_session: "lead-7".into(),
@@ -1226,6 +1311,7 @@ mod tests {
                 name: Some("w1".into()),
                 node: None,
                 slot: None,
+                provider: None,
                 cwd: "/repo".into(),
             },
             launcher_session: "lead-8".into(),

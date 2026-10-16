@@ -193,6 +193,13 @@ FIELD_META: dict[str, Meta] = {
         "Model for post-merge ritual workers (default claude-opus-5). Routing "
         "wins when a secondary provider is keyed.",
     ),
+    "telemetry.claude_otel": Meta("advanced", "Bind the daemon's local OTLP receiver for Claude Code usage (default on)."),
+    "telemetry.otlp.enabled": Meta("advanced", "Export feed events to an OTLP collector (default off)."),
+    "telemetry.otlp.endpoint": Meta("advanced", "OTLP collector URL, http(s); `/v1/logs` is appended when absent."),
+    "telemetry.otlp.headers_env": Meta("advanced", "Env var holding the export auth headers as `name=value,...`."),
+    "telemetry.otlp.log_content": Meta("advanced", "Export event titles as log text (default off: only the event kind)."),
+    "attention.enabled": Meta("advanced", "Kill switch for the attention arm (question pages and sinks; default on)."),
+    "attention.sinks": Meta("advanced", "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."),
     # --- config.research.* ---
     "research.output_dir": Meta(
         "advanced",
@@ -219,7 +226,7 @@ FIELD_META: dict[str, Meta] = {
         "never", "Legacy alias for config.review.github_apps (a straight rename); github_apps wins if both are set.",
     ),
     "review.optional_apps": Meta(
-        "advanced", "Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [gemini-code-assist, chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.",
+        "advanced", "Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.",
     ),
     "review.nudge": Meta(
         "advanced", "Per-App override for the bot-review nudge, as [review.nudge.<login>] tables with {review_handle, wait_minutes, ceiling, enabled}. A github_apps bot that reviews on MENTION not on push never reviews unless something posts its trigger; the loop-check stop gate posts review_handle (default from the built-in profile), waits wait_minutes (default 15), and after ceiling (default 3) unanswered nudges gives up rather than idling to the budget ceiling. enabled=false opts a repo back into plain block-and-wait. Ships populated for chatgpt-codex-connector, which wears three distinct names for one bot: match the review-author login chatgpt-codex-connector, trigger a fresh review with '@codex review', and address an in-thread reply to '@chatgpt-codex-connector'.",

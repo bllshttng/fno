@@ -91,6 +91,7 @@ mod bounded_spawn;
 pub mod burn_watch;
 mod cancel_sentinel;
 pub mod canonical_check;
+pub(crate) mod cap_liveness;
 pub mod capability_leaves;
 pub mod capacity;
 pub mod cargo_build_dirs;
@@ -205,7 +206,9 @@ pub mod gc_verify;
 pub mod gemini_ask;
 pub mod gh_budget;
 pub mod gh_cache;
+pub mod gh_etag;
 pub mod gh_incident;
+pub mod gh_poller;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
@@ -309,6 +312,7 @@ pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
 pub mod merge_reap;
+pub mod merge_verb;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
@@ -344,6 +348,7 @@ pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
 pub(crate) mod owner_ladder;
+pub mod pane_claim;
 pub mod pane_keeper;
 pub mod pane_rebind;
 pub mod pane_relaunch;
@@ -353,6 +358,7 @@ pub mod paths_cli;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
+pub mod pi_ask;
 pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
@@ -362,11 +368,15 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod post_merge;
 pub mod pr_admission;
+pub mod pr_base_check;
 pub mod pr_body_check;
 pub mod pr_create;
+pub mod pr_door;
 pub mod pr_draft_ready;
 pub mod pr_list;
+pub mod pr_merge_result;
 pub mod pr_nudge;
 pub mod pr_park;
 pub mod pr_push;
@@ -374,6 +384,7 @@ pub mod pr_rebase;
 pub mod pr_status;
 pub mod pr_status_facts;
 pub mod pr_steward;
+pub mod pr_verify;
 pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
@@ -419,9 +430,12 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod review_capability;
 pub mod review_doors;
+pub mod review_findings;
 pub mod review_freshness;
 pub mod review_level;
+pub mod review_policy;
 pub mod review_summary;
 pub mod revival_check;
 pub mod revive_proof;
@@ -435,6 +449,7 @@ pub mod route_gather;
 pub mod route_inventory;
 pub mod route_node_pin;
 pub mod route_recovery;
+pub mod route_settings;
 pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
@@ -473,14 +488,18 @@ pub mod spawn_cwd;
 pub mod spawn_edge;
 pub mod spawn_gate;
 pub mod spawn_gate_admission;
+pub mod spawn_gate_forced;
 pub mod spawn_gate_lanes;
+pub(crate) mod spawn_gate_queue;
 pub mod spawn_gate_reservations;
+pub(crate) mod spawn_gate_slots;
 pub mod spawn_gate_verb;
 pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
+pub(crate) mod spawn_watch;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -502,6 +521,11 @@ pub mod supervisor;
 pub mod surface_check;
 pub mod sync_canonical;
 pub mod system_sender;
+pub mod target_blast;
+pub mod target_denominator;
+pub mod target_init;
+pub mod target_orient;
+pub mod target_start;
 pub mod task_context;
 pub mod team_alarm;
 pub mod team_identity;
@@ -1118,11 +1142,14 @@ mod tests {
         let mut scanned_calls = 0usize;
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            // Production code only: truncate at the first `#[cfg(test)]` marker.
-            // Tests live at the bottom by Rust convention, so test fixtures like
-            // `.emit("tick")` are excluded. (Verified: every production emit in
-            // this crate precedes its file's first `#[cfg(test)]`.)
-            let prod = match text.find("#[cfg(test)]") {
+            // Production code only: truncate at the first `#[cfg(test)]` that
+            // gates a test MODULE. Tests live at the bottom by Rust convention,
+            // so test fixtures like `.emit("tick")` are excluded. An item-level
+            // `#[cfg(test)]` higher up (a test seam const or fn) is not a
+            // boundary: truncating there would hide every production emit
+            // after it, which is exactly what backlog_share.rs's
+            // `route_to_primary` seam did to this scan.
+            let prod = match test_module_boundary(&text) {
                 Some(i) => &text[..i],
                 None => &text[..],
             };
@@ -1177,7 +1204,7 @@ mod tests {
         let mut below_only: Vec<String> = Vec::new();
         for file in &files {
             let text = std::fs::read_to_string(file).expect("read source file");
-            let boundary = match text.find("#[cfg(test)]") {
+            let boundary = match test_module_boundary(&text) {
                 Some(i) => i,
                 None => continue,
             };
@@ -1252,6 +1279,31 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    /// The byte offset of the first `#[cfg(test)]` that gates a test MODULE.
+    /// An item-level `#[cfg(test)]` (a seam const or fn above the module) is
+    /// not a boundary: truncating there hides every production emit after it.
+    /// `None` when the file has no test module at all.
+    fn test_module_boundary(text: &str) -> Option<usize> {
+        const MARKER: &str = "#[cfg(test)]";
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(MARKER) {
+            let pos = from + rel;
+            let rest = text[pos + MARKER.len()..].trim_start();
+            // `mod tests` and its visibility-spelled forms gate the same way;
+            // four files in this crate spell `pub mod` / `pub(crate) mod`.
+            let rest = rest
+                .strip_prefix("pub(crate) ")
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest)
+                .trim_start();
+            if rest.starts_with("mod ") {
+                return Some(pos);
+            }
+            from = pos + 1;
+        }
+        None
     }
 
     /// Extract `(kind, line)` for every `.emit` / `.emit_fields` call with a
@@ -1532,6 +1584,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
+    // A refused shared-backlog flush took this machine's rows back: the
+    // operator notice beside the retained batch (backlog_share::repair).
+    "backlog_refused_flush",
     // Triage apply telemetry (the native triage engine): one row per
     // committed apply, carrying the applied counts, the priority moves and
     // the dropped-entry count.
@@ -1539,6 +1594,12 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The pr-watch sweep flipped an open fno-bound draft PR back to ready
     // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
     "pr_watch_draft_flip",
+    // The post-merge route's per-attempt attribution receipt (route.rs);
+    // observability only, never a dedup input.
+    "post_merge_dispatch_receipt",
+    // One row per post-merge ritual archive attempt (ritual.rs archive leg);
+    // Python emitted the kind unregistered, the port registers it.
+    "post_merge_archive",
     // The question intake's journal write (the ask port): the durable half
     // of `fno inbox outstanding ask`.
     "operator_question",
@@ -1555,6 +1616,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A launch the spawn gate or the dispatch door refused before any
     // worker existed; the feed projects it so a refused launch shows.
     "agent_spawn_refused",
+    // The first-turn watch saw a launch's first assistant line; carries the
+    // latency from the call per harness, substrate and machine.
+    "spawn_first_turn",
     // A reaped session came back (client-emitted): one event per revive
     // naming the verb, the actor session, the prior name and the session id.
     "agent_revived",
@@ -1895,6 +1959,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (unknown session / third distinct id) without storing.
     "session_report_stored",
     "session_report_dropped",
+    // A foreground SessionStart report bound its row to a proven pane claim
+    // (pane_claim.rs), moving it off a stale or absent mux ref.
+    "session_pane_rebound",
     // The same failure the Python identification arm emits: the manifest
     // rebind at a promoted row's first self-identification did not land.
     "role_manifest_arm_failed",

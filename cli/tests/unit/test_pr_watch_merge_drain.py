@@ -83,7 +83,8 @@ def test_a_listed_closed_row_is_skipped_with_a_reason(tmp_path, monkeypatch):
                     "merge_dispatched": False, "retries": 0, "parked": None})
     calls = []
     monkeypatch.setattr(
-        _merge, "run_merge", lambda argv, cwd=None, **kw: calls.append(argv) or 0)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
     counts = _drain([(_cand(tmp_path, 2017, "x-drain1"), key, _grant_fields())],
                     events, store_path=store_path)
     assert calls == [], "no merge call for a listed-closed row"
@@ -100,14 +101,12 @@ def test_a_held_row_records_the_merge_reason(tmp_path, monkeypatch):
     key = "owner/repo#2049"
     _open_row(store, key)
 
-    def _held(argv, cwd=None, **kw):
-        _merge.LAST_RECEIPT.update(
-            {"pr": int(argv[0]), "outcome": "held",
-             "reason": "merge serialized: another merge holds the lock; retry",
-             "strategy": "merge"})
-        return 2
+    def _held(verb, payload, timeout=None):
+        return {"pr": int(payload["argv"][0]), "outcome": "held",
+                "reason": "merge serialized: another merge holds the lock; retry",
+                "strategy": "merge", "exit": 2}
 
-    monkeypatch.setattr(_merge, "run_merge", _held)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _held)
     counts = _drain([(_cand(tmp_path, 2049, "x-drain2"), key, _grant_fields())],
                     events, store_path=store_path)
     held = [e for e in events
@@ -119,10 +118,10 @@ def test_a_held_row_records_the_merge_reason(tmp_path, monkeypatch):
 
     events.clear()
     monkeypatch.setattr(
-        _merge, "run_merge",
-        lambda argv, cwd=None, **kw: (_merge.LAST_RECEIPT.update(
-            {"pr": int(argv[0]), "outcome": "failed", "reason": "gh merge failed",
-             "strategy": "merge"}) or 1))
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: {
+            "pr": int(payload["argv"][0]), "outcome": "failed",
+            "reason": "gh merge failed", "strategy": "merge", "exit": 1})
     key_f = "owner/repo#2050"
     _open_row(store, key_f)
     counts = _drain([(_cand(tmp_path, 2050, "x-drain2f"), key_f, _grant_fields())],
@@ -144,15 +143,14 @@ def test_an_already_closed_reply_stamps_not_open_and_the_next_drain_skips(
     _open_row(store, key)
     calls = []
 
-    def _already_closed(argv, cwd=None, **kw):
-        calls.append(int(argv[0]))
-        _merge.LAST_RECEIPT.update(
-            {"pr": int(argv[0]), "outcome": "skipped",
-             "reason": _merge.ALREADY_TERMINAL + "closed; nothing to merge",
-             "strategy": "none"})
-        return 2
+    def _already_closed(verb, payload, timeout=None):
+        pr = int(payload["argv"][0])
+        calls.append(pr)
+        return {"pr": pr, "outcome": "skipped",
+                "reason": _merge.ALREADY_TERMINAL + "closed; nothing to merge",
+                "strategy": "none", "exit": 2}
 
-    monkeypatch.setattr(_merge, "run_merge", _already_closed)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _already_closed)
     cand = _cand(tmp_path, 2017, "x-drain3")
     counts = _drain([(cand, key, _grant_fields())], events, store_path=store_path)
     assert calls == [2017]
@@ -177,11 +175,13 @@ def test_an_attempt_starts_with_exactly_the_merge_floor_left(tmp_path, monkeypat
     now = [100.0]
     monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(d, "_phase_deadline", now[0] + d._MERGE_FLOOR_S)
+    monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 0.0)
     monkeypatch.setattr(
-        _merge, "run_merge", lambda argv, cwd=None, **kw: calls.append(argv) or 0)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
     counts = _drain([(_cand(tmp_path, 150, "x-floor"), key, _grant_fields())],
                     events, store_path=store_path)
-    assert calls == [["150"]]
+    assert [c["argv"] for c in calls] == [["150"]]
     assert counts["executed"] == 1 and counts["budget"] == 0
 
 
@@ -195,7 +195,8 @@ def test_under_the_merge_floor_is_refused_without_spending_retry(tmp_path, monke
     monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(d, "_phase_deadline", now[0] + d._MERGE_FLOOR_S - 1)
     monkeypatch.setattr(
-        _merge, "run_merge", lambda argv, cwd=None, **kw: calls.append(argv) or 0)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
     counts = _drain([(_cand(tmp_path, 149, "x-under-floor"), key, _grant_fields())],
                     events, store_path=store_path)
     assert calls == []
@@ -223,12 +224,14 @@ def test_the_next_row_prepares_under_merge_prepare(tmp_path, monkeypatch):
     now = [100.0]
     monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(d, "_phase_deadline", now[0] + 400.0)
+    monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 0.0)
     monkeypatch.setattr(
-        _merge, "run_merge", lambda argv, cwd=None, **kw: calls.append(argv) or 0)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
     c1, c2 = _cand(tmp_path, 1, "x-first"), _cand(tmp_path, 2, "x-second")
     counts = _drain([(c1, key1, _grant_fields()), (c2, key2, _grant_fields())],
                     events, claim=claim, store_path=store_path)
-    assert calls == [["1"], ["2"]]
+    assert [c["argv"] for c in calls] == [["1"], ["2"]]
     assert claim.phases == ["merge:prepare", "merge:prepare"]
     assert counts["executed"] == 2
 
@@ -247,16 +250,15 @@ def test_a_slow_attempt_raises_the_floor_for_the_next_row(tmp_path, monkeypatch)
     def _clock():
         return now[0]
 
-    def _slow_then_fast(argv, cwd=None, **kw):
-        merge_calls.append(int(argv[0]))
-        _merge.LAST_RECEIPT.clear()
+    def _slow_then_fast(verb, payload, timeout=None):
+        merge_calls.append(int(payload["argv"][0]))
         took = 220.0 if merge_calls == [1] else 0.0
         now[0] += took
-        return 0
+        return {"exit": 0}
 
     monkeypatch.setattr(d.time, "monotonic", _clock)
     monkeypatch.setattr(d, "_phase_deadline", _clock() + 400.0)
-    monkeypatch.setattr(_merge, "run_merge", _slow_then_fast)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _slow_then_fast)
     c1, c2 = _cand(tmp_path, 1, "x-slow"), _cand(tmp_path, 2, "x-next")
     counts = _drain([(c1, key1, _grant_fields()), (c2, key2, _grant_fields())],
                     events, store_path=store_path)
@@ -282,14 +284,12 @@ def test_every_granted_row_is_counted_once(tmp_path, monkeypatch):
     replies = {"owner/repo#11": (2, "held reason", "held"),
                "owner/repo#10": (0, "", "")}
 
-    def _merge_call(argv, cwd=None, **kw):
-        rc, reason, outcome = replies["owner/repo#" + argv[0]]
-        _merge.LAST_RECEIPT.update(
-            {"pr": int(argv[0]), "outcome": outcome, "reason": reason,
-             "strategy": "merge"})
-        return rc
+    def _merge_call(verb, payload, timeout=None):
+        rc, reason, outcome = replies["owner/repo#" + payload["argv"][0]]
+        return {"pr": int(payload["argv"][0]), "outcome": outcome,
+                "reason": reason, "strategy": "merge", "exit": rc}
 
-    monkeypatch.setattr(_merge, "run_merge", _merge_call)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _merge_call)
     claim = _LockingClaim("pr-watch:owner/repo:13")
     queue = [
         (_cand(tmp_path, 13, "x-l"), key_l, _grant_fields()),
@@ -324,10 +324,10 @@ def test_a_gh_budget_backoff_holds_every_grant_without_attempting_it(
         _open_row(store, key)
     monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 42.0)
 
-    def _boom(argv, cwd=None, **kw):
+    def _boom(verb, payload, timeout=None):
         raise AssertionError("merge core must not run during a budget backoff")
 
-    monkeypatch.setattr(_merge, "run_merge", _boom)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _boom)
     queue = [(_cand(tmp_path, 31, "x-hold1"), keys[0], _grant_fields()),
              (_cand(tmp_path, 32, "x-hold2"), keys[1], _grant_fields())]
     counts = _drain(queue, events, store_path=store_path)
@@ -356,7 +356,8 @@ def test_a_short_gh_budget_backoff_still_attempts_the_merge(
     monkeypatch.setattr(d, "_gh_budget_backoff_left", lambda: 5.0)
     calls = []
     monkeypatch.setattr(
-        _merge, "run_merge", lambda argv, cwd=None, **kw: calls.append(argv) or 0)
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, timeout=None: calls.append(payload) or {"exit": 0})
     counts = _drain([(_cand(tmp_path, 33, "x-hold3"), key, _grant_fields())],
                     events, store_path=store_path)
 

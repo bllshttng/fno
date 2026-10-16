@@ -69,7 +69,6 @@ def test_identifier_masking_preserves_snake_case():
 def test_three_79_word_sends_deliver_without_a_ledger(
     monkeypatch,
     tmp_path,
-    stubbed_pane,
     capsys,
 ):
     """The flipped burst acceptance, all three lanes: three 79-word ordinary
@@ -129,13 +128,6 @@ def test_three_79_word_sends_deliver_without_a_ledger(
             "worker", body, provider=None, cwd=tmp_path, from_name="sender"
         )
         assert result.delivery == "durable"
-
-    for _ in range(3):
-        prepared = _pane_prepare(_clean_body(45))
-        assert prepared.exit_code == 0, prepared.output
-        # The prepared payload opens with the delivered attribution line.
-        first = prepared.output.splitlines()[0]
-        assert first.startswith("`") and first.endswith("`") and " · " in first, first
 
     assert not (paths.bus_dir() / "word-budget").exists(), (
         "an ordinary send charges no rolling ledger"
@@ -465,50 +457,6 @@ def test_the_enforcing_count_refuses_when_the_door_fails(monkeypatch):
 
 def test_the_enforcing_count_reads_the_receipt():
     assert rust_binary.style_word_count_checked(words(7)) == 7
-
-
-# --- the pane lane (x-4268): same style gate, control bodies only ----------
-
-def _pane_prepare(body: str, *extra: str):
-    from typer.testing import CliRunner
-
-    from fno.mail.cli import mail_app
-
-    return CliRunner().invoke(
-        mail_app,
-        ["pane-prepare", "--session-id", "s", "--pane", "3", *extra],
-        input=body,
-    )
-
-
-@pytest.fixture
-def stubbed_pane(monkeypatch):
-    """Pin the pane transport's environment probes; see the bridge test file."""
-    from fno.mail.pane_transport import PaneIdentity
-
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_harness", lambda s, p: "claude"
-    )
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_recipient",
-        lambda s, p: "recip-3333",
-    )
-    monkeypatch.setattr("fno.mail.pane_transport.prompt_refusal", lambda **_kw: None)
-    monkeypatch.setattr("fno.agents.self_stamp.stamp_from", lambda _n: "sender-4444")
-    monkeypatch.setattr(
-        "fno.mail.pane_transport.resolve_pane_identity",
-        lambda s, p: PaneIdentity(
-            name="worker",
-            fno_id="33333333-2222-1111-4444-555566667777",
-            session_id="33333333-2222-1111-4444-555566667777",
-            handle="recip-3333",
-        ),
-    )
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_session_id",
-        lambda: "44444444-5555-6666-7777-888899990000",
-    )
-    return None
 
 
 def _clean_body(n_words: int) -> str:

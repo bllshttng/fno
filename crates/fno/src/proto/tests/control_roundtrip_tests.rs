@@ -61,6 +61,11 @@ fn proto_v4_control_verbs_roundtrip() {
             harness: "codex".into(),
             session_id: "01a03a85-1111-7222-8333-444455556666".into(),
         },
+        ControlVerb::WorkspaceOrigin {
+            workspace: "footnote".into(),
+            path: "/code/footnote".into(),
+            remove: true,
+        },
     ] {
         let msg = ClientMsg::Control {
             proto: PROTO_VERSION,
@@ -85,6 +90,7 @@ fn proto_v4_control_replies_roundtrip() {
                 squad_name: None,
                 tab_id: 7,
                 cwd: "/code/footnote".into(),
+                pane_cwd: None,
                 child_pid: Some(4242),
                 title: None,
                 pristine_idle_shell: false,

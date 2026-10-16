@@ -11,7 +11,7 @@ When `$CODEX_THREAD_ID` is nonblank, before any routing or work, Print exactly o
 `codex posture: blueprint plans natively in this thread; it writes the plan, closes the blueprint session row, and dispatches nothing.`
 
 <HARD-GATE>
-NEVER edit ~/.fno/graph.db directly via Edit/Write tools or `sqlite3`/`jq -i`/`sed -i`.
+NEVER edit ~/.fno/db/graph.db directly via Edit/Write tools or `sqlite3`/`jq -i`/`sed -i`.
 ALWAYS use `fno backlog` commands or call `locked_mutate_graph()` from Python.
 Direct edits are blocked by `hooks/write-gate.sh`.
 </HARD-GATE>
@@ -249,7 +249,7 @@ fi
 
    `manual` waits for a person or a titled `/fno:lead` lead to hand the remaining waves out with `fno backlog join <node>`. That is today's behavior for every plan. `auto` fires join at `fno do target init`.
 
-   Print the plan's measured width beside the question. Run `python3 -m fno.backlog.join_trigger width "$PLAN_PATH"`, the same probe `init-target-state.sh` uses. Branch on its exit code, never on empty output. When the width is 1, record `manual` without asking. When the probe exits 1, record `manual` and name the width as unmeasured.
+   Print the plan's measured width beside the question. Run `fno backlog join width "$PLAN_PATH"`, the same probe `init-target-state.sh` uses. Branch on its exit code, never on empty output. When the width is 1, record `manual` without asking. When the probe exits 1, record `manual` and name the width as unmeasured.
 
    Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
 

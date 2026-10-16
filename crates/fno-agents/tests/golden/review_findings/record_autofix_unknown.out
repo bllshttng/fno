@@ -1,0 +1,1 @@
+{"findings_blocking": 1, "findings_nonblocking": 0, "category_histogram": {"correctness": 1}, "findings": [{"category": "correctness", "verdict": null, "blocking": true, "has_required_fields": true, "finding_key": "f1.py:1:correctness", "summary": "summary 1", "autofix_class": null, "owner": null}]}

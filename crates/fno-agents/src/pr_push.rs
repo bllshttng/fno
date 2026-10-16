@@ -873,10 +873,14 @@ fn behind(git_bin: &str, cwd: &Path) -> String {
 }
 
 /// The open PR's `mergeable_state` for the head branch, `None` when the
-/// branch has no open PR or the read fails. Every unreadable answer
-/// integrates nothing: a push never needs integration to succeed, and the
-/// ruling forbids a routine refresh, so uncertainty lands on pushing the
-/// branch as it stands.
+/// branch has no open PR, the read fails, or GitHub has not computed the
+/// field yet (null). The list read only resolves the PR's `number`: list
+/// rows carry no `mergeable_state`, so the field comes from a second read
+/// of the single `pulls/<n>` endpoint, the one heal's `read_pr` and the
+/// status reader already use. Every unreadable answer integrates nothing:
+/// a push never needs integration to succeed, and the ruling forbids a
+/// routine refresh, so uncertainty lands on pushing the branch as it
+/// stands.
 fn pr_merge_state(gh_bin: &str, cwd: &Path, branch: &str) -> Option<String> {
     let raw = gh_api(
         gh_bin,
@@ -889,11 +893,16 @@ fn pr_merge_state(gh_bin: &str, cwd: &Path, branch: &str) -> Option<String> {
     )
     .ok()?;
     let prs: Value = serde_json::from_str(&raw).ok()?;
-    prs.as_array()?
-        .first()
-        .and_then(|pr| pr.get("mergeable_state"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let number = prs.as_array()?.first()?.get("number")?.as_u64()?;
+    let raw = gh_api(
+        gh_bin,
+        cwd,
+        &format!("repos/{{owner}}/{{repo}}/pulls/{number}"),
+        &[],
+    )
+    .ok()?;
+    let pr: Value = serde_json::from_str(&raw).ok()?;
+    pr.get("mergeable_state")?.as_str().map(str::to_string)
 }
 
 /// One refusal line per commit in a `git log --format=%h%x1f%B%x1e` capture
@@ -1270,6 +1279,37 @@ pub fn run_push(argv: &[String]) -> i32 {
         }
     })
     .unwrap_or_default();
+    // A push that would move nothing is said and skipped before the
+    // in-flight read: the remote branch already points at this HEAD, so
+    // there is no run to wait on and none to cancel (law d-7347a286 stays
+    // for real pushes), and no preflight is spent rehearsing an identity.
+    if integrate == "none" && !remote_head.is_empty() {
+        let local_head = run_labeled("pr-push", &git, &["rev-parse", "HEAD"], &cwd, READ_TIMEOUT)
+            .map(|(ok, out, _)| {
+                if ok {
+                    out.trim().to_string()
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        if local_head == remote_head {
+            let sha = run_labeled(
+                "pr-push",
+                &git,
+                &["rev-parse", "--short", "HEAD"],
+                &cwd,
+                READ_TIMEOUT,
+            )
+            .map(|(_, out, _)| out.trim().to_string())
+            .unwrap_or_default();
+            println!(
+                "pr-push: origin/main behind-before={before} behind-after={after} \
+                 integrate=none sha={sha} pushed=0 nothing to push"
+            );
+            return 0;
+        }
+    }
     let mut lease = None;
     if !remote_head.is_empty() {
         // Patch equivalence: the remote branch may only be replaced when

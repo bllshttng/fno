@@ -273,8 +273,9 @@ fn git_out(cwd: &Path, git_args: &[&str]) -> Option<String> {
 /// (the loop breaks on it even when merge-base then fails), its merge-base
 /// with HEAD is diffed as numstat, and the first tier fitting both caps
 /// names the level. No repo, no merge base, no rows, or any git failure is
-/// None.
-fn diff_review_level(project_root: &Path) -> Option<&'static str> {
+/// None. `Some` here is exactly the `level_source == "diff-sized"` answer
+/// the capability renderer keeps; a `None` is its placeholder case.
+pub(crate) fn diff_review_level(project_root: &Path) -> Option<&'static str> {
     let mut candidate_name: Option<&str> = None;
     for candidate in ["origin/main", "origin/master"] {
         let probe_ref = format!("{candidate}^{{commit}}");

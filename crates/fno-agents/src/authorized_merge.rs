@@ -1817,16 +1817,9 @@ impl Probes for RealProbes {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
-        if crate::gh_budget::admission_armed() {
-            if let Some(line) = crate::gh_budget::admit_fleet(args) {
-                return Ok((false, line));
-            }
-        }
-        let out = Command::new("gh")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .map_err(|error| error.to_string())?;
+        let mut cmd = Command::new("gh");
+        cmd.args(args).current_dir(cwd);
+        let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
         let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
         combined.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok((out.status.success(), combined))
@@ -2403,6 +2396,15 @@ pub fn covered_head_from_event(cwd: &Path) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 pub fn run_authorized_merge(args: &[String]) -> i32 {
+    // The operand argv door (`authorized-merge merge <pr> [flags]`): the
+    // client passes post-verb args, so a door word in the lead position is
+    // the native-flow form, never a payload path.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("merge") | Some("merge-result-check") | Some("hold-check")
+    ) {
+        return crate::merge_verb::run_operand(args);
+    }
     let (code, stdout, stderr) = run_authorized_merge_capture(args);
     if !stdout.is_empty() {
         print!("{stdout}");
@@ -2449,9 +2451,19 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
             String::new(),
         );
     }
-    // The hold ops are merge-authority writes riding this verb's payload, not
-    // a new top-level root: `{"op": "hold-set"|"freeze-set"|..., ...}` answers
-    // with one receipt instead of a merge verdict.
+    // The check-stage door: `{"op": "hold-check", "pr": ..., "cwd": ...}`
+    // answers the plan-hold read in process, the transport the status
+    // cache-key op and the seams probe ride instead of spawning the Python
+    // leaf.
+    if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
+        return match crate::merge_verb::run_op("hold-check", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    // The hold ops are merge-authority writes and reads riding this verb's
+    // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
+    // ...}` answers with one receipt instead of a merge verdict.
     if payload
         .get("op")
         .and_then(Value::as_str)
@@ -2524,6 +2536,16 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         }
         let out = crate::pr_status_facts::run_op(op, &payload);
         return (0, out, String::new());
+    }
+    // The merge operand's dispatch lane: the pr-watch queue and the Python
+    // thin forwarder send `{"op": "merge", "argv": [...], "authority": ...}`
+    // and get the flow receipt plus `exit` back. A refused op answers exit 3,
+    // the owner-unreachable shape the flow itself treats as unavailable.
+    if payload.get("op").and_then(Value::as_str) == Some("merge") {
+        return match crate::merge_verb::run_op("merge", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
     }
     let request = match parse_request(&payload) {
         Ok(request) => request,

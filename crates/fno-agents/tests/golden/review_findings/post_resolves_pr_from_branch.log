@@ -1,0 +1,4 @@
+api repos/o/r/pulls?state=all&head=o:main&per_page=2
+api repos/o/r/pulls/7
+api repos/o/r/issues/7/comments?per_page=100
+api -X POST repos/o/r/issues/7/comments -f

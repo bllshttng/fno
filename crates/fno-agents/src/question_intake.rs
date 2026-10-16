@@ -546,7 +546,7 @@ choice starts>'.",
                 };
                 answer.lines.push(format!(
                     "outstanding: refused: reversible with a recommendation is yours \
-to rule. Decide door first: {decide} (--authority team or agent) - record the \
+to rule. Decide door first: {decide} (--authority agent) - record the \
 ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
 credential, reaches outside the machine, or a product or taste call - name it \
@@ -569,8 +569,11 @@ with why_user: in the question file."
         .index_path
         .clone()
         .unwrap_or_else(|| questions_path(home));
+    // One read serves the dedup and the supersede after the write: the
+    // open rows a re-ask closes are the ones this read saw.
+    let open = open_rows(&index);
     if let (Some(s), Some(n)) = (subject, node) {
-        let dup = open_rows(&index).into_iter().find(|row| {
+        let dup = open.iter().find(|row| {
             row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
         });
         if let Some(row) = dup {
@@ -580,7 +583,7 @@ already waits ({}). Answer it or clear it; do not ask twice.",
                 row.id
             ));
             answer.refusal = Some("dedup".to_string());
-            answer.open_id = Some(row.id);
+            answer.open_id = Some(row.id.clone());
             answer.exit_code = 2;
             return answer;
         }
@@ -801,6 +804,60 @@ would mint a second id for the same question."
         "outstanding: recorded {qid}. The user answers it on the question board, \
 and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {qid}"
     ));
+
+    // A re-ask at a new head closes the older head's open question on the
+    // same node, whoever asked: the older head can no longer be approved
+    // or refused, so one open question per head family stays. Best-effort;
+    // a close that fails here waits for the hourly sweep.
+    if let (Some(s), Some(n)) = (subject, node) {
+        if let Some((new_family, new_head)) = crate::question_sweep::head_scoped(s) {
+            let olds: Vec<(&str, &str)> = open
+                .iter()
+                .filter_map(|row| {
+                    if row.node.as_deref() != Some(n) {
+                        return None;
+                    }
+                    let (family, old_head) =
+                        crate::question_sweep::head_scoped(row.subject.as_deref()?.trim())?;
+                    (family == new_family && !crate::question_sweep::same_head(old_head, new_head))
+                        .then_some((row.id.as_str(), old_head))
+                })
+                .collect();
+            if !olds.is_empty() {
+                let pairs: Vec<(String, String)> = olds
+                    .iter()
+                    .map(|(id, _)| {
+                        (
+                            id.to_string(),
+                            format!("superseded: {qid} re-asks at head {new_head}"),
+                        )
+                    })
+                    .collect();
+                let now = crate::claims::now_ms() / 1000;
+                let (closed, errors) =
+                    crate::question_sweep::close_questions(&index, &pairs, now, "question-intake");
+                for (id, old_head) in &olds {
+                    if closed.iter().any(|c| c == id) {
+                        answer.lines.push(format!(
+                            "outstanding: superseded {id} (same subject at older head \
+{old_head}); one question stays open on this subject."
+                        ));
+                    } else {
+                        let error = errors
+                            .iter()
+                            .find(|e| e.contains(id))
+                            .map(String::as_str)
+                            .unwrap_or("index write failed");
+                        answer.lines.push(format!(
+                            "outstanding: {id} could not be superseded ({error}); the next \
+sweep closes it."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     let (position, total) = receipt_position(&index, &qid);
     let total = total.unwrap_or(0);
     answer.position = position;
@@ -1317,6 +1374,63 @@ stops
             .is_some_and(|id| id.starts_with("q-")));
         // Nothing new recorded.
         assert_eq!(journal_text(&root).lines().count(), 1);
+    }
+
+    #[test]
+    fn a_re_ask_at_a_new_head_closes_the_older_open_question() {
+        // One open question per head family per node: the second ask at a
+        // new head succeeds AND closes the first ask with an empty-answer
+        // superseded close row in the index; the same family on another
+        // node closes nothing.
+        let home = tmp_home("supersede");
+        let root = tmp_root("supersede");
+        let ask = |subject: &str, node: &str| {
+            let mut r = req("does the paint look right?", &root);
+            r.subject = Some(subject.to_string());
+            r.node = Some(node.to_string());
+            r.ask = Some("approve the paint at this head".to_string());
+            run_intake(&r, &home)
+        };
+        let first = ask("visual approval PR 7 at 1111111a", "x-aaaa");
+        assert_eq!(first.exit_code, 0, "lines: {:?}", first.lines);
+        let q1 = first.qid.clone().unwrap();
+        let second = ask("visual approval PR 7 at 2222222b", "x-aaaa");
+        assert_eq!(second.exit_code, 0, "lines: {:?}", second.lines);
+        assert!(
+            second.lines.iter().any(|l| l.contains(&format!(
+                "superseded {q1} (same subject at older head 1111111a)"
+            ))),
+            "lines: {:?}",
+            second.lines
+        );
+        let index = crate::provider_cap::questions_path(&home);
+        let closed_text = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        let close_row: Value = closed_text
+            .lines()
+            .find(|l| l.contains(&q1))
+            .map(|l| serde_json::from_str(l).unwrap())
+            .unwrap();
+        assert_eq!(
+            close_row.pointer("/data/answer").and_then(Value::as_str),
+            Some("")
+        );
+        assert!(close_row
+            .pointer("/data/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .starts_with("superseded:"));
+        // The third ask joins the same family on another node: nothing
+        // closes there, so exactly one superseded close exists.
+        let third = ask("visual approval PR 7 at 3333333c", "x-bbbb");
+        assert_eq!(third.exit_code, 0, "lines: {:?}", third.lines);
+        let closed_text = crate::event_store::journal_text(&index, &["operator_question_closed"]);
+        assert_eq!(
+            closed_text
+                .lines()
+                .filter(|l| l.contains("superseded:"))
+                .count(),
+            1
+        );
     }
 
     #[test]

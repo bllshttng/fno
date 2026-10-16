@@ -1,6 +1,7 @@
 """A ledger row that carries a pr_number must also carry its pr_url.
 
-A url-less row attributes no ownership at read time (fno.ledger_join), and
+A url-less row attributes no ownership at read time (the native
+fno-agents pr-watch pr-sessions join), and
 nothing repairs it afterwards: upsert_ledger_pr returns early once a row has
 the number. So the write side has to resolve the slug as hard as the read side
 does, including the `gh repo view` fallback for a checkout whose GitHub remote

@@ -19,6 +19,7 @@ pub mod backlog_model;
 pub mod backlog_snapshot;
 pub mod backlog_view;
 pub mod backlog_write;
+pub(crate) mod band_remap;
 pub mod board_reader;
 pub mod bootstrap;
 pub mod build_drift;
@@ -94,8 +95,12 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_detect;
+pub mod setup_profile;
 pub mod setup_run;
+pub mod setup_services;
 pub mod sideline_color;
+pub mod spawn_floor;
 pub mod spawn_journal;
 pub mod splash;
 pub mod sprites;
@@ -123,6 +128,8 @@ pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub mod wizard;
+pub mod wizard_term;
 pub mod wordmark;
 pub mod yard_overlay;
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import json
+
 import pytest
 from typer.testing import CliRunner
 
@@ -62,80 +64,24 @@ def _send(
     return env_.id
 
 
-def _run(*args):
-    return CliRunner().invoke(app, list(args))
+def _tombstone(msg_id: str, from_: str = MY_HANDLE, to: str = PEER) -> None:
+    """The tombstone the withdraw leaf writes, appended directly: these tests
+    pin the readers' contract with that line, not the verb that produces it."""
+    from fno.bus.log import WITHDRAW_KIND, Envelope, append
 
-
-# ---------------------------------------------------------------------------
-# fno agents mail withdraw: refusals
-# ---------------------------------------------------------------------------
-
-
-def test_withdraw_refuses_a_message_i_did_not_send(env):
-    mid = _send(PEER, "cccc1111", "not mine", ts=_ts_ago(3600))
-
-    res = _run("mail", "withdraw", mid)
-
-    assert res.exit_code == 1
-    assert "only its sender can withdraw it" in res.stderr
-
-
-def test_withdraw_refuses_an_already_claimed_message(env):
-    """Once they have read it, hiding it hides it from the sender only."""
-    from fno.bus.cursor import advance_cursor
-
-    mid = _send(MY_HANDLE, PEER, "already read", ts=_ts_ago(3600))
-    advance_cursor(PEER, mid)
-
-    res = _run("mail", "withdraw", mid)
-
-    assert res.exit_code == 1
-    assert "already claimed" in res.stderr
-
-
-def test_withdraw_refuses_hosted_audit_without_tombstone(env):
-    from fno.bus.log import WITHDRAW_KIND, iter_messages
-
-    mid = _send(
-        MY_HANDLE, PEER, "already delivered", ts=_ts_ago(3600),
-        delivery="hosted",
+    append(
+        Envelope.new(
+            from_=from_,
+            to=to,
+            kind=WITHDRAW_KIND,
+            body=f"withdrawn: {msg_id}",
+            meta={"withdraws": msg_id},
+        )
     )
 
-    res = _run("mail", "withdraw", mid)
 
-    assert res.exit_code == 1
-    assert "already delivered (hosted)" in res.stderr
-    assert all(m.kind != WITHDRAW_KIND for m in iter_messages())
-
-
-def test_withdraw_refuses_an_unknown_id(env):
-    res = _run("mail", "withdraw", "msg-nope99")
-
-    assert res.exit_code == 1
-    assert "no such message" in res.stderr
-
-
-def test_withdraw_appends_nothing_when_it_refuses(env):
-    """A refusal that still wrote a tombstone would leave the log claiming a
-    withdrawal that never took effect."""
-    from fno.bus.log import iter_messages
-
-    mid = _send(PEER, "cccc1111", "not mine", ts=_ts_ago(3600))
-    before = len(list(iter_messages()))
-
-    _run("mail", "withdraw", mid)
-
-    assert len(list(iter_messages())) == before
-
-
-def test_withdraw_is_idempotent(env):
-    mid = _send(MY_HANDLE, PEER, "twice", ts=_ts_ago(3600))
-    assert _run("mail", "withdraw", mid).exit_code == 0
-
-    res = _run("mail", "withdraw", mid)
-
-    assert res.exit_code == 0
-    assert "already withdrawn" in res.stdout
+def _run(*args):
+    return CliRunner().invoke(app, list(args))
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +96,7 @@ def test_reader_1_scan_unread_omits_a_withdrawn_message(env):
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
     kept = _send(MY_HANDLE, PEER, "keep me", ts=_ts_ago(3600))
 
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert [m.id for m in scan_unread(PEER)] == [kept]
 
@@ -161,7 +107,7 @@ def test_reader_1_does_not_deliver_the_tombstone_itself(env):
     from fno.bus.cursor import scan_unread
 
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert scan_unread(PEER) == []
 
@@ -178,7 +124,7 @@ def test_reader_2_sent_unclaimed_stops_counting_it(env):
     ttl = load_settings().inbox.unclaimed_ttl
     assert len(_sent_unclaimed(MY_HANDLE, ttl)) == 1
 
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert _sent_unclaimed(MY_HANDLE, ttl) == []
 
@@ -188,23 +134,9 @@ def test_reader_2_status_line_goes_quiet(env):
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
     assert "sent unclaimed: 1" in _run("mail", "status", "--from", "proj").stdout
 
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert "sent unclaimed: 0" in _run("mail", "status", "--from", "proj").stdout
-
-
-def test_reader_3_relay_router_skips_it(env):
-    """The router reads iter_messages directly too, and routes by each
-    message's `to` rather than filtering to one inbox."""
-    from fno.relay.daemon import _tail_after_cursor
-
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-    kept = _send(MY_HANDLE, PEER, "keep me", ts=_ts_ago(3600))
-
-    _run("mail", "withdraw", mid)
-
-    routed, _ = _tail_after_cursor()
-    assert [m.id for m in routed] == [kept]
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +153,7 @@ def test_withdraw_does_not_advance_the_recipient_cursor(env):
     from_other = _send(PEER, PEER, "unrelated, still unread", ts=_ts_ago(3600))
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
 
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert read_cursor(PEER) is None
     assert [m.id for m in scan_unread(PEER)] == [from_other]
@@ -235,7 +167,7 @@ def test_withdraw_does_not_delete_the_line(env):
 
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
 
-    _run("mail", "withdraw", mid)
+    _tombstone(mid)
 
     assert any(m.id == mid for m in iter_messages())
 
@@ -259,7 +191,7 @@ def test_reader_4_the_markdown_inbox_lane_honors_it(env):
     )
     assert [h.thread_id for h in read_unread_threads("proj")] == [th.thread_id]
 
-    _run("mail", "withdraw", th.thread_id)
+    _tombstone(th.thread_id, to="proj")
 
     assert read_unread_threads("proj") == []
 
@@ -280,29 +212,19 @@ def test_reader_4_fails_open_when_the_bus_is_unreadable(env):
     assert [h.thread_id for h in read_unread_threads("proj")] == [th.thread_id]
 
 
-def test_withdraw_accepts_the_label_the_send_path_stamped(env):
+def test_reader_2_the_labelled_sent_lane_honors_the_tombstone(env):
     """`stamp_from` returns an explicit `--from-name` label verbatim, so mail
-    sent under one is owned by that label. Without a matching option the entire
-    labelled send path had no listing and no retraction."""
+    sent under one is owned by that label. A tombstone from that label must
+    clear the label-scoped listing too, or the labelled send path keeps nagging
+    about mail it can no longer deliver."""
     mid = _send("release-bot", PEER, "labelled", ts=_ts_ago(3600))
+    rows = json.loads(_run("mail", "sent", "--from-name", "release-bot", "--json").stdout)
+    assert [r["id"] for r in rows] == [mid]
 
-    assert _run("mail", "withdraw", mid).exit_code == 1  # ambient handle is not the owner
+    _tombstone(mid, from_="release-bot")
 
-    res = _run("mail", "withdraw", mid, "--from-name", "release-bot")
-
-    assert res.exit_code == 0
-
-
-def test_withdraw_receipt_does_not_promise_an_outcome_it_cannot_verify(env):
-    """The cursor read and the tombstone append are not atomic, so a drain in
-    flight may already have delivered the body. The receipt names the boundary
-    the tombstone guarantees instead of claiming the message was never seen."""
-    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
-
-    out = _run("mail", "withdraw", mid).stdout
-
-    assert "no drain will deliver it from now on" in out
-    assert "may have delivered it" in out
+    rows = json.loads(_run("mail", "sent", "--from-name", "release-bot", "--json").stdout)
+    assert rows == []
 
 
 def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
@@ -326,6 +248,32 @@ def test_a_forged_tombstone_cannot_retract_someone_elses_mail(env):
     assert [m.id for m in scan_unread("cccc1111")] == [mid]
 
 
+def test_a_typed_row_is_not_reported_as_claimed(env):
+    """`typed` is the one state that must never imply the recipient consumed it.
+
+    A typed row is excluded from the unclaimed scan the way a hosted row is, so
+    it fell through to "claimed" and told the sender the recipient had read it.
+    Bytes written into a PTY can be discarded by the prompt they land on, which
+    is the whole reason this transport's receipt says `typed`, never
+    `delivered`.
+    """
+    _send(MY_HANDLE, PEER, "ship it", ts=_ts_ago(60), delivery="typed")
+
+    result = _run("agents", "mail", "sent", "--json")
+
+    assert result.exit_code == 0, result.output
+    # The JSON lane is the one machines read, so it carries the same answer.
+    row = json.loads(result.stdout)[0]
+    assert row["delivery"] == "typed"
+    assert row["claimed"] is False
+    # And it must distinguish "not claimed" from "can never be claimed". A typed
+    # row is excluded from the unclaimed scan, withdraw refuses it, and the
+    # recipient cannot drain it, so `claimed: false` alone made it identical to
+    # an UNCLAIMED durable row that can still clear. This renderer and
+    # `--unclaimed-only` disagreed about the same row.
+    assert row["claimable"] is False
+
+
 def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
     """There is nothing to retract once the bytes are at a prompt.
 
@@ -339,5 +287,3 @@ def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
 
     assert result.exit_code == 1
     assert "cannot be recalled" in (result.stderr or result.output)
-
-

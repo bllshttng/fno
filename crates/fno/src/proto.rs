@@ -381,7 +381,13 @@ fn default_true() -> bool {
 /// v112: `MouseEvent.alt` (serde default) - the client forwards the SGR alt bit
 /// so the server can claim a modifier-click pair on a mouse-reporting pane and
 /// open the link under it; floor stays 58.
-pub const PROTO_VERSION: u32 = 112;
+/// v113: `ControlVerb::WorkspaceOrigin`, the folder edit behind
+/// `fno mux workspace origin`; floor stays 58.
+/// v114: `Command::PinThread` (move a session into a workspace by hand),
+/// `Command::AddWorkspaceFolder`, and `AgentRow.project_root`; floor stays 58.
+/// v115: `PaneInfo.pane_cwd` (serde default), the pane's own directory beside
+/// the squad-root `cwd` in `pane ls`; floor stays 58.
+pub const PROTO_VERSION: u32 = 115;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -827,6 +833,17 @@ pub enum ControlVerb {
     /// [`ServerMsg::SquadReloaded`]. The prune CLI sends this after an
     /// applied store pass, so `persist_squad` cannot write reaped members back.
     SquadReload,
+    /// (v113) Add or drop one folder (`path`, absolute) on the open workspace
+    /// named `workspace`. The folder decides which paneless rows (thread,
+    /// headless, daemon) the workspace owns. Persists before it replies.
+    /// -> [`ServerMsg::Ok`], or `Err`: `NOT_FOUND` when this server holds no
+    /// such workspace, `BAD_REQUEST` for a relative path.
+    WorkspaceOrigin {
+        workspace: String,
+        path: String,
+        #[serde(default)]
+        remove: bool,
+    },
     /// (v75) Retire every member whose (harness, full session id)
     /// matches, across every squad this server holds. Closes only the
     /// matching member's attached panes, tombstones through the store's own
@@ -1353,6 +1370,11 @@ pub struct AgentRow {
     /// stays off the wire; a pre-v111 row decodes to an empty set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<SessionBinding>,
+    /// (v114) The canonical repo root of the row's cwd (the git common dir's
+    /// parent), which the new-workspace overlay offers as a folder. `None`
+    /// when the cwd sits in no git repo or the server has not resolved it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
@@ -1709,6 +1731,21 @@ pub enum Command {
     NewSquad {
         name: String,
         origin: Option<String>,
+    },
+    /// (v114) Move a session into workspace `squad` by hand. The server pins
+    /// `(harness, harness_session_id)` on that workspace's stored row, so the
+    /// move holds across taps, portals and restarts. A dead squad id, or one
+    /// with neither name nor key, is refused with a notice.
+    PinThread {
+        squad: u64,
+        harness: String,
+        harness_session_id: String,
+    },
+    /// (v114) Add one folder (`path`, absolute) to workspace `squad`'s
+    /// origins: the same edit as `fno mux workspace origin add`.
+    AddWorkspaceFolder {
+        squad: u64,
+        path: String,
     },
     /// (v17) Rename a tab. `tab` names a stable [`TabMeta::id`] from
     /// the last `Layout`'s catalog (a stale id is refused fail-closed with a
@@ -4029,7 +4066,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 112);
+        assert_eq!(PROTO_VERSION, 115);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

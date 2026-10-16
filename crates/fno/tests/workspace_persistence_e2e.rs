@@ -874,3 +874,67 @@ fn symptom_restore_rebuilds_no_thread_pane() {
     );
     r_client.detach();
 }
+
+/// A named workspace made with no origin took none, so the paneless rows
+/// under its folder rendered under `~ elsewhere`. It now takes the folder it
+/// was made from, and `fno mux workspace origin` edits it live.
+#[test]
+fn symptom_named_workspace_takes_the_creator_folder_and_the_verb_edits_it() {
+    let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = Scratch::new("origin");
+    let _server = spawn_server(&scratch.main_sock(), &[]);
+    let mut c = attach_client(&scratch);
+    let first = c.wait_layout(10, "squads appear", |l| !l.squads.is_empty());
+    let creator = first
+        .squads
+        .iter()
+        .find(|s| s.id == first.active_squad)
+        .expect("the attach squad is active")
+        .canonical_cwd
+        .clone();
+    assert!(!creator.is_empty(), "the attach squad has a folder");
+
+    c.cmd(Command::NewSquad {
+        name: "w".into(),
+        origin: None,
+    });
+    c.wait_layout(10, "w takes the creator's folder", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.canonical_cwd == creator)
+    });
+
+    let origin = |verb: &str, path: &str| {
+        let out = scratch
+            .command()
+            .args([
+                "mux",
+                "workspace",
+                "origin",
+                verb,
+                "w",
+                path,
+                "--server",
+                "main",
+            ])
+            .output()
+            .expect("origin verb runs");
+        assert!(
+            out.status.success(),
+            "origin {verb} failed: stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    origin("remove", &creator);
+    c.wait_layout(10, "w shows no folder", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.canonical_cwd.is_empty())
+    });
+    origin("add", "/srv/other");
+    c.wait_layout(10, "w shows the added folder", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.canonical_cwd == "/srv/other")
+    });
+}

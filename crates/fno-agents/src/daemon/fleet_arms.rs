@@ -42,6 +42,7 @@ pub(super) struct FleetArms {
     notice_route: crate::notice_route::Arm,
     help_router: crate::help_router::Arm,
     first_check: crate::first_check::Arm,
+    spawn_watch: crate::first_check::Arm,
     lease_heartbeat: crate::lease_heartbeat::Arm,
     backlog_share: crate::backlog_share::Arm,
     mail: crate::mail_arm::Arm,
@@ -113,6 +114,7 @@ impl FleetArms {
             notice_route: crate::notice_route::Arm::new(opts.agents_config_cwd.clone()),
             help_router: crate::help_router::Arm::new(opts.agents_config_cwd.clone()),
             first_check: crate::first_check::Arm::default(),
+            spawn_watch: crate::first_check::Arm::new("spawn-watch", crate::spawn_watch::run_pass),
             lease_heartbeat: crate::lease_heartbeat::Arm::default(),
             backlog_share: crate::backlog_share::Arm::default(),
             mail: crate::mail_arm::Arm::default(),
@@ -263,8 +265,10 @@ impl FleetArms {
                 crate::merge_reap::consume_merge_cleanup_requests(
                     &home, &roots, &emitter, grace_secs,
                 );
-                // Daily janitor; gate and receipt in reclaim.rs.
+                // Daily janitor plus the hourly cargo cap; gates and
+                // receipt in reclaim.rs.
                 crate::reclaim::maybe_run_daily(&home);
+                crate::reclaim::maybe_run_cargo_hourly(&home);
             });
         }
         crate::orphan_reap::maybe_sweep(
@@ -305,6 +309,9 @@ impl FleetArms {
         // read inside the 10 minute lease (the help-router sweep).
         crate::help_router::maybe_tick(&self.help_router, ctx.home.clone());
         self.first_check.tick(ctx.home.clone());
+        // Every launch record reaches its first turn or tells its caller
+        // where it is stuck, by 5 minutes after the call.
+        self.spawn_watch.tick(ctx.home.clone());
         // With a shared primary set, renew this machine's dispatch leases.
         crate::lease_heartbeat::maybe_tick(&self.lease_heartbeat);
         // With the backlog shared, keep this machine's replica fresh.

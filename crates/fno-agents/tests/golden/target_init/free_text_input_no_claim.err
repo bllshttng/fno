@@ -1,0 +1,4 @@
+target: no backlog node resolved from input 'fix the login redirect bug'; running unclaimed
+config file at <TMP_REPO>/.fno/config.toml is missing; using defaults
+config file at <TMP_REPO>/.fno/settings.yaml is missing; using defaults
+config file at <TMP>/home/.fno/settings.yaml is missing; using defaults

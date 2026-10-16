@@ -9,6 +9,7 @@ exec >> "$3" 2>&1
 set -a; . "$HOME/.fno/.env"; set +a
 export FNO_CONFIG="$WS/run1-config.toml"
 export PI_CODING_AGENT_DIR="$WS/pi-agent"
+export FNO_FOOTNOTE_BIN="${FNO_FOOTNOTE_BIN:-$WS/bin/footnote}"
 cd "$REPO" || exit 1
 task=()
 [ -n "$4" ] && task=(--task "$4")

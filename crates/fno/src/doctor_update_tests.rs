@@ -391,3 +391,33 @@ fn the_check_readback_skips_a_corrupt_row_after_the_install() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn python_holds_whenever_rust_trails_the_source() {
+    // The 2026-10-14 iMac shape: no tarball for the merged rev, so the wheel
+    // must not move ahead of the bins it talks to.
+    for trails in [
+        "waiting-ci",
+        "installed-newest-published",
+        "skipped-no-origin",
+        "skipped-no-cargo",
+        "failed",
+    ] {
+        let line = python_hold_line(Some(trails)).expect(trails);
+        assert!(
+            line.contains(trails) && line.starts_with("python held"),
+            "{line}"
+        );
+    }
+    // Rust current, wheel-only machines, and --no-rust move Python freely.
+    for moves in [
+        "fresh",
+        "refreshed",
+        "partial",
+        "skipped-no-binary",
+        "skipped-no-crate",
+    ] {
+        assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
+    }
+    assert_eq!(python_hold_line(None), None);
+}

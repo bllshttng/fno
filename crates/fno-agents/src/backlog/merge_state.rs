@@ -333,8 +333,7 @@ pub(crate) fn fetch_pr_closure_context(
     if let Some(repo) = repo {
         cmd.args(["--repo", repo]);
     }
-    let out = cmd
-        .output()
+    let out = crate::gh_budget::output(cmd)
         .map_err(|e| PrReadError::new(format!("gh subprocess failed to launch: {e}"), ""))?;
     if !out.status.success() {
         return Err(PrReadError::new(

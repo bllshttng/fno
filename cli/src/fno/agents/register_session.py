@@ -20,8 +20,7 @@ if TYPE_CHECKING:
     from fno.agents.reachability import Reachability
 
 from fno.agents import events
-from fno.agents.mux_server import mux_server_env
-from fno.agents.registry import heal_mux_ref, restamp_harness_session_id
+from fno.agents.registry import restamp_harness_session_id
 
 #: How long a spawned worker waits for its own row to appear before giving up.
 #: Covers the spawner's post-`mux pane run` tail with room to spare: child-pid
@@ -123,37 +122,6 @@ def _predecessor_observation(
     return recorded, _verdict_bool(reading)
 
 
-def _heal_own_mux_ref(agent_self: str, harness: str, session_id: str) -> None:
-    """x-aaaa W2: heal this worker's row to its pane. Pair from FNO_SERVER/FNO_SESSION
-    (FNO_SERVER first) with FNO_PANE (pane-only; non-numeric/negative
-    ignored). Failure emits session_pane_rebound_failed, success emits only on
-    a verified write. Silent resolver: a session-start hook never prints.
-    """
-    session = mux_server_env().strip()
-    pane_raw = (os.environ.get("FNO_PANE") or "").strip()
-    if not session or not pane_raw:
-        return
-    try:
-        pane = int(pane_raw)
-    except ValueError:
-        pane = -1
-    if pane < 0:
-        return
-    try:
-        moved = heal_mux_ref(
-            name=agent_self, harness=harness, mux_session=session, pane_id=pane,
-            session_id=session_id,
-        )
-    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
-        events.emit("session_pane_rebound_failed", provider=harness,
-                    name=agent_self, session=f"{session}:{pane}", error=str(exc))
-        print(f"register_session: warning: {exc}", file=sys.stderr)
-        return
-    if moved is not None:
-        events.emit("session_pane_rebound", provider=harness, name=agent_self,
-                    old=moved[0], new=moved[1])
-
-
 def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -> int:
     """Bind a SPAWNED worker's SessionStart id observation to its own row.
 
@@ -236,8 +204,6 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
                         outcome,
                         reading,
                     )
-                    # x-aaaa W2: heal post-observation so a branched session heals its own row.
-                    _heal_own_mux_ref(agent_self, harness, session_id)
                     return 0
             else:
                 expected_predecessor_session_id, predecessor_reachable = (
@@ -290,8 +256,6 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
             f"register_session: restamped {entry.name} -> {session_id}",
             file=sys.stderr,
         )
-    # x-aaaa W2: the non-claude lineage path heals after its restamp too.
-    _heal_own_mux_ref(agent_self, harness, session_id)
     return 0
 
 

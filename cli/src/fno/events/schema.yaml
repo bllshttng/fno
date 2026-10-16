@@ -309,7 +309,7 @@ event_types:
           description: "Human-readable provenance on a settle row: why the row exists (the invocation died unanswered) and that no review ran. Present only on output_contract lost."
         model:
           type: string
-          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit) and by classify --attest through the same helper, never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
+          description: "The model that ANSWERED, read from the attesting session's own transcript at emit via observed_model_for_session (cli/src/fno/provenance/observed.py, the platform provenance leaf) - claude's assistant message.model rows with synthetic notices skipped, codex's turn_context.payload.model. Stamped by the emit chokepoint (fno doctor event emit), never supplied by the caller: a --data value disagreeing with the transcript is refused, the same rule attester_session_id follows and for the same reason. Empty means NOT OBSERVABLE (no ambient harness, unreadable transcript, no model row yet), never proof of the primary model. This field used to record ANTHROPIC_MODEL - the model the session ASKED for - which a dedicated node measured naming a model that did not answer on four sessions in one day, because a non-Anthropic name over an unset base URL silently falls back to the primary Anthropic model. Events emitted before this change may carry that claim or the literal `unobserved` (a claim made and refused); both are legacy values a reader must not treat as an observation. Not read by loop-check; this is the audit trail a capability floor would need."
         provider:
           type: string
           description: "The endpoint host the attesting session was pointed at (host only, derived from ANTHROPIC_BASE_URL at emit; scheme, path, and any userinfo are stripped so no key material lands here). Empty means not observable from the environment - the default Anthropic endpoint, or a lane that does not route via env. Same best-effort caveat as model."
@@ -317,6 +317,10 @@ event_types:
           type: string
           enum: [fresh, shared, unknown]
           description: "Positive evidence about the reviewer's execution context: fresh means a harness-recorded forked review context, shared means a same-context review tool result, and unknown means no positive context marker. Measures context independence, never who invoked the verb, and is not gating."
+        execution_context:
+          type: string
+          enum: [inline, fork]
+          description: "Where the review ran: inline is the attesting session's own context, fork a harness-recorded forked review context. OPTIONAL: rows before this field predate it, and its absence is the legacy shape."
         invocation_id:
           type: string
           description: "Join to the review_invocation attempt that produced this attestation."
@@ -931,7 +935,7 @@ event_types:
           description: "GitHub PR number being polled. Integer or string accepted."
         reviewer_bot:
           type: string
-          description: "Identity of the awaited external reviewer (e.g. gemini-code-assist[bot])."
+          description: "Identity of the awaited external reviewer (e.g. chatgpt-codex-connector[bot])."
         wait_kind:
           type: string
           enum: [cron, inline]
@@ -1164,6 +1168,26 @@ event_types:
         reason:
           type: string
           description: "Human-readable reason for the refusal (e.g. PR state, CI bucket summary)."
+    consumers: [operator]
+
+  - name: backlog_refused_flush
+    description: "A shared-backlog flush the primary refused took this machine's rows back for every row the batch touched. The take-back reverted this machine's own writes; the refused statements are kept in the replica's backlog_refused table for retry or inspection, and the same facts are on stderr. Emitted after the take-back transaction commits, so the event never lands without the retention."
+    sources: [daemon]
+    data:
+      required: [nodes, tables, batch, error]
+      properties:
+        nodes:
+          type: array
+          description: "One entry per nodes-table change with an id: {id, columns}."
+        tables:
+          type: array
+          description: "Non-nodes tables the batch touched, one {table, rows} entry per table."
+        batch:
+          type: string
+          description: "The refused batch id (origin:db:last:content-hash)."
+        error:
+          type: string
+          description: "The primary's refusal text."
     consumers: [operator]
 
   - name: backlog_done_forced
@@ -6091,6 +6115,25 @@ event_types:
           type: string
           description: "Bounded diagnostic: the warm miss reason or the ritual receipt tail."
 
+  - name: post_merge_archive
+    description: "One row per post-merge ritual archive attempt (worktree archived or refused). Written by the ritual verb's archive leg; Python's ritual emitted the same kind unregistered, so this entry lands with the port."
+    sources: [daemon]
+    data:
+      required: [pr, project, outcome, detail]
+      properties:
+        pr:
+          type: integer
+          description: "GitHub PR number the ritual archived against."
+        project:
+          type: string
+          description: "Project slug the ritual ran under."
+        outcome:
+          type: string
+          description: "The archive step's receipt status (ok | failed | skipped)."
+        detail:
+          type: string
+          description: "The archive step's receipt detail line."
+
   - name: merge_grant_execution
     description: "One attributable attempt by the PR watcher to execute a durable dispatch grant on an OPEN PR: reserved under the per-PR lock before the canonical merge core runs, then executed, held, or failed from the core's verdict. Held and failed rows carry the merge core's printed reason."
     sources: [daemon, agents]
@@ -8393,6 +8436,11 @@ event_types:
     sources: [agents]
     data:
       required: [name, fingerprint]
+  - name: spawn_first_turn
+    description: "The first-turn watch saw a launched worker's first assistant line: latency_ms from the spawn call, row_ms to its registry row, with harness, substrate and machine."
+    sources: [daemon]
+    data:
+      required: [name, latency_ms]
   - name: gate_written
     description: "A target gate wrote its event: the legacy gates writer's counterpart of phase_init."
     sources: [target, hook, legacy]
@@ -8589,6 +8637,40 @@ event_types:
     sources: [test, daemon, hook, loop]
     data:
       required: []
+  - name: setup_run
+    description: "One finished or blocked `fno config setup run`: the run id, host, outcome and wall duration. Emitted once per run after the verify block, on both the JSON and human output paths; never on the read-only modes (--dry-run, --list, --export, --check)."
+    sources: [cli]
+    data:
+      required: [run_id, host, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        host:
+          type: string
+        outcome:
+          type: string
+          enum: [finished, blocked]
+        duration_ms:
+          type: integer
+  - name: setup_step
+    description: "One setup step inside a `fno config setup run`: the run id, the step id, its outcome (done, skipped, or blocked), the wall duration, and the skip reason or report code when one applies. Emitted after the step loop, one row per step, beside setup_run."
+    sources: [cli]
+    data:
+      required: [run_id, step, outcome, duration_ms]
+      properties:
+        run_id:
+          type: string
+        step:
+          type: string
+        outcome:
+          type: string
+          enum: [done, skipped, blocked]
+        duration_ms:
+          type: integer
+        skip_reason:
+          type: string
+        code:
+          type: string
 # Size cap per Failure Modes (Boundaries): the system rejects events whose
 # data payload exceeds 64KB. Validators enforce this at validate() time.
 limits:

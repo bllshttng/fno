@@ -368,6 +368,17 @@ impl Core {
                         Some(i) => {
                             consumed[i] = true;
                             let a = &self.agents[i];
+                            // A pane that only VIEWS the row (a portal seat, an
+                            // Open Here viewer) sits in the viewer's workspace,
+                            // but the row belongs to its own. Only a worker
+                            // spawned into this tab takes the hosting squad.
+                            let viewer = self.portal_of(Some(pid)).is_some()
+                                || self.attached.values().any(|held| *held == pid);
+                            let row_squad = if viewer {
+                                self.thread_workspace(a)
+                            } else {
+                                Some(squad.id)
+                            };
                             let exited = a.exited || pane_dead;
                             // A confirmed-gone pane is its own corroboration
                             // (fact beats badge) even when the registry row's
@@ -393,7 +404,7 @@ impl Core {
                                 spawned_by_name: a.spawned_by_name.clone(),
                                 lineage_reason: a.lineage_reason.clone(),
                                 harness_session_id: a.harness_session_id.clone(),
-                                squad: Some(squad.id),
+                                squad: row_squad,
                                 name: a.name.clone(),
                                 pane_id: Some(pid),
                                 // Derived every build from the open portals; the row
@@ -422,7 +433,14 @@ impl Core {
                                 seen: self.seen.contains(&pid),
                                 // (US3) cwd basename on every row so the
                                 // sideline can flag a foreign-cwd join.
-                                cwd_base: foreign_cwd_base(&a.cwd, Some(squad.canonical_cwd())),
+                                cwd_base: foreign_cwd_base(
+                                    &a.cwd,
+                                    squad_cwd_of(row_squad).as_deref(),
+                                ),
+                                project_root: self
+                                    .project_by_cwd
+                                    .get(&a.cwd)
+                                    .map(|p| p.root.clone()),
                                 tombstone: false,
                                 subline: subline_with_title(a, self.compose_subline(&a.cwd)),
                                 // Structural roster-dir tag wins (Locked
@@ -542,6 +560,7 @@ impl Core {
                                 no_pane_reason: None,
                                 reach: Reach::Locate,
                                 bindings: Vec::new(),
+                                project_root: None,
                             }
                         }
                     };
@@ -655,6 +674,7 @@ impl Core {
                         pane_activity: None,
                         reach: Reach::Locate,
                         bindings,
+                        project_root: self.project_by_cwd.get(&a.cwd).map(|p| p.root.clone()),
                     })
                 }
                 None => {
@@ -750,6 +770,7 @@ impl Core {
                             a.attach_id.as_deref(),
                         ),
                         bindings,
+                        project_root: self.project_by_cwd.get(&a.cwd).map(|p| p.root.clone()),
                     })
                 }
             }
@@ -908,6 +929,7 @@ impl Core {
                 // a live external row renders through the watch-only arm above.
                 reach: Reach::Locate,
                 bindings: Vec::new(),
+                project_root: None,
             })
         }
         out

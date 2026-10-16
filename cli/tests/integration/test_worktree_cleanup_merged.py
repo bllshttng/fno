@@ -2,8 +2,8 @@
 
 Drives the real `scripts/lib/worktree-lifecycle.sh` + `scripts/setup/archive-worktree.sh`
 against a throwaway git repo with a bare `origin`, so no real worktree is touched.
-The two scripts are copied into the fixture so the sweep's hardcoded
-`$MAIN_DIR/scripts/setup/archive-worktree.sh` path resolves to the real code.
+The two scripts are copied into the fixture side by side, so the sweep's
+plugin-relative `../setup/archive-worktree.sh` path resolves to the real code.
 """
 from __future__ import annotations
 
@@ -100,9 +100,12 @@ def repo(tmp_path: Path) -> Path:
 
 
 def _sweep(
-    canon: Path, *flags: str, env_extra: dict[str, str] | None = None
+    canon: Path,
+    *flags: str,
+    env_extra: dict[str, str] | None = None,
+    script_root: Path | None = None,
 ) -> subprocess.CompletedProcess:
-    script = canon / "scripts" / "lib" / "worktree-lifecycle.sh"
+    script = (script_root or canon) / "scripts" / "lib" / "worktree-lifecycle.sh"
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
@@ -408,10 +411,15 @@ def test_dry_run_default_mutates_nothing(repo: Path):
 
 
 # ── AC1-HP + branch preservation: --apply reaps, branch survives ────────────
-def test_apply_reaps_merged_and_preserves_branch(repo: Path):
+def test_apply_reaps_merged_and_preserves_branch(repo: Path, tmp_path: Path):
     wt = _add_merged(repo, "reapme")
+    # A project other than footnote ships no scripts/: the sweep must run the
+    # archive helper from its own install, never from the swept repo.
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    shutil.move(str(repo / "scripts"), str(plugin / "scripts"))
 
-    r = _sweep(repo, "--apply")
+    r = _sweep(repo, "--apply", script_root=plugin)
     diag = f"\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
 
     assert r.returncode == 0, diag

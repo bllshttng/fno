@@ -15,10 +15,13 @@ Handled shapes (matching build.rs):
 - a file carrying "\n#[cfg(test)]\nmod tests {" splits there
   (sync_module_copy)
 - neither marker feeds over verbatim (observation.rs, validate.rs)
+- a byte-copy .toml row feeds over byte for byte (sync_harness_capabilities
+  and sync_registry_schema pass the source bytes straight through; no shape
+  logic exists to reproduce)
 
 Everything else is refused by name: otel_read.rs embeds the OTEL schema via
-a Rust Debug literal (build-only), and the schema, codegen, doc, and
-byte-copy rows have their own generators.
+a Rust Debug literal (build-only), and the codegen and doc rows
+have their own generators.
 """
 
 import os
@@ -36,6 +39,29 @@ def rows():
             continue
         cols = line.rstrip("\n").split("\t")
         if len(cols) == 3 and cols[2] == REGEN_NEEDLE and cols[0].endswith(".rs"):
+            yield cols[0], cols[1]
+
+
+#: The sources build.rs copies VERBATIM (sync_harness_capabilities and
+#: sync_registry_schema both pass the bytes straight to write_if_different).
+#: Rows are matched on the source, never on the extension: events_limits.toml
+#: is also a .toml row with the same regen command, but build.rs generates it
+#: from schema.yaml with shape logic a blind byte copy would destroy.
+BYTE_COPY_SOURCES = (
+    "crates/fno-agents/src/harness_capabilities.toml",
+    "crates/fno-agents/src/registry_schema.toml",
+)
+
+
+def byte_copy_rows():
+    """The mirrors build.rs copies byte for byte. A byte copy needs no
+    build: the regen IS the copy, so a frozen session commits a fresh
+    mirror the same way CI later proves it."""
+    for line in open(TSV, encoding="utf-8"):
+        if line.startswith("#") or not line.strip():
+            continue
+        cols = line.rstrip("\n").split("\t")
+        if len(cols) == 3 and cols[2] == REGEN_NEEDLE and cols[1] in BYTE_COPY_SOURCES:
             yield cols[0], cols[1]
 
 
@@ -75,12 +101,17 @@ def write_if_different(path, out_text):
 
 
 def main():
-    pairs = list(rows())
+    pairs = [(copy, source, False) for copy, source in byte_copy_rows()]
+    pairs += [(copy, source, True) for copy, source in rows()]
     if not pairs:
-        raise SystemExit(f"no plain-copy .rs rows found in {TSV}")
+        raise SystemExit(f"no plain-copy rows found in {TSV}")
     refusals = []
-    for copy_rel, source_rel in pairs:
-        out_text, refusal = rebuilt_text(source_rel, open(source_rel, encoding="utf-8").read())
+    for copy_rel, source_rel, shaped in pairs:
+        text = open(source_rel, encoding="utf-8").read()
+        if not shaped:
+            write_if_different(copy_rel, text)
+            continue
+        out_text, refusal = rebuilt_text(source_rel, text)
         if refusal:
             refusals.append(refusal)
             print(f"refused: {refusal}")

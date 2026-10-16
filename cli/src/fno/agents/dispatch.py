@@ -2462,6 +2462,12 @@ def dispatch_spawn(
     # the narrower ask vocabulary and the wider pane-hostable set, and the
     # check is substrate-aware: pi passes on thread and refuses on headless.
     _check_spawn_harness(harness, headless=headless)
+    if harness in ("opencode", "pi") and (once or headless):
+        raise DispatchAskError(
+            f"{harness} one-shot spawns run through the Rust runtime's headless "
+            "lane; the Python path carries --substrate thread only",
+            exit_code=2,
+        )
 
     effective_message: Optional[str] = None
     if is_verb_seed(message):
@@ -2909,13 +2915,6 @@ def dispatch_spawn(
                 # have no carrier on the serve row yet, so they are refused
                 # here rather than silently lost.
                 if harness == "opencode":
-                    if once or headless:
-                        raise DispatchAskError(
-                            "opencode one-shot spawns run through the Rust "
-                            "runtime's headless lane; the Python path carries "
-                            "--substrate thread only",
-                            exit_code=2,
-                        )
                     if resume_session_id:
                         raise DispatchAskError(
                             "--resume is not carried on the opencode serve lane "
@@ -6896,9 +6895,8 @@ def _deliver_live(
             to=mail.to,
             id=mail.id,
             from_session=mail.from_session,
-            origin=mail.origin,
-            to_session=mail.to_session,
-            subject=mail.subject,
+            origin=mail.origin, to_session=mail.to_session, subject=mail.subject,
+            from_name=sender_entry.name if sender_entry is not None else None,
         )
 
     # Dual-run dispatch on the row's live ref (4a-G2): a mux-hosted agent gets
@@ -7726,6 +7724,7 @@ def dispatch_send(
                             node=mail_ctx.node, to=mail_ctx.to, id=mail_ctx.id,
                             from_session=mail_ctx.from_session,
                             to_session=mail_ctx.to_session, subject=mail_ctx.subject,
+                            from_name=sender_entry.name if sender_entry is not None else None,
                         ),
                         from_harness=from_harness, to_harness=existing.harness,
                         to_session=mail_ctx.to_session, from_session=from_session,

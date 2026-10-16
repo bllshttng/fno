@@ -1,17 +1,19 @@
-//! The daemon's question sweep: an open question whose node closed is closed
-//! with it.
+//! The daemon's question sweep: an open question closes when its subject
+//! resolves - a terminal node rung, a merged PR the subject names, or a
+//! newer ask in the same head family.
 //!
-//! A question that outlives its long-lived work gets closed on cadence; every
-//! question whose node or blocks entry reads `done` or `superseded` gets one
-//! `operator_question_closed` row with `reason: node-closed`, and one
-//! `question_sweep` event logs the count. Graph unreadable closes nothing.
+//! Every question the fold settles gets one `operator_question_closed` row
+//! with an empty answer and the outcome in `reason` (`node-closed: {node}
+//! {status}`, `moot: ...` for a user-only ask, `pr-merged: PR {n} merged`,
+//! `superseded: {id} re-asks at head {head}`), and one `question_sweep`
+//! event logs the count. Graph unreadable closes nothing.
 use crate::paths::AgentsHome;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-/// Sweep cadence, matching the stale sweep: the interval bounds discovery
-/// lag, not freshness.
-const QUESTION_SWEEP_INTERVAL_SECS: i64 = 21_600;
+/// Sweep cadence: hourly, so a question whose subject resolved does not
+/// outlive it by much. The interval bounds discovery lag, not freshness.
+const QUESTION_SWEEP_INTERVAL_SECS: i64 = 3_600;
 
 static QUESTION_SWEEP_IN_FLIGHT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -41,24 +43,74 @@ pub fn question_sweep(home: &AgentsHome, emitter: &crate::events::EventEmitter, 
     question_sweep_in(home, emitter, now, &read_closed_rung_facts)
 }
 
+/// A head-scoped subject names one commit: its last token, split at the
+/// last space or `@`, is 7 to 40 lowercase hex characters with at least one
+/// digit. Returns `(family, head)`; the family is the subject without the
+/// head. `visual approval PR 7 at 05ea5bcc` yields the family and the sha;
+/// `lead-hold-cap` and `visual approval PR 12 at defaced` (hex letters, no
+/// digit) yield `None`.
+pub(crate) fn head_scoped(subject: &str) -> Option<(&str, &str)> {
+    let subject = subject.trim();
+    let split = subject.rfind([' ', '@'])?;
+    // A separator at the front leaves no family text: `@abcdef1` names a
+    // head and nothing else, and an empty family would collide every such
+    // subject on a node into one family.
+    if split == 0 {
+        return None;
+    }
+    let (family, head) = (&subject[..split], &subject[split + 1..]);
+    let lowercase_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    let ok = (7..=40).contains(&head.len())
+        && head.bytes().all(lowercase_hex)
+        && head.bytes().any(|b| b.is_ascii_digit());
+    ok.then_some((family, head))
+}
+
+/// Two heads name the same commit when one is a prefix of the other (a
+/// short sha and its long form).
+pub(crate) fn same_head(a: &str, b: &str) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// What the question fold reads: node statuses, each node's merged PR, and
+/// the raw question journals.
+#[derive(Default)]
+pub(crate) struct RungFacts {
+    pub statuses: std::collections::BTreeMap<String, String>,
+    /// node id -> every merged PR number, primary and additional_prs alike,
+    /// only when its merge_status reads merged.
+    pub merged_prs: std::collections::BTreeMap<String, Vec<u64>>,
+    pub raw: String,
+}
+
 /// The real reading: graph statuses plus the question journal family.
 /// `pub(crate)`: the bell's clear-settled door reads the same facts through
 /// the same reader, so the sweep keeps the one graph+journal read.
-pub(crate) fn read_closed_rung_facts(
-    cwd: &Path,
-    home: &AgentsHome,
-) -> (Vec<(String, String)>, String) {
+pub(crate) fn read_closed_rung_facts(cwd: &Path, home: &AgentsHome) -> RungFacts {
     let graph = crate::org_board::graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph);
-    (statuses_of(&store), journals_raw(&fno_dir_of(home), cwd))
+    let mut facts = statuses_of(&store);
+    facts.raw = journals_raw(&fno_dir_of(home), cwd);
+    facts
 }
 
-pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> RungFacts {
+    let mut facts = RungFacts::default();
     if let Ok(rows) = crate::graph_store::read_rows_where(
         &store.graph,
         &crate::backlog::RowQuery {
-            fields: Some(["id", "status"].into_iter().map(str::to_string).collect()),
+            fields: Some(
+                [
+                    "id",
+                    "status",
+                    "pr_number",
+                    "merge_status",
+                    "additional_prs",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
             with_blockers: true,
             ..Default::default()
         },
@@ -66,31 +118,61 @@ pub(crate) fn statuses_of(store: &crate::backlog::api::Store) -> Vec<(String, St
     .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
     {
         for row in rows {
-            if let (Some(id), Some(status)) = (
+            let (Some(id), Some(status)) = (
                 row.get("id").and_then(serde_json::Value::as_str),
                 row.get("status").and_then(serde_json::Value::as_str),
-            ) {
-                out.push((id.to_string(), status.to_string()));
+            ) else {
+                continue;
+            };
+            facts.statuses.insert(id.to_string(), status.to_string());
+            // The stamp is not a rung by itself (a multi-ship node can carry
+            // one while work remains); it only feeds the pr-merged rule,
+            // which also demands the question name the PR. Later ships ride
+            // additional_prs and feed the same rule.
+            let mut merged: Vec<u64> = Vec::new();
+            if row.get("merge_status").and_then(serde_json::Value::as_str) == Some("merged") {
+                if let Some(pr) = row.get("pr_number").and_then(serde_json::Value::as_u64) {
+                    merged.push(pr);
+                }
+            }
+            if let Some(serde_json::Value::Array(items)) = row.get("additional_prs") {
+                for item in items {
+                    if item.get("merge_status").and_then(serde_json::Value::as_str)
+                        == Some("merged")
+                    {
+                        if let Some(pr) = item
+                            .get("number")
+                            .and_then(serde_json::Value::as_i64)
+                            .and_then(|p| u64::try_from(p).ok())
+                        {
+                            merged.push(pr);
+                        }
+                    }
+                }
+            }
+            if !merged.is_empty() {
+                facts.merged_prs.insert(id.to_string(), merged);
             }
         }
     }
-    out
+    facts
 }
 
-/// Append the shared derived-close row for each question id and return its
-/// per-id receipt. The sweep and the user's Clear all action share this writer.
+/// Append the shared derived-close row for each (question id, reason) pair
+/// and return its per-id receipt. The sweep, the clear-settled door and the
+/// intake's supersede share this writer: an empty answer, the outcome in
+/// `reason`, and `closed_by` naming the writer.
 pub(crate) fn close_questions(
-    home: &AgentsHome,
-    ids: &[String],
+    index: &Path,
+    settled: &[(String, String)],
     now: i64,
     closed_by: &str,
 ) -> (Vec<String>, Vec<String>) {
-    let store = crate::provider_cap::questions_path(home);
     let mut closed = Vec::new();
     let mut errors = Vec::new();
-    for qid in ids {
+    for (qid, reason) in settled {
         match crate::provider_cap::append_questions_row(
-            &store,
+            index,
             &json!({
                 "ts": crate::provider_cap::epoch_to_rfc3339(now),
                 "type": "operator_question_closed",
@@ -98,7 +180,7 @@ pub(crate) fn close_questions(
                 "data": {
                     "question_id": qid,
                     "answer": "",
-                    "reason": "node-closed",
+                    "reason": reason,
                     "closed_by": closed_by,
                 },
             }),
@@ -135,11 +217,13 @@ fn journals_raw(fno_dir: &Path, cwd: &Path) -> String {
 }
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
-pub fn question_sweep_in(
+/// `pub(crate)`: the reading type is crate-private, so the crate's public
+/// surface never names it.
+pub(crate) fn question_sweep_in(
     home: &AgentsHome,
     emitter: &crate::events::EventEmitter,
     now: i64,
-    read: &dyn Fn(&Path, &AgentsHome) -> (Vec<(String, String)>, String),
+    read: &dyn Fn(&Path, &AgentsHome) -> RungFacts,
 ) -> usize {
     let stamp = home.root().join("question-sweep.stamp");
     let last = std::fs::read_to_string(&stamp)
@@ -150,24 +234,25 @@ pub fn question_sweep_in(
         return 0;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let (statuses, raw) = read(&cwd, home);
-    let statuses: std::collections::BTreeMap<String, String> = statuses.into_iter().collect();
-    let ids = crate::needs::node_closed_question_ids(&raw, &statuses);
-    let task_ids = crate::fleet_task::node_closed_task_ids(&raw, &statuses);
-    let legacy_ids = crate::fleet_task::legacy_question_ids(&raw);
+    let facts = read(&cwd, home);
+    let settled = crate::needs::settled_questions(&facts.raw, &facts);
+    let task_ids = crate::fleet_task::node_closed_task_ids(&facts.raw, &facts.statuses);
+    let legacy_ids = crate::fleet_task::legacy_question_ids(&facts.raw);
     let mut tasks_closed = Vec::new();
     let mut legacy_moved = Vec::new();
-    let (closed, mut errors) = close_questions(home, &ids, now, "question-sweep");
-    if ids.is_empty() && task_ids.is_empty() && legacy_ids.is_empty() {
+    // The reasons travel with the pairs: the fold owns which rule closed a
+    // question and says so; this writer only records it.
+    let index = crate::provider_cap::questions_path(home);
+    let (closed, mut errors) = close_questions(&index, &settled, now, "question-sweep");
+    if settled.is_empty() && task_ids.is_empty() && legacy_ids.is_empty() {
         let _ = emitter.emit(
             "question_sweep",
             &json!({"closed": 0, "tasks_closed": 0, "legacy_moved": 0, "outcome": "none"}),
         );
     } else {
-        let store = crate::provider_cap::questions_path(home);
         for tid in &task_ids {
             match crate::provider_cap::append_questions_row(
-                &store,
+                &index,
                 &json!({
                     "ts": crate::provider_cap::epoch_to_rfc3339(now),
                     "type": "fleet_task_closed",
@@ -185,7 +270,7 @@ pub fn question_sweep_in(
         }
         for qid in &legacy_ids {
             match crate::provider_cap::append_questions_row(
-                &store,
+                &index,
                 &json!({
                     "ts": crate::provider_cap::epoch_to_rfc3339(now),
                     "type": "operator_question_closed",
@@ -255,8 +340,59 @@ mod tests {
     fn fixture_read(
         statuses: Vec<(String, String)>,
         raw: String,
-    ) -> impl Fn(&Path, &AgentsHome) -> (Vec<(String, String)>, String) {
-        move |_, _| (statuses.clone(), raw.clone())
+    ) -> impl Fn(&Path, &AgentsHome) -> RungFacts {
+        move |_, _| RungFacts {
+            statuses: statuses.iter().cloned().collect(),
+            merged_prs: Default::default(),
+            raw: raw.clone(),
+        }
+    }
+
+    fn fixture_read_merged(
+        statuses: Vec<(String, String)>,
+        merged: Vec<(String, u64)>,
+        raw: String,
+    ) -> impl Fn(&Path, &AgentsHome) -> RungFacts {
+        move |_, _| {
+            let mut merged_prs: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+            for (node, pr) in &merged {
+                merged_prs.entry(node.clone()).or_default().push(*pr);
+            }
+            RungFacts {
+                statuses: statuses.iter().cloned().collect(),
+                merged_prs,
+                raw: raw.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn statuses_of_reads_the_primary_and_every_merged_additional_pr() {
+        // A multi-ship node ships more than one PR: the primary rides
+        // pr_number, later ships ride additional_prs, and every merged one
+        // feeds the pr-merged rule.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({
+                "id": "x-multi", "slug": "multi", "type": "feature", "title": "multi",
+                "status": "in_progress", "priority": "p2",
+                "pr_number": 7, "merge_status": "merged",
+                "additional_prs": [
+                    {"number": 9, "merge_status": "merged"},
+                    {"number": 10, "merge_status": "open"}
+                ]
+            })],
+        )
+        .unwrap();
+        let store = crate::backlog::api::Store::new(&graph);
+        let facts = statuses_of(&store);
+        assert_eq!(facts.merged_prs.get("x-multi"), Some(&vec![7, 9]));
+        assert_eq!(
+            facts.statuses.get("x-multi"),
+            Some(&"in_progress".to_string())
+        );
     }
 
     fn open_row(qid: &str, node: &str) -> String {
@@ -280,7 +416,13 @@ mod tests {
             &["operator_question_closed"],
         );
         assert!(questions.contains("q-done"));
-        assert!(questions.contains("node-closed"));
+        // The close says what happened: which node, which rung, and never
+        // an answer nobody gave.
+        assert!(
+            questions.contains(r#""reason":"node-closed: x-done done""#)
+                && questions.contains(r#""answer":""#),
+            "{questions}"
+        );
         assert_eq!(question_sweep_in(&home, &emitter, now + 60, &read), 0);
     }
 
@@ -379,27 +521,42 @@ mod tests {
     }
 
     #[test]
-    fn spares_a_user_only_question_and_still_closes_a_machine_one() {
-        // The sweep's node-closed close spares a user-only why_user; only an
-        // answer or a withdrawal closes such a question.
+    fn closes_a_user_only_question_as_moot_and_a_machine_one_as_node_closed() {
+        // A resolved subject closes all three; the reason records what
+        // happened: a user-only ask whose node closed closes moot, a paint
+        // ask whose PR merged closes pr-merged (why_user never blocks that
+        // rule), a machine question node-closed. Every row keeps an empty
+        // answer and names the node.
         let home = tmp_home("user-only");
         let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
         let user_row = format!(
             r#"{{"ts":"2026-09-17T10:00:00Z","type":"operator_question","source":"target","data":{{"question_id":"q-user","question":"approve the rules?","node":"x-done","blocks":["x-done"],"why_user":"a product or taste call"}}}}"#
         );
-        let read = fixture_read(
+        let paint_row = r#"{"ts":"2026-09-17T10:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-paint","question":"does the paint look right?","node":"x-done","blocks":["x-done"],"why_user":"taste - whether the paint looks right is the user's call","subject":"visual approval PR 7 at 1111111a"}}"#;
+        let read = fixture_read_merged(
             vec![("x-done".to_string(), "done".to_string())],
-            format!("{user_row}\n{}", open_row("q-mach", "x-done")),
+            vec![("x-done".to_string(), 7)],
+            format!("{user_row}\n{paint_row}\n{}", open_row("q-mach", "x-done")),
         );
         assert_eq!(question_sweep_in(&home, &emitter, 1_000_000, &read), 1);
         let questions = crate::event_store::journal_text(
             &crate::provider_cap::questions_path(&home),
             &["operator_question_closed"],
         );
-        assert!(questions.contains("q-mach"), "{questions}");
         assert!(
-            !questions.contains("q-user"),
-            "the user-only question survives: {questions}"
+            questions.contains("q-user") && questions.contains(r#""reason":"moot: x-done done""#),
+            "{questions}"
+        );
+        assert!(
+            questions.contains("q-paint")
+                && questions.contains(r#""reason":"pr-merged: PR 7 merged (node x-done)""#)
+                && questions.contains(r#""answer":""#),
+            "{questions}"
+        );
+        assert!(
+            questions.contains("q-mach")
+                && questions.contains(r#""reason":"node-closed: x-done done""#),
+            "{questions}"
         );
     }
 

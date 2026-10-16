@@ -2,7 +2,7 @@
 
 The add/idea hook wiring is native (the golden replays pin its offer, skip
 ladder and events) and the retro path lives in test_retro_land.py. This covers
-the remaining Python A1 path - intake - proving it invokes the shared hook.
+the remaining birth paths prove they invoke the shared hook.
 
 Decompose is NOT one of them. It used to route unflagged children here,
 which spawned a /think on every autonomous decompose rather than offering one;
@@ -76,34 +76,42 @@ def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch, capture_born):
 
     The epic doc is a group child's design authority (the blueprint session
     inline-fills each scaffold), so a decompose-born child needs no /think of
-    its own unless the operator flags the group `needs_think`.
+    its own unless the operator flags the group `needs_think`. The verb is
+    native now: the receipt's `fanout` array is the spawn evidence, read at
+    the door with the fixture root pinned (HOME) so no subprocess write
+    escapes to operator state.
     """
-    g = tmp_path / "graph.json"
-    seed_graph(g, json.dumps({"entries": [{**_EPIC, "cwd": str(tmp_path)}]}) + "\n")
-    _route_graph(g, tmp_path, monkeypatch)
+    import os as _os
+    import subprocess as _sp
 
-    # First pass: 2 children created, still no births.
-    r = _invoke("backlog", "decompose", "ab-epic0001", "--groups", _GROUPS)
-    assert r.exit_code == 0, r.output
-    assert capture_born == []
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+    home = tmp_path / "home"
+    (home / ".fno" / "db").mkdir(parents=True)
+    g = home / ".fno" / "db" / "graph.json"
+    seed_graph(g, json.dumps({"entries": [{**_EPIC, "cwd": str(tmp_path)}]}) + "\n")
+    env = {**_os.environ, "HOME": str(home), "FNO_TRACKER_BACKEND": "graph"}
+
+    def _door(*args):
+        return _sp.run(
+            [str(binary), "backlog", *args],
+            capture_output=True, text=True, env=env, cwd=tmp_path, timeout=60,
+        )
+
+    # First pass: 2 children created, still no spawns.
+    r = _door("decompose", "ab-epic0001", "--groups", _GROUPS, "--json")
+    assert r.returncode == 0, r.stdout + r.stderr
+    payload = json.loads(r.stdout)
+    assert [row["action"] for row in payload["groups"]] == ["created", "created"]
+    assert payload["fanout"] == []
 
     # Identical re-run stays idempotent and equally silent.
-    assert _invoke("backlog", "decompose", "ab-epic0001", "--groups", _GROUPS).exit_code == 0
+    r2 = _door("decompose", "ab-epic0001", "--groups", _GROUPS, "--json")
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    payload2 = json.loads(r2.stdout)
+    assert [row["action"] for row in payload2["groups"]] == ["updated", "updated"]
+    assert payload2["fanout"] == []
     assert capture_born == []
-
-
-# -- intake --
-
-def test_intake_fires_birth_hook_once(tmp_path, monkeypatch, capture_born):
-    g = tmp_path / "graph.json"
-    seed_graph(g, '{"entries": []}\n')
-    _route_graph(g, tmp_path, monkeypatch)
-
-    plan = tmp_path / "plan.md"
-    plan.write_text("---\ncreated: 2026-05-05\ntitle: A Plan\n---\n# Body\n\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n")
-
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-
-    assert len(capture_born) == 1
-    assert capture_born[0][0]  # the intaked node's real id reached the hook

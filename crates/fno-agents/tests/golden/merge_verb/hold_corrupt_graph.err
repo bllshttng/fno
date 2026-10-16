@@ -1,0 +1,2 @@
+hold: disabled an armed auto-merge for PR 7 (dispatch-hold-invalid: backlog graph is unreadable: <ERR>; re-arm with `gh pr merge 7 --auto` once the hold clears
+dispatch-hold-invalid: backlog graph is unreadable: <ERR>; refusing to assume unheld

@@ -1,0 +1,12 @@
+step=resolve status=ok detail=pr=42 source=caller
+step=mutex status=ok detail=acquired
+step=reconcile status=ok detail=no-drift
+step=plan-reconcile status=ok detail=exit=0
+step=retro status=ok detail=exit=0
+  advance: tick: dispatch check
+step=advance status=ok detail=exit=0 (1 progress lines)
+step=skill-diff status=ok detail=exit=0
+step=sync-canonical status=skipped detail=not configured
+step=archive status=skipped detail=not-merged (state=OPEN)
+step=judgment status=ok detail=deferred-to-skill (attended); deferred=0 files=0 lines=0 parking_lot=unset bar=below
+step=reap-rows status=skipped detail=not-merged (state=OPEN)

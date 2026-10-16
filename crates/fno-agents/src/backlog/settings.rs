@@ -202,6 +202,35 @@ pub fn graph_path() -> PathBuf {
     }
 }
 
+/// `config.batch.enabled`, fail-safe false: an unreadable settings file must
+/// not enable the batch lane. Same candidate walk as the other readers.
+pub fn batch_enabled() -> bool {
+    for path in candidates() {
+        if let Some(v) = read_flat(&path)
+            .get("batch")
+            .and_then(|b| b.get("enabled"))
+            .and_then(Value::as_bool)
+        {
+            return v;
+        }
+    }
+    false
+}
+
+/// `config.batch.max_nodes`, default 3 (the config coercion floor).
+pub fn batch_max_nodes() -> i64 {
+    for path in candidates() {
+        if let Some(v) = read_flat(&path)
+            .get("batch")
+            .and_then(|b| b.get("max_nodes"))
+            .and_then(Value::as_i64)
+        {
+            return v;
+        }
+    }
+    3
+}
+
 /// The configured dispatch-verb extension: `(allowed_verbs, verb_registry
 /// keys)`. Unset `allowed_verbs` defaults to the shipped trio, the same
 /// default the Python config model carries.

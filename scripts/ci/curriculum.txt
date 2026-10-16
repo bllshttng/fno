@@ -17,7 +17,6 @@ restart
 # L2 your first shipped PR
 whoami status
 status
-target start
 target status
 # L3 how "done" is decided
 pr status
@@ -32,8 +31,6 @@ plan stamp
 # L6 execute a plan (skill-led; two CLI verbs)
 state set
 state init
-# L7 review before you ship (skill-led; one CLI verb)
-review
 # L8 the PR lifecycle (skill-led; four CLI verbs)
 pr merge
 pr rebase
@@ -63,7 +60,8 @@ backlog rank
 backlog roadmap
 backlog triage
 backlog advance
-backlog intake
+# backlog intake went native with its port (the wheel caller the sweep
+# counts is gone; the native verb is reached through the dispatcher door)
 # Track C, the mesh (L12-L14)
 # L12 worktrees
 worktree ensure

@@ -28,7 +28,9 @@ fn log_of(dir: &Path, name: &str) -> String {
 /// remote-only commit, write `remote-only-merge` to make the merges log
 /// report one merge with two parents, and write `dirty-merge` to make that
 /// merge conflicted under `merge-tree` with a tree that differs from the
-/// parent auto-merge. `rev-list --count` answers 3 until a rebase or merge
+/// parent auto-merge. Write `same-head` to make `rev-parse HEAD` answer the
+/// sha the remote branch carries (deadbeef0000000), so a no-integration run
+/// reads as a no-op. `rev-list --count` answers 3 until a rebase or merge
 /// touches `counted` (the integration happened), so the receipt reads
 /// behind-before=3 behind-after=0 on an integrating push and 3/3 on one that
 /// integrates nothing. `rev-list --merges --count` always answers 0.
@@ -53,6 +55,9 @@ case "$1" in
         if [ -f "$D/no-remote-branch" ]; then exit 1; fi
         echo deadbeef0000000; exit 0 ;;
       --short) echo abc1234; exit 0 ;;
+      HEAD)
+        if [ -f "$D/same-head" ]; then echo deadbeef0000000; else echo feedface00000; fi
+        exit 0 ;;
       --show-toplevel) echo "$D"; exit 0 ;;
       *"^{tree}"*)
         if [ -f "$D/dirty-merge" ]; then echo handtree0000000; else echo autotree000000; fi
@@ -108,10 +113,12 @@ exit 0
 /// Stub gh: a settled read (completed failure buckets as not pending) by
 /// default; write `pending` for a run in flight with a job link, or
 /// `red-pending` for a head whose latest rows already failed while a run
-/// is still testing it. The pulls read (the push verb's integration
-/// gate) answers a DIRTY PR by default, so the integrating tests keep
-/// exercising the rebase/merge leg; write `clean-pr` for a mergeable PR
-/// that is merely behind, or `no-pr` for a branch with no open PR.
+/// is still testing it. The pulls reads (the push verb's integration
+/// gate) answer a DIRTY PR by default, so the integrating tests keep
+/// exercising the rebase/merge leg: the list read resolves only the PR's
+/// number, and the single `pulls/7` read carries `mergeable_state`
+/// (`clean` under `clean-pr`, null under `null-state`); write `no-pr` for a
+/// branch with no open PR.
 fn stub_gh(dir: &Path) {
     write_exec(
         dir,
@@ -124,13 +131,20 @@ if [ -f "$D/gh-error" ]; then
   exit 1
 fi
 for a in "$@"; do case "$a" in
-  *pulls?state=open*)
+  *pulls/7)
     if [ -f "$D/clean-pr" ]; then
-      echo '[{"number":7,"mergeable_state":"clean"}]'
-    elif [ -f "$D/no-pr" ]; then
+      echo '{"number":7,"mergeable_state":"clean"}'
+    elif [ -f "$D/null-state" ]; then
+      echo '{"number":7,"mergeable_state":null}'
+    else
+      echo '{"number":7,"mergeable_state":"dirty"}'
+    fi
+    exit 0 ;;
+  *pulls?state=open*)
+    if [ -f "$D/no-pr" ]; then
       echo '[]'
     else
-      echo '[{"number":7,"mergeable_state":"dirty"}]'
+      echo '[{"number":7}]'
     fi
     exit 0 ;;
   */check-runs)
@@ -253,6 +267,44 @@ fn behind_rows() {
         log.matches("git push").count(),
         1,
         "the push still lands: {log:?}"
+    );
+
+    // A no-integration push whose HEAD already is the remote head moves
+    // nothing: the receipt says pushed=0 and neither the push, the
+    // in-flight read, nor a red run's cancel ever fires.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("clean-pr"), "").unwrap();
+    std::fs::write(d.join("same-head"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("integrate=none"), "{out}");
+    assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
+    assert!(out.contains("pushed=0"), "{out}");
+    let log = log_of(&d, "git.log");
+    assert!(!log.contains("git push"), "nothing to push: {log:?}");
+    let gh = log_of(&d, "gh.log");
+    assert!(
+        !gh.contains("check-runs"),
+        "the in-flight read never ran: {gh}"
+    );
+    assert!(
+        !gh.contains("cancel"),
+        "a no-op never cancels a red run: {gh}"
+    );
+
+    // A null mergeable_state (GitHub still computing) integrates nothing:
+    // the branch pushes as it stands, with no rebase.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("null-state"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("integrate=none"), "{out}");
+    assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
+    assert!(out.contains("pushed=1"), "{out}");
+    assert!(
+        !log_of(&d, "git.log").contains("rebase origin/main"),
+        "no rebase on a null state: {:?}",
+        log_of(&d, "git.log")
     );
 }
 

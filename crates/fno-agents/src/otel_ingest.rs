@@ -38,7 +38,10 @@ pub(crate) fn receiver_port(port_file: &Path) -> Result<u16, String> {
 }
 
 /// The endpoint record survives shutdown so hosted exporters reconnect to
-/// the same listener after a daemon restart.
+/// the same listener after a daemon restart. When that port is already
+/// taken by another process, the stale record is cleared and republished
+/// on a fresh ephemeral port instead of leaving exporters pointed at a
+/// stranger.
 pub async fn run(home: AgentsHome, shutdown: Arc<AtomicBool>) {
     match receiver_port(&home.otel_dir().join("port")) {
         Ok(port) => run_on_port(home, shutdown, port).await,
@@ -47,16 +50,49 @@ pub async fn run(home: AgentsHome, shutdown: Arc<AtomicBool>) {
 }
 
 async fn run_on_port(home: AgentsHome, shutdown: Arc<AtomicBool>, port: u16) {
+    run_on_port_ready(home, shutdown, port, None).await
+}
+
+/// `ready` fires with the bound port once the listener is up and the
+/// endpoint record is published. A caller that needs to know when the
+/// receiver is actually serving (tests, chiefly) should wait on this
+/// signal rather than probe the published port over TCP - a stranger
+/// that lands on that port during a restart race can answer a TCP probe
+/// without ever being this receiver.
+async fn run_on_port_ready(
+    home: AgentsHome,
+    shutdown: Arc<AtomicBool>,
+    port: u16,
+    ready: Option<tokio::sync::oneshot::Sender<u16>>,
+) {
     let dir = home.otel_dir();
     if let Err(error) = std::fs::create_dir_all(&dir) {
         eprintln!("fno OTEL receiver: cannot create state directory: {error}");
         return;
     }
+    let port_file = dir.join("port");
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("fno OTEL receiver: cannot bind port {port}: {error}");
-            return;
+        Err(bind_error) => {
+            // The published record may point at the process that just took
+            // this port out from under us. Clear it before falling back so
+            // no exporter is left pointed at that stranger, then bind a
+            // fresh ephemeral port and republish below.
+            if let Err(error) = std::fs::remove_file(&port_file) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("fno OTEL receiver: cannot clear stale port record: {error}");
+                    return;
+                }
+            }
+            match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+                Ok(listener) => listener,
+                Err(error) => {
+                    eprintln!(
+                        "fno OTEL receiver: cannot bind port {port} ({bind_error}) or a fresh ephemeral port: {error}"
+                    );
+                    return;
+                }
+            }
         }
     };
     let port = match listener.local_addr() {
@@ -68,10 +104,13 @@ async fn run_on_port(home: AgentsHome, shutdown: Arc<AtomicBool>, port: u16) {
     };
     let temporary = dir.join("port.tmp");
     if let Err(error) = std::fs::write(&temporary, port.to_string())
-        .and_then(|_| std::fs::rename(&temporary, dir.join("port")))
+        .and_then(|_| std::fs::rename(&temporary, &port_file))
     {
         eprintln!("fno OTEL receiver: cannot publish endpoint: {error}");
         return;
+    }
+    if let Some(ready) = ready {
+        let _ = ready.send(port);
     }
     let db = dir.join("otel.db");
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -589,37 +628,24 @@ mod tests {
                 .ok()
                 .filter(|_| home.otel_dir().join("port").exists())
                 .unwrap_or(0);
-            tokio::spawn(async move { run_on_port(h, sd, port).await })
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let task =
+                tokio::spawn(async move { run_on_port_ready(h, sd, port, Some(ready_tx)).await });
+            (task, ready_rx)
         };
-        // Binding and publishing run on the receiver task, and under CI load
-        // that can take seconds - or lose a transient resource race and exit
-        // before publishing. Poll the ready signal (published port answers
-        // TCP) against a deadline, retry the start three times, and fail
-        // fast when the receiver dies first. A deterministic failure still
-        // fails, three eprintlns richer.
+        // The receiver task itself signals readiness once bound and
+        // published - never inferred by probing the published port over
+        // TCP, since a stranger that lands on that port during a restart
+        // race can answer the probe without being this receiver. Binding
+        // and publishing can take seconds under CI load, or lose a
+        // transient resource race and exit before publishing: wait on the
+        // signal against a deadline, retry the start three times, and fail
+        // fast when the receiver dies first (sender dropped with no send).
         for _ in 0..3 {
-            let task = spawn(home, &shutdown);
-            let wait = async {
-                loop {
-                    if let Ok(text) = std::fs::read_to_string(home.otel_dir().join("port")) {
-                        if let Ok(port) = text.trim().parse() {
-                            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                                .await
-                                .is_ok()
-                            {
-                                return Some(port);
-                            }
-                        }
-                    }
-                    if task.is_finished() {
-                        return None;
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            };
-            match tokio::time::timeout(Duration::from_secs(30), wait).await {
-                Ok(Some(port)) => return (port, task),
-                Ok(None) => tokio::time::sleep(Duration::from_millis(200)).await,
+            let (task, ready_rx) = spawn(home, &shutdown);
+            match tokio::time::timeout(Duration::from_secs(30), ready_rx).await {
+                Ok(Ok(port)) => return (port, task),
+                Ok(Err(_)) => tokio::time::sleep(Duration::from_millis(200)).await,
                 Err(_) => panic!("receiver never published a port within 30s"),
             }
         }
@@ -828,9 +854,12 @@ mod tests {
             std::fs::read_to_string(home.otel_dir().join("port")).unwrap(),
             port.to_string()
         );
+        // Usually the same port comes back, but a parallel test can grab it
+        // first: the restart leg then republishes on a fresh ephemeral port
+        // rather than leaving the record pointed at that stranger, so `after`
+        // is not asserted equal to `port` here.
         let shutdown_again = Arc::new(AtomicBool::new(false));
         let (after, restarted) = started(&home, Arc::clone(&shutdown_again)).await;
-        assert_eq!(after, port);
         let exported = crate::claude_supervisor::otel_env(&home.otel_dir().join("port"), |_| None);
         assert!(exported.contains(&(
             "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".into(),
@@ -857,7 +886,7 @@ mod tests {
         let ledger = home.root().join("ledger.json");
         std::fs::write(
             &ledger,
-            r#"[{"session_id": "sess-1", "cost_usd": 9.99}, {"session_id": "sess-4", "cost_usd": 3.5}]"#,
+            r#"{"entries": [{"session_id": "sess-1", "cost_usd": 9.99}, {"session_id": "sess-4", "cost_usd": 3.5}]}"#,
         )
         .unwrap();
         assert_eq!(
@@ -886,5 +915,65 @@ mod tests {
             ),
             Some(3.5)
         );
+    }
+
+    /// Reproduces the main-line flake directly: a stranger already holds the
+    /// published port when the receiver restarts. The old code bound-failed
+    /// and left the stale record pointing at the stranger; this asserts the
+    /// record is cleared and republished on a fresh port that actually
+    /// serves, rather than depending on a timing race to ever hit this path.
+    #[tokio::test]
+    async fn restart_clears_stale_record_when_port_is_taken() {
+        let (home, _td) = home();
+        let dir = home.otel_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let stranger = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let taken_port = stranger.local_addr().unwrap().port();
+        std::fs::write(dir.join("port"), taken_port.to_string()).unwrap();
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(run_on_port_ready(
+            home.clone(),
+            Arc::clone(&shutdown),
+            taken_port,
+            Some(ready_tx),
+        ));
+        let bound = tokio::time::timeout(Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(
+            bound, taken_port,
+            "a stranger holds the published port; the receiver must take a fresh one"
+        );
+        let recorded: u16 = std::fs::read_to_string(dir.join("port"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            recorded, bound,
+            "the stale record must be replaced, never left pointing at the stranger"
+        );
+        assert_eq!(
+            post(
+                bound,
+                "/v1/logs",
+                &body(json!([api_request("req_taken", "sess-taken", 1)]))
+            )
+            .await,
+            200
+        );
+
+        drop(stranger);
+        shutdown.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

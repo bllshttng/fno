@@ -54,16 +54,21 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// One verdict token for the check-in line, from the workflow-run history on
 /// main, judged at the branch head only: the verdict reduces rows whose
 /// head sha equals `head_sha` - `at_sha` carries those push runs, and the
-/// branch page is filtered to the head and to push-event rows, so only push
-/// CI at the head sets the verdict: a schedule-event nightly release failing
-/// at the head never reads main red while the head's push CI is green. A run
-/// on an OLDER commit never sets the verdict, however fresh the workflow: a
-/// release run that failed or was
-/// cancelled days ago on an old sha must not read main red while the head
-/// is clean. Such failures ride the token's `stale` list instead and the
-/// check-in names each on its own line with its age. Per workflow with head
-/// rows the newest COMPLETED run decides - red on fail or cancel, naming
-/// the workflow and the sha it ran on; a workflow whose newest head run is
+/// branch page is filtered to the head and to push-event rows to SEED which
+/// workflows join the verdict at all: a schedule-event nightly release with
+/// no push row of its own never reads main red while the head's push CI is
+/// green. Once a workflow is seeded, a later completed run of that SAME
+/// workflow at the SAME head sha supersedes an earlier push run regardless
+/// of its own trigger: a concurrency group shared across triggers
+/// can cancel the push run in favor of, say, a schedule run of the identical
+/// workflow and sha, and the cancelled run must not outlive that newer
+/// completion. A run on an OLDER commit never sets the verdict, however
+/// fresh the workflow: a release run that failed or was cancelled days ago
+/// on an old sha must not read main red while the head is clean. Such
+/// failures ride the token's `stale` list instead and the check-in names
+/// each on its own line with its age. Per workflow with head rows the
+/// newest COMPLETED run decides - red on fail or cancel, naming the
+/// workflow and the sha it ran on; a workflow whose newest head run is
 /// still in flight reads pending; no head rows at all reads pending, never
 /// green. The stale list reports within a bounded window (`now` minus
 /// [`STALE_REPORT_WINDOW_DAYS`]): the branch page is one un-paginated read,
@@ -79,7 +84,7 @@ fn main_ci_token_from_pages<'a>(
     // The verdict is main's push CI at the head. A schedule-event nightly
     // release failing at the head is a release-engineering concern, never
     // main red while the head's push CI is green; only rows the API lists as
-    // push events fold into the verdict.
+    // push events seed a workflow into the verdict.
     let is_push = |run: &Value| run.get("event").and_then(Value::as_str) == Some("push");
     let mut head: Vec<(&'a str, &'a Value, Option<&'a Value>)> = Vec::new();
     fold_page(&mut head, at_sha.iter());
@@ -87,6 +92,42 @@ fn main_ci_token_from_pages<'a>(
         &mut head,
         on_main.iter().filter(|run| at_head(run) && is_push(run)),
     );
+    // A later same-sha completed run of an ALREADY-seeded workflow supersedes
+    // an earlier push run's conclusion, from any trigger: a
+    // concurrency group shared across triggers can cancel the push run in
+    // favor of, say, a schedule run of the identical workflow and sha, and
+    // the cancelled run must not outlive a newer completion of that same
+    // workflow. Only `newest_completed` moves here, never the `newest`
+    // pointer the in-flight check below reads - so an in-flight nightly of a
+    // workflow that already finished its push run never holds the verdict
+    // pending, and a workflow with no push row at the head (a pure-schedule
+    // release) never joins the verdict through this pass. Matched by the
+    // run's stable `workflow_id`, never the display `name` alone: two
+    // different workflow files can share a `name`, and a completed run of
+    // one must never supersede the other's seeded push run.
+    for run in on_main.iter().filter(|run| at_head(run) && !is_push(run)) {
+        let name = run.get("name").and_then(Value::as_str).unwrap_or("");
+        if name.is_empty() || run.get("status").and_then(Value::as_str) != Some("completed") {
+            continue;
+        }
+        let Some((_, newest, newest_completed)) =
+            head.iter_mut().find(|(seen, _, _)| *seen == name)
+        else {
+            continue;
+        };
+        let wf_id = run.get("workflow_id").and_then(Value::as_u64);
+        if wf_id.is_none() || wf_id != newest.get("workflow_id").and_then(Value::as_u64) {
+            continue;
+        }
+        let created = run.get("created_at").and_then(Value::as_str).unwrap_or("");
+        let is_newer = match *newest_completed {
+            Some(c) => created > c.get("created_at").and_then(Value::as_str).unwrap_or(""),
+            None => true,
+        };
+        if is_newer {
+            *newest_completed = Some(run);
+        }
+    }
     let mut older: Vec<(&'a str, &'a Value, Option<&'a Value>)> = Vec::new();
     fold_page(&mut older, on_main.iter().filter(|run| !at_head(run)));
     let window_start = now - chrono::Duration::days(STALE_REPORT_WINDOW_DAYS);
@@ -397,6 +438,26 @@ mod tests {
         })
     }
 
+    /// The same row with an explicit `workflow_id`: the stable id a
+    /// non-push row must match before it can supersede an already-seeded
+    /// workflow's newest completed run - two different workflow files can
+    /// share a display `name`, so the id is what tells them apart.
+    fn wf_run_with_id(
+        name: &str,
+        sha: &str,
+        status: &str,
+        conclusion: &str,
+        created: &str,
+        event: &str,
+        workflow_id: u64,
+    ) -> Value {
+        let mut run = wf_run_event(name, sha, status, conclusion, created, event);
+        run.as_object_mut()
+            .expect("wf_run_event builds an object")
+            .insert("workflow_id".into(), serde_json::json!(workflow_id));
+        run
+    }
+
     /// The reducer at the tests' fixed clock, 2026-09-30T12:00:00Z, so the
     /// stale window's boundary never drifts under a hardcoded date.
     fn token_at(head_sha: &str, at_sha: &[Value], on_main: &[Value]) -> Value {
@@ -594,6 +655,143 @@ mod tests {
         assert_eq!(
             token_at("fresh", &[], &on_main),
             serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "fresh"})
+        );
+    }
+
+    /// The filed bug's shape: cli-ci's push run at the head was
+    /// cancelled (a concurrency group shared with the schedule trigger can
+    /// preempt it), and a later schedule-triggered run of the SAME workflow
+    /// completed success at the same sha. The schedule row would not seed a
+    /// new workflow into the verdict on its own, but it supersedes the
+    /// cancelled push run of the workflow it already shares a name with, so
+    /// the verdict reads green.
+    #[test]
+    fn a_push_run_cancelled_by_concurrency_is_superseded_by_a_later_schedule_completion() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-09-28T07:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-09-28T07:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-28T07:30:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// Codex's finding on this fix (PR #3484): two different workflow files
+    /// can share a display `name`. A completed schedule-only run of one
+    /// (`workflow_id` 99) must never supersede the other's seeded, cancelled
+    /// push run (`workflow_id` 42) just because both happen to be named
+    /// "cli-ci" - the verdict stays red on the genuinely cancelled push run.
+    #[test]
+    fn a_different_workflow_sharing_the_same_name_never_supersedes() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "cancelled",
+            "2026-09-28T07:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-09-28T07:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-28T07:30:00Z",
+                "schedule",
+                99,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "head"})
+        );
+    }
+
+    /// Two protections the fix above must not give up. First: a workflow
+    /// that never has a push row at the head (a pure-schedule release) still
+    /// never joins the verdict, even when it completes after the push CI -
+    /// the schedule pass only ever moves an ALREADY-seeded workflow's newest
+    /// completed run. Second: once a workflow's push run has itself
+    /// completed, a later same-workflow schedule run still in flight must
+    /// not flip the verdict to pending - only a completed schedule row can
+    /// move `newest_completed`, and the in-flight check reads the push-only
+    /// `newest` pointer, which this pass never touches.
+    #[test]
+    fn a_schedule_only_workflow_never_joins_and_an_in_flight_nightly_never_holds_pending() {
+        let at_sha = vec![wf_run_event(
+            "cli-ci",
+            "head",
+            "completed",
+            "success",
+            "2026-09-28T07:00:00Z",
+            "push",
+        )];
+        let on_main = vec![
+            wf_run_event(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-28T07:00:00Z",
+                "push",
+            ),
+            wf_run_event(
+                "release",
+                "head",
+                "completed",
+                "failure",
+                "2026-09-28T07:30:00Z",
+                "schedule",
+            ),
+            wf_run_event(
+                "cli-ci",
+                "head",
+                "in_progress",
+                "",
+                "2026-09-28T08:00:00Z",
+                "schedule",
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
         );
     }
 

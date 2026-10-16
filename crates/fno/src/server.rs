@@ -68,7 +68,9 @@ use crate::vt::{self, frame_text, Modes};
 
 mod agent_actions;
 pub(crate) mod agent_launch;
+mod agent_rows_apply;
 mod agent_rows_join;
+mod attach_argv;
 mod client_input;
 mod client_read;
 mod drift_retire;
@@ -101,9 +103,11 @@ mod shutdown_capture;
 mod slot_capture;
 mod squad_persistence;
 mod squad_sync;
+mod thread_pin;
 mod thread_workspace;
 mod truth_probe;
 mod visible_panes;
+mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
 
@@ -667,6 +671,14 @@ pub(crate) enum CoreMsg {
     SquadReload {
         reply: ControlReply,
     },
+    /// (v113) `ControlVerb::WorkspaceOrigin`: add or drop one folder on an
+    /// open named workspace, then persist.
+    WorkspaceOrigin {
+        workspace: String,
+        path: String,
+        remove: bool,
+        reply: ControlReply,
+    },
     /// (v75) `ControlVerb::RetireSession`: tombstone one (harness,
     /// full session id) identity across every held squad and close only its
     /// attached panes. Idempotent; a repeat retires nothing.
@@ -895,6 +907,9 @@ pub(crate) enum CoreMsg {
         /// rule, which must stay inert while the read state is unknown.
         read_ok: bool,
     },
+    /// The project of each live row cwd, sent ahead of the `AgentRows` that
+    /// needs it. Replaces the map wholesale.
+    ProjectRoots(HashMap<String, agent_rows_apply::ProjectRef>),
     /// Tails (and ctx, v91) moved with no row change behind them:
     /// transcripts grow independently of the registry, so when only this
     /// pass moved, it pushes alone rather than forcing a row set through.
@@ -1477,6 +1492,12 @@ pub(crate) struct Core {
     /// subline then degrades to the cwd tail. Display-only, so staleness across
     /// a git checkout is cosmetic.
     branch_by_cwd: HashMap<String, String>,
+    /// Latest cwd -> project (canonical root, declared id) map from the same
+    /// reader, read by the thread-workspace resolver.
+    project_by_cwd: HashMap<String, agent_rows_apply::ProjectRef>,
+    /// Operator moves of a session into a workspace: the workspace identity
+    /// (its name, else its durable key) beside the pinned session.
+    thread_pins: Vec<(String, crate::squad_store::StoredThreadPin)>,
     /// Latest session-uuid -> most-recent-assistant-line map from the
     /// off-loop reader, joined into each agent row's `tail` at layout time for
     /// the extended sideline table. A uuid absent from the map has no readable
@@ -2527,9 +2548,8 @@ impl Core {
         });
     }
 
-    /// Every pane's metadata for `pane ls`, ordered by pane id so the listing
-    /// is stable and machine-readable. A pane mid-teardown (not in the tree)
-    /// is still listed with what is known rather than dropped silently.
+    /// Every pane's metadata for `pane ls`, ordered by pane id (stable, machine-readable).
+    /// A pane mid-teardown is still listed with what is known rather than dropped silently.
     fn pane_infos_with_agents(&self, agents: &[RegistryAgent]) -> Vec<PaneInfo> {
         // (v71) One evidence read feeds every pane row's orphan verdict.
         let evidence = self.member_evidence();
@@ -2578,6 +2598,7 @@ impl Core {
                     squad_name,
                     tab_id,
                     cwd,
+                    pane_cwd: crate::pane_cwd::listed(entry.pty.child_pid(), &entry.cwd),
                     child_pid: entry.pty.child_pid(),
                     title: entry.vt.osc_title().map(str::to_string),
                     // A portal seat never reads pristine: the seat is
@@ -7419,65 +7440,6 @@ impl Core {
         }
     }
 
-    /// The registry row NAME behind an attach id when that row is a
-    /// claude row, from the live catalog (the sidepane's in-memory source).
-    /// This is the identifier the resolver requests plans by; the attach id
-    /// itself is transport-local and never a registry key. The resolver is
-    /// claude-only, so a non-claude or harness-less row answers None and its
-    /// attach keeps the legacy argv.
-    fn attach_claude_row(&self, attach_id: &str) -> Option<String> {
-        self.agents
-            .iter()
-            .find(|a| a.attach_id.as_deref() == Some(attach_id))
-            .filter(|a| a.harness.as_deref() == Some("claude"))
-            .map(|a| a.name.clone())
-    }
-
-    /// The harness behind an attach id, from the live catalog. The
-    /// argv builder needs it: each harness execs its own interface, and only
-    /// the row knows which one this id belongs to.
-    fn attach_row_harness(&self, attach_id: &str) -> Option<String> {
-        self.agents
-            .iter()
-            .find(|a| a.attach_id.as_deref() == Some(attach_id))
-            .and_then(|a| a.harness.clone())
-    }
-
-    /// One attach gesture's spawn argv. `None` means the canonical
-    /// resolution is now running off-loop and the caller must stop - the
-    /// verdict re-enters this gesture through `ReentryPlanReady`. A replayed
-    /// gesture holds the staged verdict (its argv IS the answer, config dir
-    /// included). Every non-claude row keeps the legacy argv unchanged - that
-    /// axis carries no route or account binding to preserve.
-    fn attach_gesture_argv(
-        &mut self,
-        client_id: u64,
-        id: &str,
-        placement: &crate::proto::PanePlacement,
-    ) -> Option<(Vec<String>, Option<std::path::PathBuf>)> {
-        if let Some(verdict) = self.reentry_verdict.take() {
-            return Some((verdict.prefixed_argv(), verdict.config_dir));
-        }
-        if let Some(name) = self.attach_claude_row(id) {
-            self.resolve_reentry(
-                client_id,
-                &name,
-                "revive",
-                ReentrySpawnRequest::Attach {
-                    attach_id: id.to_string(),
-                    placement: placement.clone(),
-                },
-            );
-            return None;
-        }
-        let (acct, cd) = self.attach_account_ctx(id);
-        let harness = self.attach_row_harness(id);
-        Some((
-            attach_argv_for(harness.as_deref(), id, acct.as_deref(), cd.as_deref()),
-            cd,
-        ))
-    }
-
     /// A resume gesture's re-entry plan. A replayed gesture holds
     /// the staged verdict; otherwise the caller (a claude row only) fires the
     /// off-loop resolution and `None` tells it to stop - the verdict re-enters
@@ -9475,11 +9437,7 @@ impl Core {
                     .find(|c| c.id == client_id)
                     .map(|c| c.dims)
                     .unwrap_or((vp.rows, vp.cols));
-                let squad_cwd = self
-                    .session
-                    .squad(view.0)
-                    .map(|s| s.canonical_cwd().to_string())
-                    .unwrap_or_default();
+                let squad_cwd = self.spawn_cwd(view.0);
                 let pid = match self.spawn_pane(rows, cols, &squad_cwd) {
                     Ok(p) => p,
                     Err(e) => {
@@ -10128,67 +10086,15 @@ impl Core {
                 self.dispatch_card(client_id, node, account, true)
             }
             Command::NewSquad { name, origin } => {
-                // Explicit named-workspace creation (Unit 2). A blank/whitespace
-                // name is refused fail-closed - nothing is created (AC1-ERR,
-                // epic Boundaries), same shape as the other catalog commands.
-                let name = name.trim();
-                if name.is_empty() {
-                    self.notice(client_id, "name required");
-                    return Flow::Continue;
-                }
-                // Name is the durable identity (Locked Decision 4): a duplicate
-                // of a live OR persisted named squad is refused fail-closed,
-                // same shape as the blank refusal.
-                if self.named_squad_taken(name) {
-                    self.notice(client_id, "name taken");
-                    return Flow::Continue;
-                }
-                // Seed the shell at the given origin, else the sender's current
-                // squad cwd (a new workspace opens where you are). PTY-first
-                // ordering (Locked 7): a spawn failure mutates no model. Consume
-                // `origin` into the origins vec once, then seed the shell at
-                // origins[0] (else the sender's current squad cwd).
-                let origins: Vec<String> = origin.into_iter().collect();
-                let cwd = origins.first().cloned().unwrap_or_else(|| {
-                    self.session
-                        .squad(view.0)
-                        .map(|s| s.canonical_cwd().to_string())
-                        .unwrap_or_default()
-                });
-                let (rows, cols) = self
-                    .clients
-                    .iter()
-                    .find(|c| c.id == client_id)
-                    .map(|c| c.dims)
-                    .unwrap_or((vp.rows, vp.cols));
-                let pid = match self.spawn_pane(rows, cols, &cwd) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        self.notice(client_id, format!("new workspace failed: {e}"));
-                        return Flow::Continue;
-                    }
-                };
-                let sid = self.next_squad_id;
-                self.next_squad_id += 1;
-                let tid = self.session.mint_tab_id();
-                self.session.add_squad(
-                    sid,
-                    origins,
-                    Some(name.to_string()),
-                    Tab {
-                        name: None,
-                        id: tid,
-                        root: Node::Leaf(pid),
-                        focus: pid,
-                    },
-                );
-                // Track + persist the new (empty-membership) workspace so it
-                // restores next session even before any recruit (AC1-EDGE).
-                self.squad_members.insert(sid, Vec::new());
-                self.persist_squad(sid);
-                self.set_view(client_id, sid, tid);
-                self.push_layout(true);
-                Flow::Continue
+                self.handle_new_squad(client_id, view, vp, &name, origin)
+            }
+            Command::PinThread {
+                squad,
+                harness,
+                harness_session_id,
+            } => self.handle_pin_thread(client_id, squad, harness, harness_session_id),
+            Command::AddWorkspaceFolder { squad, path } => {
+                self.handle_add_workspace_folder(client_id, squad, &path)
             }
             Command::RenameTab { tab, name } => {
                 // Explicit tab rename. A stale/unknown id (the tab
@@ -10336,7 +10242,7 @@ impl Core {
                 // the false branch and its row survived the dismiss.
                 self.squad_members.remove(&id);
                 if let Some((name, key)) = self.squad_identity(id) {
-                    self.persist_remove(&name, &key);
+                    self.persist_dismiss(&name, &key);
                 }
                 let pids: Vec<u64> = self.session.squads[pos]
                     .tabs
@@ -10554,12 +10460,12 @@ impl Core {
                                 .push(tab);
                         }
                         None => {
-                            // Create the named workspace (no origin) with this as
-                            // its first tab.
+                            // Create the named workspace with this as its first
+                            // tab, in the one folder the recruited rows share.
                             let ns = self.next_squad_id;
                             self.next_squad_id += 1;
-                            self.session
-                                .add_squad(ns, Vec::new(), Some(name.clone()), tab);
+                            let origins = self.recruit_origin(&ids);
+                            self.session.add_squad(ns, origins, Some(name.clone()), tab);
                             self.squad_members.insert(ns, Vec::new());
                             sid = Some(ns);
                         }
@@ -11281,6 +11187,15 @@ impl Core {
                 self.handle_squad_reload(reply);
                 Flow::Continue
             }
+            CoreMsg::WorkspaceOrigin {
+                workspace,
+                path,
+                remove,
+                reply,
+            } => {
+                self.handle_workspace_origin(&workspace, &path, remove, reply);
+                Flow::Continue
+            }
             CoreMsg::RetireSession {
                 harness,
                 session_id,
@@ -11778,57 +11693,9 @@ impl Core {
                 tails,
                 ctx,
                 read_ok,
-            } => {
-                self.agents_read_ok = read_ok;
-                let identity_published = self.worker_identity_published(&rows);
-                // Discoverability, once per server lifetime: the
-                // first paneless live row to appear with no portal open names
-                // the gesture. "Explicit and lazy" must not mean
-                // "undiscoverable". A notice is not state - the latch only
-                // mutes repetition, it never gates behavior. The
-                // notice names both doors, because opening a SECOND portal is
-                // the gesture an operator cannot guess from the first.
-                if !self.portal_noticed
-                    && self.portals.is_empty()
-                    && rows.iter().any(|a| a.mux.is_none() && !a.exited)
-                {
-                    // Latch on DELIVERY, not on the attempt: workers
-                    // register before an operator attaches in the ordinary
-                    // daemon startup, so a latch set with no client attached
-                    // would burn the once-per-lifetime notice on nobody.
-                    if self.notice_all(
-                        "thread row present: reach a row (Enter or click) to open portal 0; P opens another portal beside it",
-                    ) {
-                        self.portal_noticed = true;
-                    }
-                }
-                self.agents = rows;
-                self.branch_by_cwd = branches;
-                self.tail_by_session = tails;
-                self.ctx_by_session = ctx;
-                // Row changes are the journal's change signal: a
-                // spawn or removal writes both. Refresh the cached scan here,
-                // off the per-push paths that read it.
-                self.journal.refresh();
-                if identity_published {
-                    // A registry row can publish after a worker pane was
-                    // recorded. Force the existing debounce funnel to flush
-                    // the newly authoritative identity instead of waiting for
-                    // another topology mutation.
-                    self.mark_topology_dirty();
-                }
-                // The debounce flush for topology captures: a drag's
-                // events mark dirty without writing; the 1s registry tick is
-                // the coalescing timer that turns them into one store write.
-                self.flush_topology();
-                // The registry just refreshed: a queued template restore
-                // whose fno bindings now resolve gets applied here, binding live
-                // sessions instead of shells.
-                self.drain_template_restores();
-                // Rects are unchanged; only the Layout's agent rows moved -
-                // push without re-emitting frames (AC1-UI: visible within one
-                // layout push; AC2-UI: the read happened off-loop).
-                self.push_layout(false);
+            } => self.apply_agent_rows(rows, branches, tails, ctx, read_ok),
+            CoreMsg::ProjectRoots(projects) => {
+                self.project_by_cwd = projects;
                 Flow::Continue
             }
             CoreMsg::BacklogCards {
@@ -12487,6 +12354,20 @@ async fn handle_control(
                 .await
         }
         ControlVerb::SquadReload => core_tx.send(CoreMsg::SquadReload { reply: reply_tx }).await,
+        ControlVerb::WorkspaceOrigin {
+            workspace,
+            path,
+            remove,
+        } => {
+            core_tx
+                .send(CoreMsg::WorkspaceOrigin {
+                    workspace,
+                    path,
+                    remove,
+                    reply: reply_tx,
+                })
+                .await
+        }
         ControlVerb::ServerStats => core_tx.send(CoreMsg::ServerStats { reply: reply_tx }).await,
         ControlVerb::Notify { title, body } => {
             core_tx
