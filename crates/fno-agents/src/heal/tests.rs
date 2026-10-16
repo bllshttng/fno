@@ -1527,8 +1527,9 @@ fn rebase_cap_rows() {
     let fno = log_of(d, "fno.log");
     assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
 
-    // The cap counts a still-conflicting rebase attempt (`skip_rebase_conflict`)
-    // as the refresh too: no second attempt within 24h.
+    // A still-conflicting rebase attempt is NOT capped: the owner may
+    // resolve and need the retry, so the attempt runs and spends the
+    // per-run budget instead.
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
     stub_gh_drive_rebase(d, "false");
@@ -1539,18 +1540,19 @@ fn rebase_cap_rows() {
         d,
         "",
         3,
-        "status needs_resolver; files: a, b). Resolve by hand, then re-run `fno do pr push`",
+        "status needs_resolver; not safely rebasable; files: a, b). Resolve by hand, then re-run `fno do pr push`",
     );
     std::fs::write(d.join("events.jsonl"), seed(d, "skip_rebase_conflict")).unwrap();
     run_heal(&drive_args(d, &[]));
     let fno = log_of(d, "fno.log");
-    assert!(
-        !fno.contains("do pr push"),
-        "the cap covers a conflicting rebase attempt: {fno}"
-    );
+    assert_eq!(fno.matches("do pr push").count(), 1, "{fno}");
     let events = log_of(d, "events.jsonl");
     assert!(
-        events.contains("\"action\":\"skip_rebase_cap\""),
+        events.contains("\"action\":\"skip_rebase_conflict\""),
+        "{events}"
+    );
+    assert!(
+        !events.contains("\"action\":\"skip_rebase_cap\""),
         "{events}"
     );
 

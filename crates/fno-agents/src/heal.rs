@@ -1893,13 +1893,14 @@ fn journal_rerun_keys(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// PRs whose conflicting-trigger refresh already ran in the last 24 hours,
-/// out of the `pr_heal_pr` journal: a real push (`rebased`), a push that
-/// moved nothing (`skip_rebase_noop`), or a rebase that still conflicts
-/// (`skip_rebase_conflict`). Rows filter on `root`, so one checkout's PR 12
-/// never caps another's, and on the 24-hour window. The drive loop's one
-/// store read per run; the conflicting trigger's per-PR cap filters it per
-/// PR.
+/// PRs whose conflicting-trigger refresh already concluded in the last 24
+/// hours, out of the `pr_heal_pr` journal: a real push (`rebased`) or a
+/// push that moved nothing (`skip_rebase_noop`). A still-conflicting
+/// rebase is deliberately absent: the owner may resolve and need the
+/// retry, so it spends the per-run budget instead. Rows filter on `root`,
+/// so one checkout's PR 12 never caps another's, and on the 24-hour
+/// window. The drive loop's one store read per run; the conflicting
+/// trigger's per-PR cap filters it per PR.
 fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections::HashSet<String> {
     let _ = crate::event_store::import_all(path);
     let now_ms = std::time::SystemTime::now()
@@ -1922,7 +1923,7 @@ fn journal_refreshed_prs(path: &std::path::Path, root: &str) -> std::collections
         .filter(|row| {
             matches!(
                 row.pointer("/data/action").and_then(Value::as_str),
-                Some("rebased") | Some("skip_rebase_noop") | Some("skip_rebase_conflict")
+                Some("rebased") | Some("skip_rebase_noop")
             )
         })
         .filter_map(|row| {
@@ -2598,6 +2599,11 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 Ok((false, _, err)) if is_rebase_conflict(&err) => {
+                    // A conflict spends the per-run budget, never the 24h
+                    // cap: the owner may resolve and need the retry this
+                    // tick, and the journal cannot tell a resolved tree
+                    // from a stuck one.
+                    rebased_this_run += 1;
                     let files = conflict_files(&err);
                     println!(
                         "skip rebase_conflict: PR {pr} conflicts rebasing onto origin/main; the owner decides"
@@ -2623,6 +2629,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     continue;
                 }
                 other => {
+                    rebased_this_run += 1;
                     let detail = other
                         .map(|(_, _, err)| first_line(&err).to_string())
                         .unwrap_or_else(|e| e);
