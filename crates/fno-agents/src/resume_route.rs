@@ -154,6 +154,17 @@ pub(crate) fn print_resume_command(
     } else {
         form_session_id
     };
+    let form_session_id = if form_session_id.is_empty() && matches!(route, ResumeRoute::HeadlessAsk)
+    {
+        // footnote and zcode rows key their id on `session_id`, which
+        // `resume_session_id`'s harness-field map does not name.
+        entry
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(form_session_id)
+    } else {
+        form_session_id
+    };
     if form_session_id.is_empty() {
         eprintln!(
             "fno agents resume: agent {} has no recorded session_id for harness {}.",

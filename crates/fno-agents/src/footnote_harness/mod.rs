@@ -299,16 +299,14 @@ pub fn dispatch_once(
                 &seed,
                 |prompt| create_turn(home, name, prompt, from_name, cwd, model, timeout, params),
                 |prompt| {
-                    let code = maybe_run_ask(
-                        home,
-                        &serde_json::json!({
-                            "message": prompt,
-                            "timeout": timeout.map(|d| d.as_secs()),
-                        }),
-                        name,
-                    )
-                    .unwrap_or(12);
-                    outcome(code, String::new(), String::new())
+                    // resume_turn, not maybe_run_ask: the ask lane re-parses
+                    // its message, so a prompt that itself begins with
+                    // `/loop` would start a nested driver. The plain turn is
+                    // what a tick means.
+                    match resume_turn(home, name, prompt, timeout) {
+                        Some(o) => outcome(o.exit_code, o.stdout, o.stderr),
+                        None => outcome(12, String::new(), String::new()),
+                    }
                 },
                 || {
                     load_registry(&home.registry_json())

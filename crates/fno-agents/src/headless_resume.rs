@@ -32,7 +32,10 @@ pub(crate) fn run(home: &AgentsHome, entry: &Value, name: &str, message: Option<
     {
         return code;
     }
-    let params = serde_json::json!({ "message": message });
+    // The zcode lane runs its child in params.cwd, and a wake's process cwd
+    // is not the row's, so hand the recorded one over. The footnote lane
+    // reads the row's cwd from the entry and ignores the param.
+    let params = serde_json::json!({ "message": message, "cwd": cwd });
     if let Some(code) = crate::footnote_harness::maybe_run_ask(home, &params, name) {
         return code;
     }
