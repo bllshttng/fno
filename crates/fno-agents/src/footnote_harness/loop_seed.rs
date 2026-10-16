@@ -16,6 +16,7 @@ const MAX_LIFETIME: Duration = Duration::from_secs(7 * 24 * 3_600);
 const MAX_FAILURE_STREAK: u32 = 3;
 
 /// A parsed seed: the tick interval and the prompt every turn runs.
+#[derive(Debug)]
 pub struct LoopSeed {
     pub interval: Duration,
     pub prompt: String,

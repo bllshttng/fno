@@ -472,7 +472,6 @@ fn a_headless_row_resumes_one_ask_turn_and_refuses_without_a_message() {
         None,
         &serde_json::json!({}),
     );
-    restore_env(saved);
     assert_eq!(created.exit_code, 0, "{}", created.stderr);
     let resumed = crate::client_verbs::run_resume(
         &[
