@@ -863,10 +863,7 @@ fn origin_transcript_exists(
         return false;
     };
     match origin_transcript_path(session_id, cwd, harness) {
-        Some(_) => Path::new(cwd)
-            .join(".fno")
-            .join("target-state.md")
-            .is_file(),
+        Some(_) => crate::target_orient::manifest_path(Path::new(cwd)).is_some(),
         None => false,
     }
 }
