@@ -33,19 +33,9 @@ import yaml
 from .types import Claim
 
 
-CLAIMS_DIRNAME = ".fno/claims"
-EXPIRED_SUBDIR = ".expired"
+from fno.rust_binary import CLAIMS_DIRNAME, CLAIMS_ROOT_ENV, claims_dir, global_claims_root
 
-# Env var naming the base dir under which GLOBAL (node-level) claims live.
-# Node ids are global (like ~/.fno/graph.json), so a node:<id> lock must
-# coordinate across worktrees rather than land in a worktree-local cwd. Shell
-# call sites that manage node claims (init-target-state.sh; the deleted
-# set-gate.sh / claim-release.sh) set this to "$HOME" so the claim lands at
-# ~/.fno/claims. An older `fno` that predates this var silently ignores
-# it (writes cwd-local, degraded but never erroring), which is why this is an
-# env var and not a CLI flag. Per-root claims (the megawalk walker singleton)
-# pass an explicit root and are unaffected.
-CLAIMS_ROOT_ENV = "FNO_CLAIMS_ROOT"
+EXPIRED_SUBDIR = ".expired"
 
 
 class ClaimAlreadyHeld(Exception):
@@ -75,18 +65,6 @@ class ClaimGoneAway(Exception):
     """Raised when a claim file disappeared between read and use."""
 
 
-def global_claims_root() -> Path:
-    """Base dir for GLOBAL (node-level) claims.
-
-    ``claims_dir(global_claims_root())`` is ``~/.fno/claims`` by default,
-    a sibling of the global ``~/.fno/graph.json``. Honors
-    ``$FNO_CLAIMS_ROOT`` so tests (and any path-config override) can
-    redirect it; falls back to the user's home directory.
-    """
-    override = os.environ.get(CLAIMS_ROOT_ENV)
-    return Path(override) if override else Path.home()
-
-
 def global_claims_dir() -> Path:
     """The GLOBAL claims directory itself (``~/.fno/claims`` by default).
 
@@ -104,29 +82,8 @@ def global_claims_dir() -> Path:
 # crates/fno-agents/src/claims_root.rs; `fno-agents claim root <key>` is the
 # read for Python callers that need the path - `fno.claims.core.native_claims_root`).
 # The Python resolver and its prefix list are deleted (the port-owed dual).
-
-
-def claims_dir(root: Path | None = None) -> Path:
-    """Return the claims directory under the given root.
-
-    Cross-worktree coordination state. Resolution order for the base dir:
-
-      1. explicit ``root`` argument (per-root claims, e.g. walker singleton),
-      2. ``$FNO_CLAIMS_ROOT`` env var (global node claims),
-      3. the repo's space (keyed on the canonical root), so claims from every
-         worktree land in one directory and no claims dir lives in a checkout.
-    """
-    if root is not None:
-        base: Path = root
-    else:
-        override = os.environ.get(CLAIMS_ROOT_ENV)
-        if override:
-            return Path(override) / CLAIMS_DIRNAME
-        from fno.paths import space_dir
-
-        # fno-owned state: <space>/claims directly, no nested .fno segment.
-        return space_dir() / "claims"
-    return base / CLAIMS_DIRNAME
+# `global_claims_root` and `claims_dir` moved to :mod:`fno.rust_binary` and are
+# re-exported there from this module's import block.
 
 
 def dedup_claims_roots(roots: list[Path | None]) -> list[tuple[Path | None, Path]]:

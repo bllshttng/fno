@@ -11,15 +11,11 @@ from typing import Any, Sequence
 import psutil
 
 from fno.rust_binary import resolve_binary
+from fno.rust_binary import (  # noqa: F401 - re-exported import sites
+    ClaimVerdictError,
+    ClaimVerdictUnavailable,
+)
 from .io import ClaimGoneAway, claim_path, claims_dir, read_claim_file
-
-
-class ClaimVerdictUnavailable(RuntimeError):
-    """The native claim decision could not be reached."""
-
-
-class ClaimVerdictError(RuntimeError):
-    """The native claim decision returned an invalid or failed response."""
 
 
 class ClaimSweepOmission(ClaimVerdictError):
@@ -27,7 +23,9 @@ class ClaimSweepOmission(ClaimVerdictError):
 
     Raised rather than the bare ClaimVerdictError so a racer whose directory
     snapshot straddled another worker's archive-and-recreate can be told
-    apart from a genuinely failed sweep and simply re-classify.
+    apart from a genuinely failed sweep and simply re-classify. The base
+    classes are the seam module's, so callers catching either name see every
+    native claim failure.
     """
 
 

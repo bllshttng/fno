@@ -15,80 +15,33 @@ Rust owns claim persistence and audit receipts in graph.db. Python is a transpor
 
 from __future__ import annotations
 
-import os
-from subprocess import PIPE as _SUBPROCESS_PIPE
-from subprocess import Popen as _SubprocessPopen
 from pathlib import Path
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, Callable, Optional
 
-from urllib.parse import quote as _url_quote
-
+from fno.rust_binary import (
+    CLAIM_UNAVAILABLE,
+    ClaimContended,
+    ClaimHeldByOther,
+    ClaimValidationError,
+    ClaimVerdictError,
+    ClaimVerdictUnavailable,
+    ForceReleaseOutcome,
+    HolderMismatch,
+    _configured_claim_root,
+    _validate_inputs,
+    claim_op as _native_claim,
+    claim_status_payload,
+    native_acquire,
+    native_force_release,
+    native_release,
+    native_root_flags as _native_root_flags,
+)
 from .io import (ClaimAlreadyHeld, ClaimCorrupted, ClaimGoneAway, claim_path)
 from .verdict import (
     ClaimSweepOmission,
-    ClaimVerdictError,
-    ClaimVerdictUnavailable,
     claim_verdicts,
 )
 from .types import (MAX_ENCODED_FILENAME_BYTES, MAX_KEY_LENGTH, MAX_TTL_MS, MIN_TTL_MS, Claim, ClaimState)
-
-
-class ClaimHeldByOther(Exception):
-    """A live claim is held by a different holder."""
-
-    def __init__(self, holder: str, pid: Optional[int], host: str, key: str) -> None:
-        self.holder = holder
-        self.pid = pid
-        self.host = host
-        self.key = key
-        super().__init__(f"claim {key!r} held by {holder} (pid={pid}, host={host})")
-
-
-class HolderMismatch(Exception):
-    """release/refresh called with a different holder than the existing claim."""
-
-    def __init__(self, expected: str, actual: str, key: str) -> None:
-        self.expected = expected
-        self.actual = actual
-        self.key = key
-        super().__init__(f"claim {key!r}: holder mismatch (expected {expected!r}, got {actual!r})")
-
-
-class ClaimValidationError(ValueError):
-    """Inputs to a verb failed validation (ttl out of range, key too long, ...)."""
-
-
-class ClaimContended(Exception):
-    """acquire_claim/refresh_claim gave up after the native retry budget
-    contention retries on the same key's recovery mutex.
-
-    A distinct type from ClaimHeldByOther (a live claim is held by someone
-    else) even though a caller usually treats both the same way ("can't have
-    this one right now, retry later") - the recovery mutex being contended
-    says nothing about who, if anyone, ends up holding the claim. Callers
-    that only catch this narrow type cannot accidentally reclassify an
-    unrelated RuntimeError raised deeper in the call stack (pydantic,
-    resolve_self_identity, serialize_claim, ...) as contention.
-
-    Callers of acquire_claim/refresh_claim should catch this ALONGSIDE
-    ClaimHeldByOther, not instead of it - an except clause naming only one of
-    the two lets the other escape uncaught.
-    """
-
-
-# Every acquire_claim/refresh_claim caller that treats "someone else has this
-# right now" and "the recovery mutex is too busy to tell" the same way
-# ("can't have this one right now, retry/skip") should catch this tuple
-# instead of hand-rolling `except (ClaimHeldByOther, ClaimContended):` plus a
-# restated comment at each site. A caller that needs to read `.holder`/`.pid`/
-# `.host` (ClaimHeldByOther-only attributes) still needs its own separate
-# `except ClaimHeldByOther as exc:` block ahead of this one.
-CLAIM_UNAVAILABLE = (
-    ClaimHeldByOther,
-    ClaimContended,
-    ClaimVerdictError,
-    ClaimVerdictUnavailable,
-)
 
 
 class RebindRefused(Exception):
@@ -140,40 +93,6 @@ __all__ = [
     "refresh_claim",
     "release_claim",
 ]
-
-
-def _validate_inputs(
-    key: str,
-    holder: str,
-    ttl_ms: Optional[int],
-    *,
-    pid: Optional[int] = None,
-    pid_unavailable: bool = False,
-) -> None:
-    if not key:
-        raise ClaimValidationError("key must be non-empty")
-    if len(key) > MAX_KEY_LENGTH:
-        raise ClaimValidationError(f"key length {len(key)} exceeds MAX_KEY_LENGTH={MAX_KEY_LENGTH}")
-    # Raw length passing MAX_KEY_LENGTH does not guarantee the encoded
-    # filename fits the filesystem's 255-byte name limit. Check the
-    # URL-encoded form explicitly: keys with many reserved characters
-    # (slashes, colons) expand up to 3x.
-    encoded_len = len(_url_quote(key, safe="").encode("utf-8"))
-    if encoded_len > MAX_ENCODED_FILENAME_BYTES:
-        raise ClaimValidationError(
-            f"URL-encoded key length {encoded_len} exceeds "
-            f"MAX_ENCODED_FILENAME_BYTES={MAX_ENCODED_FILENAME_BYTES}"
-        )
-    if not holder:
-        raise ClaimValidationError("holder must be non-empty")
-    if pid_unavailable and ttl_ms is None:
-        raise ClaimValidationError("pid_unavailable requires a TTL claim")
-    if pid_unavailable and pid is not None:
-        raise ClaimValidationError("--pid and --pid-unavailable are mutually exclusive")
-    if pid is not None and pid <= 0:
-        raise ClaimValidationError("pid must be positive")
-    if ttl_ms is not None and not (MIN_TTL_MS <= ttl_ms <= MAX_TTL_MS):
-        raise ClaimValidationError(f"ttl_ms={ttl_ms} out of range [{MIN_TTL_MS}, {MAX_TTL_MS}]")
 
 
 def compare_and_rebind(
@@ -231,7 +150,7 @@ def compare_and_rebind(
 #: bounded to it, and before this change that same window carried NO claim at
 #: all. Closing it properly needs a secret the worker alone holds, which is its
 #: own change.
-HANDOVER_HOLDER_PREFIX = "spawn-handover:"
+from fno.rust_binary import HANDOVER_HOLDER_PREFIX  # re-export; defined beside the claim transport
 
 #: The requeue pseudo-holder (`backlog/requeue`): the session that takes the
 #: node, not an agent. `holder_agent_name` is the one resolver.
@@ -313,14 +232,6 @@ def _existing_is_live(existing: Claim, *, root: Optional[Path] = None) -> bool:
     return _claim_state(existing, root=root) in (ClaimState.LIVE, ClaimState.SUSPECT)
 
 
-class ForceReleaseOutcome(NamedTuple):
-    """What a force-release found at the path; archived=False means nothing was there."""
-
-    path: Path
-    archived: bool
-    previous_holder: Optional[str]
-
-
 def sweep_verdict(
     claim: Claim,
     *,
@@ -388,65 +299,11 @@ def native_claims_root(key: str) -> Optional[Path]:
     return Path(str(root)) if root else None
 
 
-def _native_claim(operation: str, key: str, flags: list[str]) -> dict[str, Any]:
-    """Run one native claim operation and decode its JSON reply."""
-    import json
-    from fno.rust_binary import resolve_binary
-    binary = resolve_binary()
-    if binary is None:
-        raise ClaimVerdictUnavailable(
-            "fno-agents claim unavailable: set FNO_AGENTS_BIN or reinstall fno"
-        )
-    command = [str(binary), "claim", operation]
-    # The root op's key IS the question, and an empty key is a legal input
-    # (a colon-less key routes repo-local); list/reap pass key="" to mean no
-    # key at all, so the falsy skip stays for them.
-    if key or operation == "root":
-        command.append(key)
-    command.extend(flags)
-    command.append("--json")
-    try:
-        result = _SubprocessPopen(command, stdout=_SUBPROCESS_PIPE,
-                                  stderr=_SUBPROCESS_PIPE, text=True)
-        stdout, stderr = result.communicate()
-    except OSError as exc:
-        raise ClaimVerdictUnavailable(f"fno-agents claim could not run: {exc}") from exc
-    try:
-        payload = json.loads(stdout) if stdout.strip() else {}
-    except json.JSONDecodeError as exc:
-        raise ClaimVerdictError(f"fno-agents claim returned invalid JSON: {exc}") from exc
-    if result.returncode == 1 and payload.get("outcome") == "held_by_other":
-        raise ClaimHeldByOther(
-            str(payload.get("holder") or "unknown"),
-            payload.get("pid"),
-            str(payload.get("host") or "unknown"),
-            key,
-        )
-    # A corrupted row is an answer, not a failure: status prints its verdict
-    # and exits 2 so shell callers notice.
-    if operation == "status" and isinstance(payload, dict) and payload.get("state") == "corrupted":
-        return payload
-    if result.returncode != 0:
-        detail = stderr.strip() or stdout.strip() or f"exit {result.returncode}"
-        raise ClaimVerdictError(f"fno-agents claim {operation} failed: {detail}")
-    if isinstance(payload, list) and operation == "list":
-        return {"rows": payload}
-    if not isinstance(payload, dict):
-        raise ClaimVerdictError("fno-agents claim returned a non-object JSON value")
-    return payload
-def _native_root_flags(root: Optional[Path]) -> list[str]:
-    return ["--root", str(root)] if root is not None else []
-
 def _native_claim_model(payload: dict[str, Any]) -> Claim:
     body = payload.get("claim", payload)
     if not isinstance(body, dict):
         raise ClaimVerdictError("fno-agents claim returned no claim object")
     return Claim.model_validate(body)
-
-
-def _configured_claim_root() -> Optional[Path]:
-    value = os.environ.get("FNO_CLAIMS_ROOT", "").strip()
-    return Path(value) if value else None
 
 
 def acquire_claim(
@@ -466,26 +323,15 @@ def acquire_claim(
     _attempt: int = 0,
 ) -> Claim:
     del _attempt
-    _validate_inputs(key, holder, ttl_ms, pid=pid, pid_unavailable=pid_unavailable)
-    native_root = root or _configured_claim_root()
-    flags = ["--holder", holder]
-    if ttl_ms is not None:
-        flags.extend(("--ttl-ms", str(ttl_ms)))
-    if reason is not None:
-        flags.extend(("--reason", reason))
-    if metadata is not None:
-        import json
-
-        flags.extend(("--metadata", json.dumps(metadata, separators=(",", ":"))))
-    if not pid_unavailable:
-        flags.extend(("--pid", str(pid if pid is not None else os.getpid())))
-    if pid_unavailable:
-        flags.append("--pid-unavailable")
-    for flag,value in [("--host",host),("--harness",harness),("--pid-provenance",pid_provenance),("--session-id",harness_session_id)]:
-        if value is not None:
-            flags.extend((flag,str(value)))
-    flags.extend(_native_root_flags(native_root))
-    return _native_claim_model(_native_claim("acquire", key, flags))
+    return _native_claim_model(
+        native_acquire(
+            key, holder,
+            reason=reason, ttl_ms=ttl_ms, metadata=metadata, pid=pid,
+            pid_unavailable=pid_unavailable, host=host, harness=harness,
+            pid_provenance=pid_provenance, harness_session_id=harness_session_id,
+            root=root,
+        )
+    )
 
 
 def release_claim(
@@ -495,23 +341,8 @@ def release_claim(
     strict: bool = False,
     root: Optional[Path] = None,
 ) -> Optional[Claim]:
-    if not key or not holder:
-        raise ClaimValidationError("key and holder must be non-empty")
-    native_root = root or _configured_claim_root()
-    prior_payload = _native_claim("status", key, _native_root_flags(native_root)) if strict else {}
-    prior = None
-    if prior_payload.get("state") not in {None, "free"} and prior_payload.get("holder"):
-        prior = Claim.model_validate(prior_payload)
-        if prior.holder != holder and strict:
-            raise HolderMismatch(holder, prior.holder, key)
-    # --with-claim: the wave-2 leaf port moved the release surface into
-    # claim_cli; the operator --json receipt is the frozen two-field shape,
-    # and the engine leg asks for the removed record so this parse is
-    # unchanged.
-    receipt = _native_claim(
-        "release", key, ["--holder", holder, "--with-claim", *_native_root_flags(native_root)]
-    )
-    return _native_claim_model(receipt) if receipt.get("released") is True else None
+    receipt = native_release(key, holder, strict=strict, root=root)
+    return _native_claim_model(receipt) if receipt is not None else None
 
 
 def refresh_claim(
@@ -552,30 +383,8 @@ def refresh_claim(
     return _native_claim_model(payload)
 
 
-def _unrouted_key_verdict(key: str) -> Optional[dict[str, Any]]:
-    """A bare well-formed node id names no store, and ``free`` there reads as
-    safe-to-dispatch. Both legs answer the same unknown."""
-    if not key or ":" in key:
-        return None
-    from fno.graph._constants import is_wellformed_node_id
-
-    if not is_wellformed_node_id(key):
-        return None
-    return {
-        "key": key,
-        "state": "unknown",
-        "basis": "key-unrouted",
-        "detail": f"{key!r} has no claim prefix; node claims are keyed node:{key}",
-    }
-
-
 def claim_status(key: str, *, root: Optional[Path] = None) -> dict[str, Any]:
-    unrouted = _unrouted_key_verdict(key)
-    if unrouted is not None:
-        return unrouted
-    if not key:
-        raise ClaimValidationError("key must be non-empty")
-    return _native_claim("status", key, _native_root_flags(root or _configured_claim_root()))
+    return claim_status_payload(key, root=root)
 
 
 def list_claims(
@@ -621,22 +430,9 @@ def force_release_claim(
     holding_recovery_lock: bool = False,
     expected_claim: Optional[Claim] = None,
 ) -> ForceReleaseOutcome:
-    if not key:
-        raise ClaimValidationError("key must be non-empty")
-    if not reason:
-        raise ClaimValidationError("reason must be non-empty for force-release")
-    flags = ["--reason", reason]
-    if holding_recovery_lock:
-        flags.append("--holding-recovery-lock")
-    if expected_claim is not None:
-        import json
-        flags.extend(("--expected-claim",json.dumps(expected_claim.model_dump())))
-    payload = _native_claim(
-        "force-release", key,
-        [*_native_root_flags(root or _configured_claim_root()), *flags],
-    )
-    return ForceReleaseOutcome(
-        path=Path(str(payload.get("path") or "")),
-        archived=bool(payload.get("archived")),
-        previous_holder=payload.get("previous_holder"),
+    return native_force_release(
+        key, reason,
+        root=root,
+        holding_recovery_lock=holding_recovery_lock,
+        expected_claim=expected_claim.model_dump() if expected_claim is not None else None,
     )

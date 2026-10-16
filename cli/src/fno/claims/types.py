@@ -10,53 +10,26 @@ ClaimState is the four-way classification used by status/list verbs.
 from __future__ import annotations
 
 import time
-from enum import Enum
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from fno.rust_binary import (
+    MAX_ENCODED_FILENAME_BYTES,
+    MAX_KEY_LENGTH,
+    MAX_TTL_MS,
+    MIN_TTL_MS,
+    ClaimState,
+)
 
 SCHEMA_VERSION = 1
 PID_UNAVAILABLE_SCHEMA_VERSION = 2
 MAX_SUPPORTED_SCHEMA_VERSION = PID_UNAVAILABLE_SCHEMA_VERSION
 
-# Raw key cap. The on-disk filename is `quote(key, safe="") + ".lock"`,
-# which can expand non-ASCII / reserved chars up to ~3x. We validate
-# the encoded filename length separately at acquire-time against
-# MAX_ENCODED_FILENAME_BYTES, so MAX_KEY_LENGTH only needs to keep raw
-# keys human-readable and prevent obvious denial-of-service strings.
-MAX_KEY_LENGTH = 256
-
-# Filesystem hard cap. ext4, HFS+, APFS all have 255-byte filename limits.
-# acquire_claim rejects any key that would encode past this bound.
-MAX_ENCODED_FILENAME_BYTES = 240  # 240 + ".lock" suffix = 245 bytes
-MIN_TTL_MS = 60_000        # 1 minute
-MAX_TTL_MS = 86_400_000    # 24 hours
-
 
 def now_ms() -> int:
     """Return current UTC time as epoch milliseconds."""
     return int(time.time() * 1000)
-
-
-class ClaimState(str, Enum):
-    """Classification of a key's current state.
-
-    - free: no claim file exists
-    - live: claim exists and holder process is verifiably alive
-    - suspect: TTL unexpired but holder not provably alive (dead/replaced pid).
-      The respawned-worker case: TTL still protects the slot, so acquire/
-      dispatch treat it like `live` (never steal); only TTL expiry (-> stale)
-      frees it.
-    - stale: claim exists but holder is dead or expired (recoverable)
-    - corrupted: claim file present but cannot be parsed
-    """
-
-    FREE = "free"
-    LIVE = "live"
-    SUSPECT = "suspect"
-    STALE = "stale"
-    CORRUPTED = "corrupted"
 
 
 class Claim(BaseModel):
