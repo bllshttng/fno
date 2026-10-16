@@ -68,6 +68,14 @@ struct Ledger {
     /// 0 means "no half-open probe yet"; the first probe during a backoff
     /// always passes so recovery gets noticed instead of waited out.
     last_half_open_ms: i64,
+    /// GitHub's own account-wide core reading: -1 unknown, 0 exhausted.
+    /// Writers pass what the conditional door, the classify probe or the
+    /// loop gate observed; a later reset replaces the stored value.
+    core_remaining: i64,
+    /// The epoch ms the stored reading's bucket resets at; 0 unknown.
+    core_reset_ms: i64,
+    /// When the stored reading was observed; 0 never.
+    core_seen_ms: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +95,12 @@ pub struct Snapshot {
     pub cap: u32,
     pub backoff_remaining_s: i64,
     pub ledger: LedgerState,
+    /// GitHub's account-wide core reading: -1 unknown.
+    pub core_remaining: i64,
+    /// Seconds until the stored core reading resets; 0 when unknown or past.
+    pub core_reset_in_s: i64,
+    /// The active reserve; 0 disables the reserve refusals.
+    pub core_reserve: u32,
 }
 
 pub fn ledger_path() -> PathBuf {
@@ -338,6 +352,12 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
         })
         .unwrap_or_default();
     let num = |key: &str| v.get(key).and_then(Value::as_i64).unwrap_or(0);
+    // Absent core fields read as unknown (-1/0/0): an older ledger written
+    // by a deployed fno-agents without this change admits as before.
+    let core_remaining = v
+        .get("core_remaining")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
     (
         Ledger {
             stamps,
@@ -345,6 +365,9 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
             backoff_step: num("backoff_step"),
             last_refusal_ms: num("last_refusal_ms"),
             last_half_open_ms: num("last_half_open_ms"),
+            core_remaining,
+            core_reset_ms: num("core_reset_ms"),
+            core_seen_ms: num("core_seen_ms"),
         },
         LedgerState::Ok,
     )
@@ -359,6 +382,9 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
         "backoff_step": out.backoff_step,
         "last_refusal_ms": out.last_refusal_ms,
         "last_half_open_ms": out.last_half_open_ms,
+        "core_remaining": out.core_remaining,
+        "core_reset_ms": out.core_reset_ms,
+        "core_seen_ms": out.core_seen_ms,
     });
     let dir = path
         .parent()
@@ -369,12 +395,21 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))
 }
 
-fn refusal_line(verdict: &Verdict) -> String {
+fn refusal_line(verdict: &Verdict, core_left: i64) -> String {
     // "rate limit" keeps both existing classifiers (_rest.py and
     // stderr_smells_rate_limit) reading a local refusal as secondary, so
     // every current caller backs off without new handling. "HTTP 403" must
     // stay out: it is the marker _quota.record_refusal keys on, and a local
-    // refusal must never be recorded as GitHub's.
+    // conditional refusal must never be recorded as GitHub's.
+    if matches!(verdict.cause, Some("core") | Some("core-reserve")) {
+        return format!(
+            "gh budget: GitHub core rate limit held locally ({cause}: {core_left} left, \
+             resets in {retry}s); this command did not reach GitHub. Retry after {retry}s. \
+             Ledger: fno-agents fleet-incident gh-budget status",
+            cause = verdict.cause.unwrap_or("core"),
+            retry = verdict.retry_after_s,
+        );
+    }
     let cause = verdict.cause.unwrap_or("budget");
     format!(
         "gh budget: fleet GitHub rate limit held locally ({cause}: {}/{} points in 60s | \
@@ -408,6 +443,36 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     // The shared hold rides only the REAL ledger: tests stage temp paths,
     // and a test's world must not read (or inherit) the dev machine's fleet
     // hold.
+    let (bucket, _) = crate::gh_spend::bucket_for(argv);
+    if bucket == crate::gh_spend::Bucket::Core
+        && now < ledger.core_reset_ms
+        && ledger.core_remaining >= 0
+    {
+        let reserve = core_reserve() as i64;
+        let retry_after_s = ((ledger.core_reset_ms - now) / 1000).max(1);
+        let exhausted = ledger.core_remaining == 0;
+        // The reserve stands down only the recurring pollers, so the last
+        // requests of the bucket land on merges and pushes, never on a
+        // watch loop.
+        let reserved = reserve > 0
+            && ledger.core_remaining <= reserve
+            && crate::gh_spend::is_poll_class(&crate::gh_spend::caller_label());
+        if exhausted || reserved {
+            let mut verdict = Verdict {
+                admitted: false,
+                cause: Some(if exhausted { "core" } else { "core-reserve" }),
+                retry_after_s,
+                points_60s: window_points(&ledger, now),
+                cap,
+                ledger: state,
+                refusal: None,
+            };
+            verdict.refusal = Some(refusal_line(&verdict, ledger.core_remaining));
+            crate::gh_spend::journal_verdict(path, argv, now, &verdict);
+            return verdict;
+        }
+    }
+
     let shared_until = if path == ledger_path().as_path() {
         shared_hold_until(now)
     } else {
@@ -445,7 +510,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             ledger: state,
             refusal: None,
         };
-        verdict.refusal = Some(refusal_line(&verdict));
+        verdict.refusal = Some(refusal_line(&verdict, -1));
         crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
@@ -463,7 +528,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
             ledger: state,
             refusal: None,
         };
-        verdict.refusal = Some(refusal_line(&verdict));
+        verdict.refusal = Some(refusal_line(&verdict, -1));
         crate::gh_spend::journal_verdict(path, argv, now, &verdict);
         return verdict;
     }
@@ -645,6 +710,69 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// The reserve before exhaustion that stands down only the pollers: 0
+/// disables the reserve refusals; exhaustion (remaining == 0) refuses
+/// regardless of the reserve.
+pub(crate) fn core_reserve() -> u32 {
+    std::env::var("FNO_GH_CORE_RESERVE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(500)
+}
+
+/// One core reading lands in the ledger under the same flock, read-modify
+/// write: it writes when the reading is newer than core_seen_ms, and
+/// lowers core_remaining only within the same core_reset_ms (a later reset
+/// replaces the bucket; an older one is a stale window, dropped). A fresh
+/// reading (under 60 s old, same reset, both values above twice the
+/// reserve) skips the write, so the write rate stays flat while the
+/// bucket is healthy.
+pub(crate) fn record_core_at(path: &Path, remaining: i64, reset_epoch_s: i64, now: i64) {
+    let _lock = FileLock::try_acquire(&lock_path(path));
+    let (mut ledger, _) = read_ledger(path);
+    let reset_ms = reset_epoch_s * 1000;
+    if ledger.core_seen_ms > 0
+        && now - ledger.core_seen_ms < 60_000
+        && ledger.core_reset_ms == reset_ms
+        && ledger.core_remaining > 2 * core_reserve() as i64
+        && remaining > 2 * core_reserve() as i64
+    {
+        return;
+    }
+    if ledger.core_reset_ms == 0 || reset_ms > ledger.core_reset_ms {
+        // A later reset replaces the stored bucket wholesale.
+        ledger.core_remaining = remaining;
+        ledger.core_reset_ms = reset_ms;
+        ledger.core_seen_ms = now;
+    } else if reset_ms == ledger.core_reset_ms && now > ledger.core_seen_ms {
+        ledger.core_remaining = if ledger.core_remaining < 0 {
+            remaining
+        } else {
+            ledger.core_remaining.min(remaining)
+        };
+        ledger.core_seen_ms = now;
+    } else {
+        // An older reset: a stale window's reading, dropped.
+        return;
+    }
+    write_ledger(path, &ledger, now).ok();
+}
+
+/// The one core-observation entry the three writers call: it resolves the
+/// REAL ledger and no-ops under a unit-test build (a stubbed probe's core-0
+/// reading must never land in the operator's live ledger). Opt-in for a
+/// test that wants the entry live: FNO_GH_BUDGET_TEST_ARMED.
+pub(crate) fn record_core_observation(remaining: i64, reset_epoch_s: i64) {
+    if !core_recording_armed() {
+        return;
+    }
+    record_core_at(&ledger_path(), remaining, reset_epoch_s, now_ms());
+}
+
+pub(crate) fn core_recording_armed() -> bool {
+    !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
+}
+
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
@@ -661,6 +789,13 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         cap: cap_from_env(),
         backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
+        core_remaining: ledger.core_remaining,
+        core_reset_in_s: if ledger.core_reset_ms > now {
+            (ledger.core_reset_ms - now) / 1000
+        } else {
+            0
+        },
+        core_reserve: core_reserve(),
     }
 }
 
@@ -723,6 +858,9 @@ fn print_status() {
             "cap": s.cap,
             "backoff_remaining_s": s.backoff_remaining_s,
             "ledger": ledger_word(s.ledger),
+            "core_remaining": s.core_remaining,
+            "core_reset_in_s": s.core_reset_in_s,
+            "core_reserve": s.core_reserve,
         })
     );
 }
@@ -998,6 +1136,51 @@ mod tests {
         assert!(admit_spawn_at(&path, now, 450, git, &["status".to_string()]).is_none());
         assert!(admit_spawn_at(&path, now, 450, gh, &["--version".to_string()]).is_none());
         assert_eq!(std::fs::read(&path).unwrap(), before, "no stamp for either");
+    }
+
+    #[test]
+    fn core_gate_refuses_at_zero_stands_down_pollers_and_never_outlives_its_reset() {
+        // AC3-HP: an exhausted bucket refuses the core read with the
+        // reset-shaped retry, never the GraphQL read.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        record_core_at(&path, 0, now / 1000 + 600, now);
+        let core_read = argv(&["api", "repos/o/r/pulls/1"]);
+        let v = admit(&path, &core_read, now, 450);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("core"));
+        assert!((v.retry_after_s - 600).abs() <= 1);
+        let graphql = argv(&["api", "graphql", "-f", "query=query { x }"]);
+        let v = admit(&path, &graphql, now, 450);
+        assert!(v.admitted, "GraphQL is a different bucket: {v:?}");
+
+        // AC3-HP, the reserve: remaining 300 against the default 500
+        // reserve refuses the poller and admits the merge. FNO_GH_CALLER
+        // pins the label per call, so the test serializes on the env lock
+        // and sets it around each admit.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let path2 = tmp.path().join("budget2.json");
+        record_core_at(&path2, 300, now / 1000 + 600, now);
+        let wait_read = argv(&["api", "repos/o/r/pulls/7/reviews?per_page=100"]);
+        std::env::set_var("FNO_GH_CALLER", "fno do pr wait");
+        let v = admit(&path2, &wait_read, now, 450);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("core-reserve"));
+        std::env::set_var("FNO_GH_CALLER", "fno do pr merge");
+        let v = admit(&path2, &wait_read, now, 450);
+        assert!(v.admitted, "the merge keeps the bucket's tail: {v:?}");
+        std::env::remove_var("FNO_GH_CALLER");
+        drop(_env);
+
+        // AC3-EDGE: an exhausted reading whose reset has passed gates
+        // nothing - an old exhaustion never outlives its reset.
+        let path3 = tmp.path().join("budget3.json");
+        record_core_at(&path3, 0, now / 1000 - 100, now);
+        let v = admit(&path3, &core_read, now, 450);
+        assert!(v.admitted, "a passed reset ignores core state: {v:?}");
     }
 
     // --- the guard against a new bare gh spawn ------------------------------

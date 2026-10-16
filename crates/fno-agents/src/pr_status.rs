@@ -279,16 +279,20 @@ retrying on a fixed interval sustains the refusal."
         // "API rate limit exceeded" with no "secondary" anywhere. The one
         // exempt probe asks the CORE bucket - exhausted means core, healthy
         // or unreadable means secondary (back off rather than trust wording).
-        let remaining = probe
+        let probe_read = probe
             .run_gh(cwd, &["api".to_string(), "rate_limit".to_string()])
             .ok()
             .filter(|(ok, _, _)| *ok)
-            .and_then(|(_, stdout, _)| serde_json::from_str::<Value>(&stdout).ok())
-            .and_then(|v| {
-                v.pointer("/resources/core/remaining")
-                    .and_then(Value::as_i64)
-            });
+            .and_then(|(_, stdout, _)| serde_json::from_str::<Value>(&stdout).ok());
+        let remaining = probe_read.as_ref().and_then(|v| {
+            v.pointer("/resources/core/remaining")
+                .and_then(Value::as_i64)
+        });
+        let core_reset = probe_read
+            .as_ref()
+            .and_then(|v| v.pointer("/resources/core/reset").and_then(Value::as_i64));
         if remaining == Some(0) {
+            crate::gh_budget::record_core_observation(0, core_reset.unwrap_or(0));
             return RestReason::new(
                 format!(
                     "{base} | this is the CORE REST quota (the live exempt bucket reads 0 \
