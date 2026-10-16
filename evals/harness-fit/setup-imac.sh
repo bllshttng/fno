@@ -87,7 +87,9 @@ if grep -qs '^ZAI_API_KEY=.' "$ENV_FILE"; then ok "ZAI_API_KEY in $ENV_FILE (060
 echo "== fno and this branch's fno-agents (Run 1)"
 have fno || run uv tool install --compile-bytecode fno
 bin="$REPO/crates/fno-agents/target/release/fno-agents"
-[ -x "$bin" ] || run cargo build --release --manifest-path "$REPO/crates/fno-agents/Cargo.toml"
+# Rebuild on every setup run: a leftover release binary from an older branch
+# would stale-serve FNO_AGENTS_BIN and the observe door with it.
+run cargo build --release --manifest-path "$REPO/crates/fno-agents/Cargo.toml"
 if [ "$CHECK" = 0 ] && ! grep -q '^FNO_AGENTS_BIN=' "$ENV_FILE"; then printf 'FNO_AGENTS_BIN=%s\n' "$bin" >> "$ENV_FILE"; fi
 if [ -x "$bin" ]; then ok "fno-agents built at $bin"; else bad "fno-agents is not built"; fi
 
@@ -123,6 +125,35 @@ merge("~/.local/state/opencode/model.json",
 PY
 fi
 if [ -f "$WS/run1-config.toml" ]; then ok "run1-config.toml"; else bad "run1-config.toml is missing"; fi
+
+echo "== footnote binary (Run 1, Amendment 14)"
+# Pinned fnh sha; see manifest.json amendment_14. FNH_SHA overrides for a re-pin.
+FNH_SHA="${FNH_SHA:-c4655c3f9b93d88a58070bff1fd6203b2e08e0a0}"
+if [ "$CHECK" = 1 ]; then
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote at $WS/bin/footnote"; else bad "footnote is not installed at $WS/bin/footnote"; fi
+else
+  run cargo install --locked --git https://github.com/bllshttng/fnh --rev "$FNH_SHA" --root "$WS"
+  if [ -x "$WS/bin/footnote" ]; then ok "footnote built from bllshttng/fnh at $FNH_SHA"; else bad "footnote did not install at $WS/bin/footnote"; fi
+fi
+
+echo "== footnote binary for the Run 0 containers (linux/amd64, Amendment 14)"
+# A static musl build in an amd64 rust container, so any task image runs it.
+# footnote_agent.py goes into the workspace, where launch.py imports it.
+LINUX_BIN="$WS/bin/linux-amd64/footnote"
+if [ "$CHECK" = 1 ]; then
+  if [ -x "$LINUX_BIN" ]; then ok "linux/amd64 footnote at $LINUX_BIN"; else bad "linux/amd64 footnote missing at $LINUX_BIN"; fi
+  if [ -f "$WS/footnote_agent.py" ]; then ok "footnote_agent.py in the workspace"; else bad "footnote_agent.py missing in $WS"; fi
+else
+  run mkdir -p "$WS/bin"
+  run rm -rf "$WS/bin/linux-amd64" "$WS/linux-amd64-root"
+  run docker run --rm --platform linux/amd64 -v "$WS:/ws" -e FNH_SHA="$FNH_SHA" rust:1-bookworm \
+    bash -c 'rustup target add x86_64-unknown-linux-musl && cargo install --locked --git https://github.com/bllshttng/fnh --rev "$FNH_SHA" --target x86_64-unknown-linux-musl --root /ws/linux-amd64-root'
+  run mv "$WS/linux-amd64-root/bin" "$WS/bin/linux-amd64"
+  run rm -rf "$WS/linux-amd64-root"
+  printf '%s\n' "$FNH_SHA" > "$LINUX_BIN.sha"
+  if [ -x "$LINUX_BIN" ]; then ok "linux/amd64 footnote built from bllshttng/fnh at $FNH_SHA"; else bad "the linux/amd64 footnote did not build"; fi
+  run cp "$HERE/run/footnote_agent.py" "$WS/footnote_agent.py"
+fi
 
 echo
 if [ "$fail" = 0 ]; then

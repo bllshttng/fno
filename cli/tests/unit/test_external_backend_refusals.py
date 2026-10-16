@@ -47,11 +47,16 @@ def test_every_live_verb_is_classified_exactly_once():
         tracker_owned += t
         footnote_owned += f
     # Positive controls - absence means the registry drifted and the census
-    # must be re-pinned, not silently passed.
+    # must be re-pinned, not silently passed. The tracker-owned control moved
+    # from `new` (now the native create door) to `contain`.
     labels = dict(_registry_labels())
-    assert getattr(labels["new"].callback, "_fno_tracker_owned", False)
+    assert getattr(labels["contain"].callback, "_fno_tracker_owned", False)
     assert getattr(labels["get"].callback, "_fno_footnote_owned", False)
-    assert tracker_owned > 10 and footnote_owned > 10
+    # Re-pinned when the batch family left the wheel for the native lane,
+    # again when capture's nine leaves followed it, again when decompose
+    # followed intake: seven tracker-owned verbs remain. The next wheel
+    # departure re-pins again.
+    assert tracker_owned >= 7 and footnote_owned > 7
 
 
 @pytest.mark.parametrize(

@@ -62,7 +62,7 @@ pub fn read_manifest(project_root: &Path) -> Option<BTreeMap<String, String>> {
 /// The session manifest path: the worktree slice of the space when that
 /// exists, else the pre-space checkout manifest (the Python read's exact
 /// order: space first when present, legacy fallback when not).
-fn manifest_path(project_root: &Path) -> Option<PathBuf> {
+pub(crate) fn manifest_path(project_root: &Path) -> Option<PathBuf> {
     let space = crate::paths::worktree_space_dir(project_root).join("target-state.md");
     if space.is_file() {
         return Some(space);

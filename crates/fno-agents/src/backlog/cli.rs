@@ -326,6 +326,29 @@ pub fn run(args: &[String]) -> i32 {
         "ready" => super::cutover::run_ready(resolved.tail),
         "remove" => super::cutover::run_remove(resolved.tail),
         "project-root" => super::cutover::run_project_root(resolved.tail),
+        // The finale arms (this PR): the remaining heavy verbs, served with
+        // no compat forward. The catalog-vs-arms gate (check-backlog-native
+        // check 2) derives the unclaimed set mechanically and fails the tree
+        // while any verb still rides the catch-all.
+        "new" => super::finale::run_new(resolved.tail),
+        // The epic status table: children, receipts, streaks, verify-merges,
+        // and the scope-growth metric over the archive-joined read.
+        "epic" => super::epic::run_epic(resolved.tail),
+        // The task grain: claim-gated status transitions over the rows the
+        // bound plan's strategy declares.
+        "task" => super::task::run_task(resolved.tail),
+        // The batch lane: flock'd per-domain state, the daemon's prepare and
+        // ship-closeable doors, and the one-PR ship orchestrator.
+        "batch" => super::batch::run_batch(resolved.tail),
+        "capture" => super::capture::run_capture(resolved.tail),
+        "intake" => super::intake::run_intake(resolved.tail),
+        "decompose" => super::decompose::run_decompose(resolved.tail),
+        "lanes" => super::finale::run_lanes(resolved.tail),
+        "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
+        "reprioritize" => super::finale::run_reprioritize(resolved.tail),
+        "discover" => super::finale::run_discover(resolved.tail),
+        "pick" => super::finale::run_pick(resolved.tail),
+        "requeue" => super::finale::run_requeue(resolved.tail),
         _ => forward_python(&resolved),
     }
 }
