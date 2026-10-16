@@ -84,7 +84,7 @@ fno mux pane ls                       # find the pane id
 fno mux serve --share --pane 3 --tunnel
 ```
 
-The share prints a join link. Send the whole link to the viewer. The secret is in the part after `#`, so it never goes into a request line or a proxy log. A link without that part opens nothing.
+The share prints a join link. Send the whole link to the viewer. The secret is in the part after `#`, so it never goes into a request line or a proxy log. A link without that part opens nothing. The page removes the secret from the address bar once it reads it, so a viewer who reloads the tab opens the join link again.
 
 The flags:
 
