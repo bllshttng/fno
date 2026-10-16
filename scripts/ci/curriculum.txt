@@ -60,7 +60,8 @@ backlog rank
 backlog roadmap
 backlog triage
 backlog advance
-backlog intake
+# backlog intake went native with its port (the wheel caller the sweep
+# counts is gone; the native verb is reached through the dispatcher door)
 # Track C, the mesh (L12-L14)
 # L12 worktrees
 worktree ensure

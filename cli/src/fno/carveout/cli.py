@@ -217,15 +217,28 @@ def list_carveouts(
 
     from fno.carveout.core import read_carveouts, resolve_carveout_root
 
-    reason = None
+    reason: "str | None" = None
     if pr_number is not None:
         from fno.graph._reconcile import resolve_current_repo_slug
-        from fno.ledger_join import resolve_pr_sessions
         from fno.paths import ledger_json
+        from fno.rust_binary import VerbUnavailable, verb_call
 
-        session_id, reason = resolve_pr_sessions(
-            ledger_json(), pr_number, resolve_current_repo_slug()
-        )
+        try:
+            out = verb_call(
+                ["pr-watch", "pr-sessions"],
+                {
+                    "ledger": str(ledger_json()),
+                    "pr": pr_number,
+                    "repo_slug": resolve_current_repo_slug(),
+                },
+            )
+            session_id = list(out.get("sessions") or [])
+            # The JSON contract is null-when-clean: an empty string reads as
+            # a reason, so an absent one must stay None.
+            got_reason = out.get("reason")
+            reason = None if got_reason is None else str(got_reason)
+        except VerbUnavailable as exc:
+            session_id, reason = [], f"ledger unreadable: {exc}"
 
     # Typer gives [] for an unset repeatable option; pass None so "no filter"
     # is distinct from "filter to the empty set".

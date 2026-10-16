@@ -1,0 +1,2 @@
+step=resolve status=ok detail=pr=42 source=caller
+step=mutex status=skipped detail=already-held by another runner

@@ -31,6 +31,51 @@ pub const KNOWN_TYPES: &[&str] = &[
     "terminal",
 ];
 
+/// The ignorable types the spec names: resume never needs them, so an older
+/// reader may skip them.
+pub const LOG_TYPES: &[&str] = &[
+    "heartbeat",
+    "hook_run",
+    "footnotes",
+    "footnotes_post",
+    "mcp_servers",
+    "child_session",
+];
+
+/// A writer appends a `heartbeat` this often for as long as it lives. A
+/// reader counts the session alive while the newest is under the stale bound.
+pub const HEARTBEAT_EVERY_SECS: u64 = 30;
+pub const HEARTBEAT_STALE_SECS: u64 = 90;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Heartbeat {
+    /// `working`, `waiting_permission` or `idle`.
+    pub state: String,
+    pub turn: u64,
+    pub spent_usd: f64,
+    pub wall_secs: u64,
+    pub pid: u32,
+}
+
+/// The end of one run. Its totals cover the whole session record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Terminal {
+    /// `done`, `budget`, `refused`, `interrupted` or `error`.
+    pub state: String,
+    pub reason: String,
+    pub turns: u64,
+    pub tool_calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// The newest record of `ty`.
+pub fn last_of<'a>(records: &'a [Value], ty: &str) -> Option<&'a Value> {
+    records.iter().rev().find(|r| r["type"] == ty)
+}
+
 /// The launch spec's version. The binary refuses any other, so a stale
 /// `footnote` beside a newer supervisor fails loudly instead of misreading.
 /// v2 adds `permission_mode`: a v1 binary must never run plan as default.
@@ -190,5 +235,44 @@ mod tests {
         );
         line(&mut f, 6, "future_thing", json!({}), false);
         assert!(read_records(&path).unwrap_err().contains("future_thing"));
+    }
+
+    /// The published JSON Schema names every record type a reader knows or
+    /// the spec lists as ignorable, and the lifecycle types match its fields.
+    #[test]
+    fn the_published_schema_matches_the_record_types() {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../../docs/architecture/footnote-records.schema.json"
+        ))
+        .unwrap();
+        let defs = schema["$defs"].as_object().unwrap();
+        for ty in KNOWN_TYPES.iter().chain(LOG_TYPES) {
+            assert!(defs.contains_key(*ty), "schema has no $defs.{ty}");
+        }
+        let records = vec![
+            json!({"type": "heartbeat", "data": {"state": "idle", "turn": 1, "spent_usd": 0.1, "wall_secs": 31, "pid": 9}}),
+            json!({"type": "heartbeat", "data": {"state": "working", "turn": 2, "spent_usd": 0.2, "wall_secs": 61, "pid": 9}}),
+            json!({"type": "terminal", "data": {"state": "done", "turns": 2, "cost_usd": 0.42}}),
+        ];
+        let data = |ty: &str| last_of(&records, ty).unwrap()["data"].clone();
+        let beat: Heartbeat = serde_json::from_value(data("heartbeat")).unwrap();
+        let end: Terminal = serde_json::from_value(data("terminal")).unwrap();
+        assert_eq!((beat.turn, end.cost_usd), (2, 0.42));
+        assert!(last_of(&records, "usage").is_none());
+        for (ty, sample) in [("heartbeat", json!(beat)), ("terminal", json!(end))] {
+            let data = &defs[ty]["properties"]["data"];
+            for key in sample.as_object().unwrap().keys() {
+                assert!(
+                    data["properties"].get(key).is_some(),
+                    "schema {ty} lacks {key}"
+                );
+            }
+            for key in data["required"].as_array().unwrap() {
+                assert!(
+                    sample.get(key.as_str().unwrap()).is_some(),
+                    "{ty} lacks {key}"
+                );
+            }
+        }
     }
 }

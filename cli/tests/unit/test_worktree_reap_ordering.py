@@ -7,67 +7,24 @@ sat green with `reviewed_count` 0 while the only copy of the attestation lived
 inside the worktree. Reaping those sessions destroys the only process able to
 satisfy its own PR's review gate.
 
-Inside the ritual the order already holds, and this file PINS it rather than
-rebuilding it: `run()` calls the legs in a fixed sequence with the retro at
-position 2 and both removal legs after it.
+Inside the ritual the order is pinned in Rust now
+(crates/fno-agents/src/post_merge/ritual.rs, `retro_precedes_every_removal_leg`):
+the ritual verb is native and its leg order moves with it.
 
-The gap is the OTHER path. `fno worktree cleanup --merged` knows nothing about a
-retro and neither does the daemon tick. A guard on one of N reachable paths is
-decorative, so the sweep's refusals are asserted here too.
+The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
+knows nothing about a retro and neither does the daemon tick. A guard on one of
+N reachable paths is decorative, so the sweep's refusals are asserted here.
 """
-import inspect
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
-
-from fno.pr import _ritual
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LIFECYCLE = REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh"
 
 
-# -- AC7-ORDER: the ritual's leg order is a contract, not a coincidence -------
-
-
-def _leg_order() -> list[str]:
-    """The leg names `run()` calls, in source order."""
-    src = inspect.getsource(_ritual.Ritual.run)
-    return re.findall(r"self\.(leg_\w+)\(\)", src)
-
-
-def test_retro_precedes_every_removal_leg() -> None:
-    order = _leg_order()
-
-    assert "leg_harvest" in order, "the retro leg must still be in run()"
-    retro = order.index("leg_harvest")
-    for removal in ("leg_archive", "leg_reap_rows"):
-        assert removal in order, f"{removal} must still be in run()"
-        assert order.index(removal) > retro, (
-            f"{removal} runs at {order.index(removal)}, retro at {retro}. "
-            "Reaping before the retro destroys the evidence the retro reads."
-        )
-
-
-def test_the_retro_leg_actually_runs_the_retro() -> None:
-    """Pin that `leg_harvest` is the retro, so a rename cannot hollow out the
-    ordering assertion above into a check on two arbitrary names."""
-    src = inspect.getsource(_ritual.Ritual.leg_harvest)
-
-    assert '"retro"' in src
-    assert '"run"' in src
-
-
-def test_archive_precedes_row_reap() -> None:
-    """Archive the worktree, THEN drop the row. The row is how the worktree is
-    found; dropping it first orphans the directory with nothing pointing at it."""
-    order = _leg_order()
-
-    assert order.index("leg_archive") < order.index("leg_reap_rows")
-
-
-# -- AC7-ERR / AC7-EDGE: the sweep path refuses the same cases ---------------
+# -- the sweep path refuses the same cases -----------------------------------
 
 
 def _lifecycle_source() -> str:

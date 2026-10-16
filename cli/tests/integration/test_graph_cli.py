@@ -150,6 +150,18 @@ def _native_verb(verb: str, *args: str) -> _NativeResult:
     return _NativeResult(code, out, err)
 
 
+def _native_verb_at(cwd, verb: str, *args: str) -> _NativeResult:
+    """The same door with a pinned child cwd (config candidates start at
+    cwd/.fno, so isolation from the runner's real config needs the pin)."""
+    from tests._native_door import run_native
+
+    argv = list(args)
+    if verb in ("add", "idea") and "--difficulty" not in argv:
+        argv.extend(["--difficulty", "medium"])
+    code, out, err = run_native("backlog", verb, *argv, cwd=cwd)
+    return _NativeResult(code, out, err)
+
+
 def _native_session(*args: str) -> _NativeResult:
     """The Rust-owned session lifecycle door, migrated out of the Python app."""
     from tests._native_door import run_native
@@ -559,12 +571,12 @@ class _SnapshotFakeTracker:
 
 @pytest.mark.usefixtures("native_backlog_door")
 def test_ac1_hp_graph_reprioritize(tmp_graph):
-    """AC1-HP: fno graph reprioritize changes priority."""
+    """AC1-HP: fno backlog reprioritize changes priority (the native arm)."""
     r = _native_verb("add", "ToRepri")
     node_id = json.loads(r.output)["id"]
 
-    r = _invoke("backlog", "reprioritize", node_id, "p1")
-    assert r.exit_code == 0
+    r = _native_verb("reprioritize", node_id, "p1")
+    assert r.exit_code == 0, r.err
 
     data = json.loads(_native_get(node_id))
     assert data["priority"] == "p1"
@@ -859,15 +871,15 @@ def test_priority_p0_requires_breaking_acknowledgment(tmp_graph):
 
 def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     """Every CLI birth path applies the p0 acknowledgment before mutation."""
-    refused = _invoke("backlog", "new", "Not actually broken", "--priority", "p0")
+    refused = _native_verb("new", "Not actually broken", "--priority", "p0")
     assert refused.exit_code != 0
-    assert "p0 blocks everything else, usually a bug" in refused.output
+    assert "p0 blocks everything else, usually a bug" in refused.output + refused.stderr
     assert _read_graph(tmp_graph) == []
 
-    accepted = _invoke(
-        "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything"
+    accepted = _native_verb(
+        "new", "Broken service", "--priority", "p0", "--blocks-everything"
     )
-    assert accepted.exit_code == 0, accepted.output
+    assert accepted.exit_code == 0, accepted.output + accepted.stderr
     assert _read_graph(tmp_graph)[0]["blocks_everything"] is True
 
 
@@ -1479,22 +1491,19 @@ def _settings_yaml_for_project(settings_path: Path, project: str, root: str) -> 
 
 def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
     """AC2: new --project <mapped> --unscoped -> cwd derived from work-map despite --unscoped."""
-    from unittest.mock import patch
-
     work_root = str(tmp_path / "new-root")
     settings_path = tmp_graph.parent / "settings.yaml"
     _settings_yaml_for_project(settings_path, "fno", work_root)
 
-    with patch(
-        "fno.graph._intake._settings_candidate_paths",
-        return_value=[settings_path],
-    ):
-        r = _invoke(
-            "backlog", "new", "New unscoped with explicit project",
-            "--project", "fno",
-            "--unscoped",
-            "--force-domain",
-        )
+    # cwd pins the child into the tmp dir so its config walk (cwd/.fno first)
+    # cannot pick up a runner's real work-map ahead of the fixture's.
+    r = _native_verb_at(
+        tmp_path,
+        "new", "New unscoped with explicit project",
+        "--project", "fno",
+        "--unscoped",
+        "--force-domain",
+    )
 
     assert r.exit_code == 0, r.output
     entries = _read_graph(tmp_graph)
@@ -1505,24 +1514,22 @@ def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
 
 def test_ac2_new_no_project_unchanged(tmp_graph, tmp_path):
     """AC2: new without --project keeps existing behavior (cwd from git root or None)."""
-    from unittest.mock import patch
-
     settings_path = tmp_graph.parent / "settings.yaml"
     _settings_yaml_for_project(settings_path, "fno", "/some/mapped/root")
 
-    with patch(
-        "fno.graph._intake._settings_candidate_paths",
-        return_value=[settings_path],
-    ), patch("fno.graph._intake.resolve_git_roots", return_value=("myrepo", "/git/root")):
-        r = _invoke(
-            "backlog", "new", "New without project flag",
-            "--force-domain",
-        )
+    # git-less tmp: the git-root derivation falls back to the cwd itself, and
+    # no work-map entry names tmp, so project stays unset.
+    r = _native_verb_at(
+        tmp_path,
+        "new", "New without project flag",
+        "--force-domain",
+    )
 
     assert r.exit_code == 0, r.output
     entries = _read_graph(tmp_graph)
     assert len(entries) == 1
-    assert entries[0]["cwd"] == "/git/root"
+    assert entries[0]["cwd"] == str(tmp_path)
+    assert entries[0]["project"] is None
 
 
 # --- US3: per-node dispatch verb + brief -----------------------------------

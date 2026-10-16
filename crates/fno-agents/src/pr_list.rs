@@ -295,10 +295,10 @@ pub(crate) fn origin_slug(cwd: &Path, git_ceiling: Option<&Path>) -> Result<Stri
         .ok_or_else(|| format!("origin is not a github remote: {}", redact_userinfo(&url)))
 }
 
-/// `owner/repo` from a GitHub remote URL (_ritual._parse_origin_slug):
-/// lowercase, strip scheme and `user@`, require host `github.com`, strip a
-/// trailing `/` and `.git`, and require exactly `owner/repo`.
-fn parse_origin_slug(url: &str) -> Option<String> {
+/// `owner/repo` from a GitHub remote URL (_parse_origin_slug): lowercase,
+/// strip scheme and `user@`, require host `github.com`, strip a trailing `/`
+/// and `.git`, and require exactly `owner/repo`.
+pub(crate) fn parse_origin_slug(url: &str) -> Option<String> {
     let re = regex::Regex::new(
         r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^/@]*@)?github\.com(?::[0-9]+)?[:/](.+)$",
     )
@@ -338,6 +338,41 @@ fn home_relative(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_slug_resolves_every_remote_form() {
+        // Every GitHub remote form (scp, https, ssh, git://, port, creds,
+        // case, trailing /) resolves to owner/repo.
+        let forms = [
+            "git@github.com:o/r.git",
+            "https://github.com/o/r",
+            "ssh://git@github.com/o/r.git",
+            "git://github.com/o/r",
+            "https://GitHub.com/O/R.git",
+            "ssh://git@github.com:22/o/r.git",
+            "https://user:tok@github.com/o/r.git",
+            "https://github.com/o/r.git/",
+        ];
+        for url in forms {
+            assert_eq!(parse_origin_slug(url).as_deref(), Some("o/r"), "url {url}");
+        }
+    }
+
+    #[test]
+    fn origin_slug_rejects_lookalike_hosts() {
+        // A lookalike domain or a github.com path segment yields no slug (a
+        // substring match would admit a foreign repo's node).
+        let look = [
+            "https://notgithub.com/o/r.git",
+            "https://gitlab.com/mirrors/github.com/o/r.git",
+            "/tmp/github.com/o/r.git",
+            "https://github.com.evil.test/o/r.git",
+            "git@gitlab.com:mirror/x.git",
+        ];
+        for url in look {
+            assert_eq!(parse_origin_slug(url), None, "url {url}");
+        }
+    }
 
     fn git_checkout(origin: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

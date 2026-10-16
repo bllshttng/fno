@@ -1,0 +1,1 @@
+step=config status=skipped detail=post_merge.enabled is false; ritual disabled

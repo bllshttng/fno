@@ -47,7 +47,26 @@ if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
   # Only the refusal codes stay canned - those tests assert the refusal
   # wiring, not the store.
   if [[ "${MOCK_ABI_ACQUIRE_RC:-0}" == "0" ]]; then
-    exec "${MOCK_ABI_FRONT:?no fno front}" "$@"
+    # The init script discards the front's stdout and sends stderr to
+    # .claim-err; a silent rc=1 keeps its real refusal on stdout, so this
+    # delegation records both streams for the failing assertion to print.
+    "${MOCK_ABI_FRONT:?no fno front}" "$@" > "$MOCK_ABI_LOG.front-out" 2> "$MOCK_ABI_LOG.front-err"
+    rc=$?
+    echo "FRONT_RC:$rc" >> "$MOCK_ABI_LOG"
+    # A silent front refusal is not decidable from its streams alone: record
+    # WHICH binaries answered, the FNO env they saw, and run the native
+    # directly on the same argv so a front-side death separates from a
+    # native-side one.
+    if [[ "$rc" != "0" ]]; then
+      echo "FRONT_BIN: $MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG"
+      ls -la "$MOCK_ABI_FRONT" >> "$MOCK_ABI_LOG" 2>&1
+      echo "NATIVE_BIN: $MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG"
+      ls -la "$MOCK_ABI_NATIVE" >> "$MOCK_ABI_LOG" 2>&1
+      env | grep -E "^(FNO_|HOME=|TARGET_|PYTHON)" | sort >> "$MOCK_ABI_LOG"
+      "${MOCK_ABI_NATIVE:?no native}" "$@" > "$MOCK_ABI_LOG.native-out" 2> "$MOCK_ABI_LOG.native-err"
+      echo "NATIVE_RC:$?" >> "$MOCK_ABI_LOG"
+    fi
+    exit "$rc"
   fi
   exit "$MOCK_ABI_ACQUIRE_RC"
 fi
@@ -116,7 +135,7 @@ def main() -> int:
     raw = sys.argv[1:]
     node_id = next((a for a in raw if not a.startswith("--") and a != "get"), None)
     field = sys.argv[sys.argv.index("--field") + 1] if "--field" in raw else None
-    path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "graph.json")
+    path = os.path.join(os.environ["MOCK_ABI_STATE_DIR"], "db", "graph.json")
     rows = _rows(path)
     node = next(
         (r for r in rows if isinstance(r, dict) and r.get("id") == node_id), None
@@ -141,8 +160,9 @@ if __name__ == "__main__":
 def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
+    (home / ".fno" / "db").mkdir(parents=True, exist_ok=True)
     seed_graph(
-        home / ".fno" / "graph.json",
+        home / ".fno" / "db" / "graph.json",
         [{"id": node_id, "title": "t", "status": "idea", "priority": "p2",
           "project": "fno", "plan_path": None}],
     )
@@ -202,6 +222,12 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
         "MOCK_ABI_FRONT": str(front),
         **stub_env,
     })
+    # The state-path stub owns FNO_AGENTS_BIN, and the ported claim leaf
+    # resolves that env FIRST, so the front's claim delegation would exec the
+    # stub and inherit its silent no-binary exit 1 (a smoke runner keeps no
+    # fno-agents on PATH). The stub's own contract answers this: other verbs
+    # delegate to the next real fno-agents on PATH, so give the walk one.
+    env["PATH"] = f"{bindir}:{native.parent}:{env['PATH']}"
     return repo, home, log, env
 
 
@@ -255,7 +281,36 @@ def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
     state = _state(repo)
     assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
 
-    assert f'target_claim_key: "node:{node_id}"' in state, state
+    # The state names only the blocked class; init also writes the acquire's
+    # stderr to .claim-err and its own stderr, and the refusal lives there.
+    # The mock's delegation records the front's stdout/stderr beside the log.
+    claim_err = repo.parent / "space" / ".claim-err"
+    err_text = claim_err.read_text() if claim_err.exists() else ""
+    front_out = Path(f"{log}.front-out")
+    front_err = Path(f"{log}.front-err")
+    front_text = ""
+    if front_out.exists() or front_err.exists():
+        front_text = (
+            f"--- front stdout ---\n{front_out.read_text() if front_out.exists() else ''}"
+            f"--- front stderr ---\n{front_err.read_text() if front_err.exists() else ''}"
+        )
+    native_out = Path(f"{log}.native-out")
+    native_err = Path(f"{log}.native-err")
+    native_text = ""
+    if native_out.exists() or native_err.exists():
+        native_text = (
+            f"--- native stdout ---\n{native_out.read_text() if native_out.exists() else ''}"
+            f"--- native stderr ---\n{native_err.read_text() if native_err.exists() else ''}"
+        )
+    home_walk = sorted(
+        str(p2.relative_to(home)) for p2 in home.rglob("*") if p2.is_file()
+    )
+    assert f'target_claim_key: "node:{node_id}"' in state, (
+        f"{state}\n--- init stderr ---\n{r.stderr}\n"
+        f"--- .claim-err ---\n{err_text}\n{front_text}{native_text}"
+        f"--- sandbox home files ---\n{chr(10).join(home_walk)}\n"
+        f"--- mock log ---\n{log.read_text() if log.exists() else '(absent)'}"
+    )
     assert "target_claim_holder:" in state
     assert 'target_claim_ttl: "2h"' in state
     assert not (repo / ".fno" / ".target-cancelled").exists()
@@ -351,7 +406,7 @@ def test_codex_thread_identity_aligns_manifest_graph_and_claim(
     # The store owns state; the json mirror can lag the last write.
     from fno.graph.store import read_graph_strict
 
-    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
+    graph = read_graph_strict(home / ".fno" / "db" / "graph.json")[0]
     acquire = next(
         line for line in log.read_text().splitlines() if "claim acquire" in line
     )
@@ -386,7 +441,7 @@ def test_stale_installed_fno_stamps_owner_only(tmp_path, monkeypatch):
     # The store owns state; the json mirror can lag the last write.
     from fno.graph.store import read_graph_strict
 
-    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
+    graph = read_graph_strict(home / ".fno" / "db" / "graph.json")[0]
 
     assert graph.get("locked_by") == "target-session:worker-session", \
         f"owner must survive a stale fno: {graph}"

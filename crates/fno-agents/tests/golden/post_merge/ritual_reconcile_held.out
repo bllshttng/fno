@@ -1,0 +1,12 @@
+step=resolve status=ok detail=pr=45 source=caller
+step=mutex status=ok detail=acquired
+step=reconcile status=deferred detail=held, a sweep was already in flight (requests=1, holder=other-runner)
+step=plan-reconcile status=ok detail=exit=0
+step=retro status=ok detail=exit=0
+  advance: tick: dispatch check
+step=advance status=ok detail=exit=0 (1 progress lines)
+step=skill-diff status=ok detail=exit=0
+step=sync-canonical status=skipped detail=not configured
+step=archive status=deferred detail=cleanup-requested request_id=merge-cleanup-0aaa6262ee6ba4251bb2; merged-pr; daemon resolves the tree from feature/y
+step=judgment status=ok detail=deferred-to-skill (attended); deferred=0 files=1 lines=2 parking_lot=unset bar=below
+step=reap-rows status=skipped detail=no closed node ids

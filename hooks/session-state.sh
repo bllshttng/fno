@@ -9,6 +9,9 @@
 # tests/hooks/test_with_timeout.sh pins every daemon-shelling UserPromptSubmit
 # hook on the helper).
 set -u
+# A footnote session reports its own state in its session record, and its
+# loop fires this plugin hook under the claude label. Stay out of its way.
+[[ "${FNO_HARNESS_NAME:-}" == "footnote" ]] && exit 0
 PATH="${PATH:+$PATH:}/usr/bin:/bin"
 export PATH
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import typer
 
 from fno.carveout.core import CARVEOUTS_NAME as _CARVEOUTS_NAME
@@ -346,6 +347,8 @@ def test_explicit_foreign_repo_not_attributed_to_local(tmp_path, monkeypatch):
 from fno.retro.cli import _resolve_pr_session_ids
 from fno.retro.routine import triage_pr
 
+requires_rust = pytest.mark.dev_build
+
 
 def _write_carveout(root: Path, **rec) -> None:
     led = _ledger(root)
@@ -360,6 +363,7 @@ def _write_carveout(root: Path, **rec) -> None:
     led.write_text(json.dumps(base) + "\n", encoding="utf-8")
 
 
+@requires_rust
 def test_resolve_pr_session_ids_matches_and_misses(tmp_path):
     led = tmp_path / "ledger.json"
     led.write_text(json.dumps({"entries": [
@@ -377,6 +381,7 @@ def test_resolve_pr_session_ids_matches_and_misses(tmp_path):
     assert _resolve_pr_session_ids(tmp_path / "nope.json", 522, "o/r") == []
 
 
+@requires_rust
 def test_resolve_pr_session_ids_url_less_attributes_nothing(tmp_path):
     """A url-less entry names no repo, so it attributes no ownership no matter
     which bare number field it carries - the ledger is global and the number
@@ -391,6 +396,7 @@ def test_resolve_pr_session_ids_url_less_attributes_nothing(tmp_path):
     assert _resolve_pr_session_ids(led, 522, "o/r") == []
 
 
+@requires_rust
 def test_resolve_pr_session_ids_ignores_non_list_sessions(tmp_path):
     """A non-list `sessions` is ignored, not spread into per-character ids."""
     led = tmp_path / "ledger.json"
@@ -401,6 +407,7 @@ def test_resolve_pr_session_ids_ignores_non_list_sessions(tmp_path):
     assert _resolve_pr_session_ids(led, 522, "o/r") == ["s1"]
 
 
+@requires_rust
 def test_resolve_pr_session_ids_requires_repo_scope(tmp_path):
     """No resolvable repo (repo_slug=None) -> [] even when a global-ledger entry's
     url ends in /pull/<pr>. The ledger is global and PR numbers collide across
@@ -417,6 +424,7 @@ def test_resolve_pr_session_ids_requires_repo_scope(tmp_path):
     assert _resolve_pr_session_ids(led, 522, "o/r") == ["s1"]
 
 
+@requires_rust
 def test_resolve_pr_session_ids_warns_on_infra_failure(tmp_path, capsys):
     """A broken environment still returns [] (read-only), but says so. Without the
     WARN it is indistinguishable from the ordinary no-owning-session case and
@@ -445,46 +453,29 @@ def test_resolve_pr_session_ids_warns_on_infra_failure(tmp_path, capsys):
     assert warns(tmp_path / "nope.json", 522, "o/r") == []
 
 
-def test_infra_reason_classification_covers_every_return_site(tmp_path):
-    """Every reason resolve_pr_sessions can return is classified deliberately.
+def test_missing_binary_maps_to_warn_and_readonly(tmp_path, monkeypatch, capsys):
+    """No native op on the machine is the broken-environment case: the wrapper
+    maps the refusal to a `ledger unreadable: ...` WARN and keeps retro's
+    flatten-to-empty contract. The op's own reason classification is pinned in
+    Rust (ledger_axes.rs) and by the post_merge_parity goldens."""
 
-    The classifier keys off each reason's opening words, so rewording one is
-    exactly how this silently breaks: a benign reason reworded to open with
-    "ledger ..." starts warning, and an infra reason reworded stops. Driving all
-    five sites here means a reword must update this test rather than slip
-    through with the suite still green.
-    """
-    from fno.ledger_join import reason_is_infra_failure, resolve_pr_sessions
+    import fno.rust_binary as rust_binary
 
+    def raise_unavailable(*args, **kwargs):
+        raise rust_binary.VerbUnavailable(
+            "the fno-agents binary was not found; reinstall fno,"
+            " run `fno doctor update --rust`, or set FNO_AGENTS_BIN"
+        )
+
+    monkeypatch.setattr(rust_binary, "verb_call", raise_unavailable)
     led = tmp_path / "ledger.json"
     led.write_text(json.dumps({"entries": []}), encoding="utf-8")
 
-    def reason_for(*args) -> str:
-        sessions, reason = resolve_pr_sessions(*args)
-        assert sessions == [] and reason is not None
-        return reason
-
-    infra = {
-        "no repo scope": reason_for(led, 522, None),
-        "unreadable": None,
-        "malformed": None,
-    }
-    led.write_text("{not json", encoding="utf-8")
-    infra["unreadable"] = reason_for(led, 522, "o/r")
-    led.write_text(json.dumps({"entries": "not-a-list"}), encoding="utf-8")
-    infra["malformed"] = reason_for(led, 522, "o/r")
-
-    led.write_text(json.dumps({"entries": []}), encoding="utf-8")
-    benign = {
-        "no matching entry": reason_for(led, 522, "o/r"),
-        "absent ledger": reason_for(tmp_path / "nope.json", 522, "o/r"),
-        "unset ledger": reason_for(None, 522, "o/r"),
-    }
-
-    for label, reason in infra.items():
-        assert reason_is_infra_failure(reason), f"{label!r} must warn: {reason!r}"
-    for label, reason in benign.items():
-        assert not reason_is_infra_failure(reason), f"{label!r} must stay quiet: {reason!r}"
+    assert _resolve_pr_session_ids(led, 522, "o/r") == []
+    err = capsys.readouterr().err
+    warns = [ln for ln in err.splitlines() if ln.startswith("WARN")]
+    assert len(warns) == 1
+    assert "fno doctor update --rust" in warns[0]
 
 
 def test_triage_carveouts_readonly_not_landed_or_consumed(tmp_path):
