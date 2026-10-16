@@ -59,7 +59,7 @@ Maximum rework attempts per item: 2. After that, add it to the blocked list and 
 
 #### Name the root cause before the fix
 
-The error line is where the bad state was noticed, not where it was made. Trace the bad value back one hop at a time until you reach the code that produced it. Write that site down as `cause: <file:line> <what it does wrong>`. Do not edit before you have it.
+The error line is where the bad state was noticed, not where it was made. Trace the bad value back one hop at a time until you reach the code that produced it. Write that site down before you edit. For a state the code made, the line is `cause: <file:line> <what it does wrong>`. For a state the world hands in, no code made it. Then the line names where it enters: `cause: <file:line> takes <external source> unhandled`.
 
 Then sort the bad state into one of two kinds. Ask whether the system must expect this state from outside its own code.
 

@@ -2162,6 +2162,52 @@ else
     fail "AC13n: expected a clean section: $CIA_OUT"
 fi
 
+# --- AC14: Design section (step 2e gate) ---
+# A plan dated after the gate with no ## Design is refused; the design-doc
+# path used to reach ready with none. On the gate date it warns, and a
+# `## Design` heading (even `none: <why>`) prints the receipt.
+echo "--- AC14: Design Section ---"
+design_plan() {
+    cat > "$1" <<HEREDOC
+---
+status: ready
+created: $2
+project: fno
+consolidation:
+  outcome: proceed_alone
+  proceed_alone_against: []
+---
+
+# Design gate fixture
+$3
+HEREDOC
+}
+PLAN_DESIGN_NONE="$TMPDIR_BASE/design_none.md"
+design_plan "$PLAN_DESIGN_NONE" 2026-10-17 ""
+OUTPUT=$(bash "$VALIDATE" "$PLAN_DESIGN_NONE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "ERROR: design_none.md: no ## Design section - step 2e" <<< "$OUTPUT"; then
+    pass "AC14a: post-gate plan without ## Design is refused"
+else
+    fail "AC14a: post-gate plan without ## Design should fail closed (exit $EXIT_CODE): $OUTPUT"
+fi
+PLAN_DESIGN_OLD="$TMPDIR_BASE/design_old.md"
+design_plan "$PLAN_DESIGN_OLD" 2026-10-16 ""
+OUTPUT=$(bash "$VALIDATE" "$PLAN_DESIGN_OLD" 2>&1) || true
+if grep -q "WARN:  design_old.md: no ## Design section (plan predates" <<< "$OUTPUT"; then
+    pass "AC14b: a plan dated on the gate day only warns"
+else
+    fail "AC14b: on-gate plan should warn, not refuse: $OUTPUT"
+fi
+PLAN_DESIGN_OK="$TMPDIR_BASE/design_ok.md"
+design_plan "$PLAN_DESIGN_OK" 2026-10-17 $'## Design\n\nnone: docs-only fixture'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_DESIGN_OK" 2>&1) || true
+if grep -q "OK:    design_ok.md: ## Design present (step 2e gate)" <<< "$OUTPUT" \
+    && ! grep -q "no ## Design section" <<< "$OUTPUT"; then
+    pass "AC14c: a ## Design heading satisfies the gate"
+else
+    fail "AC14c: ## Design should print the receipt: $OUTPUT"
+fi
+
 # --- Summary ---
 echo ""
 echo "=== Test Results ==="
