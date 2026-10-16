@@ -1,36 +1,23 @@
-"""Unit tests for `fno find` and `fno new` commands.
+"""Unit tests for the plan-less ``new`` filing word.
 
-find: fuzzy search across graph entries with optional filters.
-new:  append a new ab- entry without a plan file (for non-code tasks).
-
-Uses typer.testing.CliRunner with monkey-patched GRAPH_JSON.
+`new` rides the native create door (the scoped-create spelling of add), so
+these tests exec the dev binary over a fixture store via run_native_create;
+they skip where no dev build exists, like the other native-door suites.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.conftest import run_native_create
 
 import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
-from fno.cli import app
-
-runner = CliRunner()
 
 
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     g = tmp_path / "graph.json"
     seed_graph(g, '{"entries": []}\n')
-    import fno.graph._constants as gc
-    import fno.graph.store as gs
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gs, "GRAPH_JSON", g)
-    # Seam readers (guarded metadata/display reads) resolve paths.graph_json
-    # at call time; pin the resolver to the same hermetic file.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     return g
 
 
@@ -54,20 +41,21 @@ def _read(g: Path) -> list[dict]:
     return read_graph_strict(g)
 
 
+def _new_id(result) -> str:
+    """The create door's stdout receipt carries the id in its JSON body."""
+    return json.loads(result.stdout)["id"]
+
+
 # -- new --
 
 
 def test_scenario4_hp_new_creates_entry(tmp_graph):
     """Scenario 4 (HP): fno new writes a new ab- entry with defaults."""
-    result = runner.invoke(
-        app,
-        ["backlog", "new", "Research: Q3 budgets", "--domain", "research"],
+    result = run_native_create(
+        tmp_graph, "new", "Research: Q3 budgets", "--domain", "research",
     )
-    assert result.exit_code == 0, result.output
-    # Emits the new id on stdout
-    stdout = result.stdout.strip()
-    assert stdout.startswith("ab-"), stdout
-    new_id = next(line for line in stdout.splitlines() if line.startswith("ab-"))
+    assert result.exit_code == 0, result.stderr
+    new_id = _new_id(result)
     entries = _read(tmp_graph)
     assert len(entries) == 1
     e = entries[0]
@@ -82,23 +70,18 @@ def test_scenario4_hp_new_creates_entry(tmp_graph):
 
 def test_new_default_domain_is_code(tmp_graph):
     """Without --domain, new entries default to code."""
-    result = runner.invoke(app, ["backlog", "new", "Some code task"])
-    assert result.exit_code == 0, result.output
+    result = run_native_create(tmp_graph, "new", "Some code task")
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["domain"] == "code"
 
 
 def test_new_sets_project_and_priority(tmp_graph):
     """--project and --priority flow through."""
-    result = runner.invoke(
-        app,
-        [
-            "backlog", "new", "Urgent thing",
-            "--project", "acme",
-            "--priority", "p1",
-        ],
+    result = run_native_create(
+        tmp_graph, "new", "Urgent thing", "--project", "acme", "--priority", "p1",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["project"] == "acme"
     assert e["priority"] == "p1"
@@ -110,11 +93,11 @@ def test_scenario5_edge_new_fuzzy_domain_warns(tmp_graph):
         {"id": "ab-seed0001", "title": "seed", "status": "done",
          "domain": "research", "project": "p"},
     ])
-    result = runner.invoke(app, ["backlog", "new", "New task", "--domain", "res"])
-    assert result.exit_code == 2, result.output
-    combined = result.stdout + (result.stderr or "")
+    result = run_native_create(tmp_graph, "new", "New task", "--domain", "res")
+    assert result.exit_code == 2, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
     assert "research" in combined
-    assert "force-domain" in combined.lower() or "--force-domain" in combined
+    assert "force-domain" in combined.lower()
     # No entry written
     entries = _read(tmp_graph)
     assert len(entries) == 1  # only the seed
@@ -127,10 +110,10 @@ def test_scenario6_edge_new_force_domain_bypasses(tmp_graph):
         {"id": "ab-seed0001", "title": "seed", "status": "done",
          "domain": "research", "project": "p"},
     ])
-    result = runner.invoke(
-        app, ["backlog", "new", "New task", "--domain", "res", "--force-domain"],
+    result = run_native_create(
+        tmp_graph, "new", "New task", "--domain", "res", "--force-domain",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     # New entry has domain="res" verbatim (not auto-corrected to research)
     entries = _read(tmp_graph)
     new_entries = [e for e in entries if e["id"] != "ab-seed0001"]
@@ -144,8 +127,8 @@ def test_new_exact_domain_match_no_warning(tmp_graph):
         {"id": "ab-seed0001", "title": "seed", "status": "done",
          "domain": "research", "project": "p"},
     ])
-    result = runner.invoke(app, ["backlog", "new", "New task", "--domain", "research"])
-    assert result.exit_code == 0, result.output
+    result = run_native_create(tmp_graph, "new", "New task", "--domain", "research")
+    assert result.exit_code == 0, result.stderr
 
 
 def test_new_unfamiliar_domain_passes_through(tmp_graph):
@@ -154,8 +137,8 @@ def test_new_unfamiliar_domain_passes_through(tmp_graph):
         {"id": "ab-seed0001", "title": "seed", "status": "done",
          "domain": "code", "project": "p"},
     ])
-    result = runner.invoke(app, ["backlog", "new", "New task", "--domain", "trading"])
-    assert result.exit_code == 0, result.output
+    result = run_native_create(tmp_graph, "new", "New task", "--domain", "trading")
+    assert result.exit_code == 0, result.stderr
     entries = _read(tmp_graph)
     new_entries = [e for e in entries if e["id"] != "ab-seed0001"]
     assert new_entries[0]["domain"] == "trading"
@@ -163,8 +146,8 @@ def test_new_unfamiliar_domain_passes_through(tmp_graph):
 
 def test_new_id_has_correct_prefix_and_length(tmp_graph):
     """Generated id matches the ab-xxxxxxxx pattern."""
-    result = runner.invoke(app, ["backlog", "new", "T"])
-    assert result.exit_code == 0
+    result = run_native_create(tmp_graph, "new", "T")
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["id"].startswith("ab-")
     assert len(e["id"]) == 11  # ab- + 8 hex chars
@@ -172,21 +155,11 @@ def test_new_id_has_correct_prefix_and_length(tmp_graph):
 
 def test_new_sets_created_at_iso8601(tmp_graph):
     """created_at is ISO 8601."""
-    result = runner.invoke(app, ["backlog", "new", "T"])
-    assert result.exit_code == 0
+    result = run_native_create(tmp_graph, "new", "T")
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["created_at"]
     assert "T" in e["created_at"]
-
-
-# -- top-level alias sanity --
-
-
-def test_new_under_graph_also_works(tmp_graph):
-    """`fno backlog new ...` alias works the same as `fno new`."""
-    result = runner.invoke(app, ["backlog", "new", "Via graph app"])
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip().startswith("ab-")
 
 
 # -- Task 1.2: --source-* flags on fno new --
@@ -194,17 +167,14 @@ def test_new_under_graph_also_works(tmp_graph):
 
 def test_ac1_hp_new_with_source_flags_populates_provenance(tmp_graph):
     """AC1-HP: fno new --source-kind from_inbox creates entry with all four source fields."""
-    result = runner.invoke(
-        app,
-        [
-            "backlog", "new", "Add region filter",
-            "--project", "acme-web",
-            "--source-kind", "from_inbox",
-            "--source-project", "example-pipeline",
-            "--source-inbox-msg", "msg-a4f1",
-        ],
+    result = run_native_create(
+        tmp_graph, "new", "Add region filter",
+        "--project", "acme-web",
+        "--source-kind", "from_inbox",
+        "--source-project", "example-pipeline",
+        "--source-inbox-msg", "msg-a4f1",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     entries = _read(tmp_graph)
     assert len(entries) == 1
     e = entries[0]
@@ -217,15 +187,12 @@ def test_ac1_hp_new_with_source_flags_populates_provenance(tmp_graph):
 
 def test_ac1_hp_new_with_source_session_id(tmp_graph):
     """AC1-HP: --source-session-id is also stored on the entry."""
-    result = runner.invoke(
-        app,
-        [
-            "backlog", "new", "Session sourced task",
-            "--source-kind", "from_supervisor",
-            "--source-session-id", "sess-xyz123",
-        ],
+    result = run_native_create(
+        tmp_graph, "new", "Session sourced task",
+        "--source-kind", "from_supervisor",
+        "--source-session-id", "sess-xyz123",
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["source_kind"] == "from_supervisor"
     assert e["source_session_id"] == "sess-xyz123"
@@ -233,11 +200,8 @@ def test_ac1_hp_new_with_source_session_id(tmp_graph):
 
 def test_ac2_err_new_invalid_source_kind_rejected(tmp_graph):
     """AC2-ERR: --source-kind invalid_value exits non-zero, no graph mutation."""
-    result = runner.invoke(
-        app,
-        ["backlog", "new", "x", "--source-kind", "invalid_value"],
-    )
-    assert result.exit_code != 0, result.output
+    result = run_native_create(tmp_graph, "new", "x", "--source-kind", "invalid_value")
+    assert result.exit_code != 0, result.stdout
     # No entries written
     entries = _read(tmp_graph)
     assert len(entries) == 0
@@ -245,8 +209,8 @@ def test_ac2_err_new_invalid_source_kind_rejected(tmp_graph):
 
 def test_new_source_kind_defaults_to_organic(tmp_graph):
     """Without --source-kind, new entries default to source_kind=organic."""
-    result = runner.invoke(app, ["backlog", "new", "Organic task"])
-    assert result.exit_code == 0, result.output
+    result = run_native_create(tmp_graph, "new", "Organic task")
+    assert result.exit_code == 0, result.stderr
     e = _read(tmp_graph)[0]
     assert e["source_kind"] == "organic"
     assert e.get("source_project") is None

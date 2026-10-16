@@ -1500,45 +1500,39 @@ def _tracked_states_from_reader(keys: set[str], reader: Callable) -> tuple[dict[
 
 
 def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> Any:
-    """Hand one merged PR to the shared post-merge dispatcher (post_merge_route).
+    """Hand one merged PR to the native post-merge dispatcher (pr-watch
+    post-merge-dispatch).
 
-    The dispatcher decides warm/cold/defer in one place, reserves an attributable
-    receipt, then either live-injects the ritual verb or runs
-    ``fno do pr ritual <n> --autonomous`` directly (no bg thread), deduped on the
-    same per-merge-SHA marker reconcile used. ``fire_skill_fn`` is unused here -
-    the cold path is the direct verb, and the review check fire is a separate
-    tick branch - but it stays on the signature so the tick's
-    ``dispatch_ritual_fn`` protocol is uniform.
+    The dispatcher decides warm/cold in one place, reserves an attributable
+    receipt, then either live-injects the ritual verb or self-execs it (no bg
+    thread), deduped on the same per-merge-SHA marker reconcile uses. It reads
+    ``post_merge.auto_run`` itself, fail closed. ``fire_skill_fn`` stays on the
+    signature so the tick's ``dispatch_ritual_fn`` protocol is uniform.
+    VerbUnavailable raises: the tick logs one warning and the merge stays
+    retryable, exactly like a failed dispatch.
     """
-    from fno.post_merge_route import _default_run_ritual_verb, dispatch_post_merge_ritual
+    from types import SimpleNamespace
 
-    # Honor the post_merge.auto_run opt-in: a `ready` verdict means "configured +
-    # active", NOT "operator armed automatic dispatch". Without this gate, enabling
-    # pr-watch would run the ritual on a repo that never opted in. Fail closed on a
-    # config-load error.
-    auto_run = False
-    if cand.repo_dir is not None:
-        try:
-            from fno.config import load_settings_for_repo
+    from fno.rust_binary import verb_call
 
-            auto_run = bool(load_settings_for_repo(Path(cand.repo_dir)).post_merge.auto_run)
-        except Exception:  # noqa: BLE001 - fail closed
-            auto_run = False
-
-    return dispatch_post_merge_ritual(
-        cand.pr_number,
-        dedup_key=getattr(obs, "merge_sha", None),
-        auto_run=auto_run,
-        node_cwd=str(cand.repo_dir) if cand.repo_dir else None,
-        run_verb=lambda pr, cwd: _default_run_ritual_verb(pr, cwd, timeout=_ritual_timeout()),
-        ship_session_id=getattr(cand, "ship_session_id", None),
-        ship_harness=getattr(cand, "ship_harness", None),
-        source_session_id=getattr(cand, "source_session_id", None),
-        source_harness=getattr(cand, "source_harness", None),
-        source_cwd=getattr(cand, "source_cwd", None),
-        node_id=getattr(cand, "node_id", None),
-        repo_slug=getattr(cand, "repo_slug", None),
+    out = verb_call(
+        ["pr-watch", "post-merge-dispatch"],
+        {
+            "pr_number": cand.pr_number,
+            "dedup_key": getattr(obs, "merge_sha", None),
+            "node_cwd": str(cand.repo_dir) if cand.repo_dir else None,
+            "ship_session_id": getattr(cand, "ship_session_id", None),
+            "ship_harness": getattr(cand, "ship_harness", None),
+            "source_session_id": getattr(cand, "source_session_id", None),
+            "source_harness": getattr(cand, "source_harness", None),
+            "source_cwd": getattr(cand, "source_cwd", None),
+            "node_id": getattr(cand, "node_id", None),
+            "repo_slug": getattr(cand, "repo_slug", None),
+            "timeout_s": _ritual_timeout(),
+        },
+        timeout=_ritual_timeout() + 30,
     )
+    return SimpleNamespace(**out)
 
 
 def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:

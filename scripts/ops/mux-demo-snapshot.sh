@@ -371,8 +371,8 @@ PY
 # Mail and feed events. The bell, the Messages tab and the activity feed read
 # stores the board fixture never wrote, so those views shot empty. Both are
 # append-only JSONL with a documented row shape, so the seed writes them
-# directly. With FNO_AGENTS_HOME=<root>/agents the projections resolve the
-# stores at <root>: chats/<chat>/messages.jsonl and questions.jsonl.
+# directly. The projections resolve the stores under the config state dir:
+# <state>/chats/<chat>/messages.jsonl and <state>/questions.jsonl.
 python3 - "$ROOT" <<'PY'
 import json, os, sys, datetime
 root = sys.argv[1]
@@ -383,7 +383,7 @@ def ts(mins_ago):
 
 # Chats store: from/to join the registry rows above, so threads resolve to
 # seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
-chats = f"{root}/chats"
+chats = f"{root}/.fno/chats"
 
 def msg(i, mins_ago, frm, to, body):
     return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",
@@ -427,7 +427,7 @@ qs = [
     {"ts": ts(26), "type": "operator_decision", "source": "target",
      "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate"}},
 ]
-with open(f"{root}/questions.jsonl", "w") as f:
+with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
 PY
