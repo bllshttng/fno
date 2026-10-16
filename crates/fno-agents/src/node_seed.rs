@@ -411,7 +411,7 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
 pub fn payload_verb_refusal(
     seed: &str,
     flag_node: Option<&str>,
-    resume: bool,
+    skips_check: bool,
     row: Option<&Value>,
     floor: &str,
 ) -> Option<String> {
@@ -429,7 +429,7 @@ pub fn payload_verb_refusal(
         "node": node, "row_found": true, "effective_verb": verb,
         "stored_verb": null, "derive_error": null,
         "node_source": node_source,
-        "family": ["/target", "/blueprint"], "role": false, "resume": resume,
+        "family": ["/target", "/blueprint"], "role": skips_check, "resume": false,
         "argv": ["spawn", seed], "seed_index": 1, "seed_form": "positional",
     });
     let answer = decide_in(&payload, &[]);
@@ -452,12 +452,34 @@ pub fn spawn_payload_verb_refusal(params: &Value, cwd: &Path) -> Option<String> 
         None => scan_seed_node(seed)?,
     };
     let row = crate::spawn_compose::graph_row_for(&node)?;
-    let floor = crate::agents_config::config_lookup(cwd, &["dispatch", "blueprint_floor"])
+    // The floor is the node's project's, the same config the Python door
+    // loads from the row's cwd; the caller's cwd answers only a row with none.
+    let project = row
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_dir())
+        .unwrap_or(cwd);
+    let floor = crate::agents_config::config_lookup(project, &["dispatch", "blueprint_floor"])
         .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-    let resume = params.get("resume_id").is_some();
-    payload_verb_refusal(seed, flag_node, resume, Some(&row), &floor)
+    payload_verb_refusal(
+        seed,
+        flag_node,
+        spawn_skips_verb_check(params),
+        Some(&row),
+        &floor,
+    )
+}
+
+/// A resume or role-bearing spawn names its work profile by flag, so the seam
+/// passes it without comparing the payload verb. A promoted codex thread
+/// reaches the client carrying `role_level` / `role_scope`.
+fn spawn_skips_verb_check(params: &Value) -> bool {
+    ["resume_id", "role_level", "role_scope"]
+        .iter()
+        .any(|key| params.get(*key).is_some())
 }
 
 /// The spawn cwd guard's answer for a node-named spawn.
@@ -1232,18 +1254,22 @@ mod tests {
     #[test]
     fn client_lets_the_seam_own_every_other_answer() {
         let row = json!({"id": "x-aaaa", "dispatch_verb": "/blueprint", "difficulty": "high"});
-        for (seed, row, resume) in [
+        for (seed, row, skips) in [
             ("$fno:blueprint x-aaaa", Some(&row), false),
             ("$fno:target x-aaaa", None, false),
             ("$fno:target x-aaaa", Some(&row), true),
             ("port the parser", Some(&row), false),
         ] {
             assert_eq!(
-                payload_verb_refusal(seed, None, resume, row, "high"),
+                payload_verb_refusal(seed, None, skips, row, "high"),
                 None,
                 "{seed}"
             );
         }
+        for key in ["resume_id", "role_level", "role_scope"] {
+            assert!(spawn_skips_verb_check(&json!({ (key): 1 })), "{key}");
+        }
+        assert!(!spawn_skips_verb_check(&json!({"message": "x"})));
     }
 
     // --- the production params shape ------------------------------------- //
