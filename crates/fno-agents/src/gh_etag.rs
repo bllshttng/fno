@@ -19,6 +19,10 @@ pub(crate) static NOT_MODIFIED: AtomicUsize = AtomicUsize::new(0);
 /// a dead head sha cannot pin stale bodies forever.
 const ROW_TTL_S: f64 = 24.0 * 3600.0;
 
+/// A row stamped further than this into the future is a miss too: clock
+/// skew or a copied state dir must not pin a row past the 24h bound.
+const CLOCK_SLACK_S: f64 = 60.0;
+
 /// The argv shapes the door serves: exactly `["api", path]` where path is a
 /// plain REST read under `repos/`. A flag in the second token (write,
 /// method, paginate, jq - anything starting `-`) fails the prefix check, so
@@ -74,7 +78,7 @@ fn read_row_at(root: &Path, path: &str, now: f64) -> Option<Row> {
     let etag = row.get("etag")?.as_str()?.to_string();
     let body = row.get("body")?.as_str()?.to_string();
     let ts = row.get("ts")?.as_f64()?;
-    if ts <= 0.0 || now - ts >= ROW_TTL_S {
+    if ts <= 0.0 || ts - now > CLOCK_SLACK_S || now - ts >= ROW_TTL_S {
         return None;
     }
     Some(Row { etag, body })
@@ -215,7 +219,24 @@ mod tests {
         assert!(ok);
         assert_eq!(body, "{\"n\":1}");
         assert_eq!(stderr, "");
-        assert_eq!(NOT_MODIFIED.load(Ordering::SeqCst), before + 1);
+        // The counter is process-global and tests run in parallel, so a
+        // sibling can bump it mid-test. Assert the rise, never the step.
+        assert!(NOT_MODIFIED.load(Ordering::SeqCst) > before);
+    }
+
+    #[test]
+    fn future_ts_row_is_a_miss() {
+        let root = tempfile::tempdir().unwrap();
+        let file = row_path(root.path(), "repos/o/r/pulls/4");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let future = crate::gh_cache::now_secs() + 3600.0;
+        fs::write(
+            &file,
+            json!({"etag": "W/\"fw\"", "body": "{\"old\":1}", "ts": future}).to_string(),
+        )
+        .unwrap();
+        let now = crate::gh_cache::now_secs();
+        assert!(read_row_at(root.path(), "repos/o/r/pulls/4", now).is_none());
     }
 
     #[test]
