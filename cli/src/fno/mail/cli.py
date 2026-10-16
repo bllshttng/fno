@@ -55,6 +55,7 @@ from typing import Any, NoReturn, Optional, TypedDict
 import typer
 
 from fno.agents.harness_map import capabilities as _harness_capabilities
+from fno import rust_binary
 from fno.mail.codex_review_target import (
     explicit_review_pr_number,
     resolve_codex_review_target as _codex_review_target,
@@ -2593,13 +2594,6 @@ def _raw_send(
         mail_inject_probe,
     )
     from fno.agents.registry import AgentResolutionError, resolve_agent
-    from fno.review.invocation import (
-        adopt_pending_invocation,
-        emit_review_invocation,
-        mint_invocation_id,
-        parse_review_invocation,
-        write_pending_invocation,
-    )
 
     def _refused(reason: str, *, usage: bool = False) -> None:
         # Under --check a refusal about the SESSION is an ANSWER, not an error:
@@ -2684,7 +2678,14 @@ def _raw_send(
         _unmeasurable(f"registry unreadable, so {name!r} could not be resolved")
 
     session_id = getattr(entry, "harness_session_id", None) or ""
-    review = parse_review_invocation(stripped)
+    # The invocation parse rides the native door once per raw send; a door
+    # error is an unrecorded review send, never a refusal.
+    parse_err, review = rust_binary.call_binary_json(
+        "review-level", ["invocations", "parse", "--raw", stripped]
+    )
+    review = review if parse_err is None and isinstance(review, dict) else None
+    if parse_err is not None:
+        print(f"review invocation not recorded: {parse_err}", file=sys.stderr)
 
     # 5. Self-send redirect. The transport is send-keys: an unwrapped payload is
     #    text typed at a prompt line, so nothing here can be a capability
@@ -2747,20 +2748,16 @@ def _raw_send(
 
     invocation_id = None
     failure_reasons: list[str] = []
-    if review and not check:
-        invocation_id = mint_invocation_id()
-        if not write_pending_invocation(
-            target_session_id=session_id,
-            invocation_id=invocation_id,
-        ):
-            # A stale unconsumed sidecar owns the slot. Consume it and
-            # retry once so this review's id is the one the reviewer-side
-            # hook adopts; without this, the sent row carries a fresh id no
-            # sidecar holds and the join never closes for any later review.
-            adopt_pending_invocation(session_id)
-            write_pending_invocation(
-                target_session_id=session_id,
-                invocation_id=invocation_id,
+    if review is not None and not check:
+        reserve_err, payload = rust_binary.call_binary_json(
+            "review-level", ["invocations", "reserve", "--json", "--session", session_id]
+        )
+        if reserve_err is None and isinstance(payload, dict):
+            invocation_id = payload.get("invocation_id") or None
+        if invocation_id is None:
+            print(
+                f"review invocation not recorded: {reserve_err or 'no id reserved'}",
+                file=sys.stderr,
             )
 
     def _emit_review_sent(
@@ -2786,25 +2783,29 @@ def _raw_send(
         if submit_required:
             submit_key = "tab" if getattr(entry, "harness", "") == "codex" and review else "\\r"
         pr = explicit_review_pr_number(str(review.get("args_raw") or ""))
-        emit_review_invocation(
-            source="daemon",
-            invocation_id=invocation_id,
-            stage="sent",
-            verb=review["verb"],
-            args_raw=review["args_raw"],
-            level=review["level"],
-            level_source=review["level_source"],
-            flags=review["flags"],
-            transport=transport,
-            initiator=initiator,
-            initiator_session_id=transport_sender,
-            target_session_id=session_id or None,
-            submit_required=submit_required,
-            submit_key=submit_key,
-            submit_confirmed=confirmed if submit_required else None,
-            receipt=receipt,
-            pr=pr,
+        keys = ("verb", "args_raw", "level", "level_source", "flags")
+        data = {key: review.get(key) for key in keys}
+        data.update(
+            {
+                "invocation_id": invocation_id,
+                "stage": "sent",
+                "transport": transport,
+            "initiator": initiator,
+            "initiator_session_id": transport_sender,
+            "target_session_id": session_id or None,
+            "submit_required": submit_required,
+            "submit_key": submit_key,
+            "submit_confirmed": confirmed if submit_required else None,
+            "receipt": receipt,
+            "pr": pr,
+            }
         )
+        emit_err, _event = rust_binary.call_binary_json(
+            "review-level",
+            ["invocations", "emit", "--source", "daemon", "--data", json.dumps(data)],
+        )
+        if emit_err is not None:
+            print(f"review invocation not recorded: {emit_err}", file=sys.stderr)
 
     def _reserve_raw():
         raw_msg_id = generate_msg_id()
@@ -2856,8 +2857,6 @@ def _raw_send(
     if not is_keystroke:
         verb = stripped.split(maxsplit=1)[0]
         if lane == "codex-daemon":
-            from fno import rust_binary
-
             is_review = verb in _CODEX_REVIEW_VERBS
             if check and rust_binary.resolve_installed_binary() is None:
                 print(

@@ -93,11 +93,7 @@ esac
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
 
-plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
-helper_path="${plugin_root:+$plugin_root/cli/src}"
-parsed="$(PYTHONPATH="$helper_path${PYTHONPATH:+:$PYTHONPATH}" \
-  python3 -c 'import json, sys; from fno.review.invocation import parse_review_invocation; print(json.dumps(parse_review_invocation(sys.argv[1]) or {}))' \
-  "$skill_raw" 2>/dev/null || true)"
+parsed="$("$FNO_BIN" do review invocations parse --raw "$skill_raw" 2>/dev/null || true)"
 args_raw="$(printf '%s' "$parsed" | jq -r '.args_raw // empty' 2>/dev/null || true)"
 level="$(printf '%s' "$parsed" | jq -r '.level // "unset"' 2>/dev/null || echo unset)"
 level_source="$(printf '%s' "$parsed" | jq -r '.level_source // "fallback"' 2>/dev/null || echo fallback)"
@@ -144,28 +140,20 @@ fi
 session="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
 holder="review-session:${session:-unknown}"
 
-# The helper is best-effort because this hook must never block the review. The
-# shell fallback still creates a join id when an installed fno package cannot
-# be imported by the hook process.
+# The native door is best-effort because this hook must never block the
+# review. The shell fallback still creates a join id when an older installed
+# front door answers something other than an id (its invocations leaf ran the
+# settle sweep, or the door refused) - the ri- guard reads only an id, never
+# a receipt.
 # Adopt the sender's pending id when one exists (the mail-path join: the
 # sent row and this started row then carry ONE id), and only mint-plus-write
 # a fresh sidecar on a miss, so a second review never re-adopts the first
 # one's consumed id.
-invocation_id="$(PYTHONPATH="$helper_path${PYTHONPATH:+:$PYTHONPATH}" \
-  python3 -c '
-from fno.review.invocation import adopt_pending_invocation, mint_invocation_id, write_pending_invocation
-import sys
-s = sys.argv[1]
-i = adopt_pending_invocation(s) if s else None
-if i is None:
-    i = mint_invocation_id()
-    if s:
-        write_pending_invocation(target_session_id=s, invocation_id=i)
-print(i)' \
-  "$session" 2>/dev/null || true)"
-if [[ -z "$invocation_id" ]]; then
-  invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$"
-fi
+invocation_id="$("$FNO_BIN" do review invocations join --session "$session" 2>/dev/null || true)"
+case "$invocation_id" in
+  ri-*) ;;
+  *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
+esac
 model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json"
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \

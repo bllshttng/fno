@@ -1442,6 +1442,46 @@ def test_raw_injects_unwrapped_on_claude_keystroke_lane(mailbox, monkeypatch, ca
     assert rows[0].word_count == rust_binary.style_word_count(rows[0].body)
 
 
+_DOOR_PARSE_TABLE = {
+    "/code-review medium --comment": {
+        "verb": "/code-review",
+        "args_raw": "medium --comment",
+        "level": "medium",
+        "level_source": "explicit",
+        "flags": ["--comment"],
+        "target": None,
+        "pr_number": None,
+    },
+    "/review --base origin/main": {
+        "verb": "/review",
+        "args_raw": "--base origin/main",
+        "level": "unset",
+        "level_source": "fallback",
+        "flags": ["--base"],
+        "target": None,
+        "pr_number": None,
+    },
+}
+
+
+def _patch_invocation_door(monkeypatch, seen):
+    """Stand in for the native invocations door: parse answers from the
+    table, reserve mints a fixed id, emit records the data dict."""
+
+    def fake_call_binary_json(verb, args=(), **kwargs):
+        if "parse" in args:
+            payload = args[args.index("--raw") + 1]
+            return None, _DOOR_PARSE_TABLE.get(payload)
+        if "reserve" in args:
+            return None, {"invocation_id": "ri-test-reserved"}
+        if "emit" in args:
+            seen.append(json.loads(args[args.index("--data") + 1]))
+            return None, {"committed": True}
+        return None, None
+
+    monkeypatch.setattr("fno.rust_binary.call_binary_json", fake_call_binary_json)
+
+
 def test_raw_review_emits_started_transport_observation_with_literal_receipt(
     mailbox, monkeypatch, capsys
 ):
@@ -1449,10 +1489,7 @@ def test_raw_review_emits_started_transport_observation_with_literal_receipt(
 
     _seed_claude(mailbox, monkeypatch)
     seen = []
-    monkeypatch.setattr(
-        "fno.review.invocation.emit_review_invocation",
-        lambda **kwargs: seen.append(kwargs) or {"positive": True},
-    )
+    _patch_invocation_door(monkeypatch, seen)
 
     with pytest.raises(typer.Exit) as sent:
         review_level = "medium"
@@ -1478,10 +1515,7 @@ def test_codex_review_invocation_keeps_rpc_server_error_message(
 
     _seed_codex_app_server(mailbox, monkeypatch)
     seen = []
-    monkeypatch.setattr(
-        "fno.review.invocation.emit_review_invocation",
-        lambda **kwargs: seen.append(kwargs) or {"positive": True},
-    )
+    _patch_invocation_door(monkeypatch, seen)
     monkeypatch.setattr(
         "fno.agents.dispatch._review_start_codex",
         lambda *args, **kwargs: {
