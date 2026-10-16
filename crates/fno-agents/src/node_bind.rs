@@ -183,8 +183,8 @@ claim. To claim it without the loop: fno do target start {node} --steps"
 /// The adopt-shaped mint for a session no registry row holds: identity only,
 /// origin `adopted` (or `operator` when the operator checks say so), no
 /// liveness or runtime state - reconcile owns those. Every ManifestIdentity
-/// field is written out: the mint guard's text scan reads any
-/// `..Default::default()` spread in production code as a default-based mint.
+/// field is written out on purpose: the mint guard's text scan reads any
+/// default-spread literal in production code, comments included.
 fn mint_for_session(sid: &str, cwd: &str) -> crate::state::RegistryEntry {
     crate::client_verbs::mint_synthesized_entry(
         &crate::manifest_lookup::ManifestIdentity {

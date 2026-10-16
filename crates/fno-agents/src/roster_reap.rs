@@ -2213,10 +2213,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // AC15: a first-turn bind is not an ownership marker. The row holds a
-    // node from the door, not from fno's own spawn or target path, so the
-    // reaper reads it exactly like a session that names no node at all: it
-    // keeps at every scope and never retires as fleet work.
+    // AC15: a first-turn bind is not an ownership marker. The door minted a
+    // synthesized registry row beside the bind, so the roster row reads as
+    // owned: kept at every scope through the owned gate, the fleet gates
+    // never consulted, never retired as fleet work.
     #[test]
     fn first_turn_bind_reads_as_a_plain_session_to_the_reaper() {
         for scope in [RosterScope::Provenanced, RosterScope::All] {
@@ -2254,13 +2254,13 @@ mod tests {
                 summary.retired.is_empty(),
                 "scope {scope:?} retired a first-turn-bound row: {summary:?}"
             );
-            let kept = summary
-                .kept
-                .iter()
-                .find(|j| j.node.as_deref() == Some("x-bbbb"))
-                .expect("the bound row was judged");
-            assert_eq!(kept.class, "unmarked", "scope {scope:?}: {summary:?}");
-            assert_eq!(kept.node.as_deref(), Some("x-bbbb"));
+            assert_eq!(summary.kept_owned, 1, "scope {scope:?}: {summary:?}");
+            let kept = summary.kept.first().expect("the bound row was judged");
+            assert_eq!(kept.class, "owned", "scope {scope:?}: {summary:?}");
+            assert_eq!(
+                kept.reason, "owned by an fno row",
+                "scope {scope:?}: {summary:?}"
+            );
             std::fs::remove_dir_all(&dir).ok();
         }
     }
