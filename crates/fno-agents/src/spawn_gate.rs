@@ -1507,6 +1507,7 @@ fn decide_gate(
         let mut learned = crate::capacity::effective_for(config_cwd);
         let mut cap = learned.cap;
         last_succession_error = None;
+        last_burst = None;
         let mut axes_read = serde_json::Map::new();
         let mut pause = QUEUE_POLL;
         // The footprint probe runs OUTSIDE the gate mutex (it costs seconds
@@ -1833,9 +1834,9 @@ fn decide_gate(
                             cap = learned.cap;
                         }
                         // The user's max_live yields too: one spawn a minute while CPU and RAM read room.
-                        let (learned, burst) = crate::spawn_gate_slots::burst_pass(
+                        let burst = crate::spawn_gate_slots::burst(
                             counted,
-                            learned,
+                            &learned,
                             floor_gb,
                             swap_cap,
                             &live,
@@ -1843,7 +1844,10 @@ fn decide_gate(
                             name,
                             registry_path.parent(),
                         );
-                        cap = learned.cap;
+                        if matches!(burst, Some(crate::spawn_gate_slots::Burst::Yields)) {
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, counted);
+                            cap = learned.cap;
+                        }
                         last_burst = burst;
                         // A successor holds a worker slot until its role lands, so a
                         // succession may sit one row over the cap, never two.

@@ -699,10 +699,10 @@ mod probe {
             if slots >= cap {
                 if slots >= learned.ceiling && learned.cap >= learned.ceiling {
                     // The machine rows read room; only the settle window
-                    // decides. The fold returns the burst cap and the read.
-                    let (applied, burst) = crate::spawn_gate_slots::burst_pass(
+                    // decides. The read borrows; the fold applies on yields.
+                    let burst = crate::spawn_gate_slots::burst(
                         slots,
-                        learned,
+                        &learned,
                         floor_gb,
                         swap_cap,
                         &slot_row_entries,
@@ -712,8 +712,8 @@ mod probe {
                     );
                     match burst {
                         Some(crate::spawn_gate_slots::Burst::Yields) => {
-                            let pre_clause = applied.clause();
-                            learned = applied;
+                            let pre_clause = learned.clause();
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, slots);
                             cap = learned.cap;
                             out.insert("max_live".into(), json!(cap));
                             out.insert(
@@ -729,7 +729,7 @@ mod probe {
                                 "max_live",
                                 format!(
                                     "{slots} live worker slots >= {} ({})",
-                                    applied.clause(),
+                                    learned.clause(),
                                     b.word()
                                 ),
                                 json!({"count": slots, "max_live": cap, "burst": b.word()}),
@@ -740,7 +740,7 @@ mod probe {
                         None => {
                             return refuse_with(
                                 "max_live",
-                                format!("{slots} live worker slots >= {}", applied.clause()),
+                                format!("{slots} live worker slots >= {}", learned.clause()),
                                 json!({"count": slots, "max_live": cap}),
                                 &[fleet_row(slots, cap, yours)],
                                 out,

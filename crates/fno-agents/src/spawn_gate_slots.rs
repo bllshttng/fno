@@ -227,31 +227,3 @@ pub(crate) fn past_ceiling(learned: &Effective, counted: usize) -> Effective {
         ..Default::default()
     }
 }
-
-/// The slot-axis burst pass for a spawn at or above the user's ceiling: the
-/// burst read, with the cap folded to `counted + 1` when it yields. Returns
-/// the cap answer the gate carries forward beside the raw read.
-pub(crate) fn burst_pass(
-    counted: usize,
-    learned: Effective,
-    floor_gb: f64,
-    swap_cap: f64,
-    rows: &[RegistryEntry],
-    reservations: &[crate::spawn_gate::SlotReservation],
-    own: &str,
-    launches_root: Option<&Path>,
-) -> (Effective, Option<Burst>) {
-    match burst(
-        counted,
-        &learned,
-        floor_gb,
-        swap_cap,
-        rows,
-        reservations,
-        own,
-        launches_root,
-    ) {
-        Some(Burst::Yields) => (past_ceiling(&learned, counted), Some(Burst::Yields)),
-        other => (learned, other),
-    }
-}
