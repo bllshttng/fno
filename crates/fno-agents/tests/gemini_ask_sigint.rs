@@ -87,9 +87,10 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     install_fake_gemini_sigint(&bin_dir);
     let old_config = install_warn_config(&cwd);
 
-    let sentinel = tmpdir("sentinel").join("caught.txt");
+    let sentinels = tmpdir("sentinel");
+    let sentinel = sentinels.join("caught.txt");
     let sentinel_str = sentinel.to_string_lossy().to_string();
-    let ready = tmpdir("sentinel").join("ready.txt");
+    let ready = sentinels.join("ready.txt");
     let ready_str = ready.to_string_lossy().to_string();
 
     let old_path = std::env::var_os("PATH");
@@ -174,7 +175,7 @@ fn gemini_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
     assert!(
         sentinel.exists(),
-        "SIGINT must be forwarded to the gemini process group (sentinel not written, ready written: {}) — gemini would be orphaned",
+        "SIGINT must be forwarded to the gemini process group (sentinel not written, ready written: {}): gemini would be orphaned",
         ready.exists()
     );
 }

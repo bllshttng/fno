@@ -87,9 +87,10 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     let cwd = tmpdir("cwd");
     install_fake_codex_sigint(&bin_dir);
 
-    let sentinel = tmpdir("sentinel").join("caught.txt");
+    let sentinels = tmpdir("sentinel");
+    let sentinel = sentinels.join("caught.txt");
     let sentinel_str = sentinel.to_string_lossy().to_string();
-    let ready = tmpdir("sentinel").join("ready.txt");
+    let ready = sentinels.join("ready.txt");
     let ready_str = ready.to_string_lossy().to_string();
 
     let old_path = std::env::var_os("PATH");
@@ -178,7 +179,7 @@ fn codex_create_ctrl_c_forwards_sigint_and_exits_130() {
     );
     assert!(
         sentinel.exists(),
-        "SIGINT must be forwarded to the codex process group (sentinel not written, ready written: {}) — codex would be orphaned",
+        "SIGINT must be forwarded to the codex process group (sentinel not written, ready written: {}): codex would be orphaned",
         ready.exists()
     );
 }
