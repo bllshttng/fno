@@ -278,9 +278,9 @@ mod tests {
     #[test]
     fn aggregate_groups_by_domain_and_planned_difficulty() {
         let nodes = [
-            done_node("x-f001", "code", "medium", 4.0),
-            done_node("x-f002", "code", "medium", 6.0),
-            done_node("x-f003", "docs", "low", 1.0),
+            done_node("x-0000", "code", "medium", 4.0),
+            done_node("x-1111", "code", "medium", 6.0),
+            done_node("x-2222", "docs", "low", 1.0),
         ];
         let agg = aggregate(&compute(&nodes, &BTreeMap::new()));
         let code_medium = agg
