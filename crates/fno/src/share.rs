@@ -605,7 +605,7 @@ async fn upstream(
     end: mpsc::UnboundedSender<(i32, String)>,
 ) {
     let mut ready = Some(ready);
-    let mut backoff = web::BACKOFF_START;
+    let mut backoff = web::Backoff::new();
     loop {
         match web::connect_attach(&ctx.socket).await {
             Ok((mut reader, preamble)) => {
@@ -623,8 +623,7 @@ async fn upstream(
                             return;
                         }
                         eprintln!("fno mux serve --share: pane check failed: {e}");
-                        tokio::time::sleep(backoff).await;
-                        backoff = (backoff * 2).min(web::BACKOFF_MAX);
+                        backoff.wait().await;
                         continue;
                     }
                 }
@@ -637,8 +636,8 @@ async fn upstream(
                     publish(&ctx, msg);
                 }
                 set_up(&ctx, false);
-                if started.elapsed() >= web::MIN_HEALTHY_UPTIME {
-                    backoff = web::BACKOFF_START;
+                if backoff.dropped(started.elapsed()) {
+                    eprintln!("fno mux serve --share: upstream dropped; backing off");
                 }
             }
             Err(e) => {
@@ -649,8 +648,7 @@ async fn upstream(
                 eprintln!("fno mux serve --share: upstream reconnect failed: {e}");
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(web::BACKOFF_MAX);
+        backoff.wait().await;
     }
 }
 

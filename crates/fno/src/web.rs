@@ -58,8 +58,8 @@ const BROADCAST_CAP: usize = 256;
 /// a proto-level pane-closed signal is the real fix, deferred with Locked 4).
 const MAX_SNAPSHOT_PANES: usize = 128;
 /// Reconnect backoff bounds (Errors: preserve the view on upstream EOF).
-pub(crate) const BACKOFF_START: Duration = Duration::from_millis(250);
-pub(crate) const BACKOFF_MAX: Duration = Duration::from_secs(5);
+const BACKOFF_START: Duration = Duration::from_millis(250);
+const BACKOFF_MAX: Duration = Duration::from_secs(5);
 
 /// Connect bound for the upstream attach. A wedged server (never accepts)
 /// turns into a reconnect-with-backoff instead of blocking the bridge task
@@ -68,7 +68,34 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A connection must stay up at least this long before its drop resets the
 /// backoff. An accept-then-EOF flap stays below it, so the backoff keeps growing
 /// (and each quick drop logs) instead of spinning a silent 250ms reconnect loop.
-pub(crate) const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
+const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
+
+/// Reconnect pacing for an observer attach, shared by every bridge that
+/// attaches: doubling from `BACKOFF_START` to `BACKOFF_MAX`, and reset only by
+/// a connection that stayed up `MIN_HEALTHY_UPTIME`.
+pub(crate) struct Backoff(Duration);
+
+impl Backoff {
+    pub(crate) fn new() -> Self {
+        Backoff(BACKOFF_START)
+    }
+
+    /// Note a dropped connection. True for a quick accept-then-EOF flap,
+    /// which keeps the delay growing and is worth a log line.
+    pub(crate) fn dropped(&mut self, uptime: Duration) -> bool {
+        if uptime >= MIN_HEALTHY_UPTIME {
+            self.0 = BACKOFF_START;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(crate) async fn wait(&mut self) {
+        tokio::time::sleep(self.0).await;
+        self.0 = (self.0 * 2).min(BACKOFF_MAX);
+    }
+}
 
 /// Parsed `fno mux serve --web` arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -802,7 +829,7 @@ async fn upstream_loop(
     ready_tx: oneshot::Sender<Result<(), String>>,
 ) {
     let mut ready_tx = Some(ready_tx);
-    let mut backoff = BACKOFF_START;
+    let mut backoff = Backoff::new();
     loop {
         match connect_attach(&socket).await {
             Ok((reader, preamble)) => {
@@ -821,9 +848,7 @@ async fn upstream_loop(
                 // Only a session that stayed up a while resets the backoff; a
                 // quick accept-then-EOF flap keeps growing it and logs, so a
                 // misbehaving server never spins a silent tight reconnect loop.
-                if started.elapsed() >= MIN_HEALTHY_UPTIME {
-                    backoff = BACKOFF_START;
-                } else {
+                if backoff.dropped(started.elapsed()) {
                     eprintln!(
                         "fno mux serve --web: upstream dropped after {:?}; backing off",
                         started.elapsed()
@@ -841,8 +866,7 @@ async fn upstream_loop(
                 eprintln!("fno mux serve --web: upstream reconnect failed: {e}");
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(BACKOFF_MAX);
+        backoff.wait().await;
     }
 }
 
