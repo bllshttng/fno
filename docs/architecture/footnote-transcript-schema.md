@@ -2,7 +2,7 @@
 
 This is the contract between an orchestrator and a harness. The orchestrator launches the harness with a launch spec. The harness writes a session record that the orchestrator reads back: liveness, cost, outcome and the harness's verdicts on its own claims. fno is the reference orchestrator and fnh (the `footnote` binary) is the reference harness. A harness need not be either.
 
-The session record is the interchange format. A harness may store its session any way it likes, a database included, as long as it can write or export this record. The machine-readable form is [footnote-records.schema.json](footnote-records.schema.json), beside this file. The Rust types and the reader live in `crates/fno-agents/src/footnote_transcript.rs`.
+The session record is the interchange format. A harness can store its session in any form, a database included. It must write or export this record. The machine-readable form is [footnote-records.schema.json](footnote-records.schema.json), beside this file. The Rust types and the reader live in `crates/fno-agents/src/footnote_transcript.rs`.
 
 The spec has four parts: the launch spec, the session record, the lifecycle records, and the verdict types.
 
@@ -10,7 +10,18 @@ The spec has four parts: the launch spec, the session record, the lifecycle reco
 
 The orchestrator writes one `LaunchSpec` to the harness's stdin. Its `v` is 2. The harness refuses any other `v` with exit 2 and an install command, so a stale binary never runs a newer spec.
 
-Fields: `v`, `mode` (`create` or `resume`), `fno_id` (the orchestrator mints it), `session_dir`, `cwd`, `model`, `message`, `timeout_secs`, `node`, `plan_path`, `cost_cap_usd`, `wall_cap_minutes`, `plugin_root`, `parent_session_id`, `permission_mode`, `price_cache`, `context_window`, `endpoint` (`base_url`, `key`, `bearer`, `wire`, `provider_id`, `route`).
+| field | meaning |
+|---|---|
+| `v` | 2 |
+| `mode` | `create` or `resume` |
+| `fno_id` | the session id; the orchestrator mints it |
+| `session_dir`, `cwd` | where the session lives and runs |
+| `model`, `message`, `timeout_secs` | the run |
+| `node`, `plan_path` | the backlog work, if any |
+| `cost_cap_usd`, `wall_cap_minutes` | the caps |
+| `plugin_root`, `parent_session_id`, `permission_mode` | the context |
+| `price_cache`, `context_window` | the cost and compaction inputs |
+| `endpoint` | `base_url`, `key`, `bearer`, `wire`, `provider_id`, `route` |
 
 v2 adds `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`, from the capability row's `permission_modes`. Null runs the harness's own default. A resume sends the mode the registry row recorded at spawn. The key rides stdin, so it never reaches argv or the environment.
 
@@ -31,7 +42,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 
 `{"v": 1, "seq": n, "id": "<uuid>", "ts": "<RFC3339 ms>", "session_id": "<fno_id>", "type": "<type>", "data": {...}}`, plus `"ignorable": true` on a log-only record.
 
-`seq` starts at 0 and rises by one per line. `id` is a fresh v4 UUID, never a hash. A reader refuses an unknown `type` that is not `ignorable`. A new type does not raise `v`. A writer marks a record `ignorable` when resume never needs it. The mark tells an older reader it may skip the line. It does not mean the type is unspecified: every ignorable type below is part of the spec.
+`seq` starts at 0 and rises by one per line. `id` is a fresh v4 UUID, never a hash. A reader refuses an unknown `type` that is not `ignorable`. A new type does not raise `v`. If resume never needs a record, the writer marks it `ignorable`. The mark tells an older reader that it can skip the line. It does not mean the type is unspecified: every ignorable type below is part of the spec.
 
 ### Types
 
@@ -58,7 +69,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 | `footnotes` | ignorable. See part 4. |
 | `footnotes_post` | ignorable. See part 4. |
 
-`model_text` is exactly what the model saw: at most 30,000 bytes, plus the spill path when the output was longer. Storing it keeps one rule true: the next request rebuilds from the record alone, byte for byte, and its sha256 equals `body_sha256`.
+`model_text` is exactly what the model saw, at most 30,000 bytes. If the output was longer, it also names the spill path. Storing it keeps one rule true: the next request rebuilds from the record alone, byte for byte, and its sha256 equals `body_sha256`.
 
 ### Resume
 
@@ -72,19 +83,23 @@ Resume reads from the last `compaction` record forward. For a `tool_call` with n
 
 These let an orchestrator read liveness and cost as facts instead of guessing from a pid or a file's mtime.
 
-- `heartbeat` (ignorable): `state` (`working`, `waiting_permission`, `idle`), `turn`, `spent_usd`, `wall_secs`, `pid`. A harness writes one every 30 s for as long as its process lives, idle included, and one on each state change. A reader counts a session alive while its newest heartbeat is under 90 s old. A quiet record proves nothing either way: silence never proves a session dead.
+- `heartbeat` (ignorable): `state` (`working`, `waiting_permission`, `idle`), `turn`, `spent_usd`, `wall_secs`, `pid`. A harness writes one every 30 s while its process lives, idle included. It also writes one on each state change. A reader counts a session alive while its newest heartbeat is under 90 s old. A quiet record proves nothing either way: silence never proves a session dead.
 - `terminal`: `state` (`done`, `budget`, `refused`, `interrupted`, `error`), `reason`, `turns`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`. One per run. The totals cover the whole session record, so after a resume the newest `terminal` holds the session's spend so far.
 
-fno reads them this way. When a footnote child exits, fno writes one execution entry per session to its ledger from the newest `terminal`, and the node's cost rolls up from there. A fresh heartbeat is a positive liveness marker for a footnote row.
+fno reads them this way. When a footnote child exits, fno writes the newest `terminal` to its ledger as one entry per session. The node's cost rolls up from there. A fresh heartbeat is a positive liveness marker for a footnote row.
 
 ## 4. Verdict types
 
-A harness may check each claim in its final reply against its own records. fnh does. The rules that decide a verdict belong to the harness. The spec names only the words and the fields.
+A harness can check each claim in its final reply against its own records. fnh does. The rules that decide a verdict belong to the harness. The spec names only the words and the fields.
 
-- `footnotes` (ignorable): one per ended run. `gist`; `claims`, one `{n, text, verdict, reason_code, check, footnotes}` per claim; `claims_total`, `claims_accepted`, `claims_missing`, `claims_rejected`, `claims_unverifiable`, `claims_stale`; `checks` (`{passed, failed, not_run}`); `next`; `ending` (`done`, or the terminal state of a run that did not end done); `first_draft`; `signals`; `tests_touched`; `via` (`footnotes_tool`, `text` or `loop`); `reasked`; `head_sha` (null outside git); `attester_session_id`; `reviewer`.
-- A footnote is `{mark, source, verdict, reason_code, record_id, seq, kind, label}`. `kind` is `diff`, `run`, `read`, `turn`, `pr` or `tool`, or null when the source names no record.
+- `footnotes` (ignorable): one per ended run. Its fields follow.
+  - `gist`, `ending` (`done`, or the terminal state of a run that did not end done), `head_sha` (null outside git).
+  - `claims`: one `{n, text, verdict, reason_code, check, footnotes}` per claim.
+  - Counts: `claims_total`, `claims_accepted`, `claims_missing`, `claims_rejected`, `claims_unverifiable`, `claims_stale`, and `checks` (`{passed, failed, not_run}`).
+  - Run notes: `next`, `first_draft`, `signals`, `tests_touched`, `via` (`footnotes_tool`, `text` or `loop`), `reasked`, `attester_session_id`, `reviewer`.
+- A footnote is `{mark, source, verdict, reason_code, record_id, seq, kind, label}`. If the source names no record, `kind` is null. Otherwise it is `diff`, `run`, `read`, `turn`, `pr` or `tool`.
 - A footnote `verdict` is `accepted`, `missing`, `rejected`, `unverifiable` or `stale`.
-- A claim `verdict` is `accepted` when every footnote is accepted. Otherwise it is the worst of `rejected`, `missing`, `unverifiable` and `stale`. A check the harness did not run reads `not_run` and stays out of `claims_total`. `reason_code` names the rule that forced a verdict, for example `self_written` or `no_observation`.
-- `footnotes_post` (ignorable): one per attempt to post the verdicts to a pull request. `status` (`posted`, `failed` or `skipped`), `reason`; a post also carries `action` (`created` or `updated`), `comment_id`, `pr`, `url` and `head_sha`.
+- If every footnote of a claim is accepted, the claim is `accepted`. Otherwise it takes the worst of `rejected`, `missing`, `unverifiable` and `stale`. A check the harness did not run reads `not_run` and stays out of `claims_total`. `reason_code` names the rule that forced a verdict, for example `self_written` or `no_observation`.
+- `footnotes_post` (ignorable): one per attempt to post the verdicts to a pull request. It carries `status` (`posted`, `failed` or `skipped`) and `reason`. A post also carries `action` (`created` or `updated`), `comment_id`, `pr`, `url` and `head_sha`.
 
 A verdict counts as evidence only at the commit it names. A `footnotes` record whose `head_sha` is not the pull request's head is stale.
