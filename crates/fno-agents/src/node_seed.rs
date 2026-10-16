@@ -1053,7 +1053,7 @@ mod tests {
             "thread",
             "/fno:target x-aaaa"
         ]);
-        p["seed_index"] = json!(4);
+        p["seed_index"] = json!(5);
         let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
         assert_eq!(out["action"], "compose");
         let argv = out["argv"].as_array().unwrap();
