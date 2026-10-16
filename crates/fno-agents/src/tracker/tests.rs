@@ -609,3 +609,78 @@ fn a_linear_tracker_without_the_api_key_refuses_naming_the_env_var() {
         other => panic!("expected Refused, got {:?}", other),
     }
 }
+
+/// Records argv and answers every `issue list` with one canned payload, so a
+/// test can prove the Rust-side label check never leans on `gh` filtering.
+struct RecordingGh {
+    answer: (i32, String, String),
+    calls: Arc<Mutex<Vec<Vec<String>>>>,
+}
+
+impl github::GhRun for RecordingGh {
+    fn run(&self, args: &[String]) -> Result<(i32, String, String), String> {
+        self.calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(args.to_vec());
+        Ok(self.answer.clone())
+    }
+}
+
+#[test]
+fn list_labeled_keeps_only_both_label_issues_and_refuses_before_gh() {
+    let issues = json!([
+        {"number": 7, "title": "Add dark mode", "body": "please", "author": {"login": "visitor-1"},
+         "labels": [{"name": "fno-request"}, {"name": "FNO-Approved"}]},
+        {"number": 8, "title": "Only request", "body": "b", "author": {"login": "visitor-2"},
+         "labels": [{"name": "fno-request"}]},
+        {"number": 9, "title": "Approved only", "body": "c", "author": {"login": "visitor-3"},
+         "labels": [{"name": "fno-approved"}]}
+    ]);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let tracker = GitHubTracker::new(
+        None,
+        Box::new(RecordingGh {
+            answer: (0, issues.to_string(), String::new()),
+            calls: calls.clone(),
+        }),
+    );
+    let got = tracker
+        .list_labeled("o/r", "fno-request", "fno-approved", 100)
+        .unwrap();
+    assert_eq!(got.len(), 2, "only issues carrying both labels import");
+    assert_eq!(got[0].number, 7);
+    assert_eq!(got[0].login, "visitor-1");
+    assert_eq!(got[1].number, 8, "label match ignores case");
+    let argv = calls.lock().unwrap_or_else(|e| e.into_inner())[0].clone();
+    let joined = argv.join(" ");
+    assert!(joined.contains("--label fno-request"), "{joined}");
+    assert!(joined.contains("--label fno-approved"), "{joined}");
+    assert!(joined.contains("--state open"), "{joined}");
+    assert!(
+        joined.contains("--json number,title,body,author,labels"),
+        "{joined}"
+    );
+    // A bad repo and equal labels refuse before any gh call.
+    assert!(tracker
+        .list_labeled("o/r --web", "fno-request", "fno-approved", 100)
+        .is_err());
+    assert!(tracker
+        .list_labeled("o/r", "fno-request", "FNO-REQUEST", 100)
+        .is_err());
+    assert_eq!(
+        calls.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        1,
+        "the refusals must not reach gh"
+    );
+    let failing = GitHubTracker::new(
+        None,
+        Box::new(RecordingGh {
+            answer: (1, String::new(), "boom".into()),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }),
+    );
+    assert!(failing
+        .list_labeled("o/r", "fno-request", "fno-approved", 100)
+        .is_err());
+}
