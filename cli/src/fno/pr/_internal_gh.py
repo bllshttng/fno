@@ -93,6 +93,9 @@ def _rest_runner(real_gh: str, runner: Callable) -> Callable:
                 if served is not None:
                     return served
             kwargs.setdefault("env", _quota.delegate_environment())
+            refusal = _quota.admit(argv[1:])
+            if refusal:
+                return Result(_quota.REFUSED, "", refusal)
         return runner(argv, **kwargs)
 
     return invoke
