@@ -64,25 +64,22 @@ def _door_get(argv: Sequence[str], cwd: str | None) -> Result | None:
     """A plain REST GET through the Rust conditional door, or None to run it here.
 
     The door owns which paths qualify and answers ``eligible: false`` for the
-    rest, so no copy of that rule lives in Python. An unreachable door is a
-    miss, not an error: the plain read below stays the truth.
+    rest. An unreachable door is a miss: the plain read stays the truth.
     """
     if len(argv) != 3 or argv[1] != "api":
         return None
     from fno.rust_binary import VerbUnavailable, verb_call
 
+    payload = {"op": "status-rest-get", "cwd": cwd or os.getcwd(), "path": argv[2]}
     try:
-        answer = verb_call(
-            "authorized-merge",
-            {"op": "status-rest-get", "cwd": cwd or os.getcwd(), "path": argv[2]},
-            timeout=120,
-        )
+        answer = verb_call("authorized-merge", payload, timeout=120)
     except VerbUnavailable:
         return None
     if not answer.get("eligible"):
         return None
-    ok = bool(answer.get("ok"))
-    return Result(0 if ok else 1, answer.get("stdout", ""), answer.get("stderr", ""))
+    return Result(
+        0 if answer.get("ok") else 1, answer.get("stdout", ""), answer.get("stderr", "")
+    )
 
 
 def _rest_runner(real_gh: str, runner: Callable) -> Callable:
