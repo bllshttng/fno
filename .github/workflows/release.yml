@@ -301,8 +301,7 @@ jobs:
           echo "source version at ${sha}: ${src}"
 
           # exit 3 (stable already shipped) reads as an idempotent no-op;
-          # exit 1 (v<src> released on another channel) is a real failure
-          # naming the sync-version bump. stderr is captured so a failure
+          # any other exit is a real failure. stderr is captured so a failure
           # re-emits as ::error annotations naming the cause, not a bare
           # exit 1 under set -e.
           rc=0
