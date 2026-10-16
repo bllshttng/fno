@@ -89,6 +89,7 @@ fn pr_sessions_matches_python_goldens() {
         let payload = fs::read_to_string(case_dir.join("payload.json")).expect("payload");
         let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
             .args(["pr-watch", SUBJECT])
+            .envs(fno_agents::test_run::self_owner_env())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -164,6 +165,7 @@ fn mint_matches_python_goldens() {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
             .args(["pr-watch", "merge-cleanup-mint"])
             .env("FNO_AGENTS_HOME", &home)
+            .envs(fno_agents::test_run::self_owner_env())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -265,6 +267,9 @@ fn ritual_matches_python_goldens() {
             cmd.env_clear();
             for (k, v) in env.as_object().expect("case env object") {
                 cmd.env(k, v.as_str().expect("env string value"));
+            }
+            for (k, v) in fno_agents::test_run::self_owner_env() {
+                cmd.env(k, v);
             }
         };
         let slug_for_seed = slug.clone();
