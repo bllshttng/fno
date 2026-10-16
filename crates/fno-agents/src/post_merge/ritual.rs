@@ -705,9 +705,14 @@ impl Ritual {
             let detail = format!(
                 "held, a sweep was already in flight (requests={}, holder={})",
                 obj.get("requests")
-                    .map(|v| v.to_string())
+                    .and_then(Value::as_i64)
+                    .map(|n| n.to_string())
                     .unwrap_or_default(),
-                obj.get("holder").map(|v| v.to_string()).unwrap_or_default(),
+                // The string prints bare, like the Python f-string did; a
+                // serde Value's to_string would quote it.
+                obj.get("holder")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             );
             self.step("reconcile", DEFERRED, &detail);
         } else if !held.is_empty() {
