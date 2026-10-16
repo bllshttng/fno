@@ -22,13 +22,16 @@ pub struct NodeCalibration {
     pub domain: Option<String>,
     /// `difficulty_history[0].value` - the difficulty filed at intake.
     pub planned_difficulty: Option<String>,
-    /// `difficulty_history.len() > 1` - the estimate was revised after filing.
+    /// A later `difficulty_history` entry whose `value` differs from the
+    /// filed one - a confirmation (same value, new `source`) does not count.
     pub re_estimated: bool,
     /// The flat `size` field; fno tracks no history for it.
     pub planned_size: Option<String>,
-    /// Sum of `cost_sessions[].cost_usd`. Never includes an unpriced session
-    /// - `cost_sessions` only ever holds priced rows (see
-    /// `docs/architecture/cost-accuracy.md`'s "Unpriced policy").
+    /// Sum of `cost_sessions[].cost_usd`. Every writer of a `cost_sessions`
+    /// row coerces an unpriced session's cost to `0.0` rather than omitting
+    /// it or writing `null` (`cli/src/fno/cost/__init__.py`'s `_as_cost`,
+    /// `cli/src/fno/done/cli.py`'s rollup), so this sum is never silently
+    /// short a row `session_count` still counts.
     pub actual_cost_usd: f64,
     pub session_count: usize,
     /// `completed_at - created_at`, when both parse as RFC3339.
@@ -51,10 +54,14 @@ pub struct AggregateRow {
     pub avg_duration_hours: Option<f64>,
 }
 
+/// Reuses the event store's own RFC3339 parser rather than a second hand-
+/// rolled one. Negative (completed_at before created_at - clock skew, a
+/// backfilled created_at) reads as unmeasured, never as a negative average.
 fn parse_rfc3339_hours(a: &str, b: &str) -> Option<f64> {
-    let start = chrono::DateTime::parse_from_rfc3339(a).ok()?;
-    let end = chrono::DateTime::parse_from_rfc3339(b).ok()?;
-    Some((end - start).num_seconds() as f64 / 3600.0)
+    let start = crate::event_store::parse_rfc3339_ms(a)?;
+    let end = crate::event_store::parse_rfc3339_ms(b)?;
+    let hours = (end - start) as f64 / 3_600_000.0;
+    (hours >= 0.0).then_some(hours)
 }
 
 /// Computes one [`NodeCalibration`] per done node that carries at least one
@@ -73,19 +80,19 @@ pub fn compute(
         if node.get("status").and_then(Value::as_str) != Some("done") {
             continue;
         }
-        let cost_sessions = node
+        let cost_sessions: &[Value] = node
             .get("cost_sessions")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if cost_sessions.is_empty() {
             continue;
         }
-        let difficulty_history = node
+        let difficulty_history: &[Value] = node
             .get("difficulty_history")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let planned_difficulty = difficulty_history
             .first()
             .and_then(|e| e.get("value").and_then(Value::as_str))
@@ -189,23 +196,17 @@ pub fn friction_counts_by_node(journal: &Path) -> BTreeMap<String, BTreeMap<Stri
         Err(_) => return out,
     };
     for row in rows {
-        let Ok(env) = serde_json::from_str::<Value>(&row.line) else {
+        // The canonical identity reader (resolves both the "node_id" and
+        // "node" key aliases a friction row could carry), not a second
+        // hand-rolled parse of the same envelope.
+        let Some(node_id) = crate::event_store::extract_identity(&row.line).node_id else {
             continue;
         };
-        let Some(data) = env.get("data") else {
-            continue;
-        };
-        let Some(node_id) = data.get("node_id").and_then(Value::as_str) else {
-            continue;
-        };
-        let origin = data
-            .get("origin")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        *out.entry(node_id.to_string())
-            .or_default()
-            .entry(origin.to_string())
-            .or_insert(0) += 1;
+        let origin = serde_json::from_str::<Value>(&row.line)
+            .ok()
+            .and_then(|env| env.get("data")?.get("origin")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        *out.entry(node_id).or_default().entry(origin).or_insert(0) += 1;
     }
     out
 }
