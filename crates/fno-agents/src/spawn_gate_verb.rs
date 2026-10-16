@@ -2443,4 +2443,75 @@ mod tests {
             crate::spawn_gate_reservations::RESERVATION_RULE.contains("expires within 15 minutes")
         );
     }
+    #[test]
+    fn probe_reports_the_burst_cap_when_cpu_and_ram_have_room() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-verb-burst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        let claims_root = dir.join("claims-root");
+        std::fs::create_dir_all(claims_root.join(".fno/claims")).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 2\nmin_free_gb = 0.001\nmax_swap_pct = 0\n",
+        )
+        .unwrap();
+        let prior_config = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+
+        let me = std::process::id();
+        let good = crate::daemon::process_start_time(me).unwrap_or(0);
+        let row = |name: &str| {
+            format!(
+                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
+            )
+        };
+        std::fs::write(
+            home.join("registry.json"),
+            format!(
+                r#"{{"schema_version":{},"entries":[{}, {}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row("p1"),
+                row("p2")
+            ),
+        )
+        .unwrap();
+
+        let answer = probe::answer(&json!({}));
+
+        assert_eq!(answer["verdict"], "accepted", "{answer}");
+        assert_eq!(answer["max_live"], 3);
+        assert!(
+            answer["cap_clause"]
+                .as_str()
+                .unwrap_or("")
+                .contains("burst past agents.max_live 2"),
+            "{}",
+            answer["cap_clause"]
+        );
+
+        std::env::remove_var(crate::paths::HOME_ENV);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_config {
+            Some(value) => std::env::set_var("FNO_CONFIG", value),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -429,6 +429,8 @@ fn a_lead_row_takes_no_worker_slot() {
 
 /// The gate refused at load 8 of 16 cores with 90 percent of RAM free. With
 /// CPU and RAM room the learned cap yields; the user's max_live still holds.
+/// The ceiling holds in the second half because the fixture sets
+/// `min_free_gb = 0`: a disabled memory axis gives no burst.
 #[test]
 fn the_learned_cap_yields_when_cpu_and_ram_have_room() {
     let fixture = SuccessionFixture::new(3);
@@ -507,49 +509,6 @@ fn max_live_yields_one_spawn_a_minute_when_cpu_and_ram_have_room() {
             &serde_json::json!(2),
             &serde_json::json!("settling"),
             &serde_json::json!(60)
-        )
-    );
-}
-
-/// AC4-EDGE: the learned-cap yield test keeps its verdicts now that a burst
-/// exists, because `min_free_gb = 0` turns the memory axis off: the user's
-/// max_live holds and the refusal still names MAX_LIVE_REMEDY.
-#[test]
-fn the_ceiling_holds_when_the_memory_axis_is_off() {
-    let fixture = SuccessionFixture::new(3);
-    let now = chrono::Utc::now().timestamp();
-    crate::capacity::write_state(
-        &crate::paths::AgentsHome::from_env(),
-        &crate::capacity::CapacityState {
-            ceiling: 3,
-            effective: 1,
-            reason: Some("CPU-bound".into()),
-            since: Some(now - 60),
-            slots_learned: None,
-            over_since: None,
-            calm_since: None,
-            memory: None,
-            accounts: Vec::new(),
-            workers_live: None,
-            updated_epoch: now - 60,
-        },
-    )
-    .unwrap();
-    let workers = |n: usize| {
-        (0..n)
-            .map(|i| fixture.worker(&format!("w{i}"), "s"))
-            .collect::<Vec<_>>()
-    };
-    fixture.write_entries(workers(3));
-    let refusal = fixture
-        .spawn("next", None, None)
-        .expect_err("3 live of max_live 3 with the memory axis off: the ceiling holds");
-    let receipt = refusal.receipt.expect("refusal carries a receipt");
-    assert_eq!(
-        (&receipt["max_live"], &receipt["remedy"]),
-        (
-            &serde_json::json!(3),
-            &serde_json::json!(crate::capacity::MAX_LIVE_REMEDY)
         )
     );
 }
