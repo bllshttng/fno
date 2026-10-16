@@ -20,6 +20,7 @@ const UNBINDABLE: [&str; 3] = ["done", "superseded", "retracted"];
 
 /// What the door decided for one payload. `Silent` writes and prints
 /// nothing; the other two carry the one line the shim relays.
+#[derive(Debug)]
 pub(crate) enum BindOutcome {
     Silent,
     Bound(String),
