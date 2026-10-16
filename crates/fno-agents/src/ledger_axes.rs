@@ -327,10 +327,11 @@ fn upsert_locked(ledger: &Path, fno_id: &str, row: Value) -> Result<(), String> 
         .iter_mut()
         .find(|e| e["type"] == "execution" && e["fno_id"] == fno_id)
     {
-        // Merge, never replace: other writers stamp the row (pr_number).
+        // Merge, never replace: other writers stamp the row (pr_number),
+        // and a resume that lost a field (plan_path) must not null it.
         Some(existing) => {
             if let (Some(old), Value::Object(new)) = (existing.as_object_mut(), row) {
-                old.extend(new);
+                old.extend(new.into_iter().filter(|(_, v)| !v.is_null()));
             }
         }
         None => entries.push(row),

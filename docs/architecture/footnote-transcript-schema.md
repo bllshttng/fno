@@ -86,7 +86,7 @@ These let an orchestrator read liveness and cost as facts instead of guessing fr
 - `heartbeat` (ignorable): `state` (`working`, `waiting_permission`, `idle`), `turn`, `spent_usd`, `wall_secs`, `pid`. A harness writes one every 30 s while its process lives, idle included. It also writes one on each state change. A reader counts a session alive while its newest heartbeat is under 90 s old. A quiet record proves nothing either way: silence never proves a session dead.
 - `terminal`: `state` (`done`, `budget`, `refused`, `interrupted`, `error`), `reason`, `turns`, `tool_calls`, `input_tokens`, `output_tokens`, `cost_usd`. One per run. The totals cover the whole session record, so after a resume the newest `terminal` holds the session's spend so far.
 
-fno reads them this way. When a footnote child exits, fno writes the newest `terminal` to its ledger as one entry per session. The node's cost rolls up from there. A fresh heartbeat is a positive liveness marker for a footnote row.
+fno reads them this way. When a footnote child exits, fno writes the newest `terminal` to its ledger as one entry per session. The node's cost rolls up from there. The entry's `termination_reason` maps the terminal state. `done` reads `Done`, `budget` reads `Budget`, and `interrupted` reads `Interrupted`. `refused` and `error` read `Aborted`. A merged PR never stamps onto a `Budget`, `Interrupted` or `Aborted` entry. A fresh heartbeat is a positive liveness marker for a footnote row.
 
 ## 4. Verdict types
 

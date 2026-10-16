@@ -39,6 +39,29 @@ fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
         (row["graph_node_id"].as_str(), row["model"].as_str()),
         (Some("x-1"), Some("glm-y"))
     );
+    assert_eq!(row["termination_reason"], "Done");
+    // A resume that lost the plan path keeps the known one; a budget stop
+    // reads as non-delivery, so the merge backstop skips it.
+    let lost = LaunchSpec {
+        plan_path: None,
+        ..spec.clone()
+    };
+    records.push(rec(
+        3,
+        "terminal",
+        json!({"state": "budget", "cost_usd": 0.5}),
+    ));
+    let row = execution_row(&records, &lost, None).unwrap();
+    crate::ledger_axes::upsert_execution(&ledger, row).unwrap();
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&ledger).unwrap()).unwrap();
+    let row = &data["entries"][0];
+    assert_eq!(
+        (
+            row["plan_path"].as_str(),
+            row["termination_reason"].as_str()
+        ),
+        (Some("/plans/p.md"), Some("Budget"))
+    );
     std::fs::write(&ledger, "not json").unwrap();
     let row = execution_row(&records, &spec, None).unwrap();
     assert!(crate::ledger_axes::upsert_execution(&ledger, row).is_err());
@@ -54,6 +77,14 @@ fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
     std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at))).unwrap();
     assert!(transcript::heartbeat_fresh(&path, at + 30));
     assert!(!transcript::heartbeat_fresh(&path, at + 120));
+    // An offset timestamp names the same instant as its UTC form.
+    let west = chrono::FixedOffset::west_opt(7200).unwrap();
+    let ts = chrono::DateTime::from_timestamp(at as i64, 0)
+        .unwrap()
+        .with_timezone(&west);
+    let beat = json!({"ts": ts.to_rfc3339(), "type": "heartbeat", "data": {"state": "idle"}});
+    std::fs::write(&path, format!("{}\n{beat}\n", records[0])).unwrap();
+    assert!(transcript::heartbeat_fresh(&path, at + 30));
     std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at - 120))).unwrap();
     assert!(!transcript::heartbeat_fresh(&path, at));
     std::fs::write(&path, format!("{}\n", records[0])).unwrap();

@@ -51,9 +51,10 @@ pub fn heartbeat_fresh(record: &Path, now_secs: u64) -> bool {
         .is_some_and(|at| now_secs.saturating_sub(at) < HEARTBEAT_STALE_SECS)
 }
 
-/// A record `ts` carries milliseconds; the registry parser reads seconds.
+/// Any RFC3339 `ts`, offset included, as UTC epoch seconds.
 fn ts_secs(ts: &str) -> Option<u64> {
-    crate::state::rfc3339_like_to_secs(&format!("{}Z", ts.get(..19)?))
+    let at = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
+    u64::try_from(at.timestamp()).ok()
 }
 
 /// `~/.fno/sessions`, beside the spaces root so test fences on that root

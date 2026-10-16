@@ -208,6 +208,13 @@ fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -
         .node
         .clone()
         .or_else(|| header["node"].as_str().map(str::to_string));
+    // The merge backstop stamps a PR only onto a row outside NON_DELIVERY.
+    let reason = match end.state.as_str() {
+        "done" => "Done",
+        "budget" => "Budget",
+        "interrupted" => "Interrupted",
+        _ => "Aborted",
+    };
     Some(serde_json::json!({
         "type": "execution",
         "harness": "footnote",
@@ -220,6 +227,7 @@ fn execution_row(records: &[Value], spec: &LaunchSpec, reported: Option<&str>) -
         "started": records.first().map(|r| r["ts"].clone()),
         "completed": rec["ts"],
         "cost_usd": end.cost_usd,
+        "termination_reason": reason,
         "footnote_terminal": end,
     }))
 }
