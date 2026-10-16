@@ -769,9 +769,31 @@ fn dispatch_op(payload: &Value) -> i32 {
             print_status();
             0
         }
+        Some("spend") => {
+            let hours = payload.get("hours").and_then(Value::as_i64).unwrap_or(1);
+            let github = if payload
+                .get("github")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                Some(crate::gh_spend::rate_limit_probe())
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                crate::gh_spend::spend_report_at(
+                    &crate::gh_spend::journal_path(),
+                    now,
+                    hours,
+                    github,
+                )
+            );
+            0
+        }
         other => {
             eprintln!(
-                "gh-budget: unknown op {other:?}; expected admit, refused, or status \
+                "gh-budget: unknown op {other:?}; expected admit, refused, spend, or status \
                  (fno-agents fleet-incident gh-budget)"
             );
             2

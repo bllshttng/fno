@@ -430,6 +430,230 @@ pub(crate) fn append(path: &std::path::Path, line: &str) -> Result<(), String> {
         .map_err(|e| format!("cannot append {}: {e}", path.display()))
 }
 
+/// The fixed blind-spot sentence every spend report carries: a partial
+/// journal must never read as a complete answer.
+const BLIND_SPOTS: &str = "gh spawned by Python fno-py straight off PATH, the Python proxy when FNO_AGENT_SELF is unset, worker shells, and every other machine never reach this journal";
+
+/// One exempt `gh api rate_limit` read: GitHub prices it at 0, so the
+/// probe answers even mid-outage and the report can name the real
+/// account-wide state. A failed probe is an error payload, never a guess.
+pub(crate) fn rate_limit_probe() -> Result<Value, String> {
+    let out = crate::loopcheck::bounded_read(
+        std::ffi::OsStr::new("gh"),
+        &["api", "rate_limit"],
+        std::path::Path::new("."),
+        "spend rate_limit",
+        std::time::Duration::from_secs(120),
+    )
+    .map_err(|e| format!("{e}"))?;
+    if !out.status.success() {
+        let tail: String = String::from_utf8_lossy(&out.stderr_tail)
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(tail);
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("unparseable rate_limit: {e}"))
+}
+
+/// The journal rows (the `.1` generation first) newer than `since_ms`.
+fn read_rows(journal: &std::path::Path, since_ms: i64) -> Vec<Value> {
+    let older = PathBuf::from(format!("{}.1", journal.display()));
+    let mut rows = Vec::new();
+    for path in [older, journal.to_path_buf()] {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if v.get("ts_ms")
+                .and_then(Value::as_i64)
+                .is_some_and(|ts| ts >= since_ms)
+            {
+                rows.push(v);
+            }
+        }
+    }
+    rows
+}
+
+/// The `spend` op body, with the clock and the probe outcome injected so
+/// tests pass a temp journal: `github` is None when not requested,
+/// `Some(Err)` when the exempt read failed, `Some(Ok)` with the
+/// `gh api rate_limit` payload when it answered.
+pub(crate) fn spend_report_at(
+    journal: &std::path::Path,
+    now: i64,
+    hours: i64,
+    github: Option<Result<Value, String>>,
+) -> Value {
+    let hours = hours.clamp(1, 24);
+    let since = now - hours * 3_600_000;
+    let rows = read_rows(journal, since);
+
+    let mut admitted_core = 0i64;
+    let mut admitted_core_conditional = 0i64;
+    let mut admitted_graphql = 0i64;
+    let mut refused: std::collections::BTreeMap<String, i64> = Default::default();
+    struct CallerAgg {
+        core: i64,
+        core_conditional: i64,
+        graphql: i64,
+        refused: i64,
+    }
+    let mut by_caller: std::collections::BTreeMap<String, CallerAgg> = Default::default();
+    let mut by_shape: std::collections::BTreeMap<(String, String, String, bool), i64> =
+        Default::default();
+
+    for r in &rows {
+        let bucket = r.get("bucket").and_then(Value::as_str).unwrap_or("");
+        let conditional = r
+            .get("conditional")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let caller = r
+            .get("caller")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let shape = r.get("shape").and_then(Value::as_str).unwrap_or("");
+        let verdict = r.get("verdict").and_then(Value::as_str).unwrap_or("");
+        let agg = by_caller.entry(caller.clone()).or_insert(CallerAgg {
+            core: 0,
+            core_conditional: 0,
+            graphql: 0,
+            refused: 0,
+        });
+        match (verdict, bucket, conditional) {
+            ("admitted", "core", true) => {
+                admitted_core_conditional += 1;
+                agg.core_conditional += 1;
+            }
+            ("admitted", "core", false) => {
+                admitted_core += 1;
+                agg.core += 1;
+            }
+            ("admitted", "graphql", _) => {
+                admitted_graphql += 1;
+                agg.graphql += 1;
+            }
+            ("admitted", _, _) => {}
+            ("refused", _, _) => {
+                let cause = r
+                    .get("cause")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                *refused.entry(cause).or_default() += 1;
+                agg.refused += 1;
+            }
+            _ => {}
+        }
+        *by_shape
+            .entry((caller, shape.to_string(), bucket.to_string(), conditional))
+            .or_default() += 1;
+    }
+
+    let mut callers: Vec<(String, CallerAgg)> = by_caller.into_iter().collect();
+    callers.sort_by(|a, b| b.1.core.cmp(&a.1.core).then(a.0.cmp(&b.0)));
+
+    let mut shapes: Vec<_> = by_shape.into_iter().collect();
+    shapes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    shapes.truncate(25);
+
+    let github_value = match github {
+        None => None,
+        Some(Err(e)) => Some(json!({"error": e})),
+        Some(Ok(v)) => {
+            let core = v.pointer("/resources/core");
+            let limit = core.and_then(|c| c.get("limit")).and_then(Value::as_i64);
+            let used = core.and_then(|c| c.get("used")).and_then(Value::as_i64);
+            let remaining = core
+                .and_then(|c| c.get("remaining"))
+                .and_then(Value::as_i64);
+            let reset = core.and_then(|c| c.get("reset")).and_then(Value::as_i64);
+            match (limit, used, remaining, reset) {
+                (Some(limit), Some(used), Some(remaining), Some(reset)) => {
+                    let window_start_ms = (reset - 3_600) * 1000;
+                    let mut window_core = 0i64;
+                    let mut window_conditional = 0i64;
+                    for r in &rows {
+                        let in_window = r
+                            .get("ts_ms")
+                            .and_then(Value::as_i64)
+                            .is_some_and(|ts| ts >= window_start_ms);
+                        let bucket = r.get("bucket").and_then(Value::as_str) == Some("core");
+                        let conditional = r
+                            .get("conditional")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let admitted = r.get("verdict").and_then(Value::as_str) == Some("admitted");
+                        if in_window && bucket && admitted {
+                            if conditional {
+                                window_conditional += 1;
+                            } else {
+                                window_core += 1;
+                            }
+                        }
+                    }
+                    Some(json!({
+                        "core_limit": limit,
+                        "core_used": used,
+                        "core_remaining": remaining,
+                        "core_reset_in_s": (reset - now / 1000).max(0),
+                        "window_core_admitted": window_core,
+                        "outside_ledger_core_min": (used - window_core - window_conditional).max(0),
+                    }))
+                }
+                _ => Some(json!({"error": "rate_limit payload carried no resources.core"})),
+            }
+        }
+    };
+
+    let mut out = json!({
+        "since_ms": since,
+        "machine": crate::claims::hostname(),
+        "rows": rows.len(),
+        "admitted": {
+            "core": admitted_core,
+            "core_conditional": admitted_core_conditional,
+            "graphql": admitted_graphql,
+        },
+        "refused": refused,
+        "by_caller": callers
+            .into_iter()
+            .map(|(caller, agg)| json!({
+                "caller": caller,
+                "core": agg.core,
+                "core_conditional": agg.core_conditional,
+                "graphql": agg.graphql,
+                "refused": agg.refused,
+            }))
+            .collect::<Vec<_>>(),
+        "by_shape": shapes
+            .into_iter()
+            .map(|((caller, shape, bucket, conditional), count)| json!({
+                "caller": caller,
+                "shape": shape,
+                "bucket": bucket,
+                "conditional": conditional,
+                "count": count,
+            }))
+            .collect::<Vec<_>>(),
+        "blind_spots": BLIND_SPOTS,
+    });
+    if let Some(g) = github_value {
+        out["github"] = g;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +750,91 @@ mod tests {
         std::fs::write(&target, b"file, so children under it fail").unwrap();
         let err = append(&target.join("github-request-spend.jsonl"), "{}");
         assert!(err.is_err(), "append into a file-named dir must fail");
+    }
+
+    #[test]
+    fn spend_report_aggregates_a_journal_and_survives_an_empty_one() {
+        // AC2-HP: three core rows from one caller, one conditional row from
+        // another, one row 2h old - hours 1 drops the old row and ranks
+        // by core.
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = tmp.path().join("github-request-spend.jsonl");
+        let now = 1_760_000_000_000i64;
+        let row = |ts_ms: i64, caller: &str, bucket: &str, cond: bool, verdict: &str| {
+            json!({
+                "ts_ms": ts_ms,
+                "caller": caller,
+                "shape": "api repos/{repo}/pulls/N",
+                "bucket": bucket,
+                "conditional": cond,
+                "points": 1,
+                "verdict": verdict,
+                "cause": Value::Null,
+            })
+            .to_string()
+        };
+        let old_ts = now - 2 * 3_600_000;
+        std::fs::write(
+            &journal,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                row(now - 1000, "fno do pr info", "core", false, "admitted"),
+                row(now - 2000, "fno do pr info", "core", false, "admitted"),
+                row(now - 3000, "fno do pr info", "core", false, "admitted"),
+                row(
+                    now - 4000,
+                    "authorized-merge status-wait review",
+                    "core",
+                    true,
+                    "admitted"
+                ),
+                row(old_ts, "fno do pr info", "core", false, "admitted"),
+            ),
+        )
+        .unwrap();
+
+        let report = spend_report_at(&journal, now, 1, None);
+        assert_eq!(report["rows"], 4, "the 2h-old row is excluded");
+        assert_eq!(report["admitted"]["core"], 3);
+        assert_eq!(report["admitted"]["core_conditional"], 1);
+        let callers = report["by_caller"].as_array().unwrap();
+        assert_eq!(callers[0]["caller"], "fno do pr info");
+        assert_eq!(callers[0]["core"], 3);
+        assert_eq!(
+            report["by_shape"].as_array().unwrap().len(),
+            2,
+            "conditional and unconditional shapes rank separately"
+        );
+        assert!(report["blind_spots"].as_str().is_some());
+
+        // AC2-EDGE: no journal file reads as an empty report, not an error.
+        let absent = tmp.path().join("absent.jsonl");
+        let report = spend_report_at(&absent, now, 1, None);
+        assert_eq!(report["rows"], 0);
+        assert_eq!(
+            report["by_caller"].as_array().unwrap().len(),
+            0,
+            "empty lists, exit 0"
+        );
+        assert!(report["github"].is_null(), "no probe, no github key");
+
+        // The github arm: the exempt probe's account-wide `used` minus this
+        // journal's window rows (conditional rows subtract too) names the
+        // outside spend as a lower bound.
+        let report = spend_report_at(
+            &journal,
+            now,
+            1,
+            Some(Ok(json!({
+                "resources": {
+                    "core": {"limit": 5000, "used": 400, "remaining": 100, "reset": now / 1000 + 600}
+                }
+            }))),
+        );
+        assert_eq!(report["github"]["window_core_admitted"], 3);
+        assert_eq!(
+            report["github"]["outside_ledger_core_min"], 396,
+            "400 used - 3 unconditional - 1 conditional"
+        );
     }
 }
