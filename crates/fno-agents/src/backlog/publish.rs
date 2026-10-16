@@ -431,7 +431,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// `owner` and `repo` out of a GitHub remote URL; anything else refuses,
 /// because the gh-pages target only knows GitHub's URL shape.
-fn parse_origin(url: &str) -> Option<(String, String)> {
+pub(crate) fn parse_origin(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches(".git");
     let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
         rest

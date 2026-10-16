@@ -503,7 +503,9 @@ pub(crate) fn session_provenance(
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
 /// legacy archive pool, the mint tombstones, and every id a plan
 /// frontmatter names. Must run inside the locked write.
-fn mint_node_id(existing: &std::collections::BTreeSet<String>) -> Result<String, String> {
+pub(crate) fn mint_node_id(
+    existing: &std::collections::BTreeSet<String>,
+) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
