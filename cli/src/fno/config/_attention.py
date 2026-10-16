@@ -4,13 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AttentionSinkBlock(BaseModel):
-    """One ``[[attention.sinks]]`` row: where an open question is pushed.
-
-    ``type`` is ``ntfy`` or ``webhook``; the daemon refuses any other value with a
-    tick detail rather than failing config load. ``token_env`` names the env var
-    holding the bearer token. ``body`` is ``"title-only"`` by default, because
-    anyone who knows a public topic reads it; ``"full"`` adds the recommendation.
-    """
+    """One ``[[attention.sinks]]`` row. ``type`` is ntfy or webhook, which the daemon
+    checks itself; ``token_env`` names the env var holding the bearer token."""
 
     model_config = ConfigDict(extra="ignore")
 

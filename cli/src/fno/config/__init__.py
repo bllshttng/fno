@@ -37,9 +37,7 @@ from fno.user import UserBlock
 from fno.config.build_block import BuildBlock as BuildBlock
 from fno.config.split_block import SplitBlock as SplitBlock
 
-# Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
-# here; the redundant `X as X` aliases are the explicit-reexport idiom mypy's
-# --no-implicit-reexport requires (these names used to be defined here).
+# Leaf modules re-exported here; `X as X` is the explicit-reexport idiom mypy requires.
 from fno.config import _watchdog
 from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
 from fno.config._auto_heal import AutoHealBlock
@@ -73,7 +71,6 @@ from fno.config_io import read_config_flat as read_config_flat
 
 _LOG = logging.getLogger(__name__)
 
-# POSIX PATH_MAX
 _PATH_MAX = 4096
 
 # Shell glob characters to reject in path values
