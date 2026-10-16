@@ -702,12 +702,23 @@ fn run_ritual_verb(pr: i64, cwd: &Path, timeout: f64) -> (bool, String) {
     };
     let mut cmd = Command::new(&exe);
     cmd.args(["pr-watch", "ritual", &pr.to_string(), "--autonomous"])
-        .current_dir(cwd);
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     let run = crate::post_merge::ritual::bounded(
         cmd,
         std::time::Duration::from_secs_f64(timeout.max(1.0)),
     );
-    let tail = run.stdout.lines().last().unwrap_or("").to_string();
+    // The oracle's forensic tail: the last 200 chars of the stripped stdout,
+    // not the last line - a mid-receipt cut still names the failing leg.
+    let stripped = run.stdout.trim();
+    let count = stripped.chars().count();
+    let tail: String = if count > 200 {
+        stripped.chars().skip(count - 200).collect()
+    } else {
+        stripped.to_string()
+    };
     (run.ok(), tail)
 }
 

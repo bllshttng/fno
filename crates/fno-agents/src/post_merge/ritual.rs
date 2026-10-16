@@ -66,7 +66,7 @@ fn git_text(argv: &[&str], cwd: &Path) -> String {
 /// durable parking-lot write must land where archive-worktree.sh cannot
 /// delete it. `--git-common-dir` points at the shared `.git` whose parent IS
 /// canonical; it may be relative, so resolve before taking the parent.
-fn canonical_root(cwd: &Path) -> Option<PathBuf> {
+pub(crate) fn canonical_root(cwd: &Path) -> Option<PathBuf> {
     let gcd = git_text(&["rev-parse", "--git-common-dir"], cwd);
     if !gcd.is_empty() {
         let p = PathBuf::from(&gcd);
