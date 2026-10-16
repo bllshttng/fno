@@ -481,7 +481,13 @@ pub(crate) fn decide_with_payload(
     // stop-time fidelity gate below must not wedge the worker on a block the
     // merge gate re-enforces at merge time anyway.
     let manifest_fields = crate::finalize::parse_manifest_fields(&manifest_content);
-    let manifest_no_merge = manifest_fields.auto_merge_approved == Some(false);
+    // A `default-off` stamp is init's failed config read, not a no-merge:
+    // the run may still own its merge, so it does not park the fidelity gate.
+    let manifest_no_merge = manifest_fields.auto_merge_approved == Some(false)
+        && !crate::authorized_merge::posture_is_default_off(
+            manifest_fields.auto_merge_approved,
+            manifest_fields.auto_merge_source.as_deref(),
+        );
 
     // Lease renewal: keep this session's node claim fresh on every
     // stop, so a worker whose supervisor pid died mid-run (and now runs under a
