@@ -474,7 +474,7 @@ mod tests {
     }
 
     // The footer dims with the rest of the pane when something else owns
-    // typing - the title rows already did this (x-4019); the hint had not.
+    // typing, the way the title rows already did; the hint had not.
     #[test]
     fn hint_dims_when_the_pane_is_not_the_input_owner() {
         let b = board_with_fixture();
