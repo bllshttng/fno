@@ -59,7 +59,7 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// no push row of its own never reads main red while the head's push CI is
 /// green. Once a workflow is seeded, a later completed run of that SAME
 /// workflow at the SAME head sha supersedes an earlier push run regardless
-/// of its own trigger (x-d4af): a concurrency group shared across triggers
+/// of its own trigger: a concurrency group shared across triggers
 /// can cancel the push run in favor of, say, a schedule run of the identical
 /// workflow and sha, and the cancelled run must not outlive that newer
 /// completion. A run on an OLDER commit never sets the verdict, however
@@ -93,7 +93,7 @@ fn main_ci_token_from_pages<'a>(
         on_main.iter().filter(|run| at_head(run) && is_push(run)),
     );
     // A later same-sha completed run of an ALREADY-seeded workflow supersedes
-    // an earlier push run's conclusion, from any trigger (x-d4af): a
+    // an earlier push run's conclusion, from any trigger: a
     // concurrency group shared across triggers can cancel the push run in
     // favor of, say, a schedule run of the identical workflow and sha, and
     // the cancelled run must not outlive a newer completion of that same
@@ -630,7 +630,7 @@ mod tests {
         );
     }
 
-    /// The filed bug's shape (x-d4af): cli-ci's push run at the head was
+    /// The filed bug's shape: cli-ci's push run at the head was
     /// cancelled (a concurrency group shared with the schedule trigger can
     /// preempt it), and a later schedule-triggered run of the SAME workflow
     /// completed success at the same sha. The schedule row would not seed a
