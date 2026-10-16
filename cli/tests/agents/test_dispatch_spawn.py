@@ -634,17 +634,24 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
 
 
 
-def test_spawn_pi_passes_the_seam_on_both_lanes_and_unmeasured_headless_refuses() -> None:
+def test_spawn_pi_passes_the_seam_on_both_lanes_and_unmeasured_headless_refuses(
+    tmp_path: Path,
+) -> None:
     """x-43bd arm 1: the seam is substrate-aware. pi passes on thread (its
     keeper lane is journey-proven) and on headless (measured by running it),
     while a harness whose headless stance reads `unmeasured` (grok) refuses,
-    naming the stance - not the old `unknown harness` contradiction."""
+    naming the stance - not the old `unknown harness` contradiction. The
+    Python spawn path has no pi one-shot, so it names the Rust lane instead
+    of falling to the retired-harness error."""
     from fno.agents import dispatch
 
     # Positive marker: the accepted name RETURNS rather than raising.
     dispatch._check_spawn_harness("pi", headless=False)
     dispatch._check_spawn_harness("pi")
     dispatch._check_spawn_harness("pi", headless=True)
+
+    with pytest.raises(dispatch.DispatchAskError, match="Rust runtime's headless lane"):
+        dispatch.dispatch_spawn("pi-once", "hi", "pi", tmp_path, headless=True)
 
     with pytest.raises(dispatch.DispatchAskError) as caught:
         dispatch._check_spawn_harness("grok", headless=True)
