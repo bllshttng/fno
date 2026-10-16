@@ -160,21 +160,11 @@ fn a_running_child_carries_a_start_token_and_a_stop_ends_it() {
         "footnote",
         "#!/bin/sh\ncat >/dev/null\nsleep 60\n",
     );
-    let vars = [
-        ("FNO_FOOTNOTE_BIN", bin.to_string_lossy().to_string()),
-        (
-            "ANTHROPIC_BASE_URL",
-            "https://api.z.ai/api/anthropic".to_string(),
-        ),
-        ("ANTHROPIC_AUTH_TOKEN", "k".to_string()),
-    ];
-    let saved: Vec<_> = vars
-        .iter()
-        .map(|(k, _)| (*k, std::env::var_os(k)))
-        .collect();
-    for (k, v) in &vars {
-        std::env::set_var(k, v);
-    }
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
     let (h, cwd) = (home.clone(), tmp.path().to_path_buf());
     let run = std::thread::spawn(move || {
         let params = serde_json::json!({});
@@ -208,12 +198,55 @@ fn a_running_child_carries_a_start_token_and_a_stop_ends_it() {
         .unwrap()
         .block_on(stop_confirmed(pid, started));
     run.join().unwrap();
+    restore_env(saved);
+    assert!(started.is_some(), "the row carries no pid start token");
+    assert!(stopped, "the child outlived the stop");
+}
+
+/// The pane spec is the launch spec in a file only its owner reads, because
+/// it carries the endpoint key. A missing model refuses before any write.
+#[test]
+fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let saved = set_env(&[
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
+    let refused = write_pane_spec(tmp.path(), "", None, None);
+    let path = write_pane_spec(tmp.path(), "glm-test", Some("x-1"), Some("plan"));
+    restore_env(saved);
+    assert!(refused.unwrap_err().contains("needs -m"));
+    let path = path.unwrap();
+    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    let spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(spec["v"], 2);
+    assert_eq!(spec["model"], "glm-test");
+    assert_eq!(spec["node"], "x-1");
+    assert_eq!(spec["permission_mode"], "plan");
+    assert!(spec["endpoint"]["key"]
+        .as_str()
+        .is_some_and(|k| !k.is_empty()));
+}
+
+fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    let saved = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in vars {
+        std::env::set_var(k, v);
+    }
+    saved
+}
+
+fn restore_env(saved: Vec<(&'static str, Option<std::ffi::OsString>)>) {
     for (k, v) in saved {
         match v {
             Some(v) => std::env::set_var(k, v),
             None => std::env::remove_var(k),
         }
     }
-    assert!(started.is_some(), "the row carries no pid start token");
-    assert!(stopped, "the child outlived the stop");
 }
