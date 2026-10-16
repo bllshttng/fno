@@ -457,7 +457,32 @@ impl Ritual {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        bounded(cmd, timeout)
+        // One gh call through the fleet-budget transport: it admits before
+        // the spawn (a refusal reads as exit 75 with the ledger line on
+        // stderr) and SIGKILLs the whole process group at the deadline. A
+        // signaled kill maps to the leg timeout receipt, like bounded does.
+        match crate::bounded_cmd::output_with_timeout_result(cmd, timeout.as_secs()) {
+            Err(e) => LegRun {
+                code: 127,
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+                spawn_error: Some(format!("spawn-error: {e}")),
+            },
+            Ok(out) => {
+                let (code, timed_out) = match out.status.code() {
+                    Some(c) => (c, false),
+                    None => (124, true),
+                };
+                LegRun {
+                    code,
+                    stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+                    timed_out,
+                    spawn_error: None,
+                }
+            }
+        }
     }
 
     /// (state, headRefName, mergedAt) from ONE gh call, memoized: two legs
@@ -515,20 +540,19 @@ impl Ritual {
 /// silent pick decides which worktree gets archived, so the receipt carries
 /// where the number came from (`source=most-recent-merge`).
 fn resolve_most_recent_merge(cwd: &Path) -> Option<i64> {
-    let out = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--state",
-            "merged",
-            "--json",
-            "number,mergedAt",
-            "--limit",
-            "1",
-        ])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--json",
+        "number,mergedAt",
+        "--limit",
+        "1",
+    ])
+    .current_dir(cwd);
+    let out = crate::gh_budget::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
