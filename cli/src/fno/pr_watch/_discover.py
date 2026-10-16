@@ -2,7 +2,7 @@
 
 Reuses ``fno.graph._reconcile`` primitives for node traversal and gh queries
 so the discovery and state logic stays close to its existing sibling
-(``scan_merge_drift``) without duplicating it.
+(``query_pr_merge_state``) without duplicating it.
 
 The public surface is two pure dataclasses plus two functions:
 - ``discover_open_prs`` filters graph entries to candidates worth polling.

@@ -87,6 +87,56 @@ pub(super) fn missing_global_attestations(
     out
 }
 
+/// The shared primary's attestation lines that this machine's journals do
+/// not already hold. The pull is repo-scoped at the source, so no repo
+/// filter here. The dedup key is the full payload minus `repo` (ts +
+/// stamped content), the rule the merge gate's rows read and the Python
+/// coverage read both apply: rounds at one head share reviewer and session,
+/// so an identity-tuple key would silently drop the later round and hide a
+/// blocking finding or resurrect a disposed one.
+pub(super) fn missing_primary_attestations(primary_text: &str, local_text: &str) -> String {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in local_text.lines() {
+        if let Some(k) = primary_dedup_key(line) {
+            seen.insert(k);
+        }
+    }
+    let mut out = String::new();
+    for line in primary_text.lines() {
+        if let Some(k) = primary_dedup_key(line) {
+            if seen.insert(k) {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// The full-payload mirror key for one `review_attestation` line: envelope
+/// ts plus the data payload minus its carrier keys, `repo` and the
+/// `attest_machine` stamp. The primary copy differs from the journal
+/// original in exactly those keys (both stamped at push when absent), so
+/// two copies of one attestation hash equal and two distinct rounds do
+/// not. Same rule as the native rows read's `attest_dedup_key` and the
+/// Python coverage read's mirror dedup.
+fn primary_dedup_key(line: &str) -> Option<String> {
+    let val: Value = serde_json::from_str(line).ok()?;
+    if val.get("type").and_then(|v| v.as_str()) != Some("review_attestation") {
+        return None;
+    }
+    let ts = val.get("ts").and_then(Value::as_str).unwrap_or("");
+    let mut data = val.get("data")?.clone();
+    if let Some(obj) = data.as_object_mut() {
+        obj.remove("repo");
+        obj.remove("attest_machine");
+    }
+    Some(format!(
+        "{ts}\u{1f}{}",
+        blake3::hash(data.to_string().as_bytes()).to_hex()
+    ))
+}
+
 /// The text-taking body of [`unattested_reviewers_scan`], split so the
 /// producer can feed the merged project-plus-global attestation text without
 /// a temp file.
@@ -308,6 +358,30 @@ mod tests {
         assert_eq!(merged, String::new());
         // No repo identity resolved: the global arm contributes nothing.
         assert_eq!(missing_global_attestations(&global, "", ""), String::new());
+    }
+
+    #[test]
+    fn a_primary_copy_stamped_with_its_writer_dedups_against_the_local_row() {
+        // The push stamps attest_machine into the primary copy only: the
+        // local journal row predates the stamp. The key drops both carrier
+        // keys, so the reviewing machine counts one round, never two.
+        let local = "{\"ts\":\"t1\",\"type\":\"review_attestation\",\"data\":{\"reviewer\":\"code-review\",\"head_sha\":\"aaaaaaaaaa\",\"verdict\":\"pass\",\"branch\":\"feature/x\",\"repo\":\"github.com/o/r\"}}";
+        let mut val: Value = serde_json::from_str(local).unwrap();
+        val["data"]["attest_machine"] = serde_json::json!("imac");
+        let stamped = val.to_string();
+        assert_eq!(
+            missing_primary_attestations(&format!("{stamped}\n"), &format!("{local}\n")),
+            String::new()
+        );
+        // A distinct round still lands: a different head is a different key.
+        let mut other: Value = serde_json::from_str(&stamped).unwrap();
+        other["data"]["head_sha"] = serde_json::json!("bbbbbbbbbb");
+        assert_eq!(
+            missing_primary_attestations(&format!("{stamped}\n{}\n", other), &format!("{local}\n"))
+                .lines()
+                .count(),
+            1
+        );
     }
 
     #[test]

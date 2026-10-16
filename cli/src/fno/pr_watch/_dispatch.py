@@ -1060,6 +1060,8 @@ def _run_tick(
                     _mark_handled(delivery_state, key, "CLOSED")
                 continue
 
+            # An outside merge mints no request; the watch mints it before the parked check.
+            _default_ensure_merge_cleanup(cand, obs.state)
             # Suppression only. A parked entry synthesized from the delivery
             # sidecar (a retries-exhausted merge) must not dispatch again.
             # Parked STATE entries never reach here; the batch loop above
@@ -1369,9 +1371,19 @@ def run_execute_queue(
             started = time.monotonic()
             _merge.LAST_RECEIPT.clear()
             try:
-                rc = _merge.run_merge([str(pr)], cwd=str(cand.repo_dir),
-                                      authority="durable_grant",
-                                      timeout_s=_ritual_timeout())
+                # The operand door answers exit 0 with the flow receipt even
+                # when the merge held or failed; the flow's own exit rides the
+                # payload, and observed_head rides it for head-bound parking.
+                from fno.rust_binary import verb_call
+
+                receipt = verb_call(
+                    "authorized-merge",
+                    {"op": "merge", "argv": [str(pr)],
+                     "authority": "durable_grant", "cwd": str(cand.repo_dir)},
+                    timeout=900,
+                )
+                _merge.LAST_RECEIPT.update(receipt)
+                rc = int(receipt.get("exit") or 0)
             except Exception as exc:  # noqa: BLE001 - a crash is a failed attempt
                 log.warning("pr-watch: durable-grant merge for PR #%d crashed: %s", pr, exc)
                 rc, _merge.LAST_RECEIPT["reason"] = 1, f"crashed: {exc}"
@@ -1488,45 +1500,66 @@ def _tracked_states_from_reader(keys: set[str], reader: Callable) -> tuple[dict[
 
 
 def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> Any:
-    """Hand one merged PR to the shared post-merge dispatcher (post_merge_route).
+    """Hand one merged PR to the native post-merge dispatcher (pr-watch
+    post-merge-dispatch).
 
-    The dispatcher decides warm/cold/defer in one place, reserves an attributable
-    receipt, then either live-injects the ritual verb or runs
-    ``fno do pr ritual <n> --autonomous`` directly (no bg thread), deduped on the
-    same per-merge-SHA marker reconcile used. ``fire_skill_fn`` is unused here -
-    the cold path is the direct verb, and the review check fire is a separate
-    tick branch - but it stays on the signature so the tick's
-    ``dispatch_ritual_fn`` protocol is uniform.
+    The dispatcher decides warm/cold in one place, reserves an attributable
+    receipt, then either live-injects the ritual verb or self-execs it (no bg
+    thread), deduped on the same per-merge-SHA marker reconcile uses. It reads
+    ``post_merge.auto_run`` itself, fail closed. ``fire_skill_fn`` stays on the
+    signature so the tick's ``dispatch_ritual_fn`` protocol is uniform.
+    VerbUnavailable raises: the tick logs one warning and the merge stays
+    retryable, exactly like a failed dispatch.
     """
-    from fno.post_merge_route import _default_run_ritual_verb, dispatch_post_merge_ritual
+    from types import SimpleNamespace
 
-    # Honor the post_merge.auto_run opt-in: a `ready` verdict means "configured +
-    # active", NOT "operator armed automatic dispatch". Without this gate, enabling
-    # pr-watch would run the ritual on a repo that never opted in. Fail closed on a
-    # config-load error.
-    auto_run = False
-    if cand.repo_dir is not None:
-        try:
-            from fno.config import load_settings_for_repo
+    from fno.rust_binary import verb_call
 
-            auto_run = bool(load_settings_for_repo(Path(cand.repo_dir)).post_merge.auto_run)
-        except Exception:  # noqa: BLE001 - fail closed
-            auto_run = False
-
-    return dispatch_post_merge_ritual(
-        cand.pr_number,
-        dedup_key=getattr(obs, "merge_sha", None),
-        auto_run=auto_run,
-        node_cwd=str(cand.repo_dir) if cand.repo_dir else None,
-        run_verb=lambda pr, cwd: _default_run_ritual_verb(pr, cwd, timeout=_ritual_timeout()),
-        ship_session_id=getattr(cand, "ship_session_id", None),
-        ship_harness=getattr(cand, "ship_harness", None),
-        source_session_id=getattr(cand, "source_session_id", None),
-        source_harness=getattr(cand, "source_harness", None),
-        source_cwd=getattr(cand, "source_cwd", None),
-        node_id=getattr(cand, "node_id", None),
-        repo_slug=getattr(cand, "repo_slug", None),
+    out = verb_call(
+        ["pr-watch", "post-merge-dispatch"],
+        {
+            "pr_number": cand.pr_number,
+            "dedup_key": getattr(obs, "merge_sha", None),
+            "node_cwd": str(cand.repo_dir) if cand.repo_dir else None,
+            "ship_session_id": getattr(cand, "ship_session_id", None),
+            "ship_harness": getattr(cand, "ship_harness", None),
+            "source_session_id": getattr(cand, "source_session_id", None),
+            "source_harness": getattr(cand, "source_harness", None),
+            "source_cwd": getattr(cand, "source_cwd", None),
+            "node_id": getattr(cand, "node_id", None),
+            "repo_slug": getattr(cand, "repo_slug", None),
+            "timeout_s": _ritual_timeout(),
+        },
+        timeout=_ritual_timeout() + 30,
     )
+    return SimpleNamespace(**out)
+
+
+def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
+    """Mint the reap order for a merged PR with none standing (once per merge, journal-gated)."""
+    try:
+        if obs_state != "MERGED" or getattr(cand, "repo_dir", None) is None \
+                or not Path(str(cand.repo_dir), ".git").exists():
+            return
+        from fno.agents.events import daemon_lifecycle_log
+        from fno.pr._merge import _emit_merge_cleanup_request, _manifest_file, \
+            _merge_request_repo_and_project
+        repo, _ = _merge_request_repo_and_project(str(cand.repo_dir))
+        for line in daemon_lifecycle_log().read_text(errors="replace").splitlines():
+            if '"merge_cleanup_requested"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            data = record.get("data") if isinstance(record, dict) else None
+            if isinstance(data, dict) and record.get("type") == "merge_cleanup_requested" \
+                    and data.get("repo") == repo and data.get("pr") == cand.pr_number:
+                return
+        _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
+            _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])
+    except Exception as exc:  # noqa: BLE001 - a mint never fails the tick
+        log.warning("pr-watch: merge-cleanup mint for PR #%d failed: %s", cand.pr_number, exc)
 
 
 def _default_read_pr_state(

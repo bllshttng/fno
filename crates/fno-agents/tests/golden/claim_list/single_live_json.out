@@ -1,0 +1,1 @@
+[{"key":"session:live-2","state":"suspect","basis":"offhost","holder":"pty:par","schema_version":1,"pid":4242,"pid_unavailable":false,"host":"testhost","machine_id":"MACH","acquired_at":1791138000000,"expires_at":1891138000000,"expired":false,"harness":"claude","session_id":"sess-file","session_basis":"unresolved"}]

@@ -4,9 +4,11 @@
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
-# agent registry, view prefs and socket dir. It seeds invented backlog nodes
-# and three harness panes, shoots it with `fno mux serve --snapshot --server`,
-# then kills the server and deletes the root. The live mux is never touched.
+# agent registry, view prefs and socket dir. It seeds invented backlog nodes,
+# leads, mail, feed questions and harness panes, then shoots it with
+# `fno mux serve --snapshot --server`, kills the server and deletes the root.
+# Every view a paint PR changes renders populated: the verb itself refuses an
+# empty view render, and the refusal dies here.
 set -euo pipefail
 
 FNO="${FNO_BIN:-fno}"
@@ -57,10 +59,45 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text"
+mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
-printf 'schema_version = 1\nstate_dir = "%s"\n' "$ROOT/.fno" >"$ROOT/config.toml"
-export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/agents"
+# FNO_DEMO_PY_SOURCE pins the CLI the rust bootstrap provisions, so the
+# python leg matches the binary: a PyPI wheel older than the graph.db
+# claims store crashes on the migration tombstone the fresh root gets.
+{
+  printf 'schema_version = 1\nstate_dir = "%s"\n' "$ROOT/.fno"
+  # The two seeded teams lead configured projects: a live team's scope
+  # compiles only against work.workspaces projects or graph epics, so the
+  # payments and search leads name them here.
+  printf '%s\n' \
+    '[work.workspaces.checkout]' \
+    '[[work.workspaces.checkout.projects]]' \
+    'name = "payments"' \
+    'path = "~/code/checkout"' \
+    '[[work.workspaces.checkout.projects]]' \
+    'name = "search"' \
+    'path = "~/code/checkout"'
+  if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
+    printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
+  fi
+} >"$ROOT/config.toml"
+# The bootstrap's dev-pin reader resolves HOME/.fno/config.toml and runs
+# before FNO_CONFIG is honored, so the pin has to live at the stock HOME
+# path too or the python leg provisions from PyPI and mismatches the binary.
+mkdir -p "$ROOT/.fno"
+cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
+export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/.fno/agents"
+# The org gather shells `fno-agents` from PATH (org-fold), and the fresh
+# root provisions the python leg's executables under .local/bin. Without
+# this every fold dies with "could not run" and the org views shoot empty.
+export PATH="$ROOT/.local/bin:$PATH"
+# The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
+# graph.db migration tombstone at .fno/claims, which is not a directory and
+# crashes the lock. Give the demo's claims their own directory.
+export FNO_CLAIMS_ROOT="$ROOT/claimroot"
+# The lock nests .fno/claims under the claims root and needs the full path
+# to exist before its tempfile lands there.
+mkdir -p "$ROOT/claimroot/.fno/claims"
 # HOME too, for every process: the server reads harness rosters under it,
 # and a real home would list real sessions in the sideline.
 export HOME="$ROOT"
@@ -93,11 +130,30 @@ file p2 "Split the payments module out of the monolith"
 file p2 "Remove the legacy coupon service"
 file p3 "Move image resizing to a queue worker"
 file p3 "Support Apple Pay on the checkout page"
+file p2 "Unify the three checkout config surfaces into one documented schema with a migration guide and a deprecation window"
+file p3 "Split the merchant onboarding wizard into three steps with save-and-resume and a progress indicator"
+
+# Real teams: every node carries a scope, and the two seeded leads hold
+# those scopes, so Tree and Graph draw a two-team hierarchy instead of a
+# wall of unowned workers.
+for i in "${!IDS[@]}"; do
+  if [ $((i % 2)) -eq 0 ]; then s=payments; else s=search; fi
+  "$FNO" backlog update "${IDS[$i]}" --set project="$s" >/dev/null
+done
 
 # The three panes work the first three nodes: a claim moves each node to In
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
+# The first backlog verb migrates the store and publishes its tombstone AS
+# the claims path: a marker file where the lock needs a directory. The
+# marker's backup imported at publish, so retiring the marker and
+# recreating the directory hands the path back to the legacy lock writer.
+claims="$FNO_CLAIMS_ROOT/.fno/claims"
+if [ -f "$claims" ]; then
+  rm -f "$claims"
+  mkdir -p "$claims"
+fi
 for i in 0 1 2; do
   "$FNO" agents claim acquire "node:${IDS[$i]}" --holder "target-session:${SIDS[$i]}" --ttl 2h --pid-unavailable >/dev/null
   "$FNO" backlog session add "${IDS[$i]}" --phase execute --harness "${HARNESSES[$i]}" --session-id "${SIDS[$i]}" >/dev/null
@@ -208,10 +264,13 @@ run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
 
 # The registry rows that name each pane's harness, model and state. The
-# server reads the registry on an interval, so wait a few seconds for it.
-python3 - "$ROOT/agents/registry.json" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
+# fence directory at agents/registry.json marks the table as the owner: the
+# rows live in the graph store's registry table, and the document envelope
+# they fold into rides beside them in registry_meta. A seed that writes rows
+# without the envelope reads as InvalidData, i.e. no registry at all.
+python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, sys, datetime
-path, server, cwd = sys.argv[1:4]
+db, server, cwd = sys.argv[1:4]
 sids = sys.argv[4:7]
 ids = [int(p) for p in sys.argv[7:]]
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -223,9 +282,10 @@ def row(name, harness, model, pane, state, sid=None):
         "mux": {"session": server, "pane_id": pane},
         "inside_leg": {"state": state, "seq": 1, "received_at": now},
     }
-def thread(name, harness, how):
+def thread(name, harness, how, attach=None):
     # idle: a live thread with no report; unmeasured: exited with no proof;
-    # exited: a confirmed exit.
+    # exited: a confirmed exit. `attach` marks an attachable bg thread: the
+    # row-menu's Split Direction branch renders for exactly that shape.
     exited = how != "idle"
     return {
         "name": name, "cwd": cwd, "harness": harness, "substrate": "thread",
@@ -233,18 +293,143 @@ def thread(name, harness, how):
         "liveness": {"idle": "alive", "unmeasured": "unmeasured", "exited": "dead"}[how],
         "liveness_measured_at": now, "created_at": now, "last_message_at": now,
         "mux": None,
-    }
-json.dump({"schema_version": 1, "agents": [
+    } | ({} if attach is None else {"attach_id": attach})
+agents = [
     row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
     row("scout", "claude", "opus", ids[1], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
     row("pager", "pi", "glm-5", ids[3], "working"),
     row("scribe", "claude", "sonnet", ids[4], "done"),
     # Paneless threads, so the sideline shows the other states too.
-    thread("planner", "codex", "idle"),
+    # Leads dispatch and never host a pane: attachable thread rows.
+    thread("rowan", "claude", "idle", attach="demo-lead-1") | {"role_level": 1, "role_scope": "payments"},
+    thread("wren", "codex", "idle", attach="demo-lead-2") | {"role_level": 1, "role_scope": "search"},
+    thread("planner", "codex", "idle", attach="demo-attach-1"),
     thread("indexer", "claude", "unmeasured"),
     thread("migrator", "opencode", "exited"),
-]}, open(path, "w"))
+]
+import sqlite3
+conn = sqlite3.connect(db)
+# The registry rides the graph store the verbs migrated to .fno/db. Its
+# tables are created lazily by the first Rust registry writer, so the seed
+# matches that DDL instead of assuming they exist.
+if not conn.execute(
+    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes')"
+).fetchone()[0]:
+    sys.exit(f"registry seed: no nodes table in {db}; the live store is missing")
+conn.executescript(
+    """
+    CREATE TABLE IF NOT EXISTS registry (
+        identity TEXT PRIMARY KEY,
+        ordinal INTEGER NOT NULL,
+        payload TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS registry_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """
+)
+records = []
+for i, agent in enumerate(agents):
+    sid = agent.get("harness_session_id")
+    if sid:
+        identity = f"session:{agent['harness']}:{sid}"
+    else:
+        fid = agent.get("fno_id") or f"fno-demo-{agent['name']}"
+        agent["fno_id"] = fid
+        identity = f"fno:{fid}"
+    records.append((identity, i, json.dumps(agent)))
+conn.execute("DELETE FROM registry")
+conn.executemany(
+    "INSERT INTO registry(identity,ordinal,payload) VALUES (?,?,?)", records
+)
+# The document envelope the reader folds the rows into, plus the imported
+# marker the ownership probe checks: without them the read falls back to
+# the legacy file and the client serves live panes only.
+conn.executemany(
+    "INSERT INTO registry_meta(key,value) VALUES (?,?) "
+    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    [
+        ("document", json.dumps({"schema_version": 1, "agents": []})),
+        ("imported", "1"),
+    ],
+)
+row = conn.execute(
+    "SELECT value FROM registry_meta WHERE key='revision'"
+).fetchone()
+rev = int(row[0]) + 1 if row and str(row[0]).isdigit() else 1
+conn.execute(
+    "INSERT INTO registry_meta(key,value) VALUES ('revision',?) "
+    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    (str(rev),),
+)
+conn.commit()
+conn.close()
+PY
+
+# Mail and feed events. The bell, the Messages tab and the activity feed read
+# stores the board fixture never wrote, so those views shot empty. Both are
+# append-only JSONL with a documented row shape, so the seed writes them
+# directly. The projections resolve the stores under the config state dir:
+# <state>/chats/<chat>/messages.jsonl and <state>/questions.jsonl.
+python3 - "$ROOT" <<'PY'
+import json, os, sys, datetime
+root = sys.argv[1]
+now = datetime.datetime.now(datetime.timezone.utc)
+
+def ts(mins_ago):
+    return (now - datetime.timedelta(minutes=mins_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# Chats store: from/to join the registry rows above, so threads resolve to
+# seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
+chats = f"{root}/.fno/chats"
+
+def msg(i, mins_ago, frm, to, body):
+    return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",
+            "ts": ts(mins_ago), "thread": f"chat-demo-{i}", "from": frm, "to": to,
+            "body": body}
+
+def write(chat, rows):
+    os.makedirs(f"{chats}/{chat}", exist_ok=True)
+    with open(f"{chats}/{chat}/messages.jsonl", "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+write("chat-demo-review", [
+    msg(1, 9, "rowan", "scout", "Rate-limit review pass today? PR 118 is up."),
+    msg(2, 6, "scout", "rowan", "Landed: 60 req/min per key, the 429 carries Retry-After."),
+])
+write("chat-demo-scope", [
+    msg(3, 21, "wren", "archer", "Webhook retry landed behind a flag; the dead-letter queue drains nightly."),
+])
+# Broadcasts: an announce row lands on the bell (fleet-incident) or the #fno
+# channel (a lead's team row). A plain send to fleet: never does, and a pair
+# row it is not, so the demo seeds real announce rows.
+write("chat-demo-broadcast", [
+    {"type": "message", "kind": "announce", "v": 1, "id": "fmail-demo-5",
+     "ts": ts(2), "from": "fno/fleet-incident", "to": "fleet:fno",
+     "meta": {"scope": "fno"},
+     "body": "Test hold lifted at noon; CI covers the fleet."},
+    {"type": "message", "kind": "announce", "v": 1, "id": "fmail-demo-6",
+     "ts": ts(2), "from": "rowan", "to": "fleet:fno",
+     "meta": {"scope": "fno"},
+     "body": "Demo lanes reseeded; workers start on the top three cards after the shot."},
+])
+
+# Questions journal: the feed's questions leg (operator_question,
+# operator_decision envelopes).
+qs = [
+    {"ts": ts(4), "type": "operator_question", "source": "target",
+     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?"}},
+    {"ts": ts(14), "type": "operator_question", "source": "target",
+     "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
+    {"ts": ts(26), "type": "operator_decision", "source": "target",
+     "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate"}},
+]
+with open(f"{root}/.fno/questions.jsonl", "w") as f:
+    for q in qs:
+        f.write(json.dumps(q) + "\n")
 PY
 
 sleep 6

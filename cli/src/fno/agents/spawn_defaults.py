@@ -139,9 +139,11 @@ def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]
     return list(args), None
 
 # Tokens that pin the substrate explicitly (a positional substrate word conflicts
-# with any of these -> exit 2). `--headless`/`-p` and `-o/--once` mean headless;
-# `-H` selects the harness and `-P` the vendor, so both are value flags here.
-_EXPLICIT_SUBSTRATE_BOOLS = ("--headless", "-p", "-o", "--once")
+# with any of these -> exit 2). `-o/--once` means headless; `--substrate
+# headless` is the long form. `-H` selects the harness and `-P` the vendor, so
+# both are value flags here. `--headless`/`-p` retired with change 6 (--print
+# took the flag budget; `--substrate headless` is the spelling).
+_EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
 #: A claude thread spawned with no message starts with no prompt: claude's job
 #: state reads `needs: send a prompt to start` and the row holds a worker slot
@@ -572,7 +574,11 @@ def normalize_spawn_args(
     # pre-fence head: a passthrough `--name` is the PROVIDER's flag (claude's
     # session display name) and must not suppress fno's own name mint.
     head = toks if fence is None else toks[:fence]
-    if not any(t == "--name" or t.startswith("--name=") for t in head):
+    # A succession hand-off names nobody: the settle draws the successor's
+    # name from the machine pool, and a minted slug would arrive as an
+    # explicit proposal and decline the documented no-name draw.
+    hand_off = any(t == "--hand-off" or t.startswith("--hand-off=") for t in head)
+    if not hand_off and not any(t == "--name" or t.startswith("--name=") for t in head):
         names = (
             existing_names
             if existing_names is not None

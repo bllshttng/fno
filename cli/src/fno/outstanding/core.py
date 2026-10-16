@@ -24,6 +24,47 @@ from typing import Any, Callable, Iterable, Iterator, NamedTuple, Optional
 
 from fno.lead.lane import LaneItem, LaneRead, open_items, parked_items, read_lane
 
+# The strict capture parser, owned here since the capture wheel left: the
+# native lane owns the write paths, and the outstanding view is a read-only
+# enumerations of fu- items across project roots. Kept in lockstep with the
+# native lane's grammar (crates/fno-agents/src/backlog/capture.rs); the
+# twin-baseline rows in scripts/ci/reachable-paths-baseline.txt hold the pair.
+import re
+
+_ITEM_RE_STR = '^- \\[([ x\\-])\\]\\s+(fu-[a-z0-9][a-z0-9-]*)\\s+(?:—|-)\\s+(.*?)\\s*$'
+_ITEM_RE = re.compile(_ITEM_RE_STR)
+_STATUS_BY_MARK = {" ": "open", "x": "promoted", "-": "dismissed"}
+_PRIORITY_SUFFIX_RE = re.compile(r"\s*\((p[0-3])\)\s*$")
+
+
+def _split_capture_priority(raw_title):
+    m = _PRIORITY_SUFFIX_RE.search(raw_title)
+    if not m:
+        return raw_title.strip(), None
+    return raw_title[: m.start()].strip(), m.group(1)
+
+
+def _parse_capture_items(text):
+    items = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        m = _ITEM_RE.match(line)
+        if not m:
+            continue
+        status = _STATUS_BY_MARK.get(m.group(1), "open")
+        if status != "open":
+            continue
+        title, priority = _split_capture_priority(m.group(3))
+        items.append(
+            {
+                "id": m.group(2),
+                "title": title,
+                "priority": priority,
+                "status": status,
+                "line": lineno,
+            }
+        )
+    return items
+
 # Rows rendered before the footer takes over. A growing pile should read as a
 # number, not as a wall - a block that scrolls the operator's screen gets
 # skipped, which is the failure this verb exists to fix.
@@ -668,7 +709,6 @@ def _read_open_captures_with_counts(root: Path) -> "tuple[list[Capture], int, in
     a project), then by ``fu_id`` across the distinct files that
     remain.
     """
-    from fno.backlog.capture import parse_items
     from fno.paths import inbox_path
 
     def _store_label(path: Path, roots: "list[Path]") -> str:
@@ -714,7 +754,7 @@ def _read_open_captures_with_counts(root: Path) -> "tuple[list[Capture], int, in
         except (OSError, UnicodeDecodeError):
             continue
         file_total += 1
-        items = parse_items(text)
+        items = _parse_capture_items(text)
         row_total += len(items)
         project = _store_label(path, roots)
         # Canonical checkouts (a real .git dir) lead the events lookup. Fold

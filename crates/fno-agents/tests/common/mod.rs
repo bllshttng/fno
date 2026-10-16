@@ -28,6 +28,24 @@ pub fn make_script(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
+/// The Python for the live-oracle legs: the worktree venv, then the canonical
+/// checkout's venv (a fresh worktree has no .venv of its own), then a bare
+/// python3.
+pub fn python_executable() -> PathBuf {
+    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
+    let venv = cli_src.join("../.venv/bin/python");
+    if venv.is_file() {
+        return venv;
+    }
+    let canonical_venv = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| fno_agents::git_paths::common_dir(&cwd))
+        .and_then(|dir| dir.parent().map(|p| p.join("cli/.venv/bin/python")));
+    canonical_venv
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("python3"))
+}
+
 // -------------------------------------------------------------------------
 // x-a879 repro helpers: a daemon under a throwaway home, and the
 // loss-shaped registry the restart tests seed. The home is always a fresh
@@ -421,9 +439,16 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
     }
 
     assert_eq!(
-        golden_exit, rust.exit,
-        "[{label}] exit differs from golden: golden={golden_exit:?} rust={:?}",
-        rust.exit
+        golden_exit,
+        rust.exit,
+        "[{label}] exit differs from golden: golden={golden_exit:?} rust={:?}\nrust streams:\n{}",
+        rust.exit,
+        rust.streams
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("  [{i}] {s:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert_eq!(
         golden_streams.len(),

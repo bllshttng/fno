@@ -49,7 +49,7 @@ use self::lifecycle::entry_for_lifecycle;
 use self::roster_death::claude_row_provably_absent;
 pub(crate) use self::roster_death::{claude_row_id, pid_is_gone, row_death_reason};
 pub(crate) use self::store_socket_sweep::store_socket_sweep;
-mod list_rows;
+pub(crate) mod list_rows;
 use self::list_rows::{
     activity_basis_from_truth, apply_row_contradiction, attention_sort_key, basis_word_from_truth,
     handle_list, rendered_status_from_truth,
@@ -485,53 +485,15 @@ fn recover_with_policy(
 /// units across platforms (Linux ticks vs macOS microseconds) do not matter.
 ///
 /// DO NOT read this as a wall clock. At least three writers fill the column it
-/// lands in, in at least three conventions: this function (Linux ticks / macOS
+/// lands in, in at least three conventions: the probe (Linux ticks / macOS
 /// micros), `_process_start_time` in cli/src/fno/agents/spawn_gate.py, and
 /// `claude_adopt.rs`, which passes through whatever claude's own roster wrote.
 /// Converting one of them to epoch time makes the equality comparisons in
 /// `pid_is_ours` and `_pid_alive` fail across writers, which reaps live workers.
 /// A consumer that needs a real start time needs its own field, not this token.
-#[cfg(target_os = "linux")]
-pub fn process_start_time(pid: u32) -> Option<u64> {
-    // /proc/<pid>/stat field 22 (1-based) is `starttime` in clock ticks since
-    // boot. The comm field (2) can contain spaces and parens, so split on the
-    // LAST ')' and index from there. After "comm)" the space-separated fields are
-    // [state, ppid, ...], with starttime the 20th (0-based index 19).
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse::<u64>().ok()
-}
-
-/// macOS: `proc_pidinfo(PROC_PIDTBSDINFO)` fills a `proc_bsdinfo` whose
-/// `pbi_start_tvsec`/`pbi_start_tvusec` is the process start time; fold to
-/// microseconds. (`kinfo_proc` is not exposed by the libc crate.)
-#[cfg(target_os = "macos")]
-pub fn process_start_time(pid: u32) -> Option<u64> {
-    use std::mem;
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: buffer is a zeroed proc_bsdinfo of exactly `size` bytes.
-    // proc_pidinfo returns the number of bytes written; anything other than a
-    // full struct means the process is gone / not introspectable -> None.
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_start_time(_pid: u32) -> Option<u64> {
-    None
-}
+///
+/// Re-exported from [`crate::process_probe`], which owns the probe.
+pub use crate::process_probe::process_start_time;
 
 pub(crate) use crate::gc_inventory::index_tree;
 // the pane kill and its absence vocabulary moved to pane_stop.rs
@@ -1322,6 +1284,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         }
         Err(e) => return Err(e),
     };
+    crate::truth_probe::start_daemon_warm(&home);
     let sock_path = home.supervisor_sock();
     let bound_ino = std::fs::metadata(&sock_path).ok().map(|m| m.ino());
 
@@ -1522,11 +1485,11 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     // when it is still FRESH: the request activity it ran under is unchanged
     // (a served request resets the idle clock) AND the registry it read has
     // not been written since (a pane-substrate worker spawns by writing the
-    // registry directly, with no daemon contact - the mtime is the one
+    // registry directly, with no daemon contact - its stamp is the one
     // positive marker of that). Anything stale is discarded unread.
     let idle_probe_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let idle_probe_verdict: Arc<
-        std::sync::Mutex<Option<(bool, Instant, Option<std::time::SystemTime>)>>,
+        std::sync::Mutex<Option<(bool, Instant, Option<serde_json::Value>)>>,
     > = Arc::new(std::sync::Mutex::new(None));
     let mut drift_flag = crate::quiet_retire::DriftFlag::new();
     // The periodic fleet arms, extracted to daemon/fleet_arms.rs (this file
@@ -1633,9 +1596,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                             let no_worker = crate::quiet_retire::no_live_worker(&home);
                             // mtime AFTER the reads: a registry write that
                             // raced the probe is caught by the change.
-                            let mtime = std::fs::metadata(home.registry_json())
-                                .ok()
-                                .and_then(|m| m.modified().ok());
+                            let mtime = crate::quiet_retire::registry_stamp(&home);
                             *verdict.lock().unwrap() = Some((no_worker, probe_activity, mtime));
                         });
                     }
@@ -1646,9 +1607,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
                             probe_activity,
                             last_activity,
                             probe_mtime,
-                            std::fs::metadata(ctx.home.registry_json())
-                                .ok()
-                                .and_then(|m| m.modified().ok()),
+                            crate::quiet_retire::registry_stamp(&ctx.home),
                         )
                     });
                     if fresh {
@@ -1968,11 +1927,11 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // configured provider (`none` answers the empty plan). Lived in
         // sandbox_host; the dispatch line is paid by the handle_status move.
         Some("sandbox-plan") => run_blocking(ctx, req, sandbox_host::handle_sandbox_plan).await,
+        Some("truth") => run_blocking(ctx, req, crate::truth_probe::truth_rpc).await,
         Some("reconcile") => run_blocking(ctx, req, handle_reconcile).await,
         // Label rename: the registry transaction under the flock, off-loop.
         Some("rename") => run_blocking(ctx, req, convert::handle_rename).await,
-        // Pane-to-thread conversion: the agent lock plus a registry flip.
-        Some("convert") => convert::handle_convert(ctx, req).await,
+        Some("convert") => convert::handle_convert(ctx, req).await, // agent lock + registry flip
         // Inside-leg state push (E3.2): a per-turn hook stores the latest
         // {working|blocked|done} on the matching claude row. Pure flock + CPU.
         Some("report") => run_blocking(ctx, req, handle_report).await,
@@ -2080,12 +2039,12 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     // + mode=stream_json resumes an idle session as a held stream thread
     // (`claude -p --resume <uuid>`) for chat/switchboard/ask to drive -- and
     // attach-with-server thread spawns. Every interactive PTY host (codex,
-    // gemini, claude) moved to the mux, and bg/headless never reach the daemon,
-    // so any other spawn is a retired PTY-hosting request and errors with a
-    // mux pointer. The thread substrate is routed from the capability contract
-    // (`thread_lane` + `attach_needs_server`), never the harness name, and
-    // every arm other than attach-with-server refuses, so the daemon still
-    // hosts no agent PTYs.
+    // gemini, claude) moved to the mux. A harness with a client-side bg or
+    // headless arm never reaches the daemon; one without falls through here and
+    // errors, naming its harness and substrate. The thread substrate is routed
+    // from the capability contract (`thread_lane` + `attach_needs_server`),
+    // never the harness name, and every arm other than attach-with-server
+    // refuses, so the daemon still hosts no agent PTYs.
     let host_mode = p
         .get("host_mode")
         .and_then(|v| v.as_str())
@@ -2140,9 +2099,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     Response::err(
         req.id,
         ErrorCode::InvalidParams,
-        "daemon PTY hosting was retired at G4 : spawn a mux-hosted agent pane with \
-         `fno agents spawn --substrate pane`, or use `--substrate bg|headless`. The daemon \
-         serves only claude stream-json adoption (host_mode=interactive, mode=stream_json).",
+        format!("daemon PTY hosting was retired at G4, and harness '{provider}' has no `--substrate {substrate}` arm: spawn a mux-hosted agent pane with `fno agents spawn --substrate pane`. The daemon serves only claude stream-json adoption (host_mode=interactive, mode=stream_json)."),
     )
 }
 
@@ -4462,11 +4419,9 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"already_exited": true, "short_id": entry.short_id}),
         );
     }
-    // A pane-hosted row's ONE live ref is the mux pane; the refusal text and
-    // its branch table live in stop_refusal_detail. Above the claude branch on
-    // purpose: stop_claude's no-transport-id fallback signals the recorded pid
-    // instead, which kills the process inside the pane and leaves the pane
-    // itself.
+    // A pane-hosted row's ONE live ref is the mux pane (refusal text in
+    // stop_refusal_detail). Above the claude branch on purpose: stop_claude's
+    // fallback signals the recorded pid and leaves the pane.
     if let Some(mux) = entry.mux.as_ref() {
         let (probe, precheck) = stop_refusal_detail::pane_verdict(&entry);
         return Response::err(
@@ -4524,9 +4479,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
                 crate::state::record_stop(entry, "stop-verb", Some("codex-thread".into()));
                 // best-effort: a failed stamp costs a later wake its name,
                 // never the stop.
-                let sid = entry.harness_session_id.clone().unwrap_or_default();
-                let n = entry.name.clone();
-                crate::wake_name::record(&wake_home, &sid, &n);
+                crate::wake_name::stamp_from_row(&wake_home, entry);
             }
         })
         .await
@@ -4550,11 +4503,9 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             }),
         );
     }
-    // A lane-B keeper thread: fno's own keeper hosts the child and
-    // the row's short_id is empty, so without this arm the no-op arm below
-    // reports a stop that stopped nothing (PR 1332 review finding). Kill is
-    // delivered over the row's own socket and CONFIRMED before the row goes
-    // terminal; a keeper that will not die leaves the row non-terminal.
+    // A lane-B keeper thread: its short_id is empty, so the no-op arm below
+    // would report a stop that stopped nothing. Kill goes over the row's own
+    // socket and is CONFIRMED before the row goes terminal.
     if let Some(sock) = keeper_thread_sock(&entry) {
         if !stop_keeper_confirmed(&sock).await {
             let _ = ctx.emitter.emit(
@@ -4574,9 +4525,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
                 entry.status = AgentStatus::Exited;
                 entry.exited_at = Some(now_rfc3339_like());
                 crate::state::record_stop(entry, "stop-verb", Some("keeper-thread".into()));
-                let sid = entry.harness_session_id.clone().unwrap_or_default();
-                let n = entry.name.clone();
-                crate::wake_name::record(&wake_home, &sid, &n);
+                crate::wake_name::stamp_from_row(&wake_home, entry);
             }
         })
         .await
@@ -4593,14 +4542,22 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         );
         return Response::ok(req.id, json!({"stopped": true, "backend": "keeper-thread"}));
     }
-    // A non-PTY row (empty short_id == Python-authored; the daemon's create path
-    // always derives a non-empty short_id) for codex/gemini has no daemon worker
-    // to stop. Mirror Python `stop_agent`: these providers are "synchronous
-    // between asks (no persistent process to stop)" -- emit `agent_stopped` and
-    // return cleanly, leaving the registry UNCHANGED. Falling through to the PTY
-    // path would probe the agents-root `worker.sock` (absent -> "confirmed
-    // down") and then write `status = Exited`, a status Python's loader rejects,
-    // corrupting a Python-readable registry (Codex P1, PR #364).
+    // A headless footnote child is a plain process in its own group. End it
+    // before the row goes terminal, or the stop reports a pid still running.
+    if let (true, Some(pid)) = (entry.harness_name() == "footnote", entry.pid) {
+        if !crate::footnote_harness::stop_confirmed(pid, entry.pid_start_time).await {
+            return Response::err(
+                req.id,
+                ErrorCode::Internal,
+                format!("agent {name}: footnote pid {pid} did not exit; it may still be running"),
+            );
+        }
+    }
+    // An empty short_id (Python-authored; the daemon's create path always
+    // derives one) is a codex/gemini row with no daemon worker. Mirror Python
+    // `stop_agent`: emit `agent_stopped` and leave the registry UNCHANGED. The
+    // PTY path below would write `status = Exited`, which Python's loader
+    // rejects (Codex P1, PR #364).
     if entry.short_id.is_empty() {
         let _ = ctx.emitter.emit(
             "agent_stopped",
@@ -4611,10 +4568,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             json!({"stopped": true, "provider": entry.harness_name(), "no_op": true}),
         );
     }
-    // Ask the worker to shut down its PTY child gracefully, then CONFIRM it
-    // actually went away before reporting success: a swallowed shutdown
-    // failure would mark the agent exited while the PTY keeps running (Codex
-    // P1). A worker that shut down removes its socket and exits.
+    // Ask the worker to shut down its PTY child, then CONFIRM it went away: a
+    // swallowed failure would mark the agent exited while the PTY keeps running.
     if !stop_worker_confirmed(ctx, &entry).await {
         return Response::err(
             req.id,
@@ -4622,10 +4577,8 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             format!("agent {name}: worker did not confirm shutdown; it may still be running"),
         );
     }
-    // Surface a registry-write failure rather than reporting a clean stop while
-    // the on-disk status still reads live: the worker is confirmed dead, but if
-    // the status flip does not persist the registry diverges from reality
-    // (silent-failure review). Mirrors handle_register_channel's house style.
+    // Surface a registry-write failure rather than reporting a clean stop
+    // while the on-disk status still reads live.
     let stop_name = name.clone();
     let wake_home = ctx.home.clone();
     if let Err(e) = update_registry_offloaded(ctx.home.registry_json(), move |r| {
@@ -4634,9 +4587,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
             crate::state::record_stop(e, "stop-verb", None);
             // best-effort: a failed stamp costs a later wake its name,
             // never the stop.
-            let sid = e.harness_session_id.clone().unwrap_or_default();
-            let n = e.name.clone();
-            crate::wake_name::record(&wake_home, &sid, &n);
+            crate::wake_name::stamp_from_row(&wake_home, e);
         }
     })
     .await
@@ -6891,10 +6842,10 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d, hh, mm, ss)
 }
 
-/// The interval-gated maintenance sweeps (stale questions, park records),
-/// split out for the file budget; each is stamp-gated and pause-aware.
+/// The interval-gated maintenance sweeps, split out for the file budget; stamp-gated, pause-aware.
 pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
+pub(crate) mod sandbox_ingest;
 #[cfg(test)]
 pub(crate) use sweeps::{parse_stale_sweep, STALE_SWEEP_INTERVAL_SECS};
 // Test-only report imports live in this tail block beside the sweeps ones:

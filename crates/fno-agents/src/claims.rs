@@ -603,6 +603,11 @@ pub fn probe_pid(pid: i32) -> PidProbe {
 /// `sysconf(_SC_CLK_TCK)` — the same computation psutil performs. Sub-second
 /// skew vs psutil's float math is tolerable: the comparison is directional
 /// and real holders start well before they claim.
+///
+/// Genuinely-gone pids (invalid, vanished, zombie) read `Absent`; measurement
+/// failures (unreadable or malformed stat, missing boot time, bad tick rate)
+/// read `Refused`. A refusal is not proof of death: an unreadable live holder
+/// must never have its claim reaped.
 #[cfg(target_os = "linux")]
 pub fn probe_pid(pid: i32) -> PidProbe {
     if pid <= 0 {
@@ -611,11 +616,16 @@ pub fn probe_pid(pid: i32) -> PidProbe {
     let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return PidProbe::Refused,
-        Err(_) => return PidProbe::Absent,
+        // A vanished /proc entry is the NoSuchProcess analogue: the pid has no
+        // holder, provably dead. Any other read failure is a measurement
+        // problem, and a refusal is not proof of death - it reads Suspect.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return PidProbe::Absent,
+        Err(_) => return PidProbe::Refused,
     };
-    // comm (field 2) can contain spaces/parens; split on the LAST ')'.
+    // comm (field 2) can contain spaces/parens; split on the LAST ')'. A
+    // malformed stat is a refusal, never death.
     let Some(after) = stat.rsplit_once(')').map(|(_, tail)| tail) else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     // A zombie holds no fds and will never resume; a no-TTL claim naming
     // one must not read Live forever (a CI run-slot wedge).
@@ -623,14 +633,14 @@ pub fn probe_pid(pid: i32) -> PidProbe {
         return PidProbe::Absent;
     }
     let Some(Ok(starttime)) = after.split_whitespace().nth(19).map(|v| v.parse::<i64>()) else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     let Some(btime) = linux_boot_time_s() else {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     };
     let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
     if tck <= 0 {
-        return PidProbe::Absent;
+        return PidProbe::Refused;
     }
     PidProbe::Created(btime * 1000 + starttime * 1000 / tck as i64)
 }
@@ -1474,8 +1484,10 @@ pub fn resolve_harness_from(get: impl Fn(&str) -> Option<String>) -> Option<Stri
 /// marker must not be laundered into a parent record for the life of the row.
 /// Within one family the DURABLE marker leads (`CODEX_THREAD_ID` over legacy
 /// `CODEX_SESSION_ID`), the winner's VALUE is the parent session id, not just
-/// its harness kind, and two ids of one family that DISAGREE attribute
-/// nothing - the same degrade Python's `_vendor_identity` applies.
+/// its harness kind. One measured exception,
+/// [`codex_thread_parent_edge_from`]: within an all-codex marker set the two
+/// ids legitimately differ and the thread id names this process, so a codex
+/// worker's own spawn names its parent instead of minting with no edge.
 pub fn ambient_parent_edge() -> (Option<String>, Option<String>, Option<String>) {
     ambient_parent_edge_from(|k| std::env::var(k).ok())
 }
@@ -1490,13 +1502,78 @@ pub fn ambient_parent_edge_from(
         .or_else(|| std::env::current_dir().ok())
         .map(|p| p.to_string_lossy().trim().to_string())
         .filter(|s| !s.is_empty());
-    let (session, harness) = resolve_identity_from(get);
+    let resolved = resolve_identity_from(&get);
+    let (session, harness) = if resolved.0.is_some() {
+        resolved
+    } else {
+        // The exception fires only where nothing contradicts it: over a
+        // canonical stamp that refused it would relaunder exactly the foreign
+        // marker the refusal exists for.
+        let (_, _, disposition) = canonical_identity_from(&get);
+        if disposition == CanonicalDisposition::Absent {
+            codex_thread_parent_edge_from(&get)
+                .map(|(session, harness)| (Some(session), Some(harness)))
+                .unwrap_or(resolved)
+        } else {
+            resolved
+        }
+    };
     (session, harness, cwd)
 }
 
+/// The measured codex thread shape behind the daemon's "spawn request carried
+/// no parent edge" mints: codex sets `CODEX_SESSION_ID` to the ROOT session
+/// and `CODEX_THREAD_ID` per thread, so an all-codex env legitimately carries
+/// two different ids and the thread id names this process - the same measured
+/// rule `resolve_owned_identity` (harness_identity.py) and the daemon-side
+/// `spawn_context` resolver apply to a proven codex family. Fires only when
+/// every present marker is codex; a marker of any other family keeps the full
+/// refusal (a foreign codex marker in a claude child is never laundered).
+fn codex_thread_parent_edge_from(
+    get: &impl Fn(&str) -> Option<String>,
+) -> Option<(String, String)> {
+    let mut thread: Option<String> = None;
+    for (marker, harness) in HARNESS_SESSION_MARKERS
+        .iter()
+        .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
+    {
+        let Some(value) = get(marker)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        if *harness != "codex" {
+            return None;
+        }
+        if *marker == "CODEX_THREAD_ID" {
+            thread.get_or_insert(value);
+        }
+    }
+    thread.map(|session| (session, "codex".to_string()))
+}
+
+/// The acquire stamp, clamped past this process's own OS create time. The
+/// liveness probe reads pid reuse as `create_ms > acquired_at`, and a clock
+/// stepped backward between process start and acquire would otherwise pin a
+/// live claim below its own create time forever. `None` (no create-time
+/// probe) passes the wall clock through unchanged.
+fn stepped_clock_safe_acquired_at(wall_ms: i64, created_ms: Option<i64>) -> i64 {
+    match created_ms {
+        Some(created) => wall_ms.max(created + 1),
+        None => wall_ms,
+    }
+}
+
 pub(crate) fn make_claim(key: &str, holder: &str, opts: &AcquireOpts) -> ClaimRecord {
-    let acquired = now_ms();
     let pid_unavailable = opts.pid_unavailable;
+    // Resolved before the stamp: the clamp needs this process's create time.
+    let pid: Option<i32> = if pid_unavailable {
+        None
+    } else {
+        Some(opts.pid.unwrap_or_else(std::process::id) as i32)
+    };
+    let acquired = stepped_clock_safe_acquired_at(now_ms(), pid.and_then(process_create_time_ms));
     // Resolved ONCE and used for the `harness` field, the `session_id` field,
     // and the provenance stamp below, so a record can never disagree with
     // itself about which harness (or session) wrote it. A caller-vouched
@@ -1515,11 +1592,7 @@ pub(crate) fn make_claim(key: &str, holder: &str, opts: &AcquireOpts) -> ClaimRe
         key: key.into(),
         holder: holder.into(),
         acquired_at: acquired,
-        pid: if pid_unavailable {
-            None
-        } else {
-            Some(opts.pid.unwrap_or_else(std::process::id) as i32)
-        },
+        pid,
         host: opts.host.clone().unwrap_or_else(hostname),
         pid_unavailable,
         // Omitted, not backfilled with the hostname, when no stable id exists:
@@ -1828,6 +1901,13 @@ impl EnvVarGuard {
     pub fn set(var: &'static str, value: &str) -> Self {
         let prev = std::env::var_os(var);
         unsafe { std::env::set_var(var, value) };
+        Self { var, prev }
+    }
+
+    /// Clear `var` for the rest of the scope; the prior value comes back on drop.
+    pub fn unset(var: &'static str) -> Self {
+        let prev = std::env::var_os(var);
+        unsafe { std::env::remove_var(var) };
         Self { var, prev }
     }
 }
@@ -3311,6 +3391,16 @@ mod tests {
     }
 
     #[test]
+    fn acquire_stamp_clamps_past_own_create_time() {
+        // A backward clock step between process start and acquire pins a
+        // plain wall stamp below the boot-anchored create time, so the
+        // liveness probe reads the live holder as pid reuse forever.
+        assert_eq!(stepped_clock_safe_acquired_at(1_000, Some(5_000)), 5_001);
+        assert_eq!(stepped_clock_safe_acquired_at(9_000, Some(5_000)), 9_000);
+        assert_eq!(stepped_clock_safe_acquired_at(1_000, None), 1_000);
+    }
+
+    #[test]
     fn stale_claim_is_reclaimed_and_audited() {
         let td = TempDir::new().unwrap();
         // A claim whose acquired_at predates this process's create time reads
@@ -3666,7 +3756,7 @@ pub use release_stopped::{
 
 #[path = "claims_long_holds.rs"]
 mod long_holds;
-pub use long_holds::{long_holds, run_claim_long_holds, LongHoldRow};
+pub use long_holds::{fmt_age_s, long_holds, run_claim_long_holds, LongHoldRow};
 
 #[cfg(test)]
 #[path = "claims_reservation_tests.rs"]

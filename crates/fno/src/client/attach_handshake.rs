@@ -138,7 +138,12 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 // attached-client traffic.
                 | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                 | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                | ServerMsg::ServerStats { .. },
+                | ServerMsg::ServerStats { .. }
+                // (v110) A desktop notice broadcast can straddle the
+                // preamble; the client shows notices only post-attach, so
+                // ignore rather than desync.
+                | ServerMsg::DesktopNotice { .. }
+                | ServerMsg::NoticeSent { .. },
             ) => {}
             // A launch update cannot precede attach; ignore a misaddressed
             // one rather than failing the handshake.

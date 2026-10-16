@@ -15,7 +15,6 @@ registry.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -511,7 +510,7 @@ def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
 
 def test_an_archived_node_refuses_with_the_archive_remedy(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "fno.graph._archive_lookup.archived_entry",
+        "fno.backlog.note_notify.archived_entry",
         lambda node_id: {"id": "x-3a64"} if node_id == "x-3a64" else None,
     )
     got = readers_before_append("x-3a64", _graph(tmp_path, [{"id": "x-0d08"}]))
@@ -780,7 +779,7 @@ def _run_note_quiet(monkeypatch, node_id: str, live_rows: list[dict]):
         "fno.graph.api.wire_rows", lambda *, path=None: list(live_rows)
     )
     monkeypatch.setattr(
-        "fno.graph._archive_lookup.archived_entry",
+        "fno.backlog.note_notify.archived_entry",
         lambda nid: {"id": node_id} if nid == node_id else None,
     )
     monkeypatch.setattr(
@@ -986,3 +985,40 @@ def test_blocking_note_rides_ctx_args_straight_to_rust(monkeypatch) -> None:
     assert "x-5a62" in calls[0] and "the gate leak" in calls[0], (
         "the positionals ride through verbatim"
     )
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        ["--resolve", "04aa7f57"],
+        ["x-0dcd", "--resolve", "04aa7f57"],
+    ],
+)
+def test_the_stop_hook_remedy_reaches_rust_as_a_resolve(monkeypatch, tail) -> None:
+    """The remedy the open-finding gate prints (`fno backlog note --resolve
+    <id>`) must reach the native parser as a flag. Typer leaves a leading
+    unknown option in the positional slots, so it once read as a node id
+    ("no node resolves to '--resolve'") and a held builder could not end its turn."""
+    from typer.testing import CliRunner
+
+    from fno.graph import cli as graph_cli
+    from fno.graph import note_cli as note_bridge
+
+    monkeypatch.setattr(graph_cli, "_graph_path", lambda *a, **k: Path("graph.json"))
+    calls: list[list[str]] = []
+
+    class Proc:
+        returncode = 0
+
+    def fake_run(argv, check=False):
+        calls.append(argv)
+        return Proc()
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: "/fake/fno-agents")
+    monkeypatch.setattr(note_bridge.subprocess, "run", fake_run)
+    result = CliRunner().invoke(graph_cli.cli, ["note", *tail])
+    assert result.exit_code == 0, result.output
+    assert calls, "the native action must run"
+    argv = calls[0]
+    assert argv[1:3] == ["backlog", "note"]
+    assert argv[argv.index("--resolve") + 1] == "04aa7f57"

@@ -25,8 +25,6 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-import typer
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -36,37 +34,6 @@ _PLIST_FILENAME = f"{_LABEL}.plist"
 # Written by _record_bounce, read by cli._bounce_sender; rename both or the
 # sender join breaks silently.
 _BOUNCE_SIDECAR = "pr-watch-bounce.json"
-_LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
-# Per-repo watchers from the retired scripts/post-merge/ path. Their target
-# script is deleted, so a loaded job would fail under launchd forever.
-_LEGACY_POSTMERGE_GLOB = "com.fno.postmerge*.plist"
-
-
-def retire_legacy_postmerge_agents(launch_agents_dir: Path) -> list[str]:
-    """Bootout + remove retired per-repo post-merge watcher plists.
-
-    Best-effort and idempotent, never raises: called on every global-watcher
-    install/activate so an operator who once loaded the per-repo watcher does
-    not keep a launchd job firing a deleted script. Returns receipt lines.
-    """
-    receipts: list[str] = []
-    for plist in sorted(launch_agents_dir.glob(_LEGACY_POSTMERGE_GLOB)):
-        label = plist.stem
-        try:
-            subprocess.run(
-                ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
-                capture_output=True,
-                check=False,
-                timeout=10,
-            )
-        except Exception:
-            pass  # bootout of an unloaded job fails; removal below still applies
-        try:
-            plist.unlink()
-            receipts.append(f"retired legacy post-merge watcher: {label}")
-        except OSError as exc:
-            receipts.append(f"could not remove legacy watcher plist {plist}: {exc}")
-    return receipts
 
 
 _PLIST_TEMPLATE = """\
@@ -231,21 +198,6 @@ def render_plist(
 # launchctl helpers (stubbed in tests via monkeypatch)
 # ---------------------------------------------------------------------------
 
-
-def _run_launchctl(*args: str) -> int:
-    """Run launchctl; return exit code.  Best-effort: never raises."""
-    try:
-        result = subprocess.run(
-            ["launchctl", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return result.returncode
-    except OSError:
-        return -1
-
-
 # A wedged job's `launchctl kickstart` was observed to HANG indefinitely; every
 # launchctl call in the bounce is timeout-guarded so a hung fix command can't be
 # worse than no fix. 10s is generous for a local launchctl round-trip.
@@ -261,9 +213,8 @@ _BOOTSTRAP_RETRIES = 4
 def _run_launchctl_timed(*args: str, timeout_s: float = _LAUNCHCTL_TIMEOUT_S) -> tuple[int, bool]:
     """Run launchctl with a timeout. Returns ``(returncode, timed_out)``.
 
-    Separate from :func:`_run_launchctl` because the un-wedge bounce needs to
-    distinguish a HANG (report which step wedged, exit nonzero) from a normal
-    nonzero rc (tolerated for bootout).
+    The un-wedge bounce needs to distinguish a HANG (report which step wedged,
+    exit nonzero) from a normal nonzero rc (tolerated for bootout).
     """
     try:
         result = subprocess.run(
@@ -324,12 +275,25 @@ def _tick_in_flight(run: Optional[Callable[[list[str]], str]] = None) -> Optiona
     return pid if age is not None and age < 600 else None
 
 
+def bounce_sidecar_path(state_root: Optional[Path] = None) -> Path:
+    """Where the bounce receipt lives: ``state/`` per the tidiness law, the
+    legacy root spelling renamed in on first resolve. An explicit root (a
+    test or alternate root) always reads the new spelling beside it.
+    """
+    if state_root is not None:
+        return state_root / "state" / _BOUNCE_SIDECAR
+    from fno.paths import state_runtime_file
+
+    return state_runtime_file(_BOUNCE_SIDECAR)
+
+
 def _record_bounce(*, caller: str, deferred: bool, state_root: Optional[Path] = None) -> None:
     """Name this bounce so the next killed tick can name its sender.
 
-    Writes ``pr-watch-bounce.json`` in the state dir (a deferred bounce writes
-    no sidecar: there is no kill to join) and emits ``pr_watch_bounce`` so
-    deferrals are countable. Never raises; a receipt must not block a cure.
+    Writes ``pr-watch-bounce.json`` under the state root's ``state/`` folder
+    (a deferred bounce writes no sidecar: there is no kill to join) and emits
+    ``pr_watch_bounce`` so deferrals are countable. Never raises; a receipt
+    must not block a cure.
     """
     data: dict = {
         "caller": caller,
@@ -340,9 +304,7 @@ def _record_bounce(*, caller: str, deferred: bool, state_root: Optional[Path] = 
     }
     if not deferred:
         try:
-            from fno.paths import state_dir
-
-            sidecar = Path(state_root or state_dir()) / _BOUNCE_SIDECAR
+            sidecar = bounce_sidecar_path(state_root)
             sidecar.parent.mkdir(parents=True, exist_ok=True)
             tmp = sidecar.with_name(sidecar.name + ".tmp")
             tmp.write_text(json.dumps({"ts": time.time(), **data}), encoding="utf-8")
@@ -443,21 +405,6 @@ def bounce(
     return (f"bounced {target}; awaiting first tick", 0)
 
 
-def heal_watcher(
-    *, launch_agents_dir: Path, defer_when_ticking: bool = False, caller: str = "unknown"
-) -> tuple[str, int]:
-    """Resolve the plist path and bounce the watcher. Doctor's --fix entrypoint.
-
-    Returns ``(message, exit_code)``; nonzero when the plist is absent or a step wedged.
-    """
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-    if not plist_path.exists():
-        return (f"no plist at {plist_path}; run `fno do pr watch install`", 1)
-    return bounce(
-        plist_path=plist_path, defer_when_ticking=defer_when_ticking, caller=caller
-    )
-
-
 def refresh_watcher(
     *,
     launch_agents_dir: Path,
@@ -470,14 +417,15 @@ def refresh_watcher(
 ) -> tuple[str, int]:
     """Re-render the plist onto the current binary, then bounce. Post-update hook.
 
-    Unlike :func:`heal_watcher` (bounce the existing plist), this REWRITES the
-    plist first so the daemon picks up the freshly-installed binary path, a
-    fresh captured PATH, and a new mtime (so doctor's ``healthy-pending`` grace
-    applies until the next tick instead of a transient false ``dead`` - unless
-    the recent ends are a broken streak, which reads ``wedged``). Called
-    by ``fno do pr watch refresh`` at the tail of ``fno doctor update`` so an update
-    leaves an enabled watcher running the new binary and un-wedges a job a
-    mid-tick reinstall may have broken. Returns ``(message, exit_code)``.
+    This REWRITES the plist first so the daemon picks up the freshly-installed
+    binary path, a fresh captured PATH, and a new mtime (so doctor's
+    ``healthy-pending`` grace applies until the next tick instead of a
+    transient false ``dead`` - unless the recent ends are a broken streak,
+    which reads ``wedged``). Called by the refresh verb at the tail of
+    ``fno doctor update`` so an update leaves an enabled watcher running the
+    new binary and un-wedges a job a mid-tick reinstall may have broken, and
+    by the heal verb as the cure behind the SessionStart self-heal. Returns
+    ``(message, exit_code)``.
     """
     plist_path = launch_agents_dir / _PLIST_FILENAME
     try:
@@ -497,187 +445,9 @@ def refresh_watcher(
     )
 
 
-def _launchctl_is_loaded() -> bool:
-    """Return True when sh.fno.pr-watcher appears in launchctl list output."""
-    try:
-        result = subprocess.run(
-            ["launchctl", "list"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        return _LABEL in (result.stdout or "")
-    except OSError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Open-PR count for status (stubbed in tests)
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# install
-# ---------------------------------------------------------------------------
-
-
-def install(
-    *,
-    launch_agents_dir: Path,
-    fno_binary: str,
-    interval: int = 600,
-    dry_run: bool = False,
-    activate: bool = True,
-) -> None:
-    """Render the plist, print it, then gate on human confirmation before writing.
-
-    Parameters
-    ----------
-    launch_agents_dir:
-        Where to write ``sh.fno.pr-watcher.plist``.
-    fno_binary:
-        Absolute path to the ``fno`` binary.
-    interval:
-        Poll interval in seconds.
-    dry_run:
-        Print plist and hint, write nothing, do not prompt.
-    activate:
-        After writing the plist, run ``launchctl load`` so enabled means
-        running. ``--no-activate`` (activate=False) restores the old
-        write-only behavior for packaging/CI contexts.
-    """
-    plist_text = render_plist(
-        launch_agents_dir=launch_agents_dir,
-        fno_binary=fno_binary,
-        interval=interval,
-    )
-
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-
-    typer.echo("--- Rendered plist ---")
-    typer.echo(plist_text)
-
-    if dry_run:
-        typer.echo(f"[dry-run] Would write to: {plist_path}")
-        typer.echo(f"[dry-run] Then run: launchctl load {plist_path}")
-        typer.echo("[dry-run] Nothing written.")
-        return
-
-    if not typer.confirm(f"Write plist to {plist_path}?"):
-        typer.echo("Not installed.")
-        raise SystemExit(1)
-
-    launch_agents_dir.mkdir(parents=True, exist_ok=True)
-    plist_path.write_text(plist_text, encoding="utf-8")
-    typer.echo(f"Written: {plist_path}")
-
-    if activate:
-        # bootout+bootstrap+kickstart, not load/unload: `launchctl load` cannot
-        # cure the observed wedge (job loaded, `spawn scheduled`, never spawns),
-        # and this is the `dead`-verdict fix command. The bounce is idempotent,
-        # so a RE-install of a healthy agent just restarts it.
-        msg, rc = bounce(plist_path=plist_path, caller="install")
-        if rc == 0:
-            typer.echo(f"Activated: {msg}")
-        else:
-            # Loud, never silent: SIP/headless contexts can refuse launchctl.
-            # The plist is written; doctor's liveness line is the residual guard.
-            typer.echo(
-                f"WARNING: activation failed ({msg}); load it manually: "
-                f"launchctl bootstrap gui/$(id -u) {plist_path}"
-            )
-    else:
-        typer.echo(f"To activate: launchctl bootstrap gui/$(id -u) {plist_path}")
-
-    for receipt in retire_legacy_postmerge_agents(launch_agents_dir):
-        typer.echo(receipt)
-    typer.echo(
-        "The canonical pr-watch daemon now owns merge detection; no per-repo "
-        "watcher install is needed."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Activation coupling: enabled means running
-# ---------------------------------------------------------------------------
-
-
-def ensure_activated(
-    *,
-    launch_agents_dir: Path,
-    fno_binary: str,
-    interval: int = 600,
-) -> str:
-    """Idempotently install + load the watcher.  Non-interactive, never raises.
-
-    Called when ``pr_watch.enabled`` is set true.  Returns one of:
-    ``already-running`` (loaded, no-op), ``activated`` (wrote and/or loaded),
-    ``write-failed``, ``load-failed``.  A failure is reported by the caller and
-    leaves config enabled so ``fno doctor`` flags the dead watcher (AC1-ERR).
-    """
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-    retire_legacy_postmerge_agents(launch_agents_dir)
-
-    if _launchctl_is_loaded():
-        return "already-running"
-
-    # Always (re-)render, whether the plist is absent or a re-enable of an
-    # existing one. We only reach here when NOT loaded (guarded above), so
-    # rewriting is safe and (a) picks up config drift - a changed
-    # interval_seconds / fno_binary / PATH since the last write - and (b)
-    # refreshes the plist mtime so doctor's healthy-pending grace applies until
-    # the first fresh tick instead of a transient false "dead" (unless the
-    # recent ends are a broken streak, which reads wedged).
-    try:
-        from fno.paths import state_dir
-
-        plist_text = render_plist(
-            launch_agents_dir=launch_agents_dir,
-            fno_binary=fno_binary,
-            interval=interval,
-        )
-        launch_agents_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir() / "logs").mkdir(parents=True, exist_ok=True)
-        plist_path.write_text(plist_text, encoding="utf-8")
-    except OSError:
-        return "write-failed"
-
-    rc = _run_launchctl("load", str(plist_path))
-    return "activated" if rc == 0 else "load-failed"
-
-
-def unload_only(*, launch_agents_dir: Path) -> str:
-    """Unload the agent but keep the plist (config disable path).  Idempotent.
-
-    Returns ``not-installed`` (no plist), ``already-unloaded``, ``unloaded``,
-    or ``unload-failed``.  Never raises.
-    """
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-    if not plist_path.exists():
-        return "not-installed"
-    if not _launchctl_is_loaded():
-        return "already-unloaded"
-    rc = _run_launchctl("unload", str(plist_path))
-    return "unloaded" if rc == 0 else "unload-failed"
-
-
-# ---------------------------------------------------------------------------
-# uninstall
-# ---------------------------------------------------------------------------
-
-
-def uninstall(*, launch_agents_dir: Path) -> None:
-    """Unload (best-effort) and remove the plist.  Preserves watermark store."""
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-
-    if plist_path.exists():
-        _run_launchctl("unload", str(plist_path))
-        plist_path.unlink()
-        typer.echo(f"Removed: {plist_path}")
-    else:
-        typer.echo(f"Nothing to remove: {plist_path} does not exist")
-
-    typer.echo("Watermark store preserved (reinstall picks up existing history).")
 
 
 # ---------------------------------------------------------------------------

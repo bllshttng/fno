@@ -1,23 +1,22 @@
 """Antigravity CLI (``agy``) conversation-id adapter.
 
-``--conversation`` resumes and nothing creates, so the id comes from the only
-surface that returns one: a print-mode turn whose JSON envelope carries
-``conversation_id``. The turn's argv is the Rust owner's answer
-(crates/fno-agents/src/agy_launch.rs) and carries the spawn's selected axes.
-Lane notes: docs/architecture/thread-lanes.md."""
+``--conversation`` resumes and nothing creates, so the id comes from a
+print-mode turn launched with ``--output-format stream-json``: line 1 is
+``{"event":"init","conversation_id":...}``, long before any exit. The turn
+runs in the Rust runtime (crates/fno-agents/src/agy_mint.rs) over the argv
+owner's answer (agy_launch.rs); this module validates the answer and raises
+the harness-facing refusals. Lane notes: docs/architecture/thread-lanes.md."""
 from __future__ import annotations
 
-import json
 import re
-import subprocess
 from pathlib import Path
 
 from fno.agents.dispatch import DispatchAskError
 
 AGY_BINARY = "agy"
-# A ceiling, not a budget: the measured mint is 1.5s. Inside the row's declared
-# binding window (timeout_ms = 60000), so a wedged `agy` raises the refusal
-# below instead of dying to a caller with a shorter fuse.
+# A ceiling, not a budget: the measured mint prints its init line in ~3s and
+# the capture returns on it. Inside the row's declared binding window
+# (timeout_ms = 60000), so a wedged `agy` raises the refusal below.
 MINT_TIMEOUT_S = 45.0
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -54,43 +53,22 @@ def create_conversation(
     yolo: bool = False,
     timeout_s: float = MINT_TIMEOUT_S,
 ) -> str:
-    """Mint an agy conversation id by running one print-mode turn. The argv
-    is the Rust owner's answer, so the mint carries the same model, effort
-    and permission posture the spawn selected."""
-    from fno.agents.spawn_axes_client import agy_mint_argv
+    """Mint an agy conversation id by running one stream-json print turn. The
+    runtime reads the id from the stream (the init line) and kills the held
+    process - the turn answers but never exits on agy 1.3.3; an id that fails
+    validation never reaches a spawn."""
+    from fno.agents.spawn_axes_client import _answer_or_raise, spawn_axes_call
 
-    argv = agy_mint_argv(model, effort, permission_mode, yolo)
-    try:
-        completed = subprocess.run(  # noqa: S603
-            argv, cwd=str(cwd), capture_output=True, text=True, timeout=timeout_s
-        )
-    except OSError as exc:
-        raise AgySessionError(f"agy could not start: {exc}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise AgySessionError(
-            f"agy minted no conversation id within {timeout_s:g}s; an "
-            "unauthenticated or wedged binary never prints its envelope"
-        ) from exc
-
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        raise AgySessionError(
-            f"agy exited {completed.returncode} while minting a conversation "
-            f"id: {detail or 'no output'}"
-        )
-    try:
-        envelope = json.loads(completed.stdout)
-    except ValueError as exc:
-        raise AgySessionError(
-            "agy print-mode output was not JSON, so no conversation id could "
-            f"be read: {(completed.stdout or '').strip()[:400] or 'no output'}"
-        ) from exc
-    if not isinstance(envelope, dict) or "conversation_id" not in envelope:
-        raise AgySessionError(
-            "agy print-mode JSON carried no conversation_id key: "
-            f"{sorted(envelope) if isinstance(envelope, dict) else type(envelope).__name__}"
-        )
-    return require_conversation_id(str(envelope["conversation_id"]))
+    ask = {
+        "cwd": str(cwd),
+        "model": model or "",
+        "effort": effort or "",
+        "permission_mode": permission_mode or "",
+        "yolo": bool(yolo),
+        "timeout_s": timeout_s,
+    }
+    answer = spawn_axes_call({"agy_mint_run": ask})
+    return require_conversation_id(str(_answer_or_raise(answer, "conversation_id")))
 
 
 def conversation_store_path(conversation_id: str) -> Path:

@@ -279,6 +279,10 @@ const FIELD_POLICY: &[(&str, Policy)] = &[
     ("queued_at", Policy::Owned("fno backlog queue")),
     ("queued_reason", Policy::Owned("fno backlog queue")),
     ("contained_in", Policy::Owned("fno backlog contain")),
+    (
+        "containment_surfaces",
+        Policy::Owned("fno backlog contain --surface"),
+    ),
     ("cost_usd", Policy::Owned("the execution ledger")),
     ("cost_sessions", Policy::Owned("the execution ledger")),
     (
@@ -568,7 +572,7 @@ fn put_key(
 /// Clear the supersession facts and the replacer's `supersedes` backref (the
 /// stale claim would keep the chain reading as live). The deferral triple is
 /// NOT touched: `--leave superseded` may legally land on deferred.
-fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: &mut Vec<Change>) {
+pub(crate) fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: &mut Vec<Change>) {
     let id = entry_id(&rows[idx]).unwrap_or_default().to_string();
     let replacer = rows[idx]
         .get("superseded_by")
@@ -653,6 +657,25 @@ fn stamp_deferred(
     id: &str,
     changes: &mut Vec<Change>,
 ) -> Result<(), PatchRefusal> {
+    // F7: a session may not defer the node it holds. The holder deferring
+    // its own node is exactly the self-cleanup that once left a stale-plan
+    // node ownerless; the refusal names the routed step instead. A
+    // lead (any other session, or an unattributed ambient) defers as
+    // today.
+    let (_, my_session) = crate::claims::resolve_identity();
+    let holder_ids = [
+        entry
+            .get("locked_by_harness_session")
+            .and_then(Value::as_str),
+        entry.get("locked_by").and_then(Value::as_str),
+    ];
+    if let Some(me) = my_session.as_deref().filter(|s| !s.trim().is_empty()) {
+        if holder_ids.iter().any(|h| *h == Some(me)) {
+            return Err(PatchRefusal::refused(format!(
+                "refused: a session may not defer the node it holds ({id}). Emit <help class=... reason=... evidence=...> and take the routed step."
+            )));
+        }
+    }
     let reason_blank = entry
         .get("deferred_reason")
         .map(|v| v.as_str().map(str::trim).unwrap_or("").is_empty() || v.is_null())
@@ -670,6 +693,25 @@ fn stamp_deferred(
     put_key(obj, changes, id, "completed_at", Value::Null);
     put_key(obj, changes, id, "deferred_at", json!(now_isoformat()));
     Ok(())
+}
+
+/// The done door's fact, not the derived column: `status: done` is also a
+/// DERIVED status (the children rollup writes it), so the gate reads
+/// completion. A stamped completed_at routes to reopen (the work is in
+/// main). A status-done row with no stamp is a rollup write; the update
+/// door owns leaving it only when the row holds against that rollup (own
+/// plan work); otherwise reopen owns it and stamps the durable reopened_at
+/// hold the derivation respects.
+fn is_done_door_fact(row: &Value, status: &str) -> bool {
+    if status != "done" {
+        return false;
+    }
+    match row.get("completed_at").and_then(Value::as_str) {
+        // Legacy defer sentinels are not completions; the derivation reads
+        // them the same way.
+        Some(stamp) => !stamp.starts_with("deferred:"),
+        None => !crate::graph_store::has_own_plan_work(row),
+    }
 }
 
 /// One planning pass over a full row set: resolve, patch a working copy,
@@ -728,7 +770,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
                 "refused: {id} --status {word} is owned by another door: {owner}"
             )));
         }
-        if old_status == "done" {
+        if is_done_door_fact(&rows[idx], old_status.as_str()) {
             return Err(PatchRefusal::refused(format!(
                 "refused: {id} is done; leaving done is owned by another door: fno backlog reopen {id}"
             )));
@@ -776,7 +818,7 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
 
     if let Some(word) = target {
         if new_status != word {
-            return Err(status_mismatch(&rows[idx], &id, word, &new_status, &rungs));
+            return Err(status_mismatch(&rows, idx, &id, word, &new_status, &rungs));
         }
     }
     if let Some(direction) = leave {
@@ -799,15 +841,37 @@ fn plan(mut rows: Vec<Value>, req: &PatchRequest) -> Result<Planned, PatchRefusa
     })
 }
 
+/// A short "N done, N ready" summary of `id`'s children, or `None` when
+/// `id` has no children (the leaf-node refusal case is unaffected).
+fn container_children_summary(rows: &[Value], id: &str) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut n = 0usize;
+    for row in rows {
+        if row.get("parent").and_then(Value::as_str) != Some(id) {
+            continue;
+        }
+        n += 1;
+        let status = row.get("status").and_then(Value::as_str).unwrap_or("idea");
+        *counts.entry(status).or_insert(0) += 1;
+    }
+    if n == 0 {
+        return None;
+    }
+    let parts: Vec<String> = counts.iter().map(|(s, c)| format!("{c} {s}")).collect();
+    Some(parts.join(", "))
+}
+
 /// Why the derived status is not the requested word: name the holding fact
 /// and the flag or verb that supplies it (AC1-ERR, AC2-HP).
 fn status_mismatch(
-    entry: &Value,
+    rows: &[Value],
+    idx: usize,
     id: &str,
     target: &str,
     derived: &str,
     rungs: &BTreeMap<String, String>,
 ) -> PatchRefusal {
+    let entry = &rows[idx];
     let plan_path = entry
         .get("plan_path")
         .and_then(Value::as_str)
@@ -822,9 +886,14 @@ fn status_mismatch(
         let rung = rungs.get(id).map(String::as_str).unwrap_or("none");
         match (plan_path, rung) {
             (None, _) => {
+                if let Some(summary) = container_children_summary(rows, id) {
+                    return PatchRefusal::refused(format!(
+                        "refused: {id} is a container; its status rolls up from its children ({summary}), never from a direct write. Change a child's status instead of {id}'s."
+                    ));
+                }
                 return PatchRefusal::refused(format!(
                     "refused: {id} has no plan_path. Supply it with: --plan-path <path to the plan>"
-                ))
+                ));
             }
             (_, rung) if rung != target => {
                 return PatchRefusal::refused(format!(
@@ -1341,6 +1410,27 @@ mod tests {
         assert!(message.contains("--plan-path"), "{message}");
     }
 
+    #[test]
+    fn status_ready_on_a_plan_less_container_names_the_rollup_not_a_plan() {
+        // All open children are blocked, so the rollup reads "blocked", not
+        // the requested "ready" - the mismatch that reaches status_mismatch.
+        let (_d, graph) = write_graph(&[
+            node("x-epic", json!({"type": "epic", "parent": null})),
+            node(
+                "x-blocked-kid",
+                json!({"parent": "x-epic", "status": "blocked"}),
+            ),
+            node(
+                "x-done-kid",
+                json!({"parent": "x-epic", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            ),
+        ]);
+        let message = refusal_of(&graph, &req("x-epic", Some("ready"), &[]));
+        assert!(message.contains("is a container"), "{message}");
+        assert!(message.contains("rolls up"), "{message}");
+        assert!(!message.contains("--plan-path"), "{message}");
+    }
+
     // AC2-EDGE
     #[test]
     fn status_ready_on_a_deferred_node_clears_the_park_and_reads_ready() {
@@ -1579,6 +1669,35 @@ mod tests {
         );
         let (_d, graph) = write_graph(&[done_node]);
         let message = refusal_of(&graph, &req("x-9", Some("idea"), &[]));
+        assert!(message.contains("fno backlog reopen"), "{message}");
+        // A rollup-derived stale done (status done, completion cleared) is
+        // not the done door's fact for a plan-holding row: the update door
+        // owns leaving it, or the row deadlocks (reopen says not done,
+        // update says done). The rung door still owns the WORD: a plan
+        // deriving ready takes ready, not idea.
+        let stale_done = node(
+            "x-10",
+            json!({ "status": "done", "plan_path": "plans/p.md" }),
+        );
+        let (_d, graph) = write_graph(&[stale_done]);
+        let receipt = apply(&graph, &req("x-10", Some("ready"), &[]))
+            .expect("a stale done leaves through the update door");
+        assert_eq!(receipt.status.to, "ready");
+        // A derived-done row that holds nothing against the rollup (no plan
+        // work) still routes to reopen, which stamps the durable hold. The
+        // all-done children are what hold the pre-image derivation on done;
+        // without them the rung ladder re-derives idea before the gate.
+        let derived_done = node("x-11", json!({ "status": "done" }));
+        let derived_kid = node(
+            "x-11c",
+            json!({
+                "status": "done",
+                "parent": "x-11",
+                "completed_at": "2026-01-01T00:00:00+00:00"
+            }),
+        );
+        let (_d, graph) = write_graph(&[derived_done, derived_kid]);
+        let message = refusal_of(&graph, &req("x-11", Some("idea"), &[]));
         assert!(message.contains("fno backlog reopen"), "{message}");
     }
 

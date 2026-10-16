@@ -71,6 +71,12 @@ fn run_slug_cmd(argv: &[&str], cwd: Option<&str>) -> (i32, String) {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    // The fleet budget admits before the spawn: a refused gh slug read
+    // returns rc 75 with no slug, the unread shape the caller already has.
+    if let Some(_line) = crate::gh_budget::admit_spawn(std::ffi::OsStr::new(argv[0]), &argv[1..]) {
+        return (75, String::new());
+    }
+
     let mut cmd = Command::new(argv[0]);
     cmd.args(&argv[1..])
         .stdout(Stdio::piped())
@@ -188,11 +194,11 @@ pub fn is_repo_slug(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
-/// The ship lifecycle row stamped when a node is FIRST PR-linked
-/// (`_stamp_ship_on_pr_link`). The row records whoever ran the link, no
-/// terminal closes it, and a re-stamp of the same (phase, harness, session)
-/// collapses - a link event, never occupancy. Best-effort: an unresolvable
-/// identity or a graph failure skips with a named stderr reason.
+/// The ship lifecycle row stamped when a node is FIRST PR-linked. The row
+/// records whoever ran the link, no terminal closes it, and a re-stamp of
+/// the same (phase, harness, session) collapses - a link event, never
+/// occupancy. Best-effort: an unresolvable identity or a graph failure
+/// skips with a named stderr reason.
 pub fn stamp_ship_on_link(graph: &Path, node_id: &str) {
     let get = |name: &str| std::env::var(name).ok();
     let ident = crate::spawn_context::resolve_self_identity(

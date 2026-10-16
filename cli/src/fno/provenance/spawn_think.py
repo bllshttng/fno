@@ -111,12 +111,11 @@ _SPAWN_ALREADY_EXISTS = "already exists"
 # fires on a high-volume lifecycle moment.
 REASON_BIRTH = "birth"
 REASON_WORK_START = "work-start"
-REASON_RETRO = "retro"
 # C: the explicit conversational verb. NOT in _LIFECYCLE_REASONS: it is
 # operator-invoked (one per explicit call, no firehose), so it does not need the
 # relevance filter and may degrade to the stored triple like birth does.
 REASON_CONVERSATIONAL = "conversational"
-_LIFECYCLE_REASONS = frozenset({REASON_WORK_START, REASON_RETRO})
+_LIFECYCLE_REASONS = frozenset({REASON_WORK_START})
 
 
 class SpawnAlreadyRunning(RuntimeError):
@@ -268,7 +267,7 @@ def think_spawn_on_decompose_wave0(
 ) -> bool:
     """Is the wave-0 design fan-out armed for this repo?
 
-    Its own sub-flag, like ``on_work_start`` / ``on_retro``: ``enabled`` alone
+    Its own sub-flag, like ``on_work_start``: ``enabled`` alone
     never turns it on. ``FNO_THINK_SPAWN_WAVE0`` overrides for tests and for a
     one-off run, mirroring the ``FNO_THINK_SPAWN`` seam.
 
@@ -291,17 +290,26 @@ def think_spawn_on_decompose_wave0(
 
 
 def _daily_counter_path() -> Path:
-    """``~/.fno/.think-spawn-daily.json`` - the global per-day spawn counter.
-
-    Per-install (not per-project): the firehose guard bounds total bg /think
-    sessions a day regardless of which repo or node triggered them. Resolved
-    under ``global_claims_root()`` (the SAME ``$FNO_CLAIMS_ROOT``-honoring base
-    as the dispatch dedup tokens) so the counter isolates with the claims in
-    tests and travels with them in production.
+    """``~/.fno/state/think-spawn-daily.json`` - the global per-day spawn
+    counter, per-install (not per-project): the firehose guard bounds total
+    bg /think sessions a day. Resolved under ``global_claims_root()`` (the
+    same ``$FNO_CLAIMS_ROOT``-honoring base as the dispatch dedup tokens) so
+    it isolates with the claims in tests. First resolve renames the legacy
+    root spelling - the ``paths.state_runtime_file`` ladder, rebuilt here
+    because this base follows the claims root, not ``state_dir()``.
     """
     from fno.claims.io import global_claims_root
 
-    return global_claims_root() / ".fno" / ".think-spawn-daily.json"
+    base = global_claims_root() / ".fno"
+    new = base / "state" / "think-spawn-daily.json"
+    legacy = base / ".think-spawn-daily.json"
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(new)
+        except OSError:
+            return legacy
+    return new
 
 
 def _today_str() -> str:
@@ -865,12 +873,13 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
-        from fno.backlog.advance import _gate_refusal_detail
+        from fno.rust_binary import VerbUnavailable, verb_call
 
-        raise SpawnError(
-            f"fno agents spawn exited {proc.returncode}: "
-            f"{_gate_refusal_detail(stderr or proc.stdout or '')}"
-        )
+        try:
+            detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
+        except VerbUnavailable as exc:
+            detail = f"{stderr or proc.stdout or ''} (gate detail unavailable: {exc})"
+        raise SpawnError(f"fno agents spawn exited {proc.returncode}: {detail}")
     short_id = _parse_short_id(proc.stdout or "")
     if short_id:
         return short_id
@@ -1161,23 +1170,6 @@ def on_node_work_start(
     """
     return _on_node_lifecycle(
         node, reason=REASON_WORK_START, subflag="on_work_start",
-        project_root=project_root, run_state=run_state,
-    )
-
-
-def on_node_retro(
-    node: dict,
-    *,
-    project_root: Optional[Path] = None,
-    run_state: Optional[RunState] = None,
-) -> Optional[ThinkSpawnResult]:
-    """A2: dispatch a ``retro`` context /think when ``fno backlog done`` closes a node.
-
-    Gated by ``config.think_spawn.on_retro`` (default OFF even when the layer is
-    enabled). Non-fatal: never blocks the node close it rides in on.
-    """
-    return _on_node_lifecycle(
-        node, reason=REASON_RETRO, subflag="on_retro",
         project_root=project_root, run_state=run_state,
     )
 

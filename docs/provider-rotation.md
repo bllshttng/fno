@@ -325,6 +325,18 @@ Reconciliation resolves both and refuses with `ambiguous-slot` when they name di
 Every distinct candidate must prove, and they must all name one account.
 No candidate is set aside, whatever the reason it did not prove: a 401 rejects an access token while its refresh token may still be live, so `claude` can refresh that account straight back into the slot it reads first, and an unanswered call says nothing at all.
 
+`provider-cap vault sync` skips a slot source whose own `expiresAt` is already past, before any profile call runs.
+
+The skip lands in the receipt as `skipped expired: <sources>`, so the write explains the credential it ignored.
+
+An expired token can never win `newest_blob`, so the skip cannot hide a live account.
+
+Without the skip, a stale `~/.claude/.credentials.json` refuses a slot whose two Keychain items are live and agree.
+
+A source that fails to prove refuses as `ambiguous-slot: <source> failed to prove`.
+
+Two disagreeing sources refuse as `ambiguous-slot: <a> and <b> disagree`, and nothing live refuses as `expired-slot: <sources>`.
+
 The same rule reaches the usage probe. A slot proving more than one distinct principal reports `unknown`, however well the bearer it holds proves out. The platform split causes this. `claude` reads the scoped Keychain item first, while the probe reads the unscoped one. The earlier version counted credentials instead. A machine running a claude daemon always writes its own scoped Keychain item. One account presented twice therefore read as ambiguous, and the operator's own usage went dark.
 Capture-before-overwrite reads the same candidates, so the two cannot disagree about which credential belongs to a record; with more than one distinct credential present it captures nothing, since a lost rotated token is recoverable with a login while another account's credential filed under this record is silent.
 The pin check runs before the profile call rather than after it, and the slot is re-read and compared before anything is written, so a writer that replaces the credential during that call and then exits refuses with `slot-changed` instead of getting its credential stamped under the proven account's name.
@@ -1693,7 +1705,7 @@ Verify: `fno config accounts list` shows `anthropic-key` with a populated `usage
 
 ## Review policy and assurance
 
-`fno.review.policy` classifies how much assurance a change needs *before* the
+`crates/fno-agents/src/review_policy.rs` classifies how much assurance a change needs *before* the
 review runs, then resolves that against the reviewer *resolved to dispatch* - the
 resolved panel routing, not raw capacity. Cross-model being off, an all-claude
 pin, a degraded fallback, or an exhausted provider all mean a different-family

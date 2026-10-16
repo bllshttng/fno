@@ -115,6 +115,7 @@ FIELD_META: dict[str, Meta] = {
     # --- config.blueprint.* ---
     "blueprint.max_prs_per_epic": Meta("advanced", "Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it."),
     "blueprint.python_repair_added_lines": Meta("advanced", "Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh."),
+    "plan.default_diff_budget": Meta("advanced", "Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off)."),
     # --- config.backlog.* ---
     "backlog.page_reload_s": Meta("advanced", "Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off)."),
     "backlog.maintain.staleness_days": Meta("advanced", "Age (days) before an idea is flagged stale."),
@@ -145,6 +146,8 @@ FIELD_META: dict[str, Meta] = {
     "batch.enabled": Meta("advanced", "Coalesce same-domain nodes into one batch PR (opt-in)."),
     "batch.max_nodes": Meta("advanced", "Nodes per batch before it closes (default 3)."),
     "batch.max_loc": Meta("advanced", "Optional cumulative-diff LOC ceiling for a batch (off by default)."),
+    # --- config.build.* ---
+    "build.agent_freeze": Meta("never", "Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile."),
     # --- config.post_merge.* ---
     "post_merge.parking_lot_path": Meta(
         "advanced", "Per-repo vault parking-lot path for the post-merge ritual (repo-relative).",
@@ -190,6 +193,13 @@ FIELD_META: dict[str, Meta] = {
         "Model for post-merge ritual workers (default claude-opus-5). Routing "
         "wins when a secondary provider is keyed.",
     ),
+    "telemetry.claude_otel": Meta("advanced", "Bind the daemon's local OTLP receiver for Claude Code usage (default on)."),
+    "telemetry.otlp.enabled": Meta("advanced", "Export feed events to an OTLP collector (default off)."),
+    "telemetry.otlp.endpoint": Meta("advanced", "OTLP collector URL, http(s); `/v1/logs` is appended when absent."),
+    "telemetry.otlp.headers_env": Meta("advanced", "Env var holding the export auth headers as `name=value,...`."),
+    "telemetry.otlp.log_content": Meta("advanced", "Export event titles as log text (default off: only the event kind)."),
+    "attention.enabled": Meta("advanced", "Kill switch for the attention arm (question pages and sinks; default on)."),
+    "attention.sinks": Meta("advanced", "Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full)."),
     # --- config.research.* ---
     "research.output_dir": Meta(
         "advanced",
@@ -216,7 +226,7 @@ FIELD_META: dict[str, Meta] = {
         "never", "Legacy alias for config.review.github_apps (a straight rename); github_apps wins if both are set.",
     ),
     "review.optional_apps": Meta(
-        "advanced", "Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [gemini-code-assist, chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.",
+        "advanced", "Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.",
     ),
     "review.nudge": Meta(
         "advanced", "Per-App override for the bot-review nudge, as [review.nudge.<login>] tables with {review_handle, wait_minutes, ceiling, enabled}. A github_apps bot that reviews on MENTION not on push never reviews unless something posts its trigger; the loop-check stop gate posts review_handle (default from the built-in profile), waits wait_minutes (default 15), and after ceiling (default 3) unanswered nudges gives up rather than idling to the budget ceiling. enabled=false opts a repo back into plain block-and-wait. Ships populated for chatgpt-codex-connector, which wears three distinct names for one bot: match the review-author login chatgpt-codex-connector, trigger a fresh review with '@codex review', and address an in-thread reply to '@chatgpt-codex-connector'.",
@@ -340,6 +350,8 @@ FIELD_META: dict[str, Meta] = {
     "agents.max_fleet_cpu_share": Meta("advanced", "Share of CPU capacity the fleet may hold, checked on EVERY spawn (default 0.5). An attribution gap widens the share to an interval bounded above by the whole machine's measured CPU: over by its own attributed work the gate holds and re-samples; the ceiling inside the interval refuses and names both bounds plus the gap; above the interval the gate admits and says the reading was an upper bound. Leave 0.5 unless the box is dedicated, then 0.6.", default_source="default"),
     "agents.footprint_sustained_cpu_cores": Meta("advanced", "Absolute override for the doctor footprint sustained-CPU threshold, in cores. Unset, the threshold derives from measured CPU capacity (a fraction per core) instead of an absolute constant that asked a 12-core machine's fleet to idle at 8%.", default_source="default"),
     "agents.worker_qos": Meta("advanced", "Worker CPU/IO priority: utility (background QoS, default) or off.", default_source="default"),
+    "agents.claude.beat": Meta("advanced", "What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."),
+    "agents.codex.beat": Meta("advanced", "What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."),
     "agents.codex.headless_yolo": Meta("advanced", "Use full-yolo (drop sandbox) for headless codex workers."),
     "agents.gemini.headless_yolo": Meta("advanced", "Use full-yolo (drop sandbox) for headless gemini workers."),
     # --- config.dispatch.* (harness-capability map overlay; resolve_node_spawn reads it) ---
@@ -372,9 +384,6 @@ FIELD_META: dict[str, Meta] = {
     ),
     "think_spawn.on_work_start": Meta(
         "advanced", "A2: dispatch a context /think when /target claims a node to work it (default OFF)."
-    ),
-    "think_spawn.on_retro": Meta(
-        "advanced", "A2: dispatch a context /think when `fno backlog done` closes a node (default OFF)."
     ),
     "think_spawn.daily_cap": Meta(
         "advanced", "Per-install per-day ceiling on /think spawns (firehose guard; 0 = off)."
@@ -444,6 +453,8 @@ FIELD_META: dict[str, Meta] = {
         "Mux chrome theme: footnote-superscript (default, the brand dark palette) | footnote-paper (auto-picked on a light terminal background) | terminal (no-op, inherits the emulator colors) | catppuccin | tokyo-night | gruvbox. A named palette recolors the chrome while the body stays the emulator's inverse block. Set from the settings picker. Role overrides: quote-dotted keys in [mux] - \"theme.brand\", \"theme.needs_you\" and \"theme.border\" take #rrggbb values that hold under any theme, and every role also takes `default` to pin that role to the terminal's own text color (white on a dark ground, black on paper); theme.border recolors every border at once (the pane frame, the modal outlines). The tab-bar mark's stamp takes no override.",
         default_source="default",
     ),
+    # --- config.split.* ---
+    "split.opens": Meta("advanced", "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.", default_source="default"),
     # --- config.dev.* (: maintainer local-dev) ---
     "dev.source": Meta("never", "Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default)."),
     # --- config.context.* (: project-supplied context artifacts) ---
@@ -579,22 +590,22 @@ FIELD_META: dict[str, Meta] = {
     ),
     "worktree.auto_install": Meta(
         "advanced",
-        "Run dependency install when a new worktree is set up (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Run dependency install when a new worktree is set up (read by hooks/worktree-setup.sh and worktree-manager.sh); "
         "set false to skip it. Default true.",
     ),
     "worktree.setup_command": Meta(
         "advanced",
         "Explicit setup command run after a new worktree is created, whatever auto_install says "
-        "(read by skills/speculate/scripts/worktree-setup.sh). Default empty.",
+        "(read by hooks/worktree-setup.sh and worktree-manager.sh). Default empty.",
     ),
     "worktree.skip_verification": Meta(
         "advanced",
         "Skip the post-setup verification step in a new worktree (read by "
-        "skills/speculate/scripts/worktree-setup.sh). Default false.",
+        "hooks/worktree-setup.sh). Default false.",
     ),
     "worktree.test_command": Meta(
         "advanced",
-        "Verification command for a new worktree (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Verification command for a new worktree (read by hooks/worktree-setup.sh); "
         "falls back to the script's own detection when empty. Default empty.",
     ),
     "guards.preset": Meta(
@@ -603,6 +614,10 @@ FIELD_META: dict[str, Meta] = {
         "two destructive-write guards stay on), or off. Read in Rust by "
         "guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.",
     ),
+    # --- config.store.* (global config only; read in Rust by store_remote.rs) ---
+    "store.remote_url": Meta("never", "The sqld primary every machine dials out to (an http:// URL on a private network). Set, the claim keys that decide dispatch run on the primary. Read from the global config only. Unset = local store, no socket. Default unset."),
+    "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
+    "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "

@@ -121,6 +121,12 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
          if args[:2] == ['backlog', 'decisions'] and '--json' in args:\n\
          \x20   sys.stdout.write(json.dumps({'decisions': []}))\n\
          \x20   sys.exit(0)\n\
+         if args[:2] == ['agents', 'spawn']:\n\
+         \x20   if os.environ.get('FNO_STUB_SPAWN_FAIL'):\n\
+         \x20       sys.stderr.write('advisory exploded\\n')\n\
+         \x20       sys.exit(1)\n\
+         \x20   sys.stdout.write('ok\\nVERDICT: pass\\n')\n\
+         \x20   sys.exit(0)\n\
          sys.exit(1)\n",
     )
     .unwrap();
@@ -189,9 +195,6 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
          open('calls.log','a').write('register-task reason=%s costjson=%s\\n' % (tr, cj))\n"
     };
     fs::write(pypath.join("fno/cost/_register.py"), reg).unwrap();
-    // fno.verify_advise stub (W6): record the full argv so the ship tests can
-    // assert the flag shape finalize passes (a rename on either side of the
-    // Rust->Python boundary fails here, not silently in production).
     // fno.cli stub: finalize's post-stamp frontmatter validation shells
     // `python3 -m fno.cli do plan validate <path>`; record it and pass, so the
     // call is observable and the loud non-fatal branch stays quiet in a
@@ -204,12 +207,6 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
          \x20    open('calls.log','a').write('plan-validate %s\\n' % ' '.join(args[3:]))\n\
          \x20    sys.exit(0)\n\
          sys.exit(1)\n",
-    )
-    .unwrap();
-    fs::write(
-        pypath.join("fno/verify_advise.py"),
-        "import sys\n\
-         open('calls.log','a').write('verify-advise %s\\n' % ' '.join(sys.argv[1:]))\n",
     )
     .unwrap();
 
@@ -274,6 +271,49 @@ fn run_finalize_in(env: &Env, cwd: &Path, reason: &str) -> std::process::Output 
         )
         .env("GH_CALLS_LOG", &env.gh_calls)
         .current_dir(cwd)
+        .output()
+        .expect("run finalize")
+}
+
+/// Same env as `run_finalize`, plus one extra `fno`-stub env var: the stub
+/// call log (count the verifier spawns) or a forced spawn failure (the
+/// never-wedge test). A separate helper, same pattern as the transcript one.
+fn run_finalize_with_stub_env(
+    env: &Env,
+    reason: &str,
+    key: &str,
+    value: &str,
+) -> std::process::Output {
+    Command::new(BIN)
+        .envs(fno_agents::test_run::self_owner_env())
+        .arg("finalize")
+        .arg("--state")
+        .arg(&env.state)
+        .arg("--cwd")
+        .arg(&env.cwd)
+        .arg("--reason")
+        .arg(reason)
+        .arg("--events")
+        .arg(&env.events)
+        .arg("--global-events")
+        .arg(&env.global_events)
+        .arg("--handoffs-dir")
+        .arg(&env.handoffs)
+        .arg("--postmortems-dir")
+        .arg(&env.postmortems)
+        .env("FNO_SPACES_DIR", &env.spaces)
+        .env("PYTHONPATH", &env.pypath)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                env.bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("GH_CALLS_LOG", &env.gh_calls)
+        .env(key, value)
+        .current_dir(&env.cwd)
         .output()
         .expect("run finalize")
 }
@@ -480,9 +520,10 @@ fn finalize_ledger_every_exit() {
         0,
         "non-ship reason must NOT stamp"
     );
-    assert!(
-        !c.contains("verify-advise"),
-        "non-ship reason must NOT run the verifier advisory: {c}"
+    assert_eq!(
+        count_event(&env.events, "verifier_verdict", "S-budget"),
+        0,
+        "non-ship reason must NOT run the verifier advisory"
     );
     assert!(
         handoff_files(&env).is_empty(),
@@ -654,6 +695,14 @@ fn finalize_postmortem_on_interrupted_or_aborted() {
 #[test]
 fn finalize_ship_gated() {
     let env = setup("S-ship", false);
+    // The advisory needs ACs: an AC-free plan records not_applicable and
+    // never reaches the verifier spawn this test pins (the exactly-once test
+    // overwrites the plan the same way).
+    fs::write(
+        env.cwd.join("plan.md"),
+        "## Acceptance Criteria\n\nAC1-HP: x\n",
+    )
+    .unwrap();
     let out = run_finalize(&env, "DonePRGreen");
     assert!(out.status.success());
     let c = calls(&env);
@@ -676,26 +725,30 @@ fn finalize_ship_gated() {
         "graduate must NOT fire at ship (done = merged): {}",
         plan_body(&env)
     );
-    // W6 verifier advisory rides the ship branch with the manifest's fields;
-    // this line is the Rust->Python flag-shape contract (a flag rename on
-    // either side fails here).
-    let adv = c
-        .lines()
-        .find(|l| l.starts_with("verify-advise"))
-        .expect("ship fire runs verify_advise");
-    for want in [
-        "--node-id ab-testnode",
-        "--session-id S-ship",
-        "--reason DonePRGreen",
-        "--plan-path plan.md",
-        "--events",
-        "--global-events",
-    ] {
-        assert!(
-            adv.contains(want),
-            "verify-advise argv missing {want}: {adv}"
+    // The verifier advisory rides the ship branch in-process now; the
+    // contract is the recorded verdict event (its field shape is pinned by
+    // the module's own unit tests and the parity suite).
+    for log in [&env.events, &env.global_events] {
+        assert_eq!(
+            count_event(log, "verifier_verdict", "S-ship"),
+            1,
+            "ship fire records the advisory once per log: {}",
+            store_text(log)
         );
     }
+    let adv = store_text(&env.events);
+    assert!(
+        adv.contains(r#""verdict":"pass""#),
+        "stub reply parses to a pass verdict: {adv}"
+    );
+    assert!(
+        adv.contains(r#""graph_node_id":"ab-testnode""#),
+        "event names the node: {adv}"
+    );
+    assert!(
+        adv.contains(r#""source":"ship-gate""#),
+        "event carries the ship-gate source: {adv}"
+    );
     assert_eq!(handoff_files(&env).len(), 1, "exactly one handoff artifact");
     let handoff = fs::read_to_string(&handoff_files(&env)[0]).unwrap();
     assert!(
@@ -704,6 +757,48 @@ fn finalize_ship_gated() {
     );
     assert!(handoff.contains("S-ship"), "handoff names the session");
     assert_eq!(count_event(&env.events, "session_finalized", "S-ship"), 1);
+}
+
+/// The advisory spawns the verifier at most once per session: a second ship
+/// fire reuses the recorded verdict instead of spawning again.
+#[test]
+fn finalize_advisory_spawns_verifier_exactly_once() {
+    let env = setup("S-once", false);
+    fs::write(
+        env.cwd.join("plan.md"),
+        "## Acceptance Criteria\n\nAC1-HP: x\n",
+    )
+    .unwrap();
+    assert!(run_finalize_with_stub_env(
+        &env,
+        "DonePRGreen",
+        "FNO_STUB_CALLS_LOG",
+        &env.fno_calls.to_string_lossy()
+    )
+    .status
+    .success());
+    assert!(run_finalize_with_stub_env(
+        &env,
+        "DonePRGreen",
+        "FNO_STUB_CALLS_LOG",
+        &env.fno_calls.to_string_lossy()
+    )
+    .status
+    .success());
+    let fno_calls = fs::read_to_string(&env.fno_calls).unwrap_or_default();
+    assert_eq!(
+        fno_calls
+            .lines()
+            .filter(|l| l.starts_with("fno agents spawn"))
+            .count(),
+        1,
+        "exactly one verifier spawn across both fires: {fno_calls}"
+    );
+    assert_eq!(count_event(&env.events, "verifier_verdict", "S-once"), 1);
+    assert_eq!(
+        count_event(&env.global_events, "verifier_verdict", "S-once"),
+        1
+    );
 }
 
 /// An advisory ship (DoneAdvisory) has no merge event, so ship IS its
@@ -780,7 +875,11 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
         "delivery ship graduates: {}",
         plan_body(&env)
     );
-    assert!(!c.contains("verify-advise"));
+    assert_eq!(
+        count_event(&env.events, "verifier_verdict", "S-delivery"),
+        0,
+        "the delivery receipt is the evidence; no verifier advisory"
+    );
     let handoff = fs::read_to_string(&handoff_files(&env)[0]).unwrap();
     assert!(handoff.contains("fno-delivery://ab-testnode/attempt-1/sha256:abc"));
     assert!(handoff.contains("generic delivery receipt"));
@@ -1190,23 +1289,24 @@ fn finalize_nonship_then_ship_runs_ship_sideeffects() {
     );
 }
 
-/// W6 never-wedge lock: a FAILING verifier advisory (exit 1) must not hold
+/// Never-wedge lock: a FAILING verifier spawn (stub exit 1) must not hold
 /// session_finalized open for retry, must not appear in failed_steps, and must
 /// not raise the exit code. The advisory is log-only by contract.
 #[test]
 fn finalize_verify_advise_failure_never_wedges() {
     let env = setup("S-advfail", false);
     fs::write(
-        env.pypath.join("fno/verify_advise.py"),
-        "import sys\n\
-         open('calls.log','a').write('verify-advise FAIL\\n')\n\
-         sys.stderr.write('advisory exploded')\n\
-         sys.exit(1)\n",
+        env.cwd.join("plan.md"),
+        "## Acceptance Criteria\n\nAC1-HP: x\n",
     )
     .unwrap();
-    let out = run_finalize(&env, "DonePRGreen");
+    let out = run_finalize_with_stub_env(&env, "DonePRGreen", "FNO_STUB_SPAWN_FAIL", "1");
     assert!(out.status.success(), "advisory failure must not raise exit");
-    assert!(calls(&env).contains("verify-advise FAIL"), "advisory ran");
+    assert!(
+        store_text(&env.events).contains(r#""verdict":"error""#),
+        "failed spawn records the error verdict: {}",
+        store_text(&env.events)
+    );
     assert_eq!(
         count_event(&env.events, "session_finalized", "S-advfail"),
         1,

@@ -91,38 +91,6 @@ def test_ac2_err_existing_source_kind_preserved():
     assert e["source_inbox_msg"] == "msg-a4f1"
 
 
-def test_ac4_edge_kanban_render_does_not_crash_with_provenance_fields(tmp_path, monkeypatch):
-    """AC4-EDGE: kanban renderer ignores provenance fields, no crash on entries with them."""
-    g = _make_graph(tmp_path, [
-        {
-            "id": "ab-kan00001",
-            "title": "Kanban entry",
-            "status": "ready",
-            "domain": "code",
-            "project": "fno",
-            "source_kind": "from_inbox",
-            "source_project": "example-pipeline",
-            "source_session_id": "sess-abc",
-            "source_inbox_msg": "msg-a4f1",
-        }
-    ])
-    _patch_graph(monkeypatch, g)
-
-    from fno.graph.render import render_graph_md
-    from fno.graph.store import read_graph_strict
-
-    entries = read_graph_strict(g)
-    out_path = tmp_path / "graph.md"
-    # Must not crash
-    render_graph_md(entries, path=out_path)
-    assert out_path.exists()
-    md = out_path.read_text()
-    # Provenance fields must NOT appear in kanban output
-    assert "source_inbox_msg" not in md
-    assert "msg-a4f1" not in md
-    assert "source_kind" not in md
-
-
 def test_ac4_edge_provenance_survives_save_reload(tmp_path, monkeypatch):
     """AC4-EDGE: Idempotent triage - source_inbox_msg persists across save/reload."""
     g = _make_graph(tmp_path, [
@@ -1752,43 +1720,3 @@ def test_origin_ac2_edge_update_never_rewrites_birth(tmp_path, monkeypatch):
     assert node["details"] == "a later ruling"
     assert node["request_origin"] == "operator_request"
     assert node["origin_evidence"] == "fu-a1b2c3 source: PR#1700"
-
-
-def test_origin_intake_preserves_plan_sources_without_claiming_origin(
-    tmp_path, monkeypatch
-):
-    """AC2-HP (intake half): the plan's own references land as birth evidence
-    and the category stays unknown when the plan declares no source kind."""
-    from fno.graph import _intake
-
-    plan = tmp_path / "plan.md"
-    plan.write_text("# t\n", encoding="utf-8")
-    monkeypatch.setattr(
-        _intake,
-        "resolve_node_project_and_cwd",
-        lambda *_a, **_k: (None, str(tmp_path), {"sources": ["brief-a.md", "brief-b.md"]}),
-    )
-    node = _intake._build_intake_node(
-        {"plan_path": str(plan), "title": "From plan", "priority": "p2", "deps": [], "roadmap_id": None},
-        [],
-    )
-    assert node["request_origin"] == "unknown"
-    assert node["origin_evidence"] == "brief-a.md; brief-b.md"
-
-
-def test_origin_intake_without_sources_falls_back_to_plan_path(tmp_path, monkeypatch):
-    from fno.graph import _intake
-
-    plan = tmp_path / "plan.md"
-    plan.write_text("# t\n", encoding="utf-8")
-    monkeypatch.setattr(
-        _intake,
-        "resolve_node_project_and_cwd",
-        lambda *_a, **_k: (None, str(tmp_path), {}),
-    )
-    node = _intake._build_intake_node(
-        {"plan_path": str(plan), "title": "From plan", "priority": "p2", "deps": [], "roadmap_id": None},
-        [],
-    )
-    assert node["request_origin"] == "unknown"
-    assert node["origin_evidence"] == f"plan:{plan}"

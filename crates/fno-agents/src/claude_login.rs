@@ -140,6 +140,79 @@ pub fn login_command(config_dir: &Path) -> String {
     format!("CLAUDE_CONFIG_DIR={} claude /login", config_dir.display())
 }
 
+/// The persisted probe verdicts, keyed by account id. Written by the spawn
+/// gate, read by launch-time account picking (`fno config accounts pick`)
+/// so the rotation skips an account the probe just refused instead of
+/// picking it again on every attempt.
+pub fn login_probes_path(home: &crate::paths::AgentsHome) -> std::path::PathBuf {
+    home.root().join("login-probes.json")
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record one probe verdict for `account`. `LoggedIn` and `LoggedOut` both
+/// overwrite the entry (a fresh live verdict is what lets picking return to
+/// an account after `claude /login`); `Unknown` leaves any existing entry
+/// untouched - an inconclusive probe must neither refresh a refusal nor
+/// clear one. Best-effort: a write failure is silent, the gate's own
+/// refusal still stands on the live probe.
+pub fn record_verdict(
+    home: &crate::paths::AgentsHome,
+    account: &str,
+    config_dir: &Path,
+    verdict: &Login,
+) {
+    let (name, detail) = match verdict {
+        Login::LoggedIn => ("logged_in", None),
+        Login::LoggedOut(detail) => ("logged_out", Some(detail.clone())),
+        Login::Unknown(_) => return,
+    };
+    let path = login_probes_path(home);
+    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let entry = match doc.get_mut("probes").and_then(|p| p.as_object_mut()) {
+        Some(probes) => probes,
+        None => {
+            doc["probes"] = serde_json::json!({});
+            doc.get_mut("probes").unwrap().as_object_mut().unwrap()
+        }
+    };
+    let mut row = serde_json::json!({
+        "verdict": name,
+        "config_dir": config_dir.display().to_string(),
+        "at_epoch": now_epoch(),
+    });
+    if let Some(detail) = detail {
+        row["detail"] = serde_json::Value::String(detail);
+    }
+    entry.insert(account.to_string(), row);
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    if std::fs::write(&tmp, doc.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// The spawn gate's recorder: resolve the ambient shared home and persist
+/// the verdict. A process with no declared home (tests) records nothing.
+pub fn record_verdict_ambient(account: &str, config_dir: &Path, verdict: &Login) {
+    if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+        record_verdict(&home, account, config_dir, verdict);
+    }
+}
+
 fn truncate(s: &str) -> String {
     const CAP: usize = 200;
     if s.chars().count() <= CAP {
@@ -272,5 +345,51 @@ mod tests {
             login_command(Path::new("/tmp/acct")),
             "CLAUDE_CONFIG_DIR=/tmp/acct claude /login"
         );
+    }
+
+    fn read_probe(home: &crate::paths::AgentsHome, account: &str) -> Option<serde_json::Value> {
+        let raw = std::fs::read_to_string(login_probes_path(home)).ok()?;
+        let doc: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        doc.get("probes")?.get(account).cloned()
+    }
+
+    #[test]
+    fn a_logged_out_verdict_is_persisted_with_detail() {
+        let root = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(root.path().to_path_buf());
+        let dir = Path::new("/tmp/acct");
+        record_verdict(
+            &home,
+            "makers",
+            dir,
+            &Login::LoggedOut("OAuth session expired".to_string()),
+        );
+        let row = read_probe(&home, "makers").expect("refusal recorded");
+        assert_eq!(row["verdict"], "logged_out");
+        assert_eq!(row["detail"], "OAuth session expired");
+        assert_eq!(row["config_dir"], "/tmp/acct");
+        assert!(row["at_epoch"].is_i64());
+
+        // A live verdict overwrites the refusal; an inconclusive probe
+        // leaves the existing entry alone.
+        record_verdict(&home, "makers", dir, &Login::LoggedIn);
+        let row = read_probe(&home, "makers").expect("verdict recorded");
+        assert_eq!(row["verdict"], "logged_in");
+        assert!(row.get("detail").is_none());
+
+        record_verdict(
+            &home,
+            "makers",
+            dir,
+            &Login::LoggedOut("Login expired".to_string()),
+        );
+        record_verdict(
+            &home,
+            "makers",
+            dir,
+            &Login::Unknown("probe timed out after 20s".to_string()),
+        );
+        let row = read_probe(&home, "makers").expect("earlier refusal survives");
+        assert_eq!(row["verdict"], "logged_out");
     }
 }

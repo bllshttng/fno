@@ -281,6 +281,7 @@ fn gate_answer(payload: &Value) -> Value {
         seed: opt_str_of(payload, "seed"),
         session_phase: opt_str_of(payload, "session_phase"),
     };
+    let (caller, name) = (input.caller_session.clone(), input.name.clone());
     match spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
         Ok(mut guard) => {
             // A `hold: false` caller (the mux revival door) wants the verdict,
@@ -310,12 +311,23 @@ fn gate_answer(payload: &Value) -> Value {
                 "worker_holder": worker_holder,
             })
         }
-        Err(refusal) => json!({
-            "status": "refused",
-            "exit_code": refusal.exit_code,
-            "receipt": refusal.receipt,
-            "event": refusal.event,
-        }),
+        Err(refusal) => {
+            // The caller holds this refusal, so the first-turn watch owes it
+            // no gate notice for the same launch.
+            let reason = refusal
+                .receipt
+                .as_ref()
+                .and_then(|r| r.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("refused");
+            crate::spawn_watch::settle_refused(&home, caller.as_deref(), &name, reason);
+            json!({
+                "status": "refused",
+                "exit_code": refusal.exit_code,
+                "receipt": refusal.receipt,
+                "event": refusal.event,
+            })
+        }
     }
 }
 
@@ -335,7 +347,7 @@ fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn probe_answer(_payload: &Value) -> Value {
+pub(crate) fn probe_answer(_payload: &Value) -> Value {
     probe::answer(_payload)
 }
 
@@ -356,8 +368,9 @@ mod probe {
             .unwrap_or(false);
 
         let ceiling = agents_config::max_live(&config_cwd) as usize;
-        let learned = crate::capacity::effective(&home, ceiling);
-        let cap = learned.cap;
+        let floor = crate::capacity::thresholds(&config_cwd).floor as usize;
+        let mut learned = crate::capacity::effective(&home, ceiling, floor);
+        let mut cap = learned.cap;
         let floor_gb = agents_config::min_free_gb(&config_cwd);
         let swap_cap = agents_config::max_swap_pct(&config_cwd);
 
@@ -465,14 +478,34 @@ mod probe {
         // named right away, so every verdict this answer can take (refused on
         // max_live, refused later, accepted) carries them. Reservations are
         // named beside the registry rows, each entry tagged with its kind.
-        let (slot_row_entries, slot_reservations) =
-            spawn_gate::slot_reading(&registry_path, &mut warnings);
+        // Leads take no worker slot; their count rides beside the slots.
+        let all_live = spawn_gate::live_rows(&registry_path, &mut warnings);
+        let (slot_row_entries, leads) = crate::spawn_gate_slots::split_leads(all_live.clone());
+        let slot_reservations = spawn_gate::live_worker_slot_claims(&mut warnings);
         let slots = slot_row_entries.len() + slot_reservations.len();
+        out.insert("leads".into(), json!(leads));
+        // The user's own live sessions ride the same count; the gate shows
+        // them apart (decision D3 revised).
+        let yours = slot_row_entries
+            .iter()
+            .filter(|e| e.origin.as_deref() == Some("operator"))
+            .count();
+        out.insert("yours".into(), json!(yours));
         // The capacity fields ride EVERY verdict: saturation is when the
         // probe is most useful, so the numbers are in place before any
         // refusal returns, not only on the accepted tail.
         out.insert("effective".into(), json!(cap));
         out.insert("effective_ceiling".into(), json!(ceiling));
+        let lead_note = match leads {
+            0 => String::new(),
+            1 => "; 1 lead takes no slot".to_string(),
+            n => format!("; {n} leads take no slot"),
+        };
+        out.insert(
+            "cap_clause".into(),
+            json!(format!("{}{lead_note}", learned.clause())),
+        );
+        out.insert("floor".into(), json!(floor));
         if !learned.known {
             out.insert(
                 "effective_note".into(),
@@ -498,32 +531,54 @@ mod probe {
             })
         }));
         out.insert("slot_rows".into(), json!(slot_rows_json));
+        // Every answer names its occupancy, not only the accepted one: a
+        // refused spawn deserves the same fleet reading as an admitted one.
+        out.insert("slots".into(), json!(slots));
+        out.insert("max_live".into(), json!(cap));
+
+        // The test feed rides only when the payload asks, so gate-status and
+        // the leads pay nothing for it.
+        if payload
+            .get("tests")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            out.insert(
+                "tests".into(),
+                match crate::session_cost::test_stages(&home) {
+                    Ok(tests) => tests,
+                    Err(error) => json!({"error": error}),
+                },
+            );
+        }
 
         let mut ram_row: Option<Value> = None;
         let mut cpu_rows: Vec<Value> = Vec::new();
         let mut cpu: Option<spawn_gate::AdmissionPayload> = None;
 
         if !lanes_only {
-            // The slot cap is a probe refusal exactly as the gate refuses.
-            if slots >= cap {
+            // The slot cap is a probe refusal exactly as the gate refuses. The
+            // user's max_live refuses here; the learned cap waits for the
+            // machine gates below, and yields when they read room.
+            if slots >= learned.ceiling {
+                let top = crate::spawn_gate_slots::at_ceiling(&learned);
                 return refuse_with(
                     "max_live",
-                    format!("{slots} live worker slots >= {}", learned.clause()),
-                    json!({"count": slots, "max_live": cap}),
-                    &[fleet_row(slots, cap)],
+                    format!("{slots} live worker slots >= {}", top.clause()),
+                    json!({"count": slots, "max_live": top.cap}),
+                    &[fleet_row(slots, top.cap, yours)],
                     out,
                 );
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
             let bp_name = opt_str_of(payload, "name").unwrap_or_default();
-            let bp_live = spawn_gate::live_rows(&registry_path, &mut warnings);
             if let Err(receipt) = spawn_gate::check_blueprint_cap(
                 &config_cwd,
                 &registry_path,
                 &bp_name,
                 spawn_gate::gate_node().as_deref(),
-                &bp_live,
+                &all_live,
             ) {
                 let parsed: Value = serde_json::from_str(&receipt).unwrap_or(Value::Null);
                 let reason = parsed
@@ -571,7 +626,7 @@ mod probe {
                         "max_swap_pct": swap_cap,
                         "swapin_mib_per_s": mem.swapin_bps.map(|r| r / spawn_gate::MIB),
                     }),
-                    &make_rows(None, slots, cap, ram_row, Vec::new()),
+                    &make_rows(None, slots, cap, yours, ram_row, Vec::new()),
                     out,
                 );
             }
@@ -592,7 +647,7 @@ mod probe {
                             "share_low": admission.payload.share_low,
                             "ceiling": admission.payload.ceiling,
                         }),
-                        &make_rows(None, slots, cap, ram_row, cpu_rows),
+                        &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                         out,
                     );
                 }
@@ -610,13 +665,34 @@ mod probe {
                             "share_low": admission.payload.share_low,
                             "share_high": admission.payload.share_high,
                         }),
-                        &make_rows(None, slots, cap, ram_row, cpu_rows),
+                        &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                         out,
                     );
                 }
                 _ => {}
             }
             cpu = Some(admission.payload);
+            if slots >= cap {
+                if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap) {
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", learned.clause()),
+                        json!({"count": slots, "max_live": cap}),
+                        &[fleet_row(slots, cap, yours)],
+                        out,
+                    );
+                }
+                out.insert(
+                    "cap_clause".into(),
+                    json!(format!(
+                        "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                        learned.clause()
+                    )),
+                );
+                learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                cap = learned.cap;
+                out.insert("max_live".into(), json!(cap));
+            }
         }
 
         // Lead share: only a caller whose session resolved is checked.
@@ -646,7 +722,7 @@ mod probe {
                         "leads": leads,
                         "held_rows": reading.held_rows.clone().unwrap_or_default(),
                     }),
-                    &make_rows(None, slots, cap, ram_row, cpu_rows),
+                    &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                     out,
                 );
             }
@@ -683,7 +759,7 @@ mod probe {
                 "provider_cap",
                 format!("every dispatch lane at cap: {}", full.join(", ")),
                 json!({"lanes": lanes}),
-                &make_rows(Some(&lanes), slots, cap, ram_row, cpu_rows),
+                &make_rows(Some(&lanes), slots, cap, yours, ram_row, cpu_rows),
                 out,
             );
         }
@@ -696,7 +772,6 @@ mod probe {
         out.insert("warnings".into(), json!(warnings));
         out.insert("lanes".into(), lanes.clone());
         out.insert("live_workers".into(), json!(slots));
-        out.insert("max_live".into(), json!(cap));
         out.insert("share".into(), share_json(&reading));
         if let Some(payload_adm) = &cpu {
             out.insert("share_low".into(), json!(payload_adm.share_low));
@@ -712,7 +787,14 @@ mod probe {
         }
         out.insert(
             "rows".into(),
-            json!(make_rows(Some(&lanes), slots, cap, ram_row, cpu_rows)),
+            json!(make_rows(
+                Some(&lanes),
+                slots,
+                cap,
+                yours,
+                ram_row,
+                cpu_rows
+            )),
         );
         Value::Object(out)
     }
@@ -766,10 +848,13 @@ fn refuse_with(
 }
 
 /// The fleet-rows Gate dict.
-fn fleet_row(slots: usize, cap: usize) -> Value {
+fn fleet_row(slots: usize, cap: usize, yours: usize) -> Value {
     let mut row = Map::new();
     row.insert("name".into(), json!("fleet-rows"));
     row.insert("measured".into(), json!(slots.to_string()));
+    // Occupants: the user's own live sessions (origin operator). They count
+    // toward the cap and are shown apart (decision D3 revised).
+    row.insert("yours".into(), json!(yours));
     row.insert("threshold".into(), json!(cap.to_string()));
     row.insert(
         "verdict".into(),
@@ -789,6 +874,7 @@ fn make_rows(
     lanes: Option<&Value>,
     slots: usize,
     cap: usize,
+    yours: usize,
     ram_row: Option<Value>,
     cpu_rows: Vec<Value>,
 ) -> Vec<Value> {
@@ -825,7 +911,7 @@ fn make_rows(
             rows.push(Value::Object(row));
         }
     }
-    rows.push(fleet_row(slots, cap));
+    rows.push(fleet_row(slots, cap, yours));
     rows.extend(ram_row);
     rows.extend(cpu_rows);
     rows
@@ -952,7 +1038,7 @@ fn share_json(reading: &spawn_gate_lanes::ShareReading) -> Value {
 /// uncapped entries, or the built-in table when absent) and every live provider.
 /// `Err` = one lane count faulted, which is the probe's unknown verdict,
 /// never a zero.
-fn lanes_answer(
+pub(crate) fn lanes_answer(
     config_cwd: &std::path::Path,
     registry_path: &std::path::Path,
     redeemer: Option<&str>,
@@ -1001,12 +1087,14 @@ fn lanes_answer(
     // One journal read for the whole probe: every provider's lane count
     // judges the same waiting-worker question at the same instant.
     let questions_raw = spawn_gate_lanes::read_questions_journal(registry_path, warnings);
+    let watched = spawn_gate_lanes::watched_ids(registry_path, warnings);
     for provider in providers {
         let cap = caps.get(&provider).copied().flatten();
         match spawn_gate_lanes::provider_live_count_with_questions(
             registry_path,
             &provider,
             &questions_raw,
+            &watched,
             redeemer,
             warnings,
         ) {
@@ -1031,10 +1119,16 @@ fn lanes_answer(
                     json!(reading
                         .parked
                         .iter()
-                        .map(|(name, qid)| serde_json::json!({
-                            "name": name,
-                            "question_id": json!(qid),
-                        }))
+                        .map(|(name, why)| match why.strip_prefix("watch:") {
+                            Some(blocker) => serde_json::json!({
+                                "name": name,
+                                "watch": blocker,
+                            }),
+                            None => serde_json::json!({
+                                "name": name,
+                                "question_id": json!(why),
+                            }),
+                        })
                         .collect::<Vec<_>>()),
                 );
                 lane.insert(
@@ -1161,7 +1255,7 @@ mod tests {
 
     #[test]
     fn refuse_with_keeps_an_existing_refusal_without_adding_a_generic_row() {
-        let measured = fleet_row(3, 3);
+        let measured = fleet_row(3, 3, 0);
         let answer = refuse_with(
             "max_live",
             "fleet full".to_string(),
@@ -1356,11 +1450,12 @@ mod tests {
         std::fs::write(
             home.join("registry.json"),
             format!(
-                r#"{{"schema_version":{},"entries":[{}, {}, {}]}}"#,
+                r#"{{"schema_version":{},"entries":[{}, {}, {}, {}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 row("p1"),
                 row("p2"),
-                row("p2") // duplicate name, still a distinct row the count sees
+                row("p2"), // duplicate name, still a distinct row the count sees
+                row("lead").replacen(r#""status""#, r#""role_level":1,"status""#, 1)
             ),
         )
         .unwrap();
@@ -1375,8 +1470,35 @@ mod tests {
             assert!(r.get("provider").is_some(), "{r:?}");
         }
         assert_eq!(answer["live_workers"], 3, "slots stay rows + reservations");
+        // A lead takes no worker slot; the clause names it apart.
+        assert_eq!(answer["leads"], 1);
+        assert!(answer["cap_clause"]
+            .as_str()
+            .unwrap()
+            .ends_with("; 1 lead takes no slot"));
         assert_eq!(answer["verdict"], "accepted");
         assert_ne!(answer["reason"], "fleet-stop");
+
+        // AC2-HP: the probe answers `tests` on request, and the occupancy
+        // pair rides every answer.
+        let answer = probe::answer(&json!({"only": ["lanes"], "tests": true}));
+        assert_eq!(answer["slots"], 3, "{answer:?}");
+        assert_eq!(answer["max_live"], 28);
+        assert!(answer["cap_clause"].as_str().unwrap().contains("28"));
+        assert_eq!(answer["floor"], 1);
+        let tests = answer["tests"]
+            .as_object()
+            .expect("tests object on request");
+        assert!(tests.contains_key("sessions"), "{tests:?}");
+        assert!(tests.contains_key("running"), "{tests:?}");
+        assert!(tests.contains_key("queued"), "{tests:?}");
+        assert!(tests.contains_key("unattributed"), "{tests:?}");
+
+        // AC2-ERR: without the key nothing extra is read, no tests key
+        // appears, and the occupancy pair still rides.
+        let answer = probe::answer(&json!({"only": ["lanes"]}));
+        assert!(answer.get("tests").is_none(), "{answer:?}");
+        assert_eq!(answer["slots"], 3);
 
         std::env::remove_var(crate::paths::HOME_ENV);
         std::env::remove_var("FNO_CLAIMS_ROOT");
@@ -1807,7 +1929,7 @@ mod tests {
         std::fs::write(
             &registry,
             format!(
-                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
+                r#"{{"schema_version":{},"entries":[{{"name":"lead","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"role_level":1,"role_scope":"x-epic","harness_session_id":"session-lead"}},{{"name":"worker","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}},{{"name":"worker-2","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"session-lead"}}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
             ),
         )

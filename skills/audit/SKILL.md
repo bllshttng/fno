@@ -40,7 +40,7 @@ If the setup script sets a completion promise, read it and follow its instructio
 | Option | Description |
 |--------|-------------|
 | `--max-iterations N` | Stop after N iterations (default: 20) |
-| `--output-dir PATH` | Where to write plan documents when the run is authorized to produce plans (default: from `.claude/settings.json` `plansDirectory`, or `config.plans.full_path`) |
+| `--output-dir PATH` | Where to write plan documents when the run is authorized to produce plans (default: the plans dir the `fno do plan path` chain resolves) |
 | `--perspectives LIST` | Comma-separated lens subset; the resolved list is the authority for "do not skip any" (default: all five - ux, pm, po, eng, integration) |
 
 ## Skills, loaded for their own act

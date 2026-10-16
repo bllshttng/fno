@@ -4,6 +4,8 @@
 //! read the same either way, and the verbs stay for the operator CLI.
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
+use crate::gh_cache;
+use crate::pr_list::parse_origin_slug;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,6 +28,16 @@ fn read_all<R: std::io::Read>(mut pipe: R) -> String {
 }
 
 fn probe_run(cmd: &mut Command, timeout: Duration) -> Option<Run> {
+    // The fleet budget admits before the spawn: a refused gh probe leaves no
+    // child and reads as exit 75 with the ledger line on stderr.
+    if let Some(line) = crate::gh_budget::admit_command(cmd) {
+        return Some(Run {
+            ok: false,
+            code: Some(75),
+            stdout: String::new(),
+            stderr: line,
+        });
+    }
     let _ = cmd.stdin(std::process::Stdio::null());
     let mut child = cmd
         .stdout(std::process::Stdio::piped())
@@ -137,30 +149,9 @@ fn emit_bypass_escape(pr: u64, reason: &str) {
         .status();
 }
 
-/// `owner/repo` from a GitHub origin URL; None for anything else. The
-/// post-merge scan's parser: lowercase, optional scheme and user@, host must
-/// be github.com, exactly one slash in the path, `.git` stripped.
-fn parse_origin_slug(url: &str) -> Option<String> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^/@]*@)?github\.com(?::[0-9]+)?[:/](.+)$")
-            .unwrap()
-    });
-    let lowered = url.trim().to_lowercase();
-    let rest = re.captures(&lowered)?.get(1)?.as_str().to_string();
-    let mut rest = rest.trim_end_matches('/').to_string();
-    if rest.ends_with(".git") {
-        rest.truncate(rest.len() - 4);
-    }
-    if rest.matches('/').count() != 1 {
-        return None;
-    }
-    let (owner, repo) = rest.split_once('/')?;
-    if owner.is_empty() || repo.is_empty() {
-        return None;
-    }
-    Some(rest)
-}
+// The origin-slug parser lives once, in pr_list (parse_origin_slug); this
+// module's post-merge scan calls the crate copy. The retired gate_probes
+// twin's tests moved beside the surviving owner.
 
 fn fetch_ref(cwd: &Path, ref_name: &str, run: RunProbe) -> bool {
     let spec = format!("+refs/heads/{ref_name}:refs/remotes/origin/{ref_name}");
@@ -218,6 +209,47 @@ fn merged_pr_for_head(cwd: &Path, slug: &str, base: &str, run: RunProbe) -> (i64
     (PROBE_FAILED, String::new(), true)
 }
 
+/// How long the cached default-branch answer stays fresh: the branch moves
+/// only when an operator renames it, so an hour of staleness is cheap.
+const REPO_META_TTL_S: u64 = 3600;
+
+/// The repository's default branch, gh-cache first: the Python leg's
+/// `_default_branch` contract on the native merge path. A missing, stale or
+/// corrupt row (or an unreadable state dir) falls through to the live REST
+/// read, which stays the truth; a successful live read backfills the row.
+fn default_branch_cached(cwd: &Path, slug: &str, run: RunProbe) -> Option<String> {
+    if let Some(root) = gh_cache::rows_root(cwd) {
+        let fresh = gh_cache::read_row(
+            &root,
+            "repo-meta",
+            slug,
+            None,
+            Some(REPO_META_TTL_S),
+            gh_cache::now_secs(),
+        );
+        if let Some(hit) = fresh
+            .get("row")
+            .and_then(|row| row.get("default_branch"))
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+        {
+            return Some(hit.to_string());
+        }
+    }
+    let value =
+        gh_json(run, cwd, &format!("repos/{slug}")).and_then(|v| s_of(&v, "default_branch"))?;
+    if let Some(root) = gh_cache::rows_root(cwd) {
+        gh_cache::write_row(
+            &root,
+            "repo-meta",
+            slug,
+            None,
+            &serde_json::json!({ "default_branch": value }),
+        );
+    }
+    Some(value)
+}
+
 fn lineage(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
     let base_ref = facts.base_ref.as_str();
     let slug = run(&["git", "remote", "get-url", "origin"], cwd)
@@ -229,8 +261,7 @@ fn lineage(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
             "could not resolve owner/repo from the origin remote".into(),
         );
     };
-    let default =
-        gh_json(run, cwd, &format!("repos/{slug}")).and_then(|v| s_of(&v, "default_branch"));
+    let default = default_branch_cached(cwd, &slug, run);
     let Some(default) = default else {
         return (
             "unknown".into(),
@@ -388,20 +419,120 @@ fn lineage_decision(
     )
 }
 
+/// Whether `tool` resolves on PATH. The Python verb answered a missing `gh`
+/// with exit 127 naming the tool; without this check the probe seam would
+/// answer `None` and the verb would print `unknown` (4) instead - the one
+/// caller-visible contract the probe seam cannot express.
+pub(crate) fn tool_on_path(tool: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(tool).is_file()))
+        .unwrap_or(false)
+}
+
+/// `fno-agents pr-base-lineage-check <pr>`: the verb door over `lineage`,
+/// the same verdict `fno do pr merge` obeys. One REST read fills the base
+/// ref (the Python `_base_ref` ask); a miss leaves it empty and `lineage`
+/// answers its own unknown for the unreadable base. Output is the Python
+/// verb's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
+/// at 0, stderr `REFUSED` plus the bypass hint at 3, `unknown` at 4, and a
+/// missing `gh` at 127.
+pub fn run_base_lineage_verb(argv: &[String]) -> i32 {
+    const USAGE: &str = "usage: fno-agents pr-base-lineage-check <pr-number>";
+    let number = match argv.first().map(String::as_str).map(str::parse::<u64>) {
+        Some(Ok(number)) => number,
+        _ => {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+    };
+    if !tool_on_path("gh") {
+        eprintln!("fno do pr base-lineage-check: gh not found on PATH");
+        return 127;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let run = |args: &[&str], dir: &Path| {
+        let mut cmd = Command::new(args[0]);
+        cmd.args(&args[1..]).current_dir(dir);
+        run_probe(cmd)
+    };
+    let base_ref = run(&["git", "remote", "get-url", "origin"], &cwd)
+        .filter(|r| r.ok)
+        .and_then(|r| parse_origin_slug(r.stdout.trim()))
+        .and_then(|slug| {
+            let endpoint = format!("repos/{slug}/pulls/{number}");
+            let out = run(&["gh", "api", &endpoint], &cwd)?;
+            if !out.ok {
+                return None;
+            }
+            serde_json::from_str::<Value>(&out.stdout)
+                .ok()?
+                .get("base")
+                .and_then(|base| base.get("ref"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let facts = PrFacts {
+        number,
+        base_ref,
+        ..Default::default()
+    };
+    let (verdict, reason) = lineage(&cwd, &facts, &run);
+    match verdict.as_str() {
+        "ok" => {
+            println!("base-lineage: ok - {reason}");
+            0
+        }
+        "stale" if lineage_bypassed() => {
+            emit_bypass_escape(facts.number, &reason);
+            println!("base-lineage: bypassed (FNO_PR_BASE_LINEAGE_OK) - {reason}");
+            0
+        }
+        "stale" => {
+            eprintln!(
+                "base-lineage: REFUSED - {reason}\n  bypass (records a gate_escape): \
+                 FNO_PR_BASE_LINEAGE_OK=stale-acknowledged"
+            );
+            3
+        }
+        _ => {
+            eprintln!("base-lineage: unknown - {reason}");
+            4
+        }
+    }
+}
+
 /// The merge-result probe in process: the cheap ancestry answer first (the
 /// head already contains its base, so CI on the head IS the merge result),
 /// then the race-guarded pull-head fetch and the repo-wide script, exactly
 /// the spawned verb's order.
 pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeOutcome {
+    let (verdict, reason) = merge_result_verdict(cwd, facts, run);
+    match verdict.as_str() {
+        "ok" => ProbeOutcome::Clear,
+        "red" => ProbeOutcome::Refused(reason),
+        _ => ProbeOutcome::Inconclusive(reason),
+    }
+}
+
+/// The same walk in the verb's own vocabulary (`ok|red|unknown` plus the
+/// reason the Python verb printed), so the standalone verb and the in-process
+/// gate share one implementation.
+pub(crate) fn merge_result_verdict(cwd: &Path, facts: &PrFacts, run: RunProbe) -> (String, String) {
     let base = facts.base_ref.as_str();
     let head_oid = facts.head_sha.as_str();
     if base.is_empty() || head_oid.is_empty() {
-        return ProbeOutcome::Inconclusive(
+        return (
+            "unknown".into(),
             "merge-result probe could not read the PR base/head".into(),
         );
     }
     if !fetch_ref(cwd, base, run) {
-        return ProbeOutcome::Inconclusive(format!("could not fetch base branch '{base}'"));
+        return (
+            "unknown".into(),
+            format!("could not fetch base branch '{base}'"),
+        );
     }
     let ancestor = run(
         &[
@@ -414,7 +545,10 @@ pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeO
         cwd,
     );
     if ancestor.map(|r| r.code == Some(0)).unwrap_or(false) {
-        return ProbeOutcome::Clear;
+        return (
+            "ok".into(),
+            format!("head already contains {base} - CI on the head is the merge result"),
+        );
     }
     let spec = format!("refs/pull/{}/head:refs/fno/merge-result/head", facts.number);
     let fetched = run(
@@ -432,25 +566,24 @@ pub(crate) fn merge_result(cwd: &Path, facts: &PrFacts, run: RunProbe) -> ProbeO
     .map(|_| rev(cwd, "refs/fno/merge-result/head", run))
     .unwrap_or_default();
     if fetched != head_oid {
-        return ProbeOutcome::Inconclusive(format!(
-            "PR head moved during the probe ({} != {})",
-            &fetched[..8.min(fetched.len())],
-            &head_oid[..8.min(head_oid.len())]
-        ));
+        return (
+            "unknown".into(),
+            format!(
+                "PR head moved during the probe ({} != {})",
+                &fetched[..8.min(fetched.len())],
+                &head_oid[..8.min(head_oid.len())]
+            ),
+        );
     }
     let Some(top) =
         crate::paths::canonical_repo_root(cwd).map(|p| p.to_string_lossy().into_owned())
     else {
-        return ProbeOutcome::Inconclusive(
+        return (
+            "unknown".into(),
             "could not resolve the canonical repo root for the merge-result script".into(),
         );
     };
-    let (verdict, reason) = run_merge_script(&top, &format!("origin/{base}"), head_oid, cwd);
-    match verdict.as_str() {
-        "ok" => ProbeOutcome::Clear,
-        "red" => ProbeOutcome::Refused(reason),
-        _ => ProbeOutcome::Inconclusive(reason),
-    }
+    run_merge_script(&top, &format!("origin/{base}"), head_oid, cwd)
 }
 
 /// The static step: the repo's own `check-merge-result.sh` (merge-tree +
@@ -536,6 +669,7 @@ pub(crate) fn dispatch_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
                 [
                     "id",
                     "slug",
+                    "status",
                     "parent",
                     "contained_in",
                     "plan_path",
@@ -656,8 +790,8 @@ fn hold_outcome(pr_number: u64, v: &crate::backlog_ready::HoldVerdictReceipt) ->
     let note = crate::merge_hold::disarm_automerge(pr_number);
     eprintln!("hold: auto-merge disarm for PR {pr_number}: {note}");
     ProbeOutcome::Refused(format!(
-        "{}: {}; set_by={}; release_when={}; review_on={}",
-        v.guard_reason, v.reason, v.set_by, v.release_when, v.review_on
+        "{}: {}; set_by={}; release_when={}; review_on={}; exempt={}",
+        v.guard_reason, v.reason, v.set_by, v.release_when, v.review_on, v.exempt
     ))
 }
 
@@ -873,5 +1007,40 @@ mod tests {
         let entries = vec![json!({"id": "x-ok", "project": "fno", "cwd": "/repo"})];
         let out = dispatch_hold_rows(Path::new("/repo"), &facts(9), &entries);
         assert_eq!(out, ProbeOutcome::Clear);
+    }
+
+    /// The fake probe the merge-result verdict tests share: `git fetch` and
+    /// `git merge-base` succeed, everything else cannot run.
+    fn fetch_only_run(args: &[&str], _dir: &Path) -> Option<Run> {
+        let ok = args.first() == Some(&"git")
+            && matches!(args.get(1), Some(&"fetch") | Some(&"merge-base"));
+        ok.then(|| Run {
+            ok: true,
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+
+    #[test]
+    fn merge_result_verdict_ok_when_head_contains_base() {
+        let run = |args: &[&str], dir: &Path| fetch_only_run(args, dir);
+        let mut facts = facts(9);
+        facts.base_ref = "main".into();
+        let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
+        assert_eq!(verdict, "ok");
+        assert_eq!(
+            reason,
+            "head already contains main - CI on the head is the merge result"
+        );
+    }
+
+    #[test]
+    fn merge_result_verdict_unknown_when_facts_blank() {
+        let run = |args: &[&str], dir: &Path| fetch_only_run(args, dir);
+        let facts = PrFacts::default();
+        let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
+        assert_eq!(verdict, "unknown");
+        assert_eq!(reason, "merge-result probe could not read the PR base/head");
     }
 }

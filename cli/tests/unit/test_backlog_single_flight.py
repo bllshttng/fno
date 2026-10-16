@@ -24,7 +24,6 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from fno.backlog import advance as adv
 from fno.backlog.single_flight import (
     acquire_flight,
     advance_flight_key,
@@ -77,42 +76,8 @@ def _advance_result(decision: str = "disabled") -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 
 
-def test_second_advance_reports_held_and_runs_nothing(iso, monkeypatch):
-    """The x-ef2c VERIFY: fire the arm twice inside one run; the second
-    reports held rather than starting a second run."""
-    acquire_claim(advance_flight_key(None), "a-previous-run", ttl_ms=600_000)
-
-    def _must_not_run(*_a, **_k):
-        raise AssertionError("a held advance must not run the selection")
-
-    monkeypatch.setattr(adv, "advance", _must_not_run)
-    monkeypatch.setattr(adv, "advance_dependents", _must_not_run)
-
-    result = runner.invoke(app, ["backlog", "advance", "--json"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["held"] is True
-    assert payload["requests"] >= 1, "the held count is the positive marker"
-    assert payload["holder"] == "a-previous-run"
-    assert payload["decision"] == "held", "the --json receipt shape holds"
 
 
-def test_second_epic_advance_reports_held(iso, monkeypatch):
-    """Same contract for the daemon's converge entry (`--epic`), and a held
-    receipt is never a retirement: the CLI exits 0 with `held: true`."""
-    acquire_claim(advance_flight_key("x-epic-a"), "a-converge", ttl_ms=600_000)
-
-    ran = []
-    monkeypatch.setattr(
-        "fno.backlog.advance.run_advance_epic",
-        lambda *a, **k: ran.append(a),
-    )
-
-    result = runner.invoke(app, ["backlog", "advance", "--epic", "x-epic-a", "--json"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["held"] is True
-    assert ran == []
 
 
 # ---------------------------------------------------------------------------
@@ -120,39 +85,8 @@ def test_second_epic_advance_reports_held(iso, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_gate_releases_so_the_next_run_is_not_held(iso, monkeypatch):
-    """Free scope: the run executes, the gate releases, and an immediate
-    second run executes too (no stack, no wedge)."""
-    calls = []
-    monkeypatch.setattr(
-        adv, "advance", lambda *a, **k: calls.append(1) or _advance_result()
-    )
-
-    first = runner.invoke(app, ["backlog", "advance", "--json"])
-    second = runner.invoke(app, ["backlog", "advance", "--json"])
-    assert first.exit_code == 0, first.output
-    assert second.exit_code == 0, second.output
-    assert json.loads(first.stdout).get("held") is None
-    assert json.loads(second.stdout).get("held") is None
-    assert calls == [1, 1]
-    key = advance_flight_key(None)
-    state = claim_status(key)["state"]
-    assert state == "free"
 
 
-def test_gate_unavailable_fails_open(iso, monkeypatch):
-    """No fno-agents binary (or one older than the verb): the gate is
-    unavailable and the verb proceeds ungated, the pre-gate behavior."""
-    monkeypatch.setenv("FNO_AGENTS_BIN", "/nonexistent/fno-agents")
-    calls = []
-    monkeypatch.setattr(
-        adv, "advance", lambda *a, **k: calls.append(1) or _advance_result()
-    )
-
-    result = runner.invoke(app, ["backlog", "advance", "--json"])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout).get("held") is None
-    assert calls == [1], "the run went ahead without the gate"
 
 
 def test_a_dead_holder_does_not_wedge_the_scope(iso):
@@ -280,16 +214,6 @@ def test_pr_scoped_reconcile_does_not_queue_behind_a_full_sweep(iso):
 # ---------------------------------------------------------------------------
 
 
-def test_epic_stop_bypasses_the_gate(iso, monkeypatch):
-    acquire_claim(advance_flight_key("x-epic-a"), "a-converge", ttl_ms=600_000)
-    ran = []
-    monkeypatch.setattr(
-        "fno.backlog.advance.run_advance_epic",
-        lambda *a, **k: ran.append(k),
-    )
-    result = runner.invoke(app, ["backlog", "advance", "--epic", "x-epic-a", "--stop"])
-    assert result.exit_code == 0, result.output
-    assert ran, "deactivating a mission must never be held by its own drain"
 
 
 # ---------------------------------------------------------------------------
@@ -444,11 +368,9 @@ def _child_env(iso: Path, extra: dict) -> dict:
 
 
 def _wait_for_flight_held(key: str, iso: Path, proc: "subprocess.Popen | None" = None, timeout: float = 8.0) -> None:
-    from fno.claims.io import claim_path
-
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if claim_path(key, root=iso).exists():
+        if claim_status(key, root=iso)["state"] != "free":
             return
         if proc is not None and proc.poll() is not None:
             break

@@ -89,6 +89,43 @@ impl BLine {
         out
     }
 
+    /// [`BLine::wrap`] with continuation lines indented under the row's
+    /// tree guide, so a wrapped row still reads as one row. The first line
+    /// keeps the full width; continuations carry `indent` and lose its
+    /// width. Roles and the band survive the split.
+    pub(crate) fn wrap_indented(self, w: usize, indent: &str) -> Vec<BLine> {
+        let band = self.band;
+        let chars: Vec<char> = self.text.chars().collect();
+        if chars.iter().map(|c| char_w(*c)).sum::<usize>() <= w {
+            return vec![self];
+        }
+        let indent_w: usize = indent.chars().map(char_w).sum();
+        let tail_w = w.saturating_sub(indent_w).max(1);
+        let pieces = self.clone().wrap(w);
+        let mut out = vec![pieces[0].clone()];
+        let consumed: usize = pieces[0].text.chars().count();
+        if consumed >= chars.len() {
+            return out;
+        }
+        let remainder = BLine {
+            text: chars[consumed..].iter().collect(),
+            roles: self.roles.get(consumed..).unwrap_or(&[]).to_vec(),
+            default_role: self.default_role,
+            band,
+        };
+        for piece in remainder.wrap(tail_w) {
+            let mut indented = BLine {
+                text: indent.to_string(),
+                roles: vec![BRole::Meta; indent.chars().count()],
+                default_role: piece.default_role,
+                band: piece.band,
+            };
+            indented.push_line(piece);
+            out.push(indented);
+        }
+        out
+    }
+
     /// Build from segments.
     pub(crate) fn of(segs: &[BSeg]) -> BLine {
         let mut text = String::new();
@@ -156,6 +193,18 @@ impl BLine {
             line.roles.push(line.default_role);
         }
         line
+    }
+
+    /// Flatten every char to `Meta`, the same dim slot [`paint_title_row`]
+    /// gives an unfocused title: the hint reads as inert chrome while its
+    /// pane does not hold the keyboard, instead of looking equally ready to
+    /// act as a focused one's. Clearing `roles` is enough - paint_bline
+    /// falls back to `default_role` past the role walk's end, the same way
+    /// [`BLine::meta`] leaves it empty.
+    pub(crate) fn dimmed(mut self) -> BLine {
+        self.roles.clear();
+        self.default_role = BRole::Meta;
+        self
     }
 }
 

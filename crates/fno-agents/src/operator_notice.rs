@@ -31,6 +31,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Returns whether the child spawned, so the signal store can refuse to
 /// commit state for a notice that never left the machine.
 pub fn notify_operator(title: &str, body: &str, pointer: Option<&str>) -> bool {
+    // Under cargo test, an unpinned binary resolves to the real `fno` on
+    // PATH, whose `inbox notify` toasts the operator's screen for real (the
+    // 2026-10-01 leak: a test-seeded body reached the user as an OS alert).
+    // Refuse; a test that pins `FNO_BIN` to a stub keeps the spawn path.
+    if cfg!(test) && std::env::var_os("FNO_BIN").is_none() {
+        return false;
+    }
     let fno = crate::scrape::fno_bin();
     notify_operator_with(&fno, title, body, pointer)
 }
@@ -83,6 +90,11 @@ pub fn notify_operator_with(bin: &OsStr, title: &str, body: &str, pointer: Optio
 /// detached badge path keeps `notify_operator`: `notify_transition` runs
 /// inside a registry write and must not block on the child.
 pub fn notify_operator_confirmed(title: &str, body: &str, pointer: Option<&str>) -> bool {
+    // Same cargo-test refusal as [`notify_operator`]: unpinned under test
+    // means the real `fno`, never a legal spawn.
+    if cfg!(test) && std::env::var_os("FNO_BIN").is_none() {
+        return false;
+    }
     let fno = crate::scrape::fno_bin();
     let mut cmd = std::process::Command::new(&fno);
     notify_args(&mut cmd, title, body, pointer);
@@ -672,6 +684,11 @@ fn percent_encode_ref(s: &str) -> String {
 /// drained on its own thread so a chatty child cannot deadlock the wait.
 /// Returns stdout regardless of exit status; the caller judges the content.
 fn run_captured(bin: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Option<String> {
+    // The fleet budget admits before the spawn: a refused gh read takes the
+    // caller's unreadable branch instead of sending the request.
+    if crate::gh_budget::admit_spawn(OsStr::new(bin), args).is_some() {
+        return None;
+    }
     let mut child = crate::bounded_spawn::spawn_bounded(OsStr::new(bin), args, cwd).ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {

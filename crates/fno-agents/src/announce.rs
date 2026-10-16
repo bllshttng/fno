@@ -887,9 +887,10 @@ fn standing_announcements(
 
 /// One announcement block: the delivered-mail header line, then the body.
 /// The sender reads through the system-sender table (`fleet-incident` ->
-/// `fno/fleet-incident`); the third field is the row's subject when it is
-/// header-safe (no backtick or separator could forge a header field), else
-/// the body summary.
+/// `fno/fleet-incident`). User law d-b720d23c: a bodied announcement's
+/// header carries no subject; a header-only one keeps the row's subject
+/// when it is header-safe (no backtick or separator could forge a header
+/// field), else the body summary.
 fn render_block(m: &Value) -> String {
     let id = row_str(m, "id").unwrap_or("");
     let from = row_str(m, "from").unwrap_or("unknown");
@@ -898,12 +899,12 @@ fn render_block(m: &Value) -> String {
     let body = row_str(m, "body").unwrap_or("");
     let sender = crate::system_sender::canonical(from);
     let safe = !subject.is_empty() && !subject.contains('`') && !subject.contains(" · ");
-    let third = crate::mail_header::header_subject(safe.then_some(subject), body);
+    let third = crate::mail_header::header_third_field(safe.then_some(subject), body);
     let header = crate::mail_header::render_header(
         crate::mail_header::HeaderForm::Mention,
         sender,
         id,
-        &third,
+        third.as_deref(),
     );
     format!("{header}\n{body}")
 }
@@ -1784,7 +1785,10 @@ mod tests {
         let out = read_render(&f.paths, session, Boundary::Prompt)
             .unwrap()
             .unwrap();
-        assert!(out.contains(&format!("\u{b7} {id} \u{b7}")));
+        assert!(
+            out.contains(&format!("· {id}`\n")),
+            "law form: two-field header closed before the body"
+        );
         assert!(out.contains("hello fleet"));
         let second = read_render(&f.paths, session, Boundary::Prompt).unwrap();
         assert!(second.is_none(), "cursor silences the second read");

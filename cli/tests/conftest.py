@@ -65,91 +65,6 @@ def _quiet_gh_budget(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_board_render(monkeypatch):
-    """Keep every test off the real board render.
-
-    The post-publish render shells the installed front binary (`fno
-    board-render`), so an unstubbed graph write would fork a subprocess per
-    write and a lagging install would print its stderr into CliRunner's
-    mixed output, breaking --json parses far from any test about rendering.
-    Tests about the render itself request `native_board_render`, which swaps
-    this no-op for an in-process fake of the native writer.
-    """
-    import fno.graph.roadmap_public as rp
-
-    monkeypatch.setattr(rp, "render_local_targets", lambda: 0)
-
-
-@pytest.fixture
-def native_board_render(monkeypatch):
-    """An in-process fake of the native board render, for the render's own
-    tests.
-
-    Mirrors the native writer's observable contract at the Python seam: every
-    configured local target is written with the CURRENT (archive-overlaid)
-    rows; a named project matching no rows warns and counts as a failure (the
-    typo'd-project guard); a retired projection warns and skips; a failed
-    write warns with its error class and counts. The page internals remain
-    the Rust renderer's to prove.
-    """
-    import os
-    import sys
-    from pathlib import Path
-
-    import fno.graph.roadmap_public as rp
-
-    def render() -> int:
-        rows = rp.load_render_entries(None)
-        failures = 0
-        for target in rp._configured_targets():
-            scope, all_projects = rp._target_scope(target)
-            if target.projection != "local":
-                print(
-                    f"Warning: render target {target.path}: projection "
-                    f"{target.projection!r} is retired; the web backlog page "
-                    "replaces the rendered boards",
-                    file=sys.stderr,
-                )
-                continue
-            out = Path(os.path.expanduser(target.path))
-            scoped = rows if all_projects else [
-                r for r in rows if (r.get("project") or "") == scope
-            ]
-            if not all_projects and not scoped:
-                print(
-                    f"Warning: render target {out} matches no graph entry "
-                    f"with project {scope!r}; target left unchanged "
-                    "(check the project name)",
-                    file=sys.stderr,
-                )
-                failures += 1
-                continue
-            try:
-                out.parent.mkdir(parents=True, exist_ok=True)
-                body = "".join(
-                    f"<div>{r.get('id', '')} {r.get('title', '')} "
-                    f"{r.get('plan_path') or ''}</div>"
-                    for r in scoped
-                )
-                out.write_text(
-                    f'<html><body id="stats">{body}</body></html>',
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                print(
-                    f"Warning: render target {out} failed: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                failures += 1
-        return failures
-
-    monkeypatch.setattr(rp, "render_local_targets", render)
-    return render
-
-
-
-@pytest.fixture(autouse=True)
 def _operator_shell_identity(monkeypatch):
     """Run every test as a bare operator shell, never as a spawned agent.
 
@@ -537,6 +452,29 @@ def _reap_session_processes(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _stub_codex_cli_version(monkeypatch):
+    """Never let a test's codex-argv build reach the real ``codex --version``.
+
+    ``_codex_cli_version`` shells out with a bare ``subprocess.run`` (not the
+    guarded ``_codex._subprocess_popen`` seam ``_block_live_provider_exec``
+    covers), and it is ``functools.lru_cache``-memoized per process - so an
+    unstubbed first call would both exec whatever real ``codex`` happens to be
+    on the developer's PATH and then pin that version's answer for the rest
+    of the pytest run, making --dangerously-bypass-hook-trust presence
+    host-dependent. Pin to a known-supporting version; a test that needs a
+    different answer overrides this per-test (monkeypatch order: test wins).
+    The env pin carries the same answer to any fno-agents child, whose Rust
+    probe reads ``FNO_CODEX_VERSION`` first, so parity argvs agree. It lives
+    here, not in agents/, because every codex argv build probes the version,
+    and tests outside agents/ build codex argvs too.
+    """
+    from fno.agents import mux_spawn
+
+    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
+    monkeypatch.setenv("FNO_CODEX_VERSION", "0.148.0")
+
+
+@pytest.fixture(autouse=True)
 def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     """Guard every provider subprocess seam so no cli test execs a *real*
     provider binary (e.g. an immortal ``claude --bg``).
@@ -648,8 +586,8 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
                 raise AssertionError(
                     f"live launchctl mutation blocked under pytest in "
                     f"{request.node.nodeid}: {args[:2]} would change the "
-                    "operator's launchd domain. Stub _run_launchctl, "
-                    "_run_launchctl_timed or bounce, or pass activate=False."
+                    "operator's launchd domain. Stub _run_launchctl_timed "
+                    "or bounce, or pass activate=False."
                 )
             if guard_providers and _is_real_provider_exec(args):
                 name = args[0] if isinstance(args, (list, tuple)) and args else args
@@ -747,87 +685,28 @@ def _hermetic_promise_carveout_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_claim_reap(monkeypatch):
-    """Neutralise cmd_reconcile's claim-GC leg during tests.
-
-    ``reap_dead_claims()``'s default roots resolve through
-    ``resolve_canonical_repo_root()`` (cwd-based ``git worktree list``
-    discovery - the SAME channel hermetic.py documents as unclosable by any
-    env var, see its ``FNO_REPO_ROOT`` comment) and ``global_claims_root()``
-    (HOME, which IS sandboxed). A reconcile test run from inside a real
-    checkout would otherwise archive real dead claims on the host machine.
-    Closed at the reader, same pattern as ``_hermetic_promise_carveout_gate``
-    above. ``cmd_reconcile`` imports ``reap_dead_claims`` fresh inside the
-    function body, so patching the defining module's attribute reaches it;
-    a test module that imports the name directly (``test_claim_reap.py``)
-    binds its own reference at collection time and is unaffected.
-    """
-    import fno.claims.core as claims_core
-
-    def _noop_reap(*args, **kwargs):
-        # The verbs resolve core callables at call time, so this stub must
-        # absorb whatever signature the real reap_dead_claims grows (it
-        # already gained optout_sink after this fixture was written).
-        return {
-            "scanned": 0, "reaped": 0, "would_reap": 0, "kept_live": 0,
-            "kept_suspect": 0, "kept_offhost": 0, "corrupted": 0, "vanished": 0,
-            "contended": 0, "reap_failed": [],
-            "apply": kwargs.get("apply", False), "roots": [],
-        }
-
-    monkeypatch.setattr(claims_core, "reap_dead_claims", _noop_reap)
-
-
-@pytest.fixture(autouse=True)
 def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
     """Default every test to an empty fleet-incident home.
 
     The spawn gate reads the incident verdict through ``$HOME/.fno/agents`` on
     every admission, and the HOME sandbox is ONE shared tmpdir per pytest
     process, so one test that left a stopped record there refused every later
-    gate-touching test on that xdist worker. Same ambient-state-leak class as
-    ``_hermetic_merge_hold_gate`` above; closed at the reader, and a test that
-    exercises a real incident state pins ``FNO_AGENTS_HOME`` itself (monkeypatch
-    applies in order, so the test-local pin wins).
+    gate-touching test on that xdist worker. Closed at the reader, and a test
+    that exercises a real incident state pins ``FNO_AGENTS_HOME`` itself
+    (monkeypatch applies in order, so the test-local pin wins).
     """
     monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / ".fno" / "agents"))
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_merge_hold_gate(monkeypatch):
-    """Default the plan-level merge hold gate to no hold.
-
-    ``hold_for_pr`` (consulted by every merge via ``merge_hold_reason``)
-    reads the graph first and pays a live PR-body fetch whenever the graph
-    carries any node. The HOME sandbox is ONE shared tmpdir per pytest
-    process, so an earlier test in this worker that wrote a node makes every
-    later merge test scope that fetch for real; the CI runner has no working
-    gh, the fetch fails closed, and the merge reads ``held`` for a reason no
-    test arranged.
-    Which tests fall to it moves with worker scheduling, which is what made
-    it look like a race. Closed at the reader, same pattern as
-    ``_hermetic_promise_carveout_gate`` above - the fifth channel of the
-    ambient-state-leak class (CI sees the leak in both directions, local
-    authenticated gh hides it). Tests that exercise the real reader override
-    it (``test_pr_hold.py`` restores the function for the whole module;
-    ``test_plan_dispatch_hold_refuses_sanctioned_merge`` patches
-    ``merge_hold_reason`` above this seam).
-    """
-    import fno.pr._hold as hold
-
-    monkeypatch.setattr(hold, "hold_for_pr", lambda pr_number, cwd: None)
 
 
 @pytest.fixture(autouse=True)
 def _hermetic_authorized_merge(monkeypatch):
     """Default the authorized-merge owner to "authorized, then merged".
 
-    Same ambient-state class as ``_hermetic_merge_hold_gate`` above. The owner
-    lives in the fno-agents binary, which is absent on a CI runner and answers
-    ``unknown`` there, so every merge test would read ``held``; and its probes
-    are live reads - the PR over REST, the review hold's worktree layer shelling
-    ``git`` against whatever checkout the suite runs in, which inside an active
-    /target worktree is legitimately dirty.
+    The owner lives in the fno-agents binary, which is absent on a CI runner
+    and answers ``unknown`` there, so every merge test would read ``held``; and
+    its probes are live reads - the PR over REST, the review hold's worktree
+    layer shelling ``git`` against whatever checkout the suite runs in, which
+    inside an active /target worktree is legitimately dirty.
 
     Cleared at the reader. The decision itself is under test in
     ``crates/fno-agents/src/authorized_merge.rs``; the tests that exercise this
@@ -1005,7 +884,7 @@ def _hermetic_worker_add_dirs(monkeypatch):
 
 # Modules whose journal writes the dispatch-observability plan pins per test.
 # The tree-wide neutralise() above already aims every journal at one shared
-# sandbox; these five get a per-test tmp journal so they cannot even read each
+# sandbox; these modules get a per-test tmp journal so they cannot even read each
 # other's rows. scripts/ci/check-tests-hermetic-events.sh guards the marker
 # on the test-file side; keep the two lists in step.
 _PLAN_JOURNAL_PINNED_MODULES = frozenset(
@@ -1013,17 +892,14 @@ _PLAN_JOURNAL_PINNED_MODULES = frozenset(
         "test_spawn_gate_refusal_events",
         "test_spawn_defaults",
         "test_rust_runtime",
-        "test_advance_explain",
-        "test_agents_top",
         "test_epic_status",
-        "test_join_events",
     }
 )
 
 
 @pytest.fixture(autouse=True)
 def _plan_hermetic_events_journal(request, tmp_path, monkeypatch):
-    """Pin FNO_EVENTS_PATH to this test's tmp journal for the five modules.
+    """Pin FNO_EVENTS_PATH to this test's tmp journal for the pinned modules.
 
     The audit measured 224 fixture rows and 212 rows naming a nonexistent node
     in the developer's live global journal - test fixtures a green run had
@@ -1253,52 +1129,57 @@ def _mint_fno_id_stubbed(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _closure_leg_hermetic(monkeypatch):
-    """Hermetic default for the closure-line forwarders.
+    """Hermetic default for the closure-line binary verbs.
 
-    `fno.pr.closure.parse_closure_trailer`/`render_closure_trailer` are thin
-    forwarders to the Rust leg (`fno-agents pr-closure-parse|render`, through
-    `fno.rust_binary.verb_call`). In the test environment that resolver can
-    find an installed binary without the new verb, or none at all, so the
-    default answers from a test-local copy of the shared-corpus grammar;
-    tests that pin the forwarder WIRING re-stub `fno.pr.closure.verb_call`
-    themselves (closure.py binds the transport at module level), and the
-    corpus test runs the real dev binary when one exists (skip otherwise,
-    the same contract as `native_backlog_door`).
+    The closure producer lives in the fno-agents binary now; the Python side
+    reaches it only through `fno.rust_binary.verb_call`. In the test
+    environment that resolver can find an installed binary without the new
+    verb, or none at all, so the default answers `pr-closure-parse` from a
+    test-local copy of the shared-corpus grammar and refuses the writer
+    verbs loudly; tests that pin the forwarder WIRING re-stub
+    `fno.rust_binary.verb_call` themselves.
     """
+    import fno.rust_binary as rb
     from fno.graph._constants import is_wellformed_node_id
 
+    real_verb_call = rb.verb_call
+
+    def _line_ids(line):
+        stripped = line.strip()
+        for kw in ("fixes", "backlog-closure"):
+            if stripped.lower().startswith(kw):
+                rest = stripped[len(kw):]
+                if rest.startswith(":"):
+                    rest = rest[1:]
+                if rest and not rest[0].isspace():
+                    return None  # glued word, not the keyword
+                toks = [t for t in rest.replace(",", " ").split() if t]
+                if not toks or not all(is_wellformed_node_id(t) for t in toks):
+                    return None  # one bad token: the line is prose
+                return list(dict.fromkeys(toks))
+        return None
+
     def _fake_verb_call(verb, payload, unavailable=None, **kwargs):
-        if verb == "pr-closure-render":
-            ids = [
-                t
-                for t in dict.fromkeys(payload.get("ids") or [])
-                if is_wellformed_node_id(t)
-            ]
-            return {"line": f"Fixes {' '.join(ids)}" if ids else ""}
+        if verb == "pr-closure-parse":
+            best = None
+            for line in (payload.get("body") or "").splitlines():
+                ids = _line_ids(line)
+                if ids is not None:
+                    best = ids
+            return {"ids": best or []}
+        if verb in (
+            "pr-closure-context",
+            "pr-closure-ensure",
+            "pr-closure-trailer",
+            "pr-closure-bind-created",
+            "pr-closure-branch-ids",
+        ):
+            raise (unavailable or rb.VerbUnavailable)(
+                "closure leg hermetic in tests: stub verb_call for " + verb
+            )
+        return real_verb_call(verb, payload, unavailable or rb.VerbUnavailable, **kwargs)
 
-        def _line_ids(line):
-            stripped = line.strip()
-            for kw in ("fixes", "backlog-closure"):
-                if stripped.lower().startswith(kw):
-                    rest = stripped[len(kw):]
-                    if rest.startswith(":"):
-                        rest = rest[1:]
-                    if rest and not rest[0].isspace():
-                        return None  # glued word, not the keyword
-                    toks = [t for t in rest.replace(",", " ").split() if t]
-                    if not toks or not all(is_wellformed_node_id(t) for t in toks):
-                        return None  # one bad token: the line is prose
-                    return list(dict.fromkeys(toks))
-            return None
-
-        best = None
-        for line in (payload.get("body") or "").splitlines():
-            ids = _line_ids(line)
-            if ids is not None:
-                best = ids
-        return {"ids": best or []}
-
-    monkeypatch.setattr("fno.pr.closure.verb_call", _fake_verb_call)
+    monkeypatch.setattr(rb, "verb_call", _fake_verb_call)
 
 
 @pytest.fixture(autouse=True)

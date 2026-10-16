@@ -80,8 +80,12 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
     "CLAUDE_CONFIG_DIR",  # the account-alias channel; picks which bill is paid
+    "CLAUDE_JOB_DIR",  # the session job tmp dir the write gate names in refusals; a suite must not see the developer's
     "CLAUDE_DIR_OVERRIDE",  # redirects the Claude config root (the rule-file git repo the corrections hook watches); same category as CLAUDE_CONFIG_DIR
     "CODEX_HOME",  # 12 reads in source; a real per-developer setting
+    # `fno update` keeps a set wrapper and installs the admission wrapper only
+    # when it is unset, so a developer's value would change what a test runs.
+    "RUSTC_WRAPPER",
     "GEMINI_PROJECT_DIR",
     "GEMINI_SANDBOX",
     "OPENCODE_CONFIG_DIR",  # opencode's config root; same category as CODEX_HOME
@@ -90,9 +94,17 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "XDG_CONFIG_HOME",  # redirects user config discovery, including opencode
     "GROK_HOME",  # grok's session store root; the same category pi once read a store-root var for
     "GROK_SESSION_ID",  # a live grok session marker; identity, not test input
+    "LOGNAME",  # login identity; the mail sender fallback reads it, and a suite must not inherit the developer's
+    "HOST",  # the machine name the join profile header records; same identity category as LOGNAME, and host() falls back to `hostname` when it is scrubbed
     "CLAUDE_CLI",
     "CLI",  # legacy harness selector; CLI=codex flips harness resolution
     "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP",
+    # The claude harness's own unattended markers. The agent-origin predicates
+    # (spawn_gate_admission.rs, process_admission.rs) read them, so a suite
+    # inheriting a developer's CLAUDECODE=1 would flip every gate decision
+    # under test.
+    "CLAUDECODE",
+    "CLAUDE_CODE_SESSION_ATTENDED",
     # Cargo-owned build-script output. A Python test must not inherit a
     # developer's Rust build directory; Cargo supplies its own value to build
     # scripts when it invokes them.
@@ -102,6 +114,12 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # see a server lifetime the code under test did not choose; the wrapper
     # test pins its own value explicitly.
     "SCCACHE_IDLE_TIMEOUT",
+    # The sccache opt-in and kill switches. A test inheriting the developer's
+    # machine-wide SCCACHE_DISABLE=1 (or a stray FNO_SCCACHE) would compile
+    # bare rustc where the code under test opted into the cache; the wrapper
+    # tests pin every value they assert on.
+    "FNO_SCCACHE",
+    "SCCACHE_DISABLE",
     "EDITOR",  # the board editor (backlog_board.rs spawns it); a developer's editor is not a test input
     # Colour suppression, scrubbed rather than kept, which splits it from its
     # siblings TERM and COLORTERM in _ENVIRONMENT below. Those two DESCRIBE a
@@ -189,6 +207,10 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # developer's exported editor is ambient state a test must not inherit.
     "EDITOR",
     "VISUAL",
+    # The routing-page bless toggle a deliberate `cargo test -- --ignored
+    # bless_help_routing` sets by hand; no hermetic run needs the ambient
+    # value (crates/fno-agents/src/help_router.rs reads it).
+    "HELP_ROUTING_BLESS",
 )
 
 # Read by source but NOT ambient state: the process needs these to run, and

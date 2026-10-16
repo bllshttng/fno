@@ -328,14 +328,15 @@ def _spawn_guard_decision(
             ),
         }, 0
 
-    from fno.backlog.advance import _observe_node_claim
+    from fno.rust_binary import verb_call
+    from types import SimpleNamespace
 
-    observation = _observe_node_claim(
-        node_id,
-        cwd,
-        enforce_failure_limit=not no_reserve,
-        emit=not no_reserve,
-    )
+    observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+        "op": "claim", "node_id": node_id, "cwd": cwd,
+        "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
+    }))
+    if getattr(observation, "warning", None):
+        print(f"advance: WARNING: {observation.warning}", file=sys.stderr)
     common = {
         "holder": observation.holder,
         "truth_status": observation.truth_status,
@@ -397,12 +398,10 @@ def _spawn_guard_decision(
             )
             if prior is not None:
                 _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = _observe_node_claim(
-                    node_id,
-                    cwd,
-                    enforce_failure_limit=not no_reserve,
-                    emit=False,
-                )
+                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+                    "op": "claim", "node_id": node_id, "cwd": cwd,
+                    "enforce_failure_limit": not no_reserve, "emit_events": False,
+                }))
                 common = {
                     "holder": observation.holder,
                     "truth_status": observation.truth_status,
@@ -496,9 +495,18 @@ def _spawn_guard_decision(
                         )
                     ),
                 }, 0
+            # An authority outage is NOT occupancy: rendering it
+            # already-running sent free nodes' leads to a costlier lane.
+            if block_wins:
+                return {
+                    "verdict": "unknown",
+                    "reason": block,
+                    "detail": f"could not check node:{node_id} is running: "
+                              f"{observation.worked_error or block}; retry",
+                    **common,
+                }, 0
             reason = (
-                block if block_wins
-                else "suspect-claim" if wedged
+                "suspect-claim" if wedged
                 else "live-claim" if common["init_reached"]
                 else "unproven-claim"
             )
@@ -528,7 +536,7 @@ def _spawn_guard_decision(
 
     try:
         _reserve_dispatch_slot()
-    except CLAIM_UNAVAILABLE:
+    except CLAIM_UNAVAILABLE as held_exc:
         # A dead spawner's reservation blocks nothing. `spawn-cli:<pid>` is one
         # process that launches and exits, so it cannot come back under a new
         # pid and its TTL protects an empty slot. A queued spawn that never got
@@ -558,9 +566,18 @@ def _spawn_guard_decision(
         if cleared is None:
             # A live spawner is mid-launch: benign dedup, and naming a
             # force-release here would be worse advice than none.
+            held_by = getattr(held_exc, "holder", "")
+            if not held_by:
+                # No holder on the exception: a store error, not a held slot.
+                _release_dispatch_claims((res_key, holder))
+                return {
+                    "verdict": "error",
+                    "detail": f"could not acquire {res_key} ({held_exc}); retry",
+                }, 3
             return {
                 "verdict": "already-running",
                 "reason": "reservation-held",
+                "holder": held_by,
                 # A remedy is EARNED, and this names the buckets that earn it
                 # rather than the ones that do not. The exclusion polarity gave
                 # force-release advice to every bucket nobody had thought about
@@ -574,18 +591,21 @@ def _spawn_guard_decision(
             }, 0
         try:
             _reserve_dispatch_slot()
-        except CLAIM_UNAVAILABLE:
+        except CLAIM_UNAVAILABLE as retry_exc:
             return {
                 "verdict": "already-running",
                 "reason": "reservation-held",
+                "holder": getattr(retry_exc, "holder", "") or "unknown",
                 "remedy": _remedy_for(res_key),
             }, 0
         except Exception as exc:
+            _release_dispatch_claims((res_key, holder))
             return {
                 "verdict": "error",
                 "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
             }, 3
     except Exception as exc:
+        _release_dispatch_claims((res_key, holder))
         return {
             "verdict": "error",
             "detail": f"could not acquire dispatch reservation {res_key} ({exc})",
@@ -737,10 +757,9 @@ def _emit_reaped_abandoned(node_id: str, prior_holder: str, truth_status: str) -
     """
     try:
         from fno.agents import events as agent_events
-        from fno.backlog.advance import EVENT_CLAIM_OBSERVED
 
         agent_events.emit(
-            EVENT_CLAIM_OBSERVED,
+            "dispatch_claim_observed",
             node_id=node_id,
             claim_verdict="dead_predecessor",
             claim_state="suspect",
@@ -1064,7 +1083,7 @@ def cmd_spawn(
         "-P",
         help=(
             "The model VENDOR (zai or a model_routing.providers name), paired "
-            "with --model. NOT the CLI binary (-H). -p is headless."
+            "with --model. NOT the CLI binary (-H)."
         ),
     ),
     recorded_provider: str | None = typer.Option(
@@ -1094,11 +1113,10 @@ def cmd_spawn(
             "headless (one-shot). Placement flags and a `--` fence imply pane."
         ),
     ),
-    headless: bool = typer.Option(
+    print_mode: bool = typer.Option(
         False,
-        "--headless",
-        "-p",
-        help="Shortcut for --substrate headless: a one-shot worker. Wins over --substrate.",
+        "--print",
+        help="Print the native line the spawn would exec, then exit. Launches nothing.",
     ),
     sandbox_write_policy: str | None = typer.Option(
         None,
@@ -1352,7 +1370,7 @@ def cmd_spawn(
         False,
         "--force",
         "-F",
-        help="Bypass the max_live cap and the RAM floor; the worker is still counted.",
+        help="Pass every soft limit, never the RAM floor; the worker is still counted.",
     ),
     no_wait: bool = typer.Option(
         False,
@@ -1491,8 +1509,8 @@ def cmd_spawn(
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
 
-    # The substrate axis: headless is the ergonomic shortcut;
-    # an empty value resolves to the built-in default (thread where seated).
+    # The substrate axis: an empty value resolves to the built-in default
+    # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, thread_seatable, thread_uncarried
 
     # A flag the harness's thread lane cannot carry (a typed axis or a fenced
@@ -1509,8 +1527,6 @@ def cmd_spawn(
         passthrough,
     )
     defaulted = False
-    if headless:
-        substrate = "headless"
     if not substrate and once:  # --once always means a one-shot
         substrate = "headless"
     if not substrate:
@@ -1643,39 +1659,6 @@ def cmd_spawn(
             file=sys.stderr,
         )
         raise typer.Exit(code=2)
-    # Fail-closed for non-claude bg/headless (mirrors the Rust intercept): only
-    # claude's bg lane honors a mapped --permission-mode via the Python fallback
-    # (dispatch_spawn -> _claude_create_path); codex/gemini one-shot lanes
-    # hardcode their own bypass and can't express a mapped mode. The pane
-    # substrate maps every provider, so it's exempt here. The codex
-    # thread lane is exempt too: the shared app-server resolves the posture
-    # (resolve_thread_posture), so a mapped mode rides it natively.
-    # The capability table decides, through the one Rust vocabulary (see
-    # codex_posture.rs): a codex thread lane carries a mapped mode when the
-    # table declares the lane AND the mode resolves in codex's own words. An
-    # unavailable owner reads false, which degrades to the refusal below -
-    # never a guessed yes.
-    from fno.agents.permission_axis import codex_thread_lane_carries
-
-    codex_thread_lane = codex_thread_lane_carries(harness, substrate, once, permission_mode)
-    if (
-        permission_mode is not None
-        and harness != "claude"
-        and (substrate != "pane" or once)
-        and not codex_thread_lane
-    ):
-        remedy = (
-            "drop --permission-mode and pass -Y/--yolo"
-            if harness == "codex"
-            else "use --substrate pane"
-        )
-        print(
-            f"--permission-mode is not supported for harness {harness!r} on "
-            "--substrate bg/headless (its one-shot lane hardcodes its own bypass "
-            f"form); {remedy}",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
 
     #: Tier-3 fail-closed for the bg/headless lanes (the pane substrate
     # maps every provider via build_pane_argv, so it's exempt and validated
@@ -1778,6 +1761,8 @@ def cmd_spawn(
     # applied. A bare --model (no route) is still reported via the `model`
     # local below, since claude bg_create applies it as `claude --model`.
     route_model: str | None = None
+    # The row a lane-name route resolved; the lane surfaces read it once.
+    lane_row: dict | None = None
     if route is not None:
         # Pane routing is a per-harness evidence claim, independent from both
         # pane autonomy and substrate preference. Missing capability stays
@@ -1815,18 +1800,27 @@ def cmd_spawn(
 
         parsed = _parse_target(route)
         if parsed is None:
-            print(
-                f"--route must be 'provider,model' with a non-empty model token; got {route!r}",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-        route_provider = parsed[0]
-        route_model = parsed[1]
+            # The lane pin spelling: a declared row's NAME resolves the whole
+            # coordinate; the pair parse ran first, so it cannot shadow.
+            from fno.agents.model_routing import declared_lane
+
+            lane_row = declared_lane(name=route)
+            if lane_row is None:
+                print(f"--route takes 'provider,model' or a declared lane name; got {route!r}", file=sys.stderr)
+                raise typer.Exit(code=2)
+        if lane_row is not None:
+            route_provider = lane_row.get("vendor") or ""
+            if not route_provider:
+                print(f"--route {route!r} names a lane that declares no route; no worker launched, node stays dispatchable.", file=sys.stderr)
+                raise typer.Exit(code=2)
+            route_model = lane_row.get("model") or ""
+            if effort is None and lane_row.get("effort"):
+                effort = lane_row["effort"]
+        elif parsed is not None:
+            route_provider = parsed[0]
+            route_model = parsed[1]
         if monitor == "happy" and route_provider != "zai":
-            print(
-                "--monitor happy currently supports only the zai provider",
-                file=sys.stderr,
-            )
+            print("--monitor happy currently supports only the zai provider", file=sys.stderr)
             raise typer.Exit(code=2)
         if monitor == "happy" and model is not None:
             print(
@@ -1836,7 +1830,7 @@ def cmd_spawn(
             )
             raise typer.Exit(code=2)
         notes: list[str] = []
-        route_env = resolve_explicit_route(parsed[0], parsed[1], notice=notes.append)
+        route_env = resolve_explicit_route(route_provider or "", route_model or "", notice=notes.append)
         if not route_env:
             reason = "; ".join(notes) or "provider unknown, non-anthropic, or keyless"
             print(
@@ -1845,7 +1839,7 @@ def cmd_spawn(
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
-        route_env = bind_route_provider(route_env, route_provider)
+        route_env = bind_route_provider(route_env, route_provider or "")
 
     if monitor == "happy" and route_provider != "zai":
         print(
@@ -2004,6 +1998,29 @@ def cmd_spawn(
             f"bills {credential.bills})",
             file=sys.stderr,
         )
+
+    # --print: the verb refuses, composes and renders; this leg is the ask and display.
+    if print_mode:
+        import shlex
+        from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+        try:
+            answer = spawn_overlay_call({
+                "kind": "print", "harness": harness, "substrate": substrate,
+                "name": name, "payload": message or "",
+                "model": route_model or model or "", "effort": effort or "",
+                "permission_mode": permission_mode or "",
+                "route_env": route_env or {}, "account_env": account_env or {},
+                "cwd": str(workdir),
+            })
+        except SpawnOverlayUnavailable as exc:
+            print(exc, file=sys.stderr)
+            raise typer.Exit(code=2)
+        tokens = answer.get("tokens")
+        if not isinstance(tokens, list):
+            raise RuntimeError("spawn-overlay print answered no token list")
+        print(" ".join(shlex.quote(token) for token in tokens))
+        raise typer.Exit(code=0)
 
     # Resolve node provenance once for every substrate. A node-bearing spawn is
     # itself a dispatcher route, so it must cross the same family-2 decision and
@@ -2176,6 +2193,22 @@ def cmd_spawn(
 
         sandbox_settings = load_sandbox_write_policy(sandbox_write_policy)
 
+    if wait is not None and no_wait:
+        print("error: --wait and --no-wait are mutually exclusive", file=sys.stderr)
+        raise typer.Exit(code=2)
+    wait_seconds = 0.0
+    if wait is not None:
+        try:
+            wait_seconds = _parse_wait_seconds(wait)
+        except ValueError:
+            print(
+                f"error: --wait wants a positive duration like 5m, 90s or 1h (got {wait!r})",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=2)
+
+    from fno.agents.spawn_gate import WAITABLE_REFUSAL_REASONS, GateRefused, run_gate
+
     # The node guard sits BELOW the resume-provider resolution on purpose:
     # it acquires `dispatch:<id>` (and the handover `node:<id>`), and every
     # exit above it strands those keys for their whole TTL with nothing
@@ -2280,21 +2313,6 @@ def cmd_spawn(
     # exactly one evaluation per spawn (LD1). --wait loops HERE in the CLI,
     # not in the gate: the gate core has a Rust twin under a parity harness,
     # and a retry wrapper touches neither.
-    if wait is not None and no_wait:
-        print("error: --wait and --no-wait are mutually exclusive", file=sys.stderr)
-        raise typer.Exit(code=2)
-    wait_seconds = 0.0
-    if wait is not None:
-        try:
-            wait_seconds = _parse_wait_seconds(wait)
-        except ValueError:
-            print(
-                f"error: --wait wants a positive duration like 5m, 90s or 1h (got {wait!r})",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
-
-    from fno.agents.spawn_gate import WAITABLE_REFUSAL_REASONS, GateRefused, run_gate
 
     # Anything outside the gate's own waitable set (policy or config)
     # exits at once - waiting out a verdict the gate will not revisit is
@@ -2930,7 +2948,7 @@ def cmd_spawn_guard(
     dispatchable.
 
     Emits ONE verdict on stdout (a ``verdict=<v> key=value`` line, or a ``--json``
-    object) in ``{dispatchable, already-running, refused, corrupted, error}``:
+    object) in ``{dispatchable, already-running, unknown, refused, corrupted, error}``:
 
     \b
     - dispatchable    node free/stale. On a reserving call ``dispatch:<id>`` is
@@ -2951,16 +2969,21 @@ def cmd_spawn_guard(
                       frees nothing), OR a racing dispatcher already holds
                       ``dispatch:<id>`` (reason=reservation-held). No reservation
                       acquired.
+    - unknown         the worked authority could not answer (the roster read
+                      failed), so the guard cannot say whether the node is
+                      running (reason=worked-authority-unavailable; detail
+                      names the reader that failed). This is NOT occupancy:
+                      retry. No reservation acquired.
     - refused        the durable dead-dispatch limit blocked another birth
                       (reason=auto-deferred|defer-failed). No reservation acquired.
     - corrupted       the ``node:<id>`` claim is corrupted; launch nothing.
     - error           the claim probe failed or the reservation could not be
                       acquired (fail-closed); launch nothing.
 
-    Exit 0 for every clean verdict (incl. already-running and corrupted). Exit
-    non-zero ONLY for a usage error or a fail-closed guard error (verdict=error),
-    so a stale ``fno`` without this verb (Typer "No such command") also fails
-    closed in the caller.
+    Exit 0 for every answered verdict (incl. already-running, unknown and
+    corrupted). Exit non-zero ONLY for a usage error or a fail-closed guard
+    error (verdict=error), so a stale ``fno`` without this verb (Typer "No such
+    command") also fails closed in the caller.
     """
     obj, exit_code = _spawn_guard_decision(
         node_id,
@@ -3576,15 +3599,16 @@ def cmd_register(
     # of leaving the operator to guess from a blank cell.
     if delivery_policy is not None:
         from fno.harness_identity import session_identity_key
-        from fno.mail import hold as _hold
+        from fno.mail.hold import _hold_transport
 
         # Clock key is the collision-free identity key; the name-keyed clear removes a pre-migration clock.
         clock_key = session_identity_key(session_id)
-        if delivery_policy == "bus-only":
-            _hold.arm_permanent(clock_key)
-        else:
-            _hold.clear(clock_key)
-            _hold.clear(entry.name)
+        # Both stamps are the ABSENCE of a clock beside the flag: the native
+        # door's --clear drops any standing clock either way, and the policy
+        # flip also drops a pre-migration name-keyed one.
+        _hold_transport(["--clear", clock_key])
+        if delivery_policy != "bus-only":
+            _hold_transport(["--clear", entry.name])
 
     events.emit(
         "session_registered",
@@ -3631,27 +3655,27 @@ def cmd_top(
         False,
         "--pane-stats",
         help="Append per-pane mux server counters, differenced over the last "
-        "two 30s snapshots in the global events journal (bytes_in, "
-        "grid_updates, frames_composited, frames_emitted, cpu_ns).",
+        "two 30s snapshots in the global events journal.",
     ),
 ) -> None:
     """Show every live worker process - fno-spawned and foreign claude bg
-    alike - with pid, RSS (MB), and status.
+    alike - with pid, tree RSS (MB), served status and node.
 
-    The same union the spawn gate counts, so this is the audit surface every
-    gate message points at. Python-only (RSS via psutil; not routed to the
-    Rust client). ``--subagents`` appends a read-only sidechain
-    section; each row also carries its node and whether it shipped.
+    Answered by the Rust census (`fno-agents census --workers`); the `fno`
+    front execs it directly, so this shim only serves a Python-front call.
     """
-    from fno.agents.top import render_top
+    from fno.agents.rust_runtime import route_to_rust
 
-    print(
-        render_top(
-            as_json=as_json,
-            include_subagents=show_subagents,
-            include_pane_stats=show_pane_stats,
+    flags = [
+        flag
+        for flag, on in (
+            ("--json", as_json),
+            ("--subagents", show_subagents),
+            ("--pane-stats", show_pane_stats),
         )
-    )
+        if on
+    ]
+    route_to_rust(["census", "--workers", *flags])
 
 
 @agents_app.command("orphans", hidden=True)
@@ -4871,7 +4895,6 @@ from fno.agents import (  # noqa: E402,F401
     distress_reads,
     gate_reads,
     peek_cli,
-    transcript_reads,
 )
 
 
@@ -4882,7 +4905,7 @@ from fno.agents import (  # noqa: E402,F401
 def incident(ctx: typer.Context) -> None:
     """Durable fleet incident breaker.
 
-    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S].
+    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S] | cutover save|restore.
     """
     import subprocess
 

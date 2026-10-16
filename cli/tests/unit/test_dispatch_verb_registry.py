@@ -16,9 +16,7 @@ from pathlib import Path
 import pytest
 
 from fno.agents.harness_map import DispatchResolveError, resolve_dispatch
-from fno.agents.node_dispatch import NodeSpawnArgs, node_spawn_argv
 from fno.config import DispatchVerbDescriptor, load_settings, resolvable_verbs
-from fno.review_capability import resolve_skill_presence
 
 REG = {
     "/security-audit": DispatchVerbDescriptor(
@@ -83,31 +81,10 @@ def test_descriptor_session_phase_parses_and_defaults_absent():
     assert d.session_phase == "execute"
 
 
-def _spawn_args(**over) -> NodeSpawnArgs:
-    base = dict(
-        node_id="x-1", node_cwd=None, node_slug=None, harness="claude",
-        resolved_harness="claude", substrate="bg", command="/marketing x-1",
-        model=None, route=None, resolved_route=None, account=None,
-        dispatch_account=None, permission_mode="", agent_name="n",
-        vendor=None, verb="/marketing", verb_source="declared",
-        session_phase=None, grid_reason=None, decision=[],
-        is_reconcile=False, env={},
-    )
-    base.update(over)
-    return NodeSpawnArgs(**base)
 
 
-def test_node_spawn_argv_carries_the_declared_phase():
-    """A registry verb's declared phase rides the spawn argv: the door refuses
-    an unlabeled --node spawn, so the builder is the one place the label is
-    attached for every dispatching caller."""
-    argv = node_spawn_argv(_spawn_args(session_phase="execute"), cwd="/w")
-    assert argv[argv.index("--session-phase") + 1] == "execute"
-    assert argv[argv.index("--node") + 1] == "x-1"
 
 
-def test_node_spawn_argv_omits_an_undeclared_phase():
-    assert "--session-phase" not in node_spawn_argv(_spawn_args(), cwd="/w")
 
 
 def test_resolvable_verbs_canonicalizes_keys_and_drops_builtins():
@@ -133,46 +110,34 @@ def test_resolvable_verbs_empty_registry_is_empty():
 
 
 # ── 1.2: the shared skill-presence probe ────────────────────────────────
+#
+# The probe itself is native now: its three outcomes are pinned by the
+# review_capability goldens and Rust unit tests, so only the dispatch
+# caller's WIRING (derive the first token, pass --name/--harness/--context,
+# raise on `unavailable`) stays under test here, door-stubbed.
 
 
-def test_probe_satisfiable_names_the_root(isolated: Path):
-    _install_skill(isolated / "project", "sec-audit")
-    status, reason = resolve_skill_presence("sec-audit", "claude")
-    assert status == "satisfiable"
-    assert "sec-audit" in reason
+def _stub_skill_probe(monkeypatch: pytest.MonkeyPatch, answer: dict) -> list:
+    calls: list = []
+
+    def _fake(verb, payload, *args, **kwargs):
+        calls.append((verb, payload))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr("fno.rust_binary.verb_call", _fake)
+    return calls
 
 
-def test_probe_unavailable_lists_roots_and_context(isolated: Path):
-    # One readable root with no matching skill: the unavailable outcome needs
-    # at least one root searched; with none it is unverifiable by contract.
-    (isolated / "project" / ".claude" / "skills").mkdir(parents=True)
-    status, reason = resolve_skill_presence(
-        "absent-skill", "claude", context="config.dispatch.verb_registry"
-    )
-    assert status == "unavailable"
-    assert "absent-skill" in reason
-    assert "config.dispatch.verb_registry" in reason
-    assert ".claude" in reason  # the roots searched are named
-
-
-def test_probe_is_behavior_preserving_for_reviewers(isolated: Path):
-    """The private reviewer path reads through the promoted probe."""
-    from fno.config import ReviewerDescriptor
-    from fno.review_capability import SessionCapability, resolve_reviewers
-
-    SKILL = ReviewerDescriptor(
-        kind="harness-skill",
-        requires="skill",
-        invocation="/sec-audit",
-        asserts="invocation",
-    )
-    _install_skill(isolated / "project", "sec-audit")
-    session = SessionCapability(harness="claude", substrate="pane", attended=False)
-    v = resolve_reviewers(["sec-audit"], session, {"sec-audit": SKILL})[0]
-    assert v.status == "satisfiable"
-    _install_skill(isolated / "home", "home-only")
-    v = resolve_reviewers(["home-only"], session, {"home-only": SKILL})[0]
-    assert v.status == "satisfiable"
+PROBE_OK = {"status": "satisfiable", "reason": "skill resolves at <roots>"}
+PROBE_ABSENT = {
+    "status": "unavailable",
+    "reason": (
+        "skill 'sec-audit' resolves in none of the roots searched "
+        "(<roots>); install it there or change config.dispatch.verb_registry"
+    ),
+}
 
 
 # ── 1.3: resolve, refuse, render ────────────────────────────────────────
@@ -227,10 +192,11 @@ def test_registry_verb_without_invocations_map_renders_scalar():
     assert "fno:" not in out["command"]
 
 
-def test_registry_verb_missing_skill_refuses_naming_roots(isolated: Path):
+def test_registry_verb_missing_skill_refuses_naming_roots(monkeypatch: pytest.MonkeyPatch):
     # A readable-but-empty root makes the probe's answer unavailable (with no
-    # root at all it would be unverifiable, which proceeds by design).
-    (isolated / "project" / ".claude" / "skills").mkdir(parents=True)
+    # root at all it would be unverifiable, which proceeds by design); the
+    # stub hands the caller that answer so the refusal wiring stays pinned.
+    _stub_skill_probe(monkeypatch, PROBE_ABSENT)
     cfg = {
         "verb_registry": {
             "/security-audit": DispatchVerbDescriptor(
@@ -248,8 +214,8 @@ def test_registry_verb_missing_skill_refuses_naming_roots(isolated: Path):
     assert "config.dispatch.verb_registry" in msg
 
 
-def test_registry_verb_required_skill_present_resolves(isolated: Path):
-    _install_skill(isolated / "project", "sec-audit")
+def test_registry_verb_required_skill_present_resolves(monkeypatch: pytest.MonkeyPatch):
+    _stub_skill_probe(monkeypatch, PROBE_OK)
     cfg = {
         "verb_registry": {
             "/security-audit": DispatchVerbDescriptor(
@@ -263,10 +229,10 @@ def test_registry_verb_required_skill_present_resolves(isolated: Path):
     assert out["command"] == "/sec-audit x-1"
 
 
-def test_registry_verb_skill_probe_reads_first_token(isolated: Path):
+def test_registry_verb_skill_probe_reads_first_token(monkeypatch: pytest.MonkeyPatch):
     """The invocation may carry args; the probe reads the first token only,
     never the tail - a two-token invocation must not refuse an installed skill."""
-    _install_skill(isolated / "project", "sec-audit")
+    calls = _stub_skill_probe(monkeypatch, PROBE_OK)
     cfg = {
         "verb_registry": {
             "/security-audit": DispatchVerbDescriptor(
@@ -278,6 +244,12 @@ def test_registry_verb_skill_probe_reads_first_token(isolated: Path):
         harness="claude", verb="/security-audit", node_id="x-1", dispatch_cfg=cfg
     )
     assert out["command"] == "/sec-audit --deep x-1"
+    (verb, _payload) = calls[0]
+    assert verb == [
+        "review-level", "capability", "skill-presence",
+        "--name", "sec-audit", "--harness", "claude",
+        "--context", "config.dispatch.verb_registry",
+    ]
 
 
 def test_bare_allowlist_path_is_unchanged():

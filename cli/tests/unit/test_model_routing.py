@@ -238,37 +238,6 @@ def test_refuses_bare_tier_alias_on_foreign_endpoint() -> None:
     assert route is None
     assert any("sonnet" in n and "zai" in n for n in notes)
 
-
-def test_materialized_settings_keep_floor_and_undeclared_tiers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
-    route = mr.resolve_explicit_route(
-        "zai",
-        "glm-5.3-flash[1m]",
-        settings=_settings(
-            providers={"zai": {"tier_models": {"opus": "glm-5.3[1m]"}}}
-        ),
-        env={"ZAI_API_KEY": "k"},
-    )
-    assert route is not None
-    path = Path(mr.materialize_route_settings(route))
-    try:
-        import json
-
-        env_out = json.loads(path.read_text(encoding="utf-8"))["env"]
-    finally:
-        path.unlink()
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-
-    for var in SCRUB_AUTH_VARS:
-        assert var in env_out
-    assert env_out["ANTHROPIC_API_KEY"] == ""
-    assert env_out["CLAUDE_CODE_OAUTH_TOKEN"] == ""
-    assert env_out["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "glm-5.3-flash[1m]"
-    assert env_out["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "glm-5.3[1m]"
-
-
 # --- key resolution: env, env file, custom names ------------------------------------
 
 def test_key_resolution_rows(tmp_path: Path) -> None:

@@ -214,31 +214,80 @@ def _refused(head: str, readings: Iterable[str] = ()) -> Refused:
     return Refused(f"{head}so nothing was written.{trail}\n{_QUIET_HINT}", 3)
 
 
+def archived_entry(node_id: str) -> Optional[dict[str, Any]]:
+    """The node's archived row from the store, or None. Never raises.
+
+    Tells "archived" apart from "absent": both would otherwise refuse with
+    the not-found text a typo gets. The archive is default-backend storage,
+    so an external tracker selection never consults it.
+    """
+    from fno.graph._intake import _find_node
+    from fno.graph.store import read_archive_entries
+
+    try:
+        from fno.tracker import active_backend_name
+
+        if active_backend_name() != "graph":
+            return None
+        return _find_node(read_archive_entries(), node_id)
+    except Exception:  # noqa: BLE001 - a bad archive read must not mask the real refusal
+        return None
+
+
+def archived_refusal(node_id: str) -> Optional[str]:
+    """The update refusal for an archived node, or None when it is not archived."""
+    entry = archived_entry(node_id)
+    if entry is None:
+        return None
+    aid = entry.get("id") or node_id
+    return (
+        f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
+        " to restore it before updating."
+    )
+
+
 def readers_before_append(task_id: str, graph_path: Path) -> NoteReaders | Refused:
     """Resolve the readers BEFORE the append; surface any Refused verbatim."""
     from fno.agents.registry import load_registry
     from fno.graph._intake import _find_node
     from fno.graph.api import wire_rows
+    from fno.graph.store import read_nodes_by_ids
 
     try:
-        rows = wire_rows(path=graph_path)
-        entry = _find_node(rows, task_id) or next(  # the write path takes slugs too
-            (e for e in rows if str(e.get("slug") or "").lower() == task_id.strip().lower()),
-            None,
-        )
+        # The by-id seam answers the exact id/slug tiers without the whole
+        # read; the full read stays for a keeper that cannot answer.
+        fast = read_nodes_by_ids(Path(graph_path), [task_id])
+        rows: list[dict] | None = None
+        entry: dict | None = None
+        if fast and (fast.get("entries") or []) and not (fast.get("missing") or []):
+            entry = fast["entries"][0]
+            # The by-id read includes archived rows the full read excludes.
+            if entry.get("archived_at"):
+                entry = None  # fall through to the archived refusal
         if entry is None:
-            from fno.graph._archive_lookup import archived_entry
-
-            archived = archived_entry(task_id)
-            if archived is not None:
-                aid = archived.get("id") or task_id
-                return Refused(
-                    f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
-                    " to restore it before updating.",
-                    1,
-                )
+            rows = wire_rows(path=graph_path)
+            entry = _find_node(rows, task_id) or next(  # the write path takes slugs too
+                (e for e in rows if str(e.get("slug") or "").lower() == task_id.strip().lower()),
+                None,
+            )
+        if entry is None:
+            refusal = archived_refusal(task_id)
+            if refusal is not None:
+                return Refused(refusal, 1)
             return Refused(f"Error: no node resolves to '{task_id}'", 1)
-        index = {str(e.get("id")): e for e in rows if isinstance(e.get("id"), str)}
+        if rows is not None:
+            index = {str(e.get("id")): e for e in rows if isinstance(e.get("id"), str)}
+        else:
+            # The walk needs one more node: the contained_in owner chain
+            # (note_readers reads only index.get(contained_in) and
+            # index.get(owner_id)). By-id reads cover it.
+            index = {}
+            contained_in = entry.get("contained_in")
+            if isinstance(contained_in, str) and contained_in:
+                owner = read_nodes_by_ids(Path(graph_path), [contained_in])
+                for e in (owner or {}).get("entries") or []:
+                    if isinstance(e.get("id"), str):
+                        index[e["id"]] = e
         readers = note_readers(
             entry, index=index, rows=load_registry(), holder_of=claim_holder,
             leads_of=promoted_over, self_session=own_session(),

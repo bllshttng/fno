@@ -6,6 +6,7 @@
 //! event, so a later job (or a later harness) plugs in beside it without a
 //! second parse. Nothing here imports from `super::super::session_state`.
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
 
@@ -40,6 +41,7 @@ pub struct HookEvent {
 /// that refuses it, and the entry stays exit-0 fire-and-forget.
 pub fn normalize(harness: &str, event: &str, payload: &serde_json::Value) -> HookEvent {
     let mut ev = match harness {
+        "agy" => agy::normalize(event, payload),
         "claude" => claude::normalize(event, payload),
         "codex" => codex::normalize(event, payload),
         _ => HookEvent {

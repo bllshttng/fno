@@ -142,12 +142,12 @@ const AUTHORITY_MODES: &[&str] = &["interactive", "step", "paranoid"];
 /// One active drive-authority session. Field order is the JSON object key order
 /// Python emits (`active_drive_sessions` builds `{short_id, session_id, mode}`).
 #[derive(Serialize)]
-struct DriveAuthSession {
-    short_id: String,
+pub(crate) struct DriveAuthSession {
+    pub(crate) short_id: String,
     /// `drive_session_id` may be absent/null in `state.json`; preserved as-is so
     /// the JSON shows `null` (matching Python's `None`).
-    session_id: Value,
-    mode: String,
+    pub(crate) session_id: Value,
+    pub(crate) mode: String,
 }
 
 #[derive(Serialize)]
@@ -184,7 +184,7 @@ fn py_str(v: &Value) -> String {
 /// `AgentState`) so an edge-case `state.json` -- e.g. one with `drive_active`
 /// but no `short_id` -- is handled exactly as Python's `data.get(...)` does,
 /// rather than diverging on strict deserialization.
-fn active_drive_sessions(agents_root: &Path) -> Vec<DriveAuthSession> {
+pub(crate) fn active_drive_sessions(agents_root: &Path) -> Vec<DriveAuthSession> {
     let mut sessions = Vec::new();
     let read = match fs::read_dir(agents_root) {
         Ok(rd) => rd,
@@ -1475,6 +1475,8 @@ pub enum RowLiveness {
 ///    rung is silent on a row that carries an exit stamp: a rollout stays
 ///    fresh-written past its worker's stop, so on a stamped row freshness
 ///    would resurrect it - the stamp path owns that row instead.
+/// 5. **Footnote heartbeat** (footnote rows): a `heartbeat` record under
+///    90 s old in the session record. Silent on an exit-proven row.
 ///
 /// Rung 4's freshness window: a codex rollout jsonl written within
 /// this many seconds of now proves the session is advancing. A quiet rollout
@@ -1592,6 +1594,13 @@ where
             truth_fn(&handle).as_deref(),
             Some("working" | "watching" | "your-move")
         ) {
+            return RowLiveness::Alive;
+        }
+    }
+    if entry.harness_name() == "footnote" && !exit_proven {
+        let now = crate::claude_ask::now_epoch_secs();
+        let record = entry.log_path.as_deref().map(std::path::Path::new);
+        if record.is_some_and(|p| crate::footnote_harness::transcript::heartbeat_fresh(p, now)) {
             return RowLiveness::Alive;
         }
     }
@@ -1822,6 +1831,38 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         .filter(|s| !s.is_empty())
         .or_else(|| entry.get("provider").and_then(Value::as_str))
         .unwrap_or("");
+    // Exact-id contract (the Python lane's ruling, mirrored): a full
+    // non-primary session id names a historical session, while the re-entry
+    // plan below serves the row's PRIMARY id. Re-entering a session the
+    // caller did not name is a silent drop, so refuse with the remedy that
+    // door actually offers: recover selects between the row's two valid
+    // ids; a predecessor is retired, so it forks a new session from the
+    // named conversation.
+    if harness == "claude" {
+        let primary = entry
+            .get("harness_session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(matched) = crate::resolve_tier::entry_matched_full_id(entry, &name) {
+            if !primary.is_empty() && matched != primary {
+                let row = entry.get("name").and_then(Value::as_str).unwrap_or(&name);
+                let related = entry
+                    .get("related_session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !related.is_empty() && matched == related {
+                    eprintln!(
+                        "fno agents resume: {matched} is the related session id of claude row {row:?}, a second valid id of the same row. Resume re-enters the primary; name the related one with `fno agents recover {row:?} --session {matched}`, or resume the row by name."
+                    );
+                } else {
+                    eprintln!(
+                        "fno agents resume: {matched} is a predecessor of claude row {row:?}, and this runtime cannot restore its model or route. Seed a new session from it with `fno agents spawn --resume {matched}`, or resume the row by name."
+                    );
+                }
+                return 13;
+            }
+        }
+    }
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {
         Ok(contract) => contract,
         Err(error) => {

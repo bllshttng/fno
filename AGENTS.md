@@ -63,7 +63,7 @@ footnote/
 - **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
 - **File budget:** a file over 5,000 lines is shrink-only. `cli/src/fno` bars new Python (use `crates/`); an edit is a port, deletion or lead-approved blocking-bug fix, no new surface, enforced by `scripts/ci/check-file-budget.sh` at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
-- **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 3 (`fno-agents test-delta --max-net 3`). pr create refuses a code PR with no cut and no `Audited owners:` line.
+- **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.
 - **Multi-CLI:** skills are portable. Orchestration needs per-CLI hook config. See `docs/HARNESSES.md`, `docs/architecture/multi-cli-hooks.md`, `docs/SKILL-COMPAT-MATRIX.md`.
 
 ## Commands
@@ -111,13 +111,13 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 ### State files & forbidden surfaces
 
 NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / `fno do state`:
-- `~/.fno/graph.db` - the backlog graph; mutate via `fno backlog` only.
+- `~/.fno/db/graph.db` - the backlog graph. Mutate via `fno backlog` only.
 - `<space>/worktrees/<name>/target-state.md` - immutable manifest. Only post-init write is first-fill of `plan_path` via `fno do state set`.
 - Generated copies named in `generated-artifacts.tsv` or `skill-bundles.yaml`, and the installed plugin copy. Edit, Write, and Bash writes are refused. The refusal names the source and regen command.
 
 | File | Default | Purpose | Owner |
 |------|---------|---------|-------|
-| `paths.graph_json()` | `~/.fno/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
+| `paths.graph_json()` | `~/.fno/db/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
 | `paths.ledger_json()` | `~/.fno/ledger.json` | Execution history + cost | target |
 | `paths.briefs_dir()` | `~/.fno/briefs/{id}.md` | Sidecar discovery briefs | backlog |
 | `<space>/worktrees/<name>/target-state.md` | repo space | Immutable session manifest | target |
@@ -150,7 +150,7 @@ Preferred (claude): a JSON object in a fenced ```json block (or `<result>{...}</
 
 ### Deviation rules
 
-Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> implement, note it. Architecture decision or missing dependency -> STOP, emit `<help>`. Under a beastmode grant (`authority: full`) that last rule inverts: decide, append to the `## Autonomous Decisions` ledger, continue; genuine blockers still stop. [skills/target/SKILL.md](skills/target/SKILL.md#authority-the-beastmode-grant).
+Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> implement, note it. Architecture decision or missing dependency -> emit `<help class=... reason=... evidence=...>` and take the routed step. The 12 classes route at docs/architecture/help-routing.md. The classes: stale-plan, missing-prereq, ci-red, stuck, held, wait, env-denied, gate-deadlock, gate-unsatisfiable, question, budget, unclassified. STOP only for irreversible, money, public surface, or taste. Under a beastmode grant (`authority: full`) that last rule inverts: decide, append to the `## Autonomous Decisions` ledger, continue. Genuine blockers still stop. [skills/target/SKILL.md](skills/target/SKILL.md#authority-the-beastmode-grant).
 
 ## CLI subsystems (summary + doc)
 

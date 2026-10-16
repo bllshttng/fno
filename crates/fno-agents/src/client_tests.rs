@@ -1518,9 +1518,10 @@ fn substrate_flag_rows() {
     let (_m, params) = build_request("spawn", &args).unwrap();
     assert_eq!(params["substrate"], "thread");
 
-    // x-c772: --headless is the front for --substrate headless (identical to
-    // --once), for every provider. `-H` was reassigned to --harness (x-6de8).
-    for flag in ["--headless", "--once", "-o"] {
+    // x-c772: the one-shot spellings alias --substrate headless for every
+    // provider. `-H` was reassigned to --harness (x-6de8). `--headless`/`-p`
+    // retired with change 6; `--substrate headless` is the spelling.
+    for flag in ["--once", "-o"] {
         for provider in ["claude", "codex", "gemini", "agy"] {
             let args = vec![
                 "wk".to_string(),
@@ -1538,31 +1539,17 @@ fn substrate_flag_rows() {
         }
     }
 
-    // An explicit --substrate is not clobbered by a trailing --headless.
+    // An explicit --substrate is not clobbered by a trailing one-shot alias.
     let args = vec![
         "wk".to_string(),
         "--harness".to_string(),
         "claude".to_string(),
         "--substrate".to_string(),
         "thread".to_string(),
-        "--headless".to_string(),
+        "--once".to_string(),
     ];
     let (_m, params) = build_request("spawn", &args).unwrap();
     assert_eq!(params["substrate"], "thread");
-
-    // x-6de8: -p mirrors the harnesses' own one-shot short. It takes NO value,
-    // so a stray `-p codex` must leave `codex` a positional rather than
-    // silently selecting a harness.
-    let args = vec!["wk".to_string(), "-p".to_string()];
-    let (_m, params) = build_request("spawn", &args).unwrap();
-    assert_eq!(
-        params.get("substrate").and_then(|v| v.as_str()),
-        Some("headless")
-    );
-    assert!(
-        params.get("provider").is_none(),
-        "-p must not set a harness"
-    );
 
     // Off `spawn`, -p is no longer the provider short (the harness axis is
     // --harness/-H); it is a loud tombstone, never silently bound to a harness.
@@ -2794,6 +2781,14 @@ impl Drop for ResumeEnvGuard {
     }
 }
 
+/// Serializes the env-mutating resume tests inside THIS test binary. The
+/// lib-side helper (`claims::test_env_lock`) is cfg(test) of the lib crate,
+/// so the bin's test build cannot see it.
+fn resume_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// main block_ons `run`, and a codex thread row's wake builds its own
 /// runtime and block_ons again (`resume_wake.rs`). Drive the verb through
 /// the same entry main uses, inside a tokio runtime: it must refuse 16
@@ -2801,6 +2796,9 @@ impl Drop for ResumeEnvGuard {
 /// runtime".
 #[test]
 fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
+    // Serializes against the other env-mutating resume tests (shared
+    // FNO_AGENTS_HOME / CODEX_HOME / PATH mutation, parallel threads).
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
@@ -2855,6 +2853,60 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
         .unwrap()
         .block_on(run(vec!["resume".into(), "w1".into()]));
     assert_eq!(code, 16);
+}
+
+/// `resume <predecessor uuid>` on a live claude row refuses with
+/// the spawn --resume remedy and launches nothing - it never re-enters the
+/// row's current session. The refusal precedes the route and PATH work, so
+/// no stub is needed; the codex runtime test above covers the dispatch
+/// path this rides. The detector's scoping contract is tested beside it,
+/// in resolve_tier's exact_id_tests.
+#[test]
+fn resume_by_predecessor_full_id_refuses_13() {
+    // Serialize against the sibling resume tests that mutate the same env
+    // vars: parallel threads swapping FNO_AGENTS_HOME read each other's
+    // registries mid-test.
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let home_dir = temp.path().join("agents-home");
+    std::fs::create_dir_all(&home_dir).unwrap();
+    let cwd_dir = temp.path().join("cwd");
+    std::fs::create_dir_all(&cwd_dir).unwrap();
+    std::fs::write(
+        home_dir.join("registry.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "agents": [
+                {
+                    "name": "w1",
+                    "harness": "claude",
+                    "substrate": "pane",
+                    "cwd": cwd_dir.display().to_string(),
+                    "log_path": "w1.log",
+                    "harness_session_id": "77770001-2222-3333-4444-555555555555",
+                    "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let _restore = ResumeEnvGuard {
+        home: std::env::var_os("FNO_AGENTS_HOME"),
+        codex_home: std::env::var_os("CODEX_HOME"),
+        path: std::env::var_os("PATH"),
+    };
+    std::env::set_var("FNO_AGENTS_HOME", &home_dir);
+    let code = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run(vec![
+            "resume".into(),
+            "77770003-2222-3333-4444-555555555555".into(),
+        ]));
+    assert_eq!(code, 13);
 }
 
 mod tier_remap_guard {
@@ -2931,4 +2983,37 @@ fn agent_refusal_names_the_codex_role_form() {
         agent_unsupported_line("opencode", "fno:architect").is_none(),
         "opencode keeps the generic refusal"
     );
+}
+
+// -----------------------------------------------------------------------
+// the client-side gate receives the route provider
+// -----------------------------------------------------------------------
+
+// One sequential test, not three: the helper reads process env, and cargo
+// runs a binary's tests on parallel threads, so separate tests mutating
+// FNO_ROUTE_PROVIDER / FNO_ROUTE_SETTINGS_DIR would race each other.
+#[test]
+fn route_provider_for_gate_env_stamp_route_settings_none() {
+    let params = json!({"model": "glm-5.3-flash[1m]"});
+    std::env::set_var("FNO_ROUTE_PROVIDER", "zai");
+    let got = fno_agents::claude_adopt::gate_route_provider(&params);
+    std::env::remove_var("FNO_ROUTE_PROVIDER");
+    assert_eq!(got.as_deref(), Some("zai"), "seam stamp wins");
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("seed.json"),
+        r#"{"env": {"ANTHROPIC_MODEL": "glm-5.3-flash[1m]", "FNO_ROUTE_PROVIDER": "zai"}}"#,
+    )
+    .unwrap();
+    std::env::set_var("FNO_ROUTE_SETTINGS_DIR", temp.path());
+    let got = fno_agents::claude_adopt::gate_route_provider(&params);
+    std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+    assert_eq!(got.as_deref(), Some("zai"), "recorded route answers");
+
+    let empty = tempfile::tempdir().unwrap();
+    std::env::set_var("FNO_ROUTE_SETTINGS_DIR", empty.path());
+    let got = fno_agents::claude_adopt::gate_route_provider(&params);
+    std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
+    assert_eq!(got, None, "unrouted keeps the axis skipped");
 }

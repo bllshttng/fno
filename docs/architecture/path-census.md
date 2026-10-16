@@ -8,14 +8,14 @@ Rows marked `OPEN` below are intentionally not deleted when the repository still
 
 ## Census 1: post-merge ritual
 
-The dispatch lives in one leaf module: `cli/src/fno/post_merge_route.py` (`decide_post_merge_route` + `dispatch_post_merge_ritual` + the receipt). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` verb directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME verb. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
+The dispatch lives in one leaf module: `crates/fno-agents/src/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` verb directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME verb. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
 | 1 | Detector: `fno backlog reconcile` backstop | was `graph/cli.py` dispatch leg (deleted); reconcile now closes nodes + stamps plans + advances only | RETIRED dispatch leg | #587 |
-| 2 | Detector: pr-watch LaunchAgent daemon, 600s poll (SOLE detector) | `cli/src/fno/pr_watch/_dispatch.py` `_default_dispatch_ritual` -> `post_merge_route.dispatch_post_merge_ritual`, `_install.py` | KEEP, sole detector | — |
-| 3 | Warm inject into live origin session (the verb, not an LLM prompt) | `cli/src/fno/post_merge_route.py` `inject_pr_merged` (WARM_PROMPT = `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
-| 4 | Direct-finalize rung | `cli/src/fno/post_merge_route.py` `_finalize_origin_ledger` (cold prelude, falls through to the verb) | KEEP | — |
+| 2 | Detector: pr-watch LaunchAgent daemon, 600s poll (SOLE detector) | `cli/src/fno/pr_watch/_dispatch.py` `_default_dispatch_ritual` -> `pr-watch post-merge-dispatch` (`crates/fno-agents/src/post_merge/route.rs`), `_install.py` | KEEP, sole detector | — |
+| 3 | Warm inject into live origin session (the verb, not an LLM prompt) | `crates/fno-agents/src/post_merge/route.rs` `inject_claude`/`inject_codex` (the warm prompt is `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
+| 4 | Direct-finalize rung | `crates/fno-agents/src/post_merge/route.rs` `finalize_origin_impl` (cold prelude, falls through to the verb) | KEEP | — |
 | 5 | Cold `claude --bg` Sonnet session | was `_reconcile._spawn_post_merge_worker` (deleted) | DELETED; cold path runs the verb directly | #587 |
 | 6 | Cold headless `claude --print` `fire_skill` merged branch | `cli/src/fno/pr_watch/_dispatch.py` `fire_skill` (check-only) | RETIRED merged branch; the review `check` fire is retained | #587 |
 | 7 | LLM wrapper around the ritual | the `fno do pr ritual` verb owns the mechanical core; pr-watch runs it directly with no whole-ritual model layer | RETIRED wrapper paths | #587 |
@@ -30,7 +30,7 @@ stays as the single idempotency floor).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno backlog groom` pipeline | `cli/src/fno/backlog/groom.py:239-365` | KEEP, canonical | — |
+| 1 | `fno backlog groom` pipeline | `crates/fno-agents/src/backlog/groom.rs` (`groom_pass`) | KEEP, canonical | — |
 | 2 | `scripts/nightly-groom.sh` | whole file, execs the verb | DELETE | #573 |
 | 3 | `fno backlog triage health` | `graph/cli.py` | KEEP, separate metrics verb | — |
 
@@ -118,8 +118,8 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 | 1 | `fno agents workspace worktree ensure` / `fno do target start` | `worktree_cli/cli.py:282`, `target_cli.py:900` | KEEP, canonical autonomous path | - |
 | 2 | Raw `git worktree add` + linker | `scripts/setup/setup-worktree.sh` | KEEP, manual path converges | — |
 | 3 | Conductor UI recipe | `conductor.json:3`, `worktree-create-hook.sh` | KEEP, converge on linker | — |
-| 4 | Claude WorktreeCreate hook | `hooks/worktree-setup.sh` | RETIRE duplicate setup | OPEN |
-| 5 | `/speculate` private setup | `skills/speculate/scripts/worktree-setup.sh` | RETIRE duplicate setup | OPEN |
+| 4 | Claude WorktreeCreate hook | `hooks/worktree-setup.sh` | DONE: relocates, then links and reads config through `scripts/lib/worktree-config.sh` | — |
+| 5 | `/speculate` private setup | `scripts/lib/worktree-manager.sh setup` | DONE: private copy deleted; setup links through `scripts/lib/worktree-config.sh` | — |
 | 6 | Harness EnterWorktree | harness tool | KEEP, enters only | — |
 
 ## Census 9: test running

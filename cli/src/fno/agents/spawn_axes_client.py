@@ -59,6 +59,12 @@ def keeper_posture(
     return [str(t) for t in tokens]
 
 
+def footnote_pane_spec(cwd: str, model: str | None, permission_mode: str | None) -> str:
+    """The launch spec file a footnote pane's TUI reads, from the Rust owner."""
+    ask = {"cwd": cwd, "model": model or "", "permission_mode": permission_mode or ""}
+    return str(_answer_or_raise(spawn_axes_call({"footnote_pane_spec": ask}), "path"))
+
+
 def agy_mint_argv(
     model: str | None,
     effort: str | None,
@@ -74,6 +80,7 @@ def agy_mint_argv(
     }
     argv = _answer_or_raise(spawn_axes_call({"agy_mint": ask}), "argv")
     return [str(t) for t in argv]
+
 
 
 

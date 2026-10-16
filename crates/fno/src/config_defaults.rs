@@ -128,7 +128,7 @@ pub fn example_inventory() -> (BTreeMap<String, toml::Value>, Vec<String>) {
 /// Parse one config file into dotted keys. `Ok(None)` when the file is
 /// absent; `Err` names the file, because a config that cannot be read must
 /// stop the inventory rather than silently answer "default".
-fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
+pub(crate) fn read_flat(path: &Path) -> Result<Option<BTreeMap<String, toml::Value>>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -212,8 +212,60 @@ pub fn key_set(global: Option<&Path>, project: Option<&Path>, key: &str) -> bool
         || project.map(|p| file_sets(p, key)).unwrap_or(false)
 }
 
+/// Effective value of one dotted key, read straight from the config files
+/// with the same precedence [`inventory`] documents: project beats global.
+/// Fail-open: an absent file, an unreadable one, or a non-string value all
+/// answer `None`, so the caller keeps its default.
+///
+/// This is the no-subprocess read path. `fno config get` cold-starts the
+/// Python shim (seconds on a loaded machine), which no per-attach or
+/// per-render caller may pay; the split-brain risk is bounded by the
+/// migrated single-file reality (a legacy settings.yaml is converted to a
+/// flat config.toml exactly once, then every reader sees config.toml).
+pub fn lookup(global: Option<&Path>, project: Option<&Path>, key: &str) -> Option<String> {
+    fn file_value(path: &Path, key: &str) -> Option<String> {
+        match read_flat(path) {
+            Ok(Some(map)) => map.get(key).and_then(|v| v.as_str()).map(str::to_string),
+            _ => None,
+        }
+    }
+    project
+        .and_then(|p| file_value(p, key))
+        .or_else(|| global.and_then(|g| file_value(g, key)))
+}
+
+pub fn lookup_key(key: &str) -> Option<String> {
+    lookup(
+        Some(&global_config_path()),
+        Some(&project_config_path()),
+        key,
+    )
+}
+
+/// The effective value of one dotted key as its raw TOML value, project
+/// beating global, an unreadable or absent file counting as unset (the
+/// fail-open shape [`lookup`] applies). [`lookup`] answers only for
+/// string-valued keys: a TOML integer or boolean reads back `None` there
+/// even when the key is set, which would flag a correctly configured
+/// machine as drifted on every check.
+pub fn lookup_value(
+    global: Option<&Path>,
+    project: Option<&Path>,
+    key: &str,
+) -> Option<toml::Value> {
+    fn file_value(path: &Path, key: &str) -> Option<toml::Value> {
+        match read_flat(path) {
+            Ok(Some(map)) => map.get(key).cloned(),
+            _ => None,
+        }
+    }
+    project
+        .and_then(|p| file_value(p, key))
+        .or_else(|| global.and_then(|g| file_value(g, key)))
+}
+
 /// The global config file, beside the state root's other durable files.
-fn global_config_path() -> PathBuf {
+pub(crate) fn global_config_path() -> PathBuf {
     crate::model_catalog::state_dir().join("config.toml")
 }
 
@@ -369,5 +421,43 @@ mod tests {
         assert!(classify(&oss(&["config", "get"])).is_none());
         assert!(classify(&oss(&["config", "get", "--defaults", "branch.prefix"])).is_none());
         assert!(classify(&oss(&["config", "get", "branch.prefix"])).is_none());
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+
+    /// The native config read: project beats global, a key only one file
+    /// sets falls through to the other, a miss answers None (fail-open).
+    #[test]
+    fn project_beats_global_and_a_miss_answers_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let global = dir.path().join("global.toml");
+        let project = dir.path().join("project.toml");
+        std::fs::write(&global, "[mux]\nshell_integration = \"off\"\n").expect("write global");
+        std::fs::write(&project, "[mux]\nshell_integration = \"mux-panes\"\n")
+            .expect("write project");
+        assert_eq!(
+            lookup(
+                Some(global.as_path()),
+                Some(project.as_path()),
+                "mux.shell_integration"
+            )
+            .as_deref(),
+            Some("mux-panes")
+        );
+        assert_eq!(
+            lookup(Some(global.as_path()), None, "mux.shell_integration").as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            lookup(
+                Some(global.as_path()),
+                Some(project.as_path()),
+                "mux.absent"
+            ),
+            None
+        );
     }
 }

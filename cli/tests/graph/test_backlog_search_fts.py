@@ -1,6 +1,4 @@
-"""Full-text search lives in the store, with no sidecar cache file.
-
-The Python reader tests cover keeper lookup and query neutralization. The
+"""Full-text search lives in the store, with no sidecar cache file. The
 native ``backlog find --fts`` test covers the compiled store index.
 
 Filter: ``fno doctor test cli/tests/graph/test_backlog_search_fts.py``
@@ -12,7 +10,6 @@ from tests.fixtures.graph_seed import seed_graph
 import json
 
 import pytest
-from fno.graph import fts
 
 FULL = {
     "type": "feature",
@@ -48,18 +45,6 @@ def tmp_graph(tmp_path, monkeypatch):
         _row("x-bbbb", title="unrelated work item"),
     )
     return graph
-
-
-def test_search_answers_from_the_store_index(tmp_graph):
-    hits = fts.search("resume handle", tmp_graph, limit=None)
-    assert hits == ["x-aaaa"]
-    assert list(tmp_graph.parent.glob("*.fts5")) == [], (
-        "no sidecar cache file is ever written"
-    )
-
-
-def test_query_syntax_is_neutralized_end_to_end(tmp_graph):
-    assert fts.search('"unbalanced quote AND (', tmp_graph) == []
 
 
 def test_find_fts_uses_the_native_index_without_degrade_warning(tmp_graph, tmp_path, monkeypatch):

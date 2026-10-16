@@ -123,10 +123,43 @@ pub fn run(args: &[String]) -> i32 {
         goal_payload,
     );
 
+    // The distress scan fires on EVERY Stop with a transcript, before the
+    // ownership evaluation: lead-owned stops, event-rule returns and trees
+    // holding another session's manifest all get their help read and routed
+    // (F1). The node id comes from the resident manifest when this
+    // session owns it, else None - the help still routes by lineage. The
+    // turn-keyed dedup makes the later loopcheck read on a target-owned
+    // stop write nothing. An in-session route blocks HERE, before the
+    // ownership evaluation, with the route text: separate from the fno
+    // backstop counters, so it never burns the loop's own streak (F5).
+    let distress_hit = if !fire.transcript_path.as_os_str().is_empty() {
+        let node_id = resident_node_id(&cwd, &fire);
+        let project_events = events_path(&cwd);
+        let global_events = crate::loopcheck::default_global_events_path();
+        distress::scan_and_emit(
+            &project_events,
+            &global_events,
+            &cwd,
+            &fire.resolve_harness_id,
+            node_id.as_deref(),
+            fire.harness.as_deref(),
+            &fire.transcript_path,
+            fire.last_assistant_message.as_deref(),
+            Some(fire.resolve_harness_id.as_str()).filter(|s| !s.is_empty()),
+        )
+    } else {
+        None
+    };
+    if let Some((class, rung)) = distress_hit {
+        if let crate::help_router::Route::InSession(text) = crate::help_router::route(class, rung) {
+            return emit_block_for_harness(&text);
+        }
+    }
+
     // Event rules run before the ownership evaluation: a session with no
     // target or lead manifest still owes its chat asks to the board
     // (docs/architecture/event-rules.md). A notify leaves through the
-    // operator chokepoint; the first block or nudge speaks the same
+    // operator chokepoint; the first block or nudge serves the same
     // harness-shaped block the stop gate prints, and the stop returns.
     let rule_fires = crate::event_rules::eval_stop(&cwd, &payload);
     for notify in rule_fires.iter().filter_map(|f| f.notify.as_ref()) {
@@ -264,6 +297,25 @@ fn run_owned(
             "none",
             "allow",
             "foreign-manifest",
+            &manifest,
+        );
+        return 0;
+    }
+
+    // ── Steps mode: a run driven step-by-step never gates on the loop-check ──
+    // A manifest stamped turn_mode: steps marks a run its own skill advances
+    // one instructed step at a time, not a target loop. The stop allows here,
+    // before translate: the claim stays held and nothing finalizes, so the
+    // run keeps its state for the next step.
+    if !state_is_pending && first_raw_field(&manifest, &["turn_mode"]).as_deref() == Some("steps") {
+        emit_stop_decision(
+            hook_cwd,
+            fire,
+            Some(&state),
+            driver,
+            "none",
+            "allow",
+            "steps-mode",
             &manifest,
         );
         return 0;
@@ -891,7 +943,6 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
         worktree_repo_root(cwd).join(".fno").join("target-state.md")
     };
 
-    let mut pre_manifest_no_file = false;
     let step = if live_state.exists() {
         // Presence is not ownership: a resident manifest naming a FOREIGN
         // session sends the resolver out (the shell's non-resident branch).
@@ -906,7 +957,6 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
         // whatever else is on disk.
         resolve_across_worktrees(cwd, &fire.resolve_ids).map_err(|_| true)
     } else {
-        pre_manifest_no_file = true;
         // A stranger stop with no other worktree present cannot be a
         // worktree-ownership question, so an unreadable listing falls
         // through to the lead and visitor arms instead of blocking.
@@ -953,8 +1003,7 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
     }
 
     // Visitor allow. The diagnostic names every id tried (a contract the
-    // docs reference), and the distress scan reads the payload's own
-    // message first so no reader subprocess runs for an ordinary stop.
+    // docs reference).
     if clean_miss && !fire.resolve_harness_id.is_empty() {
         eprintln!(
             "loop-check: no manifest names session {}; visitor allowed (tried: {})",
@@ -962,21 +1011,27 @@ fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
             fire.resolve_ids.join(" ")
         );
     }
-    if clean_miss && pre_manifest_no_file && !fire.transcript_path.as_os_str().is_empty() {
-        let project_events = events_path(cwd);
-        let global_events = crate::loopcheck::default_global_events_path();
-        distress::scan_and_emit(
-            &project_events,
-            &global_events,
-            cwd,
-            &fire.resolve_harness_id,
-            None,
-            fire.harness.as_deref(),
-            &fire.transcript_path,
-            fire.last_assistant_message.as_deref(),
-        );
-    }
     Verdict::NoOwner
+}
+
+/// The node id from the resident manifest, when THIS stop's session is the
+/// one it names; else None (a stranger or lead stop routes by lineage, so
+/// it carries no node).
+fn resident_node_id(cwd: &Path, fire: &Fire) -> Option<String> {
+    let wt_state = worktree_space_dir(cwd).join("target-state.md");
+    let live_state = if wt_state.exists() {
+        wt_state
+    } else {
+        worktree_repo_root(cwd).join(".fno").join("target-state.md")
+    };
+    if !resident_matches(&live_state, &fire.hook_harness_id) {
+        return None;
+    }
+    let content = std::fs::read_to_string(&live_state).ok()?;
+    crate::loopcheck::scan_manifest_field(&content, "graph_node_id").or_else(|| {
+        crate::loopcheck::scan_manifest_field(&content, "target_claim_key")
+            .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
+    })
 }
 
 /// The shim's resident check: does the manifest at `state` name THIS stop's
@@ -1336,17 +1391,15 @@ mod tests {
         assert!(resident_matches(&state, "rollout-7-h-uuid-1234"));
         assert!(!resident_matches(&state, "other"));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn resident_match_falls_back_to_bare_session_id() {
-        let dir = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let state = dir.join("target-state.md");
+        // No harness_session_id: the bare fno_id matches its own id, and
+        // refuses a rollout-suffixed lookalike.
+        let dir2 = std::env::temp_dir().join(format!("stop-gate-resident2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir2).unwrap();
+        let state = dir2.join("target-state.md");
         std::fs::write(&state, "---\nfno_id: h-uuid-9\n").unwrap();
         assert!(resident_matches(&state, "h-uuid-9"));
         assert!(!resident_matches(&state, "h-uuid-9-extra"));
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir2).ok();
     }
 
     /// The foreign-session guard's allow journals a correlated
@@ -1400,6 +1453,57 @@ mod tests {
         assert_eq!(
             row.pointer("/data/class").and_then(Value::as_str),
             Some("foreign-manifest")
+        );
+        assert_eq!(
+            row.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+
+        // A steps-mode manifest also allows unjudged: the journal names the
+        // steps-mode class, and the return lands before translate, so no
+        // claim releases and no finalize runs - the run keeps its claim.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        let state = dir.path().join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nharness_session_id: sess-new\nturn_mode: steps\n",
+        )
+        .unwrap();
+        let fire = collect_fire(
+            "sess-new",
+            "/tmp/fno-x4847/sess-new.jsonl",
+            None,
+            "turn-3".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &dir.path(),
+            &fire,
+            "{}",
+            state,
+            "lead",
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(rc, 0, "a steps-mode run allows its stops unjudged");
+        let project = crate::paths::events_path(dir.path());
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal =
+            crate::event_store::journal_text_checked(&project, &query).expect("journal readable");
+        let row = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str) == Some("sess-new")
+            })
+            .unwrap_or_else(|| panic!("no stop_decision for sess-new in {}", project.display()));
+        assert_eq!(
+            row.pointer("/data/class").and_then(Value::as_str),
+            Some("steps-mode")
         );
         assert_eq!(
             row.pointer("/data/decision").and_then(Value::as_str),
@@ -1488,6 +1592,18 @@ mod tests {
         assert_eq!(
             arbitrate_continuation("target", &fire, manifest),
             GoalArbitration::Delegated
+        );
+        // With no goal truth at all the loop check keeps ownership.
+        let bare = collect_fire(
+            "session-full",
+            "/tmp/rollout-session-full.jsonl",
+            None,
+            "turn-42".to_string(),
+            None,
+        );
+        assert_eq!(
+            arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
+            GoalArbitration::None
         );
     }
 
@@ -1618,7 +1734,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_goal_owner_is_a_named_refusal() {
+    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
+        // A goal with no continuation_owner is a named refusal, not a guess.
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active"
@@ -1627,10 +1744,6 @@ mod tests {
         assert!(
             matches!(refusal, GoalArbitration::Refusal(reason) if reason.contains("missing continuation owner"))
         );
-    }
-
-    #[test]
-    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
         let fire = fire_with_goal(serde_json::json!({
             "objective": "finish the target",
             "status": "active",
@@ -1720,6 +1833,10 @@ mod tests {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // Declared root: this test used to ride whatever FNO_SPACES_DIR a
+        // concurrently running test had set, so it passed only while that
+        // ambient value survived its neighbor's cleanup.
+        let _root = crate::paths::DeclaredRoot::declare_held("stop-tick");
         let saved_home = std::env::var_os("HOME");
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", dir.path());

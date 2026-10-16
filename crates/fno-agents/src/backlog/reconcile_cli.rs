@@ -15,7 +15,7 @@ use super::binding::bind_pr_rows;
 use super::closures::{
     cascade_close_contained, strandable_contained_ids, strandable_epic_ids, strandable_orphan_ids,
     sweep_close_done_epics, sweep_close_stranded_contained, sweep_reparent_stranded_orphans,
-    sweep_stamp_carried_sessions,
+    sweep_stamp_carried_sessions, CascadeEvidence,
 };
 use super::drift_emit::{
     emit_gate_escape_for_record, emit_human_touch_for_record, emit_session_satisfied_for_record,
@@ -57,10 +57,12 @@ retro sentinel so a later session captures follow-ups. It never
 auto-creates inbox lines or backlog nodes, never auto-resumes work, and
 never clobbers a node that is already done.
 
-Side effect: also runs claim GC (reap_dead_claims), archiving dead
-lockfiles under the claims store's .expired/. --dry-run propagates to it
-(no archiving). This fires on every throttled auto-reconcile, including
-the SessionStart hook - not just a manual invocation.
+Side effect: also runs claim GC, retiring dead claims from graph.db
+into claim_history for at most 20s. Claims it did not reach are
+reported as deferred and wait for a later run. --dry-run
+propagates to it (no retiring). This fires on every throttled
+auto-reconcile, including the SessionStart hook - not just a manual
+invocation.
 
 Options:
   --dry-run, -N    Report candidates only; mutate nothing (graph stays byte-identical).
@@ -337,6 +339,25 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
 
     let mut sweep = partition_and_probe(records, &entries, full_sweep, args.dry_run);
 
+    if !full_sweep {
+        // Scoped runs skip auto-discovery, so the merged-PR file set a
+        // surface-gated cascade judges must be fetched here: records the
+        // listing cache surfaced carry no changed files.
+        for record in &sweep.closeable {
+            if !record.changed_files.is_empty()
+                || supersession_files.contains_key(&record.pr_number)
+            {
+                continue;
+            }
+            let repo = super::pr_link::repo_slug_from_url(record.pr_url.as_deref());
+            if let Ok(ctx) =
+                super::merge_state::fetch_pr_closure_context(record.pr_number, repo.as_deref())
+            {
+                supersession_files.insert(record.pr_number, ctx.changed_files);
+            }
+        }
+    }
+
     // The promise gate + reopen guard partition the closeable set.
     let (gated, mut promise_held, promise_warnings, reopen_expired) =
         promise_gate_leg(&sweep.closeable, &entries, args.json_out, &mut stderr_log);
@@ -373,7 +394,9 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         .unwrap_or_default();
 
     // The dry-run preview simulates the exact close on a throwaway copy.
-    let preview = args.dry_run.then(|| preview_leg(&entries, &sweep));
+    let preview = args
+        .dry_run
+        .then(|| preview_leg(&entries, &sweep, &supersession_files));
 
     // Full sweep only: stamp `reverted` on nodes a merged revert PR names.
     let reverted = revert_leg(
@@ -1047,7 +1070,9 @@ fn reopen_held_reason(node: &Value, pr_number: i64) -> String {
     )
 }
 
-/// One held-open row: (node_id, first reason line, outcome).
+/// One held-open row: (node_id, refusal reason, outcome). The reason is
+/// the full refusal text; the human roll prints its first line and the
+/// --json rows carry all of it.
 type HeldRow = (String, String, String);
 
 /// The promise gate over the closeable set: reopen guard first, then the
@@ -1110,13 +1135,15 @@ fn promise_gate_leg(
         if verdict.satisfied() {
             gated.push(record.clone());
         } else {
+            // The FULL refusal rides the row: the notice router puts the
+            // reason and the remedy verb in the question body, so a lead
+            // reads why the node held without re-running the verb.
             let reason = verdict.reason.unwrap_or_default();
-            let first_line = reason.lines().next().unwrap_or("").to_string();
             let outcome = match verdict.outcome {
                 PromiseOutcome::Unmet => "promise_unmet",
                 _ => "promise_unknown",
             };
-            held.push((record.node_id.clone(), first_line, outcome.into()));
+            held.push((record.node_id.clone(), reason, outcome.into()));
         }
     }
     (gated, held, warnings, reopen_expired)
@@ -1152,7 +1179,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             .unwrap_or(outcome);
         lines.push(format!("{verb} {} node(s) open ({headline}):", rows.len()));
         for (nid, reason, _) in rows {
-            lines.push(format!("  {nid}: {reason}"));
+            // The roll stays a summary: the first line of the refusal.
+            // The full text rides the --json rows for the notice router.
+            let first = reason.lines().next().unwrap_or("");
+            lines.push(format!("  {nid}: {first}"));
         }
     }
     lines.join("\n")
@@ -1169,6 +1199,7 @@ struct CloseResult {
     actually_closed: Vec<MergeDriftRecord>,
     cascade_closed: Vec<String>,
     contained_closed: Vec<String>,
+    contained_released: Vec<String>,
     carried_stamped: Vec<String>,
     reparented: Vec<(String, Option<String>)>,
     supersession_unverified: Vec<Value>,
@@ -1219,6 +1250,7 @@ fn close_leg(
         actually_closed: Vec::new(),
         cascade_closed: Vec::new(),
         contained_closed: Vec::new(),
+        contained_released: Vec::new(),
         carried_stamped: Vec::new(),
         reparented: Vec::new(),
         supersession_unverified: Vec::new(),
@@ -1238,6 +1270,7 @@ fn close_leg(
             r.actually_closed.clear();
             r.cascade_closed.clear();
             r.contained_closed.clear();
+            r.contained_released.clear();
             r.carried_stamped.clear();
             r.reparented.clear();
             r.supersession_unverified.clear();
@@ -1337,13 +1370,21 @@ fn close_mutator(
         else {
             continue;
         };
-        // Idempotency: a node closed out-of-band between the scan and the
-        // lock is skipped.
+        // Idempotency: a node closed between the scan and the lock is not
+        // re-closed - but every record here resolved MERGED, so the stamp
+        // still lands. A parent sharing its children's PR is closed by the
+        // child's cascade earlier in this same pass, before its own record
+        // is reached; the cascade contract leaves merge_status unset, so
+        // without this the parent reads done with merge_status null.
         if entries[index]
             .get("completed_at")
             .map(|v| !v.is_null())
             .unwrap_or(false)
         {
+            entries[index]
+                .as_object_mut()
+                .expect("row is an object")
+                .insert("merge_status".into(), Value::String("merged".into()));
             continue;
         }
         // Locked recheck of the reopen guard: a reopen landing between the
@@ -1393,9 +1434,24 @@ fn close_mutator(
                 obj.insert("pr_url".into(), record.pr_url.clone().into());
             }
         }
-        let mut contained =
-            cascade_close_contained(entries, &record.node_id, record.merged_at.as_deref());
-        result.borrow_mut().contained_closed.append(&mut contained);
+        let evidence = CascadeEvidence {
+            changed_files: &files,
+            pr_number: record.pr_number,
+        };
+        let mut contained = cascade_close_contained(
+            entries,
+            &record.node_id,
+            record.merged_at.as_deref(),
+            Some(&evidence),
+        );
+        result
+            .borrow_mut()
+            .contained_closed
+            .append(&mut contained.closed);
+        result
+            .borrow_mut()
+            .contained_released
+            .append(&mut contained.released);
         let mut cascaded = cascade_close_parents(entries, &record.node_id);
         result.borrow_mut().cascade_closed.append(&mut cascaded);
         result.borrow_mut().actually_closed.push(record.clone());
@@ -1404,7 +1460,14 @@ fn close_mutator(
         return;
     }
     let mut contained = sweep_close_stranded_contained(entries);
-    result.borrow_mut().contained_closed.append(&mut contained);
+    result
+        .borrow_mut()
+        .contained_closed
+        .append(&mut contained.closed);
+    result
+        .borrow_mut()
+        .contained_released
+        .append(&mut contained.released);
     let mut epics = sweep_close_done_epics(entries);
     result.borrow_mut().cascade_closed.append(&mut epics);
     let mut reparented = sweep_reparent_stranded_orphans(entries);
@@ -1633,11 +1696,15 @@ fn ledger_backstop_leg(
     }
 }
 
-/// The ledger path for the shelled legs: the checkout's ledger on its
-/// space (the Python upsert wrote the same file through paths.ledger_json).
+/// The ledger path for the shelled legs: the global ledger the Python
+/// writer appends to, under the same lock. An undeclared test process
+/// answers None so no leg reads or writes the operator's real ledger.
 fn ledger_path_for_leg() -> Option<PathBuf> {
+    if cfg!(test) && !crate::paths::test_root_declared() {
+        return None;
+    }
     let cwd = std::env::current_dir().ok()?;
-    Some(crate::paths::ledger_path(&cwd))
+    Some(crate::paths_cli::ledger_json(&cwd))
 }
 
 /// Merge-triggered auto-continue for one closed node: still the Python
@@ -1657,9 +1724,9 @@ fn auto_continue(record: &MergeDriftRecord, post_entries: &[Value], stderr_log: 
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|raw| effective_reconcile_cwd(&raw, project.as_deref()));
-    let py = crate::scrape::fno_py();
+    let py = crate::scrape::fno_bin();
     let mut cmd = std::process::Command::new(py);
-    cmd.args(["backlog", "advance"]);
+    cmd.args(["backlog", "advance", "--closed", &record.node_id]);
     if let Some(project) = &project {
         cmd.args(["--project", project]);
     }
@@ -1812,79 +1879,59 @@ fn sync_catchup_leg(dry_run: bool, json_out: bool) -> Value {
 }
 
 /// Claim GC. This leg reaches every path that fires reconcile (the
-/// SessionStart hook and a manual invocation), so a reaper on any one
-/// caller would be a guard on one of N reachable paths. --dry-run
-/// propagates (one mode contract); best-effort like sync_catchup: a reap
-/// error never fails the sweep.
+/// SessionStart hook, the daemon's merge-close beat, and a manual run), so a
+/// reaper on any one caller would be a guard on one of N reachable paths.
+/// --dry-run propagates (one mode contract). The reap runs in this process
+/// under [`CLAIM_REAP_BUDGET`]: a shelled reaper outlived the caller's bound
+/// and printed nothing, so no dead claim was ever archived. Best-effort like
+/// sync_catchup: a reap error never fails the sweep.
 fn claim_reap_leg(dry_run: bool, json_out: bool) -> Value {
-    let mut cmd = std::process::Command::new(crate::scrape::fno_py());
-    cmd.args(["claims", "reap", "--json"]);
-    if !dry_run {
-        cmd.arg("--apply");
-    }
-    let outcome = cmd.output();
-    let parsed: Option<Value> = match outcome {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            serde_json::from_str(stdout.trim()).ok()
-        }
-        Err(_) => None,
-    };
-    let Some(summary) = parsed else {
-        let detail = "the claims reap subprocess did not return JSON".to_string();
-        if !json_out {
-            eprintln!("warning: claim reap skipped: {detail}");
-        }
-        return json!({"outcome": "error", "detail": detail});
-    };
+    let summary = crate::claim_verbs::reap_roots(Vec::new(), !dry_run, None, CLAIM_REAP_BUDGET);
     if !json_out {
-        let count = if dry_run {
-            summary
-                .get("would_reap")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-        } else {
-            summary.get("reaped").and_then(Value::as_i64).unwrap_or(0)
-        };
+        let count = summary[if dry_run { "would_reap" } else { "reaped" }]
+            .as_u64()
+            .unwrap_or(0);
         if count > 0 {
             let verb = if dry_run { "would archive" } else { "archived" };
             eprintln!("claim reap: {verb} {count} dead claim(s)");
         }
-        let failed = summary
-            .get("reap_failed")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        if !failed.is_empty() {
-            // A provably-dead claim whose archive move never completed is
-            // not the same as zero dead claims found - the reaped=0 count
-            // above stays silent about it, so this must not be gated on
-            // count (AC5's "positive marker" rule applies to output too).
-            let paths: Vec<String> = failed
-                .iter()
-                .take(3)
-                .filter_map(|f| {
-                    f.as_array()
-                        .and_then(|pair| pair.first())
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect();
-            let more = if failed.len() > 3 { "..." } else { "" };
+        let deferred = summary["deferred"].as_u64().unwrap_or(0);
+        if deferred > 0 {
             eprintln!(
-                "warning: claim reap left {} dead claim(s) un-archived (move did not complete): {paths}{more}",
-                failed.len(),
-                paths = paths.join(", ")
+                "claim reap: {deferred} claim(s) left for the next pass (the {}s budget ran out)",
+                CLAIM_REAP_BUDGET.as_secs()
             );
+        }
+        // A provably-dead claim whose delete never landed is not the same as
+        // zero dead claims found, so this line never hides behind the count.
+        for list in ["reap_failed", "root_errors"] {
+            let failed = summary[list].as_array().cloned().unwrap_or_default();
+            if !failed.is_empty() {
+                let shown: Vec<&str> = failed.iter().take(3).filter_map(Value::as_str).collect();
+                let more = if failed.len() > 3 { "..." } else { "" };
+                eprintln!(
+                    "warning: claim reap {list}: {} ({}{more})",
+                    failed.len(),
+                    shown.join("; ")
+                );
+            }
         }
     }
     let mut merged = serde_json::Map::new();
-    merged.insert("outcome".into(), json!("ok"));
+    let errors = summary["root_errors"]
+        .as_array()
+        .is_some_and(|e| !e.is_empty());
+    merged.insert("outcome".into(), json!(if errors { "error" } else { "ok" }));
     if let Value::Object(map) = summary {
         merged.extend(map);
     }
     Value::Object(merged)
 }
+
+/// The reconcile beat's share for the claim reap. The rest of the sweep
+/// runs under the same caller bound, so the reap takes a slice of it, and
+/// rows it leaves are `deferred` to the next beat.
+const CLAIM_REAP_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Parent epics of this run's closure claims that are still open, each
 /// naming its still-open sibling children exactly - else a PR that ships
@@ -1990,7 +2037,11 @@ struct Preview {
     sim: Option<Vec<Value>>,
 }
 
-fn preview_leg(entries: &[Value], sweep: &Sweep) -> Preview {
+fn preview_leg(
+    entries: &[Value],
+    sweep: &Sweep,
+    supersession_files: &HashMap<i64, Vec<String>>,
+) -> Preview {
     let nothing_pending = sweep.closeable.is_empty()
         && sweep.strandable_epics.is_empty()
         && sweep.strandable_contained.is_empty()
@@ -2005,6 +2056,7 @@ fn preview_leg(entries: &[Value], sweep: &Sweep) -> Preview {
     let mut sim = entries.to_vec();
     let mut acc: Vec<String> = Vec::new();
     let mut contained: Vec<String> = Vec::new();
+    let mut released_preview: Vec<String> = Vec::new();
     let mut reparented: Vec<(String, Option<String>)> = Vec::new();
     for record in &sweep.closeable {
         let Some(index) = sim
@@ -2022,11 +2074,26 @@ fn preview_leg(entries: &[Value], sweep: &Sweep) -> Preview {
         }
         apply_completion_fields(&mut sim[index], false);
         reparented.extend(reparent_live_children(&mut sim, &record.node_id));
-        contained.extend(cascade_close_contained(
+        let files: Vec<String> = if record.changed_files.is_empty() {
+            supersession_files
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            record.changed_files.clone()
+        };
+        let evidence = CascadeEvidence {
+            changed_files: &files,
+            pr_number: record.pr_number,
+        };
+        let contained_pass = cascade_close_contained(
             &mut sim,
             &record.node_id,
             record.merged_at.as_deref(),
-        ));
+            Some(&evidence),
+        );
+        contained.extend(contained_pass.closed);
+        released_preview.extend(contained_pass.released);
         acc.extend(cascade_close_parents(&mut sim, &record.node_id));
     }
     if sweep.strandable_epics.is_empty()
@@ -2035,17 +2102,19 @@ fn preview_leg(entries: &[Value], sweep: &Sweep) -> Preview {
     {
         let carried = sweep_stamp_carried_sessions(&mut sim);
         return Preview {
-            rows: preview_rows(&acc, &contained, &reparented),
+            rows: preview_rows(&acc, &contained, &released_preview, &reparented),
             carried_stamped: carried,
             sim: Some(sim),
         };
     }
-    contained.extend(sweep_close_stranded_contained(&mut sim));
+    let stranded = sweep_close_stranded_contained(&mut sim);
+    contained.extend(stranded.closed);
+    released_preview.extend(stranded.released);
     acc.extend(sweep_close_done_epics(&mut sim));
     reparented.extend(sweep_reparent_stranded_orphans(&mut sim));
     let carried = sweep_stamp_carried_sessions(&mut sim);
     Preview {
-        rows: preview_rows(&acc, &contained, &reparented),
+        rows: preview_rows(&acc, &contained, &released_preview, &reparented),
         carried_stamped: carried,
         sim: Some(sim),
     }
@@ -2056,10 +2125,12 @@ fn preview_leg(entries: &[Value], sweep: &Sweep) -> Preview {
 fn preview_rows(
     epics: &[String],
     contained: &[String],
+    released: &[String],
     reparented: &[(String, Option<String>)],
 ) -> Vec<Value> {
     let epic_ids: BTreeSet<String> = epics.iter().cloned().collect();
     let contained_ids: BTreeSet<String> = contained.iter().cloned().collect();
+    let released_ids: BTreeSet<String> = released.iter().cloned().collect();
     let reparent_pairs: BTreeSet<(String, Option<String>)> = reparented.iter().cloned().collect();
     let mut rows: Vec<Value> = Vec::new();
     for id in epic_ids {
@@ -2067,6 +2138,9 @@ fn preview_rows(
     }
     for id in contained_ids {
         rows.push(json!({"kind": "contained", "id": id}));
+    }
+    for id in released_ids {
+        rows.push(json!({"kind": "contained_released", "id": id}));
     }
     for (id, parent) in reparent_pairs {
         rows.push(json!({"kind": "reparent", "id": id, "parent": parent}));
@@ -2121,6 +2195,26 @@ fn report_leg(
                     p.rows
                         .iter()
                         .filter(|r| r.get("kind").and_then(Value::as_str) == Some("contained"))
+                        .filter_map(|r| r.get("id").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .into_iter()
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    let contained_released: Vec<String> = close
+        .map(|c| c.contained_released.clone())
+        .unwrap_or_else(|| {
+            preview
+                .map(|p| {
+                    p.rows
+                        .iter()
+                        .filter(|r| {
+                            r.get("kind").and_then(Value::as_str) == Some("contained_released")
+                        })
                         .filter_map(|r| r.get("id").and_then(Value::as_str))
                         .map(str::to_string)
                         .collect()
@@ -2192,6 +2286,7 @@ fn report_leg(
                 "node_id": nid, "from": before, "to": after,
             })).collect::<Vec<_>>(),
             "contained_closed": contained_closed,
+            "contained_released": contained_released,
             "carried_stamped": carried_stamped,
             "contained_errors": close.map(|c| c.contained_errors.clone()).unwrap_or_default(),
             "reverted": outcomes.reverted,
@@ -2230,6 +2325,7 @@ fn report_leg(
         && sweep.strandable_contained.is_empty()
         && healed_epics.is_empty()
         && contained_closed.is_empty()
+        && contained_released.is_empty()
         && carried_stamped.is_empty()
         && outcomes.reverted.is_empty()
         && promise_held.is_empty()
@@ -2249,6 +2345,7 @@ fn report_leg(
         closed_rows,
         &healed_epics,
         &contained_closed,
+        &contained_released,
         &reparented,
         &carried_stamped,
         promise_held,
@@ -2311,6 +2408,7 @@ fn human_lines(
     closed_rows: &[Value],
     healed_epics: &[String],
     contained_closed: &[String],
+    contained_released: &[String],
     reparented: &[(String, Option<String>)],
     carried_stamped: &[String],
     promise_held: &[HeldRow],
@@ -2354,6 +2452,13 @@ fn human_lines(
                 "Would close {} contained node(s) shipped inside {whose}: {}",
                 contained_closed.len(),
                 contained_closed.join(", ")
+            ));
+        }
+        if !contained_released.is_empty() {
+            out.push(format!(
+                "Would release {} contained node(s) without matching PR evidence: {}",
+                contained_released.len(),
+                contained_released.join(", ")
             ));
         }
         if !healed_epics.is_empty() {
@@ -2417,6 +2522,13 @@ fn human_lines(
                 contained_closed.join(", ")
             ));
         }
+        if !contained_released.is_empty() {
+            out.push(format!(
+                "Released containment on {} contained node(s) without matching PR evidence (node stays open): {}",
+                contained_released.len(),
+                contained_released.join(", ")
+            ));
+        }
         if !carried_stamped.is_empty() {
             out.push(format!(
                 "Recorded the shipping session on {} node(s) carried in another node's PR: {}",
@@ -2436,7 +2548,9 @@ fn human_lines(
             out.push(reparent_receipt_line(reparented, ""));
         }
         for (node_id, before, after) in &outcomes.reclaimed {
-            out.push(format!("reclaimed {node_id}: {before} -> {after}"));
+            out.push(format!(
+                "status drift {node_id}: stored {before}, derived {after} (not written)"
+            ));
         }
     }
     if !blocked_by_settlement.is_empty() {
@@ -2763,6 +2877,16 @@ mod tests {
         assert!(text.contains("  ab-a: short one ship"));
         let dry = summarize_promise_held(&held, true);
         assert!(dry.starts_with("Holding 1 node(s) open"));
+        // A multi-line refusal prints its first line only in the roll; the
+        // full text is the --json row's, for the notice router.
+        let multiline = vec![(
+            "ab-d".to_string(),
+            "Refused: ab-d promised 2 ships; only 1 merged.\n  Two legal exits:\n    ship the rest, then close".to_string(),
+            "promise_unmet".to_string(),
+        )];
+        let rolled = summarize_promise_held(&multiline, false);
+        assert!(rolled.contains("  ab-d: Refused: ab-d promised 2 ships; only 1 merged."));
+        assert!(!rolled.contains("Two legal exits"));
     }
 
     #[test]
@@ -2776,5 +2900,78 @@ mod tests {
             reparent_receipt_line(&pairs, ""),
             "re-parented 1 stranded child(ren) under terminal parents: x-kid -> (none)"
         );
+    }
+
+    #[test]
+    fn a_parent_closed_by_a_childs_cascade_still_gets_the_merge_stamp() {
+        // The parent shares its children's PR. The child's record processes
+        // first and its cascade closes the parent (the cascade contract
+        // leaves merge_status unset); the parent's own record then hits the
+        // idempotency skip and must still stamp what the pass resolved.
+        let mut entries = vec![
+            json!({"id": "ab-par001", "status": "in_progress", "pr_number": 7,
+                   "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "ab-chil001", "status": "in_progress", "parent": "ab-par001",
+                   "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+        ];
+        let record = |nid: &str| MergeDriftRecord {
+            node_id: nid.into(),
+            plan_path: None,
+            pr_number: 7,
+            pr_url: Some("https://github.com/o/r/pull/7".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-10-04T00:00:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            error_kind: None,
+            remedy: None,
+        };
+        let closeable = vec![record("ab-chil001"), record("ab-par001")];
+        let sweep = Sweep {
+            closeable: Vec::new(),
+            failures: Vec::new(),
+            strandable_epics: Vec::new(),
+            strandable_contained: Vec::new(),
+            strandable_orphans: Vec::new(),
+            owed_evidence: Vec::new(),
+            owed_failures: Vec::new(),
+            settlement: json!({}),
+        };
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        // The child closed on its own record; the parent closed on the cascade.
+        assert_eq!(result.actually_closed.len(), 1);
+        assert_eq!(result.cascade_closed, vec!["ab-par001".to_string()]);
+        // And the parent still reads merged: the stamp the cascade skips is
+        // the parent's own record's leftover duty.
+        assert_eq!(entries[0]["merge_status"], "merged");
+        assert_eq!(entries[1]["merge_status"], "merged");
     }
 }

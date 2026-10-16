@@ -223,9 +223,6 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
         )
     );
     // Within the codex family one id under both names resolves to it.
-    // Two DIFFERENT ids of the family disagree and attribute nothing
-    // (x-0992) - the durable thread id used to win by position, which
-    // laundered whichever marker sorted first into the parent record.
     let codex = |k: &str| match k {
         "CODEX_THREAD_ID" => Some("t-1".to_string()),
         "CODEX_SESSION_ID" => Some("t-1".to_string()),
@@ -239,6 +236,11 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
             ambient_parent_edge_from(|_| None).2
         )
     );
+    // Two DIFFERENT ids of the codex family are the measured thread shape,
+    // not a conflict: CODEX_SESSION_ID names the ROOT session while
+    // CODEX_THREAD_ID names this thread, so the thread id is the parent
+    // edge - the same measured rule resolve_owned_identity applies to a
+    // proven codex family.
     let codex_disagree = |k: &str| match k {
         "CODEX_THREAD_ID" => Some("t-1".to_string()),
         "CODEX_SESSION_ID" => Some("legacy-1".to_string()),
@@ -246,8 +248,23 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
     };
     assert_eq!(
         ambient_parent_edge_from(codex_disagree),
-        (None, None, ambient_parent_edge_from(|_| None).2)
+        (
+            Some("t-1".to_string()),
+            Some("codex".to_string()),
+            ambient_parent_edge_from(|_| None).2
+        )
     );
+    // A canonical stamp that refused is never overridden by the exception:
+    // a claude session's own stamp with an inherited codex marker stays
+    // refused (the leak the disagreement rule was written for).
+    let stamped = |k: &str| match k {
+        "FNO_HARNESS_NAME" => Some("claude".to_string()),
+        "FNO_HARNESS_SESSION_ID" => Some("11111111-1111-4111-8111-111111111111".to_string()),
+        "CODEX_THREAD_ID" => Some("cx".to_string()),
+        _ => None,
+    };
+    let (s, h, _) = ambient_parent_edge_from(stamped);
+    assert_eq!((s, h), (None, None));
     // Two DISAGREEING families attribute NOTHING: no laundered lineage.
     let mixed = |k: &str| match k {
         "CODEX_THREAD_ID" => Some("cx".to_string()),

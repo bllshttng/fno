@@ -12,7 +12,6 @@ from tests.fixtures.graph_seed import seed_graph
 import json
 import os
 import subprocess
-import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -20,6 +19,7 @@ from typer.testing import CliRunner
 import fno.graph.cli as graph_cli
 from fno.cli import app
 from fno.graph.store import read_graph_strict, store_export_status
+from tests.conftest import run_native_create
 
 runner = CliRunner()
 
@@ -47,11 +47,16 @@ def test_every_live_verb_is_classified_exactly_once():
         tracker_owned += t
         footnote_owned += f
     # Positive controls - absence means the registry drifted and the census
-    # must be re-pinned, not silently passed.
+    # must be re-pinned, not silently passed. The tracker-owned control moved
+    # from `new` (now the native create door) to `contain`.
     labels = dict(_registry_labels())
-    assert getattr(labels["new"].callback, "_fno_tracker_owned", False)
+    assert getattr(labels["contain"].callback, "_fno_tracker_owned", False)
     assert getattr(labels["get"].callback, "_fno_footnote_owned", False)
-    assert tracker_owned > 10 and footnote_owned > 10
+    # Re-pinned when the batch family left the wheel for the native lane,
+    # again when capture's nine leaves followed it, again when decompose
+    # followed intake: seven tracker-owned verbs remain. The next wheel
+    # departure re-pins again.
+    assert tracker_owned >= 7 and footnote_owned > 7
 
 
 @pytest.mark.parametrize(
@@ -59,7 +64,6 @@ def test_every_live_verb_is_classified_exactly_once():
     [
         ["backlog", "add", "A thing"],
         ["backlog", "update", "EXT-1", "--priority", "p1"],
-        ["backlog", "defer", "EXT-1", "--reason", "waiting"],
         ["backlog", "encounter", "EXT-1", "--evidence", "operator asked"],
         ["backlog", "queue", "EXT-1"],
         ["backlog", "maintain"],
@@ -79,10 +83,13 @@ def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
 
     if (
-        argv[:2] in (["backlog", "update"], ["backlog", "add"], ["backlog", "queue"])
+        argv[:2] in (
+            ["backlog", "update"], ["backlog", "add"], ["backlog", "queue"], ["backlog", "maintain"],
+            ["backlog", "encounter"],
+        )
         or argv[:2] == ["backlog", "session"]
     ):
-        # The update, add and session leaves answer natively now; their guard
+        # The update, add, maintain and session leaves answer natively now; their guard
         # rode along, so the refusal asserts at the binary under the same env.
         from fno.rust_binary import find_dev_binary
 
@@ -106,34 +113,21 @@ def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
 
 
 def test_first_invocation_guard_is_on_before_click_builds_the_tree(tmp_path):
-    """Fresh-process regression: the lazy classification must run before
-    Click builds the command tree, or the first `fno backlog` call in a
-    process dispatches the original unwrapped callback and bypasses the
-    external-backend refusal (the in-process tests mask this: an earlier
-    invocation has already classified the shared module)."""
-    code = "from fno.cli import main; main()"
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            code,
-            "backlog",
-            "defer",
-            "EXT-1",
-            "--reason",
-            "probe",
-        ],
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "FNO_TRACKER_BACKEND": "github",
-            "FNO_STATE_DIR": str(tmp_path),
-            "FNO_AGENTS_HOME": str(tmp_path / "home"),
-        },
+    """Fresh-process regression: the external-backend refusal fires on the
+    first backlog call in a process, never only after a prior invocation
+    has classified the shared module. The guard moved native with the
+    lifecycle port, so the fresh process is now the dev binary and the
+    refusal precedes any graph read."""
+    result = run_native_create(
+        tmp_path / "graph.json",
+        "defer",
+        "ab-12345678",
+        "--reason",
+        "probe",
+        extra_env={"FNO_TRACKER_BACKEND": "github"},
     )
-    out = proc.stderr + proc.stdout
-    assert proc.returncode == 1, out
+    out = result.stderr + result.output
+    assert result.exit_code == 1, out
     assert "github" in out and "refused" in out, out
 
 

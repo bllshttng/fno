@@ -150,6 +150,48 @@ fn store_path_strips_generation_suffix() {
 }
 
 #[test]
+fn store_path_refuses_empty_journal_path() {
+    // 2026-10-05: an empty journal derived `.db` relative to the caller's
+    // cwd. The refusal must fire before any path is derived, and no file
+    // may appear.
+    let cwd = std::env::current_dir().unwrap();
+    let had_dot_db = cwd.join(".db").exists();
+    assert!(try_store_path(Path::new("")).is_err());
+    assert!(try_store_path(Path::new("/")).is_err());
+    let err = try_store_path(Path::new("")).unwrap_err();
+    assert!(err.contains("empty or name-less journal path"), "{err}");
+    assert_eq!(
+        cwd.join(".db").exists(),
+        had_dot_db,
+        "a refused path must not materialize a store"
+    );
+}
+
+#[test]
+#[should_panic(expected = "empty or name-less journal path")]
+fn store_path_panics_on_empty_journal() {
+    let _ = store_path(Path::new(""));
+}
+
+#[test]
+fn append_envelope_refuses_empty_journal_without_creating_a_store() {
+    let cwd = std::env::current_dir().unwrap();
+    let had_dot_db = cwd.join(".db").exists();
+    let result = append_envelope(Path::new(""), "{}", None);
+    assert!(
+        result
+            .unwrap_err()
+            .contains("empty or name-less journal path"),
+        "the refusal must surface through the emit chain"
+    );
+    assert_eq!(
+        cwd.join(".db").exists(),
+        had_dot_db,
+        "a refused append must not create a store"
+    );
+}
+
+#[test]
 fn sync_ingests_both_generations_and_second_sync_is_zero() {
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
@@ -377,6 +419,125 @@ fn prune_keeps_durable_and_gate_deletes_only_expired_ephemeral() {
         "a second prune deletes nothing new"
     );
     assert_eq!(count_type(&store, "mux_pane_counters"), 1);
+}
+
+#[test]
+fn prune_expires_telemetry_including_rows_stored_as_durable() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    let guard = |name: &str, decision: &str| {
+        json!({"ts": fresh_ts(), "type": "guard_decision", "source": "hook",
+               "data": {"guard": name, "decision": decision, "tool": "Bash"}})
+    };
+    let tick = |ts: String, arm: &str| {
+        json!({"ts": ts, "type": "control_plane_tick", "source": "daemon",
+               "data": {"arm": arm, "scheduler": "daemon", "acted": 0, "interval_s": 30}})
+    };
+    append(
+        &live,
+        &[
+            tick("2026-05-01T08:00:00Z".to_string(), "expired"),
+            tick(fresh_ts(), "legacy"),
+            tick(fresh_ts(), "fresh"),
+            tick(fresh_ts(), "machine_watch"),
+            checkin("2026-05-01T08:00:00Z", "x-aaaa", "ancient durable"),
+            guard("graph-write-protect", "allow"),
+            guard("pipe-guard", "block"),
+        ],
+    );
+    let store = sync(&live).unwrap().store;
+    assert_eq!(
+        count_type(&store, "control_plane_tick"),
+        3,
+        "the expired tick left"
+    );
+    // A row written before its kind joined the class carries `durable`.
+    let eight_days_ago = chrono::Utc::now().timestamp_millis() - 8 * DAY_MS;
+    let writable = Connection::open(&store).unwrap();
+    writable
+        .execute(
+            "UPDATE events SET retention_class = 'durable', ts_ms = ?1 \
+             WHERE type = 'control_plane_tick' AND line LIKE '%legacy%'",
+            params![eight_days_ago],
+        )
+        .unwrap();
+    // Past the telemetry horizon, inside the 30-day machine_watch one.
+    writable
+        .execute(
+            "UPDATE events SET ts_ms = ?1 WHERE line LIKE '%machine_watch%'",
+            params![eight_days_ago],
+        )
+        .unwrap();
+    // Two days old: past the allow horizon, inside the block one.
+    writable
+        .execute(
+            "UPDATE events SET ts_ms = ?1 WHERE type = 'guard_decision'",
+            params![chrono::Utc::now().timestamp_millis() - 2 * DAY_MS],
+        )
+        .unwrap();
+    writable
+        .execute(
+            "DELETE FROM events_meta WHERE key = 'telemetry_pruned_ms'",
+            [],
+        )
+        .unwrap();
+    drop(writable);
+    sync(&live).unwrap();
+    assert_eq!(
+        count_type(&store, "control_plane_tick"),
+        2,
+        "the legacy tick left; the 8-day machine_watch tick stays"
+    );
+    // Every pruned row left a count behind.
+    let pruned: Vec<(String, String, i64)> =
+        crate::event_store::read_rollup(&open_read(&store).unwrap(), "2000-01-01")
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.kind, r.subject, r.occurrences))
+            .collect();
+    for want in [
+        ("control_plane_tick", "expired"),
+        ("control_plane_tick", "legacy"),
+        ("guard_decision", "graph-write-protect:allow"),
+    ] {
+        assert!(
+            pruned.contains(&(want.0.to_string(), want.1.to_string(), 1)),
+            "{want:?} missing: {pruned:?}"
+        );
+    }
+    assert_eq!(pruned.len(), 3, "kept rows are not counted: {pruned:?}");
+    assert_eq!(count_type(&store, "lead_checkin"), 1, "durable rows stay");
+    let guards: Vec<String> = open_read(&store)
+        .unwrap()
+        .prepare("SELECT json_extract(line, '$.data.decision') FROM events WHERE type = 'guard_decision'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        guards,
+        ["block"],
+        "a day-old allow row left; the block row stays"
+    );
+    let backlog: String = open_read(&store)
+        .unwrap()
+        .query_row(
+            "SELECT value FROM events_meta WHERE key = 'telemetry_backlog'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(backlog, "0", "a finished pass clears its backlog mark");
+    let class: String = open_read(&store)
+        .unwrap()
+        .query_row(
+            "SELECT retention_class FROM events WHERE type = 'control_plane_tick'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(class, "telemetry");
 }
 
 #[test]
@@ -1121,6 +1282,129 @@ fn journal_text_checked_fast_path_stays_bounded_on_a_huge_journal() {
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "the cursor fast path keeps the read bounded: {elapsed:?}"
+    );
+}
+
+#[test]
+fn journal_text_checked_tail_type_filter_runs_the_store_filter() {
+    // The tail obeys the same type axis the store query does: an exact query
+    // (no empty type) drops typeless tail rows, `of_types` keeps them, and a
+    // legacy alias spelling matches its canonical ask.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    append(
+        &live,
+        &[checkin("2026-09-17T12:00:00Z", "x-aaaa", "committed")],
+    );
+    sync(&live).unwrap();
+    append(
+        &live,
+        &[
+            checkin("2026-09-17T12:01:00Z", "x-aaaa", "tail-checkin"),
+            json!({"ts": "2026-09-17T12:02:00Z", "type": "guard_decision",
+                   "data": {"change": "unwanted"}}),
+            json!({"ts": "2026-09-17T12:03:00Z", "type": "agent_role_vacated",
+                   "data": {"change": "old-spelling"}}),
+            json!({"ts": "2026-09-17T12:04:00Z", "kind": "spawn_defaults_applied",
+                   "data": {"change": "no-type-field"}}),
+        ],
+    );
+    let exact = EventQuery {
+        types: vec!["lead_checkin".into()],
+        include_rejected: true,
+        ..Default::default()
+    };
+    let text = journal_text_checked(&live, &exact).unwrap();
+    assert!(
+        text.contains("committed") && text.contains("tail-checkin"),
+        "store rows and wanted tail rows read: {text}"
+    );
+    assert!(
+        !text.contains("unwanted")
+            && !text.contains("no-type-field")
+            && !text.contains("old-spelling"),
+        "tail rows outside the query's types drop: {text}"
+    );
+
+    let text = journal_text_checked(&live, &EventQuery::of_types(&["lead_checkin"])).unwrap();
+    assert!(
+        text.contains("tail-checkin") && text.contains("no-type-field"),
+        "the empty type entry of_types adds keeps typeless rows: {text}"
+    );
+    assert!(
+        !text.contains("unwanted") && !text.contains("old-spelling"),
+        "typed rows outside the filter still drop: {text}"
+    );
+
+    let canonical = EventQuery {
+        types: vec!["agent_team_vacated".into()],
+        include_rejected: true,
+        ..Default::default()
+    };
+    let text = journal_text_checked(&live, &canonical).unwrap();
+    assert!(
+        text.contains("old-spelling"),
+        "a legacy alias spelling matches its canonical ask: {text}"
+    );
+    assert!(
+        !text.contains("tail-checkin"),
+        "rows outside the ask still drop: {text}"
+    );
+}
+
+#[test]
+fn journal_text_checked_tail_filter_keeps_a_cursorless_scan_bounded() {
+    // The perf guard for the absent-cursor fallback: a store that never
+    // ingested its journal used to put every line through sha256 plus two
+    // store probes per status read. The type filter skips the lines the
+    // query does not ask for, so the full-scan fallback stays bounded and
+    // the wanted tail row still reads.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    append(
+        &live,
+        &[checkin("2026-09-17T12:00:00Z", "x-aaaa", "committed")],
+    );
+    sync(&live).unwrap();
+    // Retire the cursor: the read must take the full-scan fallback.
+    rusqlite::Connection::open(store_path(&live))
+        .unwrap()
+        .execute("DELETE FROM ingest_cursor", [])
+        .unwrap();
+    let filler = checkin("2026-09-17T12:01:00Z", "x-aaaa", "filler");
+    {
+        let mut fh = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&live)
+            .unwrap();
+        for i in 0..200_000 {
+            let mut row = filler.clone();
+            row["data"]["change"] = json!(format!("filler-{i}"));
+            writeln!(fh, "{row}").unwrap();
+        }
+        writeln!(
+            fh,
+            "{}",
+            json!({"ts": "2026-09-17T12:02:00Z", "type": "control_plane_tick",
+                   "data": {"arm": "pr-watch-merge", "change": "wanted-tail"}})
+        )
+        .unwrap();
+    }
+    let exact = EventQuery {
+        types: vec!["control_plane_tick".into()],
+        include_rejected: true,
+        ..Default::default()
+    };
+    let started = std::time::Instant::now();
+    let text = journal_text_checked(&live, &exact).unwrap();
+    let elapsed = started.elapsed();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "only the wanted tail row reads: {text}");
+    assert!(text.contains("wanted-tail"), "{text}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the filtered full scan stays bounded: {elapsed:?}"
     );
 }
 

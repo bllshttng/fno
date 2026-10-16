@@ -221,7 +221,7 @@ pub(crate) fn priority_name(e: &Value) -> String {
 
 /// ISO-8601 reader: `Z` or numeric offset, else naive reads UTC; an
 /// unparseable stamp is no signal.
-fn parse_iso_ms(value: &Value) -> Option<i64> {
+pub(crate) fn parse_iso_ms(value: &Value) -> Option<i64> {
     let s = match value {
         Value::String(s) => s.as_str(),
         _ => return None,
@@ -229,7 +229,7 @@ fn parse_iso_ms(value: &Value) -> Option<i64> {
     parse_iso_str(s)
 }
 
-fn parse_iso_str(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso_str(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -365,7 +365,7 @@ fn touched_ms(entry: &Value) -> Option<i64> {
 }
 
 /// Whole days from `ts` to `now`, flooring like Python's `timedelta.days`.
-fn days_between(now_ms: i64, ts_ms: i64) -> i64 {
+pub(crate) fn days_between(now_ms: i64, ts_ms: i64) -> i64 {
     (now_ms - ts_ms).div_euclid(86_400_000)
 }
 
@@ -489,6 +489,14 @@ pub fn plan_rung(entry: &Value) -> &'static str {
     };
     let (raw, readable) = read_status_scalar(&probe);
     if !readable {
+        // A plan file that vanished while its node sat in review must not
+        // park a green PR: the plan did its job once the PR opened.
+        // A MISSING file on an in_review node reads as that rung, here and
+        // in the hold read below. Every other unreadable shape stays
+        // unreadable, and an in_progress node keeps failing closed.
+        if !probe.exists() && get_str(entry, "status") == Some("in_review") {
+            return "in_review";
+        }
         return "unreadable";
     }
     let raw = match raw {
@@ -709,7 +717,7 @@ pub(crate) fn serve_effective_verb(params: &Value) -> Result<Value, String> {
 /// A plan-less idea the autonomous drain may dispatch without a plan
 /// (`ladder.is_cold_dispatchable`): `status == "idea"` AND rung `none`, so
 /// a linked decompose stub (rung `idea`) stays behind --include-ideas.
-fn is_cold_dispatchable(e: &Value) -> bool {
+pub(crate) fn is_cold_dispatchable(e: &Value) -> bool {
     get_str(e, "status") == Some("idea") && plan_rung(e) == "none"
 }
 
@@ -773,8 +781,9 @@ pub(crate) fn node_field_hold(entry: &Value) -> HoldState {
     node_field_read(entry).state
 }
 
-/// One hold read: the state plus the fields a receipt renders, and the
-/// INVALID reason or the passed-review note.
+/// One hold read: the state plus the fields a receipt renders, the node ids
+/// the hold's owner exempted from this hold, and the INVALID reason or the
+/// passed-review note.
 #[derive(Debug, Clone)]
 pub(crate) struct HoldRead {
     pub state: HoldState,
@@ -783,6 +792,7 @@ pub(crate) struct HoldRead {
     pub review_on: String,
     pub set_by: String,
     pub detail: String,
+    pub exempt: Vec<String>,
 }
 
 impl HoldRead {
@@ -794,6 +804,7 @@ impl HoldRead {
             review_on: String::new(),
             set_by: String::new(),
             detail: String::new(),
+            exempt: Vec::new(),
         }
     }
 
@@ -805,6 +816,7 @@ impl HoldRead {
             review_on: String::new(),
             set_by: String::new(),
             detail: detail.into(),
+            exempt: Vec::new(),
         }
     }
 }
@@ -840,6 +852,34 @@ pub(crate) fn hold_block_read(block: &Value) -> HoldRead {
     if review_date < chrono::Utc::now().date_naive() {
         detail = format!("review date {review_on} has passed; hold remains active");
     }
+    // `exempt` is optional: absent or null means no exemptions; a list of
+    // non-blank node ids names the children this hold does not bind; anything
+    // else fails closed like every other malformed field.
+    let exempt = match obj.get("exempt") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut ids: Vec<String> = Vec::new();
+            for item in items {
+                match item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(id) => {
+                        let id = id.to_string();
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                    None => {
+                        return HoldRead::invalid(
+                            "dispatch_hold is invalid: exempt is not a list of node ids",
+                        )
+                    }
+                }
+            }
+            ids
+        }
+        Some(_) => {
+            return HoldRead::invalid("dispatch_hold is invalid: exempt is not a list of node ids")
+        }
+    };
     HoldRead {
         state: HoldState::Held,
         reason,
@@ -847,6 +887,7 @@ pub(crate) fn hold_block_read(block: &Value) -> HoldRead {
         review_on,
         set_by,
         detail,
+        exempt,
     }
 }
 
@@ -859,7 +900,14 @@ fn plan_hold_read(entry: &Value) -> HoldRead {
     if !probe.exists() {
         // A missing file under an EXISTING root is INVALID (stale path, typo,
         // mid-fetch checkout); only a root that is itself absent stays ABSENT.
+        // The in_review carve-out: the node's plan did its job once the PR
+        // opened, so a plan file that vanished while the node sat in review
+        // reads as no hold, not as a wedged gate. The
+        // missing-file INVALID for every other status keeps failing closed.
         if probe.parent().map(|d| d.is_dir()).unwrap_or(false) {
+            if get_str(entry, "status") == Some("in_review") {
+                return HoldRead::absent();
+            }
             return HoldRead::invalid(format!(
                 "plan file is missing under its existing plan root: {}",
                 probe.display()
@@ -897,6 +945,8 @@ pub(crate) fn hold_read(entry: &Value) -> HoldRead {
 }
 
 /// A verdict with the fields a receipt renders (`merge_hold_reason`).
+/// `exempt` is the hold's own comma-joined exemption list, rendered so a
+/// reader can see which siblings the hold still binds.
 #[derive(Debug, Clone)]
 pub(crate) struct HoldVerdictReceipt {
     pub owner: String,
@@ -907,11 +957,13 @@ pub(crate) struct HoldVerdictReceipt {
     pub review_on: String,
     pub set_by: String,
     pub detail: String,
+    pub exempt: String,
 }
 
 /// Find a hold on a node, its parents, or its contained delivery owner
 /// (`ladder.dispatch_hold_verdict`): bounded BFS, enqueue-time dedup, first
-/// non-ABSENT verdict wins.
+/// non-ABSENT verdict wins. A hold whose `exempt` list names the entry's id
+/// does not bind the entry; the walk goes on to the next ancestor.
 pub(crate) fn hold_verdict_receipt(
     entry: &Value,
     by_id: &BTreeMap<String, Value>,
@@ -919,6 +971,7 @@ pub(crate) fn hold_verdict_receipt(
     if !is_dict(entry) {
         return None;
     }
+    let for_id = get_str(entry, "id").unwrap_or("").to_string();
     let mut queue: Vec<Value> = vec![entry.clone()];
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut enqueued: BTreeSet<String> = BTreeSet::new();
@@ -932,7 +985,13 @@ pub(crate) fn hold_verdict_receipt(
         }
         seen.insert(node_id.clone());
         let read = hold_read(&current);
-        if !matches!(read.state, HoldState::Absent) {
+        // An exemption frees a CHILD from an ANCESTOR's hold, never the
+        // holder from its own: a mistyped self-id must not neutralize the
+        // hold set at the node itself.
+        let exempted = !for_id.is_empty()
+            && !node_id.eq_ignore_ascii_case(&for_id)
+            && read.exempt.iter().any(|x| x.eq_ignore_ascii_case(&for_id));
+        if !matches!(read.state, HoldState::Absent) && !exempted {
             let held = matches!(read.state, HoldState::Held);
             let prefix = if held {
                 "dispatch-hold"
@@ -948,6 +1007,7 @@ pub(crate) fn hold_verdict_receipt(
                 review_on: read.review_on,
                 set_by: read.set_by,
                 detail: read.detail,
+                exempt: read.exempt.join(","),
             });
         }
         for relation in ["contained_in", "parent"] {
@@ -995,7 +1055,7 @@ pub(crate) fn node_is_open(node: &Value) -> bool {
 
 /// True when a ready node shows any sign of being live or recently worked
 /// (`maintain.node_has_movement`).
-fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
+pub(crate) fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
     if truthy(entry.get("sessions")) || truthy(entry.get("pr_number")) {
         return true;
     }
@@ -1037,7 +1097,7 @@ fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
 /// Quarantine-eligible: abandoned, old, unmoved (`maintain.is_stale_ready`).
 /// The caller guarantees ready status; containment, blockers, undesigned
 /// rungs, movement and unprovable age each independently exempt.
-fn is_stale_ready(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
+pub(crate) fn is_stale_ready(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
     if truthy(entry.get("contained_in")) || truthy(entry.get("blocked_by")) {
         return false;
     }
@@ -1641,6 +1701,8 @@ pub(crate) fn dispatch_node_summary(e: &Value) -> Value {
         "difficulty",
         "plan_path",
         "model",
+        "provider",
+        "effort",
         "dispatch_verb",
         "dispatch_brief",
         "mission_id",
@@ -2072,6 +2134,43 @@ mod tests {
         node_field_contract();
     }
 
+    #[test]
+    fn an_in_review_carveout_reads_a_missing_plan_as_no_hold() {
+        // A plan file that vanished while its node sat in review reads as no
+        // hold: the plan did its job once the PR opened.
+        let (_d, root) = hold_dir("hold-plan-inreview");
+        let stale = root.join("gone.md"); // root exists, file does not
+        let read = hold_read(&serde_json::json!({
+            "id": "x-gone", "plan_path": stale.display().to_string(),
+            "status": "in_review",
+        }));
+        assert!(matches!(read.state, HoldState::Absent));
+        // Every other status keeps failing closed.
+        let held_back = hold_read(&serde_json::json!({
+            "id": "x-bld", "plan_path": stale.display().to_string(),
+            "status": "in_progress",
+        }));
+        assert!(matches!(held_back.state, HoldState::Invalid));
+        assert!(held_back
+            .detail
+            .contains("missing under its existing plan root"));
+        // The rung answers the same way, so the spawn gate derives a verb.
+        assert_eq!(
+            plan_rung(&serde_json::json!({
+                "id": "x-gone", "plan_path": stale.display().to_string(),
+                "status": "in_review",
+            })),
+            "in_review"
+        );
+        assert_eq!(
+            plan_rung(&serde_json::json!({
+                "id": "x-bld", "plan_path": stale.display().to_string(),
+                "status": "in_progress",
+            })),
+            "unreadable"
+        );
+    }
+
     fn past_review_note_contract() {
         let (_d, root) = hold_dir("hold-plan-past");
         let plan = held_plan(&root, "held.md", "2020-01-01");
@@ -2090,6 +2189,19 @@ mod tests {
             serde_json::json!({"reason": "why", "release_when": "fixed", "review_on": "soon", "set_by": "lead"}),
             serde_json::json!({"reason": "   ", "release_when": "fixed", "review_on": "2026-08-20", "set_by": "lead"}),
             serde_json::json!({"reason": "why", "release_when": "fixed", "review_on": "2026-08-20", "set_by": "   "}),
+            // The optional exempt field fails closed on any non-list shape.
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": "t-af4e",
+            }),
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": [7],
+            }),
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": [" "],
+            }),
         ];
         for shape in shapes {
             assert!(

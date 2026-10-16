@@ -75,8 +75,10 @@ pub struct KeymapWarning(pub String);
 
 /// Parse a key spec into the byte a terminal sends for it.
 ///
-/// Accepted: `C-a` / `Ctrl-a` / `^a` for a control byte, or a single printable
-/// ASCII character for itself. Deliberately narrow: a spec vocabulary wider than
+/// Accepted: `ctrl+a` / `C-a` / `Ctrl-a` / `^a` for a control byte, or a single
+/// printable ASCII character for itself. `ctrl+` is the printed form
+/// ([`key_disp`]), so a label copied into config round-trips; the older dash
+/// spellings stay accepted. Deliberately narrow: a spec vocabulary wider than
 /// the scanner (which dispatches on ONE post-prefix byte) would advertise binds
 /// that could never fire.
 pub fn parse_key(spec: &str) -> Option<u8> {
@@ -92,18 +94,24 @@ pub fn parse_key(spec: &str) -> Option<u8> {
         _ => {
             let lower = s.to_ascii_lowercase();
             let rest = lower
-                .strip_prefix("ctrl-")
+                .strip_prefix("ctrl+")
+                .or_else(|| lower.strip_prefix("ctrl-"))
                 .or_else(|| lower.strip_prefix("c-"))?;
             (rest.chars().count() == 1).then(|| ctrl_letter(rest.chars().next()?))?
         }
     }
 }
 
-/// How a byte prints in the which-key modal: `C-b` for a control byte, the
-/// character itself otherwise.
+/// How a byte prints in the which-key modal: `ctrl+b` for a control byte, the
+/// character itself otherwise. Lowercase: `C` does not read as ctrl and a
+/// capital `B` reads as the uppercase key. A plus, never a dash: a dash reads
+/// as negative (user ruling 2026-10-09), and this one printer owns every
+/// rendered key label - the which-key table, menu hints, and the rebind
+/// warnings all draw from it, so none can drift back to a dash. The printed
+/// form parses ([`parse_key`]), so a label copied into config still works.
 pub fn key_disp(b: u8) -> String {
     match b {
-        1..=26 => format!("C-{}", (b - 1 + b'a') as char),
+        1..=26 => format!("ctrl+{}", (b - 1 + b'a') as char),
         _ => (b as char).to_string(),
     }
 }
@@ -452,6 +460,11 @@ pub enum Event {
     /// visible; this only expands or collapses it, and the client's view
     /// layer interprets that, not here.
     OpenTeam,
+    /// Open or close the Org board view in one press: the sideline's org
+    /// board (tree, table, graph), from any sideline view. From Org it
+    /// closes back to the agents list. The client's view layer interprets
+    /// this, like OpenTeam.
+    OpenOrgView,
     /// Toggle the activity feed panel on the right edge (e):
     /// questions, decisions and node lifecycle, newest first. The panel is
     /// chrome and consumes no keys; a click deep-links a row and the border
@@ -481,6 +494,12 @@ pub enum Event {
     /// table - but the preference still persists, so the choice survives a
     /// round trip through slim.
     ToggleAgentSort,
+    /// Cycle the sideline agents view's group-by axis: workspace -> team ->
+    /// cwd -> status (prefix+G). Persisted like the density.
+    CycleAgentGroup,
+    /// Show or hide the card's `node · PR` header row (prefix+Y). The header
+    /// shows at every width now; this is the operator's off switch.
+    ToggleCardHead,
     /// Show/hide the status row (prefix+s). Client-local (US4, AC4-FR).
     ToggleStatus,
     /// Reveal each visible pane's stable id while the key repeats.
@@ -1312,6 +1331,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             "the org block (load, census, lanes)", // minimize/expand, sideline
         ),
         b(
+            b'G',
+            "org-view",
+            OpenOrgView,
+            Global,
+            "org view (tree, table, graph)",
+        ),
+        b(
             b'q',
             "notifications-bell",
             ToggleBell,
@@ -1366,6 +1392,20 @@ fn default_bindings() -> Vec<KeyBinding> {
             ToggleAgentSort,
             Global,
             "sort table columns",
+        ),
+        b(
+            b'W',
+            "cycle-agent-group",
+            CycleAgentGroup,
+            Global,
+            "group agents by workspace, lead, cwd, or status",
+        ),
+        b(
+            b'Y',
+            "toggle-card-head",
+            ToggleCardHead,
+            Global,
+            "show or hide the card header row",
         ),
         b(b's', "toggle-status", ToggleStatus, Global, "toggle status"),
         b(
@@ -1564,6 +1604,21 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "close-portal",
         key: b'c',
     },
+    // `h` lifts the hold the row wears (Remove hold / Remove DND - one
+    // entry, the mark names itself). Free in menu scope: the popup's own
+    // navigation runs on arrows, and `h` is no other menu byte.
+    MenuKeyBinding {
+        action: "release-hold",
+        key: b'h',
+    },
+    // `t` flips the row menu's Split Direction group between pane and
+    // portal (the split.opens start, flipped in-menu before the arrow is
+    // pressed). Free in menu scope: the placement picker's `t` (new tab)
+    // is a different scope, and `t` is no other menu byte.
+    MenuKeyBinding {
+        action: "toggle-split-opens",
+        key: b't',
+    },
 ];
 
 /// The one resolver both menu-scope projections read: the binding registered
@@ -1640,8 +1695,9 @@ pub fn selector_hint() -> &'static str {
 /// and the prefix-prefix literal. Kept beside [`key_bindings`] so the modal's
 /// row set stays complete without polluting the executable table.
 ///
-/// The literal-prefix row is built from the LIVE prefix: a frozen `C-b C-b`
-/// would advertise a dead sequence the moment anyone set `config.mux.prefix`.
+/// The literal-prefix row is built from the LIVE prefix: a frozen `ctrl-b
+/// ctrl-b` would advertise a dead sequence the moment anyone set
+/// `config.mux.prefix`.
 pub fn meta_rows() -> Vec<(String, String, KeySection)> {
     let p = key_disp(prefix());
     let rows = vec![
@@ -1695,6 +1751,21 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
         (
             "X".into(),
             "reap all exited agents".into(),
+            KeySection::SidelineRows,
+        ),
+        (
+            "h".into(),
+            "remove hold / DND (inside the row menu)".into(),
+            KeySection::SidelineRows,
+        ),
+        (
+            ".".into(),
+            "pin or unpin the row (inside the row selector)".into(),
+            KeySection::SidelineRows,
+        ),
+        (
+            "shift+up/down".into(),
+            "reorder the row manually (inside the row selector)".into(),
             KeySection::SidelineRows,
         ),
         // Enter reaches portal 0; P opens the next free portal so a
@@ -1976,6 +2047,27 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_org_view_binding_is_g_in_global() {
+        let binding = key_bindings()
+            .into_iter()
+            .find(|b| b.action == "org-view")
+            .expect("the org-view action is bound");
+
+        assert_eq!(binding.key, b'G');
+        assert_eq!(binding.event, Event::OpenOrgView);
+        assert!(matches!(binding.section, KeySection::Global));
+
+        // the org block keeps its key while org-view takes the
+        // free uppercase slot beside it.
+        let org = key_bindings()
+            .into_iter()
+            .find(|b| b.action == "org")
+            .expect("the org action is bound");
+        assert_eq!(org.key, b'C');
+        assert_eq!(org.event, Event::OpenTeam);
+    }
+
     fn scan_all(chunks: &[&[u8]]) -> Vec<Event> {
         // A single fixed instant: no chunk advances the clock, so the resize
         // repeat window (if a chord arms one) stays open across the chunks -
@@ -2239,6 +2331,8 @@ mod tests {
         assert_eq!(parse_key("C-a"), Some(0x01));
         assert_eq!(parse_key("Ctrl-a"), Some(0x01));
         assert_eq!(parse_key("^a"), Some(0x01));
+        assert_eq!(parse_key("ctrl+a"), Some(0x01), "the printed form parses");
+        assert_eq!(parse_key("Ctrl+Q"), Some(0x11), "case-insensitive plus");
         assert_eq!(parse_key("c-B"), Some(0x02), "case-insensitive");
         assert_eq!(parse_key(" C-b "), Some(0x02), "trimmed");
         assert_eq!(parse_key("q"), Some(b'q'));
@@ -2483,7 +2577,7 @@ mod tests {
     #[test]
     fn meta_rows_name_the_live_prefix() {
         // The literal-prefix row is built from `prefix()`, so it cannot keep
-        // advertising `C-b C-b` after the prefix moves. Asserted against the
+        // advertising `ctrl-b ctrl-b` after the prefix moves. Asserted against the
         // default here (`install` is process-global and one-shot, so a test must
         // not take it); the construction is what stops the drift.
         let rows = meta_rows();
@@ -2511,7 +2605,7 @@ mod tests {
         }
         let detach = rows.iter().find(|kb| kb.action == "detach").unwrap();
         assert_eq!(detach.key, 0x11);
-        assert_eq!(detach.disp, "C-q", "the key table prints the NEW key");
+        assert_eq!(detach.disp, "ctrl+q", "the key table prints the NEW key");
         assert_eq!(detach.event, Event::Detach);
 
         // The two no-default split actions live in the table as sentinel
@@ -2521,7 +2615,7 @@ mod tests {
         let (map, warnings) = resolve_keymap(
             None,
             &[
-                ("split-left".into(), "G".into()),
+                ("split-left".into(), "Z".into()),
                 ("split-up".into(), "u".into()),
             ],
         );
@@ -2531,8 +2625,8 @@ mod tests {
             .iter()
             .find(|kb| kb.action == "split-left")
             .expect("materialized");
-        assert_eq!(left.key, b'G');
-        assert_eq!(left.disp, "G");
+        assert_eq!(left.key, b'Z');
+        assert_eq!(left.disp, "Z");
         assert_eq!(left.event, Event::Cmd(Command::SplitDir(Dir::Left)));
         let up = rows
             .iter()

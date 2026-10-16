@@ -28,7 +28,7 @@ const BROKEN_OUTCOMES: &[&str] = &["timeout", "error"];
 const RECENT_ENDS_KEEP: usize = 16;
 
 /// The LaunchAgent label and its plist file name, as the installer writes it.
-const LABEL: &str = "sh.fno.pr-watcher";
+pub(crate) const LABEL: &str = "sh.fno.pr-watcher";
 pub(crate) const PLIST_FILENAME: &str = "sh.fno.pr-watcher.plist";
 
 /// The `pr_watch` config slice the verdict reads.
@@ -405,13 +405,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let launch_agents_dir = std::env::var_os("FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| Path::new(&home).join("Library").join("LaunchAgents"))
-                .unwrap_or_else(|| PathBuf::from("Library").join("LaunchAgents"))
-        });
+    let launch_agents_dir = launch_agents_dir();
     let inp = gather(&cwd, &launch_agents_dir);
     let marks = tick_watermarks(&inp.events);
     let leg = leg_facts(&inp);
@@ -475,10 +469,22 @@ pub(crate) fn gather(cwd: &Path, launch_agents_dir: &Path) -> Inputs {
     }
 }
 
+/// The LaunchAgents dir every pr-watch verb writes and reads: the test pin
+/// moves it, production keeps it under HOME.
+pub(crate) fn launch_agents_dir() -> PathBuf {
+    std::env::var_os("FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| Path::new(&home).join("Library").join("LaunchAgents"))
+                .unwrap_or_else(|| PathBuf::from("Library").join("LaunchAgents"))
+        })
+}
+
 /// True when the watcher's label appears in `launchctl list` output. The
-/// env pin is test-only: the parity fixtures inject the load state the way
-/// the Python tests monkeypatch `_launchctl_is_loaded`, so the goldens do
-/// not depend on the capture machine's own registration.
+/// env pin is a test-only escape hatch; the parity fixtures inject the load
+/// state by answering `launchctl list` through the PATH stub, so the
+/// goldens do not depend on the capture machine's own registration.
 pub(crate) fn launchctl_is_loaded() -> bool {
     if let Ok(pin) = std::env::var("FNO_TEST_PR_WATCH_LOADED") {
         return pin == "1";
@@ -591,9 +597,16 @@ pub(crate) fn verdict(inp: &Inputs, marks: &Marks, leg: &LegFacts) -> Verdict {
     };
 
     let tick_epoch = parse_ts(marks.last_tick.as_deref());
+    // The ts parse truncates to whole seconds, so the tie favors the tick: a
+    // tick inside the plist's own second covers it, and only a plist at or
+    // after the tick's next second boundary reads as a bounce still pending
+    // its first tick. On whole-second values this is the strict `>` it
+    // replaced.
     let bounce_pending = broke.is_none()
         && (inp.now - plist_mtime) < threshold as f64
-        && tick_epoch.map(|tick| plist_mtime > tick).unwrap_or(true);
+        && tick_epoch
+            .map(|tick| plist_mtime >= tick + 1.0)
+            .unwrap_or(true);
     if bounce_pending {
         let streak = broken_streak(&marks.recent_ends);
         if streak >= inp.cfg.wedged_after_ticks.max(1) as usize {

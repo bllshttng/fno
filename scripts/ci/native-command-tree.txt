@@ -17,6 +17,7 @@ mux layout apply	leaf	visible	-	-
 mux layout get	leaf	visible	-	-
 mux layout graft	leaf	visible	-	-
 mux ls	leaf	visible	-	--json,-J
+mux notify	leaf	hidden	-	--json,-J
 mux pane	group	visible	-	-
 mux pane break	leaf	visible	-	-
 mux pane claim	leaf	visible	-	-
@@ -51,6 +52,7 @@ mux web	group	visible	-	-
 mux web reap	leaf	visible	-	-
 mux where	leaf	visible	-	-
 mux workspace	group	visible	-	-
+mux workspace origin	leaf	visible	-	-
 mux workspace prune	leaf	visible	-	-
 mux workspace restore	leaf	visible	-	-
 uninstall	leaf	visible	-	--dry-run,--purge,--yes

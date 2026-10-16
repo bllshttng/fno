@@ -253,6 +253,16 @@ test('delivered sender and message buttons resolve the canonical session and thr
   if (!await malformed.find({ type: 'Text', text: /legacy header/ })) throw new Error('malformed header text was not preserved')
   await malformed.unmount()
 
+  // The law form (user law d-b720d23c): a two-field header renders the same
+  // sender and id buttons, with no subject text beside them.
+  const lawForm = await $.ui.mount(userMessage(`\`@old-label · ${MESSAGE_ID}\`\nlaw form body`, 'user-law-form'))
+  await lawForm.press({ key: `mail-message-user-law-form-${MESSAGE_ID}` })
+  const lawPane = await $.ui.mount(pane())
+  if (!await lawPane.find({ type: 'Text', text: /original mail body/ })) throw new Error('law-form mail did not open its body')
+  await lawPane.unmount()
+  paneIsOpen = false
+  await lawForm.unmount()
+
   peekExitCode = 13
   const unreadable = await $.ui.mount(userMessage(`${HEADER}\noriginal mail body`, 'user-unreadable'))
   await unreadable.press({ key: `mail-sender-user-unreadable-${MESSAGE_ID}` })

@@ -101,15 +101,10 @@ def test_provider_less_peer_arms_nothing(repo):
 def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
     # A code payload on a lane-less stock install carries the self-review
     # obligation: the done-when line names it and a verb this harness serves.
-    import fno.review_capability as rc
+    def _stub_invocation(verb, payload, *args, **kwargs):
+        return {"invocation": "/fno:review <level> --comment", "harness": "claude"}
 
-    monkeypatch.setattr(
-        rc,
-        "detect_session",
-        lambda: rc.SessionCapability(
-            harness="claude", substrate="interactive", attended=True
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _stub_invocation)
     root = repo("")
     line = _done_when_line({}, root)
     assert "self-review required for code" in line
@@ -139,61 +134,25 @@ def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
 
 
 def test_self_review_floor_sizes_the_level_from_the_diff(repo, monkeypatch):
-    # The floor names the sized invocation, not a hardcoded medium: pre-diff it
-    # keeps the <level> placeholder; a real diff shape picks the tier.
-    import fno.review_capability as rc
+    # The floor names the sized invocation, not a hardcoded medium: a dead
+    # sizing read keeps the <level> placeholder; a live door answer picks the
+    # tier. The stub patches the review-level door wrapper; the tier table and
+    # the merge-base discovery live in fno-agents now.
+    def _stub_invocation(verb, payload, *args, **kwargs):
+        return {"invocation": "/fno:review <level> --comment", "harness": "claude"}
 
-    monkeypatch.setattr(
-        rc,
-        "detect_session",
-        lambda: rc.SessionCapability(
-            harness="claude", substrate="interactive", attended=True
-        ),
-    )
-    root = repo("")
-    monkeypatch.setattr(rc, "_git_out", lambda cwd, *a: None)
-    line = _done_when_line({}, root)
+    monkeypatch.setattr("fno.rust_binary.verb_call", _stub_invocation)
+    line = _done_when_line({}, repo(""))
     assert "/fno:review <level>" in line
-    # 20 files, 2000 added lines: over the medium file cap, inside high's.
-    # Expected is built through the same sizing function, so this asserts the
-    # wiring (diff shape -> sized invocation) without spelling a level here.
-    # The stub patches review_capability's git helper: sizing moved there so
-    # the orienter and the refusal-site renderer share one path.
-    rows = "".join(f"100\t0\tfile{i:02d}.py\n" for i in range(20))
     monkeypatch.setattr(
-        rc,
-        "_git_out",
-        lambda cwd, *a: "abc123" if a[0] == "merge-base" else rows,
+        "fno.rust_binary.verb_call",
+        lambda verb, payload, *a, **k: {
+            "invocation": "/fno:review high --comment",
+            "harness": "claude",
+        },
     )
-    line = _done_when_line({}, root)
-    assert f"/fno:review {rc.level_for_diff(20, 2000)}" in line
-
-
-def test_self_review_floor_sizes_the_level_from_master_fallback(repo, monkeypatch):    # A master-default repo: the origin/main probe comes back empty, so the
-    # sized invocation must come through the origin/master merge-base. The
-    # sibling test feeds every merge-base probe a SHA and never gets there.
-    import fno.review_capability as rc
-
-    monkeypatch.setattr(
-        rc,
-        "detect_session",
-        lambda: rc.SessionCapability(
-            harness="claude", substrate="interactive", attended=True
-        ),
-    )
-    root = repo("")
-    rows = "".join(f"100\t0\tfile{i:02d}.py\n" for i in range(20))
-
-    def git_out(cwd, *a):
-        if a[0] == "rev-parse":
-            return "sha" if a[-1] == "origin/master^{commit}" else None
-        if a[0] != "merge-base":
-            return rows
-        return "abc123" if a[-1] == "origin/master" else None
-
-    monkeypatch.setattr(rc, "_git_out", git_out)
-    line = _done_when_line({}, root)
-    assert f"/fno:review {rc.level_for_diff(20, 2000)}" in line
+    line = _done_when_line({}, repo(""))
+    assert "/fno:review high" in line
 
 
 def test_stock_install_announces_a_satisfiable_lane_floor_on_gemini(
@@ -202,15 +161,10 @@ def test_stock_install_announces_a_satisfiable_lane_floor_on_gemini(
     # The owned lane runs wherever the plugin runs, so a harness with no native
     # review verb no longer reads as an unsatisfiable floor. The announcement
     # names the lane, never a transport-dependent verb.
-    import fno.review_capability as rc
+    def _stub_invocation(verb, payload, *args, **kwargs):
+        return {"invocation": "/fno:review <level> --comment", "harness": "gemini"}
 
-    monkeypatch.setattr(
-        rc,
-        "detect_session",
-        lambda: rc.SessionCapability(
-            harness="gemini", substrate="interactive", attended=True
-        ),
-    )
+    monkeypatch.setattr("fno.rust_binary.verb_call", _stub_invocation)
     line = _done_when_line({}, repo(""))
     assert "self-review required for code (gemini)" in line
     assert "/fno:review <level>" in line

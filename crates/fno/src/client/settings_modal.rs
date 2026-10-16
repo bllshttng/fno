@@ -15,7 +15,11 @@ pub(crate) enum SettingsTab {
 }
 
 impl SettingsTab {
-    /// Tab's section cycle: General -> Theme -> Keys -> Colors -> General.
+    /// Tab's section cycle: General -> Theme -> Keys -> Colors -> General,
+    /// the order the tab strip draws (user ruling 2026-10-09: tab reaches
+    /// every section the header lists). `Keys` is a launcher: landing on it
+    /// opens the which-key table, and a later dismiss returns to the settings
+    /// modal on the section the user came from ([`switch_tab`]).
     pub(crate) fn next(self) -> Self {
         match self {
             SettingsTab::General => SettingsTab::Theme,
@@ -102,7 +106,9 @@ impl View {
                 }
             }
             SettingsTab::Keys => {
-                (rows, actions) = keys_settings::rows(self);
+                // Never rendered: switching to this tab opens the which-key
+                // table instead (switch_tab). The arm stays so the width
+                // measurement below compiles unchanged.
             }
             SettingsTab::Colors => {
                 (rows, actions) = crate::lane_colors_panel::build_lane_color_rows(
@@ -172,8 +178,7 @@ impl View {
     /// Whether any settings page sits below its tab's top level.
     fn settings_drilled(&self) -> bool {
         let lane = &self.lane;
-        self.key_capture.is_some()
-            || !matches!(self.theme_import, theme_import_ui::ThemeImportUi::Idle)
+        !matches!(self.theme_import, theme_import_ui::ThemeImportUi::Idle)
             || lane.axis.is_some()
             || lane.pick.is_some()
             || lane.is_entry()
@@ -187,13 +192,34 @@ fn is_settings(view: &View) -> bool {
         .is_some_and(|m| !m.popup.chrome.tabs.is_empty())
 }
 
-/// Put `tab` in front at its top level.
+/// Put `tab` in front at its top level. The keybindings tab is a launcher:
+/// it opens the SAME which-key table the menu's keybindings row opens, so
+/// the two surfaces cannot drift again (US1). Reached by tab as well as
+/// click, so the marker is set and a later dismiss walks the user back here
+/// instead of dropping them on the board ([`dismiss_keys_modal`]).
 pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
+    if tab == SettingsTab::Keys {
+        view.keys_modal_return = true;
+        view.aux = None;
+        view.open_keys_modal();
+        return;
+    }
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
-    view.key_capture = None;
     view.reopen_settings_keeping_sel();
+}
+
+/// Close the which-key modal. When it was opened FROM the settings modal,
+/// reopen the settings modal on the section the user came from; otherwise
+/// this is the plain close. A run of an actual chord closes for real (the
+/// action ran; the user moved on) - only the pure-dismiss paths come here.
+pub(super) fn dismiss_keys_modal(view: &mut View) {
+    view.keys_modal = None;
+    if view.keys_modal_return {
+        view.keys_modal_return = false;
+        view.reopen_settings_keeping_sel();
+    }
 }
 
 /// A left press on a settings tab switches to it. True when the press hit
@@ -216,10 +242,7 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
 /// file-picker rows take a click; acting on another row would leave the
 /// field armed under a changed page.
 pub(super) fn row_tap_allowed(view: &View, target: usize) -> bool {
-    if !(view.lane.is_entry()
-        || theme_import_ui::is_entry(&view.theme_import)
-        || view.key_capture.is_some())
-    {
+    if !(view.lane.is_entry() || theme_import_ui::is_entry(&view.theme_import)) {
         return true;
     }
     let action = view.aux.as_ref().and_then(|m| m.actions.get(target));
@@ -238,9 +261,6 @@ pub(super) fn back(view: &mut View) -> bool {
             || l.pick.take().is_some()
             || l.axis.take().is_some()
     };
-    if keys_settings::close(view) {
-        return true;
-    }
     let stepped = (!matches!(view.theme_import, theme_import_ui::ThemeImportUi::Idle) && {
         theme_import_ui::reset(view);
         true
@@ -252,44 +272,40 @@ pub(super) fn back(view: &mut View) -> bool {
     true
 }
 
-/// Feed one read to the open settings text field or key capture. `None`
-/// when neither is open, so the caller runs its own keys. Every chunk ends
-/// with a rebuild, so the field row always paints the text so far.
+/// Feed one read to the open settings text field. `None` when none is open,
+/// so the caller runs its own keys. Every chunk ends with a rebuild, so the
+/// field row always paints the text so far.
 pub(super) async fn field_keys(
     view: &mut View,
     bytes: &[u8],
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+    _sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<Option<StdinFlow>, String> {
     if !is_settings(view) {
         return Ok(None);
     }
-    if view.key_capture.is_some() {
-        keys_settings::capture_keys(view, bytes, sock_w).await?;
+    let events = if let Some(f) = view.lane.custom_entry.as_mut() {
+        f.feed(bytes)
+    } else if let Some((_, f)) = view.lane.key_entry.as_mut() {
+        f.feed(bytes)
+    } else if let theme_import_ui::ThemeImportUi::Entry(f) = &mut view.theme_import {
+        f.feed(bytes)
     } else {
-        let events = if let Some(f) = view.lane.custom_entry.as_mut() {
-            f.feed(bytes)
-        } else if let Some((_, f)) = view.lane.key_entry.as_mut() {
-            f.feed(bytes)
-        } else if let theme_import_ui::ThemeImportUi::Entry(f) = &mut view.theme_import {
-            f.feed(bytes)
-        } else {
-            return Ok(None);
-        };
-        for event in events {
-            match event {
-                input_field::FieldEvent::Cancel => {
-                    back(view);
+        return Ok(None);
+    };
+    for event in events {
+        match event {
+            input_field::FieldEvent::Cancel => {
+                back(view);
+                break;
+            }
+            input_field::FieldEvent::Submit(text) => {
+                let submitted = if view.lane.is_entry() {
+                    lane_entry::submit(view, text).await?
+                } else {
+                    theme_import_ui::submit(view, text)
+                };
+                if submitted {
                     break;
-                }
-                input_field::FieldEvent::Submit(text) => {
-                    let submitted = if view.lane.is_entry() {
-                        lane_entry::submit(view, text).await?
-                    } else {
-                        theme_import_ui::submit(view, text)
-                    };
-                    if submitted {
-                        break;
-                    }
                 }
             }
         }
@@ -327,8 +343,6 @@ pub(super) async fn run_action(
         AuxAction::SettingsBack => {
             back(view);
         }
-        AuxAction::KeyCapture(action) => keys_settings::open_capture(view, action),
-        AuxAction::EditKeysFile => keys_settings::edit_keys_file(view).await,
         // Edit and Add leave `lane.axis` alone, so back returns to the
         // level the user came from.
         AuxAction::LaneColorEdit(axis, key) => {

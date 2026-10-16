@@ -29,6 +29,7 @@
 //! in the payload, never in the exit code, because `verb_call` raises on a
 //! nonzero exit.
 use serde_json::{json, Value};
+use std::ffi::OsStr;
 use std::io::{IsTerminal, Read};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -105,7 +106,7 @@ pub fn cap_from_env() -> u32 {
         .unwrap_or(DEFAULT_POINTS_PER_MIN)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -253,6 +254,19 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
         .sum()
 }
 
+/// The fleet-wide hold deadline: this ledger's own, raised by the claims
+/// store's shared `gh-budget:fleet` row when another host recorded the
+/// refusal. Store trouble reads as no shared hold - fail-open, the same
+/// posture as an unreadable ledger; the local ledger still catches this
+/// machine's own refusals.
+fn shared_hold_until(now: i64) -> i64 {
+    crate::claim_store::budget_hold_read(None, now)
+        .ok()
+        .flatten()
+        .map(|(until, _, _)| until)
+        .unwrap_or(0)
+}
+
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.lock", path.display()))
 }
@@ -265,7 +279,19 @@ pub(crate) struct FileLock {
 }
 
 impl FileLock {
+    /// The panicking form, kept for the callers that own their own store and
+    /// have no degrade. The budget consult does NOT use this one; it takes
+    /// try_acquire.
     pub(crate) fn acquire(path: &Path) -> FileLock {
+        FileLock::try_acquire(path)
+            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()))
+    }
+
+    /// The fallible twin: None when the lock file cannot be created or
+    /// flocked (a read-only or uncreatable state directory). The budget
+    /// consult degrades to a lock-free read instead of aborting the process
+    /// on every gh call - the module's fail-open rule.
+    pub(crate) fn try_acquire(path: &Path) -> Result<FileLock, String> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -273,11 +299,12 @@ impl FileLock {
             .create(true)
             .append(true)
             .open(path)
-            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()));
-        unsafe {
-            libc::flock(handle.as_raw_fd(), libc::LOCK_EX);
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) };
+        if locked != 0 {
+            return Err(format!("cannot flock {}: {locked}", path.display()));
         }
-        FileLock { handle }
+        Ok(FileLock { handle })
     }
 }
 
@@ -361,7 +388,7 @@ fn refusal_line(verdict: &Verdict) -> String {
 /// so tests pass a temp path, a fixed clock, and a small cap.
 pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, state) = read_ledger(path);
 
     // Exempt shapes are admitted and write nothing: a version probe is not
@@ -378,7 +405,17 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
         };
     }
 
-    if now < ledger.backoff_until_ms {
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold.
+    let shared_until = if path == ledger_path().as_path() {
+        shared_hold_until(now)
+    } else {
+        0
+    };
+    let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
+
+    if now < backoff_until_ms {
         // One request per 30s as a half-open probe, so recovery gets noticed
         // instead of waited out; the rest are refused with cause `backoff`.
         if ledger.last_half_open_ms == 0 || now - ledger.last_half_open_ms >= HALF_OPEN_MS {
@@ -395,7 +432,7 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
                 refusal: None,
             };
         }
-        let retry_after_s = ((ledger.backoff_until_ms - now) / 1000).max(1);
+        let retry_after_s = ((backoff_until_ms - now) / 1000).max(1);
         let mut verdict = Verdict {
             admitted: false,
             cause: Some("backoff"),
@@ -439,22 +476,184 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
     }
 }
 
+/// The admit op's origin judgment. An agent-origin caller (a spawned worker,
+/// or an unattended claude thread whose supervisor stripped the identity) is
+/// held by the budget like any transport; the user's own typed verb is never
+/// held, and its verdict is read off the ledger without writing it.
+fn admit_for_origin(path: &Path, argv: &[String], now: i64, cap: u32, agent: bool) -> Verdict {
+    if !agent {
+        let (ledger, state) = read_ledger(path);
+        return Verdict {
+            admitted: true,
+            cause: None,
+            retry_after_s: 0,
+            points_60s: window_points(&ledger, now),
+            cap,
+            ledger: state,
+            refusal: None,
+        };
+    }
+    admit(path, argv, now, cap)
+}
+
+/// The one-door admission for Rust-side callers: `Some(refusal line)` when
+/// the fleet budget refuses this argv, None when it admits (including every
+/// ledger-trouble fail-open). Daemon reads carry no worker identity, so the
+/// Python proxy door exempts them by design; the consult happens here, at
+/// the transport every Rust gh read already passes.
+pub fn admit_fleet(argv: &[String]) -> Option<String> {
+    let verdict = admit(&ledger_path(), argv, now_ms(), cap_from_env());
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// GitHub traffic is gh itself or a loop-check adapter that wraps it.
+pub(crate) fn is_github_program(program: &OsStr) -> bool {
+    let Some(name) = std::path::Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    name == "gh" || crate::loopcheck::internal_gh_adapter(name)
+}
+
+/// Some(refusal line) when `program args` is GitHub traffic the fleet budget
+/// refuses now. None for every other program, every admit, and every
+/// disarmed unit-test build (admission_armed).
+pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    let argv: Vec<String> = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect();
+    admit_spawn_at(&ledger_path(), now_ms(), cap_from_env(), program, &argv)
+}
+
+/// admit_spawn for a caller whose origin is judged first: an agent-origin
+/// read is held by the budget, an attended user's never is. The door a
+/// Python adapter delegates to uses this in place of the origin-blind
+/// admission inside `bounded_read`.
+pub(crate) fn admit_spawn_for_origin(argv: &[String]) -> Option<String> {
+    if !admission_armed() {
+        return None;
+    }
+    let verdict = admit_for_origin(
+        &ledger_path(),
+        argv,
+        now_ms(),
+        cap_from_env(),
+        crate::spawn_gate_admission::gate_agent_origin(),
+    );
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// The same question with the ledger path, clock and cap injected, so tests
+/// pass a temp ledger. The argv carries the subcommand and arguments, NOT
+/// the program name - the shape admit_fleet already takes and points_for
+/// prices.
+pub(crate) fn admit_spawn_at(
+    path: &Path,
+    now: i64,
+    cap: u32,
+    program: &OsStr,
+    args: &[String],
+) -> Option<String> {
+    if !is_github_program(program) {
+        return None;
+    }
+    let verdict = admit(path, args, now, cap);
+    if verdict.admitted {
+        None
+    } else {
+        verdict.refusal
+    }
+}
+
+/// admit_spawn for an already-built Command: the program and args come off
+/// the command, so a transport admits without knowing what it was handed.
+/// The program check runs before any argv copy: the transports carry every
+/// git read too, and those must stay allocation-free.
+pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
+    if !admission_armed() || !is_github_program(cmd.get_program()) {
+        return None;
+    }
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    admit_spawn_at(
+        &ledger_path(),
+        now_ms(),
+        cap_from_env(),
+        cmd.get_program(),
+        &args,
+    )
+}
+
+/// The refusal as a finished child: exit 75 (the Python door's REFUSED),
+/// empty stdout, the ledger line on stderr. A caller folds it into its
+/// existing "gh failed" path with no new handling.
+pub(crate) fn refused_output(line: String) -> std::process::Output {
+    std::process::Output {
+        status: std::os::unix::process::ExitStatusExt::from_raw(75 << 8),
+        stdout: Vec::new(),
+        stderr: line.into_bytes(),
+    }
+}
+
+/// Command::output() behind the budget: the door for a direct gh spawn. A
+/// refusal never spawns a child; everything else is the command's own output.
+pub(crate) fn output(mut cmd: std::process::Command) -> std::io::Result<std::process::Output> {
+    if let Some(line) = admit_command(&cmd) {
+        return Ok(refused_output(line));
+    }
+    cmd.output()
+}
+
+/// Whether the in-process consult is armed. A unit-test build runs dozens of
+/// gh-named stubs in one process, and their aggregate stamps would exhaust
+/// (or inherit a hold from) the operator's machine-wide ledger - the stubs
+/// are not GitHub traffic. The consult disarms there; budget behavior is
+/// tested at admit()/record_refusal() with injected paths and clocks, and a
+/// test that wants the transport consult live opts in with
+/// FNO_GH_BUDGET_TEST_ARMED.
+pub(crate) fn admission_armed() -> bool {
+    !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
+}
+
 /// A GitHub refusal reached one caller. One fleet-wide backoff opens in the
 /// ledger, escalating while refusals stay within 900s of each other. A no-op
 /// while a backoff is already live, so two writers reporting one refusal
 /// widen nothing.
 pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
-    let _lock = FileLock::acquire(&lock_path(path));
+    let _lock = FileLock::try_acquire(&lock_path(path));
     let (mut ledger, _) = read_ledger(path);
     if now < ledger.backoff_until_ms {
         return Ok(());
     }
     // 0 is the "never" sentinel, not the epoch: a first refusal must not
-    // escalate off an unset field.
-    let escalated =
-        ledger.last_refusal_ms > 0 && now - ledger.last_refusal_ms <= ESCALATION_WINDOW_MS;
+    // escalate off an unset field. The shared row's history counts even
+    // after its deadline expires, so refusals alternating hosts inside the
+    // window keep escalating instead of restarting at the base cooldown.
+    let (shared_step, shared_last) = if path == ledger_path().as_path() {
+        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    let last_refusal = ledger.last_refusal_ms.max(shared_last);
+    let escalated = last_refusal > 0 && now - last_refusal <= ESCALATION_WINDOW_MS;
     ledger.backoff_step = if escalated {
-        ledger.backoff_step + 1
+        ledger.backoff_step.max(shared_step) + 1
     } else {
         0
     };
@@ -462,16 +661,40 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
     ledger.last_refusal_ms = now;
-    write_ledger(path, &ledger, now)
+    write_ledger(path, &ledger, now)?;
+    // The hold is fleet-wide: GitHub limits the user, not the machine, so
+    // the backoff rides the claims store's shared row for the other hosts.
+    // Rides only the REAL ledger (tests stage temp paths); store trouble is
+    // a printed note, never a failure of the local record.
+    if path == ledger_path().as_path() {
+        if let Err(e) = crate::claim_store::budget_hold_write(
+            None,
+            &crate::claims::machine_id(),
+            ledger.backoff_until_ms,
+            ledger.backoff_step,
+            ledger.last_refusal_ms,
+        ) {
+            eprintln!("gh-budget: fleet hold not shared: {e}");
+        }
+    }
+    Ok(())
 }
 
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
+    // The shared hold rides only the REAL ledger (see admit): tests stage
+    // temp paths and must not read the dev machine's fleet hold.
+    let shared_until = if path == ledger_path().as_path() {
+        shared_hold_until(now)
+    } else {
+        0
+    };
+    let until = ledger.backoff_until_ms.max(shared_until);
     Snapshot {
         points_60s: window_points(&ledger, now),
         cap: cap_from_env(),
-        backoff_remaining_s: ((ledger.backoff_until_ms - now).max(0)) / 1000,
+        backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
     }
 }
@@ -552,7 +775,16 @@ fn dispatch_op(payload: &Value) -> i32 {
                         .collect()
                 })
                 .unwrap_or_default();
-            let v = admit(&ledger_path(), &argv, now, cap_from_env());
+            // The op is the one place the Python doors' origin is judged;
+            // Rust transports keep charging daemon reads through
+            // admit/admit_fleet unchanged.
+            let v = admit_for_origin(
+                &ledger_path(),
+                &argv,
+                now,
+                cap_from_env(),
+                crate::spawn_gate_admission::gate_agent_origin(),
+            );
             println!(
                 "{}",
                 json!({
@@ -653,6 +885,32 @@ mod tests {
     }
 
     #[test]
+    fn admit_op_holds_agent_callers_and_never_the_user() {
+        // AC1-HP / AC1-ERR: at cap, an agent-origin admit refuses `budget`;
+        // the user's read admits and the ledger file is untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        let read = argv(&["pr", "view", "1", "--json", "state"]);
+        let v = admit(&path, &read, now, 1);
+        assert!(v.admitted, "the staging read is admitted: {v:?}");
+        let before = std::fs::read(&path).unwrap();
+
+        let v = admit_for_origin(&path, &read, now, 1, false);
+        assert!(v.admitted);
+        assert_eq!(v.points_60s, 1);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a user admit writes nothing"
+        );
+
+        let v = admit_for_origin(&path, &read, now, 1, true);
+        assert!(!v.admitted);
+        assert_eq!(v.cause, Some("budget"));
+    }
+
+    #[test]
     fn admit_on_a_corrupt_ledger_admits_and_rewrites_it() {
         // AC1-ERR: unreadable ledger fails open, and the next stamping write
         // replaces the junk with valid JSON.
@@ -746,5 +1004,324 @@ mod tests {
         record_refusal(&path, t0 + 61_500 + 120_000 + 1_000_000).unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_step, 0);
+    }
+
+    #[test]
+    fn admit_spawn_refuses_github_programs_only() {
+        // A live backoff with the half-open probe spent (the shape the
+        // 2026-10-15 fleet repro seeded): every 1-point gh ask refuses,
+        // other programs never consult the ledger, and a 0-point gh shape
+        // admits without a write.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":1760000600000,"backoff_step":0,"last_refusal_ms":1759999540000,"last_half_open_ms":1760000000000}"#,
+        )
+        .unwrap();
+        let gh = std::ffi::OsStr::new("gh");
+        let args = &["api".to_string(), "user".to_string()];
+        let line = admit_spawn_at(&path, now, 450, gh, args).expect("gh refuses under the backoff");
+        assert!(line.contains("gh budget:"), "line: {line}");
+
+        // An absolute path and the internal coverage adapter are the same
+        // traffic under other names.
+        let abs = std::ffi::OsStr::new("/opt/homebrew/bin/gh");
+        assert!(
+            admit_spawn_at(&path, now, 450, abs, args).is_some(),
+            "an absolute gh path refuses too"
+        );
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        let pr_view = &["pr".to_string(), "view".to_string()];
+        assert!(
+            admit_spawn_at(&path, now, 450, adapter, pr_view).is_some(),
+            "the coverage adapter refuses too"
+        );
+
+        // git never reaches the ledger; `gh --version` is a 0-point shape
+        // that admits untouched. Neither writes a stamp.
+        let before = std::fs::read(&path).unwrap();
+        let git = std::ffi::OsStr::new("git");
+        assert!(admit_spawn_at(&path, now, 450, git, &["status".to_string()]).is_none());
+        assert!(admit_spawn_at(&path, now, 450, gh, &["--version".to_string()]).is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "no stamp for either");
+    }
+
+    // --- the guard against a new bare gh spawn ------------------------------
+
+    /// One production line carrying a bare gh constructor:
+    /// `Command::new("gh")`, `Command::new(&gh)`, `Command::new(gh)`, or
+    /// `Command::new("fno-gh-<lowercase>")`. Hand-rolled over the line text
+    /// so the gate needs no regex dependency.
+    fn bare_gh_constructor(line: &str) -> bool {
+        let Some(pos) = line.find("Command::new(") else {
+            return false;
+        };
+        let rest = line[pos + "Command::new(".len()..].trim_start();
+        let rest = match rest.strip_prefix('&') {
+            Some(r) => r.trim_start(),
+            None => rest,
+        };
+        let after = if let Some(quoted) = rest.strip_prefix('"') {
+            let Some(end) = quoted.find('"') else {
+                return false;
+            };
+            let name = &quoted[..end];
+            let named = name == "gh"
+                || (name.starts_with("fno-gh-")
+                    && name["fno-gh-".len()..]
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase()));
+            if !named {
+                return false;
+            }
+            &quoted[end + 1..]
+        } else {
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if ident != "gh" {
+                return false;
+            }
+            &rest[ident.len()..]
+        };
+        after.trim_start().starts_with(')')
+    }
+
+    /// The cfg(test) items cut out by brace depth, the skipper
+    /// scripts/ci/check-mux-process-admission.sh uses. Returns (number,
+    /// line) so hits keep their on-disk line numbers.
+    fn production_lines(source: &str) -> Vec<(usize, String)> {
+        let mut kept = Vec::new();
+        let mut pending_test_item = false;
+        let mut skip_depth: i64 = 0;
+        for (idx, line) in source.lines().enumerate() {
+            let stripped = line.trim();
+            if skip_depth > 0 {
+                skip_depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if skip_depth <= 0 {
+                    skip_depth = 0;
+                }
+                continue;
+            }
+            if pending_test_item {
+                if stripped.is_empty() || stripped.starts_with("//") {
+                    continue;
+                }
+                pending_test_item = false;
+                let depth = line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                if depth > 0 {
+                    skip_depth = depth;
+                }
+                continue;
+            }
+            if stripped == "#[cfg(test)]" {
+                pending_test_item = true;
+                continue;
+            }
+            kept.push((idx + 1, line.to_string()));
+        }
+        kept
+    }
+
+    fn fn_name_of(line: &str) -> Option<String> {
+        let pos = line.find("fn ")?;
+        let rest = &line[pos + 3..];
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if ident.is_empty() {
+            None
+        } else {
+            Some(ident)
+        }
+    }
+
+    /// Every production `Command::new(gh...)` whose enclosing fn reaches no
+    /// admitting sink (`gh_budget::output(` or `bounded_cmd::output_with_timeout`),
+    /// minus the allowlist. Pure over the source so a mutated fixture can
+    /// drive it, in the shape `direct_wait_bypasses` established.
+    fn bare_gh_spawns(rel_path: &str, source: &str) -> Vec<String> {
+        // Test files carry gh-named stubs by design; the walk skips them.
+        if rel_path.contains("/tests/")
+            || rel_path.ends_with("tests.rs")
+            || rel_path.ends_with("_tests.rs")
+        {
+            return Vec::new();
+        }
+        let lines = production_lines(source);
+        let hit_idxs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            // A comment never spawns; a doc aside quoting the constructor
+            // must not read as a violation.
+            .filter(|(_, (_, line))| {
+                !line.trim_start().starts_with("//") && bare_gh_constructor(line)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut violations = Vec::new();
+        for &idx in &hit_idxs {
+            // The fn runs from the last `fn ` line at or above the hit to
+            // the next `fn ` line below it; the file top counts as one fn.
+            // Comment lines never bound a fn: a `// fn foo()` aside must not
+            // cut the body short of its admitting sink.
+            let is_code = |l: &String| !l.trim_start().starts_with("//");
+            let mut start = 0usize;
+            let mut fn_name = String::new();
+            for i in (0..=idx).rev() {
+                if !is_code(&lines[i].1) {
+                    continue;
+                }
+                if let Some(name) = fn_name_of(&lines[i].1) {
+                    start = i;
+                    fn_name = name;
+                    break;
+                }
+            }
+            let mut end = lines.len();
+            for i in (idx + 1)..lines.len() {
+                if is_code(&lines[i].1) && lines[i].1.contains("fn ") {
+                    end = i;
+                    break;
+                }
+            }
+            let body = lines[start..end]
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let behind_sink = body.contains("gh_budget::output(")
+                || body.contains("bounded_cmd::output_with_timeout");
+            // Allowlist (one site, one reason each):
+            // - crates/fno/src/setup_run.rs step_gh_auth: the `fno` crate
+            //   cannot depend on fno-agents, and the one-time `gh auth
+            //   status` probe carries no fleet identity (a human runs setup
+            //   once).
+            // - fno-agents/src/merge_hold.rs disarm_automerge: the emergency
+            //   auto-merge disarm must reach GitHub even under a fleet hold;
+            //   an armed queue merging server-side is the outcome the hold
+            //   exists to prevent.
+            // - fno-agents/src/merge_verb/mod.rs disarm_queued_auto_merge:
+            //   the check-stage port of the same emergency stop, same reason.
+            let allowlist = [
+                ("fno/src/setup_run.rs", "step_gh_auth"),
+                ("fno-agents/src/merge_hold.rs", "disarm_automerge"),
+                (
+                    "fno-agents/src/merge_verb/mod.rs",
+                    "disarm_queued_auto_merge",
+                ),
+            ];
+            let allowlisted = allowlist
+                .iter()
+                .any(|(p, f)| rel_path == *p && fn_name == *f);
+            if !behind_sink && !allowlisted {
+                let (number, line) = &lines[idx];
+                violations.push(format!("{rel_path}:{number}: {line}"));
+            }
+        }
+        violations
+    }
+
+    fn literal_hits(source: &str) -> Vec<(usize, String)> {
+        production_lines(source)
+            .into_iter()
+            .filter(|(_, line)| !line.trim_start().starts_with("//") && bare_gh_constructor(line))
+            .collect()
+    }
+
+    fn rs_files_under(
+        dir: &std::path::Path,
+        rel_base: &std::path::Path,
+        out: &mut Vec<(String, String)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rs_files_under(&path, rel_base, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let rel = path
+                    .strip_prefix(rel_base)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    out.push((rel, source));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_gh_spawn_sits_behind_the_budget_seam() {
+        // (c) Every transport still carries its admission call in the
+        // production half: a removed consult fails here before a spawn can
+        // slip past it.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let transports = [
+            "src/bounded_cmd.rs",
+            "src/gate_probes.rs",
+            "src/org_board/budget.rs",
+            "src/loopcheck/bounded_run.rs",
+            "src/pr_draft_ready.rs",
+            "src/backlog/pr_link.rs",
+            "src/operator_notice.rs",
+        ];
+        for rel in transports {
+            let path = manifest.join(rel);
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let prod_text = production_lines(&source)
+                .iter()
+                .map(|(_, l)| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prod_text.contains("gh_budget::admit_"),
+                "transport {rel} lost its fleet-budget admission"
+            );
+        }
+
+        let crates_dir = manifest.parent().unwrap().to_path_buf();
+        let mut files = Vec::new();
+        rs_files_under(&manifest.join("src"), &crates_dir, &mut files);
+        rs_files_under(&crates_dir.join("fno/src"), &crates_dir, &mut files);
+
+        let mut raw = 0usize;
+        let mut violations = Vec::new();
+        for (rel_path, source) in &files {
+            raw += literal_hits(source).len();
+            violations.extend(bare_gh_spawns(rel_path, source));
+        }
+        // (b) A wrong haystack must not read clean: the walk on the real
+        // tree finds well over a dozen literal gh constructors.
+        assert!(
+            raw >= 12,
+            "the haystack decayed: only {raw} literal gh constructors found"
+        );
+
+        // (a) The scanner refuses a bare fn and passes the same fn behind
+        // the door.
+        let bare = "fn f() {\n    std::process::Command::new(\"gh\").args([\"api\", \"x\"]).output();\n}\n";
+        assert_eq!(bare_gh_spawns("x.rs", bare).len(), 1, "bare fn is a hit");
+        let behind = "fn f() {\n    let cmd = std::process::Command::new(\"gh\");\n    let _ = crate::gh_budget::output(cmd);\n}\n";
+        assert!(
+            bare_gh_spawns("x.rs", behind).is_empty(),
+            "fn behind the door passes"
+        );
+
+        assert!(
+            violations.is_empty(),
+            "bare gh spawns outside the fleet budget seam:\n{}\n\
+             route each through crate::gh_budget::output or a bounded_cmd \
+             transport, or add an allowlist entry with a reason",
+            violations.join("\n")
+        );
     }
 }

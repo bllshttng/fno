@@ -2190,10 +2190,12 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
     .await;
 }
 
-/// With no fenced tokens, worker resilience defaults reach the frame while
-/// the registry stores no synthetic harness arguments.
+/// With no fenced tokens, the frame carries no synthetic config at all while
+/// the registry stores no synthetic harness arguments. The lane injects
+/// nothing: codex 0.162 refuses any `model_providers.openai` override at
+/// config load (built-in providers are not overridable).
 #[tokio::test(flavor = "current_thread")]
-async fn codex_thread_spawn_without_harness_args_keeps_todays_frames() {
+async fn codex_thread_spawn_without_harness_args_sends_no_synthetic_config() {
     let behavior = crate::codex_fake_daemon::Behavior::quick();
     let received = std::sync::Arc::clone(&behavior.received);
     with_fake_codex_daemon(behavior, async {
@@ -2209,13 +2211,15 @@ async fn codex_thread_spawn_without_harness_args_keeps_todays_frames() {
             .find(|f| f["method"] == "thread/start")
             .and_then(|f| f.get("params").cloned())
             .expect("a thread/start frame");
-        assert_eq!(
-            start["config"],
-            json!({
-                "model_providers.openai.stream_max_retries": 20,
-                "model_providers.openai.stream_idle_timeout_ms": 600_000
-            }),
-            "unfenced workers receive only the resilience defaults: {start}"
+        // An empty carry config rides as an ABSENT key (the frame stays
+        // byte-identical to the pre-config form), so absence is the assert.
+        assert!(
+            start.get("config").is_none(),
+            "unfenced workers receive no synthetic config: {start}"
+        );
+        assert!(
+            !start.to_string().contains("model_providers"),
+            "a spawned config never names model_providers: {start}"
         );
 
         let registry = load_registry_offloaded(home.registry_json())

@@ -152,19 +152,32 @@ def scan_unread(
     (cv-d54ddd45). By-name reads pass ``exclude_from=None`` (a direct address is
     never a self-echo).
     """
-    from fno.bus.log import withdrawn_ids
+    from fno.bus.log import HOSTED_DELIVERY, dedupe_by_id, withdrawn_ids
 
     cursor = read_cursor(name)
     msgs = list(iter_messages(warn=warn)) if messages is None else messages
-    excl = exclude_from or set()
+    # Both id-sets read the RAW list: the dedupe below keeps the first row per
+    # id, which would drop a receipt row whose staged twin came first.
     # A withdrawn message is never delivered, and neither is its tombstone.
     # Applied here because this is the choke point for seven readers (drain-self,
-    # held-job, `mail unread`, notify-self, the nudge, `agent ask`, doctor); the
-    # two that read `iter_messages` directly - the sender's own unclaimed nag and
-    # the relay - filter separately and are tested separately. A filter on one of
-    # three paths would leave the nag firing on a message the sender retracted,
-    # which is the symptom withdrawal exists to end.
+    # held-job, `mail unread`, the turn-boundary delivery, the nudge, `agent ask`,
+    # doctor); the two that read `iter_messages` directly - the sender's own
+    # unclaimed nag and the relay - filter separately and are tested separately.
+    # A filter on one of three paths would leave the nag firing on a message the
+    # sender retracted, which is the symptom withdrawal exists to end.
     retracted = withdrawn_ids(msgs)
+    # A hosted receipt supersedes the staged body row that shares its id: the
+    # receipt proves the inject confirmed, so the transcript already carries the
+    # body and a drain must not print the twin. A typed receipt does NOT
+    # supersede (pane bytes are not proven consumed; the staged row is the
+    # recovery when the pane discarded them).
+    superseded = {m.id for m in msgs if m.delivery == HOSTED_DELIVERY}
+    # One row per id, first in log order wins: a staged body row and its
+    # durable fallback twin share an id, and without this the twin seated past
+    # an acked cursor re-surfaces on every later drain as a skipped-duplicate
+    # marker that never converges.
+    msgs = dedupe_by_id(msgs)
+    excl = exclude_from or set()
 
     def _mine(m: Envelope) -> bool:
         if m.to != name:
@@ -172,6 +185,8 @@ def scan_unread(
         if not is_deliverable(m):
             return False
         if m.id in retracted:
+            return False
+        if m.id in superseded:
             return False
         if excl and (m.from_ in excl or (m.from_session and m.from_session in excl)):
             return False

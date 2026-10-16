@@ -86,13 +86,13 @@
 #      self_stamp.py's identity-ambiguity remedy likewise NAMES the Codex and
 #      Claude transcript roots so an operator can locate the conflicting
 #      session marker. It constructs and writes no path there.
-#      review_capability.py's `requires: skill` predicate globs the two roots
-#      Claude resolves a bare skill name from (~/.claude/skills and
-#      <cwd>/.claude/skills) to answer "is this registered reviewer's skill
-#      installed here" at init. Read-only `is_dir`/`is_file` probes against
-#      Claude Code's OWN skill dirs; footnote stores nothing there, and an
-#      unreadable root resolves `unverifiable` rather than being reported
-#      absent.
+#      The native skill-presence probe (dispatch_resolve.rs `skill_presence`,
+#      shared by the capability door) globs the two roots Claude resolves a
+#      bare skill name from (~/.claude/skills and <cwd>/.claude/skills) to
+#      answer "is this registered reviewer's skill installed here" at init.
+#      Read-only `is_dir`/`is_file` probes against Claude Code's OWN skill
+#      dirs; footnote stores nothing there, and an unreadable root resolves
+#      `unverifiable` rather than being reported absent.
 #      usage.py joins for the same reason account_env.py already is: its
 #      shared-slot probe resolves the CANONICAL ~/.claude to read Claude
 #      Code's own credential for the stamped active account. It must be the
@@ -155,7 +155,7 @@
 #      not footnote state (the Rust leg of the wizard adapter,
 #      dual-implementation-inventory 2026-10-02). Its test builds the same
 #      tree under temp_dir as a fixture and asserts on that.
-#      claude-config-write-guard.sh is the PreToolUse write guard for the
+#      hooks/write-gate.sh is the PreToolUse write gate for the
 #      same dir: the config dir IS the thing being guarded, so every token
 #      it matches (the ambient root, CLAUDE_CONFIG_DIR, the regex-quoted
 #      arms) names its subject on purpose. Comparison only; it writes
@@ -163,6 +163,9 @@
 #      crates/fno-agents/src/backlog/birth.rs joins ~/.claude/projects to
 #      birth a session row from the harness's own transcript tree: read-only,
 #      the same category as transcript_tail.rs. Footnote stores nothing there.
+#      crates/fno-agents/src/backlog/maintenance.rs parses a node's
+#      cwd for the `/.claude/worktrees/` segment to name its repo. String
+#      parsing of a path the harness made; it writes nothing there.
 #      crates/fno-agents/src/plans_path.rs reads the project's
 #      .claude/settings.local.json / .claude/settings.json - the
 #      plansDirectory tier of the plans-dir chain, i.e. Claude Code's own
@@ -171,6 +174,11 @@
 #      crates/fno-agents/src/eval_part4.rs answers over the plans-dir
 #      chain and its inline test writes the same tempdir fixture copy of
 #      Claude Code's own settings.local.json. Nothing accumulates there.
+#      crates/fno-agents/src/review_capability.rs probes skill presence
+#      through dispatch_resolve's root set, and its inline test builds a
+#      tempdir .claude/skills fixture root so the absent/unverifiable
+#      boundary is hermetic. Read-only against real roots; nothing
+#      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
 #      removes the hook entry cli_hooks.py merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
@@ -297,7 +305,12 @@ crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
-cli/src/fno/backlog/advance.py
+crates/fno-agents/src/backlog/dispatch_resolve.rs
+crates/fno-agents/src/backlog/autobrief.rs
+crates/fno-agents/src/backlog/advance_join.rs
+crates/fno-agents/src/backlog/maintenance.rs
+crates/fno-agents/src/backlog/maintenance_tests.rs
+crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py
@@ -305,21 +318,18 @@ cli/src/fno/cost/_session_cost.py
 cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
-cli/src/fno/graph/maintain.py
 cli/src/fno/inbox/drain.py
 cli/src/fno/observer/isolation.py
 cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/daemon.py
 cli/src/fno/relay/registry.py
 cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
-cli/src/fno/review_capability.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
 cli/src/fno/scoreboard/fold.py
@@ -380,7 +390,8 @@ crates/fno/src/connections_view.rs
 crates/fno/src/transcript_tail.rs
 hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
-hooks/claude-config-write-guard.sh
+hooks/write-gate.sh
+crates/fno-agents/src/hook/write_gate.rs
 hooks/corrections-git-postcommit.sh
 hooks/lead-delegation-guard.sh
 hooks/session-start.sh

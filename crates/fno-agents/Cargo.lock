@@ -1119,6 +1119,7 @@ dependencies = [
  "throbber-widgets-tui",
  "tokio",
  "toml",
+ "toml_edit",
  "unicode-width",
 ]
 

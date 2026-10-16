@@ -26,7 +26,7 @@ pub(super) fn conflicting_reason(pr: &PrInfo) -> Option<String> {
     Some(format!(
         "PR #{} is CONFLICTING at {}. A conflicting PR has no merge ref, so GitHub \
          starts no new check run on this head, and any check already on it ran \
-         before the base moved. Rebase onto the base (`fno do pr rebase`), push, \
+         before the base moved. Integrate the base (`fno do pr push`), \
          then re-arm the wait.",
         pr.number,
         short_sha(&pr.head_oid)
@@ -139,7 +139,7 @@ pub(super) fn merge_slot_reason(
     if pr.base_behind {
         return Some(format!(
             "PR #{}: the base moved past this head while PR #{} holds the merge \
-             slot - rebase onto the base (`fno do pr rebase`), push, then re-check.",
+             slot - integrate the base (`fno do pr push`), then re-check.",
             pr.number, holder
         ));
     }
@@ -168,7 +168,7 @@ pub(super) fn merge_slot_reason(
 /// The bound uses shell builtins, never `timeout(1)`: the plugin must work on
 /// hosts where that binary (and `gtimeout`) is absent, so naming it makes the
 /// watcher no-op and the session idle forever on a wait that never started.
-/// The watchdog is reaped once the wait returns - left alive, it wakes 30m
+/// The watchdog is reaped once the wait returns - left alive, it wakes 15m
 /// later and kills whatever now holds that recycled pid (codex P1).
 pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
     // The watcher must WAIT on the actual blocker (codex P2): a review wait
@@ -185,25 +185,25 @@ pub(super) fn arm_watch_hint(pr_number: i64, blocker: &str) -> String {
     // wedged the very turn this hint was trying to unblock.
     let watcher = if blocker == "review" {
         format!(
-            "background Bash `fno do pr wait {pr_number} --until review --timeout=30m` (wakes when a new review posts, or after ~30m)"
+            "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m)"
         )
     } else if blocker == "merge_slot" {
         // No checks are pending on THIS PR, so a settled watcher would exit
         // instantly and the session would just re-block (codex P2, the same
         // trap the review arm dodges). The slot frees OUTSIDE this PR - the
         // holder merges, closes, goes red, or its lease ends - so the review
-        // watcher's 30m bound is the honest heartbeat: each wake re-evaluates
+        // watcher's 15m bound is the honest heartbeat: each wake re-evaluates
         // the hold and re-arms while it lasts.
         format!(
-            "background Bash `fno do pr wait {pr_number} --until review --timeout=30m` (wakes when a new review posts, or after ~30m; the slot frees outside this PR, so the bound is the heartbeat)"
+            "background Bash `fno do pr wait {pr_number} --until review --timeout=15m` (wakes when a new review posts, or after ~15m; the slot frees outside this PR, so the bound is the heartbeat)"
         )
     } else {
         format!(
-            "background Bash `fno do pr wait {pr_number} --until settled --timeout=30m` (wakes when CI settles - green or red - or after ~30m)"
+            "background Bash `fno do pr wait {pr_number} --until settled --timeout=15m` (wakes when CI settles - green or red - or after ~15m)"
         )
     };
     format!(
-        "{ARM_HINT_LEAD} with a hard timeout (e.g. {watcher}), then end your turn with `<watching reason=\"{blocker}\" pr=\"{pr_number}\" timeout=\"30m\">` and nothing else - the session then idles until the watcher exits."
+        "{ARM_HINT_LEAD} with a hard timeout (e.g. {watcher}), then end your turn with `<watching reason=\"{blocker}\" pr=\"{pr_number}\" timeout=\"15m\">` and nothing else - the session then idles until the watcher exits."
     )
 }
 
@@ -264,16 +264,16 @@ mod tests {
         assert_eq!(async_wait_class(&pr, true, true), None);
         let reason = build_block_reason(&pr, "abc", true, true);
         assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr rebase"), "got: {reason}");
+        assert!(reason.contains("fno do pr push"), "got: {reason}");
         assert!(reason.contains("no new check run"), "got: {reason}");
         assert!(reason.contains("before the base moved"), "got: {reason}");
     }
 
     #[test]
-    fn block_reason_names_the_rebase_not_a_wait() {
+    fn block_reason_names_the_push_not_a_wait() {
         let reason = build_block_reason(&conflicting_pr(), "abc", true, true);
         assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr rebase"), "got: {reason}");
+        assert!(reason.contains("fno do pr push"), "got: {reason}");
         assert!(!reason.contains("CI still running"), "got: {reason}");
         assert!(
             !reason.contains("declare ci.declared_none"),
@@ -352,15 +352,15 @@ mod tests {
     }
 
     #[test]
-    fn behind_base_refuses_the_idle_and_names_the_rebase() {
-        // The actionable half of the node: a BEHIND base is rebase work to do
-        // now, so the hold must not idle, and the block reason must teach the
-        // rebase rather than the arm-and-tag ritual.
+    fn behind_base_refuses_the_idle_and_names_the_integrate() {
+        // The actionable half of the node: a BEHIND base is integrate work to
+        // do now, so the hold must not idle, and the block reason must teach
+        // the integrate rather than the arm-and-tag ritual.
         let mut pr = held_green_pr();
         pr.base_behind = true;
         assert_eq!(async_wait_class(&pr, true, true), None);
         let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("rebase"), "got: {reason}");
+        assert!(reason.contains("integrate the base"), "got: {reason}");
         assert!(
             !reason.contains("<watching"),
             "actionable hold must not teach the ritual: {reason}"

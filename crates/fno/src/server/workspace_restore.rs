@@ -21,8 +21,8 @@ struct RebindJob {
 /// the core loop runs on. A loop-less context (a unit test driving
 /// `Core::handle` directly) has none, so it skips the rebind and replies
 /// inline - the same shape the restore tests asserted before this door
-/// existed.
-fn rebind_runtime_ready() -> bool {
+/// existed. Shared with the gesture's single-row rebind.
+pub(super) fn rebind_runtime_ready() -> bool {
     tokio::runtime::Handle::try_current().is_ok()
 }
 
@@ -246,6 +246,7 @@ impl super::Core {
                     squad,
                     tab,
                     notice,
+                    ..
                 } => RestoreRow {
                     member: name,
                     harness: harness_name,

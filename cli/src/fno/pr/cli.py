@@ -117,10 +117,7 @@ pr_app.add_typer(attestation_app, name="attestation", hidden=True)
     ),
 )
 def merge(ctx: typer.Context) -> None:
-    from fno.pr import _merge
-
-    rc = _merge.run_merge(list(ctx.args))
-    raise typer.Exit(code=rc)
+    _forward_to_binary("authorized-merge", ["merge", *ctx.args])
 
 
 @pr_app.command(
@@ -137,13 +134,10 @@ def verify(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number"),
     state_file: str = typer.Option(..., "--state-file", help="Path to target-state.md"),
 ) -> None:
-    from fno.pr import _verify
-
-    if kind is VerifyKind.merged:
-        rc = _verify.run_verify_merged(str(pr_number), state_file)
-    else:
-        rc = _verify.run_verify_reviews(str(pr_number), state_file)
-    raise typer.Exit(code=rc)
+    _forward_to_binary(
+        "pr-verify",
+        ["--kind", kind.value, "--pr-number", str(pr_number), "--state-file", state_file],
+    )
 
 
 @pr_app.command(
@@ -192,8 +186,8 @@ def status(
         "wakes when a new review posts on the PR. N waiters on "
         "one PR cost one network read per cache TTL, a rate-limit backoff is "
         "ridden out rather than hammered, and the gh-call count prints at "
-        "exit. --timeout (30m default) exits with the last observed code and "
-        "a still-unsettled note. A CONFLICTING PR refuses with exit 5 and a "
+        "exit. --timeout (15m default) exits with the last observed code and "
+        "a still-unsettled note. Red cancels the head's runs, exits 1; CONFLICTING exits 5 with a "
         "rebase receipt. Use this instead of a hand-rolled "
         "`while/sleep/grep` loop - every such loop is an uncoordinated poll "
         "against a quota the whole machine shares."
@@ -203,9 +197,9 @@ def wait(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
     until: str = typer.Option(
         "settled", "--until",
-        help="Exit when: settled (any terminal verdict), green, or a new review posts.",
+        help="settled (terminal, or red at once), red (fail fast), green (every check), review.",
     ),
-    timeout: str = typer.Option("30m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
+    timeout: str = typer.Option("15m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
     interval: str = typer.Option("60", "--interval", help="Poll interval in seconds (minimum 5)."),
 ) -> None:
     _forward_to_binary(
@@ -417,7 +411,7 @@ def heal(
     help=(
         "Refuse a PR whose branch base is > 24h of main history behind "
         "origin/main (phantom-deletion guard). Exit 0 fresh|bypass|fail-open, "
-        "3 stale (points at `fno do pr rebase`), 4 unrelated histories. Bypass "
+        "3 stale (points at the git merge origin/main fix), 4 unrelated histories. Bypass "
         "with FNO_PR_BASE_OK=stale-acknowledged (emits gate_escape)."
     ),
 )
@@ -426,10 +420,7 @@ def base_check(
         "origin/main", "--base", help="Base ref to compare the branch against"
     ),
 ) -> None:
-    from fno.pr import _preflight
-
-    rc = _preflight.run_base_check(base=base)
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-check", ["--base", base])
 
 
 @pr_app.command(
@@ -445,15 +436,7 @@ def base_check(
 def base_lineage_check(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
 ) -> None:
-    from fno.pr import _base_lineage
-    from fno.pr._proc import ToolMissing
-
-    try:
-        rc = _base_lineage.run_base_lineage_check(pr_number)
-    except ToolMissing as exc:
-        typer.echo(f"fno do pr base-lineage-check: {exc.tool} not found on PATH", err=True)
-        rc = 127
-    raise typer.Exit(code=rc)
+    _forward_to_binary("pr-base-lineage-check", [str(pr_number)])
 
 
 @pr_app.command(
@@ -466,9 +449,7 @@ def base_lineage_check(
     ),
 )
 def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR number")) -> None:
-    from fno.pr import _merge_result
-
-    raise typer.Exit(code=_merge_result.run_merge_result_check(pr_number))
+    _forward_to_binary("pr-merge-result-check", [str(pr_number)])
 
 
 @pr_app.command(
@@ -717,18 +698,10 @@ def hold_check(
     repo: Optional[str] = typer.Option(None, "--repo", help="Repository working directory."),
 ) -> None:
     """Refuse a PR whose bound plan ancestry carries an active or unreadable hold."""
-    from fno.pr import _hold, _review_hold
-
-    worktree = _review_hold.resolve_pr_worktree(pr_number, repo or os.getcwd())
-    # "" = no local worktree on the PR branch. The hold reader is
-    # graph-resident and runs from the caller's checkout (its cwd only
-    # resolves the canonical root), so an empty path hands it that checkout -
-    # a graph-bound hold still gates a PR that is not checked out here.
-    reason = _hold.merge_hold_reason(pr_number, worktree or repo or os.getcwd())
-    if reason:
-        typer.echo(reason, err=True)
-        raise typer.Exit(code=3)
-    typer.echo(f"PR {pr_number}: no plan dispatch hold")
+    args = [str(pr_number)]
+    if repo:
+        args += ["--repo", repo]
+    _forward_to_binary("authorized-merge", ["hold-check", *args])
 
 
 @pr_app.command(
@@ -804,10 +777,25 @@ def global_receipt_events_path() -> None:
 def sync_canonical(
     pr_number: int = typer.Option(..., "--pr-number", help="GitHub PR number of the merged PR"),
 ) -> None:
-    from fno.pr import _sync_canonical
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    rc = _sync_canonical.run_sync_canonical(pr_number)
-    raise typer.Exit(code=rc)
+    try:
+        answer = verb_call(
+            "sync-canonical",
+            {"action": "sync", "cwd": os.getcwd(), "pr": pr_number},
+            timeout=900.0,
+        )
+    except VerbUnavailable as exc:
+        # The marker stays withheld, so the next reconcile retries.
+        typer.echo(
+            f"post-merge sync: native verb unavailable ({exc}); skipping", err=True
+        )
+        raise typer.Exit(code=1)
+    for line in answer.get("stdout") or []:
+        typer.echo(line)
+    for line in answer.get("stderr") or []:
+        typer.echo(line, err=True)
+    raise typer.Exit(code=int(answer.get("exit", 1)))
 
 
 @pr_app.command(
@@ -877,13 +865,13 @@ def rebase(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "The one guarded push: fetch, rebase onto origin/main, optionally preflight, "
-        "push exactly once, print one receipt. Refuses while a CI run on the "
-        "remote head is still in flight (--force-ci-cancel overrides and "
-        "records the bypass; --preflight opts into the local runner; "
-        "--no-preflight remains an accepted no-op. "
-        "Exit 0 pushed, 1 preflight red, 2 a run in flight, 3 a refusal the "
-        "caller must fix (protected branch, dirty tree, conflict), 4 a read "
-        "error, 127 binary missing."
+        "push exactly once, print one receipt. Refuses while a CI run on the remote "
+        "head is still in flight, unless the head's checks already carry a failure: "
+        "then it cancels that stale run, records the bypass row, and pushes with no "
+        "flag. A head with no red row is never cancelled. --no-preflight is an "
+        "accepted no-op; --force-ci-cancel still overrides. Exit 0 pushed "
+        "(ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, "
+        "3 a refusal the caller must fix (protected branch, dirty tree, conflict), 4 a read error, 127 binary missing."
     ),
 )
 def push(ctx: typer.Context) -> None:
@@ -923,12 +911,12 @@ def ritual(
         "when its inputs are non-empty. Mirrors the POST_MERGE_NONINTERACTIVE=1 env.",
     ),
 ) -> None:
-    from fno.pr import _ritual
-
-    if os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
-        autonomous = True
-    rc = _ritual.run_ritual(pr_number, autonomous)
-    raise typer.Exit(code=rc)
+    args: list[str] = []
+    if pr_number is not None:
+        args.append(str(pr_number))
+    if autonomous or os.environ.get("POST_MERGE_NONINTERACTIVE", "") == "1":
+        args.append("--autonomous")
+    _forward_to_binary("pr-watch", ["ritual", *args])
 
 
 @pr_app.command(
@@ -956,71 +944,10 @@ def closure_trailer(
         "contained_in descendants (repeatable).",
     ),
 ) -> None:
-    from fno.graph.api import wire_rows
-    from fno.paths import graph_json
-    from fno.pr.closure import render_pr_closure_trailer
-    from fno.tracker import active_backend_name
-
-    from fno.graph._constants import is_wellformed_node_id
-
-    external = active_backend_name() != "graph"
-    if node is None:
-        # Bare mode is LOUD on every failure: silent empty is how a
-        # trailer-less PR ships. It never takes the legacy early returns.
-        if external:
-            typer.echo(
-                "closure-trailer: branch resolution needs the graph backend; "
-                "pass the node explicitly instead",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-    elif external:
-        # graph.json is not the delivery record of truth under an external
-        # tracker backend - nothing to render from, matching this command's
-        # own contract (prints nothing, exit 0, on any unresolvable input).
-        return
-
-    # One read for both modes, loud on failure: a dead keeper used to answer
-    # exactly like an unresolvable node here (bare except, print nothing,
-    # exit 0) and three PRs sat red on the closure gate with no cause.
-    try:
-        entries = wire_rows(path=graph_json())
-    except Exception as exc:  # noqa: BLE001 - the read failure IS the message
-        typer.echo(
-            f"closure-trailer: the graph read failed ({exc}); "
-            "exit 4 names a dead reader, not an unresolvable node",
-            err=True,
-        )
-        raise typer.Exit(code=4)
-
-    if node is None:
-        from fno.pr.closure import BranchResolutionError, resolve_branch_node_id
-
-        known_ids = frozenset(
-            str(entry["id"])
-            for entry in entries
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-        )
-        try:
-            node_id: str = resolve_branch_node_id(known_ids, cwd=os.getcwd())
-        except BranchResolutionError as exc:
-            typer.echo(f"closure-trailer: {exc}", err=True)
-            raise typer.Exit(code=1)
-    else:
-        node_id = node
-    # render_pr_closure_trailer silently drops a malformed id with no other
-    # signal - a bare-hex or slug typo in --extra would otherwise ship with
-    # the trailer one node short and no one the wiser (round-7 review fix).
-    dropped = [e for e in extra if not is_wellformed_node_id(e)]
-    if dropped:
-        typer.echo(
-            f"warning: dropping malformed --extra id(s) from the trailer: "
-            f"{', '.join(dropped)} (need the full <prefix>-<hex> form)",
-            err=True,
-        )
-    line = render_pr_closure_trailer(entries, node_id, extra_ids=list(extra))
-    if line:
-        typer.echo(line)
+    argv = [node] if node is not None else []
+    for item in extra:
+        argv.extend(["--extra", item])
+    _forward_to_binary("pr-closure-trailer", argv)
 
 
 @pr_app.command("bind-created", hidden=True)
@@ -1034,25 +961,8 @@ def bind_created(
     ),
 ) -> None:
     """Bind a raw ``gh pr create`` result to its one real node."""
-    from fno.pr.closure import bind_created_pr_from_branch
-
-    result = bind_created_pr_from_branch(url, cwd=repo or os.getcwd(), node_id=node)
-    if result.outcome == "bound":
-        # The ship row follows the binding, not one particular verb. This used
-        # to ride on `backlog update --pr-number`; when ship switched to this
-        # command the stamp silently stopped happening for every PR it opened.
-        from fno.graph.cli import _stamp_ship_on_pr_link
-
-        for bound_id in result.bound_ids:
-            _stamp_ship_on_pr_link(bound_id)
-    typer.echo(
-        json.dumps(
-            {
-                "outcome": result.outcome,
-                "claimed_ids": result.claimed_ids,
-                "refusal": result.refusal,
-            },
-            separators=(",", ":"),
-        )
-    )
-    raise typer.Exit(code=0 if result.outcome == "bound" else 1)
+    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # from argv, never stdin - the passthrough below inherits the caller's
+    # stdin, and a TTY there would hang a stdin read.
+    payload = json.dumps({"url": url, "repo": repo, "node": node})
+    _forward_to_binary("pr-closure-bind-created", [payload])

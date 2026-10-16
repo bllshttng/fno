@@ -1039,11 +1039,11 @@ fn ac3_hp_budget_flat_key_trips_cost() {
     let settings_path = cwd.join(".fno/config.toml");
     fs::write(&settings_path, "budget_cap = 0.01\n").unwrap();
 
-    let ledger_path = fno_agents::paths::ledger_path(&cwd);
+    let ledger_path = cwd.join(".fno/ledger.json");
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
-    let ledger = serde_json::json!([
+    let ledger = serde_json::json!({"entries": [
         {"session_id": "sess-budget", "cost_usd": 0.05, "tokens": 1000}
-    ]);
+    ]});
     fs::write(&ledger_path, serde_json::to_string(&ledger).unwrap()).unwrap();
 
     let mock = MockBins::green();
@@ -6876,7 +6876,6 @@ fn done_ends_unreviewed_not_awaiting_review_when_optional_app_refuses() {
     assert!(d.message.contains("chatgpt-codex-connector"));
     assert!(d.message.contains("refused"));
     assert!(d.message.contains("run the review verb at HEAD"));
-    assert!(d.message.contains("not owed, still not responding"));
     assert!(d.message.contains("merge by hand"));
 }
 

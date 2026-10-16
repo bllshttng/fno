@@ -162,7 +162,11 @@ def cmd_note(
         argv += extra
         proc = subprocess.run(argv, check=False)
         raise typer.Exit(code=proc.returncode)
-    if not task_id or "--blocking" in extra or "--resolve" in extra:
+    # ignore_unknown_options leaves a leading engine flag in the positional
+    # slots (`note --resolve <id>` arrives as task_id="--resolve"), so the
+    # flag is read across all three, never from extra alone.
+    engine_flags = {"--blocking", "--resolve"}
+    if not task_id or engine_flags & {task_id, text, *extra}:
         from fno.rust_binary import resolve_binary
 
         binary = resolve_binary()
@@ -225,15 +229,32 @@ def cmd_note(
     # mode never bypasses it (it guards the write, not the delivery). Live
     # first, then the archive: a live id is live whatever the archive holds
     # (the same order update, reopen, and unarchive take).
-    from fno.graph._archive_lookup import refuse_update_if_archived
+    from fno.backlog.note_notify import archived_refusal
     from fno.graph._intake import _find_node
     from fno.graph.api import wire_rows
+    from fno.graph.store import read_nodes_by_ids
 
-    try:
-        live = _find_node(wire_rows(path=graph_path), task_id)
-    except Exception:  # noqa: BLE001 - an unreadable store is the write path's error to report
-        live = None
-    if live is None and refuse_update_if_archived(task_id):
+    # The by-id read answers the hot path (one live row, no full-graph
+    # read); the full read stays the seam's authority whenever the keeper
+    # does not positively answer a live row, so a live row still outranks
+    # an archive answer in every shape.
+    live = None
+    answer = read_nodes_by_ids(graph_path, [task_id])
+    if answer is not None:
+        found = answer.get("entries") or []
+        if found:
+            # The live view never serves an archived row: an archived hit
+            # stays not-live, and the refusal below names it.
+            row = found[0]
+            live = None if row.get("archived_at") is not None else row
+    if live is None:
+        try:
+            live = _find_node(wire_rows(path=graph_path), task_id)
+        except Exception:  # noqa: BLE001 - an unreadable store is the write path's error to report
+            live = None
+    refusal = archived_refusal(task_id) if live is None else None
+    if refusal is not None:
+        typer.echo(refusal, err=True)
         raise typer.Exit(code=1)
 
     # Refuse BEFORE the write: an unread note is a silent drop wearing a

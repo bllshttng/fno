@@ -110,7 +110,7 @@ fn valid_provider_name(provider: &str) -> bool {
 pub(crate) fn vendor_lane_readings(config_cwd: &Path, registry_path: Option<&Path>) -> Value {
     let caps = provider_lane_caps(config_cwd);
     let mut warnings = Vec::new();
-    let (questions_raw, schema_error) = match registry_path {
+    let (questions_raw, watched, schema_error) = match registry_path {
         Some(path) => {
             let schema_error = check_registry_schema(path, &mut warnings).err().map(|_| {
                 warnings
@@ -121,9 +121,17 @@ pub(crate) fn vendor_lane_readings(config_cwd: &Path, registry_path: Option<&Pat
             let questions = schema_error
                 .is_none()
                 .then(|| read_questions_journal(path, &mut warnings));
-            (questions, schema_error)
+            let watched = schema_error
+                .is_none()
+                .then(|| watched_ids(path, &mut warnings))
+                .unwrap_or_default();
+            (questions, watched, schema_error)
         }
-        None => (None, Some("fno registry home unavailable".to_string())),
+        None => (
+            None,
+            BTreeMap::new(),
+            Some("fno registry home unavailable".to_string()),
+        ),
     };
     vendor_lane_readings_from_caps(&caps, |provider| {
         let Some(path) = registry_path else {
@@ -136,6 +144,7 @@ pub(crate) fn vendor_lane_readings(config_cwd: &Path, registry_path: Option<&Pat
             path,
             provider,
             questions_raw.as_deref().unwrap_or_default(),
+            &watched,
             None,
             &mut warnings,
         )
@@ -420,17 +429,11 @@ fn awaiting_operator(
         if sid.is_empty() {
             continue;
         }
-        let Some(age) = transcript_age_s(sid) else {
-            continue;
-        };
-        if age < OPERATOR_WAIT_QUIET_S {
-            continue;
-        }
         let short = sid.get(..8).unwrap_or(sid).to_lowercase();
         // File order is journal order, so the first OPEN ask is the oldest:
         // closed asks are filtered before the find, or a closed first question
         // would hide a newer open one.
-        if let Some((qid, _, _)) = asks
+        let Some((qid, _, _)) = asks
             .iter()
             .filter(|(qid, _, _)| !closed.contains(qid))
             .find(|(_, q_session, q_asker)| match q_session {
@@ -439,7 +442,12 @@ fn awaiting_operator(
                     .as_deref()
                     .is_some_and(|a| a.to_lowercase() == short),
             })
-        {
+        else {
+            continue;
+        };
+        // The transcript lookup scans every project dir, so it runs only for
+        // a row that has an open ask.
+        if transcript_age_s(sid).is_some_and(|age| age >= OPERATOR_WAIT_QUIET_S) {
             waiting.insert(row.name.clone(), qid.clone());
         }
     }
@@ -508,6 +516,10 @@ pub(crate) struct LaneReading {
     /// The `(name, expires_at)` pairs of the slot claims the count included:
     /// the lane's held-by-claim share, reservations named.
     pub reserved: Vec<(String, i64)>,
+    /// The pending launch records the count included: a dispatcher's record
+    /// stands between the gate pass and the session report, where no row
+    /// exists to count, so the record itself is the seat.
+    pub launches: Vec<String>,
 }
 
 /// Count rows of ONE provider only when status and positive liveness agree
@@ -520,7 +532,44 @@ pub(crate) fn provider_live_count(
     warnings: &mut Vec<String>,
 ) -> Result<LaneReading, String> {
     let questions_raw = read_questions_journal(registry_path, warnings);
-    provider_live_count_with_questions(registry_path, provider, &questions_raw, redeemer, warnings)
+    let watched = watched_ids(registry_path, warnings);
+    provider_live_count_with_questions(
+        registry_path,
+        provider,
+        &questions_raw,
+        &watched,
+        redeemer,
+        warnings,
+    )
+}
+
+/// Registry rows currently parked on a `<watching>` wait: row identity ->
+/// blocker. A worker that has pushed and waits on CI, a review, or the merge
+/// slot holds no working seat - the settle and expiry arms own its resume.
+/// An unreadable journal warns and means nobody parked (the count's rule: an
+/// unreadable source never produces a smaller number).
+pub(crate) fn watched_ids(
+    registry_path: &Path,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, String> {
+    const SEAT_WATCH_WINDOW_MS: i64 = 2 * 60 * 60 * 1000;
+    let Some(home) = registry_path.parent().map(crate::paths::AgentsHome::at) else {
+        return BTreeMap::new();
+    };
+    let evidence = match crate::watch_expiry::read_evidence_since(
+        &home,
+        crate::watch_expiry::millis_now(),
+        SEAT_WATCH_WINDOW_MS,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            warnings.push(format!(
+                "watch idles unreadable ({error}); watched workers counted"
+            ));
+            return BTreeMap::new();
+        }
+    };
+    crate::watch_expiry::watch_blockers(&evidence)
 }
 
 /// The same count over a pre-read journal, so a caller counting MANY providers
@@ -529,6 +578,7 @@ pub(crate) fn provider_live_count_with_questions(
     registry_path: &Path,
     provider: &str,
     questions_raw: &str,
+    watched: &BTreeMap<String, String>,
     redeemer: Option<&str>,
     warnings: &mut Vec<String>,
 ) -> Result<LaneReading, String> {
@@ -573,6 +623,17 @@ pub(crate) fn provider_live_count_with_questions(
 
     let waiting = awaiting_operator(&candidates, questions_raw, transcript_age_s);
 
+    // Watch parks: a row whose session carries a current seat-wait watch
+    // (`<watching>` on ci, review, or the merge slot) is idle until the
+    // daemon wakes it, so its seat counts as free.
+    let watch_parked: BTreeMap<&str, &str> = candidates
+        .iter()
+        .filter_map(|row| {
+            let id = crate::watch_expiry::registry_session_id(row)?;
+            watched.get(id).map(|b| (row.name.as_str(), b.as_str()))
+        })
+        .collect();
+
     let bg_short_ids: BTreeSet<String> = candidates
         .iter()
         .filter(|row| row.pid.is_none() && row.harness_name() == "claude")
@@ -592,6 +653,10 @@ pub(crate) fn provider_live_count_with_questions(
     for row in &candidates {
         if let Some(qid) = waiting.get(row.name.as_str()) {
             parked.push((row.name.clone(), qid.clone()));
+            continue;
+        }
+        if let Some(blocker) = watch_parked.get(row.name.as_str()) {
+            parked.push((row.name.clone(), format!("watch:{blocker}")));
             continue;
         }
         if let Some(pid) = row.pid {
@@ -654,12 +719,27 @@ pub(crate) fn provider_live_count_with_questions(
     let (claim_count, reserved) =
         provider_live_slot_claims(provider, &claim_seen, redeemer, warnings)?;
     count += claim_count;
+    let launches = pending_launch_records(registry_path, provider);
+    count += launches.len();
     Ok(LaneReading {
         count,
         counted: counted_names,
         parked,
         reserved,
+        launches,
     })
+}
+
+/// The pending dispatch records holding `provider`'s lane (the change-7
+/// reservation rule): a burst of dispatches cannot all pass on one free
+/// slot, because the first unclaimed record already holds it. A missing
+/// record dir is the no-dispatch-yet case, not a fault - the same posture
+/// the claims share takes.
+fn pending_launch_records(registry_path: &Path, provider: &str) -> Vec<String> {
+    let Some(home) = registry_path.parent().map(crate::paths::AgentsHome::at) else {
+        return Vec::new();
+    };
+    crate::launch_record::pending_for_provider(home.root(), provider, crate::claims::now_ms())
 }
 
 /// Pane liveness for one row: `Some(bool)` decided, `None` when the row
@@ -834,7 +914,6 @@ pub(crate) fn succession_replaces(
     live: &[RegistryEntry],
     caller: Option<&str>,
     scope: &str,
-    proposed_name: &str,
 ) -> Result<String, &'static str> {
     let caller = caller
         .filter(|session| !session.is_empty())
@@ -848,11 +927,15 @@ pub(crate) fn succession_replaces(
         return Err("caller_ambiguous");
     }
     let rows = serde_json::to_value(live).map_err(|_| "settle_unreadable")?;
+    // Occupancy probe only: an empty proposal skips the name contract and
+    // slot_probe keeps the settle from drawing, so a gate retry never burns
+    // a name. The successor's name settles on the spawn path.
     let answer = crate::team_settle::resolve(&serde_json::json!({
         "scope": scope,
         "rows": rows,
         "succession": true,
-        "proposed_name": proposed_name,
+        "proposed_name": "",
+        "slot_probe": true,
         "caller": {"kind": "agent", "name": row.name.clone()},
     }))
     .map_err(|_| "settle_unreadable")?;
@@ -999,11 +1082,13 @@ pub(crate) fn check_account_login(
         account,
         crate::reentry::shell_account_binding,
         crate::claude_login::probe_config_dir,
+        crate::claude_login::record_verdict_ambient,
         warnings,
     )
 }
 
-/// The decision body, split for tests: `binding` and `probe` are injected, so
+/// The decision body, split for tests: `binding`, `probe` and `record` are
+/// injected, so
 /// a test never shells out. Rules, in order:
 /// 1. no account or `default`: admit, nothing is called (the quota lock's rule).
 /// 2. a route to any provider other than anthropic: admit, nothing is called
@@ -1017,11 +1102,15 @@ pub(crate) fn check_account_login(
 ///    unparseable output, a non-auth error) pushes a note and admits - a
 ///    silent fail-open would hide a probe broken by a future claude flag
 ///    rename, so the note is the lane's one honesty signal.
+/// A DECIDED verdict (logged in or out) also goes to `record` before the
+/// result returns, so launch-time picking sees the refusal without paying
+/// for another probe; an inconclusive one records nothing.
 pub(crate) fn check_account_login_with(
     route_provider: Option<&str>,
     account: &str,
     binding: impl Fn(&str) -> Result<Option<String>, String>,
     probe: impl Fn(&Path) -> crate::claude_login::Login,
+    record: impl Fn(&str, &Path, &crate::claude_login::Login),
     warnings: &mut Vec<String>,
 ) -> Result<(), crate::spawn_gate::Refusal> {
     use crate::claude_login::Login;
@@ -1038,7 +1127,10 @@ pub(crate) fn check_account_login_with(
     };
     let dir = PathBuf::from(dir);
     match probe(&dir) {
-        Login::LoggedIn => Ok(()),
+        Login::LoggedIn => {
+            record(account, &dir, &Login::LoggedIn);
+            Ok(())
+        }
         Login::Unknown(why) => {
             warnings.push(format!(
                 "spawn-gate note: account {account} login probe inconclusive ({why}); not refusing on it"
@@ -1047,6 +1139,7 @@ pub(crate) fn check_account_login_with(
         }
         Login::LoggedOut(detail) => {
             let remedy = crate::claude_login::login_command(&dir);
+            record(account, &dir, &Login::LoggedOut(detail.clone()));
             warnings.push(format!(
                 "spawn-gate: account {account} cannot log in ({detail}); refusing; no worker launched; run: {remedy}"
             ));
@@ -1161,7 +1254,7 @@ fn runtime_state_payload(config_cwd: &Path) -> Value {
 /// The account's binding rate-limit deadline, when its health entry is fresh
 /// (the shared record-level TTL) and the lock is in the future. Reuses the
 /// fallback-chain's health parse instead of a second one.
-fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
+pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Option<f64> {
     let health = crate::fallback_chain::parse_provider_health(raw).remove(account)?;
     let rlu = health.get("rate_limited_until").and_then(Value::as_f64)?;
     match health.get("last_error_at").and_then(Value::as_f64) {
@@ -1224,6 +1317,7 @@ pub(crate) fn check_lead_share(
         ));
     }
     eprintln!("{msg}");
+    learned.eprint_slot_hint();
     Err(
         crate::spawn_gate::Refusal::code(crate::spawn_gate::EXIT_LEAD_SHARE)
             .ev("reason", serde_json::json!("lead_share"))
@@ -1321,6 +1415,81 @@ mod tests {
             reading.reserved.is_empty(),
             "no slot claims in the plain fixture"
         );
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The dispatch reservation rule: a pending record the dispatcher wrote
+    /// before exec holds the provider's lane through the exec-to-adopt gap,
+    /// and the reading names it. Another provider's record, a provider-less
+    /// one, and a record past its claim window hold nothing.
+    #[test]
+    fn a_pending_dispatch_record_holds_the_lane() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-record-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
+        let reg = dir.join("registry.json");
+        write_registry(&reg, &[]);
+        let now = crate::claims::now_ms();
+        let launch = |name: &str, provider: Option<&str>| crate::launch_record::Launch {
+            harness: "claude".into(),
+            name: Some(name.into()),
+            node: None,
+            slot: None,
+            provider: provider.map(str::to_string),
+            cwd: "/tmp".into(),
+        };
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-burst", Some("zai")),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-other-lane", Some("codex")),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-typed-line", None),
+            "lead-1",
+            None,
+            "/tmp",
+            now,
+        )
+        .unwrap();
+        crate::launch_record::write_record(
+            &dir,
+            launch("w-lapsed", Some("zai")),
+            "lead-1",
+            None,
+            "/tmp",
+            now - crate::launch_record::WINDOW_MS - 1_000,
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
+        assert_eq!(
+            reading.count, 1,
+            "only the in-window zai record holds: {reading:?}"
+        );
+        assert_eq!(reading.launches, vec!["w-burst".to_string()]);
+
+        let other = provider_live_count(&reg, "codex", None, &mut warnings).unwrap();
+        assert_eq!(other.count, 1);
+        assert_eq!(other.launches, vec!["w-other-lane".to_string()]);
         std::env::remove_var("FNO_CLAIMS_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1594,6 +1763,171 @@ mod tests {
         );
         std::env::remove_var("FNO_CLAIMS_ROOT");
         std::env::remove_var(crate::claude_drive::PROJECTS_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stages the watch-park home: agents home, events journal, claims root.
+    fn stage_watch_home(dir: &Path) -> (PathBuf, impl Fn(&str, &str, i64) -> String) {
+        std::fs::create_dir_all(dir.join("agents")).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
+        let reg = dir.join("agents").join("registry.json");
+        let watch_row = move |session: &str, blocker: &str, expires_at_ms: i64| {
+            serde_json::json!({
+                "ts": chrono::Utc::now().to_rfc3339(),
+                "type": "loop_check_watch_idle",
+                "source": "hook",
+                "data": {
+                    "session_id": session,
+                    "harness": "claude",
+                    "node": "x-wt",
+                    "pr": 42,
+                    "blocker": blocker,
+                    "expires_at_ms": expires_at_ms
+                }
+            })
+            .to_string()
+        };
+        (reg, watch_row)
+    }
+
+    /// A worker waiting on a ci watch parks; a working row still counts and
+    /// the parked row's own reservation is deduped, not counted back.
+    #[test]
+    fn provider_count_parks_a_worker_waiting_on_ci_watch() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-watch-{}", std::process::id()));
+        let (reg, watch_row) = stage_watch_home(&dir);
+        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
+        let expires = chrono::Utc::now().timestamp_millis() + 600_000;
+        std::fs::write(
+            dir.join("events.jsonl"),
+            format!("{}\n", watch_row(a, "ci", expires)),
+        )
+        .unwrap();
+        seed_worker_a_claim(&dir);
+        let me = std::process::id();
+        write_registry(
+            &reg,
+            &[claude_row_json("a", a), live_row("good", "zai", Some(me))],
+        );
+        let mut warnings = Vec::new();
+        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
+        assert_eq!(reading.count, 1, "the watch-parked row frees its seat");
+        assert_eq!(reading.counted, vec!["good".to_string()]);
+        assert_eq!(
+            reading.parked,
+            vec![("a".to_string(), "watch:ci".to_string())]
+        );
+        assert!(
+            reading.reserved.is_empty(),
+            "the parked row's own claim is deduped, not counted and not named"
+        );
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Seeds a live zai worker:a reservation under the active claims root.
+    fn seed_worker_a_claim(dir: &std::path::Path) {
+        let host = claims::hostname();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let lock = dir
+            .join("claims-root")
+            .join(".fno")
+            .join("claims")
+            .join(format!("{}.lock", claims::encode_key("worker:a")));
+        crate::claim_store::seed_yaml_at_path(&lock, &format!("schema_version: {}\nkey: worker:a\nholder: h\nacquired_at: {now}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n", claims::SCHEMA_VERSION, std::process::id()));
+    }
+
+    /// A watch ended by later activity un-parks the row; the seat counts again.
+    #[test]
+    fn provider_count_counts_a_worker_whose_watch_ended() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-watch2-{}", std::process::id()));
+        let (reg, watch_row) = stage_watch_home(&dir);
+        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
+        let expires = chrono::Utc::now().timestamp_millis() + 600_000;
+        // Stamp the watch first, the resume second: supersession compares
+        // (ts, seq), so a resume stamped before the watch never ends it.
+        let watch_line = watch_row(a, "ci", expires);
+        let resumed = format!(
+            r#"{{"ts":"{}","type":"loop_check","source":"hook","data":{{"session_id":"{a}","intent":"work"}}}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
+        std::fs::write(
+            dir.join("events.jsonl"),
+            format!("{}\n{}\n", watch_line, resumed),
+        )
+        .unwrap();
+        seed_worker_a_claim(&dir);
+        let me = std::process::id();
+        write_registry(
+            &reg,
+            &[claude_row_json("a", a), live_row("good", "zai", Some(me))],
+        );
+        let mut warnings = Vec::new();
+        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
+        assert_eq!(reading.count, 2, "a resumed worker holds its seat again");
+        assert_eq!(reading.counted, vec!["good".to_string()]);
+        assert_eq!(reading.reserved.len(), 1, "{:?}", reading.reserved);
+        assert!(reading.parked.is_empty(), "{:?}", reading.parked);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        let _ = std::fs::remove_dir_all(&dir);
+        // A blocker outside the seat-wait set never parked the row either.
+        let dir2 = std::env::temp_dir().join(format!("fno-lanes-watch3-{}", std::process::id()));
+        let (reg2, watch_row2) = stage_watch_home(&dir2);
+        std::fs::write(
+            dir2.join("events.jsonl"),
+            format!("{}\n", watch_row2(a, "local", expires)),
+        )
+        .unwrap();
+        seed_worker_a_claim(&dir2);
+        write_registry(
+            &reg2,
+            &[claude_row_json("a", a), live_row("good", "zai", Some(me))],
+        );
+        let mut warnings2 = Vec::new();
+        let reading2 = provider_live_count(&reg2, "zai", None, &mut warnings2).unwrap();
+        assert_eq!(reading2.count, 2, "a non-seat-wait blocker never parked");
+        assert!(reading2.parked.is_empty(), "{:?}", reading2.parked);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// An unreadable events journal warns and counts everyone.
+    #[test]
+    fn provider_count_counts_everyone_when_the_watch_journal_is_unreadable() {
+        let _guard = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-lanes-watch4-{}", std::process::id()));
+        let (reg, _watch_row) = stage_watch_home(&dir);
+        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
+        std::fs::write(dir.join("events.jsonl"), "{ not json\n").unwrap();
+        seed_worker_a_claim(&dir);
+        let me = std::process::id();
+        write_registry(
+            &reg,
+            &[claude_row_json("a", a), live_row("middle", "zai", Some(me))],
+        );
+        let mut warnings = Vec::new();
+        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
+        assert_eq!(reading.count, 2, "an unreadable journal counts everyone");
+        assert!(reading.parked.is_empty());
+        assert_eq!(reading.reserved.len(), 1, "{:?}", reading.reserved);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("watch idles unreadable")),
+            "{warnings:?}"
+        );
+        std::env::remove_var("FNO_CLAIMS_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2419,35 +2753,73 @@ mod tests {
         (binding, probe, calls)
     }
 
+    /// The recorder most rules pass: a decision must be free to record
+    /// nothing when the rule never reached a verdict.
+    fn no_record(_account: &str, _dir: &Path, _verdict: &Login) {}
+
+    /// A recorder that captures what it was told, for the persistence rules.
+    fn capturing_record() -> (
+        impl Fn(&str, &Path, &Login),
+        std::rc::Rc<std::cell::RefCell<Vec<(String, Login)>>>,
+    ) {
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        let record = move |account: &str, _dir: &Path, verdict: &Login| {
+            sink.borrow_mut()
+                .push((account.to_string(), verdict.clone()));
+        };
+        (record, seen)
+    }
+
     /// Rule 1: no account or `default` admits and calls nothing.
     #[test]
     fn login_lane_rows() {
         for account in ["", "default"] {
             let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
             let mut warnings = Vec::new();
-            assert!(check_account_login_with(None, account, binding, probe, &mut warnings).is_ok());
+            assert!(check_account_login_with(
+                None,
+                account,
+                binding,
+                probe,
+                no_record,
+                &mut warnings
+            )
+            .is_ok());
             assert_eq!(calls.get(), 0, "account {account:?} must call nothing");
             assert!(warnings.is_empty());
         }
 
         let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(
-            check_account_login_with(Some("zai"), "makers", binding, probe, &mut warnings).is_ok()
-        );
+        assert!(check_account_login_with(
+            Some("zai"),
+            "makers",
+            binding,
+            probe,
+            no_record,
+            &mut warnings
+        )
+        .is_ok());
         assert_eq!(calls.get(), 0);
         assert!(warnings.is_empty());
 
         let (binding, probe, calls) =
             login_lane_fakes(Err("no such account".to_string()), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(calls.get(), 1, "binding once, probe never");
         assert!(warnings.is_empty());
 
         let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(calls.get(), 1, "binding once, probe never");
         assert!(warnings.is_empty());
 
@@ -2456,8 +2828,9 @@ mod tests {
             Login::LoggedOut("Login expired".to_string()),
         );
         let mut warnings = Vec::new();
-        let err = check_account_login_with(None, "makers", binding, probe, &mut warnings)
-            .expect_err("a logged-out account must refuse");
+        let err =
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .expect_err("a logged-out account must refuse");
         assert_eq!(err.exit_code, crate::spawn_gate::EXIT_PROVIDER_CAP);
         let receipt = err.receipt.expect("refusal carries the receipt");
         assert_eq!(receipt["reason"], "account_not_logged_in");
@@ -2480,7 +2853,10 @@ mod tests {
             Login::Unknown("probe timed out after 20s".to_string()),
         );
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(
             warnings.len(),
             1,
@@ -2491,7 +2867,10 @@ mod tests {
         let (binding, probe, _calls) =
             login_lane_fakes(Ok(Some("/tmp/acct".to_string())), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert!(warnings.is_empty());
     }
 
@@ -2510,6 +2889,52 @@ mod tests {
     /// Rule 5, inconclusive: admit, but push the one honesty note.
 
     /// Rule 5, logged-in: admit with no note.
+
+    /// A decided verdict reaches the recorder before the result returns;
+    /// an inconclusive one records nothing.
+    #[test]
+    fn login_lane_records_decided_verdicts_only() {
+        let (binding, probe, _calls) = login_lane_fakes(
+            Ok(Some("/tmp/acct".to_string())),
+            Login::LoggedOut("Login expired".to_string()),
+        );
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_err(), "logged out must refuse");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            vec![(
+                "makers".to_string(),
+                Login::LoggedOut("Login expired".to_string())
+            )],
+            "exactly one refusal record"
+        );
+
+        let (binding, probe, _calls) =
+            login_lane_fakes(Ok(Some("/tmp/acct".to_string())), Login::LoggedIn);
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_ok());
+        assert_eq!(
+            seen.borrow().as_slice(),
+            vec![("makers".to_string(), Login::LoggedIn)],
+        );
+
+        let (binding, probe, _calls) = login_lane_fakes(
+            Ok(Some("/tmp/acct".to_string())),
+            Login::Unknown("probe timed out after 20s".to_string()),
+        );
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_ok(), "inconclusive admits");
+        assert!(seen.borrow().is_empty(), "unknown records nothing");
+    }
 
     #[test]
     fn questions_journal_read_reaches_the_store() {

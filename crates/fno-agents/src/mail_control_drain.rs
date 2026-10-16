@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// The bus kinds that are bookkeeping about other messages, never inbox
 /// content (`bus.log.CONTROL_KINDS`).
-const WITHDRAW_KIND: &str = "withdraw";
+pub(crate) const WITHDRAW_KIND: &str = "withdraw";
 const LANDED_KIND: &str = "landed";
 /// Delivery states meaning the bytes already reached the recipient
 /// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand
@@ -100,7 +100,11 @@ fn read_cursor(bus_dir: &Path, form: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) fn unread_count(bus_dir: &Path, msgs: &[Value], name: &str) -> usize {
+/// Unread, deliverable mail addressed to `name`, oldest first, positioned
+/// after `name`'s main cursor (`bus.cursor.scan_unread`; the cursor filename
+/// IS the address). An absent, corrupt or rotated-out cursor rescans the
+/// whole retained log.
+pub(crate) fn unread_messages<'a>(bus_dir: &Path, msgs: &'a [Value], name: &str) -> Vec<&'a Value> {
     let cursor = std::fs::read_to_string(bus_dir.join("cursors").join(format!("{name}.json")))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -109,22 +113,48 @@ pub(crate) fn unread_count(bus_dir: &Path, msgs: &[Value], name: &str) -> usize 
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
+    // Hosted-send parity with `bus.cursor.scan_unread`: a hosted receipt
+    // supersedes the staged twin sharing its id (the receipt proves the
+    // inject confirmed, so the transcript already carries the body), and
+    // rows dedupe one per id, first in log order wins, before the cursor
+    // walk. A typed receipt never supersedes: pane bytes are not proven
+    // consumed, so the staged row stays the recovery path.
+    let superseded: std::collections::HashSet<&str> = msgs
+        .iter()
+        .filter(|m| m.get("delivery").and_then(Value::as_str) == Some("hosted"))
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .collect();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let deduped: Vec<&Value> = msgs
+        .iter()
+        .filter(|m| {
+            let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+            seen.insert(id)
+        })
+        .collect();
     let after = cursor.and_then(|id| {
-        msgs.iter()
+        deduped
+            .iter()
             .position(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
     });
     let withdrawn = withdrawn_ids(msgs);
-    msgs.iter()
+    deduped
+        .iter()
         .enumerate()
         .filter(|(i, m)| {
             after.is_none_or(|pos| *i > pos)
                 && m.get("to").and_then(Value::as_str) == Some(name)
                 && deliverable(m)
-                && m.get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.is_empty() && !withdrawn.contains(id))
+                && m.get("id").and_then(Value::as_str).is_some_and(|id| {
+                    !id.is_empty() && !withdrawn.contains(id) && !superseded.contains(id)
+                })
         })
-        .count()
+        .map(|(_, m)| *m)
+        .collect()
+}
+
+pub(crate) fn unread_count(bus_dir: &Path, msgs: &[Value], name: &str) -> usize {
+    unread_messages(bus_dir, msgs, name).len()
 }
 
 fn write_cursor(bus_dir: &Path, form: &str, msg_id: &str) {
@@ -139,14 +169,14 @@ fn write_cursor(bus_dir: &Path, form: &str, msg_id: &str) {
     }
 }
 
-fn is_control(body: &str) -> bool {
+pub(crate) fn is_control(body: &str) -> bool {
     body.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
         .is_some_and(|first| first.to_lowercase().starts_with("control:"))
 }
 
-fn deliverable(m: &Value) -> bool {
+pub(crate) fn deliverable(m: &Value) -> bool {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
     if kind == WITHDRAW_KIND || kind == LANDED_KIND {
         return false;
@@ -157,7 +187,7 @@ fn deliverable(m: &Value) -> bool {
 
 /// Ids retracted by a tombstone, plus the tombstones themselves; a tombstone
 /// counts only against a message from the same sender to the same address.
-fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
+pub(crate) fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
     let by_id: std::collections::HashMap<&str, &Value> = msgs
         .iter()
         .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
@@ -189,7 +219,7 @@ fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
 /// token of a header line, or the `id` of an old `<fno_mail id="...">` tag -
 /// or None when the transcript cannot be resolved or read (print-everything
 /// posture).
-fn present_mail_ids(
+pub(crate) fn present_mail_ids(
     projects_base: &Path,
     session: &str,
 ) -> Option<std::collections::HashSet<String>> {
@@ -225,7 +255,7 @@ fn present_mail_ids(
 /// The defang `mail.landed._defang_reminder` applies: a body cannot close
 /// the reminder wrapper early. Ports `<\s*(/?)\s*system-reminder\s*>`
 /// (case-folded) to a `[`-bracketed literal.
-fn defang(s: &str) -> String {
+pub(crate) fn defang(s: &str) -> String {
     const TAG: &str = "system-reminder";
     let lower = s.to_lowercase();
     let skip_ws = |j: usize| -> usize {

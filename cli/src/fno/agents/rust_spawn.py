@@ -34,7 +34,7 @@ def _opencode_serve_spawn(
     node: Optional[str] = None,
     effort: Optional[str] = None,
 ) -> str:
-    """Delegate an opencode bg spawn to the Rust serve lane; return short_id.
+    """Delegate an opencode thread spawn to the Rust serve lane; return short_id.
 
     The lane (shared serve, session mint, writable-dirs grant, registry row,
     detached writer) is implemented once, in the fno-agents runtime; forking it
@@ -49,7 +49,7 @@ def _opencode_serve_spawn(
     binary = rust_binary.resolve_binary()
     if binary is None:
         raise DispatchAskError(
-            "opencode bg spawn needs the fno-agents runtime; install it "
+            "opencode thread spawn needs the fno-agents runtime; install it "
             "(cargo build --release -p fno-agents) or use --substrate pane",
             exit_code=13,
         )
@@ -62,8 +62,9 @@ def _opencode_serve_spawn(
         name,
         "--harness",
         "opencode",
+        # thread: the binary refuses the retired bg spelling.
         "--substrate",
-        "bg",
+        "thread",
         "--cwd",
         str(cwd),
     ]

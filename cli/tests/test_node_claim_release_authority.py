@@ -54,9 +54,8 @@ ALLOWLIST = {
     # drops the lock ONLY when the holder is stale (PID dead / TTL expired) or
     # matches the invoking session, and REFUSES a live foreign holder (warn +
     # point at force-release). Single authority at an explicit operator
-    # lifecycle boundary (x-a747). Lives in graph/requeue.py since the
-    # queue-return subject moved there out of the over-budget graph/cli.py.
-    "cli/src/fno/backlog/requeue.py",
+    # lifecycle boundary (x-a747). The queue-return subject moved to the
+    # native requeue arm, which releases through the same ladder below.
     # init-target-state.sh: the acquire-then-validate refusal (x-e957). Releases
     # the claim THIS SAME BLOCK acquired one line earlier, with the holder it
     # just minted, when the post-acquire containment read says the node was
@@ -101,6 +100,14 @@ ALLOWLIST = {
     # named). Explicit operator lifecycle boundary, never a helper's own
     # initiative.
     "crates/fno-agents/src/backlog/update_cli.rs",
+    # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
+    # verb's native release ladder (the wheel leg retired with
+    # lifecycle.py). Holder-verified on the same contract as requeue.py:
+    # a stale lock releases, a live holder releases only when it matches
+    # the invoking session, and a live foreign holder survives with its
+    # name in the receipt. Single authority at the explicit operator
+    # `unclaim` boundary.
+    "crates/fno-agents/src/backlog/cutover.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

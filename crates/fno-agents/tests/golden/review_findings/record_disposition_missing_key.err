@@ -1,0 +1,1 @@
+each disposition needs finding_key, a disposition in ['fixed', 'declined', 'nonblocking'], and a non-empty reason

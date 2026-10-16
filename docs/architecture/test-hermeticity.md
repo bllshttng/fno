@@ -142,7 +142,7 @@ The shell appender carries the same fence. When `FNO_TEST_HERMETIC=1`, `_append_
 
 ## The project journal is opt-in
 
-A project `.fno/` marks a project that opted in. `fno config setup wizard` and `fno do target init` create it.
+A project `.fno/` marks a project that opted in. `fno do wizard` and `fno do target init` create it.
 
 An event append never creates one. Before this rule, a session in any git repo with the plugin installed left a `.fno/` and an `events.jsonl` behind. The project did not have to use footnote at all.
 

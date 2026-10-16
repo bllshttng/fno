@@ -5,9 +5,9 @@
 //! everything else is plain text, which is the common case (a printed PR URL
 //! from `gh`, a session link from a coding agent). [`find_urls`] covers the
 //! second. Detection is pure and unit-tested; the grid walk lives in
-//! [`crate::vt::Pane::link_at`] and [`open_url`] is the one impure function
-//! here, kept in this file so the scheme allowlist and the call that acts on it
-//! cannot drift apart.
+//! [`crate::vt::Pane::link_at`], and the impure openers live here
+//! ([`open_url`] for a local attach, [`open_url_for_session`] for either) so
+//! the scheme allowlist and the calls that act on it cannot drift apart.
 
 use std::path::{Path, PathBuf};
 
@@ -163,6 +163,11 @@ pub const SENDER_SCHEME: &str = "fno-sender:";
 /// opener.
 pub const MESSAGE_SCHEME: &str = "fno-message:";
 
+/// The pseudo scheme for a clicked `@handle` token. Intercepted by the mux
+/// client like [`SENDER_SCHEME`] and [`MESSAGE_SCHEME`]: it opens the
+/// Messages tab filtered to the handle, never a platform opener.
+pub const HANDLE_SCHEME: &str = "fno-handle:";
+
 /// The pseudo scheme for a clicked bare file path (`crates/fno/src/link.rs:42`
 /// printed in a pane). The URI carries the CANONICAL absolute path plus an
 /// optional `:<line>` tail. It is intercepted by the mux client - open the
@@ -317,17 +322,25 @@ pub fn file_uri(path: &Path, line: Option<u32>) -> String {
     uri
 }
 
-/// True when `s` is exactly the sender pseudo URI for a `fmail-` id: scheme
-/// plus `fmail-` plus 12 hex, nothing else. A legacy `msg-` header has no
-/// sender session to find, so it resolves no span and no URI.
+/// True when `s` is exactly the sender pseudo URI for a `@handle`: scheme
+/// plus a handle-shaped name, nothing else. The handle names the sender row
+/// to open; the `fmail-` id travels on the message URI instead.
 pub fn is_sender_uri(s: &str) -> bool {
-    let Some(rest) = s.strip_prefix(SENDER_SCHEME) else {
-        return false;
-    };
-    let Some(hex) = rest.strip_prefix("fmail-") else {
-        return false;
-    };
-    hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    s.strip_prefix(SENDER_SCHEME).is_some_and(is_handle_name)
+}
+
+/// The name grammar every `@handle`-shaped URI payload follows: a short run
+/// of letters, digits, `_` and `-`, led by a letter or digit. Shared by the
+/// handle and sender validators so neither can smuggle a path or whitespace
+/// into a later opener. A header token the grammar rejects (a retired
+/// `a/b` name, say) spans no sender URI.
+pub fn is_handle_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// The message id carried by an exact `fno-message:` pseudo URI.
@@ -341,16 +354,36 @@ pub fn is_message_uri(s: &str) -> bool {
     message_id_from_uri(s).is_some()
 }
 
+/// The bare handle carried by an exact `fno-handle:` pseudo URI.
+pub fn handle_from_uri(s: &str) -> Option<&str> {
+    let name = s.strip_prefix(HANDLE_SCHEME)?;
+    is_handle_name(name).then_some(name)
+}
+
+pub fn is_handle_uri(s: &str) -> bool {
+    handle_from_uri(s).is_some()
+}
+
+/// True for the pseudo URIs the mux client intercepts (message, sender,
+/// handle). These are the URIs a click claims even from a pane whose app
+/// negotiated mouse reporting: the tokens mean what fno says, so the mux
+/// answers them itself and forwards nothing.
+pub fn is_fno_uri(s: &str) -> bool {
+    is_message_uri(s) || is_sender_uri(s) || is_handle_uri(s)
+}
+
 /// The `@name` span of a delivered-mail header line in pane text, as a
-/// half-open CHAR range plus the `fmail-<12 hex>` id.
+/// half-open CHAR range plus the bare handle and the `fmail-<12 hex>` id.
 ///
 /// The header the mail transport types into the pane reads
 /// `` `@name · fmail-<12hex> · summary` `` — a harness prompt prefix and the
 /// wrapping backticks may sit around it, so the scan anchors on the id token
 /// and tolerates whatever precedes the `@`. A spaced name, a non-hex or
 /// over-long id, or a missing summary resolves nothing, and a legacy `msg-`
-/// id resolves no span: there is no sender session to find.
-pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String)> {
+/// id resolves no span: there is no sender session to find. The handle
+/// excludes the leading `@`, so it is the URI payload that opens the
+/// handle's session.
+pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String, String)> {
     let chars: Vec<char> = text.chars().collect();
     let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
     for i in 0..chars.len() {
@@ -392,8 +425,9 @@ pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String)> {
         if name_start + 1 >= name_end {
             continue;
         }
+        let handle: String = chars[name_start + 1..name_end].iter().collect();
         let id: String = chars[hex_start..id_end].iter().collect();
-        return Some((name_start, name_end, format!("fmail-{id}")));
+        return Some((name_start, name_end, handle, format!("fmail-{id}")));
     }
     None
 }
@@ -402,11 +436,81 @@ pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String)> {
 /// sender parser as the header validator so a coincidental id in body text
 /// does not become a message link.
 pub fn find_mail_message(text: &str) -> Option<(usize, usize, String)> {
-    let (_, sender_end, id) = find_mail_sender(text)?;
+    let (_, sender_end, _, id) = find_mail_sender(text)?;
     let byte_start = text.char_indices().nth(sender_end)?.0;
     let id_byte = byte_start + text[byte_start..].find(&id)?;
     let start = text[..id_byte].chars().count();
     Some((start, start + id.chars().count(), id))
+}
+
+/// The BARE `fmail-<12 hex>` token span in pane text, as a half-open CHAR
+/// range plus the full id. Where [`find_mail_message`] needs the delivered
+/// header around the id, this is the id wherever it prints - a transcript
+/// quote, a log line - because the token means what fno says. Word-bounded:
+/// a longer hex run and an `fmail-`-prefixed name never match. `skip` is the
+/// CHAR index to scan from, so a caller can walk a line's later occurrences.
+pub fn find_fmail_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
+    for i in skip..chars.len() {
+        if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
+            continue;
+        }
+        // Word-start: the token cannot begin inside `xfmail-...`.
+        if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '-') {
+            continue;
+        }
+        let hex_start = i + "fmail-".len();
+        let id_end = hex_start + 12;
+        if !hex12(chars.get(hex_start..id_end)?) {
+            continue;
+        }
+        // Any word character right after the id means a longer token, not
+        // this id: `fmail-0123456789abg` names no mail this parse may pick.
+        if chars
+            .get(id_end)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        {
+            continue;
+        }
+        let id: String = chars[hex_start..id_end].iter().collect();
+        return Some((i, id_end, format!("fmail-{id}")));
+    }
+    None
+}
+
+/// The `@handle` token span in pane text, as a half-open CHAR range plus the
+/// bare handle (no `@`). The char before `@` must not continue a word, so an
+/// email address (`user@host`) never matches; a trailing `-` reads as
+/// punctuation, not the name. `skip` is the CHAR index to scan from, so a
+/// caller can walk a line's later occurrences.
+pub fn find_handle_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    for i in skip..chars.len() {
+        if chars[i] != '@' {
+            continue;
+        }
+        if i > 0 && is_name(chars[i - 1]) {
+            continue;
+        }
+        let raw: String = chars[i + 1..]
+            .iter()
+            .copied()
+            .take_while(|c| is_name(*c))
+            .collect();
+        // The name proper starts with a letter or digit and is at least two
+        // characters: `@-x`, `@_` and a lone `@a` are punctuation or a
+        // fragment, not handles (and `@a` sits inside malformed mail
+        // headers, which resolve nothing). A trailing `-` is punctuation too.
+        if !raw.starts_with(|c: char| c.is_ascii_alphanumeric()) || raw.len() < 2 || raw.len() > 64
+        {
+            continue;
+        }
+        let name = raw.trim_end_matches('-');
+        return Some((i, i + 1 + name.chars().count(), name.to_string()));
+    }
+    None
 }
 
 /// Hand `url` to the platform opener, blocking until it exits. `Err` carries
@@ -478,6 +582,105 @@ fn spawn_opener(opener: &str, url: &str) -> Result<std::process::ExitStatus, std
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::process_admission::std_status(&mut command)
+}
+
+// ── attach-aware open ───────────────────────────────────────────────────────
+//
+// The opener execs in the client's own process, and over an ssh attach that
+// process runs on the mux host: `open(1)` opened the browser on a screen the
+// user cannot see (reproduced on both paths 2026-10-12 - local `open` exit 0
+// with the tab on this Mac; the same exec under `ssh localhost` put the tab on
+// the host the same way). The remote arm therefore hands the URL to the
+// terminal the user IS looking at, as an OSC 52 clipboard set: the terminal
+// emulator on the user's device stores it, and the paste opens in THEIR
+// browser. OSC 8 was considered and rejected: a hyperlink only annotates
+// visible text, and the client paints the alternate screen, so the span would
+// either scribble on the TUI or be zero cells wide and unclickable. OSC 52 is
+// silent, and this codebase already ships it over attach (the copy fallback).
+
+/// Whether this process's stdout reaches a terminal on another machine: the
+/// attach came through ssh, so a child opener would act on the host. Same key
+/// set as the theme file picker, which refuses the osascript dialog for the
+/// identical reason.
+pub fn is_remote_session() -> bool {
+    is_remote_session_with(|k| std::env::var_os(k))
+}
+
+fn is_remote_session_with(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|k| env(k).is_some())
+}
+
+/// What a session-aware open did, for the status notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// The platform opener exec'd (local attach only).
+    Opened,
+    /// The URL was copied to the attached terminal's clipboard (OSC 52);
+    /// the paste opens it in the user's own browser.
+    CopiedToTerminal,
+}
+
+impl OpenOutcome {
+    /// The status-line sentence for this outcome. Both arms name what
+    /// actually happened: a click that says "opened" when the browser came up
+    /// on another machine reads as a broken button.
+    pub fn notice(self, url: &str) -> String {
+        match self {
+            OpenOutcome::Opened => format!("opened {}", for_notice(url)),
+            OpenOutcome::CopiedToTerminal => {
+                format!("copied {} - paste to open", for_notice(url))
+            }
+        }
+    }
+}
+
+/// The bytes handed to the attached terminal for `url`: an OSC 52 clipboard
+/// set, the same payload the copy fallback emits. Infallible because the only
+/// caller passes an [`is_openable`] URL, capped at [`MAX_URL_LEN`] (4096) -
+/// 13x under the ~55 KB where `osc52_payload` would truncate.
+pub fn terminal_offer_payload(url: &str) -> Vec<u8> {
+    crate::clipboard::osc52_payload(url).0
+}
+
+/// The terminal write behind the remote arm: raw bytes on stdout, flushed.
+/// OSC is consumed by the terminal emulator, never rendered over the TUI -
+/// the same channel the clipboard fallback writes through.
+fn emit_to_terminal(bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes)?;
+    out.flush()
+}
+
+/// Open `url` on the machine the user is on: [`open_url`] for a local
+/// attach, the OSC 52 handoff for an ssh attach. The allowlist gate runs
+/// before the branch, so a refused URL reaches neither the opener nor the
+/// terminal.
+pub fn open_url_for_session(url: &str) -> Result<OpenOutcome, String> {
+    open_url_for_session_with(spawn_opener, emit_to_terminal, is_remote_session(), url)
+}
+
+fn open_url_for_session_with<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    url: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if !is_openable(url) {
+        return Err(format!("refused to open {}", for_notice(url)));
+    }
+    if remote {
+        emit(&terminal_offer_payload(url)).map_err(|e| format!("terminal copy: {e}"))?;
+        return Ok(OpenOutcome::CopiedToTerminal);
+    }
+    run_opener(spawn, url)?;
+    Ok(OpenOutcome::Opened)
 }
 
 // ── open plan (LD3) ─────────────────────────────────────────────────────────
@@ -714,6 +917,68 @@ mod tests {
     }
 
     #[test]
+    fn fno_token_spans_and_their_uris_stay_intercepted() {
+        // The plain body-text form the delivered-header parsers reject.
+        let (start, end, id) =
+            find_fmail_token("quote: fmail-0123456789ab done", 0).expect("parses");
+        assert_eq!((start, end), (7, 25));
+        assert_eq!(id, "fmail-0123456789ab");
+        // Word bounds: a longer hex run and a prefixed token never match.
+        for bad in [
+            "fmail-0123456789abc",
+            "xfmail-0123456789ab",
+            "fmail-0123456789ab-cd",
+            "fmail-0123456789",
+            "fmail-0123456789abg",
+        ] {
+            assert!(find_fmail_token(bad, 0).is_none(), "{bad} resolves nothing");
+        }
+        // A second occurrence on one line answers from the skip offset.
+        let line = "fmail-0123456789ab and fmail-fedcba987654";
+        let (start, end, _id) = find_fmail_token(line, 0).expect("first");
+        assert_eq!((start, end), (0, 18));
+        let (start, end, id) = find_fmail_token(line, end).expect("second");
+        assert_eq!(id, "fmail-fedcba987654");
+        assert_eq!(
+            line.chars().collect::<Vec<_>>()[start..end]
+                .iter()
+                .collect::<String>(),
+            id
+        );
+        let (start, end, name) = find_handle_token("ping @nemo about it", 0).expect("parses");
+        assert_eq!((start, end), (5, 10));
+        assert_eq!(name, "nemo");
+        // A trailing dash reads as punctuation; the span stops before it.
+        assert_eq!(
+            find_handle_token("cc @nemo- later", 0),
+            Some((3, 8, "nemo".into()))
+        );
+        let two = "@aa and @bb";
+        let (_start, end, name) = find_handle_token(two, 0).expect("first");
+        assert_eq!(name, "aa");
+        assert_eq!(find_handle_token(two, end), Some((8, 11, "bb".into())));
+        // The char before @ continues a word: emails and mid-word @s never match.
+        for bad in ["user@example.com", "see bob@host", "@", "@-x", "@a"] {
+            assert!(
+                find_handle_token(bad, 0).is_none(),
+                "{bad} resolves nothing"
+            );
+        }
+        // The handle URI parses, and neither pseudo scheme is ever openable:
+        // the platform opener can never receive either.
+        assert_eq!(handle_from_uri("fno-handle:nemo"), Some("nemo"));
+        for bad in ["fno-handle:", "fno-handle:-x", "fno-handle:with space"] {
+            assert!(!is_handle_uri(bad), "{bad} resolves nothing");
+        }
+        assert!(!is_openable("fno-handle:nemo"));
+        assert!(is_fno_uri("fno-message:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-sender:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-handle:nemo"));
+        assert!(!is_fno_uri("https://example.com"));
+        assert!(!is_fno_uri("fno-file:/tmp/a.md"));
+    }
+
+    #[test]
     fn uppercase_scheme_is_still_a_url() {
         assert_eq!(urls("HTTPS://Example.COM/a"), ["HTTPS://Example.COM/a"]);
     }
@@ -808,6 +1073,118 @@ mod tests {
         let long = format!("https://a.test/{}", "x".repeat(500));
         assert_eq!(for_notice(&long).chars().count(), 60);
         assert!(for_notice(&long).ends_with('…'));
+    }
+
+    #[test]
+    fn remote_session_gate_reads_only_the_ssh_keys() {
+        // Neither key: local attach, the opener is allowed.
+        assert!(!is_remote_session_with(|_| None));
+        // Either key alone names a remote attach.
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_CONNECTION").then(|| std::ffi::OsString::from("::1 50555 ::1 22"))
+        ));
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_TTY").then(|| std::ffi::OsString::from("/dev/ttys004"))
+        ));
+        // Any other env never trips the gate.
+        assert!(!is_remote_session_with(
+            |k| (k == "TERM_PROGRAM").then(|| std::ffi::OsString::from("Apple_Terminal"))
+        ));
+    }
+
+    #[test]
+    fn terminal_offer_is_the_clipboard_set_for_the_url() {
+        // The offer IS the copy fallback's payload, byte for byte: one
+        // builder, so the two cannot drift.
+        let url = "https://example.com/pr/700";
+        assert_eq!(
+            terminal_offer_payload(url),
+            crate::clipboard::osc52_payload(url).0
+        );
+        // Test decode: the body after `]52;c;` is base64 of the whole URL.
+        let payload = terminal_offer_payload(url);
+        let body = std::str::from_utf8(&payload).expect("osc52 payload is ascii-safe");
+        let b64 = body
+            .trim_start_matches("\x1b]52;c;")
+            .trim_end_matches('\x07');
+        assert_eq!(b64, "aHR0cHM6Ly9leGFtcGxlLmNvbS9wci83MDA=");
+    }
+
+    #[test]
+    fn session_open_routes_by_attach_not_by_url() {
+        // Local: the opener execs, nothing is written to the terminal.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            false,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::Opened));
+        assert!(spawned, "local open must exec the opener");
+        assert!(emitted.is_empty(), "local open must not touch the terminal");
+
+        // Remote: the URL is offered to the terminal, the opener never runs.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            true,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
+        assert!(!spawned, "a remote open must not exec the opener");
+        assert!(
+            emitted.starts_with(b"\x1b]52;c;"),
+            "remote open offers the URL over OSC 52"
+        );
+
+        // A failed terminal write is a visible failure, not silence.
+        let out = open_url_for_session_with(
+            |_, _| Ok(status(true)),
+            |_| Err(std::io::Error::other("blocked")),
+            true,
+            "https://example.com",
+        );
+        assert!(out.unwrap_err().contains("terminal copy"));
+
+        // The allowlist gate outranks the branch: a refused URL reaches
+        // neither the opener nor the terminal on either attach.
+        for remote in [false, true] {
+            let mut spawned = false;
+            let mut emitted = false;
+            let out = open_url_for_session_with(
+                |_, _| {
+                    spawned = true;
+                    Ok(status(true))
+                },
+                |_| {
+                    emitted = true;
+                    Ok(())
+                },
+                remote,
+                "file:///etc/passwd",
+            );
+            assert!(out.is_err());
+            assert!(
+                !spawned && !emitted,
+                "a refused URL acts on no path (remote={remote})"
+            );
+        }
     }
 
     // ── open plan (LD3) ──

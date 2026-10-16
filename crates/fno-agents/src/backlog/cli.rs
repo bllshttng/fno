@@ -126,6 +126,14 @@ pub fn run(args: &[String]) -> i32 {
     // the whole argv rides the compat forward verbatim, exactly the shape
     // the Python app has always parsed.
     if is_app_option_head(args) {
+        if let Some(pos) = args
+            .iter()
+            .position(|a| matches!(a.as_str(), "advance" | "join" | "dispatch-lanes"))
+        {
+            let mut native = args[pos..].to_vec();
+            native.extend_from_slice(&args[..pos]);
+            return run(&native);
+        }
         return forward_verbatim(args);
     }
     let resolved = match resolve_head(args) {
@@ -135,6 +143,22 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // The ported tracker-owned verbs own graph state: under an external
+    // backend they refuse before any read or write. Help still answers.
+    if matches!(
+        resolved.legacy,
+        "archive"
+            | "unarchive"
+            | "maintain"
+            | "migrate-priorities"
+            | "migrate-difficulty"
+            | "migrate-updated-at"
+    ) && !carries(resolved.tail, &["--help", "-h"])
+    {
+        if let Some(code) = super::workflows::refuse_non_graph_backend(resolved.legacy) {
+            return code;
+        }
+    }
     match resolved.legacy {
         // The folded corpus/history reader: fully native, engine owns the
         // whole surface (inventory, migrate, history, stale, findings).
@@ -185,6 +209,9 @@ pub fn run(args: &[String]) -> i32 {
         // The lane pin is native: id gate, operator fence, lane/epic scoping
         // and midpoint arithmetic over the single-row write seam.
         "rank" => super::rank_cli::run(resolved.tail),
+        // The vote is native: identity, style gate and the one same-voter
+        // refusal over the single-row write seam. No Python twin remains.
+        "encounter" => super::encounter_cli::run(resolved.tail),
         // The create verbs are native end to end as of this wave: parse,
         // gates, locked write with the rollup inside it, receipts.
         "add" => super::create_cli::run(resolved.tail),
@@ -236,11 +263,89 @@ pub fn run(args: &[String]) -> i32 {
         // locked close, the self-heals, and the shelled legs (auto-continue
         // rides the wheel until the advance port).
         "reconcile" => super::reconcile_cli::run(resolved.tail),
+        "advance" => super::advance_cli::run(resolved.tail),
+        "join" => super::advance_join::run(resolved.tail),
+        "dispatch-lanes" => super::advance_lanes::run_lanes(resolved.tail),
         // The parallel fill: native selection over the lane world (peer
         // slots, domain annotation, the file-collision gate).
         "lane-fill" => super::advance_fill::run_lane_fill(resolved.tail),
         "schedule-shadow" => super::advance_fill::run_schedule_shadow(resolved.tail),
         "worked" => super::worked::run(resolved.tail),
+        // The launch-edge writers are native (the first-launch stamp the
+        // spawn front forwards to, and the receipted backfill); the read
+        // shapes of `provenance` stay with the Python surface.
+        "provenance" if super::provenance_cli::owns(resolved.tail) => {
+            super::provenance_cli::run(resolved.tail)
+        }
+        // The triage diagnostics group is native end to end: the nine
+        // actions over the engine, health, and the locked apply. The door
+        // owns every triage tail: the wheel's triage route forwards here,
+        // so a forward back would loop.
+        "triage" => super::triage_cli::run(resolved.tail),
+        // The projections: the shared kanban classifier, the post-publish
+        // view pass, and the read verbs over it.
+        "render-views" => super::projections::run_render_views(resolved.tail),
+        "view" => super::projections::run_view(resolved.tail),
+        "board" => super::projections::run_board(resolved.tail),
+        "bases" => super::projections::run_bases(resolved.tail),
+        "roadmap" => super::projections::run_roadmap(resolved.tail),
+        "album" => super::projections::run_album(resolved.tail),
+        // Archive residency, the hygiene pass, the daily groom, and the
+        // one-shot row migrations.
+        "archive" => super::maintenance_archive::run_archive(resolved.tail),
+        "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
+        "maintain" => super::maintenance::run_maintain(resolved.tail),
+        "groom" => super::groom::run_groom(resolved.tail),
+        "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
+        "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
+        "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
+        // The publish verb is native end to end: the public projection
+        // renders through `fno board-render`, and the three targets (static
+        // dir, uploader command, GitHub Pages) are the verb's own. The
+        // catalog row sits in the board group.
+        "publish" => super::publish::run(resolved.tail),
+        // The wave-4 cutover arms: catalog commands whose Python bodies were
+        // thin clients of native machinery, served with no compat forward.
+        // The full list of dispositions lives on the cutover module doc.
+        "version" => super::cutover::run_version(resolved.tail),
+        "status" => super::cutover::run_status(resolved.tail),
+        "cost" => super::cutover::run_cost(resolved.tail),
+        "demand" => super::cutover::run_demand(resolved.tail),
+        "collisions" => super::cutover::run_collisions(resolved.tail),
+        "backfill-deferred-kind" => super::cutover::run_backfill_deferred_kind(resolved.tail),
+        "unclaim" => super::cutover::run_unclaim(resolved.tail),
+        "defer" => super::cutover::run_defer(resolved.tail),
+        "undefer" => super::cutover::run_undefer(resolved.tail),
+        "retract" => super::cutover::run_retract(resolved.tail),
+        "unsupersede" => super::cutover::run_unsupersede(resolved.tail),
+        "relatedness" => super::cutover::run_relatedness(resolved.tail),
+        "archive-dedupe-ids" => super::cutover::run_archive_dedupe_ids(resolved.tail),
+        "ready" => super::cutover::run_ready(resolved.tail),
+        "remove" => super::cutover::run_remove(resolved.tail),
+        "project-root" => super::cutover::run_project_root(resolved.tail),
+        // The finale arms (this PR): the remaining heavy verbs, served with
+        // no compat forward. The catalog-vs-arms gate (check-backlog-native
+        // check 2) derives the unclaimed set mechanically and fails the tree
+        // while any verb still rides the catch-all.
+        "new" => super::finale::run_new(resolved.tail),
+        // The epic status table: children, receipts, streaks, verify-merges,
+        // and the scope-growth metric over the archive-joined read.
+        "epic" => super::epic::run_epic(resolved.tail),
+        // The task grain: claim-gated status transitions over the rows the
+        // bound plan's strategy declares.
+        "task" => super::task::run_task(resolved.tail),
+        // The batch lane: flock'd per-domain state, the daemon's prepare and
+        // ship-closeable doors, and the one-PR ship orchestrator.
+        "batch" => super::batch::run_batch(resolved.tail),
+        "capture" => super::capture::run_capture(resolved.tail),
+        "intake" => super::intake::run_intake(resolved.tail),
+        "decompose" => super::decompose::run_decompose(resolved.tail),
+        "lanes" => super::finale::run_lanes(resolved.tail),
+        "stuck-epics" => super::finale::run_stuck_epics(resolved.tail),
+        "reprioritize" => super::finale::run_reprioritize(resolved.tail),
+        "discover" => super::finale::run_discover(resolved.tail),
+        "pick" => super::finale::run_pick(resolved.tail),
+        "requeue" => super::finale::run_requeue(resolved.tail),
         _ => forward_python(&resolved),
     }
 }
@@ -301,24 +406,7 @@ fn forward_verbatim(args: &[String]) -> i32 {
 }
 
 fn exec_python(argv: Vec<String>) -> i32 {
-    let mut cmd = std::process::Command::new(crate::scrape::fno_py());
-    cmd.args(argv);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = cmd.exec();
-        eprintln!("fno-agents backlog: the Python CLI could not be exec'd: {err}");
-        eprintln!("       reinstall fno, run `fno doctor update --rust`, or set FNO_PY.");
-        2
-    }
-    #[cfg(not(unix))]
-    match cmd.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(err) => {
-            eprintln!("fno-agents backlog: the Python CLI could not be run: {err}");
-            2
-        }
-    }
+    crate::scrape::exec_python("fno-agents backlog", argv)
 }
 
 fn forward_python(resolved: &Resolved<'_>) -> i32 {

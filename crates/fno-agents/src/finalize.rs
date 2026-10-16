@@ -574,46 +574,26 @@ pub fn run_finalize(args: &[String]) -> i32 {
             }
         }
 
-        // W6 verifier advisory: AC-vs-diff verdict, recorded then
-        // ignored. Log-only and never pushed to `failed` - an advisory must
-        // never wedge the loop or hold session_finalized open for retry.
-        // Events paths are forwarded so the module's per-session exactly-once
-        // guard reads the same log finalize writes (a retried fire after a
-        // partial failure must not double-emit or re-spend on a spawn).
-        let mut adv = py_module(&cwd);
-        adv.arg("-m")
-            .arg("fno.verify_advise")
-            .arg("--node-id")
-            .arg(m.graph_node_id.as_deref().unwrap_or(""))
-            .arg("--plan-path")
-            .arg(m.plan_path.as_deref().unwrap_or(""))
-            .arg("--session-id")
-            .arg(&session_id)
-            .arg("--reason")
-            .arg(&reason)
-            .arg("--events")
-            .arg(&project_events)
-            .arg("--global-events")
-            .arg(&global_events);
-        match adv.output() {
-            Ok(out) if !out.status.success() => eprintln!(
-                "finalize: verify_advise failed with exit {:?}: {}",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Ok(out) => {
-                // rc=0 is the module's contract even when its internals failed
-                // (verifier died, event emit failed): forward any stderr so
-                // those messages reach the stop hook's finalize log instead of
-                // dying in a dead channel (sigma silent-failure P1).
-                let err_raw = String::from_utf8_lossy(&out.stderr);
-                let err = err_raw.trim();
-                if !err.is_empty() {
-                    eprintln!("finalize: verify_advise: {err}");
-                }
-            }
-            Err(e) => eprintln!("finalize: verify_advise spawn failed: {e}"),
-        }
+        // W6 verifier advisory: AC-vs-diff verdict, recorded then ignored.
+        // Log-only and never pushed to `failed` - an advisory must never
+        // wedge the loop or hold session_finalized open for retry. Events
+        // paths are forwarded so the exactly-once guard reads the same log
+        // finalize writes (a retried fire must not double-emit or re-spend
+        // on a spawn).
+        let verdict = crate::verify_advise::run(
+            &crate::verify_advise::AdviseArgs {
+                node_id: m.graph_node_id.clone(),
+                plan_path: m.plan_path.clone(),
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+                cwd: cwd.clone(),
+                project_events: project_events.clone(),
+                global_events: global_events.clone(),
+                ledger: crate::paths_cli::ledger_json(&cwd),
+            },
+            &crate::verify_advise::spawn_verifier,
+        );
+        eprintln!("finalize: verify_advise: verdict={verdict}");
     }
 
     if delivery_ship {
@@ -696,6 +676,38 @@ pub fn run_finalize(args: &[String]) -> i32 {
             }
         }
     }
+
+    // ── non-delivery terminal: route on the help router ──
+    // The terminal becomes a help event with a node-scoped rung, the claim
+    // moves with the route, and a second terminal on one node asks the lead
+    // with both postmortems. Interrupted is respected and routes nothing.
+    // Wall-clock age of this run at the terminal, from the manifest's
+    // created_at (the implementation window's start): the elapsed the
+    // budget evidence quotes.
+    let elapsed_min = m
+        .created_at
+        .as_deref()
+        .and_then(parse_utc_epoch)
+        .map(|start| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            u64::try_from(now.saturating_sub(start)).unwrap_or(0) / 60
+        });
+
+    crate::terminal_route::route_terminal(&crate::terminal_route::TerminalRouteFacts {
+        cwd: &cwd,
+        session_id: &session_id,
+        node: m.graph_node_id.as_deref(),
+        reason: &reason,
+        postmortem: postmortem_path.as_deref(),
+        elapsed_min,
+        claim_key: m.target_claim_key.as_deref(),
+        claim_holder: m.target_claim_holder.as_deref(),
+        project_events: &project_events,
+        global_events: &global_events,
+    });
 
     // ── STUCK ONLY: file an unanswered operator question (HALF TWO) ──
     // A worker that idles on an unanswered question and then dies (measured:
@@ -1013,7 +1025,7 @@ fn record_finalize_done(
 /// ledger / stamp the plan. In an installed environment `cli/src` is not found
 /// relative to the binary, PYTHONPATH is left untouched, and the installed
 /// `fno` package is used.
-fn py_module(cwd: &Path) -> Command {
+pub(crate) fn py_module(cwd: &Path) -> Command {
     let mut cmd = Command::new(py_interpreter(cwd));
     cmd.current_dir(cwd);
     if let Some(src) = repo_cli_src(cwd) {
@@ -1867,7 +1879,7 @@ pub(crate) fn vault_write_is_temp_stray(home: Option<&Path>, cwd: &Path) -> bool
 /// to the same flat `project.id`, so one lookup covers both. An empty/`null`
 /// value, an unreadable file, or an id outside `[A-Za-z0-9._-]` yields None so
 /// the caller falls back to the basename.
-fn read_project_id(path: &Path) -> Option<String> {
+pub(crate) fn read_project_id(path: &Path) -> Option<String> {
     let t = load_config_toml(path)?;
     let id = toml_string_at(&t, &["project", "id"])?;
     // The Python settings model rejects ids outside [A-Za-z0-9._-]
@@ -1879,7 +1891,7 @@ fn read_project_id(path: &Path) -> Option<String> {
 
 /// Project ids are restricted to `[A-Za-z0-9._-]`, matching the Python
 /// `validate_project_id` regex. ASCII byte check (no `regex` dependency).
-fn valid_project_id(s: &str) -> bool {
+pub(crate) fn valid_project_id(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
@@ -2062,16 +2074,15 @@ fn optional_review_block_reason(cwd: &Path) -> Option<String> {
     // not exist yet.
     let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
 
-    let output = match Command::new("fno-gh-coverage")
-        .args([
-            "pr",
-            "view",
-            "--json",
-            "reviews,comments,headRefOid,baseRefName",
-        ])
-        .current_dir(cwd)
-        .output()
-    {
+    let mut cmd = Command::new("fno-gh-coverage");
+    cmd.args([
+        "pr",
+        "view",
+        "--json",
+        "reviews,comments,headRefOid,baseRefName",
+    ]);
+    cmd.current_dir(cwd);
+    let output = match crate::gh_budget::output(cmd) {
         Ok(output) if output.status.success() => output,
         Ok(output) => {
             eprintln!(

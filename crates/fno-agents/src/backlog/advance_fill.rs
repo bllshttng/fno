@@ -187,6 +187,8 @@ fn ready_frontier(
                     .chain([
                         "size",
                         "model",
+                        "provider",
+                        "effort",
                         "dispatch_verb",
                         "dispatch_brief",
                         "mission_id",

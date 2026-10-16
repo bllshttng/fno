@@ -1,12 +1,11 @@
-"""CLI-layer tests for `fno do pr merge` after the in-package port (ab-d4c98550).
+"""CLI-layer tests for `fno do pr merge`.
 
-The merge logic itself is characterized in test_pr_merge.py; here we only
-assert the Typer verb dispatches into the in-package _merge module and
-propagates its exit code (the old "forwards to pr-merge.sh" assertions are
-retired - the bash is gone).
+The merge logic itself is characterized in test_pr_merge.py and, on the
+Rust side, by the operand parity suite; here we only assert the Typer verb
+forwards its args through the authorized-merge operand door and propagates
+the child's exit code.
 """
 from __future__ import annotations
-from tests.fixtures.graph_seed import seed_graph
 
 import json
 import fcntl
@@ -20,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.pr import _merge, _quota
+from fno.pr import _quota
 
 runner = CliRunner()
 
@@ -209,17 +208,22 @@ def test_graphql_exec_rejects_public_coverage_purpose():
 
 
 def test_fno_process_routes_subprocesses_through_proxy(monkeypatch):
+    import subprocess
+
+    import fno.rust_binary
+
     monkeypatch.setenv("PATH", "/real/bin")
     monkeypatch.setattr(
         "fno.setup.github_cli.worker_environment",
         lambda base: {**base, "PATH": "/quota-proxy:/real/bin"},
     )
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
 
-    def _fake(argv, cwd=None):
+    def fake_run(argv, check):
         assert __import__("os").environ["PATH"] == "/quota-proxy:/real/bin"
-        return 2
+        return SimpleNamespace(returncode=2)
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "930"])
     assert result.exit_code == 2
     assert __import__("os").environ["PATH"] == "/real/bin"
@@ -237,7 +241,7 @@ def test_pr_merge_help_renders():
 
 
 _HOOK_SOURCE = (
-    Path(__file__).resolve().parents[3] / "hooks" / "git-protection.py"
+    Path(__file__).resolve().parents[3] / "hooks" / "git_protection_impl.py"
 )
 _ROUTE_RE = re.compile(r"fno do pr ([a-z][a-z0-9-]*)")
 
@@ -364,156 +368,155 @@ def test_flag_first_route_argv_is_refused_at_the_cli(tmp_path, monkeypatch):
     assert not rec.exists(), "no gh call may run for a refused argv"
 
 
-def test_pr_merge_dispatches_in_package(monkeypatch):
-    """The verb calls _merge.run_merge with the forwarded args and exits its rc."""
-    captured = {}
+def test_pr_merge_forwards_args_to_the_operand_door(monkeypatch):
+    """The verb forwards its args through the merge operand door and exits its rc."""
+    import subprocess
 
-    def _fake(argv, cwd=None):
-        captured["argv"] = list(argv)
-        return 2
+    import fno.rust_binary
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=2)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "999999"])
+    assert seen["argv"] == ["/fake/fno-agents", "authorized-merge", "merge", "999999"]
     assert result.exit_code == 2
-    assert captured["argv"] == ["999999"]
 
 
 def test_pr_merge_forwards_legacy_invoker_flag(monkeypatch):
-    """x-04ab: a legacy --invoker=... is forwarded verbatim (run_merge ignores it)."""
-    captured = {}
+    """A legacy --invoker=... rides the door verbatim (the operand ignores it)."""
+    import subprocess
 
-    def _fake(argv, cwd=None):
-        captured["argv"] = list(argv)
-        return 2
+    import fno.rust_binary
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=2)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "--invoker=target", "42"])
+    assert seen["argv"] == [
+        "/fake/fno-agents", "authorized-merge", "merge", "--invoker=target", "42",
+    ]
     assert result.exit_code == 2
-    assert captured["argv"] == ["--invoker=target", "42"]
 
 
-def test_closure_trailer_warns_on_a_dropped_malformed_extra_id(monkeypatch, tmp_path):
-    """Round-7 review fix: render_closure_trailer silently drops a malformed
-    --extra id with no other signal - the CLI layer must warn rather than
-    ship the trailer one node short with no operator visibility."""
-    from fno import paths
+def test_pr_hold_check_forwards_pr_and_repo_through_the_operand_door(monkeypatch):
+    """The plan-hold door: pr and --repo ride verbatim; the worktree
+    resolution and the hold read are the operand flow's own first hops."""
+    import subprocess
 
-    graph_path = tmp_path / "graph.json"
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
-    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
+    import fno.rust_binary
 
+    seen = []
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["do", "pr", "hold-check", "42", "--repo", str(Path("/srv/repo"))])
+    assert seen == [
+        ["/fake/fno-agents", "authorized-merge", "hold-check", "42", "--repo", "/srv/repo"],
+    ]
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["do", "pr", "hold-check", "7"])
+    assert seen[-1] == ["/fake/fno-agents", "authorized-merge", "hold-check", "7"]
+    assert result.exit_code == 0
+
+
+def test_closure_trailer_forwards_node_and_extra_to_the_binary(monkeypatch):
+    import subprocess
+
+    import fno.rust_binary
+
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=4)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(
-        app, ["do", "pr", "closure-trailer", "x-1111", "--extra", "not-an-id"],
+        app, ["do", "pr", "closure-trailer", "x-1111", "--extra", "x-2222"],
     )
+    assert seen["argv"] == [
+        "/fake/fno-agents", "pr-closure-trailer", "x-1111", "--extra", "x-2222",
+    ]
+    assert result.exit_code == 4
+
+
+def test_closure_trailer_forwards_a_bare_invocation(monkeypatch):
+    import subprocess
+
+    import fno.rust_binary
+
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
+    assert seen["argv"] == ["/fake/fno-agents", "pr-closure-trailer"]
     assert result.exit_code == 0
-    assert "warning: dropping malformed --extra id(s)" in result.output
-    assert "not-an-id" in result.output
-    assert "Fixes x-1111" in result.output
 
 
-def test_closure_trailer_bare_invocation_resolves_from_branch(monkeypatch, tmp_path):
-    """The bare verb resolves the node the branch names and renders."""
-    from fno import paths
-    import fno.pr.closure as closure_mod
+def test_closure_trailer_names_the_missing_binary(monkeypatch):
+    import fno.rust_binary
 
-    graph_path = tmp_path / "graph.json"
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
-    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
-    monkeypatch.setattr(
-        closure_mod,
-        "resolve_branch_node_id",
-        lambda known_ids, cwd=None, runner=None: "x-1111",
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: None)
+    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
+    assert result.exit_code == 127
+    assert "closure-trailer" in result.stderr
+    assert "FNO_AGENTS_BIN" in result.stderr
+
+
+def test_bind_created_forwards_flags_to_the_binary(monkeypatch):
+    import subprocess
+
+    import fno.rust_binary
+
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(
+        app,
+        [
+            "do", "pr", "bind-created",
+            "--url", "https://github.com/o/r/pull/9",
+            "--repo", "/tmp/repo",
+            "--node", "x-1111",
+        ],
     )
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
-
+    # One JSON argv element (the logs-verb door): the leg reads its payload
+    # from argv, never stdin - the passthrough inherits the caller's stdin,
+    # and a TTY there would hang a stdin read.
+    assert seen["argv"][0:2] == ["/fake/fno-agents", "pr-closure-bind-created"]
+    assert len(seen["argv"]) == 3
+    payload = json.loads(seen["argv"][2])
+    assert payload == {
+        "url": "https://github.com/o/r/pull/9",
+        "repo": "/tmp/repo",
+        "node": "x-1111",
+    }
     assert result.exit_code == 0
-    assert "Fixes x-1111" in result.output
-
-
-def test_closure_trailer_bare_invocation_refusal_is_loud(monkeypatch):
-    """A bare-verb resolution failure exits NONZERO naming the reason - the
-    legacy silent-empty contract is what shipped trailer-less PR 2080."""
-    import fno.pr.closure as closure_mod
-
-    def _raise(known_ids, cwd=None, runner=None):
-        raise closure_mod.BranchResolutionError(
-            "branch 'main' names 0 real node(s); pass the node explicitly instead"
-        )
-
-    monkeypatch.setattr(closure_mod, "resolve_branch_node_id", _raise)
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
-
-    assert result.exit_code == 1
-    assert "main" in result.output
-    assert "pass the node explicitly" in result.output
-
-
-def test_closure_trailer_unresolvable_node_stays_silent(monkeypatch, tmp_path):
-    """AC3-HP: an unresolvable NODE prints nothing and exits 0 - the
-    documented contract, unchanged. Unresolvable here is the not-well-formed
-    case: explicit mode renders any well-formed id without a graph-membership
-    check (unknown ids red the CI gate at open, by design)."""
-    from fno import paths
-
-    graph_path = tmp_path / "graph.json"
-    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
-    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer", "not-an-id"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
-
-
-def test_closure_trailer_dead_reader_exits_4_and_names_the_read(monkeypatch):
-    """AC3-ERR: a read that raises is not an unresolvable node. This used to
-    be a bare `except Exception: return` - print nothing, exit 0 - so a dead
-    keeper answered exactly like a missing node and three PRs sat red on the
-    closure gate with no named cause."""
-    import fno.graph.api as api_mod
-
-    def _dead(path):
-        raise RuntimeError("keeper exited immediately with code -9")
-
-    monkeypatch.setattr(api_mod, "wire_rows", _dead)
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
-
-    assert result.exit_code == 4
-    assert "graph read failed" in result.output
-    assert "keeper exited immediately with code -9" in result.output
-    assert "Backlog-Closure" not in result.output
-
-
-def test_closure_trailer_bare_mode_dead_reader_exits_4_not_1(monkeypatch):
-    """AC3-BARE: branch-resolution refusals keep exit 1; a failed graph read
-    exits 4 with the reader named. The two refusals stay separable."""
-    import fno.graph.api as api_mod
-
-    def _dead(path):
-        raise RuntimeError("store unreadable")
-
-    monkeypatch.setattr(api_mod, "wire_rows", _dead)
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
-
-    assert result.exit_code == 4
-    assert "store unreadable" in result.output
-
-
-def test_closure_trailer_external_backend_explicit_node_stays_silent(monkeypatch):
-    """AC3-EDGE: an external tracker with an explicit node prints nothing and
-    exits 0 - graph.json is not the delivery record there, unchanged."""
-    import fno.tracker as tracker_mod
-
-    monkeypatch.setattr(tracker_mod, "active_backend_name", lambda: "linear")
-
-    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
-
-    assert result.exit_code == 0
-    assert result.output == ""
 
 
 def test_global_receipt_path_uses_pinned_accessor(monkeypatch, tmp_path):

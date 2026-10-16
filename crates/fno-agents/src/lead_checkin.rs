@@ -677,6 +677,7 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
             }
         })
         .unwrap_or_else(|| "lanes unreadable".into());
+    let cap = s_str(gate_payload, "cap_clause").map(|clause| format!(" | {clause}"));
     let cpu_str = gate_cpu.as_str().unwrap_or("").to_string();
     let disagree = match (meaning(&fp_str), meaning(&cpu_str)) {
         (Some(a), Some(b)) => a != b,
@@ -688,11 +689,12 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
         "gate_axis": gate_axis,
         "gate_cpu": gate_cpu,
         "disagree": disagree,
-        "unparsed_lines": footprint_payload
-            .get("unparsed_lines")
-            .and_then(|u| u.as_i64())
-            .unwrap_or(0),
-        "lanes": lanes,
+        "unparsed_lines": footprint_payload.get("unparsed_lines").and_then(|u| u.as_i64()).unwrap_or(0),
+        // Occupants: the user's own live sessions in the slot count, shown
+        // apart (decision D3 revised). The probe answers at top level; an
+        // older probe without the field reads as none.
+        "occupants_yours": gate_payload.get("yours").and_then(Value::as_u64).unwrap_or(0),
+        "lanes": format!("{lanes}{}", cap.unwrap_or_default()),
     }))
 }
 
@@ -1165,8 +1167,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
         let slots = crate::spawn_gate_lanes::share_reading(
             &crate::paths::AgentsHome::from_env().registry_json(),
-            crate::capacity::effective_from_env(crate::agents_config::max_live(&ctx.cwd) as usize)
-                .cap,
+            crate::capacity::effective_for(&ctx.cwd).cap,
             session_id.as_deref(),
         )
         .share
@@ -1242,6 +1243,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("pushback", crate::lead_pushback::reading());
     take("subagents", crate::lead_answers::r_subagents());
     take("wake_meter", r_wake_meter(since));
+    take(
+        "correction_meter",
+        crate::correction_meter::r_correction_meter(),
+    );
     take("drain", r_drain(ctx));
     take("held", crate::lead_answers::held_reading(&ctx.scope));
     take("repeated_asks", crate::repeated_asks::reading());
@@ -1386,6 +1391,9 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
             "subagent_tokens_session".into(),
             wm.value["tokens_session"].clone(),
         );
+    }
+    if let Some(cm) = get("correction_meter").filter(|r| r.ok) {
+        crate::correction_meter::add_data(&cm.value, &mut data);
     }
     if let Some(drain) = get("drain").filter(|r| r.ok) {
         data.insert("undelivered".into(), drain.value.clone());
@@ -2152,6 +2160,16 @@ fn render_lines_with(
                     dash(wm.get("tokens_session")),
                 ));
             }
+        }
+    }
+
+    match failed("correction_meter") {
+        Some(r) => lines.push(format!("READER FAILED correction_meter: {}", r.error)),
+        None => {
+            let cm = by_name("correction_meter")
+                .map(|r| &r.value)
+                .unwrap_or(&Value::Null);
+            lines.push(crate::correction_meter::render_line(cm));
         }
     }
 
@@ -3723,10 +3741,13 @@ mod tests {
 
         let unreadable = r_capacity_pair(
             &json!({"admission": {"verdict": "admit"}, "unparsed_lines": 0}),
-            &json!({"verdict": "accepted"}),
+            &json!({"verdict": "accepted", "cap_clause": "effective cap 24 of 24"}),
         )
         .unwrap();
-        assert_eq!(unreadable["lanes"], "lanes unreadable");
+        assert_eq!(
+            unreadable["lanes"],
+            "lanes unreadable | effective cap 24 of 24"
+        );
         let unread_readings = sample_readings(board0(), org0(), unreadable, workers_none());
         let unread_data = build_data(&unread_readings, "x-bbbb");
         let unread_line = render_lines(
@@ -3740,7 +3761,7 @@ mod tests {
         .into_iter()
         .find(|line| line.starts_with("capacity:"))
         .unwrap();
-        assert!(unread_line.ends_with("| lanes lanes unreadable"));
+        assert!(unread_line.ends_with("| lanes lanes unreadable | effective cap 24 of 24"));
 
         let capacity_line = |unparsed: i64| {
             let capacity = r_capacity_pair(

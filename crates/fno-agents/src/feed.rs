@@ -32,7 +32,7 @@ pub struct FeedRow {
     /// `question_asked` | `question_closed` | `decision_recorded` |
     /// `node_created` | `node_started` | `node_shipped` | `node_ended` |
     /// `session_spawned` | `session_reaped` | `team_granted` |
-    /// `team_vacated` | `day_boundary`
+    /// `team_vacated` | `mail_to_user` | `day_boundary`
     pub kind: String,
     pub node: Option<String>,
     /// The node's project directory. Present on `node_created` rows so a
@@ -97,6 +97,10 @@ pub struct FeedRow {
     /// The search answers `l:` through it, else through `owner`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead: Option<String>,
+    /// True when `lead` is the LIVE team name resolved at render time;
+    /// omitted (false) when it is the event-time holder's fallback.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lead_current: bool,
     /// The row's position in the total order, as a six-string JSON array
     /// (`[ts, kind, node, session_id, ref, title]`, absent fields as "").
     /// The `--before` / `--after` flags take one back. Always serialized:
@@ -727,7 +731,8 @@ pub fn project(
                 | "blocked"
                 | "fno_update_started"
                 | "fno_update_installed"
-                | "fno_update_failed"),
+                | "fno_update_failed"
+                | "mail_escalation"),
             ) => k,
             _ => continue,
         };
@@ -736,6 +741,21 @@ pub fn project(
             continue;
         };
         match kind {
+            "mail_escalation" => {
+                let reason = s_field(data, "reason").unwrap_or_default();
+                let sender = s_field(data, "sender").unwrap_or_default();
+                let recipient = s_field(data, "recipient").unwrap_or_default();
+                let summary = s_field(data, "summary").unwrap_or_default();
+                rows.push(FeedRow {
+                    ts,
+                    kind: "mail_to_user".into(),
+                    cwd: s_field(&v, "cwd"),
+                    r#ref: s_field(data, "msg_id"),
+                    title: format!("{sender} to {recipient}: {}", one_line(&summary)),
+                    reason: Some(reason),
+                    ..FeedRow::default()
+                });
+            }
             "spawn_gate_refused" => {
                 let reason = s_field(data, "reason").unwrap_or_else(|| "unknown".into());
                 let name = s_field(data, "name").unwrap_or_default();
@@ -821,6 +841,14 @@ pub fn project(
     // read feeds every team row's title below.
     let themes = crate::paths::AgentsHome::from_env_opt()
         .map(|home| crate::team_names::theme_map(&home.team_names_json()))
+        .unwrap_or_default();
+    // Scope -> CURRENT team name, read once per fold beside the themes: the
+    // lead column resolves at render time, never from the event-time holder.
+    let lead_names = crate::paths::AgentsHome::from_env_opt()
+        .map(|home| {
+            crate::team_names::live_names(&home.team_names_json(), &home.registry_json())
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
     let rank = |level: i64, scope: &str| -> String {
         let theme = themes
@@ -944,6 +972,7 @@ pub fn project(
         &team_events,
         graph_entries,
         &themes,
+        &lead_names,
         &spawn_names,
     );
     for r in &mut rows {
@@ -993,7 +1022,7 @@ fn parse_team_events(team_raw: &str) -> Vec<TeamEvent> {
             .and_then(Value::as_str)
             .map(crate::event_store::event_type_alias)
         {
-            Some("agent_teamed") => {
+            Some("agent_promoted") => {
                 let Some(name) = s_field(&data, "name") else {
                     continue;
                 };
@@ -1048,11 +1077,15 @@ fn parse_team_events(team_raw: &str) -> Vec<TeamEvent> {
 /// clears its scope at its own ts. A row whose node, or that node's graph
 /// parent, sits in a held scope gets `lead {holder} L{level}`; otherwise a
 /// row whose node has a graph parent gets `epic {parent} {parent title}`.
+/// The printed lead name resolves at render time through `lead_names` (the
+/// live team store): a renamed or successed team shows its current name,
+/// the event-time holder only when no live team covers the node.
 fn assign_owners(
     rows: &mut [FeedRow],
     team_events: &[TeamEvent],
     graph_entries: &[Value],
     themes: &std::collections::BTreeMap<String, String>,
+    lead_names: &std::collections::BTreeMap<String, String>,
     spawn_names: &std::collections::HashMap<String, String>,
 ) {
     if rows.is_empty() {
@@ -1141,8 +1174,21 @@ fn assign_owners(
                 .get(crate::territory::canonical_scope(&scope).as_str())
                 .cloned();
             let rank = crate::team_names::title(*level as u32, &scope, theme.as_deref());
-            r.lead = Some(holder.clone());
-            r.owner = Some(format!("{rank} ({holder})"));
+            let canon = crate::territory::canonical_scope(&scope);
+            // Both names: the owner string keeps the lead AT EVENT TIME, the
+            // lead column resolves to the team's CURRENT name, and the flag
+            // tells the two apart on the wire.
+            r.owner = match lead_display(holder) {
+                Some(name) => Some(format!("{rank} ({name})")),
+                None => Some(rank),
+            };
+            r.lead = match lead_names.get(canon.as_str()).filter(|n| !n.is_empty()) {
+                Some(name) => {
+                    r.lead_current = true;
+                    Some((*name).clone())
+                }
+                None => lead_display(holder),
+            };
         } else if r.node.is_none() {
             // A node-less row whose parent session IS a held role holder's
             // session rolls up to that holder: the question a lead's own
@@ -1154,8 +1200,18 @@ fn assign_owners(
                         .get(crate::territory::canonical_scope(scope).as_str())
                         .cloned();
                     let rank = crate::team_names::title(*level as u32, scope, theme.as_deref());
-                    r.lead = Some(holder.clone());
-                    r.owner = Some(format!("{rank} ({holder})"));
+                    let canon = crate::territory::canonical_scope(scope);
+                    r.owner = match lead_display(holder) {
+                        Some(n) => Some(format!("{rank} ({n})")),
+                        None => Some(rank),
+                    };
+                    r.lead = match lead_names.get(canon.as_str()).filter(|n| !n.is_empty()) {
+                        Some(n) => {
+                            r.lead_current = true;
+                            Some((*n).clone())
+                        }
+                        None => lead_display(holder),
+                    };
                 }
             }
         } else if let Some(p) = parent {
@@ -1172,6 +1228,14 @@ fn assign_owners(
 /// True when a team scope (comma-separated node ids) holds `node`.
 fn scope_holds(scope: &str, node: &str) -> bool {
     scope.split(',').any(|seg| seg.trim() == node)
+}
+
+/// The event-time name a feed row prints: the holder when person-shaped.
+/// A dispatch slug carries digits in it and never prints - the row keeps
+/// its rank rollup without a placeholder name. The live store name rides
+/// beside this one and always passes (name_team validates it).
+fn lead_display(stored: &str) -> Option<String> {
+    (!stored.bytes().any(|b| b.is_ascii_digit())).then(|| stored.to_string())
 }
 
 /// The filters the CLI flags express, applied after ordering: `--node`,
@@ -1321,9 +1385,11 @@ pub(crate) fn filter_rows(
 /// unit test fails if any kind the projection emits lands there.
 pub(crate) fn area_of(kind: &str) -> &'static str {
     match kind {
-        "question_asked" | "question_closed" | "decision_recorded" | "sendmessage_fallback" => {
-            "mail"
-        }
+        "question_asked"
+        | "question_closed"
+        | "decision_recorded"
+        | "sendmessage_fallback"
+        | "mail_to_user" => "mail",
         "node_created" | "node_started" | "node_ended" => "backlog",
         "node_shipped" | "pr_merged" => "ship",
         "session_spawned"
@@ -1357,11 +1423,13 @@ pub(crate) const GRAPH_KINDS: &[&str] = &[
 ];
 pub(crate) const REMOVAL_KINDS: &[&str] = &["session_reaped"];
 /// The feed kinds the main store leg derives (its store kinds are
-/// spawn_gate_refused, worker_silent, blocked and the fno_update_* trio).
+/// spawn_gate_refused, worker_silent, blocked, mail_escalation and the
+/// fno_update_* trio).
 pub(crate) const MAIN_KINDS: &[&str] = &[
     "session_spawn_refused",
     "worker_stalled",
     "help_emitted",
+    "mail_to_user",
     "update_started",
     "update_finished",
 ];
@@ -1436,6 +1504,7 @@ pub(crate) struct Prefilter {
 #[derive(Debug)]
 struct FeedArgs {
     json: bool,
+    otlp: bool,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
     page: Page,
@@ -1445,6 +1514,7 @@ struct FeedArgs {
 fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     let mut args = FeedArgs {
         json: false,
+        otlp: false,
         since_epoch: None,
         until_epoch: None,
         page: Page::default(),
@@ -1454,6 +1524,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
+            "--otlp" => args.otlp = true,
             "--since-epoch" => {
                 args.since_epoch = Some(
                     it.next()
@@ -1497,6 +1568,9 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     }
     if args.page.before.is_some() && args.page.after.is_some() {
         return Err("--before and --after cannot combine: page from one edge".into());
+    }
+    if args.otlp && args.json {
+        return Err("--otlp and --json cannot combine".into());
     }
     let live = |v: Option<String>| v.filter(|s| !s.is_empty());
     args.pre.node = live(args.pre.node);
@@ -1547,7 +1621,7 @@ fn agents_journal(
 /// emitter wrote. Unbounded by the window: a team is granted before the
 /// events it owns.
 fn team_journals(home: &AgentsHome) -> String {
-    let types = ["agent_teamed", "agent_team_vacated"];
+    let types = ["agent_promoted", "agent_team_vacated"];
     let mut raw = agents_journal(home, &types, None, None);
     if let Some(parent) = home.root().parent() {
         let path = parent.join("events.jsonl");
@@ -1573,10 +1647,11 @@ fn main_store_journal(
     let Some(parent) = home.root().parent() else {
         return (String::new(), None);
     };
+    let mail = mail_escalation_text(&parent.join("spaces"), since_epoch, until_epoch);
     let path = parent.join("events.jsonl");
     if !path.is_file() && !crate::event_store::store_path(&path).is_file() {
         return (
-            String::new(),
+            mail,
             Some(format!("main store skipped (absent): {}", path.display())),
         );
     }
@@ -1595,9 +1670,199 @@ fn main_store_journal(
             ])
         },
     ) {
-        Ok(text) => (text, None),
-        Err(e) => (String::new(), Some(format!("main store skipped ({e})"))),
+        Ok(text) => (format!("{text}\n{mail}"), None),
+        Err(e) => (mail, Some(format!("main store skipped ({e})"))),
     }
+}
+
+/// The `mail_escalation` rows of every project space, one typed read each.
+/// The escalation emit writes the project store only, so the global store
+/// holds none. A space's directory name is its repository path with `/`
+/// swapped for `-`; each row gets that path as `cwd` when it decodes to a real
+/// directory. A store with no db reads as its whole journal, so a row of any
+/// other type is dropped here rather than projected twice.
+fn mail_escalation_text(
+    spaces: &std::path::Path,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> String {
+    let Ok(dirs) = std::fs::read_dir(spaces) else {
+        return String::new();
+    };
+    let query = crate::event_store::EventQuery {
+        since_ms: since_epoch.map(|s| s as i64 * 1000),
+        until_ms: until_epoch.map(|u| u as i64 * 1000),
+        ..crate::event_store::EventQuery::of_types(&["mail_escalation"])
+    };
+    let mut out = String::new();
+    for dir in dirs.flatten() {
+        let journal = dir.path().join("events.jsonl");
+        let Ok(text) = crate::event_store::journal_text_checked(&journal, &query) else {
+            continue;
+        };
+        let decoded = dir.file_name().to_string_lossy().replace('-', "/");
+        let cwd = std::path::Path::new(&decoded)
+            .is_dir()
+            .then(|| Value::String(decoded.clone()));
+        for line in text.lines() {
+            let Ok(mut v) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            if v.get("type").and_then(Value::as_str) != Some("mail_escalation") {
+                continue;
+            }
+            if let (Some(cwd), Some(row)) = (&cwd, v.as_object_mut()) {
+                row.insert("cwd".into(), cwd.clone());
+            }
+            out.push_str(&v.to_string());
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The questions leg: the four question kinds plus the empty type read typed
+/// off questions.jsonl (corrupt rows still count). The store's other kinds,
+/// 119k+ attention_delivery rows alone, never reach the parser, so they stop
+/// reading as malformed. An unreadable store is an empty leg plus the note
+/// the caller prints.
+fn questions_leg(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> (String, Option<String>) {
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let questions_path = fno_dir.join("questions.jsonl");
+    let questions_query = crate::event_store::EventQuery {
+        since_ms: since_epoch.map(|s| s as i64 * 1000),
+        until_ms: until_epoch.map(|u| u as i64 * 1000),
+        ..crate::event_store::EventQuery::of_types(&[
+            "operator_question",
+            "operator_question_closed",
+            "operator_decision",
+            "day_boundary",
+        ])
+    };
+    match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
+        Ok(raw) => (raw, None),
+        Err(e) => (
+            String::new(),
+            Some(format!(
+                "questions store unreadable, skipped: {} ({e})",
+                questions_path.display()
+            )),
+        ),
+    }
+}
+
+/// The lifecycle leg reads the store, never the file. An absent store is
+/// still a skipped store for the feed's purposes: the operator should know
+/// the lifecycle leg is absent, so its absence keeps its own note (AC3)
+/// where a present-but-empty store is just empty.
+fn graph_leg(home: &AgentsHome) -> (Vec<Value>, Option<String>) {
+    let path = graph_path(home);
+    if !crate::backlog::database_path(&path).exists() {
+        return (Vec::new(), Some("graph store skipped (absent)".to_string()));
+    }
+    match crate::graph_store::read_rows_where(
+        &path,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "id",
+                    "title",
+                    "parent",
+                    "cwd",
+                    "sessions",
+                    "created_at",
+                    "completed_at",
+                    "status",
+                    "merge_status",
+                    "pr_number",
+                    "pr_url",
+                    "source_session_id",
+                    "source_harness",
+                    "source_model",
+                    "source_effort",
+                    "source_parent_session",
+                    "source_team",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    {
+        Ok(list) => (list, None),
+        Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
+    }
+}
+
+/// The full window for a non-interactive reader: every leg on, no page, no
+/// prefilter. Returns the rows plus each store-skip note, so a caller can say
+/// why a leg contributed nothing when its store failed instead of reporting
+/// the window as simply quiet. The OTLP exporter reads through this, so the
+/// daemon arm and the `--otlp` preview see the same window.
+pub(crate) fn collect_window(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> (Vec<FeedRow>, Vec<String>) {
+    let mut notes: Vec<String> = Vec::new();
+    let (questions_raw, note) = questions_leg(home, since_epoch, until_epoch);
+    notes.extend(note);
+    let (graph_entries, note) = graph_leg(home);
+    notes.extend(note);
+    let (removals, removal_notes) =
+        crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
+    notes.extend(removal_notes);
+    let spawns_raw = agents_journal(
+        home,
+        &["agent_spawned", "agent_spawn_refused"],
+        since_epoch,
+        until_epoch,
+    );
+    let team_raw = team_journals(home);
+    let closes_raw = agents_journal(
+        home,
+        &[
+            "pane_closed",
+            "server_stopped",
+            "composer_shell_ran",
+            "composer_shell_refused",
+            "daemon_started",
+        ],
+        since_epoch,
+        until_epoch,
+    );
+    let (main_raw, note) = main_store_journal(home, since_epoch, until_epoch);
+    notes.extend(note);
+    let Projection { rows, .. } = project(
+        &questions_raw,
+        &graph_entries,
+        &removals,
+        &spawns_raw,
+        &team_raw,
+        &closes_raw,
+        &main_raw,
+        None,
+    );
+    let rows = filter_rows(
+        rows,
+        &Page::default(),
+        &Prefilter::default(),
+        since_epoch,
+        until_epoch,
+    );
+    (rows, notes)
 }
 
 /// The `fno-agents feed` verb. A missing or unreadable store is not fatal: the
@@ -1612,88 +1877,19 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
 
-    let fno_dir = home
-        .root()
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".fno"));
-    let questions_path = fno_dir.join("questions.jsonl");
-    // Typed read: the four question kinds plus the empty type (corrupt rows
-    // still count). The store's other kinds, 119k+ attention_delivery rows
-    // alone, never reach the parser, so they stop reading as malformed.
-    let questions_query = crate::event_store::EventQuery {
-        since_ms: args.since_epoch.map(|s| s as i64 * 1000),
-        until_ms: args.until_epoch.map(|u| u as i64 * 1000),
-        ..crate::event_store::EventQuery::of_types(&[
-            "operator_question",
-            "operator_question_closed",
-            "operator_decision",
-            "day_boundary",
-        ])
-    };
-    let questions_raw = if leg_skipped(&args.pre, QUESTION_KINDS) {
-        String::new()
+    let (questions_raw, questions_note) = if leg_skipped(&args.pre, QUESTION_KINDS) {
+        (String::new(), None)
     } else {
-        match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
-            Ok(raw) => raw,
-            Err(e) => {
-                eprintln!(
-                    "fno-agents feed: questions store unreadable, skipped: {} ({e})",
-                    questions_path.display()
-                );
-                String::new()
-            }
-        }
+        questions_leg(home, args.since_epoch, args.until_epoch)
     };
+    if let Some(note) = questions_note {
+        eprintln!("fno-agents feed: {note}");
+    }
 
-    let (graph_entries, graph_note): (Vec<Value>, Option<String>) = {
-        // The lifecycle leg reads the store, never the file. An absent store
-        // is still a skipped store for the feed's purposes: the operator
-        // should know the lifecycle leg is absent, so its absence keeps its
-        // own note (AC3) where a present-but-empty store is just empty.
-        let path = graph_path(home);
-        if leg_skipped(&args.pre, GRAPH_KINDS) {
-            (Vec::new(), None)
-        } else if !crate::backlog::database_path(&path).exists() {
-            (Vec::new(), Some("graph store skipped (absent)".to_string()))
-        } else {
-            match crate::graph_store::read_rows_where(
-                &path,
-                &crate::backlog::RowQuery {
-                    fields: Some(
-                        [
-                            "id",
-                            "title",
-                            "parent",
-                            "cwd",
-                            "sessions",
-                            "created_at",
-                            "completed_at",
-                            "status",
-                            "merge_status",
-                            "pr_number",
-                            "pr_url",
-                            "source_session_id",
-                            "source_harness",
-                            "source_model",
-                            "source_effort",
-                            "source_parent_session",
-                            "source_team",
-                        ]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    ),
-                    with_blockers: true,
-                    ..Default::default()
-                },
-            )
-            .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-            {
-                Ok(list) => (list, None),
-                Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
-            }
-        }
+    let (graph_entries, graph_note) = if leg_skipped(&args.pre, GRAPH_KINDS) {
+        (Vec::new(), None)
+    } else {
+        graph_leg(home)
     };
     if let Some(note) = graph_note {
         eprintln!("fno-agents feed: {note}");
@@ -1774,6 +1970,30 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     }
     if skipped_entries > 0 {
         eprintln!("fno-agents feed: skipped {skipped_entries} non-object graph entr(ies)");
+    }
+
+    if args.otlp {
+        // A preview, never a send: the body is what a beat WOULD post, and
+        // the posture line names the resolved config. Off machines can still
+        // preview, so an operator sees the shape before opting in; content
+        // attrs stay off unless the config turns them on. Selection runs over
+        // the full window the flags select, the beat's own input, never the
+        // newest-200 head page the panel prints.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let window = filter_rows(
+            rows,
+            &Page::default(),
+            &args.pre,
+            args.since_epoch,
+            args.until_epoch,
+        );
+        let (body, notes) = crate::otlp_export::preview(&cwd, home, &window);
+        println!("{body}");
+        for note in &notes {
+            eprintln!("fno-agents feed: {note}");
+        }
+        eprintln!("{}", crate::otlp_export::status_line(&cwd, home));
+        return 0;
     }
 
     let mut page = args.page;
@@ -2321,6 +2541,7 @@ mod tests {
             "update_finished",
             "main_ci_changed",
             "pr_merged",
+            "mail_to_user",
         ] {
             assert_ne!(area_of(k), "other", "{k} has no area");
         }
@@ -2404,7 +2625,7 @@ mod tests {
         // The lead route: a node-less row whose parent session is a held
         // role holder's spawn rolls up to that holder; the node route keeps
         // setting lead beside owner.
-        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
+        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
         let spawns = concat!(
             r#"{"ts":"2026-09-02T16:00:00Z","type":"agent_spawned","source":"python","data":{"name":"successor","harness":"claude","harness_session_id":"20260904T151442Z-cl54345-58af0c","substrate":"pane","spawned_by_session":"s-op"}}"#,
             "\n",
@@ -2442,6 +2663,10 @@ mod tests {
             r#"{"ts":"2026-09-30T10:04:00Z","type":"fno_update_installed","source":"python","data":{"new_rev":"55f04eda70a99c3f4e72a3cfe62e80d219c66d6f"}}"#,
             "\n",
             r#"{"ts":"2026-09-30T10:05:00Z","type":"fno_update_failed","source":"python","data":{"rc":"1","stage":"install","reason":"install exited 1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:07:00Z","type":"mail_escalation","source":"target","cwd":"/work/repo","data":{"reason":"attended-miss","sender":"c698b69a","recipient":"operator","summary":"mux test was a flake\nsecond line","msg_id":"msg-1"}}"#,
+            "\n",
+            r#"{"ts":"2026-09-30T10:08:00Z","type":"mail_escalation","source":"target","data":{"reason":"question","sender":"c698b69a","recipient":"operator","summary":"which branch?"}}"#,
         );
         let daemon = r#"{"ts":"2026-09-30T10:06:00Z","type":"daemon_started","source":"daemon","data":{"pid":15714,"version":"0.4.1","recovery_mode":"preserve"}}"#;
         let p = project("", &[], &[], "", "", daemon, main, None);
@@ -2477,6 +2702,21 @@ mod tests {
             "installed and failed both fold into update_finished"
         );
         assert_eq!(find("daemon_restarted").title, "daemon 0.4.1 pid 15714");
+        let mail = find("mail_to_user");
+        assert_eq!(mail.title, "c698b69a to operator: mux test was a flake");
+        assert_eq!(mail.area, "mail");
+        assert_eq!(mail.cwd.as_deref(), Some("/work/repo"));
+        assert_eq!(mail.reason.as_deref(), Some("attended-miss"));
+        assert_eq!(mail.r#ref.as_deref(), Some("msg-1"));
+        assert_eq!(
+            p.rows
+                .iter()
+                .filter(|r| r.kind == "mail_to_user")
+                .map(|r| r.reason.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["attended-miss", "question"],
+            "every escalation reason projects: a mail question has no question_asked row"
+        );
 
         let mut entry = graph_fixture().remove(0);
         entry
@@ -2701,6 +2941,41 @@ mod tests {
         .unwrap();
         assert!(raw.contains("q-feed-1"), "{raw}");
 
+        // mail_to_user reads each project space's own store. The space name
+        // decodes to cwd when it names a real directory, and a space with no
+        // db yields only its mail_escalation rows.
+        let spaces = tempfile::tempdir().unwrap();
+        let stored = spaces.path().join("-tmp");
+        std::fs::create_dir_all(&stored).unwrap();
+        let escalation = |sender: &str| {
+            serde_json::json!({
+                "ts": "2026-09-30T10:00:00Z", "type": "mail_escalation", "source": "target",
+                "data": {"reason": "attended-miss", "sender": sender, "recipient": "b", "summary": "hi"}
+            })
+            .to_string()
+        };
+        crate::event_store::append_envelope(&stored.join("events.jsonl"), &escalation("a"), None)
+            .unwrap();
+        let bare = spaces.path().join("-no-such-dir");
+        std::fs::create_dir_all(&bare).unwrap();
+        let other = r#"{"ts":"2026-09-30T10:01:00Z","type":"blocked","source":"target","data":{"kind":"help","reason":"x"}}"#;
+        std::fs::write(
+            bare.join("events.jsonl"),
+            format!("{}\n{other}\n", escalation("c")),
+        )
+        .unwrap();
+        let rows: Vec<Value> = mail_escalation_text(spaces.path(), None, None)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "one mail_escalation row per space: {rows:?}");
+        let by = |s: &str| rows.iter().find(|r| r["data"]["sender"] == s).unwrap();
+        assert_eq!(by("a")["cwd"], "/tmp");
+        assert!(
+            by("c").get("cwd").is_none(),
+            "an undecodable space sets no cwd"
+        );
+
         // AC2-EDGE: the typed questions read keeps the parser to the four
         // question kinds. Attention rows never reach it, so they stop reading
         // as malformed; an empty-type corrupt line still counts, once.
@@ -2806,7 +3081,7 @@ mod tests {
         // AC5: the same team pair landing in both journals yields exactly
         // one granted and one vacated row.
         let team = [
-            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_teamed","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
+            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_promoted","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
             r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_team_vacated","source":"python","data":{"cause":"succession","grantor":"vellum","holder":"warden","level":2,"scope":"x-eeee","successor":"jolly-finch"}}"#,
         ]
         .join("\n");
@@ -2837,7 +3112,7 @@ mod tests {
                 "id": "x-epic", "title": "the epic", "created_at": "2026-09-28T16:00:00Z",
             }),
         ];
-        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
+        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
         let p = project("", &entries, &[], "", team, "", "", None);
         let child = p
             .rows
@@ -2933,5 +3208,70 @@ mod tests {
             refused.reason.as_deref(),
             Some("no project chosen; pick one on the Project chip")
         );
+    }
+
+    #[test]
+    fn the_lead_column_resolves_the_current_team_name_at_render_time() {
+        let granted = |ts: &str, holder: &str, scope: &str| TeamEvent {
+            ts: ts.into(),
+            action: TeamAction::Granted,
+            holder: holder.into(),
+            scope: scope.into(),
+            level: 2,
+            cause: None,
+            successor: None,
+            actor: None,
+            vacated_scope: None,
+        };
+        let row_under = |ts: &str, node: &str| FeedRow {
+            ts: ts.into(),
+            kind: "question_asked".into(),
+            node: Some(node.into()),
+            ..FeedRow::default()
+        };
+        // x-live was granted to "finch" but the team is now named Quill;
+        // x-old's grant froze a dispatch slug and no live team covers it;
+        // x-gone's team is gone but its stored holder is a person name.
+        let mut rows = vec![
+            row_under("2026-10-07T10:00:00Z", "x-live"),
+            row_under("2026-10-07T10:00:00Z", "x-old"),
+            row_under("2026-10-07T10:00:00Z", "x-gone"),
+        ];
+        let events = vec![
+            granted("2026-10-07T09:00:00Z", "finch", "x-live"),
+            granted("2026-10-07T09:00:00Z", "w-9x4d2-g", "x-old"),
+            granted("2026-10-07T09:00:00Z", "candor", "x-gone"),
+        ];
+        let lead_names = std::collections::BTreeMap::from([("x-live".to_string(), "Quill".into())]);
+        assign_owners(
+            &mut rows,
+            &events,
+            &[],
+            &Default::default(),
+            &lead_names,
+            &Default::default(),
+        );
+        // The renamed team's lead column prints the CURRENT name while the
+        // owner string keeps the lead at event time: both names on the row,
+        // and the flag tells the two apart on the wire.
+        assert_eq!(rows[0].lead.as_deref(), Some("Quill"));
+        assert!(rows[0].lead_current);
+        assert_eq!(rows[0].owner.as_deref(), Some("Lead of x-live (finch)"));
+        // A slug holder with no live team prints no name: rank only, lead
+        // absent - the placeholder never renders.
+        assert_eq!(rows[1].lead, None);
+        assert_eq!(rows[1].owner.as_deref(), Some("Lead of x-old"));
+        // A person-shaped stored holder is the fallback when no live team
+        // covers the node.
+        assert_eq!(rows[2].lead.as_deref(), Some("candor"));
+        assert!(!rows[2].lead_current, "a fallback name is not the live one");
+        assert_eq!(rows[2].owner.as_deref(), Some("Lead of x-gone (candor)"));
+    }
+
+    /// The preview prints a body, not JSON: the two output flags refuse.
+    #[test]
+    fn otlp_refuses_json() {
+        let err = parse_args(&["--otlp".into(), "--json".into()]).unwrap_err();
+        assert_eq!(err, "--otlp and --json cannot combine");
     }
 }

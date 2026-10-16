@@ -27,8 +27,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use crate::loopcheck::LeadManifest;
 
@@ -298,8 +298,261 @@ pub fn live_titles(
         .collect())
 }
 
+// ---- name history: every name ever drawn or bound on this host ----
+//
+// `check_duplicate_name` only sees LIVE teams, so a dead lead freed its name
+// and the next successor took it (Rowan led the same scope twice in nine
+// days, and the iMac drew the same name while the MacBook Rowan lived). The
+// ledger records every name a draw consumed or a bind committed, and the
+// naming paths refuse any of them. Same flock + atomic-rename contract as
+// the store: a MISSING file reads as empty history, a malformed one is an
+// error, never "no names used".
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NameHistoryEntry {
+    pub name: String,
+    pub scope: String,
+    #[serde(default)]
+    pub session: Option<String>,
+    /// "drawn" (consumed by a draw, maybe not yet bound) or "bound".
+    pub kind: String,
+    pub ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct HistoryStore {
+    version: u32,
+    #[serde(default)]
+    names: Vec<NameHistoryEntry>,
+}
+
+/// The history file lives beside the store; every caller holds one path.
+pub fn history_path(store_path: &Path) -> PathBuf {
+    store_path.with_file_name("name_history.json")
+}
+
+fn history_read(store_path: &Path) -> Result<HistoryStore, String> {
+    let path = history_path(store_path);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HistoryStore {
+                version: 1,
+                names: Vec::new(),
+            })
+        }
+        Err(e) => {
+            return Err(format!(
+                "name history unreadable at {}: {e}",
+                path.display()
+            ))
+        }
+    };
+    let history: HistoryStore = serde_json::from_slice(&bytes).map_err(|e| {
+        format!(
+            "name history malformed at {} ({e}); fix or delete the file",
+            path.display()
+        )
+    })?;
+    if history.version != 1 {
+        return Err(format!(
+            "name history at {} has version {}, this fno understands 1",
+            path.display(),
+            history.version
+        ));
+    }
+    Ok(history)
+}
+
+/// Append one entry under the exclusive sidecar lock, the store's own
+/// contract: a reader racing the write sees the old file or the new one,
+/// never a torn line.
+pub(crate) fn history_append(store_path: &Path, entry: NameHistoryEntry) -> Result<(), String> {
+    let path = history_path(store_path);
+    let lock = crate::state::acquire_exclusive(&crate::state::lock_path(&path))
+        .map_err(|e| e.to_string())?;
+    let out = history_append_locked(store_path, entry);
+    let _ = lock.unlock();
+    out
+}
+
+/// [`history_append`] for a caller that already holds the sidecar lock (the
+/// draw's critical section). flock is per open file description, so a
+/// second `acquire_exclusive` on the same lock file from the same process
+/// blocks forever.
+pub(crate) fn history_append_locked(
+    store_path: &Path,
+    entry: NameHistoryEntry,
+) -> Result<(), String> {
+    let path = history_path(store_path);
+    history_read(store_path).and_then(|mut history| {
+        history.names.push(entry);
+        crate::state::write_json_atomic(&path, &history).map_err(|e| e.to_string())
+    })
+}
+
+/// Every name in the history, lowercased: the never-reuse floor.
+pub fn history_names(store_path: &Path) -> Result<BTreeSet<String>, String> {
+    Ok(history_read(store_path)?
+        .names
+        .into_iter()
+        .map(|e| e.name.to_ascii_lowercase())
+        .collect())
+}
+
+/// The newest drawn entry over `scope`, the one an explicit `--name` must
+/// match to count as accepting the machine's draw.
+pub fn pending_draw(store_path: &Path, scope: &str) -> Result<Option<String>, String> {
+    let canon = crate::territory::canonical_scope(scope);
+    Ok(history_read(store_path)?
+        .names
+        .into_iter()
+        .rev()
+        .find(|e| e.scope == canon && e.kind == "drawn")
+        .map(|e| e.name))
+}
+
+/// Every name this host must not reuse, lowercased: the history ledger, the
+/// store's records (live or stale), every registry row's name and aliases
+/// (any status), the bus's names and @mentions, the handoffs dir's file
+/// tokens, and the `name:` claims the peer hosts wrote. Best-effort sources
+/// (bus, handoffs, claims) answer what they can read; a hard error
+/// (history, store, registry) propagates, because a naming decision made on
+/// a half-read set is the bug this module exists to close.
+pub fn used_names(store_path: &Path, registry_path: &Path) -> Result<BTreeSet<String>, String> {
+    let mut used = history_names(store_path)?;
+    let store = read(store_path)?;
+    used.extend(
+        store
+            .teams
+            .values()
+            .map(|rec| rec.name.to_ascii_lowercase()),
+    );
+    let registry = crate::state::load_registry(registry_path).map_err(|e| e.to_string())?;
+    for row in &registry.entries {
+        used.insert(row.name.to_ascii_lowercase());
+        used.extend(row.aliases.iter().map(|a| a.to_ascii_lowercase()));
+    }
+    used.extend(bus_names(store_path));
+    used.extend(handoffs_name_tokens(store_path));
+    if let Ok(claims) = claim_names() {
+        used.extend(claims);
+    }
+    Ok(used)
+}
+
+/// The bus's names: from/to fields and every `@token` mention in a row,
+/// lowercased. The bus is best-effort: a missing file (a fresh host) or a
+/// malformed line answers nothing.
+fn bus_names(store_path: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Some(fno_dir) = store_path.parent().and_then(|p| p.parent()) else {
+        return out;
+    };
+    let Ok(bytes) = std::fs::read_to_string(crate::intel::bus_log_path(fno_dir)) else {
+        return out;
+    };
+    for line in bytes.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        for field in ["from", "to"] {
+            if let Some(name) = row.get(field).and_then(serde_json::Value::as_str) {
+                if valid_person_name(name.trim()) {
+                    out.insert(name.trim().to_ascii_lowercase());
+                }
+            }
+        }
+        for token in line.split('@').skip(1) {
+            let name: String = token
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            if valid_person_name(&name) {
+                out.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// Valid person-name tokens from the handoffs dir's file names, lowercased
+/// (`rowan-succession-2026-10-02.md` answers `rowan`). Best-effort like the
+/// bus; the dir resolves the way finalize's handoff writer resolves it, from
+/// the ambient home and cwd.
+fn handoffs_name_tokens(store_path: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let home = store_path
+        .parent()
+        .and_then(|agents| agents.parent())
+        .and_then(|dot_fno| dot_fno.parent())
+        .map(|p| p.to_path_buf());
+    let dir = crate::finalize::resolve_handoffs_dir(
+        None,
+        None,
+        &std::env::current_dir().unwrap_or_default(),
+        home.as_deref(),
+    );
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else { continue };
+        for token in file.split(|c: char| !c.is_ascii_alphabetic()) {
+            if valid_person_name(token) {
+                out.insert(token.to_ascii_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// The keys of every `name:` claim, lowercased: what the peer hosts have
+/// drawn or bound (the shared store when `store.remote_url` is set, this
+/// machine's graph.db otherwise). Best-effort: an unreadable store answers
+/// nothing here, because the draw's own acquire is the hard cross-host gate.
+fn claim_names() -> Result<BTreeSet<String>, String> {
+    // The ambient state root is fenced under test (paths.rs): read the rows
+    // only when the run declared a root, or outside tests. The listing is
+    // advisory - every local bind and draw already sits in the history, and
+    // the draw's own acquire stays the hard cross-host gate.
+    #[cfg(test)]
+    if std::env::var_os("FNO_CLAIMS_ROOT").is_none() {
+        return Ok(BTreeSet::new());
+    }
+    let mut out = BTreeSet::new();
+    for record in crate::claim_store::records_db(Some("name:"), true, None)? {
+        if let Some(name) = record.key.strip_prefix("name:") {
+            out.insert(name.to_ascii_lowercase());
+        }
+    }
+    Ok(out)
+}
+
+/// The used set for a naming decision over `canon`, minus the live holder
+/// row's own name when the history never bound it: renaming or checking in
+/// with what the row already carries is the same person, not a reuse. A
+/// name the history bound stays refused even while the row carries it.
+pub(crate) fn used_for_canon(
+    store_path: &Path,
+    registry_path: &Path,
+    canon: &str,
+    live: &BTreeMap<String, crate::territory::Team>,
+) -> Result<BTreeSet<String>, String> {
+    let mut used = used_names(store_path, registry_path)?;
+    if let Some(team) = live.get(canon) {
+        let holder = team.holder.to_ascii_lowercase();
+        if !history_names(store_path)?.contains(&holder) {
+            used.remove(&holder);
+        }
+    }
+    Ok(used)
+}
+
 /// Name an un-named live team. Refusals (pattern, a duplicate live name,
-/// an already-named team) name the holder so the lead can pick again.
+/// a retired name, an already-named team) name the holder so the lead can
+/// pick again.
 /// Success writes generation 1 bound to the live holder's session and answers
 /// the display string.
 pub fn name_team(
@@ -316,6 +569,7 @@ pub fn name_team(
     }
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
+    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
     let shown = update(store_path, |store| {
         let names = live_names_in(store, &live);
         if let Some(existing) = names.get(&canon) {
@@ -330,7 +584,7 @@ pub fn name_team(
                 "this team is already named {existing}; the name belongs to the team"
             ));
         }
-        check_duplicate_name(store, &names, &live, &canon, name)?;
+        check_duplicate_name(store, &names, &live, &used, &canon, name)?;
         let holder_session = live.get(&canon).and_then(|c| c.holder_session.clone());
         store.teams.insert(
             canon.clone(),
@@ -350,6 +604,16 @@ pub fn name_team(
         );
         Ok(display(name, 1))
     })?;
+    history_append(
+        store_path,
+        NameHistoryEntry {
+            name: name.to_ascii_lowercase(),
+            scope: canon.clone(),
+            session: live.get(&canon).and_then(|c| c.holder_session.clone()),
+            kind: "bound".into(),
+            ts: now_stamp(),
+        },
+    )?;
     ensure_named_team(store_path, registry_path, &canon)?;
     Ok(shown)
 }
@@ -358,6 +622,7 @@ fn check_duplicate_name(
     store: &Store,
     names: &BTreeMap<String, String>,
     live: &BTreeMap<String, crate::territory::Team>,
+    used: &BTreeSet<String>,
     canon: &str,
     name: &str,
 ) -> Result<(), String> {
@@ -374,6 +639,21 @@ fn check_duplicate_name(
                 &store.teams[held_scope].name,
                 store.teams[held_scope].generation
             )
+        ));
+    }
+    // A name is used once, fleet-wide and forever: any earlier lead, worker,
+    // draw or peer host's claim refuses here. Renaming a team to its own
+    // current name stays legal - the own record is excluded below.
+    let lowered = name.to_ascii_lowercase();
+    let own = store
+        .teams
+        .get(canon)
+        .map(|rec| rec.name.to_ascii_lowercase())
+        .unwrap_or_default();
+    if own.as_str() != lowered && used.contains(&lowered) {
+        return Err(format!(
+            "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Pick (or draw) a fresh name",
+            display(name, 1)
         ));
     }
     Ok(())
@@ -420,16 +700,18 @@ pub fn rename_team(
     {
         return Ok(None);
     }
+    let prior_record_name = record.name.to_ascii_lowercase();
+    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
     if !apply {
         let from = display(&record.name, record.generation);
         let to = display(new_name, 1);
         let names = live_names_in(&prior, &live);
-        check_duplicate_name(&prior, &names, &live, &canon, new_name)?;
+        check_duplicate_name(&prior, &names, &live, &used, &canon, new_name)?;
         return Ok(Some((from, to)));
     }
     let result = update(store_path, |store| {
         let names = live_names_in(store, &live);
-        check_duplicate_name(store, &names, &live, &canon, new_name)?;
+        check_duplicate_name(store, &names, &live, &used, &canon, new_name)?;
         let current = store
             .teams
             .get(&canon)
@@ -454,6 +736,20 @@ pub fn rename_team(
         record.updated_at = now_stamp();
         Ok((from, to))
     })?;
+    // Both spellings burn: the old name is off the store after the rename,
+    // so only the ledger keeps refusing it.
+    for burned in [prior_record_name, new_name.to_ascii_lowercase()] {
+        history_append(
+            store_path,
+            NameHistoryEntry {
+                name: burned,
+                scope: canon.clone(),
+                session: Some(session.to_string()),
+                kind: "bound".into(),
+                ts: now_stamp(),
+            },
+        )?;
+    }
     Ok(Some(result))
 }
 
@@ -473,7 +769,34 @@ pub fn ensure_named_team(
     let Some(rec) = store.teams.get(&canon) else {
         return Ok(false);
     };
-    if rec.holder_session.is_some() && rec.holder_session != team.holder_session {
+    // A recorded holder whose session is terminal - or whose row no registry
+    // row answers for any more - has vacated: the term died with the
+    // session, so the name belongs to the live team again. Unbind the stale
+    // session here, or the holder guard below reports the team unnamed
+    // forever. A live holder elsewhere stays untouched - keep_from and
+    // rename_team still read it.
+    let mut holder_bound = rec.holder_session.clone();
+    if let Some(sid) = holder_bound.as_deref() {
+        let registry = crate::state::load_registry(registry_path).map_err(|e| e.to_string())?;
+        let holder_vacated = registry
+            .entries
+            .iter()
+            .find(|e| e.harness_session_id.as_deref() == Some(sid))
+            .map_or(true, crate::state::row_is_terminal);
+        if holder_vacated {
+            update(store_path, |store| {
+                if let Some(rec) = store.teams.get_mut(&canon) {
+                    if rec.holder_session.as_deref() == Some(sid) {
+                        rec.holder_session = None;
+                        rec.updated_at = now_stamp();
+                    }
+                }
+                Ok(())
+            })?;
+            holder_bound = None;
+        }
+    }
+    if holder_bound.is_some() && holder_bound != team.holder_session {
         return Ok(false);
     }
     let label = rec.name.to_ascii_lowercase();
@@ -485,6 +808,9 @@ pub fn ensure_named_team(
     // lock is as fresh as the two files allow.
     let displaceable = |row: &crate::state::RegistryEntry,
                         entries: &[crate::state::RegistryEntry]| {
+        if crate::state::row_is_terminal(row) {
+            return true;
+        }
         let Some(sid) = row.harness_session_id.as_deref() else {
             return false;
         };
@@ -671,7 +997,7 @@ pub fn carry_holder_name(
     if canon.is_empty() {
         return Ok(None);
     }
-    update(store_path, |store| {
+    let named = update(store_path, |store| {
         if store.teams.contains_key(&canon) {
             // Already named (or claimed mid-flight): the name belongs to
             // the team, never re-stamped here.
@@ -702,7 +1028,18 @@ pub fn carry_holder_name(
             },
         );
         Ok(Some(display(candidate, 1)))
-    })
+    })?;
+    history_append(
+        store_path,
+        NameHistoryEntry {
+            name: candidate.to_ascii_lowercase(),
+            scope: canon,
+            session: Some(session.to_string()),
+            kind: "bound".into(),
+            ts: now_stamp(),
+        },
+    )?;
+    Ok(named)
 }
 
 /// Give the promoted colleague a fresh person name. The pending record
@@ -713,7 +1050,7 @@ pub fn carry_succession(
     pending: Option<PendingSuccession>,
 ) -> Result<Option<PendingSuccession>, String> {
     let pending = pending.ok_or(
-        "--hand-off requires --name <Name>; the outgoing lead chooses a fresh person name",
+        "--hand-off without a successor: the settle draws the successor name; accept it (--name <drawn>) or ask for a redraw (--name redraw)",
     )?;
     if !valid_person_name(&pending.successor_name) {
         return Err(
@@ -721,6 +1058,20 @@ pub fn carry_succession(
         );
     }
     let canon = crate::territory::canonical_scope(scope);
+    // The machine's draw is the only sanctioned successor name: accept is
+    // the name matching the scope's pending draw, so the pending drawn entry
+    // (already in the history) is excluded from this bind's refusal.
+    let accepted_draw = crate::team_names::pending_draw(store_path, scope)?
+        .is_some_and(|drawn| drawn.eq_ignore_ascii_case(&pending.successor_name));
+    if !accepted_draw {
+        let used = crate::team_names::history_names(store_path)?;
+        if used.contains(&pending.successor_name.to_ascii_lowercase()) {
+            return Err(format!(
+                "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Take the machine's draw (--name <drawn> to accept, --name redraw for a fresh draw)",
+                display(&pending.successor_name, 1)
+            ));
+        }
+    }
     update(store_path, |store| {
         if store
             .teams
@@ -735,23 +1086,40 @@ pub fn carry_succession(
                 pending.successor_name
             ));
         }
-        let rec = store.teams.entry(canon).or_insert_with(|| TeamNameRecord {
-            name: String::new(),
-            generation: 0,
-            holder_session: None,
-            nodes: Vec::new(),
-            updated_at: String::new(),
-            theme: None,
-            title: None,
-            pending_succession: None,
-            lead: None,
-        });
+        let rec = store
+            .teams
+            .entry(canon.clone())
+            .or_insert_with(|| TeamNameRecord {
+                name: String::new(),
+                generation: 0,
+                holder_session: None,
+                nodes: Vec::new(),
+                updated_at: String::new(),
+                theme: None,
+                title: None,
+                pending_succession: None,
+                lead: None,
+            });
         rec.name = pending.successor_name.clone();
         rec.generation = rec.generation.saturating_add(1);
         rec.holder_session = None;
         rec.pending_succession = Some(pending.clone());
         rec.updated_at = now_stamp();
         Ok(Some(pending))
+    })
+    .and_then(|settled| {
+        let settled = settled.ok_or("succession carry produced no record")?;
+        history_append(
+            store_path,
+            NameHistoryEntry {
+                name: settled.successor_name.to_ascii_lowercase(),
+                scope: canon.clone(),
+                session: settled.successor_session.clone(),
+                kind: "bound".into(),
+                ts: now_stamp(),
+            },
+        )?;
+        Ok(Some(settled))
     })
 }
 
@@ -1744,14 +2112,13 @@ mod tests {
         let store = store_path(tmp.path());
         let registry = registry_path(tmp.path());
         let refused = name_team(&store, &registry, "fno", "barnaby").unwrap_err();
-        assert!(
-            refused.contains("already names another worker"),
-            "{refused}"
-        );
+        assert!(refused.contains("retired"), "{refused}");
 
         write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
+        // The refusal fired before any store write, so the retry is a fresh
+        // naming; display preserves the caller's casing past the first letter.
         assert_eq!(
-            name_team(&store, &registry, "fno", "BARNABY").unwrap(),
+            name_team(&store, &registry, "fno", "barnaby").unwrap(),
             "Barnaby"
         );
         let registry = crate::state::load_registry(&registry).unwrap();
@@ -1830,6 +2197,122 @@ mod tests {
             .filter(|e| e.name == "folio" || e.aliases.iter().any(|a| a == "folio"))
             .count();
         assert_eq!(label_holders, 1);
+    }
+
+    /// The predecessor EXITED (a retired lead) and the record still names its
+    /// session as holder. A dead holder has vacated: the succession takes the
+    /// label back and unbinds the stale session instead of reporting the team
+    /// unnamed.
+    #[test]
+    fn an_exited_predecessors_label_and_stale_holder_do_not_block_the_succession() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_registry(
+            tmp.path(),
+            json!([
+                team_row("vellum", "fno", 1, "sess-successor"),
+                json!({
+                    "name": "folio", "status": "exited", "cwd": "/repo",
+                    "harness": "claude", "harness_session_id": "sess-old",
+                    "short_id": "oldrow21",
+                    "created_at": "2026-09-23T20:00:00Z",
+                }),
+            ]),
+        );
+        let store = store_path(tmp.path());
+        let registry = registry_path(tmp.path());
+        write(
+            &store,
+            &Store {
+                version: 1,
+                teams: BTreeMap::from([(
+                    "fno".into(),
+                    TeamNameRecord {
+                        name: "Folio".into(),
+                        generation: 2,
+                        holder_session: Some("sess-old".into()),
+                        nodes: Vec::new(),
+                        updated_at: now_stamp(),
+                        theme: None,
+                        title: None,
+                        pending_succession: None,
+                        lead: None,
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(ensure_named_team(&store, &registry, "fno").unwrap(), true);
+
+        let rows = crate::state::load_registry(&registry).unwrap();
+        let successor = rows
+            .entries
+            .iter()
+            .find(|e| e.harness_session_id.as_deref() == Some("sess-successor"))
+            .unwrap();
+        let old = rows
+            .entries
+            .iter()
+            .find(|e| e.harness_session_id.as_deref() == Some("sess-old"))
+            .unwrap();
+        assert_eq!(successor.name, "folio");
+        assert_ne!(old.name, "folio");
+        assert!(!old.aliases.iter().any(|a| a == "folio"));
+        let label_holders = rows
+            .entries
+            .iter()
+            .filter(|e| e.name == "folio" || e.aliases.iter().any(|a| a == "folio"))
+            .count();
+        assert_eq!(label_holders, 1);
+        let dump = snapshot(&store).unwrap();
+        assert_eq!(dump["teams"]["fno"]["holder_session"], json!(null));
+    }
+
+    /// The same succession shape when the predecessor's row was reaped
+    /// outright: the record names a session no registry row answers for. A
+    /// holder nobody can resolve has vacated like an exited one.
+    #[test]
+    fn a_reaped_holders_stale_session_does_not_block_the_succession() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_registry(
+            tmp.path(),
+            json!([team_row("vellum", "fno", 1, "sess-successor")]),
+        );
+        let store = store_path(tmp.path());
+        let registry = registry_path(tmp.path());
+        write(
+            &store,
+            &Store {
+                version: 1,
+                teams: BTreeMap::from([(
+                    "fno".into(),
+                    TeamNameRecord {
+                        name: "Folio".into(),
+                        generation: 2,
+                        holder_session: Some("sess-gone".into()),
+                        nodes: Vec::new(),
+                        updated_at: now_stamp(),
+                        theme: None,
+                        title: None,
+                        pending_succession: None,
+                        lead: None,
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(ensure_named_team(&store, &registry, "fno").unwrap(), true);
+
+        let rows = crate::state::load_registry(&registry).unwrap();
+        let successor = rows
+            .entries
+            .iter()
+            .find(|e| e.harness_session_id.as_deref() == Some("sess-successor"))
+            .unwrap();
+        assert_eq!(successor.name, "folio");
+        let dump = snapshot(&store).unwrap();
+        assert_eq!(dump["teams"]["fno"]["holder_session"], json!(null));
     }
 
     #[test]
@@ -2004,6 +2487,15 @@ mod tests {
             &registry_path(tmp.path()),
             "fno",
             "barnaby",
+        )
+        .unwrap_err();
+        // A fresh grant re-names the scope; the burned name stays burned, so
+        // the re-grant draws a different one.
+        name_team(
+            &store_path(tmp.path()),
+            &registry_path(tmp.path()),
+            "fno",
+            "norbert",
         )
         .unwrap();
         // The scope's team dies (registry row gone): the record is stale.

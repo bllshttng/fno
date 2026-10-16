@@ -38,6 +38,7 @@ fn feed_item(node: Option<&str>, sid: Option<&str>) -> crate::feed_overlay::Feed
         parent: None,
         url: None,
         lead: None,
+        lead_current: false,
         area: String::new(),
         cursor: String::new(),
     }
@@ -66,6 +67,7 @@ fn reaped_item(sid: &str, resume: &str) -> crate::feed_overlay::FeedItem {
         parent: None,
         url: None,
         lead: None,
+        lead_current: false,
         area: String::new(),
         cursor: String::new(),
     }
@@ -233,6 +235,88 @@ fn render_rows() {
     );
 }
 
+/// Header and data draw through ONE column grid: every title's display
+/// offset equals its column's value offset, a value at the cap fills its
+/// cell with a one-space gutter, and a value past the cap ellipsizes
+/// without pushing the next column sideways.
+#[test]
+fn column_grid_rows() {
+    fn display_col(line: &str, needle: &str) -> Option<usize> {
+        let byte = line.find(needle)?;
+        Some(
+            line[..byte]
+                .chars()
+                .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1))
+                .sum(),
+        )
+    }
+    // The rendered ts spells differently per zone (short_ts is local), so the
+    // time cell is read back out of the row: display columns 3..14 are the
+    // marker block plus the 11-wide date cell.
+    fn display_slice(line: &str, start: usize, len: usize) -> String {
+        let mut out = String::new();
+        let mut col = 0usize;
+        for ch in line.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+            if col >= start + len {
+                break;
+            }
+            if col + cw > start {
+                out.push(ch);
+            }
+            col += cw;
+        }
+        out
+    }
+    let mut long = feed_item(Some("x-a1b2c3d4e5f6"), Some("s-1234567890"));
+    long.kind = "daemon_restarted".into();
+    long.area = "mux".into();
+    long.harness = Some("claude".into());
+    long.lead = Some("team-alpha".into());
+    long.title = "restarted the daemon".into();
+    let mut over = feed_item(Some("x-b"), Some("s-2"));
+    // A kind past the 16-column cap: the cell ellipsizes at the cap.
+    over.kind = "prompt_parked_by_gatekeeper".into();
+    let o = overlay_in(vec![long, over], feed_view::FeedOrder::Recent);
+    let lines = feed_panel_lines(&o, false, 120, ROWS, 0);
+    let header = &lines[1];
+    // Recent order renders NEWEST first, so display row 0 is `over` and
+    // display row 1 (lines[3]) is `long`, whose cells carry the wide values.
+    let row = &lines[3];
+    let ts_cell = display_slice(row, 3, 11);
+    assert!(
+        !ts_cell.trim().is_empty(),
+        "the row carries a time cell: {row}"
+    );
+    for (title, value) in [
+        ("time", ts_cell.as_str()),
+        ("area", "mux"),
+        ("harness", "claude"),
+        ("kind", "daemon_restarted"),
+        ("node", "x-a1b2c"),
+        ("session", "09876543"),
+        ("lead", "team-alpha"),
+    ] {
+        assert_eq!(
+            display_col(header, title),
+            display_col(row, value),
+            "column `{title}`: header and data sit at different x\nheader: {header}\nrow:    {row}"
+        );
+    }
+    // A kind past the cap ellipsizes to exactly the cap and the node column
+    // keeps its grid position (over is display row 0, lines[2]).
+    let over_row = &lines[2];
+    assert!(
+        over_row.contains("prompt_parked_b\u{2026} "),
+        "the over-cap kind ellipsizes at 16 columns: {over_row}"
+    );
+    assert_eq!(
+        display_col(header, "node"),
+        display_col(over_row, "x-b"),
+        "node keeps its offset under an ellipsized kind\nheader: {header}\nrow:    {over_row}"
+    );
+}
+
 #[test]
 fn hit_rows() {
     // The cwd basename is the node id: the join the sideline itself uses.
@@ -240,17 +324,26 @@ fn hit_rows() {
     let row = joined_row("worker-01", Some("x-9223"), Some(7));
     let item = feed_item(Some("x-9223"), Some("s-ghost"));
     let (_, actions, _) = feed_detail::build(&[row], 0, &item);
-    let expected = agent_hit(&joined_row("worker-01", Some("x-9223"), Some(7)), 0);
-    let joined = actions.iter().find_map(|a| match a {
+    // The session id has no roster row: the link takes the shared
+    // open-session action's adopt door. The pane row is the seat of the
+    // node's current worker: FocusPane(7).
+    let seat = actions.iter().find_map(|a| match a {
         feed_detail::FeedAction::Session(hit) => Some(hit.clone()),
         _ => None,
     });
-    assert_eq!(actions.len(), 3, "node, session-id and pane are actions");
-    // ChromeHit carries no Debug/PartialEq; the two shapes that matter here.
-    match (joined, expected) {
+    let expected = agent_hit(&joined_row("worker-01", Some("x-9223"), Some(7)), 0);
+    match (seat, expected) {
         (Some(ChromeHit::Cmds(a)), ChromeHit::Cmds(b)) => assert_eq!(a, b),
-        _ => panic!("both hits must be Cmds"),
+        _ => panic!("the seat hit must be Cmds"),
     }
+    assert!(
+        actions.iter().any(
+            |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
+            if line == "fno agents adopt s-ghost --cross-project")
+        ),
+        "the ghost session's link takes the adopt door: {actions:?}"
+    );
+    assert_eq!(actions.len(), 3, "node, session-id and pane are actions");
 
     let item = feed_item(Some("x-nope"), None);
     let (_, actions, _) = feed_detail::build(&[], 0, &item);
@@ -377,18 +470,20 @@ fn click_rows() {
         matches!(&hit, ChromeHit::OpenFeedDetail(item) if item.session_id.as_deref() == Some("s-3")),
         "the click names the event the top row painted"
     );
-    // And THAT modal's session row offers the resume command the session id
-    // answers: the feed id is a session handle, never an attach jobId, so
-    // the row copies `fno agents resume <sid>` instead of a doomed attach.
+    // And THAT modal's session row offers the adopt command the session id
+    // answers: the feed id is a session handle the registry lacks, so the
+    // shared open-session action spells the adopt line, and `y` copies it.
     v.feed_detail = Some(feed_detail::modal(&v, feed_item(Some("x-c"), Some("s-3"))));
     let m = v.feed_detail.as_ref().unwrap();
     assert!(m.actions.iter().any(
         |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents resume s-3")
+            if line == "fno agents adopt s-3 --cross-project")
     ));
     assert!(
-        m.values.iter().any(|v| v == "fno agents resume s-3"),
-        "y copies the resume command: {:?}",
+        m.values
+            .iter()
+            .any(|v| v == "fno agents adopt s-3 --cross-project"),
+        "y copies the adopt command: {:?}",
         m.values
     );
     // Header and footer rows are chrome, not rows: they never deep-link.
@@ -1073,9 +1168,26 @@ fn detail_field_rows() {
     assert_eq!(owner, "epic x-29a8 the epic");
 
     let tz = chrono::FixedOffset::east_opt(-7 * 3600).unwrap();
-    assert_eq!(feed_view::short_ts_in("2026-09-28T16:48:49Z", &tz), "09:48");
+    // An older row carries its date when the panel is wide enough; a
+    // today row and a narrow panel read time only.
     assert_eq!(
-        feed_view::short_ts_in("not-a-time", &tz),
+        feed_view::short_ts_in("2026-09-28T16:48:49Z", &tz, true),
+        "09-28 09:48"
+    );
+    assert_eq!(
+        feed_view::short_ts_in("2026-09-28T16:48:49Z", &tz, false),
+        "09:48"
+    );
+    let now = chrono::Utc::now()
+        .with_timezone(&tz)
+        .format("%H:%M")
+        .to_string();
+    assert_eq!(
+        feed_view::short_ts_in(&chrono::Utc::now().to_rfc3339(), &tz, true),
+        now
+    );
+    assert_eq!(
+        feed_view::short_ts_in("not-a-time", &tz, true),
         "not-a-time",
         "unparseable stamps show raw"
     );

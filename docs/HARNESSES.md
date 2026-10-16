@@ -24,16 +24,16 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | cursor-agent (Cursor CLI agent) | fno drives the hosted TUI: a mux pane attended, the keeper-hosted thread lane dispatched. The `--print` stream is output-only; no rpc, acp, serve, or stdio transport exists. | Sequential |
 | grok CLI | fno drives its hosted TUI. Rust ACP is separate. Headless `grok -p` awaits signed-in create/resume proof. | Sequential |
 | zcode (ZCode's CLI agent) | Headless one-shot lane: fno runs `zcode -p` turns and resumes the minted `sess_<uuid>` by name. The TUI lane is unmeasured on the 3.14.3 bundle. | Sequential |
-| footnote (footnote's own loop) | Headless only: the `fno-agents` client runs the turn loop in-process over a model API, with `-P <provider>` and `-m <model>`. No pane, thread or TUI. | Sequential |
+| footnote (footnote's own loop) | Headless: the `fno-agents` client runs the turn loop over a model API, with `-m <provider>/<model>`. Pane: `--substrate pane` hosts the TUI as `footnote --spec <file>`; the spec file is the same launch spec the headless lane pipes on stdin. No thread. | Sequential |
 
 ### footnote
 
-`fno agents spawn -H footnote -P zai -m glm-5.3-flash --substrate headless "<task>"` runs footnote's own loop. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill) under `hooks/hooks.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown.
+`fno agents spawn -H footnote -m zai/glm-5.3-flash --substrate headless "<task>"` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill) under `hooks/hooks.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path ~/code/footnote/fnh`. `FNO_FOOTNOTE_BIN` names another path.
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `api.anthropic.com needs an API key` | A Claude.ai login cannot drive a third-party loop | Use `-H claude`, or set `ANTHROPIC_API_KEY` |
-| `no model endpoint` | No route env and no `-P` | Spawn with `-P <provider>`; the record lives at `config.model_routing.providers.<p>` |
+| `no model endpoint` | No route env and no provider prefix on the model id | Spawn with `-m <provider>/<model>`; the record lives at `config.model_routing.providers.<p>` |
 | `a dollar cap is set but <model> has no price` | The models.dev cache has no row for the model | Refresh `~/.fno/cache/models-dev.json` or drop the manifest's `budget_cost_cap_usd` |
 | `session <id> has a live writer` | Another process holds the session's `<fno_id>.lock` | `fno agents stop <name>`, then ask again |
 
@@ -52,7 +52,27 @@ One-time setup: put a `zcode` launcher on PATH that execs `node /Applications/ZC
 
 Other CLIs (Cursor's GUI editor, GitHub Copilot Agents, Kiro, Qoder, Rovo Dev, Trae) are out of scope for footnote orchestration. For a new harness that enters scope, run `fno doctor harness <name> --live` and record its positive markers before adding a capability row; the runnable rubric is the evidence gate, not this summary.
 
+The live rubric reads the spawn form from the capability table. A harness that declares no interactive create form and a headless one (zcode) spawns with `--substrate headless`. footnote declares both, so its live rubric takes the pane form. Its VIEW and MANIFEST PINNED lines then skip as declared unsupported. The one-shot exits after its answer, so MAIL BOTH WAYS and SURVIVE send their turns through the declared `headless_resume` form. A model-borrowing harness needs a model and a provider. Set `FNO_PROBE_MODEL` and `FNO_PROBE_PROVIDER`, for example `FNO_PROBE_PROVIDER=zai FNO_PROBE_MODEL=glm-5.3-flash fno doctor harness footnote --live`. The probe copies only that provider's `model_routing.providers` record into the isolated config. The `--provider` flag is a claude route. For footnote and opencode the probe joins the two values into `--model <provider>/<model>`, and every other harness gets the model as given. That is also the footnote spawn form: `fno agents spawn -H footnote --substrate headless -m zai/glm-5.3-flash`. A prefix that names a `model_routing.providers` record selects that record, and the rest is the model id. When `ANTHROPIC_BASE_URL` is set, that endpoint wins and the id goes whole.
+
 What each CLI can DO - a review command, a spawn arm, rpc, plugins, MCP - is the features dimension of the capability table, rendered per harness in [docs/harnesses/capability-matrix.md](harnesses/capability-matrix.md). That matrix is generated; never edit it by hand.
+
+## Launch each harness its own way
+
+Each harness documents its own CLI. The line it documents is the line that launches a worker, and fno translates no flags on this path. Around the launch fno does four things. It gates the launch where it sees it. It carries what only fno knows: a provider route through a claude `--settings` file, an account through `CLAUDE_CONFIG_DIR`. It records a provenance event holding the verbatim argv, caller and cwd. It adopts the session: the harness's own SessionStart hook reports to fno. The session then gets a registry row, a name, a parent edge and a node. `fno agents spawn <name> "<payload>" --node <node-id>` stays the path that applies your config preferences. Both paths end in the same adopt.
+
+Versions measured 2026-10-11: claude 2.1.296, codex 0.162.1, opencode 1.18.33, pi 0.84.2, agy 1.3.3. Links to each harness's own docs sit in [Official CLI documentation](#official-cli-documentation).
+
+| Harness | Native launch line | Background form | Model / permission / effort | Name | Resume / attach | Session list | SessionStart hook |
+|---|---|---|---|---|---|---|---|
+| claude | `claude --bg --name w "/fno:target x-aaaa"` | `--bg`: Claude's own supervisor, paneless | `--model M`, `--permission-mode P`, `--effort E`; route via `--settings <file>` | `--name` | `claude attach <short>` restarts a stopped one; `claude --resume <uuid> --bg` | `claude agents --json --all` | `hooks/context-hooks.json` |
+| codex | `codex -m M -a never -s workspace-write -c model_reasoning_effort=high "$fno:target x-aaaa"` | fno keeper via spawn | `-m`, `-a`, `-s`, `--yolo`, `-c model_reasoning_effort=E`, `-p <profile>` | none at launch (`/rename` in the TUI) | `codex resume <id> --remote unix://` | app-server thread list; `~/.codex/sessions` rollouts | `hooks/codex-hooks.json` |
+| opencode | `opencode run --attach $URL --title w -m zai/glm-5.3 --command fno:target x-aaaa` | fno keeper via spawn | `-m provider/model`, `--agent A`; permission only through the serve's `OPENCODE_CONFIG` file | `--title` | `opencode attach $URL`, then `-s <id>` | `opencode session list --format json` | `cli/src/fno/setup/assets/opencode/footnote.js` (`session.created`) |
+| pi | `pi --session-id <uuid> --model zai/glm-5.3:high "/skill:target x-aaaa"` | fno keeper via spawn | `--provider`, `--model p/id[:thinking]`, `--thinking L`; no permission prompts | none | `pi --session <id>` from the session's own cwd | the `--session-dir` store | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`) |
+| agy | `agy -i "/target x-aaaa" --model M --dangerously-skip-permissions` | fno keeper via spawn | `--model`, `--dangerously-skip-permissions`, `--effort` | none | `agy --conversation <id>` | none measured on 1.3.3 | `hooks/agy-session-report.sh` |
+
+Background mode is a keeper owned by a daemon. For claude that keeper is Claude's own supervisor: `claude --bg`, paneless, with peek, attach, detach and restart from the saved conversation. For every other harness it is fno's daemon and pane keeper. Reach it through `fno agents spawn --node <node-id> --name w -- <native argv verbatim>`. Spawn wraps the harness's own line after the `--` fence and keeper-hosts it. The session shows no pane until a portal opens one. The harness's flags pass through untouched. fno translates none.
+
+A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents list`, `fno agents peek`, mail and the stop verb reach it like any other.
 
 ## What this means in practice
 

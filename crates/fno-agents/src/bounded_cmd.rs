@@ -47,6 +47,11 @@ pub(crate) fn output_with_timeout_result(
     secs: u64,
 ) -> std::io::Result<std::process::Output> {
     use std::os::unix::process::CommandExt;
+    // The fleet budget admits before the spawn: a gh Command refused here
+    // leaves no child, and the caller reads the ledger line as exit 75.
+    if let Some(line) = crate::gh_budget::admit_command(&cmd) {
+        return Ok(crate::gh_budget::refused_output(line));
+    }
     let mut child = cmd
         .process_group(0)
         .stdin(std::process::Stdio::null())
@@ -167,4 +172,62 @@ mod tests {
         let err = output_with_timeout_result(cmd, 5).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
+}
+
+/// One subprocess read under a wall-clock budget, feeding `input` on the
+/// child's stdin. The null-stdin default above stays for every existing
+/// caller; the LLM one-shot seam feeds the prompt this way.
+pub(crate) fn output_with_timeout_stdin(
+    mut cmd: std::process::Command,
+    secs: u64,
+    input: &str,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Write as _;
+    use std::os::unix::process::CommandExt;
+    // Same admission as output_with_timeout_result: one transport, one
+    // consult, whichever stdin shape the caller needs.
+    if let Some(line) = crate::gh_budget::admit_command(&cmd) {
+        return Ok(crate::gh_budget::refused_output(line));
+    }
+    let mut child = cmd
+        .process_group(0)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    if let Some(mut pin) = child.stdin.take() {
+        let _ = pin.write_all(input.as_bytes());
+        let _ = pin.flush();
+    }
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let out = keep_capped(stdout, "stdout");
+        let err = keep_capped(stderr, "stderr");
+        (out, err)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                unsafe {
+                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                }
+                break child.wait()?;
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let (stdout, stderr) = reader
+        .join()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "output reader panicked"))?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }

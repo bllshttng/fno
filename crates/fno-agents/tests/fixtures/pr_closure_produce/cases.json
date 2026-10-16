@@ -1,0 +1,139 @@
+[
+  {"label": "scanner finds one id", "verb": "branch-ids", "head_ref": "feature/x-aaaa-auth"},
+  {"label": "scanner finds two ids in order", "verb": "branch-ids", "head_ref": "x-aaaa-and-x-cccc-duo"},
+  {"label": "scanner dedups repeats preserving order", "verb": "branch-ids", "head_ref": "x-aaaa-fix-x-cccc-then-x-aaaa"},
+  {"label": "scanner drops malformed segments", "verb": "branch-ids", "head_ref": "feature/fix-auth-and-x-aaaa"},
+  {"label": "plain branch name is empty", "verb": "branch-ids", "head_ref": "main"},
+  {"label": "empty head ref is empty", "verb": "branch-ids", "head_ref": ""},
+  {"label": "digits only segments are empty", "verb": "branch-ids", "head_ref": "release/1-2-3"},
+  {"label": "long prefix is not an id", "verb": "branch-ids", "head_ref": "toolongprefix-aaaa"},
+  {"label": "underscores do not delimit", "verb": "branch-ids", "head_ref": "x_aaaa_fix"},
+  {"label": "dots do not delimit", "verb": "branch-ids", "head_ref": "x-aaaa.tar.gz"},
+  {"label": "consume before suffix no double yield", "verb": "branch-ids", "head_ref": "stack/x-5b667-rebase"},
+  {"label": "nine hex digits is too long", "verb": "branch-ids", "head_ref": "pr/x-123456789"},
+  {"label": "greedy hex backtracks to an eleven char yield", "verb": "branch-ids", "head_ref": "x-aaaaaaaaaaaa"},
+  {"label": "hyphen inside branch separates ids", "verb": "branch-ids", "head_ref": "x-aaaa-x-cccc"},
+  {"label": "non string head ref is empty", "verb": "branch-ids", "head_ref": 3},
+  {"label": "cache dead is a documented false positive", "verb": "branch-ids", "head_ref": "feature/x-dddd-cache-dead"},
+  {"label": "scanner does not read the graph", "verb": "branch-ids", "head_ref": "feature/x-aaaa", "corrupt": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "verify keeps the real id", "verb": "branch-ids", "head_ref": "feature/x-aaaa-auth", "verify": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "verify drops the grammar only id", "verb": "branch-ids", "head_ref": "feature/x-dddd-fix", "verify": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "verify on a corrupt graph exits four", "verb": "branch-ids", "head_ref": "feature/x-aaaa-auth", "verify": true, "corrupt": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "no candidates leaves the body untouched", "verb": "ensure", "head_ref": "main", "body": "do the thing", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "no candidates skips a corrupt graph", "verb": "ensure", "head_ref": "main", "body": "x", "corrupt": true},
+  {"label": "real branch candidate appends the trailer", "verb": "ensure", "head_ref": "feature/x-aaaa-auth", "body": "do it", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "grammar only candidate is dropped", "verb": "ensure", "head_ref": "feature/x-dddd-fix", "body": "do it", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "malformed extra ids drop silently", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "", "extra_ids": ["nope", "x-bbbb"], "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-bbbb", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "idempotent when the trailer already claims", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "do it\n\nFixes x-aaaa\n", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "keeps parsed claims and appends new ones", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "Fixes x-cccc\n", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "empty body gets a bare trailer", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "external backend stays untouched", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "do it", "backend": "github", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "corrupt graph fails the ensure", "verb": "ensure", "head_ref": "feature/x-aaaa", "body": "x", "corrupt": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "trailer renders the node with contained descendants", "verb": "trailer", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed", "contained_in": "x-aaaa"},
+    {"id": "x-bbbb", "slug": "node-three", "title": "Node three", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "bare trailer resolves one real branch id", "verb": "trailer", "git": {"branch": "feature/x-aaaa-auth"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "bare trailer with zero real ids refuses", "verb": "trailer", "git": {"branch": "feature/main-thing"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "bare trailer with two real ids refuses naming both", "verb": "trailer", "git": {"branch": "x-aaaa-and-x-cccc"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "malformed extra prints a warning", "verb": "trailer", "node": "x-aaaa", "extra": ["bogus", "x-bbbb"], "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-bbbb", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "external backend with a node is silent", "verb": "trailer", "node": "x-aaaa", "backend": "github", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "external backend bare refuses", "verb": "trailer", "git": {"branch": "feature/x-aaaa"}, "backend": "github", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "corrupt graph exits four with the dead reader line", "verb": "trailer", "node": "x-aaaa", "corrupt": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "unreal but wellformed node still renders", "verb": "trailer", "node": "x-dddd", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "malformed node renders nothing", "verb": "trailer", "node": "x-zzzz", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "detached head refuses the bare trailer", "verb": "trailer", "git": "detached", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "node flag binds the created pr", "verb": "bind", "url": "https://github.com/acme/widget/pull/41", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "branch fallback binds one real id", "verb": "bind", "url": "https://github.com/acme/widget/pull/42", "git": {"branch": "feature/x-aaaa-auth"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "malformed url refuses", "verb": "bind", "url": "https://github.com/acme/widget/pull/abc", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "ambiguous branch refuses", "verb": "bind", "url": "https://github.com/acme/widget/pull/43", "git": {"branch": "x-aaaa-and-x-cccc"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"},
+    {"id": "x-cccc", "slug": "node-two", "title": "Node two", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "rebinding the same pr is idempotent", "verb": "bind", "url": "https://github.com/acme/widget/pull/41", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed", "pr_number": 41, "pr_url": "https://github.com/acme/widget/pull/41"}
+  ]},
+  {"label": "binding a done node is a no-op", "verb": "bind", "url": "https://github.com/acme/widget/pull/47", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "done", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "detached head refuses the bind", "verb": "bind", "url": "https://github.com/acme/widget/pull/44", "git": "detached", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "non graph backend refuses the bind", "verb": "bind", "url": "https://github.com/acme/widget/pull/45", "node": "x-aaaa", "backend": "github", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "branch with no match refuses", "verb": "bind", "url": "https://github.com/acme/widget/pull/46", "git": {"branch": "feature/nothing-here"}, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "a second pr appends to additional", "verb": "bind", "url": "https://github.com/acme/widget/pull/41", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed", "pr_number": 40, "pr_url": "https://github.com/acme/widget/pull/40"}
+  ]},
+  {"label": "cross repo claim refuses", "verb": "bind", "url": "https://github.com/acme/widget/pull/41", "node": "x-aaaa", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed", "pr_number": 9, "pr_url": "https://github.com/other/repo/pull/9"}
+  ]},
+  {"label": "unknown node refuses the bind", "verb": "bind", "url": "https://github.com/acme/widget/pull/48", "node": "x-dddd", "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]},
+  {"label": "corrupt graph refuses the bind", "verb": "bind", "url": "https://github.com/acme/widget/pull/48", "node": "x-aaaa", "corrupt": true, "rows": [
+    {"id": "x-aaaa", "slug": "node-one", "title": "Node one", "type": "feature", "status": "ready", "priority": "p1", "details": "seed"}
+  ]}
+]

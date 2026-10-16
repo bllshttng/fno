@@ -3,11 +3,11 @@ from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 
 from fno.graph import relatedness as R
+from tests.conftest import run_native_create
 
 
 def _node(nid, title="", domain=None, details="", slug="", **extra):
@@ -162,79 +162,43 @@ def test_write_map_round_trip(tmp_path):
     assert json.loads(p.read_text()) == mapping
 
 
-# --- AC8-EDGE: archive (consumed as-is by the nightly wrapper) never touches a
-# referenced or too-recent terminal node. Guards the contract the composition
-# relies on. ---
-
-def test_archive_holds_back_referenced_and_recent():
-    from fno.graph.archive import partition_for_archive
-
-    now = datetime.now(timezone.utc)
-    old = "2020-01-01T00:00:00+00:00"
-    entries = [
-        {"id": "done-old-ref", "completed_at": old},          # old but referenced
-        {"id": "done-old-free", "completed_at": old},          # old, unreferenced -> archives
-        {"id": "done-young", "completed_at": now.isoformat()}, # too recent
-        {"id": "open", "blocked_by": ["done-old-ref"]},        # open node referencing the first
-    ]
-    to_archive, _, skipped = partition_for_archive(entries, older_than_days=30, now=now)
-    ids = {e["id"] for e in to_archive}
-    assert ids == {"done-old-free"}
-    skip_reasons = {e["id"]: e["_skip"] for e in skipped}
-    assert skip_reasons["done-old-ref"] == "referenced-by-open-node"
-    assert skip_reasons["done-young"] == "too-recent"
-
-
 # --- CLI boundary: build then get round-trip + exit-code contract (AC2/AC3) ---
+# The wheel sub-app retired with the relatedness port; these exec the native
+# binary over a fixture store, asserting over both streams like the
+# create-port tests.
 
-def _wire_paths(tmp_path, monkeypatch, entries):
-    """Point both the graph read and the sidecar write at tmp_path."""
+
+def _seed_store(tmp_path, entries):
     import json as _json
-    from fno.graph import cli as _cli
 
     graph = tmp_path / "graph.json"
     seed_graph(graph, _json.dumps({"entries": entries}))
-    sidecar = tmp_path / "relatedness.json"
-    monkeypatch.setattr(_cli, "_graph_path", lambda: graph)
-    # relatedness build reads through the guarded display seam, which
-    # resolves fno.paths.graph_json at call time; pin it to the same file.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-    monkeypatch.setattr(_cli, "_relatedness_path", lambda: sidecar)
-    return sidecar
+    return graph
 
 
-def test_cli_build_then_get(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    from fno.graph.cli import _relatedness_cli
-
-    _wire_paths(tmp_path, monkeypatch, [
+def test_cli_build_then_get(tmp_path):
+    graph = _seed_store(tmp_path, [
         _node("aa-0001", title="nightly groomer relatedness", domain="code"),
         _node("aa-0002", title="nightly groomer rank", domain="code"),
     ])
-    runner = CliRunner()
-    assert runner.invoke(_relatedness_cli, ["build"]).exit_code == 0
-    res = runner.invoke(_relatedness_cli, ["get", "aa-0001", "-J"])
-    assert res.exit_code == 0
-    assert '"id": "aa-0002"' in res.stdout
+    build = run_native_create(graph, "relatedness", "build")
+    assert build.exit_code == 0, build.output + build.stderr
+    res = run_native_create(graph, "relatedness", "get", "aa-0001", "--json")
+    assert res.exit_code == 0, res.output + res.stderr
+    assert '"id": "aa-0002"' in (res.output + res.stderr)
 
 
-def test_cli_get_no_map_exits_nonzero_empty(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    from fno.graph.cli import _relatedness_cli
-
-    _wire_paths(tmp_path, monkeypatch, [])  # no build run -> no sidecar
-    res = CliRunner().invoke(_relatedness_cli, ["get", "a"])
+def test_cli_get_no_map_exits_nonzero_empty(tmp_path):
+    _seed_store(tmp_path, [])  # no build run -> no sidecar
+    res = run_native_create(tmp_path / "graph.json", "relatedness", "get", "a")
     assert res.exit_code != 0
-    assert res.stdout.strip() == ""
+    assert res.output.strip() == ""
 
 
-def test_cli_get_no_edges_exits_zero(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    from fno.graph.cli import _relatedness_cli
-
-    _wire_paths(tmp_path, monkeypatch, [_node("solo", title="lonely", domain="code")])
-    runner = CliRunner()
-    runner.invoke(_relatedness_cli, ["build"])
-    res = runner.invoke(_relatedness_cli, ["get", "solo", "-J"])
-    assert res.exit_code == 0
-    assert res.stdout.strip() == "[]"
+def test_cli_get_no_edges_exits_zero(tmp_path):
+    graph = _seed_store(tmp_path, [_node("solo", title="lonely", domain="code")])
+    build = run_native_create(graph, "relatedness", "build")
+    assert build.exit_code == 0, build.output + build.stderr
+    res = run_native_create(graph, "relatedness", "get", "solo", "--json")
+    assert res.exit_code == 0, res.output + res.stderr
+    assert res.output.strip() == "[]"

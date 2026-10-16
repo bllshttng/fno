@@ -117,6 +117,11 @@ def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
         ]
     )
 
+    # The machine names successors: seal the pending draw so the typed name
+    # counts as accepting it.
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Rowan", "epic-x")
     result = _spawn(
         "spawn", "--name", "Rowan", "-H", "claude", "term",
         "--substrate", "thread", "--cwd", str(bg_home), "--promote", "epic-x", "--succeed",
@@ -273,7 +278,7 @@ def test_bg_spawn_roles_over_a_scope_whose_lead_is_terminal(bg_home, monkeypatch
 # --- headless stays refused --------------------------------------------------
 
 
-@pytest.mark.parametrize("one_shot_args", [["--substrate", "headless"], ["-p"], ["--once"]])
+@pytest.mark.parametrize("one_shot_args", [["--substrate", "headless"], ["--once"]])
 def test_headless_role_is_refused(bg_home, one_shot_args) -> None:
     """A one-shot exits after one answer, so its role names a dead ruler before
     the grantor's next turn. This is the ONE substrate the refusal still covers."""

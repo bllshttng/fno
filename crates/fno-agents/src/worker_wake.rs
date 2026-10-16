@@ -474,7 +474,7 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                 crate::claims::ClaimState::Corrupted => Claim::Unreadable,
             }
         },
-        &|cwd, pr| crate::pr_status::cache::cached_status(cwd, pr, false).1,
+        &|cwd, pr| crate::pr_status::cache::cached_status(cwd, pr, false, None).1,
         &|sid, drive, text| match drive {
             Drive::TurnStart => match crate::codex_inject::deliver_via_codex_daemon_sync(sid, text)
             {

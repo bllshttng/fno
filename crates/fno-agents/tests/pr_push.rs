@@ -28,7 +28,9 @@ fn log_of(dir: &Path, name: &str) -> String {
 /// remote-only commit, write `remote-only-merge` to make the merges log
 /// report one merge with two parents, and write `dirty-merge` to make that
 /// merge conflicted under `merge-tree` with a tree that differs from the
-/// parent auto-merge. `rev-list --count` answers 3 until a rebase or merge
+/// parent auto-merge. Write `same-head` to make `rev-parse HEAD` answer the
+/// sha the remote branch carries (deadbeef0000000), so a no-integration run
+/// reads as a no-op. `rev-list --count` answers 3 until a rebase or merge
 /// touches `counted` (the integration happened), so the receipt reads
 /// behind-before=3 behind-after=0 on an integrating push and 3/3 on one that
 /// integrates nothing. `rev-list --merges --count` always answers 0.
@@ -53,6 +55,9 @@ case "$1" in
         if [ -f "$D/no-remote-branch" ]; then exit 1; fi
         echo deadbeef0000000; exit 0 ;;
       --short) echo abc1234; exit 0 ;;
+      HEAD)
+        if [ -f "$D/same-head" ]; then echo deadbeef0000000; else echo feedface00000; fi
+        exit 0 ;;
       --show-toplevel) echo "$D"; exit 0 ;;
       *"^{tree}"*)
         if [ -f "$D/dirty-merge" ]; then echo handtree0000000; else echo autotree000000; fi
@@ -106,11 +111,14 @@ exit 0
 }
 
 /// Stub gh: a settled read (completed failure buckets as not pending) by
-/// default; write `pending` to make the check-runs read report a run in
-/// flight with a job link. The pulls read (the push verb's integration
-/// gate) answers a DIRTY PR by default, so the integrating tests keep
-/// exercising the rebase/merge leg; write `clean-pr` for a mergeable PR
-/// that is merely behind, or `no-pr` for a branch with no open PR.
+/// default; write `pending` for a run in flight with a job link, or
+/// `red-pending` for a head whose latest rows already failed while a run
+/// is still testing it. The pulls reads (the push verb's integration
+/// gate) answer a DIRTY PR by default, so the integrating tests keep
+/// exercising the rebase/merge leg: the list read resolves only the PR's
+/// number, and the single `pulls/7` read carries `mergeable_state`
+/// (`clean` under `clean-pr`, null under `null-state`); write `no-pr` for a
+/// branch with no open PR.
 fn stub_gh(dir: &Path) {
     write_exec(
         dir,
@@ -123,22 +131,37 @@ if [ -f "$D/gh-error" ]; then
   exit 1
 fi
 for a in "$@"; do case "$a" in
-  *pulls?state=open*)
+  *pulls/7)
     if [ -f "$D/clean-pr" ]; then
-      echo '[{"number":7,"mergeable_state":"clean"}]'
-    elif [ -f "$D/no-pr" ]; then
+      echo '{"number":7,"mergeable_state":"clean"}'
+    elif [ -f "$D/null-state" ]; then
+      echo '{"number":7,"mergeable_state":null}'
+    else
+      echo '{"number":7,"mergeable_state":"dirty"}'
+    fi
+    exit 0 ;;
+  *pulls?state=open*)
+    if [ -f "$D/no-pr" ]; then
       echo '[]'
     else
-      echo '[{"number":7,"mergeable_state":"dirty"}]'
+      echo '[{"number":7}]'
     fi
     exit 0 ;;
   */check-runs)
     if [ -f "$D/no-runs" ]; then
       echo '{"check_runs":[]}'
+    elif [ -f "$D/red-pending" ]; then
+      echo '{"check_runs":[{"name":"lint","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/6/job/40"},{"name":"guards","status":"in_progress","conclusion":null,"html_url":"https://github.com/o/r/actions/runs/7/job/42"}]}'
     elif [ -f "$D/pending" ]; then
       echo '{"check_runs":[{"name":"guards","status":"in_progress","conclusion":null,"html_url":"https://github.com/o/r/actions/runs/7/job/42"}]}'
     else
       echo '{"check_runs":[{"name":"guards","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/7/job/42"}]}'
+    fi
+    exit 0 ;;
+  */cancel)
+    if [ -f "$D/cancel-fails" ]; then
+      echo "cancel failed" >&2
+      exit 1
     fi
     exit 0 ;;
   */status) echo '{"statuses":[]}'; exit 0 ;;
@@ -245,6 +268,44 @@ fn behind_rows() {
         1,
         "the push still lands: {log:?}"
     );
+
+    // A no-integration push whose HEAD already is the remote head moves
+    // nothing: the receipt says pushed=0 and neither the push, the
+    // in-flight read, nor a red run's cancel ever fires.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("clean-pr"), "").unwrap();
+    std::fs::write(d.join("same-head"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("integrate=none"), "{out}");
+    assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
+    assert!(out.contains("pushed=0"), "{out}");
+    let log = log_of(&d, "git.log");
+    assert!(!log.contains("git push"), "nothing to push: {log:?}");
+    let gh = log_of(&d, "gh.log");
+    assert!(
+        !gh.contains("check-runs"),
+        "the in-flight read never ran: {gh}"
+    );
+    assert!(
+        !gh.contains("cancel"),
+        "a no-op never cancels a red run: {gh}"
+    );
+
+    // A null mergeable_state (GitHub still computing) integrates nothing:
+    // the branch pushes as it stands, with no rebase.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("null-state"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("integrate=none"), "{out}");
+    assert!(out.contains("behind-before=3 behind-after=3"), "{out}");
+    assert!(out.contains("pushed=1"), "{out}");
+    assert!(
+        !log_of(&d, "git.log").contains("rebase origin/main"),
+        "no rebase on a null state: {:?}",
+        log_of(&d, "git.log")
+    );
 }
 
 #[test]
@@ -323,6 +384,50 @@ fn inflight_rows() {
     assert!(
         !log_of(&d, "git.log").contains("fetch"),
         "no fetch after a dirty refusal"
+    );
+    assert!(!log_of(&d, "git.log").contains("git push"));
+}
+
+#[test]
+fn red_cancel_rows() {
+    // A red head's stale run cancels best-effort, the bypass row journals,
+    // and the fix pushes with no flag (user law 2026-10-09).
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("red-pending"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ci=red-cancel"), "{out}");
+    let gh = log_of(&d, "gh.log");
+    assert!(gh.contains("actions/runs/7/cancel"), "{gh}");
+    assert!(gh.contains("-X POST"), "{gh}");
+    assert!(
+        log_of(&d, "fno.log").contains("push_debounce_bypass"),
+        "the journal row"
+    );
+    assert_eq!(log_of(&d, "git.log").matches("git push").count(), 1);
+
+    // A failed cancel never blocks the push.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("red-pending"), "").unwrap();
+    std::fs::write(d.join("cancel-fails"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ci=red-cancel"), "{out}");
+    assert!(err.contains("cancel of run 7 failed"), "{err}");
+    assert_eq!(log_of(&d, "git.log").matches("git push").count(), 1);
+    assert!(
+        log_of(&d, "fno.log").contains("push_debounce_bypass"),
+        "the journal row survives a failed cancel"
+    );
+
+    // A run on a head with no red row is never cancelled.
+    let (_t, d) = tmpdir();
+    std::fs::write(d.join("pending"), "").unwrap();
+    let (code, out, err) = run_verb(&d, &[]);
+    assert_eq!(code, 2, "{out}\n{err}");
+    assert!(
+        !log_of(&d, "gh.log").contains("cancel"),
+        "an all-green run is never cancelled"
     );
     assert!(!log_of(&d, "git.log").contains("git push"));
 }

@@ -11,12 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.graph import discovery, fts
-from fno.graph.cli import cli
-
-runner = CliRunner()
+from fno.graph import discovery
 
 
 def _node(node_id: str, **overrides: object) -> dict:
@@ -59,7 +55,7 @@ def _seed(graph: Path, entries: list[dict]) -> None:
 
 def test_candidates_union_recall_lanes(tmp_graph: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_graph, [_node("x-fts"), _node("x-related"), _node("x-both")])
-    monkeypatch.setattr(fts, "search", lambda *args, **kwargs: ["x-fts", "x-both"])
+    monkeypatch.setattr(discovery, "_fts_search", lambda *args, **kwargs: ["x-fts", "x-both"])
     monkeypatch.setattr(
         "fno.graph.relatedness.similar_nodes",
         lambda *args, **kwargs: [
@@ -83,9 +79,9 @@ def test_candidates_degrade_when_fts_is_unavailable(
     _seed(tmp_graph, [_node("x-related")])
 
     def unavailable(*args, **kwargs):
-        raise fts.SearchUnavailableError("no fts5")
+        raise discovery.SearchUnavailableError("no fts5")
 
-    monkeypatch.setattr(fts, "search", unavailable)
+    monkeypatch.setattr(discovery, "_fts_search", unavailable)
     monkeypatch.setattr(
         "fno.graph.relatedness.similar_nodes",
         lambda *args, **kwargs: [("x-related", 0.4, "shared terms")],
@@ -96,90 +92,6 @@ def test_candidates_degrade_when_fts_is_unavailable(
     assert result.degraded is True
     assert result.warning == "no fts5"
     assert result[0].lanes == frozenset({"relatedness"})
-
-
-def test_assess_cites_duplicate_and_satisfied_evidence() -> None:
-    duplicate = discovery.assess(
-        _node("x-expired", status="deferred"),
-        [discovery.Candidate("x-done", 0.6, frozenset({"fts"}))],
-    )
-    satisfied = discovery.assess(
-        _node("x-expired", status="deferred", pr_number=1345, completed_at="2026-09-01T00:00:00Z"),
-        [],
-    )
-
-    assert duplicate.verdict == "duplicate"
-    assert "x-done" in duplicate.evidence
-    assert satisfied.verdict == "satisfied"
-    assert "PR#1345" in satisfied.evidence
-
-
-def test_assess_unknown_explains_why() -> None:
-    result = discovery.assess(
-        _node("x-expired", status="deferred", deferred_reason="operator decision"),
-        [],
-    )
-
-    assert result.verdict == "undecided"
-    assert result.reason
-    assert result.evidence == []
-
-
-def test_discover_expired_population_is_read_only(tmp_graph: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _seed(
-        tmp_graph,
-        [
-            _node("x-expired", status="deferred", deferred_kind="expired", deferred_reason="stale >30d, drained by maintain"),
-            _node("x-decided", status="deferred", deferred_kind="wont_do", deferred_reason="operator decision"),
-            _node("x-ready", status="ready"),
-        ],
-    )
-    monkeypatch.setattr(discovery, "candidates", lambda *args, **kwargs: discovery.CandidateResults())
-    before = tmp_graph.with_suffix(".db").read_bytes()
-
-    result = runner.invoke(cli, ["discover", "--json"])
-
-    assert result.exit_code == 0, result.output
-    report = json.loads(result.stdout)
-    assert report["assessed"] == 1
-    assert report["excluded_by_kind"] == 1
-    assert report["worklist"][0]["verdict"] == "undecided"
-    assert tmp_graph.with_suffix(".db").read_bytes() == before
-
-
-def test_discover_none_match_reports_positive_control(tmp_graph: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _seed(tmp_graph, [_node("x-expired", status="deferred", deferred_kind="expired")])
-    monkeypatch.setattr(discovery, "candidates", lambda *args, **kwargs: discovery.CandidateResults())
-
-    result = runner.invoke(cli, ["discover", "--json"])
-
-    assert result.exit_code == 0, result.output
-    report = json.loads(result.stdout)
-    assert len(report["worklist"]) == 1
-    assert report["worklist"][0]["candidates"] == []
-    assert report["positive_control"]["matches"] == ["x-expired"]
-
-
-def test_discover_refuses_all_match_fixture(tmp_graph: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _seed(
-        tmp_graph,
-        [
-            _node("x-one", status="deferred", deferred_kind="expired"),
-            _node("x-two", status="deferred", deferred_kind="expired"),
-        ],
-    )
-    monkeypatch.setattr(
-        discovery,
-        "candidates",
-        lambda *args, **kwargs: discovery.CandidateResults(
-            [discovery.Candidate("x-other", 0.5, frozenset({"fts"}))]
-        ),
-    )
-
-    result = runner.invoke(cli, ["discover"])
-
-    assert result.exit_code != 0
-    assert "failed instrument" in result.output.lower()
 
 
 def test_candidates_floor_passthrough_keeps_caller_floors(
@@ -199,7 +111,7 @@ def test_candidates_floor_passthrough_keeps_caller_floors(
             )
         ],
     )
-    monkeypatch.setattr(fts, "search", lambda *args, **kwargs: [])
+    monkeypatch.setattr(discovery, "_fts_search", lambda *args, **kwargs: [])
 
     default_floor = discovery.candidates(
         "alfa bravo charlie delta echo foxtrot golf hotel", "", graph_path=tmp_graph, domain=""
@@ -217,19 +129,3 @@ def test_candidates_floor_passthrough_keeps_caller_floors(
     assert low and low[0].score == pytest.approx(0.0625)
 
 
-def test_filing_paths_ignores_quoted_log_spans() -> None:
-    quoted = (
-        "Verbatim from the log: 'ok cli/src/fno/graph/cli.py 12353 lines, "
-        "change +4/-4 (net 0), no grow'"
-    )
-    assert "cli/src/fno/graph/cli.py" not in discovery.filing_paths(quoted)
-
-    # an apostrophe inside a word opens no span, so the real surface survives
-    mixed = quoted + " The node's surface is scripts/ci/check-file-budget.sh"
-    assert "scripts/ci/check-file-budget.sh" in discovery.filing_paths(mixed)
-
-
-def test_filing_paths_keeps_backticked_paths() -> None:
-    assert "cli/src/fno/think_inspect.py" in discovery.filing_paths(
-        "`cli/src/fno/think_inspect.py`"
-    )

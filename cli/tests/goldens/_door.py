@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -46,6 +47,7 @@ def door(
     args: list[str],
     *,
     path_prepend: str | None = None,
+    env_override: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run `fno-agents backlog <args>` against the sandbox; skip when this
     checkout has no dev build (the same finder the other door tests use)."""
@@ -64,6 +66,16 @@ def door(
     }
     if path_prepend:
         env["PATH"] = f"{path_prepend}:{os.environ['PATH']}"
+    if "FNO_BIN" not in env:
+        # The door execs the front binary for board-render; CI builds it in
+        # this checkout but never puts it on PATH.
+        from fno.events.store_client import EventStoreUnavailable, resolve_native_bin
+
+        try:
+            env["FNO_BIN"] = resolve_native_bin()
+        except EventStoreUnavailable:
+            pass
+    env.update(env_override or {})
     proc = subprocess.run(
         [str(binary), "backlog", *args],
         capture_output=True,
@@ -94,7 +106,9 @@ def roster_stub(root: Path, rows: list | None = None) -> str:
     return str(stub)
 
 
-def door_graph(graph: Path, *args: str) -> tuple[int, str, str]:
+def door_graph(
+    graph: Path, *args: str, env_override: dict[str, str] | None = None
+) -> tuple[int, str, str]:
     """Run a selection verb (next/undispatched) through the binary against a
     fixture-seeded store at graph.parent. Writes config.toml when the fixture
     has none, isolates claims under the state root, and stubs the roster
@@ -105,7 +119,28 @@ def door_graph(graph: Path, *args: str) -> tuple[int, str, str]:
     config = root / "config.toml"
     if not config.exists():
         config.write_text(f'state_dir = "{root}"\n')
-    return door(root, list(args), path_prepend=roster_stub(root, []))
+    return door(
+        root, list(args), path_prepend=roster_stub(root, []), env_override=env_override
+    )
+
+
+class DoorResult(NamedTuple):
+    """A native verb's run in the shape CliRunner results had."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+
+    @property
+    def output(self) -> str:
+        return self.stdout + self.stderr
+
+
+def door_cli(
+    graph: Path, *args: str, env_override: dict[str, str] | None = None
+) -> DoorResult:
+    """`door_graph` for a backlog verb that left the python app."""
+    return DoorResult(*door_graph(graph, *args, env_override=env_override))
 
 
 def write_gh_stub(tmp_path: Path, body: str = "[]\n") -> str:
@@ -163,3 +198,12 @@ def graph_rows(root: Path) -> list[dict]:
     from fno.graph.api import wire_rows
 
     return wire_rows(path=root / "graph.json")
+
+
+def native_backlog(*argv: str, env_override: dict[str, str] | None = None) -> DoorResult:
+    """`fno backlog <verb>` for a verb the native binary serves, run against
+    the store the test pinned through `fno.paths.graph_json`."""
+    from fno import paths
+
+    assert argv and argv[0] == "backlog", argv
+    return door_cli(paths.graph_json(), *argv[1:], env_override=env_override)

@@ -334,3 +334,88 @@ def test_unknown_scope_is_refused_not_routed_to_global(tmp_path, monkeypatch):
     assert exc.value.exit_code == 2
     assert not (tmp_path / ".fno" / "config.toml").exists()
     assert not (tmp_path / "home" / ".fno" / "config.toml").exists()
+
+
+# ---------------------------------------------------------------------------
+# The build-freeze key is modeled, so the front door arms it and the stored
+# shape is a real table (the Rust reader walks nested keys).
+# ---------------------------------------------------------------------------
+
+
+def test_build_agent_freeze_roundtrip_writes_a_toml_table(tmp_path):
+    res = set_config_value(
+        "build.agent_freeze", "true", scope="project", repo_root=tmp_path
+    )
+    assert res.value is True
+    stored = _read(tmp_path)
+    assert stored["build"]["agent_freeze"] is True
+
+
+# ---------------------------------------------------------------------------
+# The telemetry keys the Rust daemon reads are modeled, so `config set`
+# accepts them and stores the nested tables the daemon walks.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key, raw, parts, expected",
+    [
+        ("telemetry.claude_otel", "false", ("telemetry", "claude_otel"), False),
+        ("telemetry.otlp.enabled", "true", ("telemetry", "otlp", "enabled"), True),
+        (
+            "telemetry.otlp.endpoint",
+            "https://us.i.posthog.com/i",
+            ("telemetry", "otlp", "endpoint"),
+            "https://us.i.posthog.com/i",
+        ),
+        (
+            "telemetry.otlp.headers_env",
+            "MY_OTLP_HEADERS",
+            ("telemetry", "otlp", "headers_env"),
+            "MY_OTLP_HEADERS",
+        ),
+        ("telemetry.otlp.log_content", "true", ("telemetry", "otlp", "log_content"), True),
+    ],
+)
+def test_telemetry_keys_roundtrip_as_nested_tables(tmp_path, key, raw, parts, expected):
+    set_config_value(key, raw, scope="project", repo_root=tmp_path)
+    node = _read(tmp_path)
+    for part in parts:
+        node = node[part]
+    assert node == expected
+
+
+# ---------------------------------------------------------------------------
+# The attention keys the Rust daemon reads are modeled, so `config set`
+# accepts `attention.sinks` as a list of tables and `attention.enabled`.
+# ---------------------------------------------------------------------------
+
+
+def test_attention_sinks_roundtrip_as_a_list_of_tables(tmp_path):
+    row = (
+        '[{"name": "phone", "type": "ntfy", "url": "https://ntfy.sh",'
+        ' "topic": "fno-questions", "token_env": "NTFY_TOKEN"}]'
+    )
+    set_config_value("attention.sinks", row, scope="project", repo_root=tmp_path)
+    assert _read(tmp_path)["attention"]["sinks"] == [
+        {
+            "name": "phone",
+            "type": "ntfy",
+            "url": "https://ntfy.sh",
+            "topic": "fno-questions",
+            "token_env": "NTFY_TOKEN",
+        }
+    ]
+
+
+def test_a_retired_attention_row_list_loads_as_defaults():
+    from fno.config import ConfigBlock
+
+    block = ConfigBlock(attention=[{"name": "old"}]).attention
+    assert block.enabled is True
+    assert block.sinks == []
+
+
+def test_attention_enabled_roundtrips(tmp_path):
+    set_config_value("attention.enabled", "false", scope="project", repo_root=tmp_path)
+    assert _read(tmp_path)["attention"]["enabled"] is False

@@ -127,6 +127,24 @@ def _arm_world(
         return {"outcome": "merged", "detail": "cafe" * 6}
 
     monkeypatch.setattr(merge_mod, "_authorized_merge", _owner)
+
+    # The drain reaches the core through the operand door (the native
+    # authorized-merge binary). This journey fakes the transport, not the
+    # core: route the door's merge op back into the in-process run_merge,
+    # which runs through the stubbed owner above, and flatten the flow
+    # receipt the way the native door answers.
+    def _operand_door(verb, payload, timeout=None):
+        if verb == "authorized-merge" and payload.get("op") == "merge":
+            rc = merge_mod.run_merge(
+                list(payload.get("argv") or []),
+                cwd=payload.get("cwd"),
+                authority=payload.get("authority") or "durable_grant",
+                timeout_s=float(timeout or 300.0),
+            )
+            return {"exit": rc, **dict(merge_mod.LAST_RECEIPT)}
+        raise AssertionError(f"journey stub: unexpected verb_call {verb} {payload!r}")
+
+    monkeypatch.setattr("fno.rust_binary.verb_call", _operand_door)
     return fake
 
 

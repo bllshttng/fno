@@ -42,6 +42,9 @@ def test_ac1_hp_nameless_spawn_mints_slug():
     out = _norm(["spawn"])
     assert out == ["spawn", "--name", out[2]]
     assert "-" in out[2]  # adjective-noun slug
+    # A succession hand-off names nobody: the settle draws the name, and a
+    # minted slug would arrive as an explicit proposal and decline the draw.
+    assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
 
 
 def test_workspace_value_flag_not_misread_as_name_or_substrate():
@@ -148,9 +151,9 @@ def test_substrate_given_twice_exits_2():
     assert e.value.code == 2
 
 
-def test_headless_flag_plus_trailing_substrate_token_exits_2():
+def test_once_flag_plus_trailing_substrate_token_exits_2():
     with pytest.raises(SystemExit) as e:
-        _norm(["spawn", "--name", "foo", "--headless", "bg"])
+        _norm(["spawn", "--name", "foo", "--once", "bg"])
     assert e.value.code == 2
 
 
@@ -374,7 +377,7 @@ def test_claude_bg_carries_fenced_tokens():
     assert "no carrier" not in err.getvalue()
 
 
-@pytest.mark.parametrize("substrate_args", [["--headless"], ["-p"]])
+@pytest.mark.parametrize("substrate_args", [["--once"], ["-o"], ["--substrate", "headless"]])
 def test_headless_keeps_fenced_tokens(substrate_args):
     # The one-shot lanes carry fenced tokens (appended before the prompt).
     err = io.StringIO()

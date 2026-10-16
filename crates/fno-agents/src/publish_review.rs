@@ -54,7 +54,7 @@ impl Gh for GhReal {
         if let Some(t) = token {
             cmd.env("GH_TOKEN", t);
         }
-        match cmd.output() {
+        match crate::gh_budget::output(cmd) {
             Ok(out) => GhOut {
                 ok: out.status.success(),
                 code: out.status.code().unwrap_or(-1),
@@ -237,7 +237,9 @@ fn newest_head_attestation(journals: &[PathBuf], head: &str) -> Option<Value> {
     for path in journals {
         // SQL authority: committed rows in commit order; the import pulls any
         // journal bytes a pre-cutover writer (or fixture) left behind.
-        let Ok(text) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(text) =
+            crate::loopcheck::event_lines_of(path, &["review_attestation"]).map(|l| l.join("\n"))
+        else {
             continue;
         };
         for line in text.lines() {
@@ -278,7 +280,9 @@ fn newest_head_attestation(journals: &[PathBuf], head: &str) -> Option<Value> {
 fn newest_branch_attestation(journals: &[PathBuf], branch: &str) -> Option<Value> {
     let mut newest: Option<(String, Value)> = None;
     for path in journals {
-        let Ok(text) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(text) =
+            crate::loopcheck::event_lines_of(path, &["review_attestation"]).map(|l| l.join("\n"))
+        else {
             continue;
         };
         for line in text.lines() {

@@ -397,6 +397,13 @@ def test_spawn_claude_command_receipt_names_effective_message(workdir_claude) ->
     receipt = json.loads(_receipt_line(result.output))
     assert receipt["effective_message"] == "/fno:ship pr check 7"
 
+    # v41: the row records the DELIVERED seed (post brevity enrichment),
+    # so the attended guard can exempt the machine's own slash-command turn.
+    from fno.agents.spawn_payload import enrich_spawn_payload
+
+    entry = next(e for e in load_registry() if e.name == "command-c")
+    assert entry.spawn_payload == enrich_spawn_payload("/fno:ship pr check 7")
+
 
 def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
     """zsh turns a double-quoted `$fno:target x-1` into `arget x-1`. The spawn
@@ -625,44 +632,29 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
 
 
-def test_thread_refusal_is_one_message_across_both_seams(monkeypatch) -> None:
-    """The spawn seam and the dispatch-lanes seam raise the SAME text.
-
-    Two files used to render the accept set from the tuple and then hardcode
-    the same pane-only sentence beside it, so one could name a harness the
-    other had since admitted - and did.
-    """
-    from typer.testing import CliRunner
-
-    from fno.agents import dispatch
-    from fno.backlog import advance
-    from fno.graph import cli as graph_cli
-
-    with pytest.raises(dispatch.DispatchAskError) as caught:
-        dispatch._check_spawn_harness("gemini")
-
-    monkeypatch.setattr(advance, "dispatch_lanes", lambda *a, **k: [])
-    lanes = CliRunner().invoke(
-        graph_cli.cli, ["dispatch-lanes", "--harness", "gemini", "--max", "1"]
-    )
-
-    assert lanes.exit_code == 2
-    for line in str(caught.value).splitlines():
-        assert line in lanes.output
 
 
-def test_spawn_pi_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:
+def test_spawn_pi_passes_the_seam_on_both_lanes_and_unmeasured_headless_refuses(
+    tmp_path: Path,
+) -> None:
     """x-43bd arm 1: the seam is substrate-aware. pi passes on thread (its
-    keeper lane is journey-proven) and refuses on headless, naming the
-    `unmeasured` stance - not the old `unknown harness` contradiction."""
+    keeper lane is journey-proven) and on headless (measured by running it),
+    while a harness whose headless stance reads `unmeasured` (grok) refuses,
+    naming the stance - not the old `unknown harness` contradiction. The
+    Python spawn path has no pi one-shot, so it names the Rust lane instead
+    of falling to the retired-harness error."""
     from fno.agents import dispatch
 
     # Positive marker: the accepted name RETURNS rather than raising.
     dispatch._check_spawn_harness("pi", headless=False)
     dispatch._check_spawn_harness("pi")
+    dispatch._check_spawn_harness("pi", headless=True)
+
+    with pytest.raises(dispatch.DispatchAskError, match="Rust runtime's headless lane"):
+        dispatch.dispatch_spawn("pi-once", "hi", "pi", tmp_path, headless=True)
 
     with pytest.raises(dispatch.DispatchAskError) as caught:
-        dispatch._check_spawn_harness("pi", headless=True)
+        dispatch._check_spawn_harness("grok", headless=True)
     message = str(caught.value)
     assert "unmeasured" in message
     assert "headless" in message

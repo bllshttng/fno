@@ -1443,11 +1443,7 @@ fn relaunch_name(claude_home: &ClaudeHome, row_name: &str, short_id: &str, uuid:
         return row_name.to_string();
     }
     transcript_custom_title(claude_home, uuid)
-        .filter(|title| {
-            title
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        })
+        .filter(|title| crate::wake_name::spawn_safe_name(title))
         .unwrap_or_else(|| row_name.to_string())
 }
 
@@ -2524,6 +2520,12 @@ mod tests {
         let io = ScriptedViewport::new("idle codex tui");
         let loaded_empty = || Ok(Vec::new());
         let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        // The env is process-global: hold the shared test-env lock across the
+        // pinned window so a concurrent scenario elsewhere in the binary
+        // (burn_watch pins these roots) never sees this flip.
+        let env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("FNO_AGENTS_HOME", home.registry_json().parent().unwrap());
         let code = codex_resume_route(
             "w1",
@@ -2544,6 +2546,7 @@ mod tests {
             Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
             None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
+        drop(env_lock);
         assert_eq!(code, 0);
         // One daemon serves every arm: arm B's wake is the LAST turn/start
         // for sess-1 with the wake text (arm A ran first, arm C sends "go").

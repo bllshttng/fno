@@ -412,7 +412,7 @@ fn git_remote_slug(root: &Path) -> Option<String> {
 
 /// POSIX `$VAR` / `${VAR}` expansion; unset reads empty, like
 /// `os.path.expandvars`.
-fn expandvars(raw: &str) -> String {
+pub(crate) fn expandvars(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len());
     let mut i = 0;

@@ -17,8 +17,10 @@ use super::merge_evidence::{
 use super::node_ref::has_node_id_prefix;
 use super::promise::resolve_promise_evidence;
 use super::settings;
+use super::supersession::normalize_surface;
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
+use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
 
 // ---------------------------------------------------------------------------
 // argv parsing
@@ -286,23 +288,16 @@ pub(crate) fn children_all_closed(parent: &Value, kids: &[&Value]) -> bool {
 }
 
 /// True when a deliberate reopen postdates every child's close (the
-/// _reopen_outranks_child_closes twin). Ambiguity favours the human.
+/// _reopen_outranks_child_closes twin). Ambiguity favours the human: an
+/// unreadable reopen protects, an unreadable child stamp protects.
 pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> bool {
-    let reopened = match parse_iso(parent.get("reopened_at")) {
-        Some(t) => t,
-        None => {
-            let raw = text_at(parent, "reopened_at").unwrap_or("");
-            return !raw.trim().is_empty();
-        }
-    };
-    for kid in kids {
-        if let Some(closed) = parse_iso(kid.get("completed_at")) {
-            if closed >= reopened {
-                return false;
-            }
-        }
-    }
-    true
+    reopen_outranks_stamps(
+        text_at(parent, "reopened_at"),
+        &kids
+            .iter()
+            .map(|k| text_at(k, "completed_at"))
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// True when a deliberate reopen postdates the merge being closed on (the
@@ -339,16 +334,11 @@ fn clear_reopen_warning_if_child_matches(parent: &mut Value, child_id: Option<&s
     }
 }
 
-pub(crate) fn auto_closed_note(entry: &Value) -> String {
-    let has_plan = truthy_field(entry, "plan_path")
-        || entry
-            .get("plan_path")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
-    let has_pr = entry.get("pr_number").and_then(Value::as_u64).is_some();
-    if has_plan && !has_pr {
-        return "auto-closed: all children complete; own plan deliverables UNVERIFIED (plan_path set, no PR)".into();
-    }
+/// completion_note for a container closed by all-children-complete. A
+/// plan-having, PR-less container is never closed any more (the
+/// has_own_plan_work hold), so the old UNVERIFIED flag branch is retired
+/// with the false close it flagged.
+pub(crate) fn auto_closed_note(_entry: &Value) -> String {
     "auto-closed: all children complete".into()
 }
 
@@ -430,7 +420,11 @@ pub(crate) fn cascade_close_parents(entries: &mut [Value], node_id: &str) -> Vec
         let parent_is_done = truthy_field(&entries[idx], "completed_at");
         let outranks = reopen_outranks_child_closes(&entries[idx], &kid_refs);
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
-        if parent_is_done || outranks || !all_closed {
+        // Own plan work holds the close: the parent's own deliverables are
+        // unverified, and the UNVERIFIED note that used to flag this close
+        // is retired with it.
+        let holds_plan = has_own_plan_work(&entries[idx]);
+        if parent_is_done || outranks || holds_plan || !all_closed {
             clear_reopen_warning_if_child_matches(&mut entries[idx], Some(node_id));
             break;
         }
@@ -509,38 +503,6 @@ fn drive_audit(task_id: &str) {
     }
 }
 
-/// The A2 retro-at-done trigger, gated by config.think_spawn.on_retro
-/// (default OFF). When on, the Python lifecycle implementation dispatches
-/// the think spawn; a dispatch failure never unwinds the close.
-fn retro_trigger(node: &Value) {
-    let on = settings::config_candidates().iter().any(|doc| {
-        doc.get("think_spawn")
-            .and_then(|t| t.get("on_retro"))
-            .map(|v| !v.is_null() && v.as_bool() != Some(false))
-            .unwrap_or(false)
-    });
-    if !on {
-        return;
-    }
-    let payload = serde_json::to_string(node).unwrap_or_default();
-    let _ = std::process::Command::new(crate::scrape::fno_py())
-        .args([
-            "-c",
-            "import json,sys;from fno.provenance.spawn_think import on_node_retro;on_node_retro(json.load(sys.stdin))",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .and_then(|mut c| {
-            use std::io::Write;
-            if let Some(mut stdin) = c.stdin.take() {
-                let _ = stdin.write_all(payload.as_bytes());
-            }
-            c.wait()
-        });
-}
-
 /// Holder-agnostic release of the `node:<id>` claim a closure just made
 /// moot: the closer is usually not the worker holding it, the terminal rung
 /// is the authority, and the reaper is the backstop. Best-effort and loud.
@@ -583,7 +545,9 @@ fn project_plans(graph: &Path, node_ids: &[String]) {
         crate::plan_doc::project::project_graph_nodes(&entries, node_ids, None, None, None, None);
 }
 
-/// The shared post-close tail: plan stamp, projection, retro trigger.
+/// The shared post-close tail: plan stamp and projection. The A2 retro
+/// think-spawn trigger retired with the Python backlog runtime it rode; the
+/// config leaf is registered in scripts/ci/retired-config-leaves.txt.
 fn canonical_post_close(
     graph: &Path,
     task_id: &str,
@@ -603,20 +567,6 @@ fn canonical_post_close(
         ids.extend(cascade_closed.iter().cloned());
         project_plans(graph, &ids);
     }
-    retro_trigger(&retro_node_stub(task_id, plan_path));
-}
-
-// The retro trigger takes the closed node's row; after the commit the row's
-// completed_at is what the python caller passed. Rebuilt from the stored
-// fields the spawn actually reads.
-fn retro_node_stub(task_id: &str, plan_path: Option<&str>) -> Value {
-    let mut n = json!({"id": task_id});
-    if let Some(p) = plan_path {
-        n.as_object_mut()
-            .unwrap()
-            .insert("plan_path".into(), Value::String(p.into()));
-    }
-    n
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +612,7 @@ pub fn run_done(tail: &[String]) -> i32 {
 fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
     // External backend: the shared gates then exactly one tracker.close are
     // the seam's job (still Python-owned).
-    if external_backend_selected() {
+    if crate::graph_get::external_backend_selected() {
         return forward_to_python("done", tail);
     }
     if !has_node_id_prefix(task_id) {
@@ -753,6 +703,18 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                     "backlog_done_refused",
                     json!({"node_id": task_id, "pr_number": refs[0].0, "reason": msg}),
                 );
+                if let Some(space) = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| crate::paths::space_dir_opt(&cwd))
+                {
+                    crate::friction::record_gate_refusal(
+                        &space.join("events.jsonl"),
+                        "done",
+                        Some(task_id),
+                        &msg,
+                        &msg,
+                    );
+                }
                 return evidence.exit_code();
             }
         }
@@ -947,6 +909,27 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 
 /// `fno backlog reopen` — clears a node's completion. Fully native: the
 /// Python twin and its registry row are gone.
+/// The reopen verb's done fact: a completion stamp, or a children-rollup
+/// derived done (status done with every child closed and the row's own
+/// completion cleared). A bare status-done row nothing derives is stale
+/// data, and the golden contract keeps it out of reopen's reach: the
+/// completion stamp is the evidence of done, not the status field.
+fn reopenable_done(rows: &[Value], node: &Value, task_id: &str) -> bool {
+    if truthy_field(node, "completed_at") {
+        return true;
+    }
+    if text_at(node, "status") != Some("done") {
+        return false;
+    }
+    let kids: Vec<&Value> = rows
+        .iter()
+        .filter(|e| {
+            text_at(e, "contained_in") != Some(task_id) && text_at(e, "parent") == Some(task_id)
+        })
+        .collect();
+    children_all_closed(node, &kids)
+}
+
 pub fn run_reopen(tail: &[String]) -> i32 {
     let (id, reason, force, help, unknown) = parse_reopen_args(tail);
     if help {
@@ -1023,7 +1006,12 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     // The CANONICAL id, not the argument: a partial-id spelling resolves
     // here, and the cascade walks full ids.
     let task_id: String = text_at(node, "id").map(String::from).unwrap_or(task_id);
-    if !truthy_field(&node, "completed_at") {
+    // The done fact, not the derived column (is_done_door_fact's twin at
+    // the patch door): `status: done` is also written by the children
+    // rollup, and a derived-done row reopens with its reopened_at stamping
+    // the hold the derivation respects. A bare status-done row that nothing
+    // derives is stale data, not done.
+    if !reopenable_done(&rows, node, &task_id) {
         eprintln!("warning: {task_id} is not done; nothing to reopen");
         return 0;
     }
@@ -1102,13 +1090,13 @@ pub fn run_reopen(tail: &[String]) -> i32 {
             not_found.replace(true);
             return Ok(false);
         };
-        if !truthy_field(&rows[idx], "completed_at") {
-            raced.replace(true);
-            return Ok(false);
-        }
         let canonical_id = text_at(&rows[idx], "id")
             .map(String::from)
             .unwrap_or_else(|| task_id.clone());
+        if !reopenable_done(rows, &rows[idx], &canonical_id) {
+            raced.replace(true);
+            return Ok(false);
+        }
         {
             let status = rungs
                 .get(&canonical_id)
@@ -1268,13 +1256,12 @@ fn cascade_reopen_parents(
 }
 
 /// The reopen status per row: the ladder's idea-vs-ready answer. A row with
-/// no plan is the NONE rung; a plan's rung comes from the sanctioned Python
-/// classifier, shelled once per distinct plan before the lock.
+/// no plan is the NONE rung; a plan's rung comes from the native rung
+/// classifier (`backlog_ready::plan_rung`, the `ladder.plan_rung` port).
 fn reopen_statuses(rows: &[Value], node_id: &str) -> std::collections::HashMap<String, String> {
     let mut rungs = std::collections::HashMap::new();
     let mut cur: Option<String> = Some(node_id.to_string());
     let mut seen: Vec<String> = Vec::new();
-    let mut cache: std::collections::HashMap<String, String> = Default::default();
     while let Some(id) = cur.clone() {
         if id.is_empty() || seen.contains(&id) {
             break;
@@ -1283,50 +1270,17 @@ fn reopen_statuses(rows: &[Value], node_id: &str) -> std::collections::HashMap<S
         let Some(row) = rows.iter().find(|e| text_at(e, "id") == Some(id.as_str())) else {
             break;
         };
-        let status = match text_at(row, "plan_path") {
-            None => "idea".to_string(),
-            Some(plan) => {
-                let answer = cache
-                    .entry(plan.to_string())
-                    .or_insert_with(|| plan_rung_status(plan, text_at(row, "cwd")));
-                answer.clone()
-            }
+        // The shelled leg degraded every unanswerable shape (unreadable
+        // plan, failed round-trip) to `idea`; the native classifier's
+        // distinct verdicts collapse to the same two words here.
+        let status = match crate::backlog_ready::plan_rung(row) {
+            "none" | "idea" | "unreadable" => "idea".to_string(),
+            _ => "ready".to_string(),
         };
         rungs.insert(id, status);
         cur = text_at(row, "parent").map(String::from);
     }
     rungs
-}
-
-/// One `fno do plan rung` round-trip: exit 0 = dispatchable (a non-idea
-/// rung), anything else degrades to `idea` the way the ladder's NONE rung
-/// does for an unreadable plan.
-fn plan_rung_status(plan_path: &str, cwd: Option<&str>) -> String {
-    let mut path = std::path::PathBuf::from(plan_path.split('#').next().unwrap_or(plan_path));
-    if !path.is_absolute() {
-        if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
-            path = Path::new(cwd).join(path);
-        }
-    }
-    let Ok(out) = std::process::Command::new(crate::scrape::fno_py())
-        .args(["do", "plan", "rung"])
-        .arg(&path)
-        .output()
-    else {
-        return "idea".into();
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        if let Some(rung) = line.strip_prefix("rung=") {
-            let rung = rung.trim().to_lowercase();
-            return if matches!(rung.as_str(), "idea" | "none") {
-                "idea".into()
-            } else {
-                "ready".into()
-            };
-        }
-    }
-    "idea".into()
 }
 
 fn archived_entry(node_id: &str) -> Option<Value> {
@@ -1387,10 +1341,6 @@ fn find_node<'a>(rows: &'a [Value], task_id: &str) -> Option<&'a Value> {
     None
 }
 
-fn external_backend_selected() -> bool {
-    active_backend_name() != "graph"
-}
-
 pub(crate) fn active_backend_name() -> String {
     std::env::var("FNO_TRACKER_BACKEND")
         .ok()
@@ -1425,10 +1375,10 @@ pub(crate) fn rollup_from_ledger(node: &Value) -> Rollup {
         return empty;
     };
     let target = normalize_plan_path(plan_path);
-    let Some(state_dir) = settings::state_dir() else {
-        return empty;
-    };
-    let Ok(text) = std::fs::read_to_string(state_dir.join("ledger.json")) else {
+    // The resolver every ledger writer uses, so a paths.ledger_json override
+    // reads back the rows it wrote.
+    let cwd = std::path::Path::new(text_at(node, "cwd").unwrap_or("."));
+    let Ok(text) = std::fs::read_to_string(crate::paths_cli::ledger_json(cwd)) else {
         return empty;
     };
     let Ok(data) = serde_json::from_str::<Value>(&text) else {
@@ -1584,7 +1534,7 @@ fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
 
 /// The shared non-graph backend guard (the update door's guard, per verb):
 /// these verbs own graph state; under an external backend they refuse.
-fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
+pub(crate) fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
     let backend = active_backend_name();
     if backend == "graph" {
         return None;
@@ -1967,21 +1917,57 @@ fn refuse_dead_owner(owner: &Value, context: &str) -> Option<String> {
     ))
 }
 
-/// `fno backlog contain <owner> <ids...>`: folds existing nodes into an
-/// owner. One locked mutation, atomic across the batch; the guard ladder is
-/// the _contain.py twin, message for message and exit code for exit code.
+/// `fno backlog contain <owner> <ids...> [--surface <path>...]`: folds
+/// existing nodes into an owner. One locked mutation, atomic across the
+/// batch; the guard ladder is the _contain.py twin, message for message and
+/// exit code for exit code. `--surface` stamps each contained child with the
+/// repo-relative paths its work is expected to touch; the merge cascade
+/// closes on a match and releases the containment without one.
 pub fn run_contain(tail: &[String]) -> i32 {
-    if tail.is_empty() || tail.iter().any(|a| a == "--help" || a == "-h") {
+    if tail.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "Usage: fno backlog contain <owner> <task_id>... [--surface <repo-relative-path>]..."
+        );
+        println!();
+        println!("Fold existing nodes into an owner in one locked mutation.");
+        println!("A contained child ships inside the owner's PR and closes with it.");
+        println!("--surface stamps the declared work files on each contained child.");
+        println!("Pass it once per path.");
+        println!("A declared child closes on the owner's merge only when the merged PR touches a declared surface, or the PR body binds the child.");
+        println!("With neither, the cascade releases the containment and the child stays open.");
+        return 0;
+    }
+    if tail.is_empty() {
         return forward_to_python("contain", tail);
     }
     let mut positionals: Vec<&String> = Vec::new();
-    for arg in tail {
-        if arg.starts_with('-') {
-            return forward_to_python("contain", tail);
+    let mut surfaces: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < tail.len() {
+        let tok = tail[i].as_str();
+        if tok == "--surface" {
+            match take_value(tail, &mut i) {
+                Some(v) => surfaces.push(v),
+                None => {
+                    eprintln!("Error: --surface needs a path value");
+                    return 2;
+                }
+            }
+        } else if let Some(v) = tok.strip_prefix("--surface=") {
+            surfaces.push(v.to_string());
+        } else if tok.starts_with('-') {
+            eprintln!("Error: --surface cannot be mixed with other flags: {tok}");
+            return 2;
+        } else {
+            positionals.push(&tail[i]);
         }
-        positionals.push(arg);
+        i += 1;
     }
     if positionals.is_empty() {
+        if !surfaces.is_empty() {
+            eprintln!("Error: --surface needs an owner and at least one task_id");
+            return 2;
+        }
         return forward_to_python("contain", tail);
     }
     let owner_arg = positionals[0].clone();
@@ -1990,12 +1976,23 @@ pub fn run_contain(tail: &[String]) -> i32 {
         return code;
     }
     let ids = expand_id_args(&ids_raw);
-    contain_write(&settings::graph_path(), &owner_arg, &ids)
+    contain_write(&settings::graph_path(), &owner_arg, &ids, &surfaces)
 }
-fn contain_write(graph: &Path, owner_arg: &str, ids: &[String]) -> i32 {
+fn contain_write(graph: &Path, owner_arg: &str, ids: &[String], surfaces: &[String]) -> i32 {
     if ids.is_empty() {
         eprintln!("Error: at least one task_id is required");
         return 1;
+    }
+    let mut declared: Vec<String> = Vec::new();
+    for raw in surfaces {
+        let path = normalize_surface(raw);
+        if path.is_empty() {
+            eprintln!("Error: --surface {raw:?} normalizes to an empty path");
+            return 2;
+        }
+        if !declared.contains(&path) {
+            declared.push(path);
+        }
     }
     let Ok(rows) = graph_store::read_rows(graph) else {
         eprintln!("Error: the backlog graph could not be read");
@@ -2141,6 +2138,11 @@ fn contain_write(graph: &Path, owner_arg: &str, ids: &[String]) -> i32 {
                     if let Some(o) = obj.get_mut("released_from") {
                         o.take();
                     }
+                    if !declared.is_empty() {
+                        obj.insert("containment_surfaces".into(), json!(declared.clone()));
+                    } else {
+                        obj.remove("containment_surfaces");
+                    }
                 }
                 if let Some(reason) = &warning {
                     out_warnings.borrow_mut().push(format!(
@@ -2172,8 +2174,13 @@ fn contain_write(graph: &Path, owner_arg: &str, ids: &[String]) -> i32 {
         eprintln!("{line}");
     }
     let owner_id = owner.as_str();
+    let surfaces_note = if declared.is_empty() {
+        String::new()
+    } else {
+        format!(" (surfaces: {})", declared.join(", "))
+    };
     for tid in out_contained.into_inner() {
-        println!("contained {tid} into {owner_id}; it ships inside {owner_id}'s PR");
+        println!("contained {tid} into {owner_id}; it ships inside {owner_id}'s PR{surfaces_note}");
     }
     0
 }
@@ -2187,17 +2194,30 @@ fn release_contained_children(entries: &mut [Value], owner_id: &str) -> Vec<Stri
         if text_at(e, "contained_in") != Some(owner_id) {
             continue;
         }
-        let obj = e.as_object_mut().expect("row");
-        obj.remove("contained_in");
-        drop_owner_pr_refs(obj, &owner_refs);
-        obj.insert("released_from".into(), Value::String(owner_id.to_string()));
-        if let Some(id) = obj.get("id").and_then(Value::as_str) {
+        release_contained_row(e, owner_id, &owner_refs);
+        if let Some(id) = e.get("id").and_then(Value::as_str) {
             if !id.is_empty() {
                 freed.push(id.to_string());
             }
         }
     }
     freed
+}
+
+/// The one row-level release shape: drop `contained_in`, drop the owner's PR
+/// refs so the owner's merge cannot close it, and stamp `released_from` (the
+/// marker the claim-line binder reads as "a claim line predates the
+/// release"). Shared by the owner-delete release and the cascade's
+/// evidence-less release.
+pub(crate) fn release_contained_row(
+    e: &mut Value,
+    owner_id: &str,
+    owner_refs: &std::collections::BTreeSet<(i64, String)>,
+) {
+    let obj = e.as_object_mut().expect("row");
+    obj.remove("contained_in");
+    drop_owner_pr_refs(obj, owner_refs);
+    obj.insert("released_from".into(), Value::String(owner_id.to_string()));
 }
 
 /// Clear parent on the owner's non-done children; return the ids freed (the
@@ -2221,7 +2241,10 @@ fn release_parented_children(entries: &mut [Value], owner_id: &str) -> Vec<Strin
 
 /// The owner's (pr_number, repo-lowered slug) ref set (the release_contained
 /// comparison key).
-fn pr_ref_set(entries: &[Value], owner_id: &str) -> std::collections::BTreeSet<(i64, String)> {
+pub(crate) fn pr_ref_set(
+    entries: &[Value],
+    owner_id: &str,
+) -> std::collections::BTreeSet<(i64, String)> {
     let owner = entries.iter().find(|e| text_at(e, "id") == Some(owner_id));
     let Some(owner) = owner else {
         return Default::default();

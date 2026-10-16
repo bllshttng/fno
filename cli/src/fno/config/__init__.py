@@ -2,32 +2,13 @@
 
 Settings are DEEP-MERGED across every candidate file that exists, higher
 priority overriding lower key-by-key (nested dicts merge recursively,
-scalars and lists replace wholesale). Candidate priority, highest first:
-  1. $FNO_CONFIG env var (explicit path; when set, the ONLY candidate)
-  2. <worktree_root>/.fno/settings.yaml  (project-local to this checkout)
-  3. <canonical_root>/.fno/settings.yaml  (the main checkout's config,
-     reached via the main worktree from `git worktree list`; lets a linked
-     worktree read shared project config with zero per-worktree setup;
-     deduped when 2 == 3)
-  4. ~/.fno/settings.yaml  (per-user global; shared defaults)
-
-A key absent from a higher-priority file falls through to the next file down,
-so the per-user global holds shared defaults while each project sets only its
-deltas. With no file, built-in defaults apply. This mirrors the shell reader
-(scripts/lib/config.sh, per-key local->global fallback) and the provider loader.
+scalars and lists replace wholesale). The candidate priority list, the per-key fallthrough, and the design decisions are locked in docs/path-config.md.
 
 Cache: load_settings() is an uncached wrapper over _load_settings_at(),
 keyed on the declaration (_settings_key: env overrides + HOME + resolved
 repo root) PLUS a stat fingerprint of every candidate file. A same-key
 settings rewrite changes the fingerprint, so the cache reparses on its
 own; no cache_clear is needed to see an edit in-process.
-
-Design decisions (locked in 2026-05-14-path-config.md):
-  - extra='ignore' for forward compatibility (do NOT change to 'forbid')
-  - Emit a startup WARNING for unknown keys (not an error)
-  - Reject glob chars (*?[) at validation time, not at resolve time
-  - Reject {vault} when obsidian.enabled is False
-  - PATH_MAX = 4096 bytes enforced on state_dir / plans_dir
 """
 from __future__ import annotations
 
@@ -53,10 +34,10 @@ from pydantic import (
 )
 
 from fno.user import UserBlock
+from fno.config.build_block import BuildBlock as BuildBlock
+from fno.config.split_block import SplitBlock as SplitBlock
 
-# Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
-# here; the redundant `X as X` aliases are the explicit-reexport idiom mypy's
-# --no-implicit-reexport requires (these names used to be defined here).
+# Leaf modules re-exported here; `X as X` is the explicit-reexport idiom mypy requires.
 from fno.config import _watchdog
 from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
 from fno.config._auto_heal import AutoHealBlock
@@ -68,13 +49,15 @@ from fno.config._lead import LeadBlock
 from fno.config._evals import EvalsBlock
 from fno.config.status_sinks import StatusFanoutConfig as StatusFanoutConfig
 from fno.config.status_sinks import StatusSinkConfig as StatusSinkConfig
-# The keyed settings loader lives in fno.config._loader (this file is
-# shrink-only); re-exported under the names every caller and test imports.
+# The keyed settings loader lives in shrink-only fno.config._loader; re-exported for callers.
 from fno.config._loader import _load_settings_at as _load_settings_at
 from fno.config.source_attribution import resolve_source as resolve_source
 from fno.config._loader import _settings_key as _settings_key
 from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
 from fno.config._guards import GuardsBlock
+from fno.config._store import StoreBlock
+from fno.config._attention import AttentionBlock
+from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
@@ -88,7 +71,6 @@ from fno.config_io import read_config_flat as read_config_flat
 
 _LOG = logging.getLogger(__name__)
 
-# POSIX PATH_MAX
 _PATH_MAX = 4096
 
 # Shell glob characters to reject in path values
@@ -280,6 +262,14 @@ class MaintainBlock(BaseModel):
         return v
 
 
+class PlanBlock(BaseModel):
+    """Plan budgets (config.plan): default_diff_budget is the commit-time diff-budget ceiling (hooks/diff-budget-commit.sh), 0 is off; a plan's frontmatter diff_budget overrides."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    default_diff_budget: int = Field(default=300, ge=0)
+
+
 _RENDER_PROJECTIONS = ("backlog", "roadmap", "local")
 
 # Shared with the graph-layer auto-render so the array-of-tables typo warns
@@ -318,7 +308,7 @@ class RenderTargetConfig(BaseModel):
                     # load_settings(), so raising here turns one typo in one
                     # render-target row into a ValidationError out of every
                     # settings-loading fno command. The row is REFUSED instead
-                    # at the point of use, in roadmap_public._configured_targets,
+                    # at the point of use, by the native render-target read,
                     # where skipping it costs one board and nothing else.
                     _LOG.warning(
                         "config.backlog.render_targets: unknown key %r in row "
@@ -1205,7 +1195,7 @@ class ApprovalsBlock(BaseModel):
 #: measure different lanes on one PR, which is what a remedy printed by one and
 #: refused by the other looked like. Parity is pinned against the shared golden
 #: file cli/tests/config/optional_apps_default.json.
-DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("gemini-code-assist", "chatgpt-codex-connector")
+DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("chatgpt-codex-connector",)
 
 
 def resolved_optional_apps(review: "ReviewBlock") -> list[str]:
@@ -1888,7 +1878,7 @@ class TargetConfig(BaseModel):
         Mirrors ConfigBlock._coerce_cross_model so a scalar typo like
         `blast: true` cannot raise out of `load_settings`/`SettingsModel`
         construction (the disabled-by-default promise must hold for every
-        consumer, not only the local `_load_blast_cfg` catch). A dict passes
+        consumer, not only the native classifier's loader catch). A dict passes
         through so BlastConfig's own field coercion still runs.
         """
         if isinstance(v, (dict, BlastConfig)):
@@ -1978,13 +1968,22 @@ class AgentProviderBlock(BaseModel):
     dropping the sandbox - strictly safer than the full bypass. A malformed
     block fails safe to bounded. Only the autonomous exec lane consults it; an
     interactive `host`/`drive` launch and claude (yolo is a no-op) are never
-    affected. (The old "sandboxed-but-prompting" meaning of `false` is removed;
-    it was strictly worse than bounded - sandboxed AND hangs.)
+    affected.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     headless_yolo: bool = False
+
+
+class AgentBeatBlock(BaseModel):
+    """`config.agents.<harness>.beat`; `auto` reads the harness capability row."""
+
+    beat: str = "auto"
+
+
+class CodexAgentBlock(AgentProviderBlock, AgentBeatBlock):
+    """The codex block: the provider settings plus its lead beat."""
 
 
 # The routing schema block lives in routing_blocks (the hub is shrink-only).
@@ -2167,9 +2166,10 @@ class ProviderBudget(BaseModel):
     `subagents` is that second dimension, and it is consumed by ROUTE
     RESOLUTION rather than by a guard: a native subagent is a harness-internal
     Task call fno never observes, so a spawn-path guard is decorative for
-    exactly the case that cost the account. `review_capability` reads this
-    budget and refuses to hand a panel reviewer to a provider that cannot
-    afford one - a worker cannot fan out a panel it was never handed.
+    exactly the case that cost the account. The capability resolver that once
+    read this budget to refuse a panel reviewer is gone (the native
+    `review-level capability` door replaced it); a worker cannot fan out a
+    panel it was never handed.
 
     `None` on either field means unbounded in that dimension, which is what an
     unlisted provider gets: today's behavior for every dedicated account.
@@ -2284,7 +2284,8 @@ class AgentsBlock(SweepKeys):
     reap_receipts: ReapReceiptsBlock = Field(default_factory=ReapReceiptsBlock)
     reap: ReapBlock = Field(default_factory=ReapBlock)
     state_reap: StateReapBlock = Field(default_factory=StateReapBlock)
-    codex: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
+    claude: AgentBeatBlock = Field(default_factory=AgentBeatBlock)
+    codex: CodexAgentBlock = Field(default_factory=CodexAgentBlock)
     gemini: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
     # Spawn-gate scalars degrade to safe defaults: max_live caps the roster
     # union as the BACKSTOP behind the RAM floor (min_free_gb) and the CPU
@@ -2505,7 +2506,7 @@ class AgentsBlock(SweepKeys):
             return v.strip().lower()
         return "utility"
 
-    @field_validator("codex", "gemini", mode="before")
+    @field_validator("claude", "codex", "gemini", mode="before")
     @classmethod
     def _coerce_provider_block(cls, v: object) -> object:
         """Fail-safe: a non-mapping provider block degrades to defaults.
@@ -2516,7 +2517,7 @@ class AgentsBlock(SweepKeys):
         passes through so an explicit ``headless_yolo: false`` opt-out still
         takes effect. Mirrors ``ConfigBlock._coerce_auto_continue``.
         """
-        if isinstance(v, (dict, AgentProviderBlock)):
+        if isinstance(v, (dict, BaseModel)):
             return v
         return {}
 
@@ -2684,7 +2685,7 @@ class ThinkSpawnBlock(BaseModel):
     node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
-    verb, an armed lifecycle trigger (``on_work_start``/``on_retro``), or a
+    verb, an armed lifecycle trigger (``on_work_start``), or a
     consented decompose fan-out.
 
     Default ``False`` (Locked Decision 2): shipping this changes nothing until
@@ -2712,13 +2713,12 @@ class ThinkSpawnBlock(BaseModel):
     max_per_run: int = 5
     idle_threshold_s: int = 0
     # --- A2 lifecycle triggers ---
-    # Two non-birth dispatch moments, each behind its OWN sub-flag, default OFF
-    # even when ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
-    # /target claims a node to work it; ``on_retro`` fires when ``fno backlog
-    # done`` closes a node. ``daily_cap`` is the per-install per-day firehose
-    # ceiling the broad A2 triggers require (Locked Decision 3); 0 disables it.
+    # Non-birth dispatch moment behind its OWN sub-flag, default OFF even when
+    # ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
+    # /target claims a node to work it. ``daily_cap`` is the per-install
+    # per-day firehose ceiling the broad A2 triggers require (Locked
+    # Decision 3); 0 disables it.
     on_work_start: bool = False
-    on_retro: bool = False
     daily_cap: int = 20
     # a third trigger of the same shape - fire at `fno backlog
     # decompose` for the epic's WAVE-0 children (those with no intra-epic
@@ -2740,7 +2740,7 @@ class ThinkSpawnBlock(BaseModel):
     attended: str = "offer"
 
     @field_validator(
-        "enabled", "on_work_start", "on_retro", "on_decompose_wave0", mode="before"
+        "enabled", "on_work_start", "on_decompose_wave0", mode="before"
     )
     @classmethod
     def _coerce_enabled(cls, v: object) -> bool:
@@ -2976,7 +2976,6 @@ class AutoMergeBlock(BaseModel):
         return "attempt"
 
 
-
 class PrWatchBlock(BaseModel):
     """PR-state watcher settings (nested under 'config.pr_watch').
 
@@ -3010,8 +3009,8 @@ class PrWatchBlock(BaseModel):
 class GroomBlock(BaseModel):
     """Daily backlog-grooming pass settings (nested under 'config.groom').
 
- wave 2: `fno backlog groom` (`_spawn_groom_worker`,
-    backlog/groom.py:204) previously spawned with no enable key at all, so it
+ wave 2: `fno backlog groom` (`spawn_worker` in
+    crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it
     could not be turned off. Default ``True`` matches the spawner's CURRENT
     effective behavior (it always ran) - shipping this gate changes nothing
     for an existing user until they explicitly disable it.
@@ -3777,8 +3776,8 @@ class WorktreeBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     policy: Optional[str] = None
-    # The worktree.* leaves below are read ad-hoc by
-    # skills/speculate/scripts/worktree-setup.sh (wt_config) and by the
+    # The worktree.* leaves below are read through `fno config get` by
+    # scripts/lib/worktree-config.sh (wt_config) and by the
     # done-node gate (prune_done, in Rust), so the model carries them but
     # never enforces their values.
     auto_install: bool = True
@@ -3910,6 +3909,7 @@ class ConfigBlock(BaseModel):
     plans_dir: str = ".fno/plans/"
     plans_filename: str = "%Y%m%d-{slug}-{node}.md"
     branch: BranchBlock = Field(default_factory=BranchBlock)
+    build: BuildBlock = Field(default_factory=BuildBlock)
     paths: PathsBlock = Field(default_factory=PathsBlock)
     obsidian: ObsidianBlock = Field(default_factory=ObsidianBlock)
     project: ProjectBlock = Field(default_factory=ProjectBlock)
@@ -3917,27 +3917,31 @@ class ConfigBlock(BaseModel):
     user: UserBlock = Field(default_factory=UserBlock)
     sandbox: SandboxBlock = Field(default_factory=SandboxBlock)
     blueprint: BlueprintBlock = Field(default_factory=BlueprintBlock)
+    plan: PlanBlock = Field(default_factory=PlanBlock)
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
+    telemetry: TelemetryBlock = Field(default_factory=TelemetryBlock)
+    attention: AttentionBlock = Field(default_factory=AttentionBlock)
     research: ResearchBlock = Field(default_factory=ResearchBlock)
     review: ReviewBlock = Field(default_factory=ReviewBlock)
     style: StyleBlock = Field(default_factory=StyleBlock)
     preflight: PreflightBlock = Field(default_factory=PreflightBlock)
     approvals: ApprovalsBlock = Field(default_factory=ApprovalsBlock)
     context: ContextBlock = Field(default_factory=ContextBlock)
-    # Repo-wide ship-gate probes join plan `done_probes`; both must pass. A
-    # probe is an OBSERVATION running `sh -c` in the session cwd, so the list
-    # stays gitignored and superuser-authored: a tracked one runs code on clone.
+    # Repo-wide ship-gate probes join plan `done_probes`; both must pass. Each runs `sh -c`
+    # in the session cwd, so the list stays gitignored: a tracked one runs code on clone.
     done_probes: list[str] = Field(default_factory=list)
     target: TargetConfig = Field(default_factory=TargetConfig)
     test: TestBlock = Field(default_factory=TestBlock)
     guards: GuardsBlock = Field(default_factory=GuardsBlock)
+    store: StoreBlock = Field(default_factory=StoreBlock)
     agents: AgentsBlock = Field(default_factory=AgentsBlock)
     process_admission: ProcessAdmissionBlock = Field(default_factory=ProcessAdmissionBlock)
     dispatch: DispatchBlock = Field(default_factory=DispatchBlock)
     routing: RoutingBlock = Field(default_factory=RoutingBlock)
     sideline: SidelineBlock = Field(default_factory=SidelineBlock)
+    split: SplitBlock = Field(default_factory=SplitBlock)
     autonomy: AutonomyBlock = Field(default_factory=AutonomyBlock)
     auto_continue: AutoContinueBlock = Field(default_factory=AutoContinueBlock)
     keep_going: KeepGoingBlock = Field(default_factory=KeepGoingBlock)
@@ -4351,9 +4355,6 @@ class SettingsModel(ConfigBlock):
 # config.local.toml is flat, so no `config.` prefix.
 WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
     {
-        # post_merge.parking_lot_path was removed: the ritual is a
-        # serial one-shot durable write, already safe on the shared canonical
-        # file; a per-lane redirect only orphaned the prose.
         "project.id",
     }
 )

@@ -337,10 +337,11 @@ fn session_join(fno_dir: &Path) -> HashMap<String, (Vec<String>, Option<String>,
     join
 }
 
-/// The bus log path, mirroring the env order every bus reader shares
-/// (FNO_BUS_DIR, then FNO_INBOX_ROOT, else `<fno>/bus/messages.jsonl`). The
-/// config.paths.bus_dir template override is the gap org_board.rs already
-/// documents.
+/// The bus log path, mirroring `fno.paths.bus_dir`'s order every bus reader
+/// shares: FNO_BUS_DIR, then FNO_INBOX_ROOT, then the `config.paths.bus_dir`
+/// override (tilde-expanded; `{vault}`/`{project}` templates are not), else
+/// `<fno>/bus/messages.jsonl`. org_board.rs keeps its own env-only copy and
+/// documents the template gap there.
 pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     if let Some(dir) = std::env::var("FNO_BUS_DIR").ok().filter(|v| !v.is_empty()) {
         return PathBuf::from(dir).join("messages.jsonl");
@@ -351,7 +352,27 @@ pub(crate) fn bus_log_path(fno_dir: &Path) -> PathBuf {
     {
         return PathBuf::from(root).join(".bus").join("messages.jsonl");
     }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(dir) = crate::agents_config::config_lookup(&cwd, &["paths", "bus_dir"])
+            .and_then(|v| v.as_str().map(str::to_string))
+            .filter(|s| !s.trim().is_empty())
+        {
+            return crate::cargo_build_dirs::expand_home(Path::new(&dir)).join("messages.jsonl");
+        }
+    }
     fno_dir.join("bus").join("messages.jsonl")
+}
+
+/// The bus DIRECTORY under `fno_dir`, the shape the mail-front leaves read:
+/// `bus_log_path`'s parent, or `<fno_dir>/bus` when the log path has none.
+/// Callers must pass the PYTHON state root (`agents_config::state_dir`),
+/// mirroring `fno.paths.bus_dir`'s final fallback - not the agents home,
+/// which `FNO_STATE_DIR` does not move.
+pub(crate) fn bus_dir_of(fno_dir: &Path) -> PathBuf {
+    bus_log_path(fno_dir)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| fno_dir.join("bus"))
 }
 
 pub(crate) fn ts_secs(ts: &str) -> Option<u64> {
@@ -884,7 +905,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                 for part in v.split(',') {
                     match part.trim() {
                         "" => {}
-                        "claude" | "codex" | "opencode" | "all" => {
+                        "claude" | "codex" | "opencode" | "footnote" | "pi" | "agy" | "all" => {
                             let part = part.trim();
                             if !harness_spec.iter().any(|s| s == part) {
                                 harness_spec.push(part.to_string());
@@ -892,7 +913,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                         }
                         other => {
                             eprintln!(
-                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, all)"
+                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, footnote, pi, agy, all)"
                             );
                             return 2;
                         }
@@ -1050,8 +1071,8 @@ pub fn run_intel(args: &[String]) -> i32 {
 }
 
 /// The selected harnesses in canonical order: `all` (or nothing named) expands to every harness, otherwise the named values intersect the canonical order.
-fn selected_harnesses(spec: &[String]) -> Vec<&'static str> {
-    const ALL: [&str; 4] = ["claude", "codex", "opencode", "footnote"];
+pub(crate) fn selected_harnesses(spec: &[String]) -> Vec<&'static str> {
+    const ALL: [&str; 6] = ["claude", "codex", "opencode", "footnote", "pi", "agy"];
     if spec.iter().any(|s| s == "all") || spec.is_empty() {
         return ALL.to_vec();
     }
@@ -1176,6 +1197,31 @@ fn fold_all(
         };
         if let Err(why) = source.probe() {
             skipped.insert("opencode".to_string(), why);
+        } else {
+            sources.push(Box::new(source));
+        }
+    }
+    if selected.contains(&"pi") {
+        let source = crate::pi_transcript::PiSource {
+            sessions_dir: None,
+            roots: roots.clone(),
+        };
+        if let Err(why) = source.probe() {
+            skipped.insert("pi".to_string(), why);
+        } else {
+            sources.push(Box::new(source));
+        }
+    }
+    if selected.contains(&"agy") {
+        let (summaries_db, history, conversations_dir) = crate::agy_transcript::agy_stores();
+        let source = crate::agy_transcript::AgySource {
+            summaries_db,
+            history,
+            conversations_dir,
+            roots: roots.clone(),
+        };
+        if let Err(why) = source.probe() {
+            skipped.insert("agy".to_string(), why);
         } else {
             sources.push(Box::new(source));
         }

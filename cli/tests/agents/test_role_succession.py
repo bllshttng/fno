@@ -92,6 +92,12 @@ def _seat(
 def _spawn_successor(name: str = "successor", *, succeed: bool = False):
     from fno.agents.dispatch import dispatch_spawn
 
+    if succeed:
+        # The machine names successors: seal the pending draw so this test's
+        # typed name counts as accepting it.
+        from tests.agents._name_draw_seed import seed_pending_draw
+
+        seed_pending_draw(name, SCOPE)
     return dispatch_spawn(
         name=name,
         message="term",
@@ -502,6 +508,9 @@ def test_a_name_rebound_since_the_plan_keeps_its_role(team, monkeypatch, capsys)
 
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     _seat("other-lead", "old-session")
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("successor", SCOPE)
     refusal, plan = role.plan_spawn_role(SCOPE, None, True, proposed_name="successor")
     assert refusal is None
     assert plan is not None

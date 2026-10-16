@@ -777,10 +777,13 @@ def _ordinary_verdict(
     hint = None
     try:
 
-        from fno.review_capability import render_self_review_invocation
+        from fno.rust_binary import verb_call
 
         root = _repo_root(cwd)
-        rendered = render_self_review_invocation(project_root=root)
+        answer = verb_call(
+            ["review-level", "capability", "invocation", "--root", str(root)], {}
+        )
+        rendered = answer["invocation"]
         # An unsized render (no merge-base against main/master) keeps its
         # `<level>` placeholder - teachable on the orienter surface, but a
         # non-runnable string in a copy-me slot here. No hint, levelless line.
@@ -1024,14 +1027,18 @@ def attestation_chain(
                 # measured), so two rounds inside one second are real.
                 # What separates the mirror's copy from a distinct
                 # attestation is the payload: the copy differs from its
-                # original in exactly one key, `repo`, while two distinct
-                # rounds differ in verdict, findings, dispositions or
-                # head. One key for every row shape, no invocation-era
-                # fallback.
+                # original in exactly the carrier keys, `repo` and the
+                # `attest_machine` stamp, while two distinct rounds differ
+                # in verdict, findings, dispositions or head. One key for
+                # every row shape, no invocation-era fallback.
                 key = "{}|{}".format(
                     event.get("ts", ""),
                     json.dumps(
-                        {k: v for k, v in data.items() if k != "repo"},
+                        {
+                            k: v
+                            for k, v in data.items()
+                            if k not in ("repo", "attest_machine")
+                        },
                         sort_keys=True,
                     ),
                 )
@@ -1058,18 +1065,26 @@ def attestation_chain(
 
 
 def _resolved_categories(cwd: str) -> frozenset[str]:
-    """The configured allowlist, extended per the shipped default."""
+    """The configured allowlist, extended per the shipped default.
+
+    The resolution lives in the native classifier (the categories door);
+    a door failure keeps the shipped list, which is what the old unreadable
+    config arm returned.
+    """
     try:
-        from fno.config import load_settings_for_repo
-        from fno.review.findings import resolve_nonblocking_categories
+        from fno.rust_binary import call_binary_json
 
         root = _repo_root(cwd)
         _log_config_receipt(root, "config.review.nonblocking_categories")
-        return resolve_nonblocking_categories(
-            getattr(
-                load_settings_for_repo(root).review, "nonblocking_categories", None
-            )
+        error, payload = call_binary_json(
+            "review-level", ["findings", "categories", "--root", str(root)]
         )
+        names = payload.get("categories") if isinstance(payload, dict) else None
+        if error is None and isinstance(names, list) and all(
+            isinstance(name, str) for name in names
+        ):
+            return frozenset(names)
+        return GATE_NONBLOCKING_CATEGORIES
     except Exception:  # noqa: BLE001 - unreadable config keeps the shipped default
         return GATE_NONBLOCKING_CATEGORIES
 

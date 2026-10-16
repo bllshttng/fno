@@ -403,6 +403,58 @@ STUB
     cleanup
 }
 
+# ── T14: broken resolver -> verbs run from ROOT, counter persists ─────────────
+# agy fires the global hooks.json from ~/.gemini/config (not a git repo): the
+# real manifest-for-session refuses there (rc=2) and the pre-fix counter write
+# silently failed, so the give-up ceiling never fired and agy never exited.
+log "T14: rc=2 resolver keeps counting toward the give-up ceiling, from ROOT"
+{
+    setup_env
+    mkdir -p "${TMP_DIR}/sub" "${TMP_DIR}/.fno"
+    MISSING_SPACE="${TMP_DIR}/.fno/missing-slice"
+    CWD_MARK="${TMP_DIR}/resolver_cwd"
+    STUB="${TMP_DIR}/fno-agents"
+    # Resident manifest names a DIFFERENT session, so the manifest-for-session
+    # resolver leg runs; the stub refuses it like the real binary does from a
+    # non-git cwd.
+    cat > "$STATE_FILE" <<STATE
+---
+session_id: agy-test-001
+harness_session_id: resident-abc
+created_at: 2026-06-27T00:00:00Z
+attended: false
+---
+STATE
+    make_stub "$STUB" <<STUB
+if [[ "\${1:-}" == "state" ]]; then
+  if [[ -n "\${FNO_TEST_SPACE:-}" ]]; then printf '%s\n' "\${FNO_TEST_SPACE}/\${3}"; exit 0; fi
+  exit 1
+fi
+if [[ "\${1:-}" == "manifest-for-session" ]]; then pwd > "${CWD_MARK}"; exit 2; fi
+exit 1
+STUB
+    INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"other-sess\",\"workspacePaths\":[\"${TMP_DIR}\"]}"
+    # FNO_TEST_SPACE override (last env wins) points the SPACE slice at a dir
+    # that does not exist: the counter write must create it, not fail silently.
+    t14=true
+    for fire in 1 2 3 4; do
+        run_hook "${TMP_DIR}/sub" "$INPUT" "HOME=${HOME_DIR}" \
+            "FNO_AGENTS_BIN=${STUB}" "FNO_TEST_SPACE=${MISSING_SPACE}"
+        case "$fire" in
+            1|2|3) [[ "$(stdout_decision)" == "continue" ]] \
+                || { fail "T14: fire $fire expected continue, got $HOOK_STDOUT"; t14=false; } ;;
+            *)    printf '%s' "$HOOK_STDOUT" | jq -e 'type == "object" and (.decision | not)' >/dev/null 2>&1 \
+                || { fail "T14: fire 4 expected the give-up allow {}, got $HOOK_STDOUT"; t14=false; } ;;
+        esac
+    done
+    [[ "$(tr -dc '0-9' < "${MISSING_SPACE}/.loop-check-unavail-other-sess" 2>/dev/null)" == "4" ]] \
+        || { fail "T14: counter did not persist in the created SPACE_DIR"; t14=false; }
+    [[ "$(cat "$CWD_MARK" 2>/dev/null)" == "$TMP_DIR" ]] \
+        || { fail "T14: manifest-for-session ran from $(cat "$CWD_MARK" 2>/dev/null), not ROOT"; t14=false; }
+    [[ "$t14" == true ]] && pass "T14: broken resolver bounded-continues 3 then gives up; verbs run from ROOT"
+    cleanup
+}
+
 echo ""
 printf '[agy] Results: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP_COUNT"
 [[ "$FAIL" -gt 0 ]] && exit 1

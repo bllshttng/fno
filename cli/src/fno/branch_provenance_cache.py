@@ -1,4 +1,4 @@
-"""Per-repo branch-provenance cache: the pr-watch stranded leg writes it, the Kanban board reads it. File contract: docs/state-root-inventory.md."""
+"""Per-repo branch-provenance cache: the pr-watch stranded leg writes it, the native graph.md render reads it. File contract: docs/state-root-inventory.md."""
 
 from __future__ import annotations
 
@@ -50,35 +50,3 @@ def read_cache(repo: Path) -> list[dict]:
         return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
     except (OSError, ValueError):
         return []
-
-
-def _provenance_roots() -> list[Path]:
-    try:
-        from fno.tracker import sidecar as sidecar_store
-
-        cwds = {str(getattr(sc, "cwd", "")) for sc in sidecar_store.load_all().values()}
-    except Exception:  # noqa: BLE001 - display signal; never break a mutation
-        return []
-    return [Path(c) for c in sorted(cwds) if c and Path(c).is_dir()]
-
-
-def _provenance_line(row: dict) -> str:
-    remote = row.get("has_remote")
-    parts = [
-        "has remote" if remote else ("no remote" if remote is False else "remote unknown"),
-        f"{row.get('unpushed') or 0} unpushed",
-        f"PR #{row['pr_number']}" if row.get("pr_number") else "no PR",
-        *(["LIVE"] if row.get("live") else []),
-        f"newest commit {row.get('age') or 'unknown'}",
-    ]
-    node = row.get("node")
-    label = f"**{node}**" if node else "*(unmapped)*"
-    return f"- {label} ({row.get('branch') or 'no branch'}): {', '.join(parts)}"
-
-
-def provenance_lines(roots: list[Path] | None = None) -> list[str]:
-    try:
-        rows = [r for root in (roots if roots is not None else _provenance_roots()) for r in read_cache(root)]
-    except Exception:  # noqa: BLE001 - display signal; never break a mutation
-        return []
-    return ["## Branch Provenance", "", *(_provenance_line(r) for r in rows), ""] if rows else []

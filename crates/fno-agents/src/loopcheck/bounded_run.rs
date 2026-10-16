@@ -27,7 +27,9 @@ pub(crate) struct BoundedOutput {
 /// site.
 pub(super) enum BoundedRun {
     Completed(BoundedOutput),
-    TimedOut(std::time::Duration),
+    /// The elapsed bound plus whatever stderr the child printed before the
+    /// kill - the evidence a timeout row needs to name what it waited on.
+    TimedOut(std::time::Duration, Vec<u8>),
     /// The io error kind is kept because "binary absent" (NotFound) and
     /// "could not spawn right now" (ETXTBSY, EACCES, ...) are different
     /// facts; collapsing them is how a transient spawn failure used to read
@@ -80,7 +82,12 @@ pub(super) fn run_bounded(
         buf
     });
     let mut stderr_pipe = child.stderr.take();
-    let stderr_drain = std::thread::spawn(move || {
+    // The tail travels over a channel, not a bare join, so the timeout arm
+    // can collect it under a short bound: a kill usually ends the writer,
+    // but a straggler holding the pipe write end must cost the tail, never
+    // a hang on the stop path.
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let _stderr_drain = std::thread::spawn(move || {
         // Retain only the LAST `BOUNDED_STDERR_TAIL_CAP` bytes while still
         // draining to EOF: an unbounded write must not buy an unbounded
         // allocation, but stopping the read early would block a child that
@@ -105,7 +112,7 @@ pub(super) fn run_bounded(
                 }
             }
         }
-        tail
+        let _ = stderr_tx.send(tail);
     });
 
     enum Outcome {
@@ -146,11 +153,21 @@ pub(super) fn run_bounded(
         // Captured at the moment the bound was actually crossed, not after
         // kill_process_group + killpg have run - else the reported duration
         // is inflated by cleanup cost instead of reflecting the timeout itself.
-        Outcome::TimedOut(elapsed) => BoundedRun::TimedOut(elapsed),
+        Outcome::TimedOut(elapsed) => BoundedRun::TimedOut(
+            elapsed,
+            // The kill ended the writer, so the drain sees EOF; a short
+            // bounded collect keeps whatever gh printed before the bound
+            // (the network-vs-GitHub evidence a timeout row would
+            // otherwise drop). A straggler holding the write end costs the
+            // bound below, never a hang on the stop path.
+            stderr_rx
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .unwrap_or_default(),
+        ),
         Outcome::WaitFailed => BoundedRun::WaitFailed,
         Outcome::Done(status) => {
             let stdout = stdout_drain.join().unwrap_or_default();
-            let stderr_tail = stderr_drain.join().unwrap_or_default();
+            let stderr_tail = stderr_rx.recv().unwrap_or_default();
             BoundedRun::Completed(BoundedOutput {
                 status,
                 stdout,
@@ -209,11 +226,11 @@ impl GhReadError {
         Self::failed(read, String::new())
     }
 
-    pub(super) fn timed_out(read: &str, elapsed: std::time::Duration) -> Self {
+    pub(super) fn timed_out(read: &str, elapsed: std::time::Duration, stderr_tail: String) -> Self {
         GhReadError {
             read: read.to_string(),
             kind: ReadErrorKind::TimedOut,
-            stderr_tail: String::new(),
+            stderr_tail,
             elapsed: Some(elapsed),
             spawn_kind: None,
         }
@@ -234,6 +251,19 @@ impl GhReadError {
             read: read.to_string(),
             kind: ReadErrorKind::BudgetRefused,
             stderr_tail: String::new(),
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
+    /// The fleet request budget refused before the spawn; `detail` carries
+    /// the ledger's refusal line, which every existing classifier already
+    /// reads as `budget_lock` (it names `gh budget:`).
+    pub(super) fn budget_refused_with_detail(read: &str, detail: String) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::BudgetRefused,
+            stderr_tail: detail,
             elapsed: None,
             spawn_kind: None,
         }
@@ -277,9 +307,15 @@ impl GhReadError {
                 "external read '{}' could not run; retrying next fire. {}",
                 self.read, self.stderr_tail
             ),
-            ReadErrorKind::BudgetRefused => format!(
+            ReadErrorKind::BudgetRefused if self.stderr_tail.is_empty() => format!(
                 "external read '{}' was not run: the fire budget was spent before the read",
                 self.read
+            ),
+            // A non-empty tail names the fleet ledger's own refusal line, so
+            // the render prints that instead of the fire-budget prose.
+            ReadErrorKind::BudgetRefused => format!(
+                "external read '{}' was not run: {}",
+                self.read, self.stderr_tail
             ),
         }
     }
@@ -295,6 +331,52 @@ impl GhReadError {
             ReadErrorKind::BudgetRefused => "budget_refused",
         }
     }
+
+    /// What the failed call waited on, from the evidence the row carries:
+    /// the local fleet budget gate (its refusal text names itself), GitHub's
+    /// own refusal wording, or the network's resolve/connect/TLS markers on
+    /// a killed child. A row with no evidence stays `unknown` - the stall
+    /// report counts it under unattributed rather than guessing a cause
+    /// past what the row proves.
+    pub(crate) fn waited_on(&self) -> &'static str {
+        if self.stderr_tail.contains("gh budget:") {
+            return "budget_lock";
+        }
+        match self.kind {
+            ReadErrorKind::Failed if stderr_names_github_refusal(&self.stderr_tail) => "github",
+            ReadErrorKind::TimedOut if stderr_names_network(&self.stderr_tail) => "network",
+            _ => "unknown",
+        }
+    }
+}
+
+/// GitHub's own refusal wording: a 403/429 status line or the secondary
+/// limit's rate-limit sentence.
+fn stderr_names_github_refusal(stderr: &str) -> bool {
+    stderr.contains("HTTP 403")
+        || stderr.contains("HTTP 429")
+        || stderr.contains("secondary rate limit")
+        || stderr.contains("rate limit")
+}
+
+/// The network's failure vocabulary: name resolution, connect, and transport
+/// trouble a hung `gh` prints before it stops printing.
+fn stderr_names_network(stderr: &str) -> bool {
+    [
+        "Could not resolve",
+        "Unable to resolve",
+        "connection refused",
+        "Connection refused",
+        "connection reset",
+        "Connection reset",
+        "getaddrinfo",
+        "i/o timeout",
+        "request timeout",
+        "TLS",
+        "SSL",
+    ]
+    .iter()
+    .any(|marker| stderr.contains(marker))
 }
 
 pub(crate) fn bounded_read_diagnostic(context: &str, error: &GhReadError) -> String {
@@ -328,9 +410,33 @@ pub(crate) fn bounded_read(
     read_name: &str,
     timeout: std::time::Duration,
 ) -> Result<BoundedOutput, GhReadError> {
+    // The fleet request budget admits before the spawn: a refusal leaves no
+    // child and carries the ledger's refusal line. gh and the loop-check
+    // adapters that wrap it are GitHub traffic; fno and git reads are not,
+    // and the 0-point shapes (version probes, `api rate_limit`) admit
+    // untouched.
+    if let Some(line) = crate::gh_budget::admit_spawn(bin, args) {
+        return Err(GhReadError::budget_refused_with_detail(read_name, line));
+    }
+    bounded_read_unadmitted(bin, args, cwd, read_name, timeout)
+}
+
+/// `bounded_read` without the budget admission, for a caller that already
+/// judged the request against the budget itself (the origin-aware door).
+pub(crate) fn bounded_read_unadmitted(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
     match run_bounded(bin, args, cwd, timeout) {
         BoundedRun::Completed(out) => Ok(out),
-        BoundedRun::TimedOut(elapsed) => Err(GhReadError::timed_out(read_name, elapsed)),
+        BoundedRun::TimedOut(elapsed, tail) => Err(GhReadError::timed_out(
+            read_name,
+            elapsed,
+            String::from_utf8_lossy(&tail).into_owned(),
+        )),
         BoundedRun::Refused => Err(GhReadError::budget_refused(read_name)),
         BoundedRun::SpawnFailed(kind) => Err(GhReadError::unrunnable_spawn(
             read_name,
@@ -460,8 +566,12 @@ pub(crate) fn git_bounded(git_bin: &str, args: &[&str], cwd: &Path) -> Option<Bo
     let read_name = format!("git {}", args.first().unwrap_or(&"?"));
     match run_bounded(OsStr::new(git_bin), args, cwd, stopgate_read_timeout()) {
         BoundedRun::Completed(out) => Some(out),
-        BoundedRun::TimedOut(elapsed) => {
-            let error = GhReadError::timed_out(&read_name, elapsed);
+        BoundedRun::TimedOut(elapsed, tail) => {
+            let error = GhReadError::timed_out(
+                &read_name,
+                elapsed,
+                String::from_utf8_lossy(&tail).into_owned(),
+            );
             log_bounded_read_error("git", &error);
             None
         }

@@ -69,7 +69,7 @@ run_hook() {
 # 1. startup + seed fields -> exactly one envelope, quoting the seed verbatim.
 # The envelope is the delivered header line: `@<sender> · <msg id> · <summary>`.
 out="$(run_hook startup "${seed_env[@]}")"
-headers="$(printf '%s' "$out" | grep -c '· msg-abc123 ·' || true)"
+headers="$(printf '%s' "$out" | grep -c '· msg-abc123`' || true)"
 check "startup emits one header line" "1" "$headers"
 if printf '%s' "$out" | grep -q '`@119e3c52-0000-7000-8000-000000000000 · msg-abc123'; then
     printf 'ok   full sender session is the reply address\n'
@@ -133,7 +133,7 @@ try:
 except Exception as exc:
     print(f"unparseable: {exc}")')"
 check "the envelope survives the strip" "1" \
-    "$(printf '%s' "$out" | grep -c '· msg-abc123 ·' || true)"
+    "$(printf '%s' "$out" | grep -c '· msg-abc123`' || true)"
 
 # 8. a codex-shaped payload (valid JSON, no `.source`) DOES emit. `.source` is a
 #    claude field and codex routes compaction to PostCompact, a separate event
@@ -144,7 +144,7 @@ out="$(printf '{"cwd":"/w"}' \
     | env CLAUDE_PLUGIN_ROOT="$REPO_ROOT" FNO_BIN="$FNO_BIN" "${seed_env[@]}" \
       bash "$HOOK" 2>/dev/null)"
 check "a payload with no source field still emits" "1" \
-    "$(printf '%s' "$out" | grep -c '· msg-abc123 ·' || true)"
+    "$(printf '%s' "$out" | grep -c '· msg-abc123`' || true)"
 
 # 9. and an UNPARSEABLE payload still does not. The two absences differ: one
 #    harness does not report the field, the other input cannot be read at all,

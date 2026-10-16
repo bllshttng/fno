@@ -68,6 +68,18 @@ permissions:
   contents: read
 
 jobs:
+  plugin-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install marketplace CLIs for artifact validation
+        run: npm install --global @openai/codex @anthropic-ai/claude-code
+      - name: Prove minimal tree, count refusal and fast-forward publication
+        run: bash scripts/ci/check-plugin-tree.sh
+
   # The OpenCode plugin suites: the repo-local orchestration plugin and the
   # shipped stop bridge. Both files speak two OpenCode contracts (the 1.x
   # function entrypoint and the 2.x `{ id, setup }` entrypoint), so a
@@ -155,8 +167,11 @@ jobs:
         # floor the 0 cap cannot express; the suite still shrinks in net
         # across any PR that only extends existing owners. 3: the identity
         # schema (d-f9c59b68, d-2327af8e) adds two native modules and one
-        # store aggregate, each carrying its first contract test.
-        run: fno-agents test-delta --base "$TEST_BASE" --max-net 3
+        # store aggregate, each carrying its first contract test. 6: the
+        # OTLP exporter is a new native module whose four tests are its
+        # first contracts, plus two regressions in existing owners (the
+        # preview-flag refusal and the old-spelling vacate).
+        run: fno-agents test-delta --base "$TEST_BASE" --max-net 6
 
       - name: Verb matrix fresh
         if: ${{ !cancelled() }}
@@ -166,7 +181,7 @@ jobs:
           uv run fno-py doctor harness-matrix --write
           git diff --exit-code -- ../docs/harnesses/verb-matrix.md
 
-      # hooks/generated-write-guard.sh refuses edits only to generated copies
+      # hooks/write-gate.sh refuses edits only to generated copies
       # that generated-artifacts.tsv or skill-bundles.yaml names. The census
       # fails on a dead row and on a marked generated file no list covers.
       - name: Generated-copy manifest complete (selftest, then check)
@@ -551,7 +566,7 @@ jobs:
         run: bash tests/ci/test_check_client_actions_shrink.sh
 
       # State-root tidiness: the inventory doc's root rows are shrink-only.
-      # The runtime half is hooks/claude-config-write-guard.sh, which refuses
+      # The runtime half is hooks/write-gate.sh, which refuses
       # a NEW top-level write in either root; this gate is the review half,
       # failing a PR whose diff adds a root pattern to the doc.
       - name: State-root inventory rows are shrink-only
@@ -560,6 +575,19 @@ jobs:
         run: |
           bash scripts/ci/check-state-root-rows.sh --self-test
           bash scripts/ci/check-state-root-rows.sh
+
+      # The write-side half of the same rule: a diff that ADDS a hand-built
+      # root-level write (a bare state_dir() leaf, a fence-less
+      # root_state_file, a Rust place() with no layout row) fails, so a new
+      # writer cannot skip the paths-module doors the doc's rule names.
+      - name: State-root writes are rowed or subfoldered
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          bash scripts/ci/check-state-root-writes.sh --self-test
+          bash scripts/ci/check-state-root-writes.sh
 
       # From review-invocation-single-source.yml.
       - name: Review invocation single-source check

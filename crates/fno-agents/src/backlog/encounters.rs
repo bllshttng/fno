@@ -5,6 +5,71 @@
 use super::model::Encounter;
 use super::schema_v4::{iso, norm_sql, touch, updated, NOW};
 use rusqlite::{params, Connection};
+use serde_json::Value;
+use std::collections::HashMap;
+
+/// Append one encounter to the node whose id is exactly `node_id`, refusing
+/// a second vote from the same voter. The voter is the record's own
+/// `voter_key`, else its `session_id`. Returns `{appended, error, reason}`
+/// with reason missing, duplicate or unidentified: the keeper op, the
+/// native verb and the creation vote all answer from this one body.
+pub(crate) fn append_refusing_duplicate(
+    entries: &mut [Value],
+    node_id: &str,
+    record: Value,
+) -> Value {
+    let voter = |v: &Value| -> String {
+        v.get("voter_key")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("session_id").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let key = voter(&record);
+    if key.is_empty() {
+        return serde_json::json!({"appended": false,
+            "error": "an encounter with no voter key (session_id) is not readable back to a transcript",
+            "reason": "unidentified"});
+    }
+    let Some(obj) = entries
+        .iter_mut()
+        .find(|e| crate::graph_store::entry_id(e) == Some(node_id))
+        .and_then(Value::as_object_mut)
+    else {
+        return serde_json::json!({"appended": false,
+            "error": format!("no node resolves to '{node_id}'"), "reason": "missing"});
+    };
+    if let Some(prior) = obj
+        .get("encounters")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|prior| voter(prior) == key))
+    {
+        return serde_json::json!({"appended": false,
+            "error": format!(
+                "voter {key} already recorded an encounter on {} at {}",
+                obj.get("id").and_then(Value::as_str).unwrap_or(node_id),
+                // Python's f-string printed a missing stamp as "None"; the
+                // receipt keeps that spelling.
+                prior
+                    .get("created_at")
+                    .or_else(|| prior.get("ts"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("None")
+            ),
+            "reason": "duplicate"});
+    }
+    let encounters = obj
+        .entry("encounters".to_string())
+        .or_insert_with(|| Value::Array(vec![]));
+    if !encounters.is_array() {
+        *encounters = Value::Array(vec![]);
+    }
+    encounters
+        .as_array_mut()
+        .expect("just made an array")
+        .push(record);
+    serde_json::json!({"appended": true, "error": Value::Null, "reason": Value::Null})
+}
 
 /// Schema 4. The vote time is the row's creation time, so the schema-3
 /// `ts` column is `created_at` now (user ruling 2026-09-23).
@@ -141,6 +206,24 @@ pub fn delete(connection: &Connection, node_id: &str) -> Result<(), String> {
 /// One node's encounters in list order (seq). The extras column
 /// round-trips the item keys the typed model keeps as `extras`; an
 /// unparsable value reads as empty.
+fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Encounter> {
+    let extras_raw: String = row.get(9)?;
+    let extras: serde_json::Map<String, Value> =
+        serde_json::from_str(&extras_raw).unwrap_or_default();
+    Ok(Encounter {
+        created_at: row.get(0)?,
+        evidence: row.get(1)?,
+        session_id: row.get(2)?,
+        voter_key: row.get(3)?,
+        voter_kind: row.get(4)?,
+        harness: row.get(5)?,
+        fno_id: row.get(6)?,
+        effort: row.get(7)?,
+        model: row.get(8)?,
+        extras,
+    })
+}
+
 pub fn load(connection: &Connection, node_id: &str) -> Result<Vec<Encounter>, String> {
     let mut statement = connection
         .prepare(
@@ -150,49 +233,43 @@ pub fn load(connection: &Connection, node_id: &str) -> Result<Vec<Encounter>, St
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![node_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, String>(9)?,
-            ))
-        })
+        .query_map(params![node_id], record_from_row)
         .map_err(|error| error.to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (
-            created_at,
-            evidence,
-            session_id,
-            voter_key,
-            voter_kind,
-            harness,
-            fno_id,
-            effort,
-            model,
-            extras_raw,
-        ) = row.map_err(|error| error.to_string())?;
-        let extras: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&extras_raw).unwrap_or_default();
-        out.push(Encounter {
-            created_at,
-            evidence,
-            session_id,
-            voter_key,
-            voter_kind,
-            harness,
-            fno_id,
-            effort,
-            model,
-            extras,
-        });
+        out.push(row.map_err(|error| error.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Bulk twin of [`load`]: one query per id batch, rows grouped per node in
+/// the same per-node seq order `load` produces.
+pub fn load_many(
+    connection: &Connection,
+    node_ids: &[String],
+) -> Result<HashMap<String, Vec<Encounter>>, String> {
+    const SQLITE_BIND_BATCH: usize = 900;
+    let mut out: HashMap<String, Vec<Encounter>> = HashMap::new();
+    for batch in node_ids.chunks(SQLITE_BIND_BATCH) {
+        let placeholders = std::iter::repeat_n("?", batch.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT created_at, evidence, session_id, voter_key, voter_kind, harness, fno_id,
+                    effort, model, extras, node_id
+             FROM encounters WHERE node_id IN ({placeholders}) ORDER BY node_id, seq",
+            ))
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(batch.iter()), |row| {
+                Ok((record_from_row(row)?, row.get::<_, String>(10)?))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let (record, node_id) = row.map_err(|error| error.to_string())?;
+            out.entry(node_id).or_default().push(record);
+        }
     }
     Ok(out)
 }

@@ -26,6 +26,18 @@ pub const DEFAULT_CUT_FRACTION: f64 = 0.25;
 pub const DEFAULT_RAISE_LOAD_PER_CORE: f64 = 2.0;
 /// Sustained calm before one +1 decay step.
 pub const DEFAULT_RAISE_HOLD_SECONDS: u64 = 900;
+/// The learned cap never drops below this unless the user sets a higher floor.
+pub const DEFAULT_FLOOR: u32 = 1;
+/// The reason an older first run stamped on a cap it guessed from the machine
+/// budget. The reader treats it as no measurement.
+const SEED_REASON: &str = "seeded from machine budget";
+/// What every soft-cap refusal names to hold the learned cap up. The spawn
+/// door's `--floor` writes the key.
+/// What every soft refusal says about --force.
+const FORCE_TAIL: &str =
+    "For one spawn the user ordered: --force. It passes every soft limit and never the RAM floor.";
+pub const MAX_LIVE_REMEDY: &str = "raise agents.max_live in ~/.fno/config.toml";
+pub const FLOOR_REMEDY: &str = "fno agents spawn --floor N";
 
 /// `[agents.capacity]` thresholds, defaults mirroring the runaway arm's band.
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +47,8 @@ pub struct CapacityThresholds {
     pub cut_fraction: f64,
     pub raise_per_core: f64,
     pub raise_hold_seconds: u64,
+    /// `[agents.capacity] floor`: the user's lower bound on the learned cap.
+    pub floor: u32,
 }
 
 impl Default for CapacityThresholds {
@@ -45,6 +59,7 @@ impl Default for CapacityThresholds {
             cut_fraction: DEFAULT_CUT_FRACTION,
             raise_per_core: DEFAULT_RAISE_LOAD_PER_CORE,
             raise_hold_seconds: DEFAULT_RAISE_HOLD_SECONDS,
+            floor: DEFAULT_FLOOR,
         }
     }
 }
@@ -75,6 +90,10 @@ pub fn thresholds(cwd: &std::path::Path) -> CapacityThresholds {
             .unwrap_or(DEFAULT_CUT_FRACTION),
         raise_per_core: float("raise_load_per_core", DEFAULT_RAISE_LOAD_PER_CORE),
         raise_hold_seconds: uint("raise_hold_seconds", DEFAULT_RAISE_HOLD_SECONDS),
+        floor: read("floor")
+            .and_then(|v| v.as_integer())
+            .filter(|v| *v > 0)
+            .map_or(DEFAULT_FLOOR, |v| v.min(u32::MAX as i64) as u32),
     }
 }
 
@@ -146,19 +165,40 @@ pub struct CapacityState {
 
 /// The cap answer the gate reads. `known = false` means no usable state: the
 /// cap IS the ceiling and every rendering says so.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Effective {
     pub cap: usize,
     pub ceiling: usize,
     pub known: bool,
     pub reason: Option<String>,
     pub since: Option<i64>,
+    /// Set when the user's floor holds the cap above what the loop learned.
+    pub held: Option<FloorHold>,
+}
+
+/// The floor as configured and the learned cap it overrode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloorHold {
+    pub floor: usize,
+    pub learned: usize,
 }
 
 impl Effective {
     /// The sentence fragment every refusal and receipt shares, so a display
     /// can never quote a cap the gate did not read.
     pub fn clause(&self) -> String {
+        if let Some(held) = self.held.as_ref().filter(|h| h.learned >= self.cap) {
+            return format!(
+                "effective cap {} of {} (at agents.capacity.floor {})",
+                self.cap, self.ceiling, held.floor
+            );
+        }
+        if let Some(held) = &self.held {
+            return format!(
+                "effective cap {} of {} (held at agents.capacity.floor {}, learned {})",
+                self.cap, self.ceiling, held.floor, held.learned
+            );
+        }
         match self.known {
             true => match (&self.reason, self.since) {
                 (Some(reason), Some(since)) => format!(
@@ -176,22 +216,94 @@ impl Effective {
             ),
         }
     }
+
+    /// The cap the loop learned, with the floor stripped off.
+    fn learned_cap(&self) -> usize {
+        self.held.as_ref().map_or(self.cap, |h| h.learned)
+    }
+
+    /// The line every soft-cap refusal prints so the reader knows the number
+    /// is not theirs and how to lift it. `None` at the ceiling: no lift exists.
+    pub fn override_hint(&self) -> Option<String> {
+        (self.cap < self.ceiling).then(|| {
+            format!(
+                "spawn-gate: the learned cap is {}; the user's agents.max_live is {}. To hold \
+                 the cap at N or above: {FLOOR_REMEDY}. {FORCE_TAIL}",
+                self.learned_cap(),
+                self.ceiling
+            )
+        })
+    }
+
+    /// The hint for a refusal on the slot axis: below the ceiling the floor
+    /// hint, at it the step that raises `agents.max_live`.
+    pub fn slot_hint(&self) -> String {
+        self.override_hint().unwrap_or_else(|| {
+            format!(
+                "spawn-gate: the cap is the user's agents.max_live, {}. To raise it: \
+                 {MAX_LIVE_REMEDY}. {FORCE_TAIL}",
+                self.ceiling
+            )
+        })
+    }
+
+    pub fn eprint_slot_hint(&self) {
+        eprintln!("{}", self.slot_hint());
+    }
+
+    /// Prints [`Self::override_hint`] on stderr when there is one.
+    pub fn eprint_hint(&self) {
+        if let Some(hint) = self.override_hint() {
+            eprintln!("{hint}");
+        }
+    }
+
+    /// Adds the keys a slot refusal receipt carries beside its `max_live`:
+    /// the learned cap, the ceiling and, below the ceiling, the remedy.
+    pub fn annotate(&self, receipt: &mut Value) {
+        receipt["learned_cap"] = serde_json::json!(self.learned_cap());
+        receipt["ceiling"] = serde_json::json!(self.ceiling);
+        if self.cap < self.ceiling {
+            receipt["remedy"] = serde_json::json!(FLOOR_REMEDY);
+        } else if receipt["axis"] != "fleet_cpu_share" {
+            receipt["remedy"] = serde_json::json!(MAX_LIVE_REMEDY);
+        }
+    }
+}
+
+/// The remedy a refused native launch line shows. A native line has no
+/// `--force`, so a slot refusal (its receipt carries `ceiling`) also names the
+/// spawn form that does.
+pub fn native_remedy(remedy: &str, receipt: Option<&Value>) -> String {
+    match receipt.is_some_and(|r| r.get("ceiling").is_some()) {
+        true => format!(
+            "{remedy}. For one launch the user ordered: fno agents spawn NAME PAYLOAD --force"
+        ),
+        false => remedy.to_string(),
+    }
 }
 
 /// [`effective`] against the ambient home, and the ceiling when the process
 /// has none: the gate reads this, so an undeclared-root test process takes
 /// the ceiling fallback instead of panicking on the home resolution.
-pub fn effective_from_env(ceiling: usize) -> Effective {
+pub fn effective_from_env(ceiling: usize, floor: usize) -> Effective {
     match crate::paths::AgentsHome::from_env_opt() {
-        Some(home) => effective(&home, ceiling),
+        Some(home) => effective(&home, ceiling, floor),
         None => Effective {
             cap: ceiling,
             ceiling,
-            known: false,
-            reason: None,
-            since: None,
+            ..Default::default()
         },
     }
+}
+
+/// [`effective_from_env`] with the ceiling and the floor read from the config
+/// at `cwd`: the one-line reader for callers that hold no ceiling already.
+pub fn effective_for(cwd: &std::path::Path) -> Effective {
+    effective_from_env(
+        crate::agents_config::max_live(cwd) as usize,
+        thresholds(cwd).floor as usize,
+    )
 }
 
 /// The state file: per machine, keyed by the stable platform id when the box
@@ -219,13 +331,25 @@ pub fn read_state(home: &AgentsHome) -> Option<CapacityState> {
     serde_json::from_str(&raw).ok()
 }
 
-/// The cap answer for this machine: the learned effective cap clamped under
-/// the given ceiling, or the ceiling itself when no usable state exists.
-pub fn effective(home: &AgentsHome, ceiling: usize) -> Effective {
+/// The learned cap when the loop measured it below the ceiling. A seed guess,
+/// or a cap that sat at an older and lower ceiling, is no measurement: it
+/// follows the ceiling, so a raised `agents.max_live` binds at once.
+fn measured_cut(state: &CapacityState) -> Option<u32> {
+    (state.effective < state.ceiling && state.reason.as_deref() != Some(SEED_REASON))
+        .then_some(state.effective)
+}
+
+/// The cap answer for this machine: the learned effective cap raised to the
+/// user's floor and clamped under the given ceiling, or the ceiling itself
+/// when no usable state exists. The reader applies the floor itself so a
+/// floor set between two ticks binds at once.
+pub fn effective(home: &AgentsHome, ceiling: usize, floor: usize) -> Effective {
     let ceiling = ceiling.max(1);
     match read_state(home) {
         Some(state) if state.effective >= 1 => {
-            let cap = (state.effective as usize).min(ceiling);
+            let learned = measured_cut(&state).map_or(ceiling, |cut| (cut as usize).min(ceiling));
+            let floor_cap = floor.min(ceiling);
+            let cap = learned.max(floor_cap);
             let known = cap < ceiling || state.reason.is_some();
             Effective {
                 cap,
@@ -233,14 +357,16 @@ pub fn effective(home: &AgentsHome, ceiling: usize) -> Effective {
                 known,
                 reason: state.reason,
                 since: state.since,
+                // A tick and a cut both write the floor into the state, so a
+                // cap sitting on a user floor is held even when learned equals it.
+                held: (floor > DEFAULT_FLOOR as usize && cap == floor_cap)
+                    .then_some(FloorHold { floor, learned }),
             }
         }
         _ => Effective {
             cap: ceiling,
             ceiling,
-            known: false,
-            reason: None,
-            since: None,
+            ..Default::default()
         },
     }
 }
@@ -254,8 +380,8 @@ fn render_clock(epoch: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// One AIMD step from a tick's sample. Seeds the state from the machine
-/// budget on first run, folds the memory figure and the account windows, and
+/// One AIMD step from a tick's sample. Seeds the state at the ceiling on
+/// first run, folds the memory figure and the account windows, and
 /// persists the result. `Ok(None)` when the sample carries no run queue (the
 /// one signal the loop reads) and there is nothing to refresh.
 pub fn feed(
@@ -266,11 +392,18 @@ pub fn feed(
 ) -> io::Result<CapacityState> {
     let ceiling = crate::agents_config::max_live(cwd);
     let thresholds = thresholds(cwd);
-    let mut state = read_state(home).unwrap_or_else(|| seed(sample, ceiling, now_epoch));
+    let mut state = read_state(home).unwrap_or_else(|| seed(ceiling, now_epoch));
+    if measured_cut(&state).is_none() {
+        state.effective = ceiling;
+        state.reason = None;
+        state.since = None;
+    }
     state.ceiling = ceiling;
     if let Some(next) = step(&state, sample, &thresholds, now_epoch) {
         state = next;
     }
+    // The file the mux meter reads agrees with the reader within one tick.
+    state.effective = state.effective.max(thresholds.floor.min(ceiling));
     state.memory = memory_figure(sample);
     state.workers_live = sample.live_rows;
     state.accounts = fold_accounts(cwd, home, ledger_rows(cwd, home), now_epoch);
@@ -279,16 +412,13 @@ pub fn feed(
     Ok(state)
 }
 
-/// First run: the p75 machine budget clamped under the ceiling.
-fn seed(sample: &MachineSample, ceiling: u32, now_epoch: i64) -> CapacityState {
-    let budget =
-        crate::machine_load::budget(sample.cores, sample.total_mem_gb, sample.sessions.as_ref());
-    let effective = budget.max_live.min(ceiling).max(1);
+/// First run: the cap starts at the ceiling. Only a measured breach lowers it.
+fn seed(ceiling: u32, now_epoch: i64) -> CapacityState {
     CapacityState {
         ceiling,
-        effective,
-        reason: Some("seeded from machine budget".into()),
-        since: Some(now_epoch),
+        effective: ceiling.max(1),
+        reason: None,
+        since: None,
         slots_learned: None,
         over_since: None,
         calm_since: None,
@@ -299,7 +429,8 @@ fn seed(sample: &MachineSample, ceiling: u32, now_epoch: i64) -> CapacityState {
     }
 }
 
-/// The verdict step: breach held long enough cuts 25% (floor 1), calm held
+/// The verdict step: breach held long enough cuts 25% (never under the
+/// floor, and no cut at all once the cap sits on it), calm held
 /// long enough adds 1 (never over the ceiling), the middle band resets both
 /// streaks. The streak bookkeeping is ALWAYS updated in the returned state
 /// (a pre-threshold sample arms the clock; discarding it would restart the
@@ -322,9 +453,9 @@ fn step(
         let over = state.over_since.unwrap_or(now_epoch);
         next.over_since = Some(over);
         next.calm_since = None;
-        if now_epoch - over >= t.cut_hold_seconds as i64 && state.effective > 1 {
+        if now_epoch - over >= t.cut_hold_seconds as i64 && state.effective > t.floor {
             let cut = ((state.effective as f64) * (1.0 - t.cut_fraction)).floor() as u32;
-            next.effective = cut.max(1);
+            next.effective = cut.max(t.floor);
             next.reason = Some("CPU-bound".into());
             next.since = Some(now_epoch);
             next.over_since = None;
@@ -348,7 +479,7 @@ fn step(
     Some(next)
 }
 
-fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
+pub(crate) fn memory_figure(sample: &MachineSample) -> Option<MemoryFigure> {
     let total = sample.total_mem_gb?;
     let occupied = sample.compressor_gb?;
     if total <= 0.0 {
@@ -666,7 +797,7 @@ fn fold_accounts(
 
 /// The write the tick owns: tmp file, rename, the same pattern the provider
 /// cap snapshot persists with.
-fn write_state(home: &AgentsHome, state: &CapacityState) -> io::Result<()> {
+pub(crate) fn write_state(home: &AgentsHome, state: &CapacityState) -> io::Result<()> {
     let path = state_path(home);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -726,8 +857,7 @@ mod tests {
         // cutting, the state file carries it, and the tick past the hold
         // window fires the cut - no pre-seeded timestamps.
         let natural = tmp_home("natural");
-        let mut hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
-        hot.total_mem_gb = Some(96.0); // the seed budget reads 23 under this box
+        let hot = sample(Some(60), 12.0); // 5 per core, over the 4.0 band
         let armed = feed(&hot, &cwd, &natural, now).unwrap();
         assert_eq!(armed.effective, 23, "the arming tick does not cut");
         assert_eq!(armed.over_since, Some(now), "the breach clock is persisted");
@@ -757,7 +887,7 @@ mod tests {
         let fed = feed(&hot, &cwd, &home, now).unwrap();
         assert_eq!(fed.effective, 17, "a 25% cut of 23 floors to 17");
         assert_eq!(fed.reason.as_deref(), Some("CPU-bound"));
-        let learned = effective(&home, 23);
+        let learned = effective(&home, 23, 1);
         assert_eq!(learned.cap, 17);
         assert!(
             learned.clause().contains("effective cap 17 of 23"),
@@ -768,7 +898,7 @@ mod tests {
 
         // A machine with no state at all takes the ceiling and says so.
         let bare = tmp_home("fallback");
-        let learned = effective(&bare, 23);
+        let learned = effective(&bare, 23, 1);
         assert_eq!(learned.cap, 23);
         assert!(!learned.known);
         assert_eq!(
@@ -809,6 +939,110 @@ mod tests {
         assert_eq!(fed.effective, 23);
         let _ = std::fs::remove_dir_all(home.root());
         drop_ceiling_pin(env_lock, &cfg_dir);
+    }
+
+    #[test]
+    fn the_floor_binds_the_reader_and_the_cut() {
+        let now = 1_800_000_000;
+        let learned_five = CapacityState {
+            ceiling: 24,
+            effective: 5,
+            reason: Some("CPU-bound".into()),
+            since: Some(now - 60),
+            slots_learned: None,
+            over_since: None,
+            calm_since: None,
+            memory: None,
+            accounts: Vec::new(),
+            workers_live: None,
+            updated_epoch: now - 300,
+        };
+        let home = tmp_home("floor");
+        write_state(&home, &learned_five).unwrap();
+        // The reader raises the cap before any tick and says why.
+        let held = effective(&home, 24, 8);
+        assert_eq!((held.cap, held.known), (8, true));
+        assert_eq!(
+            held.clause(),
+            "effective cap 8 of 24 (held at agents.capacity.floor 8, learned 5)"
+        );
+        // A floor over the ceiling clamps to it; one under the learned cap
+        // changes nothing.
+        assert_eq!(effective(&home, 24, 40).cap, 24);
+        let plain = effective(&home, 24, 1);
+        assert_eq!(plain.cap, 5);
+        assert!(plain.held.is_none());
+        // A native line has no --force, so its slot refusal names the spawn form.
+        let mut receipt = serde_json::json!({"reason": "cap"});
+        plain.annotate(&mut receipt);
+        let native = native_remedy(FLOOR_REMEDY, Some(&receipt));
+        assert!(
+            native.ends_with("fno agents spawn NAME PAYLOAD --force"),
+            "{native}"
+        );
+        assert_eq!(native_remedy(FLOOR_REMEDY, None), FLOOR_REMEDY);
+        let _ = std::fs::remove_dir_all(home.root());
+
+        // A cut stops at the floor and never fires once the cap sits on it.
+        let t = CapacityThresholds {
+            floor: 8,
+            ..Default::default()
+        };
+        let hot = sample(Some(60), 12.0);
+        let mut ten = learned_five.clone();
+        ten.effective = 10;
+        ten.over_since = Some(now - 600);
+        let cut = step(&ten, &hot, &t, now).unwrap();
+        assert_eq!(cut.effective, 8, "a 25% cut of 10 is 7; the floor holds 8");
+        let mut on_floor = ten.clone();
+        on_floor.effective = 8;
+        assert_eq!(step(&on_floor, &hot, &t, now).unwrap().effective, 8);
+        // With no floor key the cut still clamps at 1.
+        let mut two = ten.clone();
+        two.effective = 2;
+        let bare = CapacityThresholds::default();
+        assert_eq!(step(&two, &hot, &bare, now).unwrap().effective, 1);
+
+        // After the cut is persisted the state's learned cap equals the floor.
+        // The reader still names the floor, so a tick never hides it.
+        let home = tmp_home("floor-tick");
+        write_state(&home, &cut).unwrap();
+        let after = effective(&home, 24, 8);
+        assert_eq!(after.cap, 8);
+        assert_eq!(
+            after.clause(),
+            "effective cap 8 of 24 (at agents.capacity.floor 8)"
+        );
+        let _ = std::fs::remove_dir_all(home.root());
+
+        // At the ceiling a refusal still names a step: agents.max_live and --force.
+        let at_ceiling = Effective {
+            cap: 24,
+            ceiling: 24,
+            ..Default::default()
+        };
+        let hint = at_ceiling.slot_hint();
+        assert!(
+            hint.contains("agents.max_live") && hint.contains("--force"),
+            "{hint}"
+        );
+        let mut receipt = serde_json::json!({"axis": "max_live"});
+        at_ceiling.annotate(&mut receipt);
+        assert_eq!(receipt["remedy"], MAX_LIVE_REMEDY);
+
+        // max_live 32 with no floor reads 32: a first run seeds at the
+        // ceiling, and neither an old seed guess nor a cap that sat at an
+        // older ceiling of 24 holds the cap at 24.
+        assert_eq!(seed(32, now).effective, 32);
+        let home = tmp_home("raised-ceiling");
+        let mut at_old = learned_five.clone();
+        (at_old.effective, at_old.reason) = (24, None);
+        write_state(&home, &at_old).unwrap();
+        assert_eq!(effective(&home, 32, 1).cap, 32);
+        (at_old.ceiling, at_old.reason) = (32, Some(SEED_REASON.into()));
+        write_state(&home, &at_old).unwrap();
+        assert_eq!(effective(&home, 32, 1).cap, 32);
+        let _ = std::fs::remove_dir_all(home.root());
     }
 
     #[test]

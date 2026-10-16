@@ -1,13 +1,10 @@
-"""W2: cross-delivery dedup at the drain + W3: write-ahead durable.
+"""W2: the transcript ledger reader + W3: write-ahead durable.
 
-W2 (here, ``-k dedup``): a durable message whose ``msg_id`` already landed in the
-recipient transcript (a live inject that confirmed after the durable copy was
-written) is not printed again. The transcript is the ledger -- no new state --
-read once per drain. A skipped message still advances the cursor and still emits
-an ``agent_mail_drained`` receipt with ``reason="skipped-duplicate"``. A
-transcript that cannot be read falls through to PRINTING: a read failure is not
-evidence of absence, and a duplicate is strictly better than a drop
-(AC4-HP, AC5-ERR).
+W2 (here, ``-k dedup``): the drain's cross-delivery dedup reads THIS session's
+transcript for ids that already landed -- the ledger instrument
+(``present_mail_ids``), no new state. The dedup-at-drain behavior itself is the
+Rust mail front's drain-self leaf, characterized byte-for-byte by its parity
+suite; these tests keep the reader honest.
 
 W3 (``-k writeahead``) is appended alongside.
 """
@@ -26,150 +23,9 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-class _Msg:
-    def __init__(self, *, id, from_, to, kind, ts, body):  # noqa: A002
-        self.id = id
-        self.from_ = from_
-        self.to = to
-        self.kind = kind
-        self.ts = ts
-        self.body = body
-
-
-class _CountingStdout:
-    """Stands in for stdout: writes buffer until flush() moves them to delivered."""
-
-    def __init__(self) -> None:
-        self.buffer: list[str] = []
-        self.delivered: list[str] = []
-
-    def write(self, s: str) -> int:
-        self.buffer.append(s)
-        return len(s)
-
-    def flush(self) -> None:
-        self.delivered.extend(self.buffer)
-        self.buffer.clear()
-
-    def isatty(self) -> bool:
-        return False
-
-
-def _drain_setup(monkeypatch, msg):
-    """Wire cmd_drain_self to see exactly one unread message for cl-abcd1234."""
-    from fno import harness_identity
-    from fno.bus import cursor as cursor_mod
-
-    class _Ident:
-        harness = "claude"
-        session_id = "abcd1234"
-        disposition = "single"
-
-    monkeypatch.setattr("fno.agents.self_stamp.resolve_self_identity", lambda: _Ident())
-    monkeypatch.setattr(harness_identity, "canonical_handle", lambda sid: "cl-abcd1234")
-    monkeypatch.setattr(
-        cursor_mod, "scan_unread", lambda h: [msg] if h == "cl-abcd1234" else []
-    )
-    return cursor_mod
-
-
-def _capture_events(monkeypatch) -> list[dict]:
-    records: list[dict] = []
-    from fno.agents import events as events_mod
-
-    monkeypatch.setattr(
-        events_mod, "emit", lambda kind, *, path=None, **data: records.append({"kind": kind, **data})
-    )
-    return records
-
-
 # ---------------------------------------------------------------------------
-# W2: cross-delivery dedup at the drain
+# W2: the transcript ledger reader
 # ---------------------------------------------------------------------------
-
-
-def test_drain_skips_duplicate_already_in_transcript(monkeypatch):
-    """AC4-HP: a durable copy whose id already landed in the transcript is not
-    printed again, but the cursor still advances and the receipt carries
-    reason=skipped-duplicate (silently swallowing it would recreate the absence
-    problem one layer down)."""
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-dup", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="the duplicate body",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-    # The live inject already landed this id in the recipient transcript.
-    monkeypatch.setattr("fno.mail.reply_resolve.present_mail_ids", lambda: {"m-dup"})
-    advances: list[tuple] = []
-    monkeypatch.setattr(
-        cursor_mod, "advance_cursor", lambda h, mid: advances.append((h, mid)) or True
-    )
-    captured = _capture_events(monkeypatch)
-    fake_out = _CountingStdout()
-
-    with monkeypatch.context() as patch:
-        patch.setattr("sys.stdout", fake_out)
-        mail_cli.cmd_drain_self(json_out=False)
-
-    assert "the duplicate body" not in "".join(fake_out.delivered), (
-        "a duplicate was printed a second time"
-    )
-    assert advances, "a skipped duplicate did not advance the cursor"
-    markers = [e for e in captured if e.get("kind") == "agent_mail_drained"]
-    assert markers and markers[0]["msg_id"] == "m-dup", "no receipt for the skipped id"
-    assert markers[0].get("reason") == "skipped-duplicate", (
-        "a skipped duplicate was receipted as printed"
-    )
-
-
-def test_drain_prints_when_transcript_cannot_be_read(monkeypatch):
-    """AC5-ERR: present_mail_ids() == None (unreadable transcript) must fall
-    through to PRINTING. A read failure is not evidence of absence."""
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-ac5", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="must still print",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-    monkeypatch.setattr("fno.mail.reply_resolve.present_mail_ids", lambda: None)
-    monkeypatch.setattr(cursor_mod, "advance_cursor", lambda h, mid: True)
-    fake_out = _CountingStdout()
-
-    with monkeypatch.context() as patch:
-        patch.setattr("sys.stdout", fake_out)
-        mail_cli.cmd_drain_self(json_out=False)
-
-    assert "must still print" in "".join(fake_out.delivered), (
-        "a message was skipped when the transcript could not be read"
-    )
-
-
-def test_drain_prints_message_absent_from_readable_transcript(monkeypatch):
-    """Positive control for the partition: a readable transcript that does NOT
-    carry the id prints normally (the dedup is a presence match, not an
-    always-skip)."""
-    from fno.mail import cli as mail_cli
-
-    msg = _Msg(
-        id="m-fresh", from_="alice", to="cl-abcd1234", kind="note",
-        ts="2026-08-11T00:00:00Z", body="fresh message",
-    )
-    cursor_mod = _drain_setup(monkeypatch, msg)
-    monkeypatch.setattr("fno.mail.reply_resolve.present_mail_ids", lambda: set())  # readable, empty
-    monkeypatch.setattr(cursor_mod, "advance_cursor", lambda h, mid: True)
-    captured = _capture_events(monkeypatch)
-    fake_out = _CountingStdout()
-
-    with monkeypatch.context() as patch:
-        patch.setattr("sys.stdout", fake_out)
-        mail_cli.cmd_drain_self(json_out=False)
-
-    assert "fresh message" in "".join(fake_out.delivered)
-    markers = [e for e in captured if e.get("kind") == "agent_mail_drained"]
-    assert markers and markers[0].get("reason") == "printed"
 
 
 def test_present_mail_ids_reads_envelope_ids_from_transcript(tmp_path, monkeypatch):
@@ -294,8 +150,14 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
     assert res.exit_code == 0, f"exit={res.exit_code} out={res.output!r}"
 
     rows = list(iter_messages())
-    assert len(rows) == 1
-    audit = rows[0]
+    # Staged body row first, hosted receipt second; one id, two rows.
+    assert len(rows) == 2
+    staged, audit = rows
+    assert staged.id == audit.id
+    assert (staged.from_, staged.to, staged.kind, staged.delivery) == (
+        "web", recipient, "send", None
+    )
+    assert staged.body == injected[0]
     assert audit.id in res.output
     assert (audit.from_, audit.to, audit.kind, audit.delivery) == (
         "web", recipient, "send", "hosted"
@@ -305,6 +167,7 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
         "to_session": "abcd1234-1111-7222-8333-444455556666",
         "to_harness": "claude",
     }
+    # The hosted receipt supersedes the staged twin: nothing left to drain.
     assert scan_unread(recipient) == []
 
     sent = runner.invoke(app, ["mail", "sent", "--from-name", "web", "--json"])
@@ -335,6 +198,8 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
 def test_live_recipient_audit_failure_does_not_queue_retry(
     runner, tmp_path, monkeypatch
 ):
+    """The receipt row fails AFTER a confirmed inject: the staged body row is
+    already on the bus, so nothing dangles and a retry would double-deliver."""
     from fno.bus.log import iter_messages
     from fno.cli import app
 
@@ -353,9 +218,11 @@ def test_live_recipient_audit_failure_does_not_queue_retry(
 
     assert res.exit_code == 0, res.output
     assert "delivered (hosted)" in res.stdout
-    assert "outbox record failed" in (res.stderr or "")
+    assert "receipt row failed" in (res.stderr or "")
     assert "do not retry" in (res.stderr or "")
-    assert list(iter_messages()) == []
+    rows = list(iter_messages())
+    assert [m.delivery for m in rows] == [None]
+    assert "hi" in rows[0].body
 
 
 def test_live_recipient_live_miss_writes_durable(runner, tmp_path, monkeypatch):
@@ -377,3 +244,60 @@ def test_live_recipient_live_miss_writes_durable(runner, tmp_path, monkeypatch):
     unread = scan_unread(recipient)
     assert unread, "the live-first durable fallback did not write"
     assert all(m.kind != "withdraw" for m in unread)
+
+
+def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
+    """A missed inject leaves the staged body row and the durable fallback under
+    one id; the drain surface shows the message exactly once, body intact."""
+    from fno.bus.cursor import scan_unread
+    from fno.bus.log import iter_messages
+    from fno.cli import app
+
+    use_tmpdir(monkeypatch, tmp_path)
+    recipient = _register_claude_peer("red")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
+    monkeypatch.setattr("fno.agents.dispatch._deliver_live", lambda *_a, **_k: False)
+
+    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
+    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
+
+    rows = [m for m in iter_messages() if m.to == recipient]
+    assert len(rows) == 2, "expected the staged row and its durable fallback"
+    assert len({m.id for m in rows}) == 1, "the twins stopped sharing an id"
+    assert all("hi" in m.body for m in rows)
+    unread = scan_unread(recipient)
+    assert len(unread) == 1, "one id surfaced twice to the drain"
+    assert "hi" in unread[0].body
+
+
+def test_stage_failure_skips_the_live_attempt(runner, tmp_path, monkeypatch):
+    """The bus door refuses the stage, so the inject never runs: a confirmed
+    inject into an id with no row is the dangling-Read-line bug. The durable
+    floor carries the message instead."""
+    from fno.bus.cursor import scan_unread
+    from fno.cli import app
+
+    use_tmpdir(monkeypatch, tmp_path)
+    recipient = _register_claude_peer("red")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
+
+    def _no_stage(**_kw):
+        raise OSError("bus lock timeout")
+
+    def _no_live(*_a, **_k):
+        raise AssertionError("live lane ran on an unstaged send")
+
+    monkeypatch.setattr("fno.bus.log.stage_before_live", _no_stage)
+    monkeypatch.setattr("fno.agents.dispatch._deliver_live", _no_live)
+
+    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
+    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
+    assert "body row not staged" in (res.stderr or "")
+
+    unread = scan_unread(recipient)
+    assert unread, "the durable floor did not carry the unstaged message"
+    assert all(m.delivery is None for m in unread)

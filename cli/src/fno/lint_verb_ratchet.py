@@ -46,19 +46,58 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 
 # Collapse-kept leaves the fno-agents binary serves natively after their
 # Python click leg retired (`backlog rank`'s lane pin answers in the binary
-# now, and the five `backlog session` lifecycle verbs answer from
-# backlog/session_cli.rs). The map row stays: the mux menu binds the leaf
-# and the Rust verb-baseline ratchet reads the same row.
+# now, the five `backlog session` lifecycle verbs answer from
+# backlog/session_cli.rs, and the three `do review` leaves answer from the
+# fno front's classifier execing the fno-agents review-level door - the
+# sizing leaf, the disposition-comment leaf, and the findings classifier).
+# The map row stays: the mux menu binds the leaf and the Rust verb-baseline
+# ratchet reads the same row.
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
+    "backlog advance",
+    "backlog album",
+    "backlog archive",
+    "backlog backfill-deferred-kind",
+    "backlog bases",
+    "backlog board",
+    "backlog collisions check",
+    "backlog cost",
+    "backlog defer",
+    "backlog demand",
+    "backlog dispatch-lanes",
+    "backlog encounter",
+    "backlog groom",
+    "backlog join",
+    "backlog maintain",
+    "backlog migrate-difficulty",
+    "backlog migrate-priorities",
+    "backlog migrate-updated-at",
+    "backlog project-root",
+    "backlog ready",
+    "backlog relatedness build",
+    "backlog relatedness get",
+    "backlog remove",
+    "backlog retract",
+    "backlog status",
+    "backlog unclaim",
+    "backlog undefer",
+    "backlog unsupersede",
+    "backlog version",
     "backlog rank",
+    "backlog render-views",
     "backlog reopen",
+    "backlog roadmap",
+    "backlog unarchive",
+    "backlog view",
     "backlog session add",
     "backlog session backfill",
     "backlog session close",
     "backlog session open",
     "backlog session reap-open",
+    "do review resolve-level",
+    "do review post-dispositions",
+    "do review classify",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the
@@ -331,6 +370,9 @@ def iter_python_leaves():
                         f"{path} {flag}" for flag in _hidden_option_tokens(sub)
                     )
                 cmd = collapse_click_group(cmd, keep=set(collapse_keep))
+                for native in sorted(NATIVE_SERVED_LEAVES):
+                    if native.startswith(name + " ") and native.removeprefix(name + " ") in collapse_keep:
+                        yield native, None
             if hasattr(cmd, "list_commands"):
                 ctx = click.Context(cmd, info_name=name)
                 yielded = False

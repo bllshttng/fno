@@ -77,6 +77,11 @@ pub enum Role {
     Title,
     /// The `esc close` affordance.
     Chip,
+    /// The composer chip that holds the keyboard: the one filled chip. A
+    /// terminal-following inverse block (fg/bg swapped by the emulator), so
+    /// the focused chip is unmistakable on a dark and a light ground alike
+    /// and no theme can pick a fill that washes out. Bold carries the label.
+    ChipFocus,
     Subtitle,
     /// `(is_active,)` - a section tab; the active one carries the accent.
     Tab(bool),
@@ -219,6 +224,16 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // washing the default fg out on a light terminal, while index 8 stays
         // a readable gray under both.
         Role::PanelMeta | Role::PanelRule => return (Color::Indexed(8), Color::Default, 0),
+        // The focused composer chip resolves above the theme split too: the
+        // terminal's own pair, swapped, is the fill - visible under every
+        // theme and every emulator ground.
+        Role::ChipFocus => {
+            return (
+                Color::Default,
+                Color::Default,
+                cell_flags::INVERSE | cell_flags::BOLD,
+            )
+        }
         _ => {}
     }
     if t.inherit {
@@ -567,6 +582,21 @@ pub fn is_light(t: &Theme) -> bool {
     matches!(t.base, Color::Rgb(r, g, b) if r > 127 && g > 127 && b > 127)
 }
 
+/// The Claude Code theme that matches a mux theme: the plugin ships one per
+/// brand theme under `themes/`, and Claude Code lists each as "<name> from
+/// fno" (selected as `custom:fno:<file stem>`). A light ground gets Footnote
+/// Paper, a theme built on the dark brand palette gets Footnote Superscript,
+/// and any other theme gets `None` so Claude Code keeps its own.
+pub fn claude_theme(t: &Theme) -> Option<&'static str> {
+    if is_light(t) {
+        Some("custom:fno:footnote-paper")
+    } else if t.name == "footnote-superscript" || t.inherit_from == "footnote-superscript" {
+        Some("custom:fno:footnote-superscript")
+    } else {
+        None
+    }
+}
+
 /// The OSC sequences that paint the terminal ground under a footnote theme:
 /// default background (11), default foreground (10), and the 16 palette
 /// slots (4), all from the theme's own tokens. `None` = the theme defines no
@@ -880,6 +910,34 @@ mod tests {
     }
 
     #[test]
+    fn the_focused_chip_is_a_terminal_following_inverse_under_every_theme() {
+        // The focused-chip ruling: all chips read at one dim weight, so
+        // Tab's landing spot is the only tell, and it told nothing. The
+        // focused chip is the one
+        // filled chip: the terminal's own pair swapped (INVERSE), bold
+        // label, under EVERY theme - no theme picks a fill that washes out
+        // on the disagreeing ground.
+        for n in THEME_NAMES {
+            let t = Theme::from_name(n).0;
+            let (fg, bg, flags) = cell_style(Role::ChipFocus, &t);
+            assert_eq!(fg, Color::Default, "{n} focused-chip fg");
+            assert_eq!(bg, Color::Default, "{n} focused-chip bg");
+            assert_eq!(
+                flags & cell_flags::INVERSE,
+                cell_flags::INVERSE,
+                "{n} focused chip carries INVERSE"
+            );
+            // A focused chip must not read like its neighbors: unfocused
+            // chips ride PanelBody (default video) under every theme.
+            assert_ne!(
+                cell_style(Role::ChipFocus, &t),
+                cell_style(Role::PanelBody, &t),
+                "{n} focused vs unfocused chip"
+            );
+        }
+    }
+
+    #[test]
     fn panel_roles_never_carry_inverse_or_a_bg_under_any_theme() {
         // The pale-panel fix: the backlog panel paints on the terminal's own
         // bg. INVERSE would swap the emulator's fg in as the bg - the exact
@@ -1107,5 +1165,20 @@ mod tests {
             );
         }
         assert!(ratio(t.dim) >= 4.5, "dim is {:.2}:1", ratio(t.dim));
+    }
+
+    #[test]
+    fn each_brand_theme_selects_its_claude_theme() {
+        let pick = |name: &str| claude_theme(&Theme::from_name(name).0);
+        assert_eq!(
+            pick("footnote-superscript"),
+            Some("custom:fno:footnote-superscript")
+        );
+        assert_eq!(pick("footnote-paper"), Some("custom:fno:footnote-paper"));
+        assert_eq!(pick("terminal"), None);
+        let mut user = theme_catppuccin();
+        user.name = "midnight";
+        user.inherit_from = "footnote-superscript";
+        assert_eq!(claude_theme(&user), Some("custom:fno:footnote-superscript"));
     }
 }

@@ -1,0 +1,2 @@
+blocked=True
+reason=incarnation-fence: session:uuid-fence claim file corrupted (unverifiable single-writer state)

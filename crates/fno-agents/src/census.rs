@@ -76,6 +76,30 @@ fn codex_app_server_rows() -> Vec<Value> {
     vec![row]
 }
 
+/// Every process under `root` in one table read, found by walking each
+/// row's ppid chain (at most 64 hops).
+pub(crate) fn descendants(table: &[ProcRow], root: u32) -> Vec<u32> {
+    let parent: std::collections::HashMap<u32, u32> =
+        table.iter().map(|row| (row.pid, row.ppid)).collect();
+    table
+        .iter()
+        .filter(|row| {
+            let mut current = row.ppid;
+            for _ in 0..64 {
+                if current == root {
+                    return true;
+                }
+                match parent.get(&current) {
+                    Some(&next) if current > 1 => current = next,
+                    _ => return false,
+                }
+            }
+            false
+        })
+        .map(|row| row.pid)
+        .collect()
+}
+
 #[cfg(test)]
 pub(crate) fn test_proc_row(pid: u32, ppid: u32, command: &str) -> ProcRow {
     ProcRow {
@@ -291,6 +315,46 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
         });
     }
     (rows, unreadable)
+}
+
+/// True when a live process argv contains `needle`. One pass over the pid
+/// list reading argv only, so a click path pays no per-thread census. This
+/// process is skipped: its own argv carries the needle when the caller was
+/// handed it on the command line.
+#[cfg(target_os = "macos")]
+pub fn live_argv_contains(needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return false;
+    }
+    let mut pids = vec![0u32; count as usize + 64];
+    let filled = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr().cast::<libc::c_void>(),
+            (pids.len() * std::mem::size_of::<u32>()) as libc::c_int,
+        )
+    };
+    if filled <= 0 {
+        return false;
+    }
+    let me = std::process::id();
+    pids[..filled as usize]
+        .iter()
+        .filter(|pid| **pid > 0 && **pid != me)
+        .any(|&pid| argv_of(pid).is_some_and(|argv| argv.iter().any(|a| a.contains(needle))))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn live_argv_contains(needle: &str) -> bool {
+    let me = std::process::id();
+    !needle.is_empty()
+        && process_table_ps()
+            .0
+            .iter()
+            .any(|r| r.pid != me && r.command.contains(needle))
 }
 
 /// The live argv of one pid, for the caller outside the census that needs
@@ -900,30 +964,9 @@ pub async fn census() -> Vec<Value> {
 /// Run the daemon-free census subcommand.  The process walk stays in Rust so
 /// Python callers and the machine sample share one table implementation.
 pub async fn run_verb(args: &[String]) -> i32 {
-    if args.iter().any(|arg| arg == "--tree-rss") {
-        let Some(index) = args.iter().position(|arg| arg == "--tree-rss") else {
-            unreachable!()
-        };
-        let Some(raw) = args.get(index + 1) else {
-            eprintln!("fno-agents census: --tree-rss needs a pid list");
-            return 2;
-        };
-        let mut pids = Vec::new();
-        for token in raw.split(',').filter(|token| !token.is_empty()) {
-            match token.parse::<u32>() {
-                Ok(pid) => pids.push(pid),
-                Err(_) => {
-                    eprintln!("fno-agents census: invalid pid {token}");
-                    return 2;
-                }
-            }
-        }
-        let (rows, _) = process_table_ps();
-        println!(
-            "{}",
-            json!({"rss_mb": crate::session_cost::tree_rss(&rows, &pids)})
-        );
-        return 0;
+    // `fno agents top`: the worker table, the census of live runs.
+    if args.first().map(String::as_str) == Some("--workers") {
+        return crate::agents_top::run(&args[1..]);
     }
     if args.iter().any(|arg| arg == "--ps") {
         let (rows, unreadable) = process_table();
@@ -1235,5 +1278,23 @@ mod process_table_tests {
             "a live pid is not zombie"
         );
         child.wait().unwrap();
+    }
+
+    #[test]
+    fn live_argv_contains_finds_a_running_argv_and_nothing_else() {
+        let needle = "census-witness-needle-4f1c";
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("sleep 20; : # {needle}"))
+            .spawn()
+            .unwrap();
+        let found = super::live_argv_contains(needle);
+        let absent = super::live_argv_contains("census-witness-never-run-9b2e");
+        let empty = super::live_argv_contains("");
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(found, "a live argv naming the needle is a witness");
+        assert!(!absent, "a needle no process names is no witness");
+        assert!(!empty, "an empty needle names nothing");
     }
 }

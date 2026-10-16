@@ -11,7 +11,7 @@ The three sideline-adjacent actions sit on three different keys, and their names
 
 ## Inside the notifications panel
 
-The panel opens from the bell at the far right of the sideline's top row or with `prefix+q`. While open, bare `j`/`k` move, `Enter` opens a question or clears settled questions, `c` clears settled questions, and `q`/`Esc` closes it.
+The panel opens from the bell at the far right of the sideline's top row or with `prefix+q`. While open, bare `j`/`k` move, `Enter` opens a question or clears settled questions, `c` clears settled questions, and `q`/`Esc` closes it. Drag the panel's left border to resize it. The dragged width persists across restarts. `w` toggles the wide panel, about three fifths of the terminal, and back. `F` toggles the full-screen panel and back. On the Questions tab, `space` marks the selected question and moves the cursor down. `c` archives the marked questions. With none marked, `c` clears settled questions.
 
 ## The global chord: Ctrl+Opt+Left
 
@@ -44,6 +44,6 @@ The overlay owns every keystroke, so bare arrows are free there.
 selector = ";"
 ```
 
-The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `Ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
+The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
 
-You can also rebind from the mux. Open settings > keybindings, pick the prefix or any listed action with `Enter` or a click, then press the new key. A collision, a digit, or the prefix byte is refused with the resolver's sentence, and the page waits for another key. A key that takes goes live at once and is saved to `[mux.keys]` or `mux.prefix` with `fno config set --local`. The last row, "edit keys in $EDITOR", opens that same file. After the editor exits, the mux reloads the keys.
+You can also rebind from the mux. The menu's `keybindings` row and `settings > keybindings` open the SAME table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button: it opens the key config in your `$EDITOR` (vi when none is set). After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.

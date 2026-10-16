@@ -1,0 +1,1 @@
+message 'ackmsg-4' is addressed to 'other', not 'a1b2c3d4'; cursor not advanced (ack only your own messages)

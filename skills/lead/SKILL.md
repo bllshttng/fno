@@ -30,13 +30,25 @@ The role is granted, never inferred. Verify it before anything else:
 2. If a row carries a role-source field, use it. If it does not, call the reader directly: resolve `term_state(scope)` (`fno agents org manifest-path` resolves the same file) and print `ROLE-SOURCE: term_state (team field absent)`.
 3. This session's handle must appear titled over `<scope>` (rung 0, 1 or 2), the manifest-versus-registry answer must read `split: false`, AND `conflicts` must carry no entry whose scope is `<scope>`. The two fields answer different questions. `split` is one role that two readers describe differently. `conflicts` is two roles over one territory. `agree` answers neither: two rival rows both read `agree: true` by design, because `agree` only says the graph was read and the scope resolved.
 4. A split, a conflict, or an unknown STOPS the skill and prints both session ids. For a conflict, print the two holders the entry names. A `conflicts` of null means the reader gave no answer. That is an unknown and it stops the skill, because an absent answer is not the same as no rival. A lead cannot lead through a role two readers disagree about, it cannot lead beside a rival, and it cannot re-role itself.
-5. Otherwise print `not promoted over <scope>; from an attended shell: fno agents org promote <handle> --scope <scope>` and stop.
+5. Otherwise print that this session is not promoted over `<scope>`. Print the grant line for an attended shell: `fno agents org promote <handle> --scope <scope>`. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
 
 How a role is granted, the ladder and succession: [the role model](references/once.md#who-runs-this-the-role-is-granted).
 
+## Without a role
+
+A session with no role over the scope does not lead. It runs no check-in, spawns no worker for the scope, and records no ruling. It can still act in three ways.
+
+- Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents org --json` lists the roles on this machine only.
+- Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
+- Mail a named peer: `fno agents mail send <name> "<text>"` on this machine. Use `fno agents mail send <name>@<host> "<text>"` for a peer on another machine. Run `fno agents register` first, so the peer can answer.
+
+An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from an attended shell on this machine.
+
+If `fno backlog get <scope>` finds no node, this machine's backlog does not hold the scope. The steps to share it are in [a node on a second machine](../../docs/architecture/multiplayer.md#a-node-on-a-second-machine).
+
 ## On titling
 
-- `fno agents org init --scope <scope>`. Print level, scope, mail handle. When the output carries a settled-findings section, those titles are what this epic already established: read them before the first check-in and never re-derive them.
+- `fno agents org init --scope <scope> --harness-session-id <full session id>`. Read the full id with `printenv CLAUDE_CODE_SESSION_ID` on claude, or `printenv CODEX_THREAD_ID` on codex. The stop hook matches the manifest id to the transcript name. So the 8-character handle from `fno agents whoami --json` does not work. Print level, scope, mail handle. The output can carry a settled-findings section. Those titles are what this epic already established. Read them before the first check-in. Never re-derive them.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
 - Declare the shape now: `fno agents org shape pass` for a one-wave pass, and `fno agents org shape team` THE MOMENT the lead spawns its first worker. This is the field the Stop nudge reads; an undeclared org is nagged at every stop.
@@ -48,19 +60,24 @@ With `--once` the role rules one wave and expires. Run Who runs this and On titl
 
 ## Arm the beat
 
-Branch once on what the harness supports, before arming anything. Claude gets the native `/loop` heartbeat. Codex uses provider-backed goal actions, never raw prompt-line `/goal` or `/loop`. Read effective readiness and require a positive `provider_goal` receipt plus a separate positive `stop` receipt. The verified provider goal is the primary continuation state, and Stop proves a different boundary. Every Codex wake runs the check-in body below. Other harnesses use the harness-specific heartbeat or externally owned wake described in [the beat table](references/beat-by-harness.md).
+Read the beat before arming anything: `fno-agents harness-beat` prints `beat: <beat> (<source>)`. The key `agents.<harness>.beat` defaults to `auto`, which reads this harness's capability row. A user sets the key only to override the row. Arm what the line names, and never branch on the harness name:
 
-The daemon mails the settle push on every harness:
+- `loop`: inject the native `/loop` as the cheap heartbeat (below).
+- `goal`: use provider-backed goal actions, never raw prompt-line `/goal` or `/loop`. Read effective readiness and require a positive `provider_goal` receipt plus a separate positive `stop` receipt. The verified provider goal is the primary continuation state, and Stop proves a different boundary. Every goal wake runs the check-in body below.
+- `schedule`: use the harness's own recurring schedule tool, as [the beat table](references/beat-by-harness.md) names it.
+- `daemon`: arm nothing. The daemon's lead-wake mail is the beat.
 
-1. **Settle mail, 300s.** The daemon's `lead_settle` arm mails the lead once per covered PR that settles green. It mails again once per covered node that merges and closes. The lead arms no watch and relaunches nothing. A red settle stays with the daemon nudge ladder, which names the failing checks. Codex arms nothing native: its provider goal and Stop receipts are the beat.
+The daemon mails the settle push on every beat:
 
-On Claude, inject the loop as the cheap heartbeat:
+1. **Settle mail, 300s.** The daemon's `lead_settle` arm mails the lead once per covered PR that settles green. It mails again once per covered node that merges and closes. The lead arms no watch and relaunches nothing. A red settle stays with the daemon nudge ladder, which names the failing checks.
+
+On `loop`, inject the loop:
 
 ```
 fno agents mail send "/loop ${lead.checkin_interval} ${lead.checkin_text}" --to-self --raw
 ```
 
-Confirm the loop receipt, journal `lead_armed` (`fno doctor event emit`) with it. For Codex, record its positive provider-goal and separate Stop receipts with `lead_armed`. Use the beat table for every other harness. Only an event, mail or the heartbeat wakes the lead.
+Journal `lead_armed` (`fno doctor event emit`) with the beat line and its receipt: the loop receipt on `loop`, the positive provider-goal and separate Stop receipts on `goal`. Only an event, mail or the heartbeat wakes the lead.
 
 ## The check-in body
 
@@ -74,7 +91,7 @@ To change the name later, run `fno agents rename <you> --name <new>`. It moves t
 
 Run `bash "$PLUGIN_ROOT/hooks/precompact-canon-doc.sh" < /dev/null` to refresh the doc's auto sections on this beat. Resolve `$PLUGIN_ROOT` as `${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cat "$HOME/.fno/install/plugin-root" 2>/dev/null)}}`. The writer resolves the role's doc itself, so every beat refreshes the same scope-keyed doc. This is what keeps the doc continuously refreshed instead of only at precompact. Past the compaction ceiling (default 3), a doc older than 24 hours blocks the stop gate. The beat refresh is what keeps the lead exitable.
 
-Role mail delivers live between beats. Peers, other leads included, message through `fno agents mail send <handle> "<body>" --subject "<one line>"`, and the send receipt is one JSON line `{msg_id, subject, to, status}`. The native SendMessage is the outage fallback only. A native send never reaches the mail journal, so the feed, the Messages tab, check-in counts and provenance all miss it. When mail is healthy, the send-message-guard refuses a SendMessage aimed at an fno-registered session and redirects to fno mail. When mail itself is down, the guard allows the native send and journals the fallback as a mail event.
+Role mail delivers live between beats. Peers, other leads included, message through `fno agents mail send <handle> "<body>" --subject "<one line>"`, and the send receipt is one JSON line `{msg_id, subject, to, status}`. The native SendMessage is the outage fallback only. A native send never reaches the mail journal, so the feed, the Messages tab, check-in counts and provenance all miss it. When mail is healthy, the send-message-guard refuses a SendMessage aimed at an fno-registered session and redirects to fno mail. When mail itself is down, the guard allows the native send and journals the fallback as a mail event. A peer on another machine takes a target of `<handle>@<host>`. With the shared primary set, the send writes a bus row the peer's daemon pulls and injects through its own local send ([multiplayer](../../docs/architecture/multiplayer.md)). With no store configured, send and peek relay over ssh. `--from-self` refuses on that lane. Pass `--from-name` instead.
 
 Every status update to the user is the `lineup:` table `fno agents org checkin` prints. Paste it as printed. Seated workers come first, then the on-deck queue in seat order. Do not rebuild the table by hand from per-node reads. Record the seat order with `fno agents org checkin --queue <ids>`. The ids are a comma list, on-deck first to last. Never use `fno backlog rank`: it orders dispatch, not the lineup.
 
@@ -97,6 +114,7 @@ Then run `fno agents org checkin` (bare from the titled session, or `--scope <sc
 - `posture:` the permission mode and sandbox this lead was titled with, beside the posture its state reports now observe. A drift line leads with `POSTURE DRIFT`. A lead's posture is fixed for its lead. Only the user can re-pin or restore it. Escalate to the user at once, and never read the lead as unchanged. A missing half (a pre-v19 row, a harness with no posture record) reads unproven, never drifted.
 - `refusal_rate:` the machine declining, as a percent, over the trailing 200 tool calls in this session's own transcript - the cheapest available proxy for context degradation, no model introspection needed. A rise across two consecutive check-ins (not one noisy tick) prints `RISING (handoff signal)`: treat it as a reason to hand off, the same way a `blocked_child` or `attention:` line is. The trend baseline is its own sidecar store, not the check-in journal: every beat that measured a rate advances it, so a beat whose row never journaled cannot pin the comparison to a stale pair. With no prior pair (fresh role, store loss) the line prints `UNMEASURED (needs two prior beats)`, never RISING. Reads `unmeasured` on a harness with no per-session transcript file (opencode) or when the transcript cannot be found.
 - `wake_ratio:` machine wakes to typed turns in this session's own transcript, read with the same provenance classifier `fno-agents intel` uses. Relay rows, loop wakeups, stop hooks and keepalives are wakes. Typed and unwitnessed turns are user. Over 3 to 1 prints `OVER 3 to 1` and journals an attention item. Treat it as a reason to shorten the lead. Fails on a harness with no per-session transcript file, the same posture as `refusal_rate`.
+- `self_correction:` the lead's own retractions against the user's corrections, per compaction window, with interrupts and rejects. The line names the newest (open) window and the previous closed one. It reads the same transcript with the same classifier as `wake_ratio`. It is evidence for the user. It is never a lever and never a hand-off trigger. The compaction term and `refusal_rate` stay the hand-off signals. Reads `unmeasured` on a harness whose transcript carries no compaction windows, the same posture as `refusal_rate`.
 - `subagent_tokens:` subagent token spend carried by task notifications, summed per task id: since the last beat, and the session total. With no previous beat it reads the session total twice.
 - `drain:` undelivered mail as one number.
 - `main ci:` one verdict token, never a count, for the merge decision. `fno-agents` reduces the shared check reader. That reader holds every check-run page, the legacy commit statuses, and runs that failed before minting a job. A workflow file GitHub cannot parse completes as `failure` with zero jobs. It mints no check run, so the row names its workflow path. `red` on any `fail` or `cancel` row. `green` on a row set where all rows pass or skip. `pending` on every other row set, including no rows. A failed read is loud, never green: an unreadable status or runs listing names the fault instead of answering. The combined status left the reduce. GitHub answers `pending` for a commit with zero legacy statuses. No green on this repo ever survived it. `total_count` and any per-conclusion tally are never compared. Measured 09:11Z to 09:23Z on one push: a count-based reader woke three times. The success counts ran 5, then 16, then 20, with zero failures and one identical verdict. A count moves on every finishing job. When the fleet's merge posture changes, the verdict moves. That is the only thing this read exists to answer.

@@ -78,6 +78,7 @@ from fno.agents.registry import (
     update_registry,
 )
 from fno.agents.role import (
+    adopt_drawn_name,
     calling_agent_row,
     role_validation_error,
     journal_spawn_role,
@@ -463,6 +464,30 @@ def happy_pane_argv(
     return ["happy", *claude_env, *argv[1:]]
 
 
+def inject_route_model_argv(
+    argv: list[str],
+    route_env: Optional[Mapping[str, str]],
+) -> list[str]:
+    """Pin a routed claude pane's model on argv, ahead of every settings rung.
+
+    A routed pane carries ANTHROPIC_MODEL as process env, but the user
+    settings file's ``env`` block outranks process env, so a global
+    model pin there wins and the worker launches on the wrong vendor's model.
+    ``claude --model`` on argv outranks settings env, so the route's model is
+    pinned the way the thread lane pins it with a ``--settings`` route file.
+    An argv that already names a model is caller intent and wins. The token
+    lands flags-first, where it can never sit inside a ``--`` seed fence.
+    """
+    if not route_env or argv[:1] != ["claude"]:
+        return argv
+    route_model = str(route_env.get("ANTHROPIC_MODEL", "")).strip()
+    if not route_model or any(
+        tok == "--model" or tok == "-m" or tok.startswith("--model=") for tok in argv
+    ):
+        return argv
+    return [argv[0], "--model", route_model, *argv[1:]]
+
+
 def claude_argv_is_interactive(argv: list[str]) -> bool:
     """D2 billing guard predicate (mirrors the daemon's
     ``claude_argv_is_interactive``): a mux-hosted claude must be the
@@ -488,6 +513,7 @@ PANE_HOSTABLE_PROVIDERS: tuple[str, ...] = (
     "pi",
     "cursor-agent",
     "grok",
+    "footnote",
 )
 
 #: : the token shape an UNDECLARED harness name must match before the
@@ -927,6 +953,9 @@ def _codex_cli_version() -> Optional[tuple]:
     matter how many panes this process spawns. None on any miss (missing
     binary, timeout, unparseable output) - treated as "assume incompatible"
     by every caller, never as "assume compatible"."""
+    if (pinned := os.environ.get("FNO_CODEX_VERSION")) is not None:
+        found = re.search(r"(\d+)\.(\d+)\.(\d+)", pinned)
+        return tuple(int(part) for part in found.groups()) if found else None
     try:
         proc = subprocess.run(
             ["codex", "--version"], capture_output=True, text=True, timeout=5
@@ -939,6 +968,12 @@ def _codex_cli_version() -> Optional[tuple]:
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
+
+
+def codex_hook_trust_args() -> list[str]:
+    """Trust fno's own plugin hooks on every launched codex; empty on an old codex."""
+    too_old = (_codex_cli_version() or (0, 0, 0)) < _CODEX_HOOK_TRUST_FLAG_MIN_VERSION
+    return [] if too_old else ["--dangerously-bypass-hook-trust"]
 
 
 def build_pane_argv(
@@ -1051,7 +1086,7 @@ def build_pane_argv(
     if provider == "codex":
         # `codex [OPTIONS] [PROMPT]` with no subcommand is the interactive CLI.
         argv = [*identity, "-C", str(cwd)]
-        bypass_posture = permission_mode == "yolo" if permission_mode else yolo
+        bypass_posture = permission_mode in ("yolo", "bypassPermissions") if permission_mode else yolo
         if permission_mode:
             argv += permission_pane_tokens("codex", permission_mode)
         else:
@@ -1063,18 +1098,9 @@ def build_pane_argv(
                 # disagree about what "bounded" means.
                 else permission_pane_tokens("codex", "workspace-write:never")
             )
-        if bypass_posture and (_codex_cli_version() or (0, 0, 0)) >= _CODEX_HOOK_TRUST_FLAG_MIN_VERSION:
-            # Codex 0.148 parks a fresh pane on a `Hooks need review` modal
-            # whenever a hook is new or changed, and the approvals bypass
-            # above does not clear it. Answering it by keystroke would need a
-            # modal-specific response mapping, which no harness declares - the
-            # `submit_keys` contract submits a composed turn and says nothing
-            # about a modal. So this flag is the only lever. Sandboxed
-            # postures never opt in. Gated on
-            # the installed version: an older codex's clap parser rejects an
-            # unrecognized flag outright, and an older codex predates the
-            # modal anyway, so omitting the flag there costs nothing.
-            argv += ["--dangerously-bypass-hook-trust"]
+        # Codex 0.148 parks a pane on a `Hooks need review` modal for a new or
+        # changed hook, and no posture clears it. Sandbox and approval stay.
+        argv += codex_hook_trust_args()
         # Any sandboxed posture (including --full-auto and an explicit
         # <sandbox>:<approval>) inherits codex's read-only .git carveout and
         # cannot commit without the grant. Only the two bypass postures skip it.
@@ -1183,14 +1209,12 @@ def build_pane_argv(
         argv += perm
         return argv
     if provider == "pi":
-        # pi's WATCHING lane: the plain interactive TUI, never `--mode rpc`
-        # (mutually exclusive per process). The pinned `--session-id` makes this
-        # a JOIN onto a live rpc session (measured 2026-08-28: one session
-        # file). Opening a NOT-yet-existing id is a CREATE, the unserialised
-        # half - the spawn lane serialises via
-        # `fno.agents.harnesses.pi.create_decision`; this builder only composes
-        # argv. The ONE pi route owner (keeper and pane share it). pi ships
-        # no permission popups, so `yolo` maps to nothing.
+        # pi's WATCHING lane: the plain TUI, never `--mode rpc` (mutually
+        # exclusive per process). The pinned `--session-id` JOINS a live rpc
+        # session (measured 2026-08-28); a not-yet-existing id is a CREATE,
+        # serialised by `fno.agents.harnesses.pi.create_decision`. The ONE pi
+        # route owner (keeper and pane share it). No permission popups, so
+        # `yolo` maps to nothing.
         from fno.agents.spawn_axes_client import spawn_axes_call
         from fno.agents.keeper_thread import _pi_axes
 
@@ -1209,16 +1233,13 @@ def build_pane_argv(
             argv += [message]
         return argv
     if provider == "cursor-agent":
-        # cursor-agent has no bidirectional local transport. Its stream-json
-        # mode is output-only, so fno drives it through a hosted pty: the pane,
-        # or the keeper that hosts the same argv on the thread lane.
-        # create-chat mints the UUID before this builder runs; the declared
-        # form then joins that exact remote chat. --trust rides the DECLARED
-        # form itself (never appended here: a second --trust is a duplicated
-        # flag, not a stronger one) and is NOT the bypass: in an untrusted
-        # cwd cursor-agent refuses with Workspace Trust Required and does no
-        # work, and fno always spawns into a fresh worktree. -w/--worktree is
-        # never passed; the worktree is fno's.
+        # cursor-agent's stream-json mode is output-only, so fno drives it
+        # through a hosted pty: the pane, or the keeper on the thread lane.
+        # create-chat mints the UUID first; the declared form joins that chat.
+        # --trust rides the DECLARED form (a second one is a duplicate, not a
+        # stronger one) and is NOT the bypass: an untrusted cwd refuses with
+        # Workspace Trust Required. -w/--worktree is never passed; the
+        # worktree is fno's.
         argv = identity
         if model:
             argv += ["--model", model]
@@ -1232,13 +1253,17 @@ def build_pane_argv(
         refuse_cursor_native_worktree_tokens(passthrough)
         argv += pane_passthrough_tokens(passthrough, argv)
         return argv
+    if provider == "footnote":
+        # The TUI takes one launch spec, not a session flag; the Rust owner
+        # resolves the endpoint and writes the 0600 file.
+        from fno.agents.spawn_axes_client import footnote_pane_spec
+
+        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode)]
     if provider == "grok":
-        # grok's pane hosts the plain TUI; the declared interactive_create
-        # form carries the caller-assigned `--session-id` and nothing else.
-        # The bypass (--always-approve), the one model axis and the effort
-        # axis are appended here, so pane and keeper compose the same argv.
-        # grok maps no --add-dir, and its permission vocabulary is claude's,
-        # so permission_pane_tokens passes it through exactly.
+        # grok's pane hosts the plain TUI; the declared form carries only the
+        # caller-assigned `--session-id`. The bypass, model and effort axes
+        # append here so pane and keeper compose the same argv. grok maps no
+        # --add-dir and its permission vocabulary is claude's.
         argv = identity
         if permission_mode:
             argv += permission_pane_tokens("grok", permission_mode)
@@ -1264,7 +1289,12 @@ def build_pane_argv(
         argv = [provider]
         argv += pane_passthrough_tokens(passthrough, argv)
         return argv
-    raise DispatchAskError(f"provider {provider!r} has no interactive pane form", exit_code=2)
+    try:
+        render_session_argv(provider, "headless_create", session_uuid)
+        hint = "; --substrate headless runs it as a one-shot"
+    except DispatchResolveError:
+        hint = ""
+    raise DispatchAskError(f"provider {provider!r} has no interactive pane form{hint}", exit_code=2)
 
 
 def _mesh_env_pairs(
@@ -3391,6 +3421,7 @@ def dispatch_spawn_pane(
         )
         if role_refusal is not None:
             raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
+        name = adopt_drawn_name(succession, role_plan, name)
 
     conflict = pane_placement_conflict(
         pane, workspace=squad, split=split, at=at, tab=tab, tab_id=tab_id,
@@ -3691,6 +3722,12 @@ def dispatch_spawn_pane(
     # argv so a passthrough token faces the identical check an fno-emitted one
     # would (a splice inside build_pane_argv, never an append past the guards).
     refuse_pane_headless_form(provider, argv)
+    # A routed claude pane cannot carry its model as env: the user settings
+    # env block outranks process env, so the route's ANTHROPIC_MODEL
+    # is pinned on argv, which outranks settings. Runs before the happy wrap
+    # so happy forwards it like any other claude option.
+    if provider == "claude":
+        argv = inject_route_model_argv(argv, route_env)
     # The outer env wrapper is not merely a scrub: it SETS the whole route in
     # happy's own environment, and happy merges that into its claude child. So
     # the wrapper is what delivers the credential, and --claude-env carries only
@@ -4571,6 +4608,8 @@ def dispatch_spawn_pane(
                     requested_model=model or route_model,
                     requested_provider=resolved_lane_provider,
                     requested_effort=effort,
+                    # v41: the delivered seed, for the attended seed exemption.
+                    spawn_payload=message or None,
                     cwd=str(cwd),
                     # Written in the SAME registry transaction as the status, so
                     # a concurrent reconcile cannot land one without the other

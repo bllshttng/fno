@@ -140,10 +140,8 @@ RUST_CLIENT_VERBS = frozenset(
         "adopt",
         "attach",
         "logs",
-        # The daemon-free read projections the top view and the spawn path
-        # call: the session-to-node join and the revival decision. Client-side
+        # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
-        "sessions-map",
         "revival-check",
         # registry-json: the daemon-free registry projection the hooks read.
         # Reads the registry file client-side (load_registry_entries) and
@@ -234,6 +232,11 @@ RUST_CLIENT_VERBS = frozenset(
         # also satisfy it. Dispatched directly in client.rs before
         # build_request (no daemon RPC, no Python impl).
         "review-coverage",
+        # Review-attestation carrier between this machine's event journal and
+        # the shared primary. Dispatched directly in client.rs before
+        # build_request (no daemon RPC, no Python impl); this entry keeps the
+        # client.rs<->router parity test in sync.
+        "attest",
         # Pre-manifest <help> tag read: the stop hooks' visitor-allowed
         # exit calls this directly when no manifest names the session, so a
         # worker that dies before `target init` still gets its distress heard.
@@ -312,6 +315,10 @@ RUST_CLIENT_VERBS = frozenset(
         # PreCompact stamp writer/reader: the hook invokes the
         # binary directly (`fno-agents compaction mark`). Parity-synced.
         "compaction",
+        # The fmail read-verb lesson state: the hook carriers invoke
+        # the binary directly (`fno-agents mail-teach --self --mark`).
+        # Parity-synced.
+        "mail-teach",
         # Read leaves over the packaged capability table and the merge-posture
         # family table: the successors to the retired
         # dispatch capabilities/family query leaves (d-496680aa). Direct dispatch
@@ -369,10 +376,6 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     # `--watch` worker-binary surface noted in client.rs is a separate lane), so
     # it must never auto-route to the daemon.
     "watch",
-    # The newest-assistant transcript read the loopcheck distress leg shells.
-    # Pure Python (fno.agents.peek reads the JSONL directly); no Rust port, so
-    # it must never auto-route to the daemon.
-    "newest-assistant-text",
     "distress-verdicts", #: blocked_child's verdict lookup; no Rust port.
     # The stop hook's read-only spawn-gate capacity probe. Pure Python (the
     # gate lives in fno.agents.spawn_gate); no Rust port, so it must never
@@ -420,9 +423,9 @@ PYTHON_AGENT_VERBS: frozenset[str] = frozenset({
     # Listing it here is defensive/documentary: whoami is not in
     # RUST_CLIENT_VERBS, so AUTO_ROUTE_VERBS already excludes it.
     "whoami",
-    #: the spawn-gate audit surface — every live worker process with
-    # RSS via psutil, over the same union the gate counts. Python-only by
-    # design (LD8): no daemon involvement, no Rust port, never auto-routes.
+    #: the spawn-gate audit surface. The registered Python command is a shim
+    # that execs `fno-agents census --workers`; the `fno` front execs it
+    # directly. `top` is no client action, so it must never auto-route.
     "top",
     #: the read-only observe leg (twin of `fno agents mail send`). Reads a
     # peer's on-disk transcript / status events via fno.agents.peek. No Rust
@@ -538,9 +541,9 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "select-read": "One bounded backlog read (next|undispatched) under [auto_continue] select_timeout_s; prints an ok/unmeasured/error receipt JSON.",
     "feed": "Activity feed projection over questions.jsonl + graph.json (questions, decisions, node lifecycle): [--since-epoch <secs>] [--limit <n>] [--node <id>] [--session <id>] [--json].",
     "adopt": "Register an orphaned session by its session id so it is addressable (peek/ask/resume/mail); resolves the registry, .fno/target-state.md, then harness stores.",
-    "sessions-map": "One JSON read of the session-to-node join: the graph's sessions rows and the node claims, a live claim outranking the graph record; consumed by the top view.",
     "revival-check": "One JSON answer to whether a spawn --resume revives an existing row instead of forking: the row by name or by the resumed uuid, supervisor not live; consumed by the spawn path.",
     "review-coverage": "Emit the review_coverage event for a PR with the stop hook's own resolver/emitter: --cwd <dir> [--pr <n>] [--head <sha>]. No way to assert coverage without the reads.",
+    "attest": "Review-attestation carrier over the shared primary: push reads one envelope line on stdin, pull prints this repo's rows (unset store.remote_url is a no-op).",
     "distress-scan": "Read a transcript for a <help> tag and append a blocked row on a hit: --transcript <path> --run <id> [--node <id>] [--harness <name>] [--cwd <dir>]. Best-effort, always exits 0.",
     "recover": "Restore a recorded claude session under its account and route: <agent> [--session <id>] names the id when the row holds two; --print-command prints the inspection form and touches nothing.",
     "rename": "Rename a registry row's label: <worker> --name <new-label>; the old label keeps resolving as an alias.",
@@ -559,7 +562,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "spawn-axes": "Spawn-seam billing axes (route/account/model): JSON payload on stdin, the {inject, applied, suppressed, messages} plan on stdout; a `node_seed` field instead answers the node-verb check. Invoked by fno.agents.spawn_axes_client and the spawn seam, not `fno agents` routing.",
     "fallback-chain": "Failover chain walk: JSON payload on stdin, the {eligible} answer on stdout; invoked by fno.recovery, not `fno agents` routing.",
     "authorized-merge": "The one authorized merge operation: JSON payload on stdin, one receipt (merged|armed|authorized|held|refused|head_changed|unknown|failed) on stdout; invoked by fno.rust_binary.verb_call from the merge and verify verbs, not `fno agents` routing.",
-    "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing.",
+    "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing. --workers [--json] [--subagents] [--pane-stats] answers `fno agents top`.",
     "fleet-incident": "Durable fleet incident breaker: stop --reason T / clear --reason T write the machine-wide record; status [--json] reads it with its typed holds/admits reach (exit 0 clear, 1 stopped or unavailable); check [--scope spawns|tests|merges] is one scope's admission verdict (exit 0 clear, 90 stopped, 91 unavailable). The public surface is `fno agents incident`; the spawn/test/daemon gates read the file before their bypass branches, and the merge primitive refuses while merges are held. The fleet GitHub request budget rides this action as its gh-budget argument (one JSON payload on stdin, {op: admit|refused|status}; ledger at ~/.fno/locks/github-request-budget.json; called via fno.rust_binary.verb_call from pr/_quota.py).",
     "announce": "Fleet announcements: send --scope S [--subject T] [--expires 24h] [--urgent] reads the body on stdin and appends ONE kind=announce bus line (operator or promoted agent, 6/hour); read --session-id ID --boundary B renders unseen standing announcements once per session; status ID [--json] reads the sender's receipts. The public surface is `fno agents mail team`; hooks call the binary directly.",
     "compaction": "Compaction stamps: mark --session <id> writes the PreCompact stamp the provider-cap actor reads (best-effort, always exits 0); status --session <id> reads the stamp against the transcript's own boundary. The hook calls the binary directly.",
@@ -567,6 +570,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "target-family": "Merge-posture family test: --message <m> prints family when the message's first token is a /target-family spelling, other otherwise; exit 0 either way.",
     "permission-tokens": "The permission-posture owner: payload {provider, mode, substrate} in, the {mappable, tokens} answer out; invoked by the spawn seam via fno.rust_binary.verb_call, not `fno agents` routing.",
     "sandbox-probe": "The codex sandbox verdict owner: payload {cwd, mode} in, the {verdict, blocked, note} envelope out; invoked by fno.agents.sandbox_probe, not `fno agents` routing.",
+    "mail-teach": "The fmail read-verb lesson state: (--session <id> | --self) [--transcript <path>] [--mark] prints the teaching line when the lesson is due and stamps it taught; the hook carriers invoke the binary directly.",
 }
 
 #: The only Rust-only verb the In-N-Out menu advertises. Every other
@@ -669,7 +673,10 @@ def _is_bounded_codex_code_spawn(args: Sequence[str]) -> bool:
         longs=("--yolo", "--dangerously-bypass-approvals-and-sandbox"),
     ):
         return False
-    if _has_flag(args, longs=("--once", "--headless")):
+    headless_spawn = _has_flag(args, longs=("--once",)) or (
+        (_spawn_flag_value(args, "--substrate") or "").strip().lower() == "headless"
+    )
+    if headless_spawn:
         # The codex headless one-shot lane hardcodes its own bypass, so no
         # bounded sandbox stands between the worker and .git; spawn_defaults
         # skips permission-mode mapping on this lane for the same reason.
@@ -696,8 +703,7 @@ def _refuse_codex_code_spawn_without_git_grant(args: Sequence[str]) -> None:
         return
     print(
         "fno agents spawn: Codex code payloads require a resolved git grant; "
-        f"cwd={cwd}; git rev-parse --path-format=absolute --git-common-dir "
-        "failed; no worker launched",
+        f"cwd={cwd}; git rev-parse --git-common-dir failed; no worker launched",
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -963,11 +969,12 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     for a in it:
         if a == "--argv" or a == "--":
             break
-        if a in ("--once", "-o", "--headless", "-p"):
-            # The headless spellings (--once/-o and --headless/-p): a one-shot,
-            # never a pane. Must be honored here or a headless spawn would route
-            # to the pane back half. `-H` (harness) and `-P` (vendor) are NOT
-            # here: they are value flags that do not pick the lane.
+        if a in ("--once", "-o"):
+            # The headless spellings (--once/-o; `--substrate headless` is the
+            # long form): a one-shot, never a pane. Must be honored here or a
+            # headless spawn would route to the pane back half. `-H` (harness)
+            # and `-P` (vendor) are NOT here: they are value flags that do not
+            # pick the lane.
             return False
         if a == "--substrate":
             substrate = next(it, "")
@@ -998,7 +1005,7 @@ def _is_keeper_thread_spawn(verb: str, args: Sequence[str]) -> bool:
     it = iter(_args_before_argv(args))
     substrate = "pane"
     for a in it:
-        if a in ("--once", "-o", "--headless", "-p"):
+        if a in ("--once", "-o"):
             return False
         if a == "--substrate":
             substrate = next(it, "")

@@ -81,7 +81,7 @@ The grant supersedes only the per-run layer. Live config, the posture floor, the
 
 The predicate lives in `pr_admission.rs` (`outside_reason`). When the head repo is not the base repo, the PR reads outside. A deleted fork reads outside. When the `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR`, the PR reads outside. Bots read outside like any other non-member author.
 
-No outside PR is merged, healed, bound or reviewed by fleet lanes, and no law row, flag or config admits one. The refusal names the rebuild path, never an admit command. Worth-pursuing work enters through its linked issue as a backlog node. Normal triage decides. The fleet builds accepted work on its own branch and credits the contributor with a `Co-authored-by: <login> <numeric-id>+<login>@users.noreply.github.com>` trailer. The issue-first comment and intake flow (the PR steward, a separate delivery) is the contributor's way in.
+No outside PR is merged, healed, bound or reviewed by fleet lanes, and no law row, flag or config admits one. The refusal names the rebuild path, never an admit command. Worth-pursuing work enters through its linked issue as a backlog node. Normal triage decides. The fleet builds accepted work on its own branch and credits the contributor with a `Co-authored-by: <login> <numeric-id>+<login>@users.noreply.github.com>` trailer. The PR steward below is the contributor's way in.
 
 The decision reads the two gates in the order above: `outside_pr` refused (and `Unknown` on an unreadable origin read), `pr_hold` held. The preview walk carries the same two as blockers, so `fno do pr status` never says ready where merge refuses. `Effect::Merge` and `Effect::Arm` both pass through the decision, so finalize's auto-merge arm and the daemon's grant queue obey them with no change of their own.
 
@@ -107,6 +107,12 @@ Both open-PR binding legs and the board's mergeable queue skip a row whose `isCr
 
 Uncovered cases, kept on purpose: a hand bind of a fork PR with `fno backlog update <id> --pr-number` still cannot merge, but nothing gates a review-fix dispatch onto it. The owner's raw `gh pr merge` is the owner's call. A same-repo branch from a non-member bot is caught by the merge and heal predicate but not by the binding legs, which read cross-repo only. A member who lost access keeps reading inside until the cache file is removed. A useful bot PR can never merge through fno. The owner merges it by hand.
 
+### The PR steward
+
+Heal's apply pass ends with one steward walk over the same open-PR pages it already read. The walk is `run_pass` in `pr_steward.rs`, called from `heal.rs` before the tick event. The gate is an operator law row under the `outside-contributions` subject with a `global` scope, read through `fno backlog decisions outside-contributions --lane law --state live --json`. Any read or parse failure turns the steward off (`steward_off_no_law`), never on. A GitHub budget backoff also turns it off.
+
+Per outside, non-bot PR the steward takes one action per pass, tracked in stage files at `cache/pr-steward/<owner>/<repo>--<pr>.json` inside the state root. With no stage: it reads the PR comments once. When no earlier steward marker is there, it posts the issue-first comment asking the contributor to open an issue and link it with `Closes #<n>`. It then reads the PR body for the issue link: a URL, an `owner/repo#<n>` shorthand, or a bare `#<n>` that is not a self-reference. It files the issue as an intake node with `fno backlog idea --source-kind from_observation`. The origin evidence is the issue URL, and the details carry a `Co-authored-by` credit trailer. Later passes hand the pull request diff, the linked issue, the contributor identity and a capped backlog-find view to a tool-less reader model. The view arrives as `UNTRUSTED` nonce-fenced blocks. The reader returns one verdict: `pursue`, `decline`, or `needs_clarity` with a sanitized question. The note lands on the intake node and, for `needs_clarity`, the question is posted to the PR. Every comment carries an HTML marker, so a rebuilt or wiped stage file costs at most one comments read and never a duplicate comment.
+
 ## The effect
 
 `gh pr merge <n> [--auto] --<strategy> --match-head-commit <head>`.
@@ -122,7 +128,7 @@ The recovery and the cleanup failure ride separate fields. A recovery that worke
 ## Who calls it
 
 - **`fno do pr merge`** (`cli/src/fno/pr/_merge.py`) asks twice. The `decide_only` pass comes first, so a merge about to be refused never publishes its coverage status receipt. The second pass re-runs the whole chain and closes the window the first one opened.
-- **`fno do pr verify --kind merged`** (`cli/src/fno/pr/_verify.py`) asks once, then re-reads the PR before it reports. This verb's name is its contract, so the receipt is not its last word.
+- **`fno do pr verify --kind merged`** (`crates/fno-agents/src/pr_verify.rs`) asks once, then re-reads the PR before it reports. This verb's name is its contract, so the receipt is not its last word.
 - **`fno-agents finalize`** arms at a green terminal. What stays in finalize is what only the terminal knows: the merge-gating opt-out claim, and the optional-App review evidence.
 
 Python reaches it through `fno.rust_binary.verb_call("authorized-merge", payload)`, the single door. An unreachable binary answers `unknown`, never a clear merge. A merge whose authorization nobody read is not an authorized merge.

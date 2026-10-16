@@ -21,14 +21,22 @@ const SEEN_MS = 5_000
 // person is there. In an fno mux pane the mux names the panes on screen; elsewhere a key typed
 // in this session's prompt box within this window stands in for that.
 const TYPED_MS = 600_000
-// The status line wrapper drops a frame older than 30 s, so an idle frame is rewritten well before that.
-const FRAME_REFRESH_MS = 10_000
+// The status line wrapper drops a frame older than 45 s, so an idle frame is rewritten well before that.
+const FRAME_REFRESH_MS = 25_000
+// Each new frame starts Python in the status line, so the buddy moves only while something
+// happens: for this long after you type, a turn ends, it speaks, or you pet it. Then it holds still.
+const ANIMATE_MS = 60_000
+// While it moves, the fidget steps this often; one step per status line run would cost a Python start a second.
+const STEP_MS = 2_000
+let turnAt = -Infinity
 const PANE_ID = 'buddy'
 // The /buddy card opens here, focused, so any key closes it like the original.
 const CARD_ID = 'buddy-card'
 let cardSnap: Shown | undefined
 const PANE_COLUMNS = 24
 const WRAPPER = 'statusline.py'
+// The status line runs this first; it skips Python on ticks where nothing changed.
+const FAST = 'statusline.sh'
 // bbb: bring back buddy.
 const COMMANDS = ['buddy', 'bbb']
 
@@ -73,7 +81,7 @@ let unwrappedAt = -Infinity
 
 const buddyDir = () => `${stateDir}/state/buddy`
 const settingsPath = () => `${home}/.claude/settings.json`
-const wrapperCommand = () => `python3 ${buddyDir()}/${WRAPPER}`
+const wrapperCommand = () => `bash ${buddyDir()}/${FAST}`
 
 async function load($: EngineInterface, now: number): Promise<void> {
   muted = (await $.store.get('muted')) === true
@@ -384,7 +392,33 @@ async function readSettings($: EngineInterface): Promise<Record<string, unknown>
 }
 
 function isOurs(statusLine: any): boolean {
-  return typeof statusLine?.command === 'string' && statusLine.command.includes(`/state/buddy/${WRAPPER}`)
+  return wrapperRoot(statusLine) !== undefined
+}
+
+// The state folder of the wrapper a status line runs, or undefined when it runs no buddy wrapper.
+export function wrapperRoot(statusLine: any): string | undefined {
+  if (typeof statusLine?.command !== 'string') return undefined
+  return statusLine.command.match(/(?:^|\s)(\S+)\/state\/buddy\/statusline\.(?:py|sh)(?:\s|$)/)?.[1]
+}
+
+// The wrapper reads frames from its own folder, so every session must write there. A session that
+// asks fno for the folder can time out under load and fall back to ~/.local, then write where no
+// wrapper reads; so the wrapper in the settings decides, and fno is asked only when there is none.
+async function findStateDir($: EngineInterface, settings: Record<string, unknown> | null): Promise<string> {
+  return wrapperRoot(settings?.statusLine) ?? (await resolveStateDir($))
+}
+
+// A buddy from before the shell entry point did not know statusline.sh as its own, so it could
+// save one wrapper as the user's line and wrap it again. The user's line is the one that wrapper saved.
+async function unnest($: EngineInterface): Promise<void> {
+  const path = `${buddyDir()}/inner.json`
+  const inner = await readJson($, path).catch(() => undefined)
+  const root = wrapperRoot(inner?.statusLine)
+  if (!root) return
+  const deeper = root === stateDir ? undefined : await readJson($, `${root}/state/buddy/inner.json`).catch(() => undefined)
+  // Without the line that wrapper saved there is nothing to put back, so the file stays as it is.
+  if (!deeper || !('statusLine' in deeper) || isOurs(deeper.statusLine)) return
+  await $.fs.write(path, JSON.stringify({ statusLine: deeper.statusLine }, null, 2) + '\n')
 }
 
 async function resolveStateDir($: EngineInterface): Promise<string> {
@@ -400,15 +434,33 @@ async function resolveStateDir($: EngineInterface): Promise<string> {
 
 // Keeps a copy of the wrapper at a path that survives plugin updates, so statusLine never points into the plugin cache.
 async function installWrapper($: EngineInterface): Promise<void> {
-  const ours = await $.fs.read(`${$.plugin.root}/hooks/${WRAPPER}`)
-  const target = `${buddyDir()}/${WRAPPER}`
-  let theirs = ''
-  try {
-    theirs = await $.fs.read(target)
-  } catch {
-    theirs = ''
+  for (const file of [WRAPPER, FAST]) {
+    const ours = await $.fs.read(`${$.plugin.root}/hooks/${file}`)
+    const target = `${buddyDir()}/${file}`
+    let theirs = ''
+    try {
+      theirs = await $.fs.read(target)
+    } catch {
+      theirs = ''
+    }
+    if (theirs !== ours) await $.fs.write(target, ours)
   }
-  if (theirs !== ours) await $.fs.write(target, ours)
+}
+
+// The buddy animates only while the status line reruns every second. A slower interval set on
+// the wrapper is the user's wish for their own line, so it moves there and the wrapper keeps 1 s.
+// An install from before the shell fast path moves to it here too.
+async function keepTicking($: EngineInterface, settings: Record<string, unknown>): Promise<void> {
+  const ours = settings.statusLine as any
+  if (ours.refreshInterval === 1 && ours.command === wrapperCommand()) return
+  const inner = (await readJson($, `${buddyDir()}/inner.json`)) ?? {}
+  // An interval the user already gave their own line wins over the one on the wrapper.
+  if (inner.statusLine && inner.statusLine.refreshInterval == null && typeof ours.refreshInterval === 'number' && ours.refreshInterval !== 1) {
+    inner.statusLine.refreshInterval = ours.refreshInterval
+    await $.fs.write(`${buddyDir()}/inner.json`, JSON.stringify(inner, null, 2) + '\n')
+  }
+  settings.statusLine = { ...ours, command: wrapperCommand(), refreshInterval: 1 }
+  await $.fs.write(settingsPath(), JSON.stringify(settings, null, 2) + '\n')
 }
 
 async function statuslineOn($: EngineInterface): Promise<string> {
@@ -596,29 +648,38 @@ function talking(now: number): string | null {
 }
 
 function sprite(c: Companion, now: number): string[] {
-  const lines = renderSprite(c, IDLE_SEQUENCE[tick % IDLE_SEQUENCE.length]!)
+  const lines = renderSprite(c, IDLE_SEQUENCE[Math.floor(now / STEP_MS) % IDLE_SEQUENCE.length]!)
   // A 5-line sprite keeps row 0 for a hat; a shorter one has no free row, so the hearts go above it.
   if (now - pettedAt < PET_MS) lines.splice(0, lines.length < 5 ? 0 : 1, PET_HEARTS[tick % PET_HEARTS.length]!)
   return lines
 }
 
-// The wrapper stamps a heartbeat on each run, so a status line set in any settings file counts.
+// The wrapper stamps a heartbeat each time Python runs, so a status line set in any settings file counts.
+// The shell fast path skips Python, but a new frame or every 25th tick runs it, about every 25 s at most.
+const WRAPPER_SEEN_MS = 45_000
 async function wrapperSeen($: EngineInterface, now: number): Promise<boolean> {
   if (!stateDir) return false
   try {
     const at = Number(await $.fs.read(`${buddyDir()}/frames/${sessionId}.seen`))
     // A beat from before /buddy pane is the old wrapper's last run, not a live one.
-    return at > unwrappedAt && now - at < SEEN_MS
+    return at > unwrappedAt && now - at < WRAPPER_SEEN_MS
   } catch {
     return false
   }
 }
 
 // The status line wrapper reads this file; frames change on screen at each status line refresh.
+// A pane the mux hides never moves; anywhere else the buddy moves for ANIMATE_MS after activity.
+function moving(now: number): boolean {
+  const last = Math.max(typedAt, turnAt, bubble?.at ?? -Infinity, pettedAt, hatchUntil)
+  return onScreen !== false && now - last < ANIMATE_MS
+}
+
 async function writeFrame($: EngineInterface, now: number): Promise<void> {
   if (!buddy || !sessionId || !stateDir) return
   const frame = JSON.stringify({
-    sprite: sprite(buddy, now),
+    // A pane the mux hides holds still, so its status line can reuse its last output.
+    sprite: moving(now) ? sprite(buddy, now) : renderSprite(buddy, 0),
     name: buddy.name,
     face: renderFace(buddy),
     color: rarityColor(theme, buddy.rarity),
@@ -636,6 +697,9 @@ const BUBBLE_COLUMNS = 34
 // Desktop sets text in a proportional font, which collapses the spaces in a sprite. There the
 // sprite is an SVG in a monospace font; SVG cannot read theme keys, so it takes the theme's value.
 let desktop = false
+// A terminal docks a pane on the right only in a wide fullscreen layout; anywhere else it opens above the prompt.
+let docks = false
+const DOCK_COLUMNS = 110
 // Claude Code's theme setting, so the status line and the SVG draw the color the card draws.
 let theme = 'dark'
 const svgColor = (c: Companion) => {
@@ -664,14 +728,18 @@ export function register(on: On) {
     if (deferred) muted = true
     // A buddy that is off runs nothing at start: no process, no settings read.
     if (!muted) {
-      stateDir = await resolveStateDir($)
+      const settings = await readSettings($)
+      stateDir = await findStateDir($, settings)
       // The fno mux sets both in each pane it hosts, and writes <mux dir>/<session>.visible.json.
       const mux = await $.env.get('FNO_SESSION')
       muxPane = Number(await $.env.get('FNO_PANE')) || 0
       if (mux && muxPane && stateDir) muxVisible = `${(await $.env.get('FNO_MUX_DIR')) || `${stateDir}/mux`}/${mux}.visible.json`
-      const settings = await readSettings($)
       wrapped = isOurs(settings?.statusLine)
-      if (wrapped && stateDir) await installWrapper($).catch(() => {})
+      if (wrapped && stateDir) {
+        await installWrapper($).catch(() => {})
+        await unnest($).catch(() => {})
+        await keepTicking($, settings!).catch(() => {})
+      }
       else if (stateDir) {
         const saved = await readJson($, `${buddyDir()}/inner.json`).catch(() => undefined)
         // The user wrapped once, then ran /statusline again: ask, never re-wrap on their behalf.
@@ -691,7 +759,10 @@ export function register(on: On) {
         }
         await syncSoul($).catch(() => {})
         const was = wrapped
-        wrapped = (await wrapperSeen($, at)) || isOurs((await readSettings($))?.statusLine)
+        const line = (await readSettings($))?.statusLine
+        // Another session or the user can point the status line at another folder; follow it.
+        stateDir = wrapperRoot(line) ?? stateDir
+        wrapped = (await wrapperSeen($, at)) || isOurs(line)
         if (wrapped && !was) await $.ui.close({ id: PANE_ID }).catch(() => {})
         if (wrapped) $.ui.invalidate('ui.render')
       }
@@ -720,7 +791,7 @@ export function register(on: On) {
     const arg = e.args.trim().toLowerCase()
     if (!buddy) await load($, now)
     if (deferred) return { text: 'Your fno plugin still runs its own buddy. Update fno (/plugin update fno@footnote), then start a new session.' }
-    if (!stateDir) stateDir = await resolveStateDir($)
+    if (!stateDir) stateDir = await findStateDir($, await readSettings($))
     if (arg === 'statusline') return { text: await statuslineOn($) }
     if (arg === 'bye') {
       const { ok, text } = await statuslineOff($)
@@ -782,12 +853,14 @@ export function register(on: On) {
     }
     const snap: Shown = { c: buddy!, last: lastSaid, r, ...(fresh ? { hatchAt: now } : {}) }
     try {
+      // Above the prompt the card would push the transcript away, so there it draws in the transcript, as the original's did.
+      if (!desktop && !docks) throw new Error('no dock')
       cardSnap = snap
       await $.ui.open({ id: CARD_ID, title: buddy!.name, focus: true, closeOnEscape: true })
       $.ui.invalidate('ui.render')
       return { text: `${buddy!.name} the ${buddy!.species} · ${RARITY_STARS[buddy!.rarity]} ${buddy!.rarity}` }
     } catch {
-      // No pane here (a narrow terminal, another app): the card draws in the output row instead.
+      // No docked pane here (a terminal that is not wide and fullscreen): the card draws in the output row instead.
       cardSnap = undefined
       pending = snap
       $.ui.invalidate('ui.render')
@@ -806,6 +879,7 @@ export function register(on: On) {
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) turnAt = await $.clock.now()
     if (buddy && !muted && !e.agentId && !e.isAborted) {
       const now = await $.clock.now()
       if (now - drawnAt < SEEN_MS && attended(now)) {
@@ -872,13 +946,20 @@ export function register(on: On) {
       justifyContent: 'flex-end',
       height: e.props.scroll?.bodyRows ?? 12,
       children: [
-        ...(words ? [Box({ borderStyle: 'round', children: [Text({ wrap: 'wrap', children: [words] })] }), Text({ children: ['  ◦ ·'] })] : []),
-        ...(fleet ? [Text({ dimColor: true, wrap: 'wrap', children: [fleet] }), Text({ children: [' '] })] : []),
-        ...drawArt({ Text, Svg: $.ui.resolve(e).Svg }, buddy, sprite(buddy, now)),
-        Button({ key: 'pet', label: buddy.name, hotkey: 'p', plain: true, dimColor: true, onPress: async () => {
-          pettedAt = await $.clock.now()
-          $.ui.invalidate('ui.render')
-        } }),
+        ...(words ? [Box({ borderStyle: 'round', children: [Text({ wrap: 'wrap', children: [words] })] }), Box({ justifyContent: 'center', children: [Text({ children: ['◦ ·'] })] })] : []),
+        // The bubble takes the full width; the fleet line, the buddy, and its name stand centered under it.
+        Box({
+          flexDirection: 'column',
+          alignItems: 'center',
+          children: [
+            ...(fleet ? [Text({ dimColor: true, wrap: 'wrap', children: [fleet] }), Text({ children: [' '] })] : []),
+            ...drawArt({ Text, Svg: $.ui.resolve(e).Svg }, buddy, sprite(buddy, now)),
+            Button({ key: 'pet', label: buddy.name, hotkey: 'p', plain: true, dimColor: true, onPress: async () => {
+              pettedAt = await $.clock.now()
+              $.ui.invalidate('ui.render')
+            } }),
+          ],
+        }),
       ],
     })
   })
@@ -886,6 +967,7 @@ export function register(on: On) {
   // The band only holds a one-line face, and only where neither the status line nor the dock has the buddy.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     desktop = e.surface === 'desktop'
+    docks = e.viewport?.isFullscreen === true && (e.viewport?.columns ?? 0) >= DOCK_COLUMNS
     // Desktop draws no status line but shares its settings, so a wrapped status line hides nothing there.
     if (!buddy || muted || (wrapped && e.surface !== 'desktop') || e.props.hasSurvey) return next(e)
     const now = await $.clock.now()

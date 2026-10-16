@@ -1,0 +1,1 @@
+{"outcome":"refused","claimed_ids":["x-aaaa"],"refusal":"x-aaaa already carries a other/repo PR ref; this PR is acme/widget - refusing a cross-repo claim"}

@@ -124,10 +124,13 @@ pub fn keeper_posture(
     }
 }
 
-/// The agy conversation-mint argv: the measured print turn (the only surface
-/// that returns a conversation id on 1.1.27) carrying the spawn's selected
-/// posture, model and effort, so the first turn of a thread no longer runs
-/// on the harness default.
+/// The agy conversation-mint argv: the measured print turn carrying the
+/// spawn's selected posture, model and effort, so the first turn of a thread
+/// no longer runs on the harness default. The format is stream-json: on agy
+/// 1.3.3 the print turn answers but never exits (the harness Stop hook holds
+/// the process), so the exit envelope never arrives; stream-json prints
+/// `{"event":"init","conversation_id":...}` on line 1 within seconds and the
+/// mint reads the id from the stream, then terminates the process.
 pub fn agy_mint_argv(
     model: Option<&str>,
     effort: Option<&str>,
@@ -140,7 +143,7 @@ pub fn agy_mint_argv(
         "-p".to_string(),
         MINT_PROMPT.to_string(),
         "--output-format".to_string(),
-        "json".to_string(),
+        "stream-json".to_string(),
     ];
     argv.extend(posture.tokens);
     if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
@@ -220,7 +223,7 @@ mod tests {
                 "-p",
                 "Reply with exactly: OK",
                 "--output-format",
-                "json",
+                "stream-json",
                 "--dangerously-skip-permissions",
             ]
         );

@@ -15,11 +15,16 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from fno.paths_testing import use_tmpdir
+
+# The AC5 read verb forwards to the native fno-agents reader; these tests pin
+# reader behavior and need the dev build (the pytest smoke shard deletes it).
+requires_rust = pytest.mark.dev_build
 
 
 @pytest.fixture
@@ -154,6 +159,7 @@ def _bus_send(to, body):
     return env
 
 
+@requires_rust
 def test_ac5_ui_agents_inbox_shows_unread_to_me(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -168,6 +174,7 @@ def test_ac5_ui_agents_inbox_shows_unread_to_me(bus, runner):
     assert bodies == ["first", "second"]
 
 
+@requires_rust
 def test_ac5_ui_ack_advances_cursor(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -182,6 +189,7 @@ def test_ac5_ui_ack_advances_cursor(bus, runner):
     assert [m["body"] for m in payload] == ["beta"]
 
 
+@requires_rust
 def test_ac5_ui_inbox_empty_when_nothing_unread(bus, runner):
     from fno.mail.cli import mail_app
 
@@ -201,6 +209,7 @@ def test_ack_unknown_id_fails_loudly(bus, runner):
     assert "unknown message id" in (res.stdout + (res.stderr or "")).lower()
 
 
+@requires_rust
 def test_ack_other_recipients_id_rejected(bus, runner):
     # Acking an id addressed to someone else would advance my cursor past my own
     # earlier unread (the cursor is a single global-log position). Reject it.
@@ -250,25 +259,27 @@ def test_ac8_ui_heads_up_on_bus_triaged_with_provenance(inbox_and_bus, tmp_path,
             self.stdout = stdout
             self.stderr = stderr
 
-    import subprocess as _subprocess
-
-    real_run = _subprocess.run  # the stub patches the shared module attr
-
     def fake_run(cmd, *args, **kwargs):
-        if len(cmd) >= 2 and cmd[1] == "mail-envelope":
-            return real_run(cmd, *args, **kwargs)
-        if cmd[:4] == ["fno-py", "backlog", "new", "--help"]:
-            return _FakeRun(stdout="--source-kind --source-project --source-inbox-msg\n")
-        if cmd[:3] == ["fno-py", "backlog", "new"]:
+        # The dedupe classifier resolves the same stubbed binary; answer its
+        # shape classify locally (one tagless body) so the stub never
+        # reaches a real exec.
+        if cmd[1:3] == ["mail-envelope", "--classify"]:
+            return _FakeRun(stdout='[{"ids": []}]')
+        # The native create door: argv[0] is the resolved fno-agents path,
+        # so the fake matches on the verb words, not the binary.
+        if cmd[1:3] == ["backlog", "new"]:
             captured["argv"] = cmd
-            return _FakeRun(stdout="created node ab-abc123\n")
+            return _FakeRun(stdout='{"id": "ab-abc123", "title": "t"}\n')
         raise AssertionError(f"unexpected subprocess: {cmd}")
 
     monkeypatch.setattr(drain_mod, "triage_thread", fake_triage_thread)
     monkeypatch.setattr(drain_mod.subprocess, "run", fake_run)
+    # The door resolver: a stubbed path keeps the fake subprocess matching
+    # (argv[0] is the resolved binary) without a filesystem probe.
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: Path("/fake/fno-agents"))
 
     results = drain_mod.drain_inbox(tmp_path, "alice")
-    assert results[0].action == "created_node"
+    assert results[0].action == "created_node", results[0].error
     assert results[0].node_id == "ab-abc123"
     # Provenance fields unchanged: source-kind/project/inbox-msg still passed.
     argv = captured["argv"]

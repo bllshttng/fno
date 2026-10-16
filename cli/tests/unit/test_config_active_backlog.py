@@ -222,3 +222,12 @@ def test_mission_key_stays_parseable_but_is_documented_ignored():
     b = ActiveBacklogConfig(enabled=True, mission="x-5317")
     assert b.any_enabled() is True
     assert b.mission == "x-5317"
+
+
+def test_parallel_max_lanes_deprecation_warns_once(caplog):
+    from fno.config import SettingsModel, _DEPRECATED_WARNED
+
+    _DEPRECATED_WARNED.discard("parallel.max_lanes")
+    for _ in range(2):
+        SettingsModel.model_validate({"parallel": {"max_lanes": 3}})
+    assert caplog.text.count("parallel.max_lanes is deprecated and ignored") == 1

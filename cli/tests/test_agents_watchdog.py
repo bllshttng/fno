@@ -525,7 +525,7 @@ def test_stalled_open_row_past_the_ceiling_stays_stale():
     assert "needs a human" in v.basis
 
 
-def test_ledger_join_finds_nodes_for_manifest_less_rows(monkeypatch, tmp_path):
+def test_ledger_finds_nodes_for_manifest_less_rows(monkeypatch, tmp_path):
     # A worker that ran in the canonical checkout has no manifest of its own;
     # the execution ledger's machine-written (sessions -> node) row is its
     # recorded identity. The ``t-`` shorthand name stays untrusted: the node's
@@ -2539,12 +2539,12 @@ def test_the_sweep_buys_the_whole_fleet_not_the_interactive_budget(monkeypatch):
     assert spent["timeout"] > claude_mod._AGENTS_JSON_TIMEOUT_DEFAULT
 
 
-def test_ledger_join_reads_the_singular_session_key_without_spreading_it(
+def test_ledger_reads_the_singular_session_key_without_spreading_it(
     monkeypatch, tmp_path
 ):
     """Older ledger entries record ``session_id`` (a bare string). Iterating
     it spreads one node across every CHARACTER of the id; dropping it loses
-    the row entirely. ledger_join.py guards both shapes and so must this."""
+    the row entirely. The ledger readers guard both shapes and so must this."""
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps({"entries": [
         {"graph_node_id": "x-old", "session_id": "aaaa1111-0000"},
@@ -2557,7 +2557,7 @@ def test_ledger_join_reads_the_singular_session_key_without_spreading_it(
 
 
 @pytest.mark.parametrize("raw", ["null", "NULL", "none", "None", "nil", "NIL", "", "'", '"'])
-def test_ledger_join_drops_unresolved_node_sentinels(monkeypatch, tmp_path, raw):
+def test_ledger_drops_unresolved_node_sentinels(monkeypatch, tmp_path, raw):
     ledger = tmp_path / "ledger.json"
     ledger.write_text(json.dumps({"entries": [
         {"graph_node_id": raw, "sessions": ["sentinel-session"]},
@@ -3783,7 +3783,7 @@ def test_ac9_manual_and_tick_stamps_agree_for_one_snapshot(tmp_path, monkeypatch
     (source, tick epoch) differs."""
     import fno.paths as paths_mod
 
-    sweep_file = tmp_path / "watchdog-sweep.json"
+    sweep_file = tmp_path / "state" / "watchdog-sweep.json"
     monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
     monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -3841,7 +3841,7 @@ def test_report_write_preserves_the_verdict_lanes_stamps(tmp_path, monkeypatch):
     --apply run re-mails an unchanged verdict digest."""
     import fno.paths as paths_mod
 
-    sweep_file = tmp_path / "watchdog-sweep.json"
+    sweep_file = tmp_path / "state" / "watchdog-sweep.json"
     monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
     monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
     monkeypatch.setattr(

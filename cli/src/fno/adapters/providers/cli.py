@@ -595,7 +595,7 @@ def window_providers(
 # unmappable bot is silently skipped (fail-open).
 _REQUIRED_BOT_CLI: dict[str, str] = {
     "codex": "codex",   # chatgpt-codex-connector
-    "gemini": "gemini",  # gemini-code-assist
+    "gemini": "gemini",
     "claude": "claude",
 }
 
@@ -1168,6 +1168,7 @@ def pick_account(
     from fno.adapters.providers.runtime_state import headroom, refresh_usage
     from fno.agents.account_env import (
         AccountResolutionError,
+        login_probe_refusal,
         resolve_account_overlay,
     )
 
@@ -1209,19 +1210,23 @@ def pick_account(
                 "not a picker candidate: managed, rides the shared ~/.claude slot",
             ))
             continue
+        if (refusal := login_probe_refusal(pid, overlay.env.get("CLAUDE_CONFIG_DIR"))) is not None:
+            # The gate already refused this login; skip, pick the next live one.
+            rows.append((pid, f"login probe refused: {refusal}"))
+            continue
         launchable.append(pid)
 
     if not launchable:
         named = ", ".join(pid for pid, _ in rows) or "(no records)"
-        return PickVerdict(
-            None,
+        reason = (
             f"no launchable candidate among {named}: only an account with its "
             "own config dir can be pinned to a worker. Register one with "
             "`fno config accounts register <id> --config-dir <path>` (a full second "
-            "login in its own dir)",
-            rows,
-            PICK_EXIT_NO_CANDIDATE,
+            "login in its own dir)"
         )
+        if any(s.startswith("login probe refused") for _, s in rows):
+            reason += " login refused; remedy: CLAUDE_CONFIG_DIR=<config dir> claude /login"
+        return PickVerdict(None, reason, rows, PICK_EXIT_NO_CANDIDATE)
 
     # Fill the TTL cache once per candidate before reading headroom, so a pick
     # acts on fresh numbers. refresh_usage is a no-op inside probe_ttl_seconds.

@@ -33,6 +33,7 @@ def test_doctor_lists_direct_actions() -> None:
         "route",
         "scratch",
         "skill-diff",
+        "stalls",
         "test",
         "update",
     }

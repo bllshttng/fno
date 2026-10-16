@@ -3,6 +3,7 @@
 //! parent under the file-budget gate - the code the change touched moves with
 //! it.
 
+use super::pane_spawn::{SpawnOrder, KEEPER_ROAD};
 use super::*;
 
 /// Does `portal_key` name the same ROW the reach resolved?
@@ -37,6 +38,26 @@ pub(super) fn title_session_name(title: &str) -> &str {
         Some((glyph, rest)) if !glyph.chars().any(char::is_alphanumeric) => rest.trim(),
         _ => t,
     }
+}
+
+/// The (rows, cols) a portal viewer spawns at, so the harness draws its
+/// first frame at the size it will keep. A replaced seat keeps its own size;
+/// a fresh open takes the tab rect; the client terminal only stands in for an
+/// empty rect, and a passive observer's (0, 0) sentinel never sizes a pane.
+pub(super) fn portal_spawn_size(
+    seat: Option<(u16, u16)>,
+    tab_rect: (u16, u16),
+    client: Option<(u16, u16)>,
+) -> (u16, u16) {
+    if let Some(size) = seat {
+        return size;
+    }
+    if tab_rect.0 > 0 && tab_rect.1 > 0 {
+        return tab_rect;
+    }
+    client
+        .filter(|(rows, cols)| *rows > 0 && *cols > 0)
+        .unwrap_or(tab_rect)
 }
 
 /// Remember every restored portal slot's seat (index, row, pane,
@@ -143,9 +164,10 @@ pub(super) fn rearm_held_portal_seats(
         if let Some(sid) = recorded_sid {
             core.portal_session_guards.insert(index, sid);
         }
+        let label = core.portal_channel_label(&row);
         core.write_restore_message(
             seat,
-            &format!("portal {index} ({row}, held across restart) - reach the row, or focus this pane, to resume"),
+            &format!("portal {index} ({label}, held across restart) - reach the row, or focus this pane, to resume"),
         );
         held += 1;
     }
@@ -208,17 +230,32 @@ pub(super) fn fill_held_portal_at(
         }
     };
     // A recorded session id binds the seat to the row's incarnation at
-    // capture. A different full id under the same key is a DIFFERENT
-    // thread wearing a familiar label: refuse, keep the seat held, and
-    // name both ids - no pane ever renders B under A's label.
-    if let Some(recorded) = core.portal_session_guards.get(&idx) {
-        if row.harness_session_id.as_deref() != Some(recorded.as_str()) {
-            core.notice_all(format!(
-                "portal {idx} fill refused: stored session {} resolved to {} under the same key; seat stays held",
-                recorded,
-                row.harness_session_id.as_deref().unwrap_or("(unreadable)")
-            ));
-            return Some(Flow::Continue);
+    // capture. A resume mints a new id under the same row, and the row's own
+    // lineage names the old one: that is the same worker, so the fill
+    // follows the key. A different full id with no lineage to the recorded
+    // one (or a fork of it) is a DIFFERENT thread wearing a familiar label:
+    // refuse, keep the seat held, and name both ids - no pane ever renders
+    // B under A's label.
+    if let Some(recorded) = core.portal_session_guards.get(&idx).cloned() {
+        let current = row.harness_session_id.clone();
+        if current.as_deref() != Some(recorded.as_str()) {
+            // Only a predecessor is succession: `related_session_id` is a
+            // parked fork, a different thread.
+            let resumed = row.forked_from_session_id.as_deref() != Some(recorded.as_str())
+                && row.predecessor_session_ids.contains(&recorded);
+            let shown = current.as_deref().unwrap_or("(unreadable)");
+            if !resumed {
+                core.notice_all(format!(
+                    "portal {idx} fill refused: stored session {recorded} resolved to {shown} under the same key; reach the row again to retune this portal; seat stays held"
+                ));
+                return Some(Flow::Continue);
+            }
+            let note = format!(
+                "portal {idx}: {} resumed as {}; following",
+                row.name,
+                shown.get(..8).unwrap_or(shown)
+            );
+            core.notice_all(note);
         }
     }
     core.portal_session_guards.remove(&idx);
@@ -623,6 +660,16 @@ impl Core {
                 portal_idx = held_idx;
             }
         }
+        // A seat or row whose viewer is still spawning off the loop answers
+        // the second gesture here; the first one's landing places it.
+        let row_gate = row.attach_id.clone().unwrap_or_else(|| row.name.clone());
+        if self.portal_spawning(portal_idx) || self.row_spawning(&row_gate) {
+            self.notice(
+                client_id,
+                format!("portal {portal_idx}: {} is still opening", row.name),
+            );
+            return Flow::Continue;
+        }
         // ONE ROW, ONE VIEWER. A reach for a row that ANOTHER portal
         // already shows focuses that portal rather than minting a second
         // viewer for it. The single slot enforced this by construction: there
@@ -680,6 +727,9 @@ impl Core {
         } else {
             row.cwd.clone()
         };
+        // A staged verdict carries the plan's own time; no staged verdict
+        // on a Drive row means the argv needed no plan.
+        let staged_plan_ms = self.reentry_verdict.as_ref().map(|v| v.plan_ms);
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
         let argv = match tier {
@@ -702,16 +752,27 @@ impl Core {
             Reach::Follow => peek_argv(&row.name),
             Reach::Locate => locate_argv(&row),
         };
-        let (rows, cols) = self
+        let mechanism = match (&tier, staged_plan_ms) {
+            (Reach::Drive, None) => "attach-direct",
+            (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
+                "relaunch"
+            }
+            (Reach::Drive, Some(_)) => "attach-plan",
+            (Reach::Follow, _) => "follow",
+            (Reach::Locate, _) => "locate",
+        };
+        let plan_ms = staged_plan_ms.unwrap_or(0);
+        // The viewer spawns at the tab rect it will fill, so the harness
+        // draws its first frame at the final size; the client terminal is
+        // the fallback for an empty rect. A passive observer's (0,0)
+        // sentinel must never size a pane (the control-path reach rides an
+        // observer client).
+        let client_dims = self
             .clients
             .iter()
             .find(|c| c.id == client_id)
-            .map(|c| c.dims)
-            // A passive observer's (0,0) sentinel must never size a pane -
-            // fall back to the view rect (the control-path reach rides an
-            // observer client).
-            .filter(|(r, c)| *r > 0 && *c > 0)
-            .unwrap_or((vp.rows, vp.cols));
+            .map(|c| c.dims);
+        let (rows, cols) = portal_spawn_size(None, (vp.rows, vp.cols), client_dims);
         // Entry: take THIS portal, then verify against the live tree (the
         // diff-pane stale-id guard - a recorded pane closed by any other path
         // reads as closed and never wedges the portal). Only this index is
@@ -804,12 +865,44 @@ impl Core {
                             return Flow::Continue;
                         }
                     };
-                    let new_pid = match self
-                        .spawn_pane_cmd_with_permit(&argv, rows, cols, &spawn_cwd, permit)
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            self.portals.insert(
+                    // The seat is replaced in place, so the replacement
+                    // spawns at the size the seat already holds.
+                    let seat_size = self.panes.get(&pid).map(|e| e.vt.size());
+                    let (rows, cols) = portal_spawn_size(seat_size, (rows, cols), None);
+                    let order = SpawnOrder {
+                        argv,
+                        rows,
+                        cols,
+                        cwd: spawn_cwd,
+                        permit,
+                        keeper: KEEPER_ROAD,
+                    };
+                    let key = key.to_string();
+                    self.claim_row_spawn(&row_gate);
+                    self.claim_portal_spawn(portal_idx);
+                    let queued = std::time::Instant::now();
+                    return self.spawn_then(order, Some(client_id), move |core, spawned| {
+                        core.release_row_spawn(&row_gate);
+                        core.release_portal_spawn(portal_idx);
+                        let new_pid = match spawned {
+                            Ok(p) => p,
+                            Err(e) => {
+                                core.portals.insert(
+                                    portal_idx,
+                                    Portal {
+                                        row_key: slot_row,
+                                        seat: pid,
+                                        tab: slot_tid,
+                                    },
+                                );
+                                core.notice(client_id, format!("thread pane failed: {e}"));
+                                return Flow::Continue;
+                            }
+                        };
+                        core.name_thread_viewer_pane(new_pid, &row, &tier);
+                        let Some(tab) = core.viewed_tab_mut((sid, tid)) else {
+                            core.reap_pane(new_pid);
+                            core.portals.insert(
                                 portal_idx,
                                 Portal {
                                     row_key: slot_row,
@@ -817,67 +910,61 @@ impl Core {
                                     tab: slot_tid,
                                 },
                             );
-                            self.notice(client_id, format!("thread pane failed: {e}"));
+                            core.notice(client_id, "thread pane: the tab closed under the repoint");
+                            return Flow::Continue;
+                        };
+                        if !tree::replace_leaf(tab, pid, new_pid) {
+                            core.reap_pane(new_pid);
+                            core.portals.insert(
+                                portal_idx,
+                                Portal {
+                                    row_key: slot_row,
+                                    seat: pid,
+                                    tab: slot_tid,
+                                },
+                            );
+                            core.notice(client_id, "thread pane: its pane left the tree");
                             return Flow::Continue;
                         }
-                    };
-                    self.name_thread_viewer_pane(new_pid, &row, &tier);
-                    let Some(tab) = self.viewed_tab_mut((sid, tid)) else {
-                        self.reap_pane(new_pid);
-                        self.portals.insert(
+                        // Insert the new mapping BEFORE the reap: reap_pane drops
+                        // every mapping onto the old pane, so the old row
+                        // resurfaces watch-only while the new mapping survives.
+                        if let Some(id) = row.attach_id.clone() {
+                            core.attached.insert(id, new_pid);
+                        }
+                        // Reap-last: the displaced viewer dies, the session it
+                        // showed keeps running daemon-hosted.
+                        core.reap_pane(pid);
+                        if let Some(old_row) = &taken_row {
+                            core.journal_portal_channel_left(portal_idx, old_row, "retune");
+                        }
+                        core.journal_portal_open(
                             portal_idx,
                             Portal {
-                                row_key: slot_row,
-                                seat: pid,
-                                tab: slot_tid,
+                                row_key: key.to_string(),
+                                seat: new_pid,
+                                tab: tid,
                             },
                         );
-                        self.notice(client_id, "thread pane: the tab closed under the repoint");
-                        return Flow::Continue;
-                    };
-                    if !tree::replace_leaf(tab, pid, new_pid) {
-                        self.reap_pane(new_pid);
-                        self.portals.insert(
+                        core.journal_portal_reached(
+                            client_id,
                             portal_idx,
-                            Portal {
-                                row_key: slot_row,
-                                seat: pid,
-                                tab: slot_tid,
-                            },
+                            &row,
+                            &key,
+                            mechanism,
+                            (plan_ms, queued),
                         );
-                        self.notice(client_id, "thread pane: its pane left the tree");
-                        return Flow::Continue;
-                    }
-                    // Insert the new mapping BEFORE the reap: reap_pane drops
-                    // every mapping onto the old pane, so the old row
-                    // resurfaces watch-only while the new mapping survives.
-                    if let Some(id) = row.attach_id.clone() {
-                        self.attached.insert(id, new_pid);
-                    }
-                    // Reap-last: the displaced viewer dies, the session it
-                    // showed keeps running daemon-hosted.
-                    self.reap_pane(pid);
-                    if let Some(old_row) = &taken_row {
-                        self.journal_portal_channel_left(portal_idx, old_row, "retune");
-                    }
-                    self.journal_portal_open(
-                        portal_idx,
-                        Portal {
-                            row_key: key.to_string(),
-                            seat: new_pid,
-                            tab: tid,
-                        },
-                    );
-                    self.set_view(client_id, sid, tid);
-                    if let Some(tab) = self.viewed_tab_mut((sid, tid)) {
-                        tab.focus = new_pid;
-                    }
-                    self.notice(
-                        client_id,
-                        format!("thread pane -> {} (portal {})", row.name, portal_idx),
-                    );
-                    self.push_layout(true);
-                    return Flow::Continue;
+                        core.set_view(client_id, sid, tid);
+                        if let Some(tab) = core.viewed_tab_mut((sid, tid)) {
+                            tab.focus = new_pid;
+                        }
+                        core.notice(
+                            client_id,
+                            format!("thread pane -> {} (portal {})", row.name, portal_idx),
+                        );
+                        core.push_layout(true);
+                        Flow::Continue
+                    });
                 } else {
                     // Half-created pane (close_pane's same case): tracked in
                     // self.panes but absent from the tab tree. Reap it here
@@ -989,45 +1076,69 @@ impl Core {
                 return Flow::Continue;
             }
         };
-        let pid = match self.spawn_pane_cmd_with_permit(&argv, rows, cols, &spawn_cwd, permit) {
-            Ok(p) => p,
-            Err(e) => {
-                self.notice(client_id, format!("thread pane failed: {e}"));
-                return Flow::Continue;
-            }
+        let order = SpawnOrder {
+            argv,
+            rows,
+            cols,
+            cwd: spawn_cwd.clone(),
+            permit,
+            keeper: KEEPER_ROAD,
         };
-        self.name_thread_viewer_pane(pid, &row, &tier);
-        let (sid, tid, fell_back) = match self.place_with(dest, &spawn_cwd, pid, &effective) {
-            Ok(landing) => landing,
-            Err((_code, e)) => {
-                self.notice(client_id, e);
-                return Flow::Continue;
+        let key = key.to_string();
+        self.claim_row_spawn(&row_gate);
+        self.claim_portal_spawn(portal_idx);
+        let queued = std::time::Instant::now();
+        self.spawn_then(order, Some(client_id), move |core, spawned| {
+            core.release_row_spawn(&row_gate);
+            core.release_portal_spawn(portal_idx);
+            let pid = match spawned {
+                Ok(p) => p,
+                Err(e) => {
+                    core.notice(client_id, format!("thread pane failed: {e}"));
+                    return Flow::Continue;
+                }
+            };
+            core.name_thread_viewer_pane(pid, &row, &tier);
+            let (sid, tid, fell_back) = match core.place_with(dest, &spawn_cwd, pid, &effective) {
+                Ok(landing) => landing,
+                Err((_code, e)) => {
+                    core.notice(client_id, e);
+                    return Flow::Continue;
+                }
+            };
+            if let Some(id) = row.attach_id.clone() {
+                core.attached.insert(id, pid);
             }
-        };
-        if let Some(id) = row.attach_id.clone() {
-            self.attached.insert(id, pid);
-        }
-        if let Some(old_row) = &taken_row {
-            self.journal_portal_channel_left(portal_idx, old_row, "retune");
-        }
-        self.journal_portal_open(
-            portal_idx,
-            Portal {
-                row_key: key.to_string(),
-                seat: pid,
-                tab: tid,
-            },
-        );
-        self.set_view(client_id, sid, tid);
-        if fell_back {
-            self.notice(client_id, "tab full - opened as tab");
-        }
-        self.notice(
-            client_id,
-            format!("thread pane -> {} (portal {})", row.name, portal_idx),
-        );
-        self.push_layout(true);
-        Flow::Continue
+            if let Some(old_row) = &taken_row {
+                core.journal_portal_channel_left(portal_idx, old_row, "retune");
+            }
+            core.journal_portal_open(
+                portal_idx,
+                Portal {
+                    row_key: key.to_string(),
+                    seat: pid,
+                    tab: tid,
+                },
+            );
+            core.journal_portal_reached(
+                client_id,
+                portal_idx,
+                &row,
+                &key,
+                mechanism,
+                (plan_ms, queued),
+            );
+            core.set_view(client_id, sid, tid);
+            if fell_back {
+                core.notice(client_id, "tab full - opened as tab");
+            }
+            core.notice(
+                client_id,
+                format!("thread pane -> {} (portal {})", row.name, portal_idx),
+            );
+            core.push_layout(true);
+            Flow::Continue
+        })
     }
 
     /// Title a freshly-opened thread-viewer pane by its registry row.
@@ -1130,13 +1241,16 @@ impl Core {
         // the plan-pending return that emits nothing, and the harvest would
         // invent "no such agent: NAME" for a row the registry knows.
         let needs_plan = matches!(&live_row, Some(r)
-            if r.attach_id.is_some()
-                && r.harness.as_deref() == Some("claude")
-                && self.reentry_verdict.is_none());
-        if needs_plan && self.pending_thread_reply.is_some() {
+            if r.harness.as_deref() == Some("claude")
+                && self.reentry_verdict.is_none()
+                && r.attach_id
+                    .as_deref()
+                    .is_some_and(|id| self.live_attach_argv(id).is_none()));
+        if self.pending_thread_reply.is_some() {
             // One park at a time: the observer client id is the constant
-            // CONTROL_CLIENT, so a second park would trample the first. The
-            // parked reach finishes within the resolver's own bound.
+            // CONTROL_CLIENT, so a second reach would trample the parked
+            // one's observer. A park (a resolving plan or an in-flight spawn)
+            // finishes within its own bound.
             let _ = reply.send(ServerMsg::Err {
                 code: err_code::BAD_REQUEST,
                 msg: "a portal reach is still resolving; try again in a moment".to_string(),
@@ -1224,6 +1338,19 @@ impl Core {
                 placement,
             },
         );
+        // A reach whose viewer is still spawning off the loop has emitted
+        // nothing yet: park the reply, and the spawn's landing answers it.
+        if self.spawn_in_flight_for(CONTROL_CLIENT) {
+            self.pending_thread_reply = Some(PendingThreadReply {
+                client: CONTROL_CLIENT,
+                name: name.to_string(),
+                portal,
+                view,
+                rx,
+                reply,
+            });
+            return;
+        }
         // Harvest the notice(s) the reach emitted and tear the observer out
         // through Gone. Every path ends in at least one; a reach that refuses
         // caller geometry AND lands ends in two, joined here so the
@@ -1342,7 +1469,7 @@ impl Core {
     /// `u8::MAX` was itself an occupied index, so a full space silently
     /// REPOINTED portal 255; the caller refuses instead.
     pub(super) fn next_free_portal(&self) -> Option<u8> {
-        (0..=u8::MAX).find(|idx| !self.portals.contains_key(idx))
+        (0..=u8::MAX).find(|idx| !self.portals.contains_key(idx) && !self.portal_spawning(*idx))
     }
 
     /// A claude portal seat follows the session its viewer's OSC title names.
@@ -1620,39 +1747,58 @@ impl Core {
                 return Flow::Continue;
             }
         };
-        let pid = match self.spawn_pane_cmd_with_permit(&marked, rows, cols, &spawn_cwd, permit) {
-            Ok(p) => p,
-            Err(e) => {
-                self.notice(client_id, format!("view open failed: {e}"));
-                return Flow::Continue;
-            }
+        let row_gate = row.attach_id.clone().unwrap_or_else(|| row.name.clone());
+        if !self.claim_row_spawn(&row_gate) {
+            self.notice(
+                client_id,
+                format!("view open: {} is still opening", row.name),
+            );
+            return Flow::Continue;
+        }
+        let order = SpawnOrder {
+            argv: marked,
+            rows,
+            cols,
+            cwd: spawn_cwd.clone(),
+            permit,
+            keeper: KEEPER_ROAD,
         };
-        self.name_thread_viewer_pane(pid, &row, &tier);
-        // The view owns a fresh tab; the caller's split/at/from geometry
-        // is not a view's to honor. Owner routing asks the one
-        // thread-workspace resolver (member, then spawner, then cwd).
-        let owner = self.thread_workspace(&row).unwrap_or(view.0);
-        let effective = PanePlacement {
-            tab: Some(crate::proto::TabSel::New),
-            ..Default::default()
-        };
-        let (_sid, _tid, fell_back) =
-            match self.place_with(Some(owner), &spawn_cwd, pid, &effective) {
-                Ok(landing) => landing,
-                Err((_code, e)) => {
-                    self.notice(client_id, e);
+        self.spawn_then(order, Some(client_id), move |core, spawned| {
+            core.release_row_spawn(&row_gate);
+            let pid = match spawned {
+                Ok(p) => p,
+                Err(e) => {
+                    core.notice(client_id, format!("view open failed: {e}"));
                     return Flow::Continue;
                 }
             };
-        if let Some(id) = row.attach_id.clone() {
-            self.attached.insert(id, pid);
-        }
-        if fell_back {
-            self.notice(client_id, "tab full - opened as tab");
-        }
-        self.notice(client_id, format!("view pane -> {} (pane {pid})", row.name));
-        self.push_layout(true);
-        Flow::Continue
+            core.name_thread_viewer_pane(pid, &row, &tier);
+            // The view owns a fresh tab; the caller's split/at/from geometry
+            // is not a view's to honor. Owner routing asks the one
+            // thread-workspace resolver (member, then spawner, then cwd).
+            let owner = core.thread_workspace(&row).unwrap_or(view.0);
+            let effective = PanePlacement {
+                tab: Some(crate::proto::TabSel::New),
+                ..Default::default()
+            };
+            let (_sid, _tid, fell_back) =
+                match core.place_with(Some(owner), &spawn_cwd, pid, &effective) {
+                    Ok(landing) => landing,
+                    Err((_code, e)) => {
+                        core.notice(client_id, e);
+                        return Flow::Continue;
+                    }
+                };
+            if let Some(id) = row.attach_id.clone() {
+                core.attached.insert(id, pid);
+            }
+            if fell_back {
+                core.notice(client_id, "tab full - opened as tab");
+            }
+            core.notice(client_id, format!("view pane -> {} (pane {pid})", row.name));
+            core.push_layout(true);
+            Flow::Continue
+        })
     }
 
     /// The parked screen a portal shows when nothing plays on it: a
@@ -1677,10 +1823,27 @@ impl Core {
             "stty -echo 2>/dev/null; exec tail -f /dev/null".to_string(),
         ];
         let pid = self.spawn_pane_cmd(&argv, rows, cols, cwd)?;
+        let label = self.portal_channel_label(channel);
         if let Some(entry) = self.panes.get_mut(&pid) {
-            entry.name = Some(channel.to_string());
+            entry.name = Some(label);
         }
         Ok(pid)
+    }
+
+    /// What a parked seat wears: the registry name of the one row the
+    /// channel key (an attach id or a name) answers, exited rows included.
+    /// The key stays in the argv where restore reads it; the operator reads
+    /// the name, never an attach id. A key no single row answers is its own
+    /// label.
+    pub(crate) fn portal_channel_label(&self, key: &str) -> String {
+        let mut hits = self
+            .agents
+            .iter()
+            .filter(|a| a.attach_id.as_deref() == Some(key) || a.name == key);
+        match (hits.next(), hits.next()) {
+            (Some(row), None) if !row.name.is_empty() => row.name.clone(),
+            _ => key.to_string(),
+        }
     }
 
     /// Spawn `env <wrapper> <shell>` on the first shell candidate that

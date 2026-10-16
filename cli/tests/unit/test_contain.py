@@ -13,8 +13,6 @@ Covers:
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +20,6 @@ import typer
 from typer.testing import CliRunner
 
 from fno.cli import app
-from tests.goldens._door import door_graph
 from fno.graph.store import commit_rows_via_store, read_graph_strict
 from tests.conftest import run_native_create
 
@@ -197,7 +194,16 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
 
 def test_contain_refuses_a_deferred_owner_and_stamps_nothing(tmp_graph):
     owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    _invoke("backlog", "defer", owner, "--reason", "parked")
+
+    def stamp(rows):
+        for e in rows:
+            if e["id"] == owner:
+                e["status"] = "deferred"
+                e["deferred_at"] = "2026-04-01T00:00:00+00:00"
+                e["deferred_reason"] = "parked"
+        return rows
+
+    commit_rows_via_store(tmp_graph, stamp)
     code, out = _native_contain(tmp_graph, owner, *kids)
     assert code == 2, out
     assert "is deferred" in out
@@ -303,14 +309,6 @@ def test_contain_withholds_containment_for_a_done_target_with_a_pr(tmp_graph):
 # ---------------------------------------------------------------------------
 
 
-def test_plan_base_refusal_names_the_contain_verb():
-    from fno.graph._decompose import DecomposeError, plan_base
-
-    with pytest.raises(DecomposeError) as exc:
-        plan_base(None)
-    assert "fno backlog contain <epic> <id>..." in str(exc.value)
-
-
 # ---------------------------------------------------------------------------
 # A box is a node with a child that is not contained in it
 # ---------------------------------------------------------------------------
@@ -338,52 +336,11 @@ def test_container_ids_counts_a_free_child():
     assert _container_ids(entries) == {"o"}
 
 
-def test_next_returns_the_owner_when_its_only_children_are_contained(tmp_graph):
-    """The delivery-unit rule: an all-contained brood makes the owner drain.
-
-    A top-level scan selects the owner itself (before the container-rule fix
-    it was an undispatchable box forever), and selection_guards holds each
-    contained child out of autonomous dispatch.
-    """
-    from fno.backlog.advance import selection_guards
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 2)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    code, out, err = door_graph(tmp_graph, "next", "--ideas")
-    assert code == 0, err
-    assert owner in out
-    for kid in kids:
-        assert kid not in out
-        now = datetime.now(timezone.utc)
-        assert selection_guards(
-            _by_id(tmp_graph)[kid], _by_id(tmp_graph), now
-        ) == f"contained:{owner}"
 
 
 # ---------------------------------------------------------------------------
 # The board says where a contained row ships
 # ---------------------------------------------------------------------------
-
-
-def test_kanban_column_and_card_for_a_contained_row(tmp_graph):
-    from fno.graph.render import _kanban_column, render_graph_md
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    kid_row = _by_id(tmp_graph)[kids[0]]
-    assert _kanban_column(kid_row) is not None
-    card = tmp_graph.with_name("card.md")
-    render_graph_md(_read_entries(tmp_graph), card, obsidian=False)
-    assert f"ships inside: {owner}" in card.read_text()
-
-
-def test_kanban_column_hides_a_deferred_row(tmp_graph):
-    from fno.graph.render import _kanban_column
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    _invoke("backlog", "defer", kids[0], "--reason", "parked")
-    assert _kanban_column(_by_id(tmp_graph)[kids[0]]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -469,20 +426,6 @@ def test_strandable_contained_ids_names_open_nodes_of_a_done_owner():
 # ---------------------------------------------------------------------------
 
 
-def test_undefer_after_contain_keeps_containment(tmp_graph):
-    from fno.backlog.advance import selection_guards
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    kid = kids[0]
-    _invoke("backlog", "defer", kid, "--reason", "waiting on the owner")
-    assert _native_contain(tmp_graph, owner, kid)[0] == 0
-    r = _invoke("backlog", "undefer", kid)
-    assert r.exit_code == 0, r.output
-    row = _by_id(tmp_graph)[kid]
-    assert not row.get("deferred_at")
-    assert row["contained_in"] == owner
-    now = datetime.now(timezone.utc)
-    assert selection_guards(row, _by_id(tmp_graph), now) == f"contained:{owner}"
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,13 @@
 //! The capability reader's contract tests: the control refusal, the
 //! blind-pattern conviction, the shipped-table assertion, the journey
-//! declarations, the watch-lease journey cell, and the isolation nonce pair.
+//! declarations, the watch-lease journey cell, the isolation nonce pair, and
+//! the live spawn's substrate and provider route.
 
 use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl, JOURNEY_KEYS};
-use fno_agents::harness_reader::{retry_marker, wait_for_ci_cell, LineVerdict};
+use fno_agents::harness_reader::{
+    isolated_provider_config, probe_route_args, probe_substrate, retry_marker, wait_for_ci_cell,
+    LineVerdict,
+};
 use std::time::Duration;
 
 fn decl(kind: &str, authority: &str, pattern: &str, control: &str) -> ProbeDecl {
@@ -190,6 +194,17 @@ fn isolation_reads_its_nonce_back_and_reports_the_real_root_pair() {
         Some(true),
         "the paired negative read: the nonce is absent from the real state root"
     );
+    // A child runs inside the root, never in the caller's checkout, so no
+    // project `.fno/config.toml` reaches the probe.
+    let mut cmd = std::process::Command::new("true");
+    root.child_env(&mut cmd);
+    let cwd = cmd.get_current_dir().expect("child_env pins the cwd");
+    let fno_home = cmd
+        .get_envs()
+        .find(|(k, _)| *k == "FNO_HOME")
+        .and_then(|(_, v)| v)
+        .expect("child_env pins FNO_HOME");
+    assert_eq!(std::path::Path::new(fno_home), cwd.join("fno"));
 }
 
 #[test]
@@ -244,4 +259,58 @@ fn the_watch_lease_answers_the_wait_for_ci_journey() {
             "{harness}: the refusal is quoted, got: {refusal}"
         );
     }
+}
+
+#[test]
+fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
+    let contract = HarnessContract::packaged().expect("the shipped table parses");
+    // zcode declares interactive_create unsupported and headless_create
+    // supported, so a pane spawn refuses it at birth.
+    assert_eq!(probe_substrate(&contract, "zcode"), Some("headless"));
+    // A harness with an interactive create form keeps the spawn default.
+    assert_eq!(probe_substrate(&contract, "claude"), None);
+    // The provider flag is a claude route. Any other harness takes the
+    // provider as the model id's prefix, never doubled.
+    let args = |h, p, m| probe_route_args(h, p, m).join(" ");
+    assert_eq!(
+        args("claude", Some("zai"), Some("glm-x")),
+        "--provider zai --model glm-x"
+    );
+    assert_eq!(
+        args("footnote", Some("zai"), Some("glm-x")),
+        "--model zai/glm-x"
+    );
+    assert_eq!(
+        args("footnote", Some("zai"), Some("zai/glm-x")),
+        "--model zai/glm-x"
+    );
+    assert_eq!(args("footnote", None, Some("glm-x")), "--model glm-x");
+    assert_eq!(args("footnote", Some("zai"), None), "");
+    // A harness with no provider/model spelling takes the model as given.
+    assert_eq!(
+        args("codex", Some("openai"), Some("gpt-x")),
+        "--model gpt-x"
+    );
+}
+
+#[test]
+fn the_isolated_config_carries_one_provider_with_its_key_file_pinned_to_the_real_home() {
+    let mut record = toml::Table::new();
+    record.insert("base_url".into(), "https://example.test/v1".into());
+    record.insert("api_key_env".into(), "EXAMPLE_KEY".into());
+    record.insert("api_key_file".into(), "~/.fno/.env".into());
+    let text = isolated_provider_config("example", &record, std::path::Path::new("/real/home"));
+    let parsed: toml::Table = toml::from_str(&text).expect("the record is valid TOML");
+    assert_eq!(parsed.len(), 1, "no other config section crosses");
+    let providers = parsed["model_routing"]["providers"]
+        .as_table()
+        .expect("model_routing.providers is a table");
+    assert_eq!(providers.len(), 1, "only the named provider crosses");
+    let copied = &providers["example"];
+    // The child's `~` is the isolated home, so the key file is pinned.
+    assert_eq!(
+        copied["api_key_file"].as_str(),
+        Some("/real/home/.fno/.env")
+    );
+    assert_eq!(copied["base_url"].as_str(), Some("https://example.test/v1"));
 }

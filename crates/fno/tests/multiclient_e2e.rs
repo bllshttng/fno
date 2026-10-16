@@ -476,11 +476,23 @@ fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
     // older build): listed as alive-unqueryable, never breaking the listing.
     let _silent = std::os::unix::net::UnixListener::bind(scratch.0.join("odd.sock")).unwrap();
 
-    let out = fno_cmd(&scratch, &["mux", "ls"]);
-    assert!(out.status.success(), "ls exits 0: {out:?}");
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The attach road reserves the pane id and grafts it into the layout on
+    // the loop, but the pane enters the server's map only when the off-loop
+    // spawn lands back as ready. Under load that landing can lose to this
+    // read, so re-run the read-only ls until the row settles.
+    let needle = "main: 1 clients, 1 workspaces, 1 panes";
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let stdout = loop {
+        let out = fno_cmd(&scratch, &["mux", "ls"]);
+        assert!(out.status.success(), "ls exits 0: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if stdout.contains(needle) || std::time::Instant::now() > deadline {
+            break stdout;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
     assert!(
-        stdout.contains("main: 1 clients, 1 workspaces, 1 panes"),
+        stdout.contains(needle),
         "live row with counts; got: {stdout}"
     );
     assert!(stdout.contains("dead: stale"), "stale row; got: {stdout}");

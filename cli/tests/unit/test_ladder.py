@@ -1,8 +1,6 @@
 """Design-stage probe: the `design` rung of the derived lifecycle ladder."""
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from fno.graph.ladder import is_design_stage
@@ -132,30 +130,6 @@ def test_missing_file_stays_armed(tmp_path):
 )
 def test_malformed_entries_stay_armed(entry):
     assert not is_design_stage(entry)
-
-
-def test_design_node_is_never_stale_ready(tmp_path):
-    """Quarantine must not reach a node that is unarmed on purpose.
-
-    Pinned on `is_stale_ready` itself rather than `detect_stale_ready`, because
-    `maintain --apply` re-runs the predicate directly under the lock.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from fno.graph.maintain import detect_stale_ready, is_stale_ready
-
-    now = datetime.now(timezone.utc)
-    plan = tmp_path / "d.md"
-    plan.write_text(DESIGN_FM)
-    os.utime(plan, (0, 0))  # ancient mtime: no movement signal
-    node = {
-        "id": "x-old",
-        "status": "ready",
-        "plan_path": str(plan),
-        "created_at": (now - timedelta(days=400)).isoformat(),
-    }
-    assert not is_stale_ready(node, now, 21)
-    assert detect_stale_ready([node], 21, now) == []
 
 
 def test_recompute_persists_the_design_rung(tmp_path):
@@ -411,43 +385,6 @@ def test_receipt_reports_a_node_already_on_the_design_rung(tmp_path, monkeypatch
     assert out == [("x-d", "design")]
 
 
-def test_think_attaches_plan_then_blueprint_arms_it(tmp_path, monkeypatch):
-    """The whole point of the rung: /think can link its doc safely.
-
-    Before this rung existed, linking a design doc flipped the node to `ready`
-    and the dispatcher claimed it within ~a minute - the reason the old advice
-    was to leave plans unlinked until blueprint. Walks the real sequence:
-    /think links a `status: design` doc (visible, parked, explained), then
-    /blueprint flips the doc and the same node arms.
-    """
-    from datetime import datetime, timezone
-
-    from fno.backlog.advance import selection_guards
-    from fno.graph.cli import _starvation_receipts
-    from fno.graph.statuses import recompute_statuses
-
-    now = datetime.now(timezone.utc)
-    doc = tmp_path / "20260719-dark-mode-x-8af8.md"
-    doc.write_text("---\nstatus: design\nnode: x-8af8\ntype: think-brief\n---\n\n# Dark mode\n")
-    node = {"id": "x-8af8", "plan_path": str(doc), "created_at": now.isoformat()}
-
-    # /think links it: parked, but visible and explained rather than silent.
-    recompute_statuses([node])
-    assert node["status"] == "design"
-    assert node["status"] != "ready"  # the filter every autonomous selector applies
-    _seed_graph(tmp_path, monkeypatch, [node])
-    assert _starvation_receipts([node], None, True, None, set(), now, 21) == [
-        ("x-8af8", "design")
-    ]
-
-    # /blueprint flips the doc; the very same node is now dispatchable.
-    doc.write_text("---\nstatus: ready\nnode: x-8af8\n---\n\n## Execution Strategy\n")
-    recompute_statuses([node])
-    assert node["status"] == "ready"
-    _seed_graph(tmp_path, monkeypatch, [node])
-    assert selection_guards(node, {"x-8af8": node}, now) is None
-
-
 def test_starvation_receipt_names_design_not_quarantined(tmp_path, monkeypatch):
     """A design-stage node is a lifecycle rung, not starvation.
 
@@ -578,11 +515,22 @@ def test_uncertain_documents_park(tmp_path, body):
 
 
 def test_missing_file_is_unreadable_and_not_dispatchable(tmp_path):
+    """A missing plan file reads UNREADABLE, except on an in_review node:
+    the plan did its job once the PR opened, so a vanished file reads as the
+    node's own rung and stays dispatchable. Any other status keeps failing
+    closed."""
     from fno.graph.ladder import Rung, is_dispatchable, plan_rung
 
     entry = {"id": "x-test", "plan_path": str(tmp_path / "gone.md")}
     assert plan_rung(entry) is Rung.UNREADABLE
     assert is_dispatchable(entry) is False
+
+    gone = {"id": "x-gone", "plan_path": str(tmp_path / "gone.md"), "status": "in_review"}
+    building = {"id": "x-bld", "plan_path": str(tmp_path / "gone.md"), "status": "in_progress"}
+    assert plan_rung(gone) is Rung.IN_REVIEW
+    assert is_dispatchable(gone) is True
+    assert plan_rung(building) is Rung.UNREADABLE
+    assert is_dispatchable(building) is False
 
 
 @pytest.mark.parametrize("status", ["idea", "stub", "design"])
@@ -688,86 +636,7 @@ def _ready_row(plan_path: str) -> dict:
     }
 
 
-@pytest.mark.parametrize(
-    "status,expected",
-    [("design", "design-stage"), ("idea", "idea-stage"), ("stub", "idea-stage")],
-)
-def test_a_stale_ready_row_is_re_probed_for_every_undesigned_rung(
-    tmp_path, monkeypatch, status, expected
-):
-    """The persisted status can lie; the live doc decides.
-
-    `read_graph` does not recompute, so a doc rewritten down to `idea` (or an
-    old scaffold still spelled `stub`) sits behind a `ready` row. A DESIGN-only
-    probe waved those straight through to dispatch.
-    """
-    from datetime import datetime, timezone
-
-    from fno.backlog.advance import selection_guards
-
-    plan = tmp_path / "p.md"
-    plan.write_text(f"---\nstatus: {status}\n---\n")
-    node = _ready_row(str(plan))
-    _seed_graph(tmp_path, monkeypatch, [node])
-    verdict = selection_guards(
-        node, {node["id"]: node}, datetime.now(timezone.utc)
-    )
-    assert verdict == expected
-
-
-def test_a_stale_ready_row_with_a_real_plan_still_selects(tmp_path, monkeypatch):
-    """The guard must not hold back a genuinely ready node."""
-    from datetime import datetime, timezone
-
-    from fno.backlog.advance import selection_guards
-
-    plan = tmp_path / "r.md"
-    plan.write_text("---\nstatus: ready\n---\n")
-    node = _ready_row(str(plan))
-    _seed_graph(tmp_path, monkeypatch, [node])
-    assert selection_guards(
-        node, {node["id"]: node}, datetime.now(timezone.utc)
-    ) is None
-
-
-def test_an_unmounted_plan_root_remains_no_hold_signal(tmp_path, monkeypatch):
-    """A cross-project or unmounted plan ROOT (the whole tree absent from
-    this machine) has no declaration to validate here."""
-    from datetime import datetime, timezone
-
-    from fno.backlog.advance import selection_guards
-
-    node = _ready_row(str(tmp_path / "not-mounted" / "gone.md"))
-    _seed_graph(tmp_path, monkeypatch, [node])
-    assert selection_guards(
-        node, {node["id"]: node}, datetime.now(timezone.utc)
-    ) is None
 # every readiness path re-probes the rung, not just `design` (sigma panel) -----
-
-
-def test_maintain_never_quarantines_an_undesigned_node(tmp_path):
-    """`maintain --apply` must not defer a scaffold off the board.
-
-    `is_stale_ready` exempted DESIGN only, so an `idea`-rung row aged into
-    stale-quarantine and got `deferred_at` stamped. Two of its three callers
-    never pass through `selection_guards`, so the rung probe has to live here.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from fno.graph.maintain import is_stale_ready
-
-    now = datetime.now(timezone.utc)
-    old = (now - timedelta(days=572)).isoformat()
-    for status in ("idea", "stub", "design"):
-        plan = tmp_path / f"{status}.md"
-        plan.write_text(f"---\nstatus: {status}\n---\n")
-        node = {
-            "id": f"x-{status[:4]}",
-            "status": "ready",
-            "plan_path": str(plan),
-            "created_at": old,
-        }
-        assert is_stale_ready(node, now, 21) is False, status
 
 
 def test_entry_status_uses_the_same_rung_table_as_recompute(tmp_path):

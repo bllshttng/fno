@@ -126,12 +126,14 @@ fn write_cached(dir: &Path, slug: &str, pr: u64, facts: &Value) {
     }
 }
 
-/// The real fetch: one `gh api repos/{slug}/pulls/{n}`.
+/// The real fetch: one `gh api repos/{slug}/pulls/{n}`. Polled by the merge
+/// decide path, so it admits against the fleet budget first; a hold refuses
+/// in process with the ledger's own line.
 fn real_fetch(slug: &str, pr: u64) -> Result<Value, String> {
-    let out = std::process::Command::new("gh")
-        .args(["api", &format!("repos/{slug}/pulls/{pr}")])
-        .output()
-        .map_err(|e| format!("gh api spawn failed: {e}"))?;
+    let path = format!("repos/{slug}/pulls/{pr}");
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["api", &path]);
+    let out = crate::gh_budget::output(cmd).map_err(|e| format!("gh api spawn failed: {e}"))?;
     if !out.status.success() {
         return Err(format!(
             "gh api repos/{slug}/pulls/{pr} exited {}: {}",
@@ -198,10 +200,9 @@ fn outside_pr_in(
 pub(crate) type GhRun<'a> = &'a dyn Fn(&[&str]) -> Result<(bool, String), String>;
 
 fn real_gh(args: &[&str]) -> Result<(bool, String), String> {
-    let out = std::process::Command::new("gh")
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(args);
+    let out = crate::gh_budget::output(cmd).map_err(|e| e.to_string())?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok((out.status.success(), text))

@@ -21,7 +21,6 @@ const ADVISORY: &str = "roster advisory: ";
 const UNMEASURABLE_ROW_PREFIX: &str = "unmeasurable-row: ";
 const REGISTRY_ONLY_MARK: &str = "falling back to registry-only view";
 const TRANSCRIPT_EVIDENCE_S: i64 = 20 * 60;
-const STALLED_AFTER_S: i64 = 2 * 3600;
 const TICK_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_PID: i64 = 0x7FFF_FFFF;
 
@@ -51,17 +50,17 @@ const USAGE: &str = "usage: fno-agents backlog worked [--json]";
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-struct FleetRow {
-    row_id: String,
-    name: String,
-    state: String,
-    node: Option<String>,
-    cwd: String,
-    agent: String,
-    stopped_at: Option<String>,
-    pid: Option<u32>,
-    pid_start_time: Option<u64>,
-    mux: Option<crate::state::MuxRef>,
+pub(crate) struct FleetRow {
+    pub(crate) row_id: String,
+    pub(crate) name: String,
+    pub(crate) state: String,
+    pub(crate) node: Option<String>,
+    pub(crate) cwd: String,
+    pub(crate) agent: String,
+    pub(crate) stopped_at: Option<String>,
+    pub(crate) pid: Option<u32>,
+    pub(crate) pid_start_time: Option<u64>,
+    pub(crate) mux: Option<crate::state::MuxRef>,
 }
 
 fn status_word(status: crate::AgentStatus) -> &'static str {
@@ -426,18 +425,10 @@ fn raw_row_sid(r: &Value) -> Option<String> {
 
 fn ledger_nodes_map() -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let Ok(text) = std::fs::read_to_string(crate::paths::ledger_path(
+    let path = crate::paths_cli::ledger_json(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    )) else {
-        return out;
-    };
-    let Ok(data) = serde_json::from_str::<Value>(&text) else {
-        return out;
-    };
-    let Some(entries) = data.get("entries").and_then(Value::as_array) else {
-        return out;
-    };
-    for e in entries {
+    );
+    for e in crate::loopcheck::ledger_file_rows(&path) {
         let Some(node) = e
             .get("graph_node_id")
             .and_then(Value::as_str)
@@ -472,15 +463,22 @@ fn ledger_nodes_map() -> BTreeMap<String, String> {
 // The roster reading (`read_roster`, require_live_probe=False)
 // ---------------------------------------------------------------------------
 
-struct RosterReading {
-    consulted: bool,
-    reason: String,
-    workers_by_node: BTreeMap<String, Vec<FleetRow>>,
-    rows_by_session: BTreeMap<String, FleetRow>,
-    unmeasurable_by_node: BTreeMap<String, Vec<String>>,
+pub(crate) struct RosterReading {
+    pub(crate) consulted: bool,
+    pub(crate) reason: String,
+    pub(crate) workers_by_node: BTreeMap<String, Vec<FleetRow>>,
+    pub(crate) rows_by_session: BTreeMap<String, FleetRow>,
+    pub(crate) unmeasurable_by_node: BTreeMap<String, Vec<String>>,
+    pub(crate) rows_scanned: usize,
+    pub(crate) rows_unresolved: usize,
+    pub(crate) unresolved_rows: Vec<FleetRow>,
 }
 
-fn read_roster() -> RosterReading {
+/// Python's `read_roster(require_live_probe=False)`: a registry-only view
+/// is a tolerated degraded probe, not a refusal, so it still carries
+/// attribution (the claim-status crosscheck calls it the same way, see
+/// cli.py's crosscheck read).
+pub(crate) fn read_roster() -> RosterReading {
     let (rows, warnings) = fleet_rows();
     let mut blocking: Vec<String> = Vec::new();
     let mut degraded_reason = String::new();
@@ -520,26 +518,36 @@ fn read_roster() -> RosterReading {
             workers_by_node: BTreeMap::new(),
             rows_by_session: BTreeMap::new(),
             unmeasurable_by_node: BTreeMap::new(),
+            rows_scanned: 0,
+            rows_unresolved: 0,
+            unresolved_rows: Vec::new(),
         };
     }
+    // The python reading indexes a row under its node when the node is
+    // truthy and lists it as unresolved otherwise; an empty-string node is
+    // unresolved, never a worker under "".
     let mut workers_by_node: BTreeMap<String, Vec<FleetRow>> = BTreeMap::new();
     let mut rows_by_session: BTreeMap<String, FleetRow> = BTreeMap::new();
+    let mut unresolved_rows: Vec<FleetRow> = Vec::new();
+    let rows_scanned = rows.len();
     for r in rows {
-        if let Some(node) = &r.node {
-            workers_by_node
-                .entry(node.clone())
-                .or_default()
-                .push(r.clone());
+        rows_by_session.insert(r.row_id.clone(), r.clone());
+        match r.node.as_deref().filter(|n| !n.is_empty()) {
+            Some(node) => workers_by_node.entry(node.to_string()).or_default().push(r),
+            None => unresolved_rows.push(r),
         }
-        rows_by_session.insert(r.row_id.clone(), r);
     }
-    let _ = degraded_reason;
+    // The degraded probe line is the reading's reason on success, the same
+    // field the status leaf renders as its `roster_probe` rider.
     RosterReading {
         consulted: true,
-        reason: String::new(),
+        reason: degraded_reason,
         workers_by_node,
         rows_by_session,
         unmeasurable_by_node: unmeasurable,
+        rows_scanned,
+        rows_unresolved: unresolved_rows.len(),
+        unresolved_rows,
     }
 }
 
@@ -592,6 +600,16 @@ fn record_epoch(record: &Value) -> Option<f64> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .ok()
         .map(|dt| dt.timestamp() as f64 + dt.timestamp_subsec_nanos() as f64 / 1e9)
+}
+
+/// A transcript's age in seconds (its last record's epoch against now) for
+/// the claim list silence report: `None` when the transcript or its
+/// timestamps cannot be read. Walks the store fresh (no shared listing),
+/// like the single-row Python lookup.
+pub(crate) fn transcript_age_s(session_id: &str, cwd: &str, agent: &str) -> Option<f64> {
+    let facts = tail_facts(session_id, cwd, agent, &[])?;
+    let epoch = facts.last_epoch?;
+    Some((now_epoch_s() - epoch).max(0.0))
 }
 
 /// Tail-read one transcript and derive the classifier's input: the newest
@@ -698,74 +716,6 @@ fn record_text(record: &Value) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-// ---------------------------------------------------------------------------
-// The tail classifier (`classify_tail`)
-// ---------------------------------------------------------------------------
-
-fn watching_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<watching[>\s]").unwrap())
-}
-
-fn promise_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<promise[>\s]").unwrap())
-}
-
-fn help_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"<help[>\s]").unwrap())
-}
-
-fn api_error_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"^API Error\b").unwrap())
-}
-
-fn option_prompt_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"[\[(](?:[Yy]/[Nn]|\d+(?:/\d+)+)[\])]\s*$").unwrap())
-}
-
-/// Pure classifier over the LAST transcript turn. Content signals apply only
-/// when the last turn is the assistant's; a trailing user turn clears any
-/// stale assistant signal and mtime decides. A turn stops being news past
-/// `stalled_after_s`; `done` is an outcome and does not go stale.
-fn classify_tail(last_role: Option<&str>, last_text: &str, age_s: Option<f64>) -> String {
-    let text = last_text;
-    let stale = age_s.is_some_and(|a| a > STALLED_AFTER_S as f64);
-    if last_role == Some("assistant") {
-        if watching_re().is_match(text) {
-            return if stale {
-                "stalled".into()
-            } else {
-                "watching".into()
-            };
-        }
-        if promise_re().is_match(text) {
-            return "done".into();
-        }
-        if api_error_re().is_match(text.trim_start()) {
-            return "stalled".into();
-        }
-        let stripped = text.trim_end();
-        if stripped.ends_with('?')
-            || help_re().is_match(text)
-            || option_prompt_re().is_match(stripped)
-        {
-            return if stale {
-                "stalled".into()
-            } else {
-                "your-move".into()
-            };
-        }
-    }
-    if stale {
-        return "stalled".into();
-    }
-    "working".into()
 }
 
 // ---------------------------------------------------------------------------
@@ -885,15 +835,59 @@ fn worker_reachability(row: &FleetRow, listing: &[Hit]) -> Reach {
     {
         falsifier = Some(format!("finished-state:{}", row.state));
     }
-    let truth = classify_tail(facts.last_role.as_deref(), &facts.last_text, Some(age));
+    let truth = crate::session_truth::classify_tail(
+        facts.last_role.as_deref(),
+        &facts.last_text,
+        Some(age),
+        crate::session_truth::STALLED_AFTER_S,
+    );
     classify_reachability(Some(&truth), Some(age), falsifier)
+}
+
+/// Node id -> names of its REACHABLE roster workers. An unread roster is an
+/// Err naming why, so a reaper holds instead of reading "no worker".
+pub(crate) fn reachable_workers_by_node() -> Result<BTreeMap<String, Vec<String>>, String> {
+    let reading = read_roster();
+    if !reading.consulted {
+        return Err(reading.reason);
+    }
+    let listing = store_listing(&claude_projects_root());
+    let mut out = BTreeMap::new();
+    for (node, rows) in &reading.workers_by_node {
+        let names: Vec<String> = rows
+            .iter()
+            .filter(|r| worker_reachability(r, &listing).verdict == REACHABLE)
+            .map(|r| r.name.clone())
+            .collect();
+        if !names.is_empty() {
+            out.insert(node.clone(), names);
+        }
+    }
+    Ok(out)
+}
+
+/// The leaf crosscheck's split of one node's folded rows into
+/// (engaged, unmeasurable). A falsified row ("unreachable") lands in
+/// neither list, exactly as the Python classify_workers this mirrors.
+pub(crate) fn classify_node_workers(rows: &[FleetRow]) -> (Vec<&FleetRow>, Vec<&FleetRow>) {
+    let listing = store_listing(&claude_projects_root());
+    let mut engaged = Vec::new();
+    let mut unmeasurable = Vec::new();
+    for row in rows {
+        match worker_reachability(row, &listing).verdict {
+            REACHABLE => engaged.push(row),
+            UNKNOWN => unmeasurable.push(row),
+            _ => {}
+        }
+    }
+    (engaged, unmeasurable)
 }
 
 // ---------------------------------------------------------------------------
 // The worked overlay (`live_worked_node_ids`, strict)
 // ---------------------------------------------------------------------------
 
-const UNMEASURABLE_LABEL_MARK: &str = "(unmeasurable:";
+pub(crate) const UNMEASURABLE_LABEL_MARK: &str = "(unmeasurable:";
 
 /// One graph session row: a valid, unfinished window of `phase`.
 fn is_open_phase_row(row: &Value, phase: &str) -> bool {
@@ -916,7 +910,7 @@ fn is_open_phase_row(row: &Value, phase: &str) -> bool {
 /// Session ids whose own phase row closed and none is open: finished with
 /// THIS node ahead of the predicate. A ship row is a link event, never a
 /// phase that closes.
-fn closed_worker_session_ids(entry: &Value) -> BTreeSet<String> {
+pub(crate) fn closed_worker_session_ids(entry: &Value) -> BTreeSet<String> {
     let mut closed: BTreeSet<String> = BTreeSet::new();
     let mut open: BTreeSet<String> = BTreeSet::new();
     for row in entry
@@ -976,6 +970,16 @@ pub(crate) fn live_worked_node_ids(
     if !reading.consulted {
         return Err(reading.reason);
     }
+    fold_over_entries(entries, &reading)
+}
+
+/// The per-entry fold over ONE roster snapshot. `live_worked_node_ids` and
+/// the claim status leaf share it, so a crosscheck and its overlay read the
+/// same reading instead of two roster passes drifting apart.
+pub(crate) fn fold_over_entries(
+    entries: &[Value],
+    reading: &RosterReading,
+) -> Result<Vec<(String, Vec<String>)>, String> {
     let listing = store_listing(&claude_projects_root());
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     for entry in entries {

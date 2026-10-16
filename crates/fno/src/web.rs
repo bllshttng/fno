@@ -924,12 +924,15 @@ async fn read_stream(
 
 /// Serialize one `ServerMsg` to its wire JSON, update the replay snapshot, and
 /// broadcast it. A `Frame` failing `geometry_ok` at this trust boundary is
-/// dropped (AC5-FR): the previous good frame stays drawn.
-fn forward(msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<Snapshot>>) {
-    if let ServerMsg::Frame { frame, .. } = &msg {
+/// dropped (AC5-FR): the previous good frame stays drawn. A good frame gets
+/// the same user-message band text fix the native client applies, because the
+/// browser paints the raw cell colors.
+fn forward(mut msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<Snapshot>>) {
+    if let ServerMsg::Frame { frame, .. } = &mut msg {
         if !frame.geometry_ok() {
             return;
         }
+        frame.cells.iter_mut().for_each(crate::band_remap::remap);
     }
     let json = match serde_json::to_string(&msg) {
         Ok(j) => j,
@@ -2469,6 +2472,10 @@ const any = { project: "p", status: "ready", priority: "p2", size: "M", kind: "b
 const nodes = { "x-1": { details: "needle in details" } };
 const off = { project: [], status: [], priority: [], size: [], kind: [], tag: [], lead: [], epic: [], q: "" };
 eq(cardKeeps(any, nodes, off), true, "no filters keep");
+// A public payload's card carries no lead field at all; the empty filter
+// set keeps it all the same.
+const pubCard = { project: "p", status: "ready", priority: "p2", size: "M", kind: "bug", tags: ["t1"], parent: "e1", id: "x-1", slug: "s", title: "T" };
+eq(cardKeeps(pubCard, nodes, off), true, "a public card without a lead keeps");
 eq(cardKeeps(any, nodes, Object.assign({}, off, { status: ["idea"] })), false, "status filter drops");
 eq(cardKeeps(any, nodes, Object.assign({}, off, { kind: ["bug"] })), true, "kind filter keeps");
 eq(cardKeeps(any, nodes, Object.assign({}, off, { kind: ["epic"] })), false, "kind filter drops");
@@ -2547,7 +2554,7 @@ const reversed = nestChildren([
 ]);
 eq(reversed.map((r) => r.card.id), ["par", "kid"], "a child listed first still follows its parent");
 eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
-console.log("snapshot page helpers: 35 cases ok");
+console.log("snapshot page helpers: 36 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
 const M = { meta: false, ctrl: false };
@@ -2684,7 +2691,7 @@ console.log("recent searches: 12 cases ok");
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 assert!(
-                    stdout.contains("snapshot page helpers: 35 cases ok"),
+                    stdout.contains("snapshot page helpers: 36 cases ok"),
                     "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
                 );
                 assert!(
@@ -2980,6 +2987,28 @@ console.log("recent searches: 12 cases ok");
             },
             &tx,
             snap,
+        );
+    }
+
+    #[test]
+    fn forward_repaints_band_text_for_the_browser() {
+        let (tx, mut rx) = broadcast::channel::<String>(16);
+        let snap = Arc::new(Mutex::new(Snapshot::default()));
+        let mut frame = tiny_frame();
+        frame.cells[0].bg = proto::Color::Rgb(0xff, 0xff, 0xff);
+        frame.cells[0].fg = proto::Color::Rgb(0xe8, 0xe8, 0xe8);
+        forward(ServerMsg::Frame { pane_id: 1, frame }, &tx, &snap);
+        let fg_of = |json: &str| match serde_json::from_str::<ServerMsg>(json) {
+            Ok(ServerMsg::Frame { frame, .. }) => frame.cells[0].fg,
+            other => panic!("a frame was expected: {other:?}"),
+        };
+        let want = proto::Color::Rgb(0x14, 0x14, 0x14);
+        assert_eq!(fg_of(&rx.try_recv().unwrap()), want);
+        let stored = snap.lock().unwrap().frames[&1].1.clone();
+        assert_eq!(
+            fg_of(&stored),
+            want,
+            "the replay snapshot holds the repaint"
         );
     }
 

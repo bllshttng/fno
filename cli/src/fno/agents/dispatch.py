@@ -84,6 +84,7 @@ from fno.agents.registry import (
     update_registry,
 )
 from fno.agents.role import (
+    adopt_drawn_name,
     calling_agent_row,
     role_validation_error,
     journal_spawn_role,
@@ -580,10 +581,8 @@ def _stamp_status(
         else:
             resolved_last = last_message_at  # str or None
 
-        # Use ``dataclasses.replace`` for the same reason ``reconcile_agents``
-        # does: future AgentEntry fields are preserved automatically without
-        # needing to re-list every constructor argument (Gemini PR #319 review,
-        # consistent with the PR #317 Gemini-medium fix).
+        # ``dataclasses.replace``: future AgentEntry fields are preserved
+        # automatically without re-listing every constructor argument.
         out: list[AgentEntry] = []
         for entry in entries:
             if entry.name != name:
@@ -720,8 +719,7 @@ def _codex_create_path(
         )
         # Propagate codex's exit code (or the provider's structured code
         # like 12 for tee-open EACCES or 127 for missing binary) instead
-        # of collapsing to 1. Gemini PR #305 round 3 flagged the prior
-        # collapse as losing structured error context.
+        # of collapsing to 1.
         raise DispatchAskError(
             f"codex exited {exc.exit_code} (see {output_path} for details)",
             exit_code=exc.exit_code if exc.exit_code != 0 else 1,
@@ -756,6 +754,8 @@ def _codex_create_path(
         # the node this spawn was FOR (the caller's provenance pass),
         # never this process's ambient value.
         node=node,
+        # v41: the delivered seed, for the attended seed exemption.
+        spawn_payload=message or None,
         # The one-shot codex create lane: non-interactive by construction.
         substrate="headless",
     )
@@ -1409,6 +1409,7 @@ def _claude_create_path(
     # the row this resume forks FROM (fork_lineage.lineage_row_for);
     # states every axis the caller left unstated.
     lineage_row: object | None = None,
+    carried: Optional[dict] = None,
     # The model token the ROUTE named (-P vendor/model or --route
     # vendor,model). Recorded on the row beside an explicit --model; never fed
     # to the child argv, so launch behavior is untouched.
@@ -1673,15 +1674,12 @@ def _claude_create_path(
     if revive and resume_session_id:
         print(
             f"fno agents spawn: forked {canonical_handle(resume_session_id)} into a "
-            f"new session (new id, new row, new fno binding): {short_id} continues "
-            f"the transcript; the source id is not preserved.\n"
-            f"Watch the new one: fno agents peek {short_id}",
+            f"new session: {short_id} keeps its name, id and spawner from the "
+            f"source row; watch it: fno agents peek {short_id}",
             file=sys.stderr,
         )
 
-    # Best-effort ambient capture; never raises. The
-    # spawn_trigger was already popped before bg_create above.
-    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, lineage_row)
+    spawned_by_session, spawned_by_harness, spawned_by_cwd = _parent_edge(parent_edge, carried or {})
     lineage_reason = _report_unlinked_parent(spawned_by_session)
 
     # Role stamp (US9), same contract as the pane path: the grantor is the
@@ -1721,6 +1719,7 @@ def _claude_create_path(
         # silent, byte-identical stamps where there is none.
         **fork_lineage.axis_overrides(
             src,
+            carried=carried,
             model=model,
             route_model=route_model,
             verified_model=verified_model,
@@ -1764,6 +1763,8 @@ def _claude_create_path(
         role_level=role_level,
         role_scope=role_scope,
         role_grantor=role_grantor_val,
+        # v41: the delivered seed, for the attended seed exemption.
+        spawn_payload=message or None,
     )
 
     role_declined = False
@@ -2461,6 +2462,12 @@ def dispatch_spawn(
     # the narrower ask vocabulary and the wider pane-hostable set, and the
     # check is substrate-aware: pi passes on thread and refuses on headless.
     _check_spawn_harness(harness, headless=headless)
+    if harness in ("opencode", "pi") and (once or headless):
+        raise DispatchAskError(
+            f"{harness} one-shot spawns run through the Rust runtime's headless "
+            "lane; the Python path carries --substrate thread only",
+            exit_code=2,
+        )
 
     effective_message: Optional[str] = None
     if is_verb_seed(message):
@@ -2499,6 +2506,7 @@ def dispatch_spawn(
             message, role_level, role_scope, succession, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
+        name = adopt_drawn_name(succession, promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2633,6 +2641,7 @@ def dispatch_spawn(
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
+                name = adopt_drawn_name(succession, role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -2662,10 +2671,8 @@ def dispatch_spawn(
             row_launch_account_source = launch_account_source
             # the row this resume forks FROM, matched by uuid alone.
             lineage_row = fork_lineage.lineage_row_for(entries, resume_session_id)
-            if lineage_row is not None and node is None:
-                # A wake fork (new name, no caller node) carries the lineage
-                # row's node so the join survives the revive.
-                node = lineage_row.node
+            kept = fork_lineage.carried(resume_session_id)
+            node = node or kept.get("node")
             if resume_session_id and row_launch_account is None:
                 row_launch_account = getattr(lineage_row, "launch_account", None)
                 # A revive inherits the source row's provenance; None is honest.
@@ -2774,9 +2781,8 @@ def dispatch_spawn(
             # 4a2. Build the dispatch context so the create helpers' emits
             # (agent_ask_started/agent_ask_done) carry the same request_id /
             # caller / from_name attribution the old dispatch_ask create
-            # branch had (codex P2, PR #457). try/finally mirrors
-            # dispatch_ask's 3c block so the ctx cannot leak to a sibling
-            # dispatch on the same thread.
+            # branch had. try/finally mirrors dispatch_ask's 3c block so
+            # the ctx cannot leak to a sibling dispatch on the same thread.
             ctx_for_dispatch = build_context(
                 to_name=name,
                 to_provider=harness,
@@ -2863,6 +2869,7 @@ def dispatch_spawn(
                         resume_session_id=resume_session_id,
                         revive=revive,
                         lineage_row=lineage_row,
+                        carried=kept,
                         add_dir=add_dir,
                         agent=agent,
                         tools=tools,
@@ -2908,13 +2915,6 @@ def dispatch_spawn(
                 # have no carrier on the serve row yet, so they are refused
                 # here rather than silently lost.
                 if harness == "opencode":
-                    if once or headless:
-                        raise DispatchAskError(
-                            "opencode one-shot spawns run through the Rust "
-                            "runtime's headless lane; the Python path carries "
-                            "--substrate thread only",
-                            exit_code=2,
-                        )
                     if resume_session_id:
                         raise DispatchAskError(
                             "--resume is not carried on the opencode serve lane "
@@ -3959,10 +3959,10 @@ def reconcile_agents(
     from fno.agents.codex_pane import codex_backfill_stamp_applies
 
     # Tri-state per-codex-side capability: True (readable + present),
-    # False (file missing — fresh install), None (file present but
-    # unreadable — permission/device error). Codex P1 finding on
-    # PR #315: lumping "unreadable" with "fresh install" would
-    # mass-orphan every codex agent on a host with a permission glitch.
+    # False (file missing, fresh install), None (file present but
+    # unreadable, a permission or device error). Lumping "unreadable" with
+    # "fresh install" would mass-orphan every codex agent on a host
+    # with a permission glitch.
     codex_index_state: Optional[str] = None  # "ready" | "missing" | "unreadable"
     known_codex_ids: set[str] = set()
     claude_path_present: Optional[bool] = None
@@ -4860,27 +4860,13 @@ def _daemon_rpc(
 # off-thread and wants the full ceiling for its own reason: a genuine multi-hop
 # stream exchange. The first hop needs the same number for the reason below.
 _SWITCHBOARD_READ_TIMEOUT = 130.0
-# The FIRST hop's read budget. SYNCHRONOUS -- the sender blocks on it -- so a
-# tighter value than the relay's is tempting, and a 15s one shipped here. It is
-# unsafe, and the ceiling is not ours to pick: `agent.switchboard_v2` does not
-# ack and return. `handle_switchboard` drives B's WHOLE turn before it answers,
-# bounded by SWITCHBOARD_TURN_TIMEOUT_MS (120s) + SWITCHBOARD_DRIVE_GRACE_S (5s).
-# Reading for less than 125s abandons a turn the daemon is still driving: the
-# body already reached B, `_switchboard_exchange` returns None, and
-# `_deliver_live` falls through and injects the SAME body a second time under a
-# receipt that says durable. Most real model turns run past 15s, so that was the
-# common case, not the edge.
-#
-# Capping the daemon instead (`timeout_ms` in params) is worse: a drive that
-# misses its deadline stamps B orphaned, so a short cap marks every slow-but-
-# healthy peer dead.
-#
-# The complaint behind the 15s is real -- a wedged daemon held a sender for the
-# full budget, twice killed by hand at 90s and 120s. The fix belongs on the
-# daemon side (ack first, drive after), not in a client read cap. Until that
-# lands, the sender pays the daemon's own ceiling. The common non-stream case
-# still fast-fails in about a second: every pre-drive check is bounded, the
-# stream probe at STREAM_PROBE_TIMEOUT_S = 2s.
+# The FIRST hop's read budget. SYNCHRONOUS: `agent.switchboard_v2` does not
+# ack and return; `handle_switchboard` drives B's WHOLE turn before it answers
+# (SWITCHBOARD_TURN_TIMEOUT_MS + SWITCHBOARD_DRIVE_GRACE_S). Reading under
+# 125s abandons a turn the daemon still drives and injects the SAME body a
+# second time under a durable receipt. Capping the daemon instead stamps every
+# slow-but-healthy peer orphaned; the wedged-daemon fix belongs daemon-side,
+# so the sender pays this ceiling.
 _SWITCHBOARD_FIRST_HOP_READ_TIMEOUT = _SWITCHBOARD_READ_TIMEOUT
 # A SHORT connect timeout: every claude send now tries the switchboard first, so
 # a DOWN/wedged daemon must not tax the common (non-stream) path — it should fail
@@ -5174,7 +5160,7 @@ def _a2a_first_use_gate(
 
     from fno import paths
 
-    marker = paths.state_dir() / ".a2a-confirmed"
+    marker = paths.state_runtime_file("a2a-confirmed", legacy_name=".a2a-confirmed")
     if marker.exists():
         return True  # answered once already; honor the persisted setting.
 
@@ -6490,12 +6476,14 @@ def wake_and_deliver(
     except (RegistryVersionError, ValueError):
         return False, "registry-incomplete"
 
-    spawn_name = fork_lineage.wake_spawn_name(session_uuid)
+    carried = fork_lineage.carried(session_uuid)
+    spawn_name = carried.get("name") or f"wake-{canonical_handle(session_uuid)}"
     route_provider, route_env = fork_lineage.wake_route(entry, session_uuid)
     from fno.agents.spawn_gate import GateRefused, run_gate
     from fno.agents.launch_provenance import launch_account_for_session
 
-    parent = tuple(getattr(entry, f"spawned_by_{k}", None) for k in ("session", "harness", "cwd"))
+    row = carried if entry is None else vars(entry)
+    parent = tuple(row.get(f"spawned_by_{k}") for k in ("session", "harness", "cwd"))
     gate = None
     revived_reservation = False
     if route_provider is not None:
@@ -6869,7 +6857,6 @@ def _deliver_live(
     sender_entry: "Optional[AgentEntry]" = None,
     reason_out: "Optional[list]" = None,
     family1_state: Optional[str] = None,
-    header_only: bool = False,
 ) -> bool:
     """Attempt a single fire-and-forget live delivery (live-inject-first; the
     caller writes the durable fallback when this returns False -- node).
@@ -6883,8 +6870,7 @@ def _deliver_live(
 
     ``family1_state`` is the caller's already-computed registered-state class
     for ``entry``, passed in so the recipient transcript is not re-read;
-    ``"working"`` scales the claude confirm budget; ``header_only`` wraps the
-    turn as the header line alone (records and durable copies keep the body).
+    ``"working"`` scales the claude confirm budget.
 
     When ``mail`` is set the body is wrapped in the paired ``<fno_mail>`` envelope
     so the recipient sees agent-to-agent structure and the delivered turn is
@@ -6909,10 +6895,8 @@ def _deliver_live(
             to=mail.to,
             id=mail.id,
             from_session=mail.from_session,
-            origin=mail.origin,
-            to_session=mail.to_session,
-            subject=mail.subject,
-            header_only=header_only,
+            origin=mail.origin, to_session=mail.to_session, subject=mail.subject,
+            from_name=sender_entry.name if sender_entry is not None else None,
         )
 
     # Dual-run dispatch on the row's live ref (4a-G2): a mux-hosted agent gets
@@ -7101,20 +7085,11 @@ def _deliver_live(
     ):
         return True
 
-    # Live inject over control.sock (adopted `claude --bg`, the fno-agents
-    # mail-inject verb, G1; node). This is the SOLE claude live lane: the
-    # PTY worker.sock lane retired with daemon PTY hosting, and
-    # the redundant MCP-channel fast lane retired here (US5) because it reported
-    # hosted on an unconfirmed bytes-written push (Locked Decision 4) while
-    # reaching no peer the control.sock lane cannot. The mail-inject verb resolves
-    # the handle itself via ClaudeRoster (accepts the full session uuid or 8-hex
-    # short id) and confirms transcript growth before reporting delivered.
-    #
-    # Recipient resolution guarantees no former MCP recipient is stranded:
-    # mcp_channel_id is minted 1:1 from short_id, so it IS a roster-resolvable
-    # id. Live rows can carry
-    # an empty plain `short_id`, so mcp_channel_id is the load-bearing
-    # fallback for an MCP-registered row whose short_id field was since cleared.
+    # Live inject over control.sock: the SOLE claude live lane since the
+    # PTY worker.sock and MCP-channel lanes retired. The mail-inject verb
+    # resolves the handle via ClaudeRoster (uuid or 8-hex short id) and
+    # confirms transcript growth before reporting delivered; mcp_channel_id
+    # (minted 1:1 from short_id) stays the fallback for a cleared short_id.
     recipient = entry.harness_session_id or entry.short_id or entry.mcp_channel_id
     if not recipient:
         _record("no-recipient")
@@ -7403,7 +7378,6 @@ def dispatch_send(
     registry_stamp_timeout_seconds: float = 1.0,
     origin: Optional[str] = None,
     subject: Optional[str] = None,
-    header_only: bool = False,
 ) -> "DispatchSendResult":
     """Dispatch an async ``send`` to an already-registered agent.
 
@@ -7447,6 +7421,8 @@ def dispatch_send(
 
     registry_path = paths.agents_registry_path()
     requested_name = name
+    # One discovery sweep per send; a lock wait clears it (a new owner may appear).
+    discovered: dict[str, list] = {}
 
     def _load_and_resolve_target(
         expected_identity: Optional[RecipientIdentity] = None,
@@ -7483,16 +7459,14 @@ def dispatch_send(
 
             registry_id = resolved_identity[2]
             registry_key = (resolved_identity[1], registry_id)
-            live_foreign = {
-                (session.agent, session_identity_key(session.session_id)): session
-                for session in discovery_address_matches(
+            if "matches" not in discovered:
+                discovered["matches"] = discovery_address_matches(
                     requested_name, registry_path=registry_path
                 )
-                if (
-                    session.agent,
-                    session_identity_key(session.session_id),
-                )
-                != registry_key
+            live_foreign = {
+                (session.agent, session_identity_key(session.session_id)): session
+                for session in discovered["matches"]
+                if (session.agent, session_identity_key(session.session_id)) != registry_key
             }
             if live_foreign:
                 candidates = [
@@ -7543,11 +7517,8 @@ def dispatch_send(
     canonical_identity = _recipient_identity_key(initial)
 
     def _on_wait() -> None:
-        print(
-            f"Waiting for agent {canonical_name!r} lock...",
-            file=sys.stderr,
-            flush=True,
-        )
+        discovered.clear()
+        print(f"Waiting for agent {canonical_name!r} lock...", file=sys.stderr, flush=True)
 
     # 3. Per-agent flock. Confirmed (node, change 6): this `with` block
     # spans the ENTIRE rest of the send, including the live-delivery attempt
@@ -7560,10 +7531,7 @@ def dispatch_send(
     # whole first attempt rather than just the identity check -- the specimen
     # measured delivering this plan's own report ("Waiting for agent
     # 'lead-footnote-g3' lock..." with no progress until killed). Narrowing
-    # this to cover only the registry mutation is a real fix but a nontrivial
-    # restructuring of a concurrency-sensitive 300-line function under time
-    # pressure is the wrong place to guess; filed as a carveout rather than
-    # rushed here.
+    # it to the registry mutation alone is a separate, larger restructuring.
     try:
         with hold_agent_lock(
             canonical_name,
@@ -7727,11 +7695,10 @@ def dispatch_send(
                 # so it cannot drain during a live window, and there is no live
                 # window to crash in. Write its durable placeholder BEFORE
                 # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live stays
-                # live-first: it can drain at its next SessionStart while the live
-                # turn is still in flight, before the id lands in its transcript,
-                # so W2 cannot skip a write-ahead placeholder there and the
-                # message would double-deliver.
+                # not lose the message. A recipient we WILL attempt live gets its
+                # body row staged just before the inject (stage_before_live
+                # below): the bus row is the body's only home. A drain firing
+                # mid-inject can print a duplicate; a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -7745,59 +7712,55 @@ def dispatch_send(
                 if not family1_attemptable:
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
-                    live_attempted = True
-                    _live_delivered = _deliver_live(
-                        existing,
-                        message,
-                        from_name,
-                        mail_ctx,
-                        sender_entry=sender_entry,
-                        reason_out=_live_reason,
-                        family1_state=family1_state,
-                        header_only=header_only,
-                    )
-                    if _live_delivered:
-                        delivery = "hosted"
-                        from fno.bus.log import record_hosted_delivery
-                        from fno.mail.envelope import wrap_fno_mail
+                    from fno import rust_binary
+                    from fno.bus.log import record_hosted_delivery, stage_before_live
+                    from fno.mail.envelope import wrap_fno_mail
 
-                        hosted_body = wrap_fno_mail(
-                            message,
-                            from_=mail_ctx.from_,
-                            harness=mail_ctx.harness,
-                            node=mail_ctx.node,
-                            to=mail_ctx.to,
-                            id=mail_ctx.id,
+                    record: dict[str, Any] = dict(
+                        msg_id=msg_id, sender=mail_ctx.from_,
+                        recipient=durable_recipient or existing.short_id,
+                        body=wrap_fno_mail(
+                            message, from_=mail_ctx.from_, harness=mail_ctx.harness,
+                            node=mail_ctx.node, to=mail_ctx.to, id=mail_ctx.id,
                             from_session=mail_ctx.from_session,
-                            to_session=mail_ctx.to_session,
-                            subject=mail_ctx.subject,
-                        )
-                        from fno import rust_binary
-                        try:
-                            record_hosted_delivery(
-                                msg_id=msg_id,
-                                sender=mail_ctx.from_,
-                                recipient=durable_recipient or existing.short_id,
-                                body=hosted_body,
-                                from_harness=from_harness,
-                                to_harness=existing.harness,
-                                to_session=mail_ctx.to_session,
-                                from_session=from_session,
-                                from_model=mail_ctx.model,
-                                to_kind="session",
-                                word_count=rust_binary.style_word_count(message),
-                                subject=mail_ctx.subject,
-                            )
-                        except Exception as exc:  # noqa: BLE001 - delivery already succeeded
-                            print(
-                                "delivery succeeded; outbox record failed; "
-                                f"do not retry: {exc}",
-                                file=sys.stderr,
-                            )
+                            to_session=mail_ctx.to_session, subject=mail_ctx.subject,
+                            from_name=sender_entry.name if sender_entry is not None else None,
+                        ),
+                        from_harness=from_harness, to_harness=existing.harness,
+                        to_session=mail_ctx.to_session, from_session=from_session,
+                        from_model=mail_ctx.model, to_kind="session",
+                        word_count=rust_binary.style_word_count(message),
+                        subject=mail_ctx.subject,
+                    )
+                    # Stage before the inject; a staging failure demotes to the
+                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    try:
+                        if record["recipient"]:
+                            stage_before_live(**record)
+                    except Exception as exc:  # noqa: BLE001 - demote to durable
+                        print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
+                        live_miss_reason = "stage-failed"
                     else:
-                        live_miss_reason = ";".join(_live_reason) if _live_reason else None
-                        if live_miss_reason and existing.mux:
-                            live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
+                        live_attempted = True
+                        _live_delivered = _deliver_live(
+                            existing,
+                            message,
+                            from_name,
+                            mail_ctx,
+                            sender_entry=sender_entry,
+                            reason_out=_live_reason,
+                            family1_state=family1_state,
+                        )
+                        if _live_delivered:
+                            delivery = "hosted"
+                            try:
+                                record_hosted_delivery(**record)
+                            except Exception as exc:  # noqa: BLE001 - delivery already succeeded
+                                print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
+                        else:
+                            live_miss_reason = ";".join(_live_reason) if _live_reason else None
+                            if live_miss_reason and existing.mux:
+                                live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
                 if _bus_only:
                     live_miss_reason = BUS_ONLY_POLICY
                 if not _live_delivered and (durable_recipient is None or family1_attemptable):

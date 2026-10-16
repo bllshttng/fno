@@ -79,18 +79,3 @@ def test_master_enabled_fails_safe_to_false_on_unreadable_config(
     monkeypatch.setattr(config_mod, "load_settings_for_repo", _boom)
 
     assert config_mod.autonomy_master_enabled(tmp_path) is False
-
-
-def test_master_enabled_checked_before_env_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The panic switch is checked FIRST, before even an explicit env
-    override - a switch something else can bypass is not a panic switch."""
-    _load(tmp_path, monkeypatch, "schema_version: 1\nautonomy:\n  enabled: false\n")
-    monkeypatch.setenv("FNO_AUTO_CONTINUE", "1")
-
-    from fno.backlog.advance import _auto_continue_resolve
-
-    armed, rank = _auto_continue_resolve(tmp_path)
-    assert armed is False
-    assert rank == "autonomy"

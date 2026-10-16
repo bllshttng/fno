@@ -67,7 +67,11 @@ fn bounded_run_retains_the_last_stderr_bytes_not_the_first() {
 
 #[test]
 fn bounded_read_diagnostic_preserves_transport_classification() {
-    let timeout = GhReadError::timed_out("main_run_view", std::time::Duration::from_secs(1));
+    let timeout = GhReadError::timed_out(
+        "main_run_view",
+        std::time::Duration::from_secs(1),
+        String::new(),
+    );
     let rendered = bounded_read_diagnostic("main-head", &timeout);
     assert!(rendered.contains("main-head"), "{rendered}");
     assert!(rendered.contains("main_run_view"), "{rendered}");
@@ -79,6 +83,30 @@ fn bounded_read_diagnostic_preserves_transport_classification() {
     assert!(rendered.contains("git_status"), "{rendered}");
     assert!(rendered.contains("outcome=unrunnable"), "{rendered}");
     assert!(rendered.contains("spawn failed"), "{rendered}");
+}
+
+#[test]
+fn a_ledger_budget_refusal_renders_its_own_line_not_the_fire_budget_prose() {
+    let refused = GhReadError::budget_refused("main_run_view");
+    assert!(
+        refused.render().contains("fire budget"),
+        "{}",
+        refused.render()
+    );
+    let ledger = GhReadError::budget_refused_with_detail(
+        "main_run_view",
+        "gh budget: fleet GitHub rate limit held locally (backoff: 0/450 points in 60s | \
+         backoff 42s left); this command did not reach GitHub."
+            .into(),
+    );
+    let rendered = ledger.render();
+    assert!(rendered.contains("gh budget:"), "{rendered}");
+    assert!(
+        !rendered.contains("fire budget"),
+        "the ledger line replaces the fire-budget prose: {rendered}"
+    );
+    // The tail the budget_lock classifier keys on rides unchanged.
+    assert!(ledger.stderr_tail.contains("gh budget:"));
 }
 
 #[test]
@@ -126,7 +154,7 @@ fn bounded_run_kills_a_forked_process_group_on_timeout() {
         &cwd,
         std::time::Duration::from_millis(200),
     ) {
-        BoundedRun::TimedOut(elapsed) => {
+        BoundedRun::TimedOut(elapsed, _) => {
             assert!(elapsed >= std::time::Duration::from_millis(200));
             // Cleanup slack for spawn + group kill, generous for parallel
             // test scheduling: the point is "bounded", not "precise".
@@ -141,7 +169,7 @@ fn bounded_run_kills_a_forked_process_group_on_timeout() {
 fn bounded_kind(run: &BoundedRun) -> &'static str {
     match run {
         BoundedRun::Completed(_) => "Completed",
-        BoundedRun::TimedOut(_) => "TimedOut",
+        BoundedRun::TimedOut(..) => "TimedOut",
         BoundedRun::SpawnFailed(_) => "SpawnFailed",
         BoundedRun::WaitFailed => "WaitFailed",
         BoundedRun::Refused => "Refused",
@@ -182,9 +210,52 @@ fn a_wedged_child_still_reports_timed_out_with_its_real_bound() {
         std::time::Duration::from_millis(200),
     );
     match run {
-        BoundedRun::TimedOut(elapsed) => {
+        BoundedRun::TimedOut(elapsed, _) => {
             assert!(elapsed >= std::time::Duration::from_millis(200));
             assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        }
+        other => panic!("expected TimedOut, got {}", bounded_kind(&other)),
+    }
+}
+
+/// A timeout keeps the stderr the child printed before the bound, and the
+/// cause field reads only what the row proves: table over (tail -> waited_on)
+/// plus one live kill proving the tail survives.
+#[test]
+fn timeout_rows_keep_their_tail_and_waited_on_reads_row_evidence_only() {
+    // The classifier table: evidence in, cause out, nothing guessed.
+    let timeout = |tail: &str| {
+        GhReadError::timed_out("read", std::time::Duration::from_secs(1), tail.to_string())
+    };
+    for (tail, want) in [
+        ("", "unknown"),
+        ("gh: Could not resolve host", "network"),
+        ("gh budget: held locally", "budget_lock"),
+    ] {
+        assert_eq!(timeout(tail).waited_on(), want, "tail {tail:?}");
+    }
+    let failed = GhReadError::failed("read", "gh: HTTP 403 secondary rate limit".to_string());
+    assert_eq!(failed.waited_on(), "github");
+    let failed_plain = GhReadError::failed("read", "exit 1".to_string());
+    assert_eq!(failed_plain.waited_on(), "unknown");
+    // The live kill: the tail the child printed before the bound survives
+    // into the timeout payload, the evidence the table above reads.
+    let tmp = tempfile::tempdir().unwrap();
+    let stub = write_exec(
+        tmp.path(),
+        "chatty",
+        "#!/bin/sh\necho 'gh: Could not resolve host' 1>&2\nsleep 30\n",
+    );
+    let run = run_bounded(
+        stub.as_os_str(),
+        &[],
+        tmp.path(),
+        std::time::Duration::from_millis(300),
+    );
+    match run {
+        BoundedRun::TimedOut(_, tail) => {
+            let tail = String::from_utf8_lossy(&tail);
+            assert!(tail.contains("Could not resolve host"), "tail {tail:?}");
         }
         other => panic!("expected TimedOut, got {}", bounded_kind(&other)),
     }

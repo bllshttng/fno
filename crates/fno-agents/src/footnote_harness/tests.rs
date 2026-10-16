@@ -1,525 +1,347 @@
 use super::*;
-use crate::provenance::TranscriptSource;
-use std::io::{BufRead, BufReader, Read as _, Write as _};
-use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
 
-const KEY: &str = "sk-test-secret-0123456789";
-
-/// A one-connection-per-request HTTP stub: answers each POST with the next
-/// canned (status, body) and keeps every request body it read.
-fn stub(replies: Vec<(u16, Value)>) -> (String, Arc<Mutex<Vec<String>>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let log = seen.clone();
-    std::thread::spawn(move || {
-        for (status, body) in replies {
-            let Ok((mut conn, _)) = listener.accept() else {
-                return;
-            };
-            let mut reader = BufReader::new(conn.try_clone().unwrap());
-            let mut len = 0usize;
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if line == "\r\n" || line.is_empty() {
-                    break;
-                }
-                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap();
-                }
-            }
-            let mut buf = vec![0; len];
-            reader.read_exact(&mut buf).unwrap();
-            log.lock().unwrap().push(String::from_utf8(buf).unwrap());
-            let text = body.to_string();
-            let _ = write!(
-                conn,
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
-                text.len()
-            );
-        }
-    });
-    (base, seen)
-}
-
-fn reply(id: &str, content: Value, stop: &str) -> (u16, Value) {
-    (
-        200,
-        json!({"id": id, "model": "glm-reported", "content": content, "stop_reason": stop,
-        "usage": {"input_tokens": 100, "output_tokens": 10}}),
-    )
-}
-
-fn tool_use(id: &str, name: &str, input: Value) -> Value {
-    json!({"type": "tool_use", "id": id, "name": name, "input": input})
-}
-
-struct Fixture {
-    tmp: tempfile::TempDir,
-}
-
-impl Fixture {
-    fn new() -> Fixture {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("cwd")).unwrap();
-        std::fs::create_dir_all(root.join("plugin/hooks")).unwrap();
-        std::fs::create_dir_all(root.join("plugin/skills/target")).unwrap();
-        std::fs::write(
-            root.join("plugin/skills/target/SKILL.md"),
-            "TARGET SKILL BODY",
-        )
-        .unwrap();
-        // PreToolUse denies any Bash that names graph.db (exit 2); Stop
-        // blocks once, then allows (a marker file remembers).
-        std::fs::write(
-            root.join("plugin/hooks/deny.sh"),
-            "#!/bin/sh\nif grep -q graph.db; then echo 'graph.db is protected' >&2; exit 2; fi\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("plugin/hooks/stop.sh"),
-            format!(
-                "#!/bin/sh\ncat >/dev/null\nm={}/stopped\nif [ -f $m ]; then echo '{{}}'; else touch $m; echo '{{\"decision\":\"block\",\"reason\":\"run the tests first\"}}'; fi\n",
-                root.display()
-            ),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("plugin/hooks/hooks.json"),
-            json!({"hooks": {
-                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/deny.sh"}]}],
-                "Stop": [{"hooks": [{"type": "command", "command": "sh ${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh"}]}],
-            }})
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("prices.json"),
-            json!({"zai": {"models": {"glm-test": {"cost": {"input": 1.0, "output": 2.0, "cache_read": 0.1}}}}}).to_string(),
-        )
-        .unwrap();
-        Fixture { tmp }
-    }
-
-    fn p(&self, rel: &str) -> PathBuf {
-        self.tmp.path().join(rel)
-    }
-
-    fn launch(&self, base: &str, manifest: Option<PathBuf>) -> Launch<'static> {
-        let cwd: &'static Path = Box::leak(self.p("cwd").into_boxed_path());
-        Launch {
-            root: self.p("sessions"),
-            cwd,
-            model: "glm-test",
-            endpoint: model::Endpoint {
-                base_url: base.to_string(),
-                key: KEY.to_string(),
-                bearer: true,
-                wire: model::Wire::Anthropic,
-                provider_id: Some("zai".into()),
-                route: "env",
-            },
-            plugin_root: Some(self.p("plugin")),
-            timeout: None,
-            node: None,
-            parent_session_id: Some("parent-1".into()),
-            price_cache: self.p("prices.json"),
-            manifest,
-        }
-    }
-}
-
-/// A sibling test's fork holds an inherited lock fd until its exec, so a
-/// reopen right after a drop can meet a lock that is about to free.
-fn retry<T>(mut f: impl FnMut() -> Result<T, String>) -> Result<T, String> {
-    for _ in 0..100 {
-        match f() {
-            Err(e) if e.contains("live writer") => std::thread::sleep(Duration::from_millis(20)),
-            other => return other,
-        }
-    }
-    f()
-}
-
-fn of<'a>(s: &'a Session, ty: &str) -> Vec<&'a Value> {
-    s.records.iter().filter(|r| r["type"] == ty).collect()
-}
-
-/// One run end to end: skill expansion, a retried empty completion, a hook
-/// deny that never starts its tool, a spilled 200 KiB result, a Stop block
-/// that continues the loop, the request each turn sent equal to the one
-/// rebuilt from the transcript, and the key in no file.
+/// The spend in a session's newest `terminal` lands in the ledger as one
+/// execution row, which a resume updates in place and never duplicates or
+/// strips of another writer's stamp; a heartbeat under 90 s old reads
+/// fresh, an older or absent one does not.
 #[test]
-fn a_run_records_every_call_before_it_acts() {
-    let fx = Fixture::new();
-    let big = "head -c 204800 /dev/zero | tr '\\0' x";
-    let (base, seen) = stub(vec![
-        reply("r0", json!([]), "end_turn"),
-        reply(
-            "r1",
-            json!([
-                tool_use("t1", "Bash", json!({"command": "echo x > graph.db"})),
-                tool_use("t2", "Bash", json!({"command": big})),
-                tool_use(
-                    "t3",
-                    "Edit",
-                    json!({"file_path": "a.txt", "old_string": "a", "new_string": "b"})
-                ),
-            ]),
-            "tool_use",
-        ),
-        reply(
-            "r2",
-            json!([{"type": "text", "text": "done once"}]),
-            "end_turn",
-        ),
-        reply("r3", json!([{"type": "text", "text": "done"}]), "end_turn"),
-    ]);
-    std::fs::write(fx.p("cwd/a.txt"), "a a").unwrap();
-    let mut s = start(fx.launch(&base, None)).unwrap();
-    s.client.backoff = Duration::ZERO;
-    let t = drive(&mut s, "/fno:target x-aaaa", "operator").unwrap();
-    assert_eq!(t.state, "done", "{t:?}");
-
-    // Identity: one v4 id names the dir and every record; seq rises by one.
-    let id = s.fno_id();
-    assert_eq!(id.len(), 36);
-    assert_eq!(s.w.dir().file_name().unwrap().to_string_lossy(), id);
-    let on_disk = transcript::read_records(&s.w.transcript_path()).unwrap();
-    for (n, r) in on_disk.iter().enumerate() {
-        assert_eq!(r["seq"], n as u64);
-        assert_eq!(r["session_id"], id.as_str());
-        assert_eq!(r["v"], 1);
+fn the_record_feeds_the_ledger_and_the_heartbeat_reads_fresh() {
+    use serde_json::json;
+    let tmp = tempfile::tempdir().unwrap();
+    let ledger = tmp.path().join("ledger.json");
+    let rec = |seq: u64, ty: &str, data: Value| json!({"seq": seq, "ts": format!("2026-10-16T10:0{seq}:00.000Z"), "type": ty, "data": data});
+    let spec: LaunchSpec = serde_json::from_value(json!({"v": 2, "mode": "resume", "fno_id": "s1",
+        "session_dir": "/s1", "cwd": "/", "model": "glm-x", "message": "hi", "timeout_secs": null,
+        "node": null, "plan_path": "/plans/p.md", "cost_cap_usd": null, "wall_cap_minutes": null,
+        "plugin_root": null, "parent_session_id": null, "permission_mode": null, "price_cache": "/p",
+        "context_window": 1, "endpoint": {"base_url": "u", "key": "k", "bearer": true, "wire": "anthropic",
+            "provider_id": null, "route": "env"}}))
+    .unwrap();
+    let mut records = vec![rec(0, "header", json!({"node": "x-1"}))];
+    assert!(execution_row(&records, &spec, None).is_none());
+    let stamped = json!({"entries": [{"type": "execution", "fno_id": "s1", "pr_number": 7}]});
+    std::fs::write(&ledger, stamped.to_string()).unwrap();
+    for (seq, cost) in [(1, 0.25), (2, 0.42)] {
+        records.push(rec(
+            seq,
+            "terminal",
+            json!({"state": "done", "turns": seq, "cost_usd": cost}),
+        ));
+        let row = execution_row(&records, &spec, Some("glm-y")).unwrap();
+        crate::ledger_axes::upsert_execution(&ledger, row).unwrap();
     }
-    let h = &on_disk[0];
-    assert_eq!(h["type"], "header");
-    assert_eq!(h["data"]["parent_session_id"], "parent-1");
-    assert!(h["data"].get("commit").is_some() && h["data"]["fno_version"].is_object());
-
-    // The skill body rode the first request with its argument.
-    assert!(
-        seen.lock().unwrap()[0].contains("TARGET SKILL BODY")
-            && seen.lock().unwrap()[0].contains("ARGUMENTS: x-aaaa")
-    );
-
-    // The empty completion was retried, the attempt recorded and ignorable.
-    let attempts = of(&s, "model_attempt");
-    assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0]["ignorable"], true);
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&ledger).unwrap()).unwrap();
+    let rows = data["entries"].as_array().unwrap();
+    let row = &rows[0];
+    assert_eq!((rows.len(), row["cost_usd"].as_f64()), (1, Some(0.42)));
+    assert_eq!(row["pr_number"], 7);
     assert_eq!(
-        of(&s, "model_response")[0]["data"]["reported_model"],
-        "glm-reported"
+        (row["graph_node_id"].as_str(), row["model"].as_str()),
+        (Some("x-1"), Some("glm-y"))
     );
-
-    // The denied call never started and never ran.
-    let uid = |n: usize| of(&s, "tool_call")[n]["data"]["tool_call_uid"].clone();
-    let started: Vec<_> = of(&s, "tool_start")
-        .iter()
-        .map(|r| r["data"]["tool_call_uid"].clone())
-        .collect();
-    assert!(!started.contains(&uid(0)));
-    assert!(!fx.p("cwd/graph.db").exists());
-    let dec = of(&s, "effect_decision");
-    assert_eq!(dec[0]["data"]["verdict"], "deny");
-    assert!(dec[0]["data"]["rule"].as_str().unwrap().contains("deny.sh"));
-    let results = of(&s, "tool_result");
-    assert_eq!(results[0]["data"]["disposition"], "none");
-
-    // 200 KiB spilled whole; the record keeps size, sha256 and path.
-    let r1 = &results[1]["data"];
-    assert_eq!(r1["disposition"], "applied");
-    assert_eq!(r1["size"], 204800);
-    let spill = std::fs::read(r1["spill_path"].as_str().unwrap()).unwrap();
-    assert_eq!(spill.len(), 204800);
-    assert_eq!(r1["sha256"], transcript::sha256_hex(&spill));
-
-    // A non-unique Edit refused and left the file alone.
-    assert_eq!(results[2]["data"]["is_error"], true);
-    assert_eq!(std::fs::read_to_string(fx.p("cwd/a.txt")).unwrap(), "a a");
-
-    // Stop blocked once: its reason became the next user input.
-    assert!(of(&s, "user_input")
-        .iter()
-        .any(|r| r["data"]["text"] == "run the tests first"));
-    assert_eq!(of(&s, "terminal")[0]["data"]["state"], "done");
-
-    // Model-visible equals logged: every request rebuilds from the records before it.
-    for (n, req) in on_disk
-        .iter()
-        .filter(|r| r["type"] == "model_request")
-        .enumerate()
-    {
-        let at = req["seq"].as_u64().unwrap() as usize;
-        let rebuilt = resume::build_request(&on_disk[..at]);
-        assert_eq!(
-            req["data"]["body_sha256"],
-            transcript::sha256_hex(rebuilt.as_bytes())
-        );
-        assert_eq!(
-            seen.lock().unwrap()[if n == 0 { 0 } else { n + 1 }],
-            rebuilt
-        );
-    }
-
-    // The key is in no file; diag lines carry run and session ids.
-    s.w.diag("info", &format!("probe {KEY}"));
-    for f in [
-        s.w.transcript_path(),
-        s.w.dir().join(format!("{id}.diag.log")),
-    ] {
-        let text = std::fs::read_to_string(&f).unwrap();
-        assert!(!text.contains(KEY), "{} leaks the key", f.display());
-    }
-    let diag = std::fs::read_to_string(s.w.dir().join(format!("{id}.diag.log"))).unwrap();
-    assert!(diag.contains(&format!("session={id}")) && diag.contains("run="));
-
-    // The index holds one content-free row per record.
-    let conn = rusqlite::Connection::open(s.w.dir().join(format!("{id}.index.db"))).unwrap();
-    let rows: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM events WHERE session_id = ?1",
-            [&id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(rows as usize, on_disk.len());
-
-    // No generic file name anywhere: the record is <id>.jsonl beside the
-    // dir, and the dir holds only id-named files (spill keeps its unique
-    // tool_call_uid).
-    let record = s.w.transcript_path();
-    assert_eq!(record.parent().unwrap(), s.w.dir().parent().unwrap());
-    assert_eq!(
-        record.file_name().unwrap().to_string_lossy(),
-        format!("{id}.jsonl")
-    );
-    let names: Vec<String> = std::fs::read_dir(s.w.dir())
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert!(
-        !names.is_empty()
-            && names
-                .iter()
-                .all(|n| n.starts_with(&format!("{id}.")) || n.ends_with(".out")),
-        "generic file name in the session dir: {names:?}"
-    );
-}
-
-/// An existing id refuses a create; a live writer refuses a second one.
-fn one_writer_per_session() {
-    let fx = Fixture::new();
-    let dir = fx.p("sessions/_none/abc");
-    let w = transcript::Writer::create(&dir, "abc").unwrap();
-    assert!(transcript::Writer::create(&dir, "abc")
-        .err()
-        .unwrap()
-        .contains("already exists"));
-    let err = transcript::Writer::open(&dir, "abc").err().unwrap();
-    assert!(err.contains("live writer"), "{err}");
-    drop(w);
-    assert!(retry(|| transcript::Writer::open(&dir, "abc")).is_ok());
-}
-
-/// Resume never re-runs a started effect-capable call; it re-runs a call
-/// that never started and a started read-only one.
-#[test]
-fn resume_settles_dead_calls_by_effect() {
-    one_writer_per_session();
-    let fx = Fixture::new();
-    std::fs::write(fx.p("cwd/r.txt"), "hello").unwrap();
-    let (base, _) = stub(vec![]);
-    let mut s = start(fx.launch(&base, None)).unwrap();
-    let call = |s: &mut Session, uid: &str, name: &str, input: Value, started: bool| {
-        s.append(
-            "tool_call",
-            json!({"tool_call_uid": uid, "provider_tool_call_id": uid, "name": name,
-            "input": input, "raw_input": "", "parse_error": null}),
-        )
-        .unwrap();
-        if started {
-            s.append("tool_start", json!({"tool_call_uid": uid}))
-                .unwrap();
-        }
+    assert_eq!(row["termination_reason"], "Done");
+    // A resume that lost the plan path keeps the known one; a budget stop
+    // reads as non-delivery, so the merge backstop skips it.
+    let lost = LaunchSpec {
+        plan_path: None,
+        ..spec.clone()
     };
-    call(
-        &mut s,
-        "u-bash",
-        "Bash",
-        json!({"command": "touch ran"}),
-        true,
-    );
-    call(
-        &mut s,
-        "u-read",
-        "Read",
-        json!({"file_path": "r.txt"}),
-        true,
-    );
-    call(
-        &mut s,
-        "u-write",
-        "Write",
-        json!({"file_path": "w.txt", "content": "w"}),
-        false,
-    );
-    let (dir, id) = (s.w.dir().to_path_buf(), s.fno_id());
-    drop(s);
-    let s = retry(|| reopen(&dir, &id, fx.launch(&base, None))).unwrap();
-    let by = |uid: &str| {
-        of(&s, "tool_result")
-            .into_iter()
-            .find(|r| r["data"]["tool_call_uid"] == uid)
-            .unwrap()["data"]
-            .clone()
-    };
-    assert_eq!(by("u-bash")["disposition"], "unknown");
-    assert!(!fx.p("cwd/ran").exists());
-    assert!(by("u-read")["model_text"]
-        .as_str()
-        .unwrap()
-        .contains("hello"));
-    assert_eq!(by("u-write")["disposition"], "applied");
-    assert!(fx.p("cwd/w.txt").exists());
-}
-
-/// A dollar cap the next call would cross sends nothing; a cap with no
-/// price refuses to start; past 80% of the window the run compacts with
-/// the plan's acceptance criteria inline.
-#[test]
-fn budget_stops_before_the_call_and_compaction_keeps_the_plan() {
-    let fx = Fixture::new();
-    let manifest = fx.p("target-state.md");
-    std::fs::write(
-        fx.p("plan.md"),
-        "# P\n\n## Acceptance Criteria\n\nAC1: it works\n\n## Other\n\nx\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &manifest,
-        format!(
-            "budget_cost_cap_usd: 0.0000001\nplan_path: {}\n",
-            fx.p("plan.md").display()
-        ),
-    )
-    .unwrap();
-    let (base, seen) = stub(vec![]);
-    let mut s = start(fx.launch(&base, Some(manifest.clone()))).unwrap();
-    assert_eq!(drive(&mut s, "go", "operator").unwrap().state, "budget");
-    assert!(seen.lock().unwrap().is_empty());
-    assert!(of(&s, "model_request").is_empty());
-
-    let mut no_price = fx.launch(&base, Some(manifest.clone()));
-    no_price.model = "unpriced";
-    assert!(start(no_price).err().unwrap().contains("no price"));
-
-    std::fs::write(
-        &manifest,
-        format!("plan_path: {}\n", fx.p("plan.md").display()),
-    )
-    .unwrap();
-    let (base, seen) = stub(vec![reply(
-        "r1",
-        json!([{"type": "text", "text": "ok"}]),
-        "end_turn",
-    )]);
-    let mut s = start(fx.launch(&base, Some(manifest))).unwrap();
-    s.submit("first ask", "operator").unwrap();
-    s.append(
-        "usage",
-        json!({"input_tokens": 190_000, "output_tokens": 0}),
-    )
-    .unwrap();
-    std::fs::write(fx.p("stopped"), "").unwrap();
-    s.run_turns().unwrap();
-    let c = &of(&s, "compaction")[0]["data"];
-    assert_eq!(c["trigger"], "auto_80pct");
-    assert!(c["plan_anchor_sha256"].is_string());
-    assert!(seen.lock().unwrap()[0].contains("AC1: it works"));
-}
-
-/// The intel source lists a footnote session with its turns and calls; an
-/// unknown non-ignorable record type refuses the read.
-#[test]
-fn readers_see_the_transcript_and_refuse_unknown_types() {
-    endpoint_refuses_a_subscription_login();
-    let fx = Fixture::new();
-    let dir = fx.p("sessions/_none/s1");
-    let mut w = transcript::Writer::create(&dir, "s1").unwrap();
-    w.append("header", json!({"cwd": fx.p("cwd")}), false)
-        .unwrap();
-    w.append(
-        "user_input",
-        json!({"text": "hi", "origin": "operator"}),
-        false,
-    )
-    .unwrap();
-    w.append("tool_call", json!({"name": "Read"}), false)
-        .unwrap();
-    w.append("future_thing", json!({}), true).unwrap();
-    let src = source::FootnoteSource {
-        sessions_root: fx.p("sessions"),
-        roots: None,
-    };
-    let files = src.sessions(0);
-    assert_eq!(files.len(), 1);
-    let raw = src.read(&files[0]);
-    assert_eq!(src.turns(&raw).len(), 1);
-    assert_eq!(src.tool_uses(&raw), 1);
-    assert!(transcript::read_records(&w.transcript_path()).is_ok());
-    w.append("model_response", json!({"reported_model": "glm-x"}), false)
-        .unwrap();
-    w.append(
-        "usage",
-        json!({"input_tokens": 7, "output_tokens": 3}),
-        false,
-    )
-    .unwrap();
-    let payload = json!({"lane": {"name": "f", "harness": "footnote", "model": "glm-x"},
-        "workdir": fx.p("cwd"), "started_epoch": 0.0, "footnote_sessions_root": fx.p("sessions")});
-    let seen = crate::eval_attempt::observe(&payload);
+    records.push(rec(
+        3,
+        "terminal",
+        json!({"state": "budget", "cost_usd": 0.5}),
+    ));
+    let row = execution_row(&records, &lost, None).unwrap();
+    crate::ledger_axes::upsert_execution(&ledger, row).unwrap();
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&ledger).unwrap()).unwrap();
+    let row = &data["entries"][0];
     assert_eq!(
         (
-            seen["lane_status"].as_str(),
-            seen["usage"]["input"].as_u64()
+            row["plan_path"].as_str(),
+            row["termination_reason"].as_str()
         ),
-        (Some("ok"), Some(7))
+        (Some("/plans/p.md"), Some("Budget"))
     );
-    w.append("future_thing", json!({}), false).unwrap();
-    assert!(transcript::read_records(&w.transcript_path())
-        .unwrap_err()
-        .contains("future_thing"));
+    std::fs::write(&ledger, "not json").unwrap();
+    let row = execution_row(&records, &spec, None).unwrap();
+    assert!(crate::ledger_axes::upsert_execution(&ledger, row).is_err());
+    assert_eq!(std::fs::read_to_string(&ledger).unwrap(), "not json");
+
+    // The freshness check reads the file's mtime, so the clock here is real.
+    let path = tmp.path().join("s1.jsonl");
+    let at = chrono::Utc::now().timestamp() as u64;
+    let beat_at = |secs: u64| {
+        let ts = crate::provider_cap::epoch_to_rfc3339(secs as i64);
+        json!({"ts": ts, "type": "heartbeat", "data": {"state": "idle"}})
+    };
+    std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at))).unwrap();
+    assert!(transcript::heartbeat_fresh(&path, at + 30));
+    assert!(!transcript::heartbeat_fresh(&path, at + 120));
+    // An offset timestamp names the same instant as its UTC form.
+    let west = chrono::FixedOffset::west_opt(7200).unwrap();
+    let ts = chrono::DateTime::from_timestamp(at as i64, 0)
+        .unwrap()
+        .with_timezone(&west);
+    let beat = json!({"ts": ts.to_rfc3339(), "type": "heartbeat", "data": {"state": "idle"}});
+    std::fs::write(&path, format!("{}\n{beat}\n", records[0])).unwrap();
+    assert!(transcript::heartbeat_fresh(&path, at + 30));
+    std::fs::write(&path, format!("{}\n{}\n", records[0], beat_at(at - 120))).unwrap();
+    assert!(!transcript::heartbeat_fresh(&path, at));
+    std::fs::write(&path, format!("{}\n", records[0])).unwrap();
+    assert!(!transcript::heartbeat_fresh(&path, at));
+    assert!(!transcript::heartbeat_fresh(
+        &tmp.path().join("gone.jsonl"),
+        at
+    ));
 }
 
-/// A Claude.ai login never reaches api.anthropic.com; a route env does.
-fn endpoint_refuses_a_subscription_login() {
+/// A Claude.ai login never reaches api.anthropic.com; a route env does. A
+/// spawn whose footnote binary is missing refuses with the install command
+/// and leaves no registry row. A spawn hands the binary a v2 spec that
+/// carries the node and the permission mode.
+#[test]
+fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     let cwd = Path::new("/");
     let env = |pairs: &'static [(&'static str, &'static str)]| {
         move |k: &str| pairs.iter().find(|p| p.0 == k).map(|p| p.1.to_string())
     };
-    let err = model::resolve_endpoint(
+    let err = endpoint::resolve_endpoint(
         cwd,
         &env(&[
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_AUTH_TOKEN", "oauth"),
         ]),
+        None,
     )
     .unwrap_err();
     assert!(err.contains("Claude Code lane"), "{err}");
-    let ep = model::resolve_endpoint(
+    let ep = endpoint::resolve_endpoint(
         cwd,
         &env(&[
             ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
             ("ANTHROPIC_AUTH_TOKEN", "k"),
             ("FNO_ROUTE_PROVIDER", "zai"),
         ]),
+        None,
     )
     .unwrap();
     assert_eq!(
-        (ep.wire, ep.provider_id.as_deref(), ep.bearer),
-        (model::Wire::Anthropic, Some("zai"), true)
+        (ep.wire.as_str(), ep.provider_id.as_deref(), ep.bearer),
+        ("anthropic", Some("zai"), true)
     );
+    assert_eq!(ep.route, "env");
+    // A model id names its provider as a prefix. A prefix with no provider
+    // record is part of the id. An env endpoint keeps the id whole unless its
+    // own stamp is the prefix. No endpoint at all names the legal form.
+    assert_eq!(
+        endpoint::split_model(cwd, &env(&[]), "zai/glm-x"),
+        (Some("zai".to_string()), "glm-x")
+    );
+    for whole in ["glm-test", "no-such-provider/model-x", "zai/"] {
+        assert_eq!(endpoint::split_model(cwd, &env(&[]), whole), (None, whole));
+    }
+    let proxy = env(&[("ANTHROPIC_BASE_URL", "https://proxy.example")]);
+    assert_eq!(
+        endpoint::split_model(cwd, &proxy, "zai/glm-x"),
+        (None, "zai/glm-x")
+    );
+    let stamped = env(&[
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("FNO_ROUTE_PROVIDER", "zai"),
+    ]);
+    assert_eq!(
+        endpoint::split_model(cwd, &stamped, "zai/glm-x"),
+        (None, "glm-x")
+    );
+    let err = endpoint::resolve_endpoint(cwd, &env(&[]), None).unwrap_err();
+    assert!(err.contains("-m <provider>/<model>"), "{err}");
+    assert!(!err.contains("-P"), "{err}");
+
+    let tmp = tempfile::tempdir().unwrap();
+    // The guard holds the crate's env lock for the rest of the test, so the
+    // three launch vars below cannot race another env-reading test.
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let vars = [
+        ("FNO_FOOTNOTE_BIN", "/nonexistent/footnote"),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("ZAI_API_KEY", "zk"),
+    ];
+    let saved: Vec<_> = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in vars {
+        std::env::set_var(k, v);
+    }
+    // A resumed row names its provider, and that record outranks whatever
+    // endpoint the asking session exports.
+    let ep = endpoint::resolve_endpoint(tmp.path(), &proxy, Some("zai")).unwrap();
+    assert_eq!(
+        (ep.route.as_str(), ep.provider_id.as_deref()),
+        ("config", Some("zai"))
+    );
+    let o = dispatch_once(
+        &home,
+        "fx-missing",
+        "hi",
+        "tester",
+        tmp.path(),
+        Some("glm-test"),
+        None,
+        &serde_json::json!({}),
+    );
+    let missing = o;
+    // A stand-in binary keeps the spec it read and refuses, as a stale
+    // binary would.
+    let seen = tmp.path().join("spec.json");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!("#!/bin/sh\ncat > '{}'\nexit 2\n", seen.display()),
+    );
+    std::env::set_var("FNO_FOOTNOTE_BIN", &bin);
+    // With no env endpoint, the model id's prefix picks the provider record.
+    std::env::remove_var("ANTHROPIC_BASE_URL");
+    let refused = dispatch_once(
+        &home,
+        "fx-plan",
+        "hi",
+        "tester",
+        tmp.path(),
+        Some("zai/glm-test"),
+        None,
+        &serde_json::json!({"node": "x-1", "permission_mode": "plan"}),
+    );
+    for (k, v) in saved {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    assert_eq!(missing.exit_code, 2, "{}", missing.stderr);
+    assert!(
+        missing
+            .stderr
+            .contains("cargo install --locked --path ~/code/footnote/fnh"),
+        "{}",
+        missing.stderr
+    );
+    assert_eq!(refused.exit_code, 2, "{}", refused.stderr);
+    let spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).unwrap();
+    assert_eq!(spec["v"], 2);
+    assert_eq!(spec["node"], "x-1");
+    assert_eq!(spec["permission_mode"], "plan");
+    assert_eq!(spec["model"], "glm-test");
+    assert_eq!(spec["endpoint"]["provider_id"], "zai");
+    assert_eq!(spec["endpoint"]["route"], "config");
+    let reg = load_registry(&home.registry_json()).unwrap();
+    assert!(reg.find("fx-missing").is_none());
+    assert!(reg.find("fx-plan").is_none());
+}
+
+/// A running headless child carries its start token, and the stop helper ends
+/// it. Before, a stop marked the row stopped and left the pid running, and a
+/// row with no start token wedged the fleet-wide footprint check.
+#[test]
+fn a_running_child_carries_a_start_token_and_a_stop_ends_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        "#!/bin/sh\ncat >/dev/null\nsleep 60\n",
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
+    let (h, cwd) = (home.clone(), tmp.path().to_path_buf());
+    let run = std::thread::spawn(move || {
+        let params = serde_json::json!({});
+        dispatch_once(
+            &h,
+            "fx-run",
+            "hi",
+            "tester",
+            &cwd,
+            Some("glm-test"),
+            None,
+            &params,
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let row = loop {
+        let row = load_registry(&home.registry_json())
+            .ok()
+            .and_then(|r| r.find("fx-run").cloned())
+            .filter(|e| e.pid.is_some());
+        if let Some(row) = row {
+            break row;
+        }
+        assert!(std::time::Instant::now() < deadline, "no running row");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let (pid, started) = (row.pid.unwrap(), row.pid_start_time);
+    let stopped = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(stop_confirmed(pid, started));
+    run.join().unwrap();
+    restore_env(saved);
+    assert!(started.is_some(), "the row carries no pid start token");
+    assert!(stopped, "the child outlived the stop");
+}
+
+/// The pane spec is the launch spec in a file only its owner reads, because
+/// it carries the endpoint key. A missing model refuses before any write.
+#[test]
+fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let saved = set_env(&[
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
+    let refused = write_pane_spec(tmp.path(), "", None, None);
+    let path = write_pane_spec(tmp.path(), "glm-test", Some("x-1"), Some("plan"));
+    restore_env(saved);
+    assert!(refused.unwrap_err().contains("needs -m"));
+    let path = path.unwrap();
+    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    let spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(spec["v"], 2);
+    assert_eq!(spec["model"], "glm-test");
+    assert_eq!(spec["node"], "x-1");
+    assert_eq!(spec["permission_mode"], "plan");
+    assert!(spec["endpoint"]["key"]
+        .as_str()
+        .is_some_and(|k| !k.is_empty()));
+}
+
+fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    let saved = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in vars {
+        std::env::set_var(k, v);
+    }
+    saved
+}
+
+fn restore_env(saved: Vec<(&'static str, Option<std::ffi::OsString>)>) {
+    for (k, v) in saved {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
 }

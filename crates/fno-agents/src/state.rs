@@ -827,6 +827,14 @@ pub struct RegistryEntry {
     pub liveness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_measured_at: Option<String>,
+    /// The LAST session report's arrival stamp, written by
+    /// `handle_session_report` on every stored report and on the native
+    /// mint. The capacity reader's freshness source for rows no probe can
+    /// reach: a pid-less row the claude roster cannot answer counts as an
+    /// occupant while this stamp is inside `cap_liveness::REPORT_FRESHNESS`
+    /// (d-d0c63de7). Unparseable fails closed (`InsideLegReport::is_live_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_report_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_used_pct: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -981,6 +989,17 @@ pub struct RegistryEntry {
     pub requested_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_effort: Option<String>,
+    /// v41: the seed payload the spawner handed this session at birth,
+    /// verbatim as delivered (post-render, post-brevity-enrichment). The
+    /// attended guard exempts a harness-rendered slash-command turn matching
+    /// this text: a spawn seeded with a slash command writes one user-shaped
+    /// CommandInvocation turn that is the machine's, never a person's, so it
+    /// must not hold the row against stop or reap for 15 minutes. Python's
+    /// mint doors stamp it; absence means unknown (adopt, keeper lane B,
+    /// daemon-hosted mints), never "no seed". Same X3 passthrough duty as
+    /// `requested_*`: without this mirror a daemon write drops the stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_payload: Option<String>,
     /// The fenced `--` tokens a codex thread spawn carried, verbatim (schema
     /// v31). Startup recovery re-parses them into the same `thread/resume.config`
     /// the start built, so a daemon restart does not silently drop the
@@ -2332,12 +2351,7 @@ fn source_root_for_exe(exe: &Path, home: Option<&Path>) -> Option<PathBuf> {
     // `.git`. A cargo marker on an ancestor proves the tree is a build tree
     // (deployed binaries have none), and the compile-time manifest dir then
     // names the crate it was built from, so the guard stays armed.
-    let build_tree = exe
-        .ancestors()
-        .skip(1)
-        .take(6)
-        .any(|p| p.join("CACHEDIR.TAG").is_file() || p.join(".rustc_info.json").is_file());
-    if !build_tree {
+    if !in_build_tree(exe) {
         return None;
     }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2348,15 +2362,26 @@ fn source_root_for_exe(exe: &Path, home: Option<&Path>) -> Option<PathBuf> {
     Some(root.to_path_buf())
 }
 
+fn in_build_tree(exe: &Path) -> bool {
+    exe.ancestors()
+        .skip(1)
+        .take(6)
+        .any(|p| p.join("CACHEDIR.TAG").is_file() || p.join(".rustc_info.json").is_file())
+}
+
 /// Recover the source root for a build whose binary a path walk cannot place:
 /// a build-dir override (cargo's build.build-dir, e.g. the machine pool)
 /// detaches the exe from its checkout, so [`source_root_for_exe`] finds no
 /// `.git`. When this build's own OUT_DIR was likewise detached, the exe is a
-/// dev build and the manifest dir - baked in at compile time, present only on
-/// the build machine - recovers the root. A deployed binary never takes this
-/// arm: its OUT_DIR sat inside its build checkout, and on a user machine
-/// neither baked path exists.
-fn source_root_for_detached_build() -> Option<PathBuf> {
+/// dev build and the manifest dir - baked in at compile time - recovers the
+/// root. The baked paths cannot tell an install apart on the machine that
+/// built it: `fno doctor update` builds in the shared build base, so the
+/// installed binary also has a detached OUT_DIR and a live manifest dir. Only
+/// an exe still inside its build tree takes this arm.
+fn source_root_for_detached_build(exe: &Path) -> Option<PathBuf> {
+    if !in_build_tree(exe) {
+        return None;
+    }
     let out_dir = Path::new(env!("FNO_AGENTS_BUILD_OUT_DIR"));
     if out_dir.ancestors().any(|p| p.join(".git").exists()) {
         return None;
@@ -2453,7 +2478,7 @@ fn refuse_source_ahead_schema_bump(path: &Path, found: u32) -> Result<(), StateE
         // consult build-time baked facts.
         .or_else(|| {
             if found < REGISTRY_SCHEMA_VERSION && resolved == shared.as_path() {
-                source_root_for_detached_build()
+                source_root_for_detached_build(&exe)
             } else {
                 None
             }
@@ -2821,14 +2846,22 @@ fn project_identity(registry_path: &Path, before: &[RegistryEntry], entries: &[R
 /// resolving. `token` resolves through the same tiers the sibling verbs accept
 /// (`find_name_or_full_session_id`: label, full session id + canonical handle,
 /// related/predecessor ids) plus the transport short id and a prior label held
-/// as an alias.
+/// as an alias. A label held only by terminal rows is vacated and taken; a
+/// live, orphaned or failed holder refuses.
 pub fn rename_agent(
     path: &Path,
     token: &str,
     new_name: &str,
     node: Option<&str>,
 ) -> Result<(String, String), String> {
-    rename_agent_displacing(path, token, new_name, node, |_, _| false)
+    rename_agent_displacing(path, token, new_name, node, |row, _| row_is_terminal(row))
+}
+
+/// A terminal row (Exited, PermanentDead) never answers to any label again,
+/// so its label is free for the taking. Orphaned and Failed keep blocking -
+/// restart policy may still revive them.
+pub(crate) fn row_is_terminal(row: &RegistryEntry) -> bool {
+    matches!(row.status, AgentStatus::Exited | AgentStatus::PermanentDead)
 }
 
 /// [`rename_agent`] with label displacement: when the target label is held
@@ -2837,7 +2870,7 @@ pub fn rename_agent(
 /// receives the row and the transaction's own entries, so its verdict reads
 /// the state under the lock, not a pre-transaction snapshot. The role
 /// check-in takes a carried label back from a predecessor row that holds no
-/// live role; every other caller keeps the plain refusal.
+/// live role; plain [`rename_agent`] displaces only terminal rows.
 pub fn rename_agent_displacing(
     path: &Path,
     token: &str,
@@ -3142,6 +3175,9 @@ pub(crate) fn account_for_removed_rows(
         .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "unknown".to_string());
     for entry in &removed {
+        // The drop stamp a later wake reads: the identity leaves the
+        // registry beside the receipt, before the row is announced gone.
+        crate::wake_name::stamp_from_row(&home, entry);
         crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter);
     }
     // One grouped `registry_rows_lost` beside the per-row events: the

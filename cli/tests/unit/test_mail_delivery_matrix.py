@@ -831,10 +831,13 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
 
     assert result.exit_code == 14, result.output
     replies = [m for m in iter_messages() if m.in_reply_to == inbound.thread_id]
-    assert len(replies) == 1
-    assert replies[0].to == LIVE_HANDLE
+    # The write-ahead stage row and the durable recovery row share one id.
+    assert len(replies) == 2
+    assert replies[0].id == replies[-1].id
+    assert replies[0].delivery is None
+    assert replies[-1].to == LIVE_HANDLE
     drained = _drain_as(runner, monkeypatch, LIVE_SID)
-    assert any(message["id"] == replies[0].id for message in drained)
+    assert any(message["id"] == replies[-1].id for message in drained)
 
 
 # ---------------------------------------------------------------------------
@@ -1246,13 +1249,16 @@ def test_exactly_one_receipt_line_per_send(
     from fno.bus.log import iter_messages
 
     rows = [m for m in iter_messages() if m.from_ == "web"]
-    assert len(rows) == 1
+    # The write-ahead stage row and the outcome row share one id.
+    assert len(rows) == 2
+    staged_row, outcome = rows
+    assert staged_row.delivery is None
+    assert staged_row.id == outcome.id
     if expected == "queued (durable)":
-        assert rows[0].delivery is None
-        assert [m.id for m in scan_unread(rows[0].to)] == [rows[0].id]
+        assert [m.id for m in scan_unread(staged_row.to)] == [staged_row.id]
     else:
-        assert rows[0].delivery == "hosted"
-        assert scan_unread(rows[0].to) == []
+        assert outcome.delivery == "hosted"
+        assert scan_unread(staged_row.to) == []
 
 
 def test_deferred_head_reads_the_oracle_at_call_time(monkeypatch):

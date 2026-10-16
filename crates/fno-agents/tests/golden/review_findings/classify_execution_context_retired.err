@@ -1,0 +1,1 @@
+classify: --execution-context is retired; write the attestation with skills/review/scripts/emit-attestation.sh <reviewer> [verdict] [reviewer_context] [execution_context] [output_contract] --findings-file F

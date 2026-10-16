@@ -828,17 +828,10 @@ fn resolve_allow_missing(path: &std::path::Path) -> std::path::PathBuf {
 
 /// Absolute git COMMON dir for `cwd`; `None` outside a repo or on any failure.
 ///
-/// A failing `git rev-parse` writes only to stderr, so empty stdout already
-/// covers every failure the exit code would report.
+/// Read through [`crate::git_paths`], which survives a git without
+/// `--path-format`.
 pub(crate) fn git_common_dir(cwd: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .ok()?;
-    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!common.is_empty()).then_some(common)
+    crate::git_paths::common_dir(cwd).map(|p| p.to_string_lossy().into_owned())
 }
 
 impl Provider for CodexProvider {
@@ -859,6 +852,7 @@ impl Provider for CodexProvider {
             "--skip-git-repo-check".into(),
         ]);
         argv.extend(crate::codex_ask::sandbox_flag(ctx.yolo));
+        argv.extend(crate::codex_ask::hook_trust_flag());
         if !ctx.yolo {
             argv.extend(codex_git_writable_args(&ctx.cwd));
             argv.extend(codex_plan_writable_args(&ctx.cwd));
@@ -884,6 +878,7 @@ impl Provider for CodexProvider {
         .expect("embedded codex headless-resume capability");
         argv.extend(["--json".into(), "--skip-git-repo-check".into()]);
         argv.extend(crate::codex_ask::sandbox_flag_resume(ctx.yolo));
+        argv.extend(crate::codex_ask::hook_trust_flag());
         if !ctx.yolo {
             argv.extend(codex_sandbox_config_args_resume(&ctx.cwd));
         }
@@ -2341,6 +2336,19 @@ mod tests {
         let argv = CodexProvider.create_argv(&ctx);
         assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
         assert!(!argv.iter().any(|a| a == "--sandbox"));
+        // Hook trust rides every posture, but only on a codex that ships the
+        // flag.
+        let trust = ["--dangerously-bypass-hook-trust".to_string()];
+        assert_eq!(crate::codex_ask::hook_trust_tokens(Some("0.162.0")), trust);
+        assert_eq!(crate::codex_ask::hook_trust_tokens(Some("0.148.0")), trust);
+        assert!(crate::codex_ask::hook_trust_tokens(Some("0.147.9")).is_empty());
+        assert!(crate::codex_ask::hook_trust_tokens(None).is_empty());
+        // The env pin parses like the Python twin's regex.
+        let pin = crate::codex_ask::pinned_version;
+        assert_eq!(pin("0.148.0").as_deref(), Some("0.148.0"));
+        assert_eq!(pin("codex-cli 0.150.0 (abc)").as_deref(), Some("0.150.0"));
+        assert_eq!(pin("0.148"), None);
+        assert_eq!(pin(""), None);
 
         let mut ctx = create_ctx();
         ctx.reasoning_effort = Some("high".into());

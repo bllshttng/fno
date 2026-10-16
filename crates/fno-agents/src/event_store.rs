@@ -67,9 +67,36 @@ pub const EPHEMERAL_EVENT_TYPES: &[&str] = &[
 /// as positive evidence. They never auto-expire.
 pub const GATE_EVENT_TYPES: &[&str] = &["review_attestation", "review_coverage"];
 
+/// Event types the schema declares `retention: telemetry`: high-volume
+/// readouts whose readers fold only recent rows. They stay in the main
+/// store (no sibling journal) and expire after [`TELEMETRY_TTL_HOURS`].
+/// Kept equal to `schema.yaml` by the parity test.
+pub const TELEMETRY_EVENT_TYPES: &[&str] = &[
+    "codex_thread_inside_leg",
+    "control_plane_tick",
+    "guard_decision",
+    "inside_leg_report",
+    "store_seat_lock_unlinked",
+    "store_socket_unlinked",
+];
+
 /// Retention floor for `ephemeral` rows (`schema.yaml`:
 /// `retention.minimum_ephemeral_ttl_hours`).
 pub const MINIMUM_EPHEMERAL_TTL_HOURS: i64 = 672;
+
+/// Retention horizon for `telemetry` rows (`schema.yaml`:
+/// `retention.telemetry_ttl_hours`).
+pub const TELEMETRY_TTL_HOURS: i64 = 168;
+
+/// Retention horizon for `guard_decision` allow rows. They only prove a
+/// guard still runs, so a day of them is enough; block rows keep the
+/// telemetry horizon.
+pub const GUARD_ALLOW_TTL_HOURS: i64 = 24;
+
+/// Retention horizon for `control_plane_tick` rows of the `machine_watch`
+/// arm. They carry the load readings `fno-agents intel --fleet` folds over
+/// its 30-day window.
+pub const MACHINE_WATCH_TTL_HOURS: i64 = 720;
 
 /// Marks a judged refusal inside `append_envelope`'s error string. The
 /// door strips it and answers exit 3, the class Python maps to
@@ -87,6 +114,11 @@ pub fn is_ephemeral_event(kind: &str) -> bool {
 /// Whether an event kind belongs to the schema-declared gate class.
 pub fn is_gate_event(kind: &str) -> bool {
     GATE_EVENT_TYPES.contains(&kind)
+}
+
+/// Whether an event kind belongs to the schema-declared telemetry class.
+pub fn is_telemetry_event(kind: &str) -> bool {
+    TELEMETRY_EVENT_TYPES.contains(&kind)
 }
 
 /// The permanent old->new spellings of the role-event rename. Stored rows
@@ -126,13 +158,15 @@ fn query_types_with_aliases(types: &[String]) -> Vec<String> {
     out
 }
 
-/// The retention class a kind belongs to: `ephemeral`, `gate`, or `durable`
-/// (the schema default).
+/// The retention class a kind belongs to: `ephemeral`, `gate`, `telemetry`,
+/// or `durable` (the schema default).
 pub fn retention_class(kind: &str) -> &'static str {
     if is_ephemeral_event(kind) {
         "ephemeral"
     } else if is_gate_event(kind) {
         "gate"
+    } else if is_telemetry_event(kind) {
+        "telemetry"
     } else {
         "durable"
     }
@@ -176,17 +210,37 @@ pub fn live_journal(journal: &Path) -> PathBuf {
 /// The store beside a journal: the live journal's `.jsonl` stem plus `.db`.
 /// A state-root journal (`events`, `decisions`, `questions`) resolves through
 /// the layout table instead, so a migrated root answers the `db/` store.
+/// An empty or name-less journal is refused (panic naming the call site);
+/// `try_store_path` is the degrading form.
+#[track_caller]
 pub fn store_path(journal: &Path) -> PathBuf {
+    match try_store_path(journal) {
+        Ok(store) => store,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+/// [`store_path`] for callers that degrade instead of crashing: an empty or
+/// name-less journal comes back as an error naming the input, so a misused
+/// placeholder emitter fails its append instead of materializing `.db` in
+/// whatever directory the process happened to run from.
+pub fn try_store_path(journal: &Path) -> Result<PathBuf, String> {
     let live = live_journal(journal);
     let stem = live
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    if stem.is_empty() {
+        return Err(format!(
+            "empty or name-less journal path {:?}: refusing to derive a cwd-relative store",
+            journal
+        ));
+    }
     let stem = stem.strip_suffix(".jsonl").unwrap_or(&stem);
     if let Some(routed) = route_state_root_store(&live, stem) {
-        return routed;
+        return Ok(routed);
     }
-    live.with_file_name(format!("{stem}.db"))
+    Ok(live.with_file_name(format!("{stem}.db")))
 }
 
 /// The canonical state root, cached per env fingerprint: an emit pays one
@@ -985,42 +1039,252 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Once a day: `ephemeral` rows older than the schema's TTL floor leave the
-/// store. `durable`, `gate`, rejected, and migration receipt rows never
-/// auto-expire; stale ingest cursors still fall off on the same cadence.
+/// store, and stale ingest cursors fall off. `telemetry` rows expire on their
+/// own gate ([`prune_telemetry_due`]). `durable`, `gate`, rejected, and
+/// migration receipt rows never auto-expire.
 fn prune(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
-    let last: i64 = conn
-        .query_row(
-            "SELECT value FROM events_meta WHERE key = 'last_prune_ms'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    if now_ms.saturating_sub(last) < DAY_MS {
+    if now_ms.saturating_sub(meta_ms(conn, "last_prune_ms")) >= DAY_MS {
+        let cutoff = now_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        // Re-read under the write lock: a concurrent sync that already claimed
+        // this pass wins, so two processes never prune at once.
+        if now_ms.saturating_sub(meta_ms(&tx, "last_prune_ms")) >= DAY_MS {
+            tx.execute(
+                "DELETE FROM events WHERE retention_class = 'ephemeral' AND ts_ms < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "DELETE FROM ingest_cursor WHERE updated_ms < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+            stamp_meta(&tx, "last_prune_ms", now_ms)?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+    }
+    // Best-effort: the ingest already committed, so a busy store here never
+    // fails the sync. A pass that errors keeps its backlog mark and retries.
+    let _ = prune_telemetry_due(conn, now_ms);
+    Ok(())
+}
+
+/// An integer `events_meta` value, 0 when absent or unreadable.
+fn meta_ms(conn: &Connection, key: &str) -> i64 {
+    conn.query_row(
+        "SELECT value FROM events_meta WHERE key = ?1",
+        params![key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(0)
+}
+
+fn stamp_meta(conn: &Connection, key: &str, value: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO events_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![key, value.to_string()],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The true start of the last telemetry pass. Coverage reads its cutoff from
+/// here, so it never claims a range a pass already deleted from.
+const TELEMETRY_PRUNED_KEY: &str = "telemetry_pruned_ms";
+
+/// 1 while a telemetry pass has rows left (it spent its budget or failed).
+const TELEMETRY_BACKLOG_KEY: &str = "telemetry_backlog";
+
+/// Rows per telemetry delete. Each batch commits on its own and stays well
+/// inside the 5s busy wait an append rides, so the first pass over a large
+/// backlog never starves a live writer.
+const TELEMETRY_PRUNE_BATCH: i64 = 1_000;
+
+/// Wall-clock cap on one pass's telemetry deletes. The sync caller pays it,
+/// so a large backlog costs any one command a few seconds at most.
+const TELEMETRY_PRUNE_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How soon a pass that left a backlog runs again.
+const PRUNE_RETRY_MS: i64 = 5 * 60_000;
+
+fn telemetry_due(conn: &Connection, now_ms: i64) -> bool {
+    let wait = if meta_ms(conn, TELEMETRY_BACKLOG_KEY) != 0 {
+        PRUNE_RETRY_MS
+    } else {
+        DAY_MS
+    };
+    now_ms.saturating_sub(meta_ms(conn, TELEMETRY_PRUNED_KEY)) >= wait
+}
+
+/// Run a telemetry pass when one is due: daily, or every
+/// [`PRUNE_RETRY_MS`] while a backlog is left. The pass is claimed under
+/// the write lock with the backlog mark already set, so a pass that dies
+/// midway is retried rather than forgotten for a day.
+fn prune_telemetry_due(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
+    if !telemetry_due(conn, now_ms) {
         return Ok(());
     }
-    let cutoff = now_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM events WHERE retention_class = 'ephemeral' AND ts_ms < ?1",
-        params![cutoff],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM ingest_cursor WHERE updated_ms < ?1",
-        params![cutoff],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "INSERT INTO events_meta (key, value) VALUES ('last_prune_ms', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = ?1",
-        params![now_ms.to_string()],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    if !telemetry_due(&tx, now_ms) {
+        return Ok(());
+    }
+    stamp_meta(&tx, TELEMETRY_PRUNED_KEY, now_ms)?;
+    stamp_meta(&tx, TELEMETRY_BACKLOG_KEY, 1)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    if prune_telemetry(conn, now_ms, TELEMETRY_PRUNE_BUDGET)? {
+        stamp_meta(conn, TELEMETRY_BACKLOG_KEY, 0)?;
+    }
+    Ok(())
+}
+
+/// Daily counts of the telemetry rows a prune deleted. The row is gone, but
+/// the fact that it happened is not: each delete batch adds its rows here
+/// in the same transaction, keyed by UTC day, kind, and subject.
+const ROLLUP_DDL: &str = "CREATE TABLE IF NOT EXISTS event_rollup (
+         day TEXT NOT NULL,
+         type TEXT NOT NULL,
+         subject TEXT NOT NULL,
+         stored INTEGER NOT NULL,
+         occurrences INTEGER NOT NULL,
+         PRIMARY KEY (day, type, subject)
+     )";
+
+/// The rollup subject of one row: the arm of a tick, `guard:decision` of a
+/// guard row, the state of an inside-leg row, and empty for the rest.
+const ROLLUP_SUBJECT_SQL: &str = "CASE type \
+     WHEN 'control_plane_tick' THEN coalesce(json_extract(line, '$.data.arm'), '') \
+     WHEN 'guard_decision' THEN coalesce(json_extract(line, '$.data.guard'), '') \
+         || ':' || coalesce(json_extract(line, '$.data.decision'), '') \
+     WHEN 'inside_leg_report' THEN coalesce(json_extract(line, '$.data.state'), '') \
+     WHEN 'codex_thread_inside_leg' THEN coalesce(json_extract(line, '$.data.state'), '') \
+     ELSE '' END";
+
+/// Rollup totals for one kind and subject: what prunes deleted from the
+/// first day in range on. `occurrences` sums each row's `occurrence_count`
+/// (default 1), so a coalesced poll counts every poll it stood for.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RollupRow {
+    pub since_day: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub subject: String,
+    pub stored: i64,
+    pub occurrences: i64,
+}
+
+/// Rollup totals per kind and subject over the days at or after
+/// `since_day` (`YYYY-MM-DD`), most occurrences first. A store no prune has
+/// touched has no table and reads empty.
+pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>, String> {
+    let has_table: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_rollup'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if has_table == 0 {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT min(day), type, subject, sum(stored), sum(occurrences) FROM event_rollup \
+             WHERE day >= ?1 GROUP BY type, subject \
+             ORDER BY sum(occurrences) DESC, type, subject",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![since_day], |r| {
+            Ok(RollupRow {
+                since_day: r.get(0)?,
+                kind: r.get(1)?,
+                subject: r.get(2)?,
+                stored: r.get(3)?,
+                occurrences: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+/// Delete telemetry rows past their horizon, oldest first within each
+/// kind, until none are left (`true`) or `budget` is spent (`false`). The
+/// match is by kind, not class: rows stored before their kind joined the
+/// class still read `durable`. Rejected rows stay. `guard_decision` allow
+/// rows go on their shorter [`GUARD_ALLOW_TTL_HOURS`] horizon, and
+/// `machine_watch` ticks on their longer [`MACHINE_WATCH_TTL_HOURS`] one.
+/// Each batch counts its rows into `event_rollup` in the transaction that
+/// deletes them, so a crash never drops a count or counts a row twice.
+fn prune_telemetry(
+    conn: &mut Connection,
+    now_ms: i64,
+    budget: std::time::Duration,
+) -> Result<bool, String> {
+    let started = std::time::Instant::now();
+    conn.execute_batch(ROLLUP_DDL).map_err(|e| e.to_string())?;
+    let cutoff = now_ms.saturating_sub(TELEMETRY_TTL_HOURS * HOUR_MS);
+    let allow_cutoff = now_ms.saturating_sub(GUARD_ALLOW_TTL_HOURS * HOUR_MS);
+    let machine_cutoff = now_ms.saturating_sub(MACHINE_WATCH_TTL_HOURS * HOUR_MS);
+    let arm = "coalesce(json_extract(line, '$.data.arm'), '')";
+    let passes = TELEMETRY_EVENT_TYPES
+        .iter()
+        .map(|kind| match *kind {
+            "control_plane_tick" => (*kind, cutoff, format!(" AND {arm} <> 'machine_watch'")),
+            _ => (*kind, cutoff, String::new()),
+        })
+        .chain([
+            (
+                "control_plane_tick",
+                machine_cutoff,
+                format!(" AND {arm} = 'machine_watch'"),
+            ),
+            (
+                "guard_decision",
+                allow_cutoff,
+                " AND json_extract(line, '$.data.decision') = 'allow'".to_string(),
+            ),
+        ]);
+    for (kind, cutoff_ms, filter) in passes {
+        let batch = format!(
+            "SELECT seq FROM events WHERE type = ?1 AND ts_ms < ?2 \
+             AND reject_reason IS NULL{filter} ORDER BY ts_ms, seq LIMIT ?3"
+        );
+        let count_sql = format!(
+            "INSERT INTO event_rollup (day, type, subject, stored, occurrences) \
+             SELECT date(ts_ms / 1000, 'unixepoch'), type, {ROLLUP_SUBJECT_SQL}, count(*), \
+             sum(coalesce(json_extract(line, '$.data.occurrence_count'), 1)) \
+             FROM events WHERE seq IN ({batch}) GROUP BY 1, 2, 3 \
+             ON CONFLICT (day, type, subject) DO UPDATE SET \
+             stored = stored + excluded.stored, \
+             occurrences = occurrences + excluded.occurrences"
+        );
+        let delete_sql = format!("DELETE FROM events WHERE seq IN ({batch})");
+        loop {
+            if started.elapsed() >= budget {
+                return Ok(false);
+            }
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            tx.execute(&count_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
+                .map_err(|e| e.to_string())?;
+            let deleted = tx
+                .execute(&delete_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            if (deleted as i64) < TELEMETRY_PRUNE_BATCH {
+                break;
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// One acknowledged append: the positive readback the caller may trust.
@@ -1054,7 +1318,7 @@ pub fn append_envelope(
     envelope_json: &str,
     requested_event_id: Option<&str>,
 ) -> Result<AppendReceipt, String> {
-    let store = store_path(journal);
+    let store = try_store_path(journal)?;
     let line = envelope_json.trim();
     if line.contains('\n') || line.contains('\r') {
         return Err(format!(
@@ -1126,7 +1390,10 @@ pub fn append_envelope(
     let mut last_error = String::new();
     for attempt in 0..APPEND_ATTEMPTS {
         match commit_envelope(&store, line, &event_id, &row_hash, &ty, class, obj, ts_ms) {
-            Ok(receipt) => return Ok(receipt),
+            Ok(receipt) => {
+                crate::attest::maybe_push(&ty, line, receipt.suppressed);
+                return Ok(receipt);
+            }
             Err(error) => {
                 let settled = !lock_busy(&error) || attempt + 1 == APPEND_ATTEMPTS;
                 last_error = error;
@@ -1707,14 +1974,23 @@ pub fn coverage(journal: &Path, since_ms: Option<i64>, types: &[String]) -> Cove
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     // The proven start per asked kind: durable and gate kinds are kept
-    // forever since the epoch; an ephemeral kind only proves back to the
-    // last prune's retention cutoff. A mixed list takes the later start.
+    // forever since the epoch; an ephemeral or telemetry kind only proves
+    // back to the last prune's cutoff for its class. A mixed list takes the
+    // later start.
     let ephemeral_cutoff = last_prune_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
+    let telemetry_pruned_ms = meta_ms(&conn, TELEMETRY_PRUNED_KEY);
+    let telemetry_cutoff = telemetry_pruned_ms.saturating_sub(TELEMETRY_TTL_HOURS * HOUR_MS);
+    let guard_cutoff = telemetry_pruned_ms.saturating_sub(GUARD_ALLOW_TTL_HOURS * HOUR_MS);
     let proven_start = types
         .iter()
         .map(|t| {
             if is_ephemeral_event(t) {
                 epoch.max(ephemeral_cutoff)
+            } else if t.as_str() == "guard_decision" {
+                // Its allow rows only prove back one day.
+                epoch.max(guard_cutoff)
+            } else if is_telemetry_event(t) {
+                epoch.max(telemetry_cutoff)
             } else {
                 epoch
             }
@@ -1885,10 +2161,22 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         Err(err) => return Err(format!("{}: {err}", live.display())),
     };
     let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    // The tail filter the loop below applies per line: the query's types
+    // expanded the way the store side expands them, plus whether typeless
+    // rows pass (they do only when the query asked for the empty type).
+    let tail_allowed = if q.types.is_empty() {
+        None
+    } else {
+        Some(query_types_with_aliases(&q.types))
+    };
+    let tail_typeless_ok = q.types.iter().any(|t| t.is_empty());
     // ponytail: a pre-store line no import took reads as newest; any import fixes it.
     for line_bytes in tail[..complete_end].split(|&b| b == b'\n') {
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
         if line_bytes.is_empty() {
+            continue;
+        }
+        if !tail_line_wanted(line_bytes, tail_allowed.as_deref(), tail_typeless_ok) {
             continue;
         }
         let hash = Sha256::digest(line_bytes).to_vec();
@@ -1930,6 +2218,87 @@ fn read_range(path: &Path, start: u64) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     fh.read_to_end(&mut out)?;
     Ok(out)
+}
+
+/// True when an uncommitted tail line can matter to the query. The store half
+/// of this read filters `type IN (...)`; the tail half hashed and store-probed
+/// every line, so a cursor-less journal put its whole file through sha256 plus
+/// two EXISTS probes per status read even when the fold wanted none of it. The
+/// tail now runs the store's own filter: no `types` filter keeps everything;
+/// otherwise a line survives when any `"type"` key in it carries one of the
+/// query's expanded types, and a line whose type is present but unwanted drops
+/// even when typeless rows pass. The scan is bytes, not a parse: a false keep
+/// only costs what the unfiltered path paid.
+fn tail_line_wanted(line: &[u8], allowed: Option<&[String]>, typeless_ok: bool) -> bool {
+    let Some(allowed) = allowed else {
+        return true;
+    };
+    let mut saw_type_value = false;
+    let mut rest = line;
+    loop {
+        let Some(pos) = find_bytes(rest, b"\"type\"") else {
+            return !saw_type_value && typeless_ok;
+        };
+        rest = &rest[pos + b"\"type\"".len()..];
+        if let Some(value) = json_string_value_after_key(rest) {
+            saw_type_value = true;
+            if allowed.iter().any(|t| t.as_bytes() == value) {
+                return true;
+            }
+        }
+    }
+}
+
+/// First-byte-anchored needle search. Tail lines can be hundreds of KB and a
+/// windows-per-offset scan compares at every position, so advance on the
+/// needle's first byte instead.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let last = haystack.len().checked_sub(needle.len())?;
+    let first = needle[0];
+    let mut at = 0;
+    loop {
+        while at <= last && haystack[at] != first {
+            at += 1;
+        }
+        if at > last {
+            return None;
+        }
+        if &haystack[at..at + needle.len()] == needle {
+            return Some(at);
+        }
+        at += 1;
+    }
+}
+
+/// The byte value of the JSON string literal that begins after an
+/// optional-space colon at `rest`, or None. Escapes pass through byte-wise:
+/// the comparison targets are plain type identifiers, so an escaped byte
+/// simply fails the equality.
+fn json_string_value_after_key(rest: &[u8]) -> Option<&[u8]> {
+    let mut i = 0;
+    while i < rest.len() && (rest[i] == b' ' || rest[i] == b'\t') {
+        i += 1;
+    }
+    if rest.get(i) != Some(&b':') {
+        return None;
+    }
+    i += 1;
+    while i < rest.len() && (rest[i] == b' ' || rest[i] == b'\t') {
+        i += 1;
+    }
+    if rest.get(i) != Some(&b'"') {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while i < rest.len() {
+        match rest[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(&rest[start..i]),
+            _ => i += 1,
+        }
+    }
+    None
 }
 /// Write every committed row, in commit order, to `out` as JSONL - atomically
 /// (tmp file + rename), labeled by the caller as the snapshot it is. Returns

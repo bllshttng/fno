@@ -35,20 +35,23 @@ use tokio::sync::mpsc;
 use crate::agents_view::{lineage_layout, lineage_parent};
 use crate::chrome;
 
+mod move_pick;
 mod open_chooser;
 mod open_link;
 mod rename_overlay;
 mod row_menu;
 mod sweep_scope;
 mod wire_version;
-use open_chooser::open_for_session;
-use row_menu::execute_row_menu_action;
+mod workspace_folder;
 use wire_version::{server_has_splitdir, split_skew_notice};
 
 use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
 
 use self::rename_overlay::RenameTarget;
-use row_menu::{build_row_menu, build_section_menu, build_tab_menu};
+pub use row_menu::SplitOpens;
+#[cfg(test)]
+use row_menu::{build_row_menu, row_menu_execute_selected};
+use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
@@ -76,7 +79,8 @@ use crate::sideline_color;
 use crate::theme::{cell_style, Theme};
 use crate::tree::{Axis, Dir, Rect, TabId};
 use crate::view_store::{
-    self, next_view, AgentSort, AgentSortColumn, Density, SectionKey, SectionView, SortDirection,
+    self, next_view, AgentGroup, AgentSort, AgentSortColumn, Density, SectionKey, SectionView,
+    SortDirection,
 };
 use crate::vt::ShellActivity;
 use crate::wordmark;
@@ -533,26 +537,6 @@ fn e2e_client_log(msg: std::fmt::Arguments<'_>) {
     );
 }
 
-/// Whether the interactive path must disable OSC 133 injection. Bounded +
-/// fail-open through [`crate::server::config_get`]: any spawn/read error, a
-/// non-`off` value, or a read that overruns the budget all leave injection on
-/// (the default). The bound matters because this runs synchronously inside
-/// `spawn_server`, *before* the client's spawn-connect wait loop exists -
-/// nothing downstream would rescue an unbounded read, so a slow or wedged
-/// config read would freeze `fno` startup with no notice.
-fn shell_integration_off() -> bool {
-    crate::server::config_get("mux.shell_integration")
-        .as_deref()
-        .map(config_says_off)
-        .unwrap_or(false)
-}
-
-/// The one off-switch, matched exactly like the Rust pane-spawn side
-/// (`pty::integration_disabled`): only a trimmed `off` disables injection.
-fn config_says_off(stdout: &str) -> bool {
-    stdout.trim() == "off"
-}
-
 // ---------------------------------------------------------------------------
 // View state + pure composition
 // ---------------------------------------------------------------------------
@@ -807,6 +791,15 @@ pub(crate) struct View {
     /// Extended-table row order, persisted alongside the density.
     /// Inert in the other two densities (they render no table).
     agent_sort: AgentSort,
+    /// The agents view's group-by axis (prefix+G), persisted like the density.
+    agent_group: AgentGroup,
+    /// The card's `node · PR` header row switch (prefix+Y), persisted.
+    show_card_head: bool,
+    /// The manual reorder sequence (agent names in display order) behind the
+    /// Manual sort column, persisted.
+    manual_order: Vec<String>,
+    /// Pinned agent names in pin order; they lead every sort.
+    pinned_agents: Vec<String>,
     /// Manual status-row toggle (prefix+s). Client-local and deliberately
     /// unpersisted: a reattach resets to on (AC4-FR).
     status_on: bool,
@@ -991,6 +984,10 @@ pub(crate) struct View {
     digest: Option<Vec<String>>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// The session-details modal's off-loop token fetch: (participant key,
+    /// tokens-or-miss). The select arm paints only the modal whose key and
+    /// pending flag still match, so a stale answer is dropped.
+    details_tx: Option<tokio::sync::mpsc::UnboundedSender<(String, Option<serde_json::Value>)>>,
     next_reply_request_id: u64,
     pending_reply_journals: HashMap<u64, messages_reply::PendingJournal>,
     /// The row-scoped outcome stamp and its armed action, one at a
@@ -1021,8 +1018,10 @@ pub(crate) struct View {
     /// from the same config ladder `hover_focus` reads, and swapped in memory on
     /// an explicit apply from the settings modal. `footnote-superscript` is
     /// the default; a terminal reporting a light background defaults to
-    /// `footnote-paper`, and `terminal` stays available as the no-op that
-    /// inherits the emulator's own colors.
+    /// `footnote-paper`, whose ground an inferred pick never paints (the
+    /// terminal keeps its own bg and fg, the theme-ground ruling), and
+    /// `terminal` stays available as the no-op that inherits the emulator's
+    /// own colors.
     theme: Theme,
     /// The user's own themes, latched at startup (theme_ground::launch_theme).
     user_themes: Vec<(String, Theme)>,
@@ -1050,6 +1049,16 @@ pub(crate) struct View {
     experimental_backlog: bool,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
+    /// Whether the which-key modal was opened FROM the settings modal (tab or
+    /// click on its keybindings section). Esc and the other pure-dismiss paths
+    /// return to the settings modal instead of dropping to the board; a run of
+    /// an actual chord closes for real. The keybindings section is a launcher
+    /// with no rows of its own, so `settings_tab` stays on the section the
+    /// user came from.
+    keys_modal_return: bool,
+    /// `config.split.opens`: where the row menu's Split Direction toggle
+    /// starts. Latched once at startup; the in-menu toggle flips and persists.
+    split_opens: SplitOpens,
     /// Focus-follows-mouse debounce: the pane the pointer is settling on
     /// and when it first landed there. `FocusPane` fires once the same pane holds
     /// for [`HOVER_DEBOUNCE`]; a different pane or chrome resets it.
@@ -1121,6 +1130,9 @@ pub(crate) struct View {
     /// Backspace pops, Enter sends [`Command::NewSquad`] (empty keeps it open),
     /// Esc cancels. Client-local like `search`: opening reserves no row.
     create: Option<String>,
+    /// Which folder the create overlay will send: follows the typed name until
+    /// the operator cycles it with the arrow keys.
+    folder_pick: workspace_folder::FolderPick,
     /// Pending escape bytes in create-overlay mode (same split-arrow safety as
     /// [`View::search_esc`]).
     create_esc: Vec<u8>,
@@ -1145,8 +1157,6 @@ pub(crate) struct View {
     /// The theme file importer, active only inside Settings > Theme.
     theme_import: theme_import_ui::ThemeImportUi,
     theme_import_gen: u64,
-    /// The Keybindings tab's open "press the new key" capture.
-    key_capture: Option<keys_settings::KeyCapture>,
     /// Pending escape bytes in rename-overlay mode (same split-arrow safety
     /// as [`View::create_esc`]).
     rename_esc: Vec<u8>,
@@ -1470,6 +1480,9 @@ struct KeysModal {
     /// The live `/` filter query. `None` = browsing; `Some` (possibly empty) =
     /// filtering, rows rebuilt per keystroke by [`keys_modal_with_filter`].
     filter: Option<String>,
+    /// The row index of the "[ edit keys in ... ]" button (`None` while
+    /// filtering): Enter there opens `$EDITOR`, not a chord.
+    edit_row: Option<usize>,
 }
 
 /// (US2) The right-click / `m` row context menu over a sideline agent
@@ -1616,6 +1629,8 @@ enum MenuAction {
     Resume,
     /// Reattach a live paneless row whose server-side session is still present.
     Reattach,
+    /// A workspace section's Add folder: opens the picker of live-row folders.
+    AddFolder,
     /// (6.2) Mail this agent - opens the SAME peek overlay and its
     /// free-text composer (`peek_input`) that peek `m` opens, never a second
     /// input surface.
@@ -1635,6 +1650,11 @@ enum MenuAction {
     PortalAt(Option<Dir>),
     /// Release the row's mail hold; built only on a row wearing a hold mark.
     ReleaseHold,
+    /// Flip the Split Direction group's pane|portal toggle in-menu. Never
+    /// reaches [`execute_row_menu_action`]: the execute path closes the menu,
+    /// and the toggle's whole point is flipping BEFORE the arrow is pressed,
+    /// so [`row_menu_execute_selected`] intercepts it and keeps the menu open.
+    ToggleSplitOpens,
 }
 
 impl MenuAction {
@@ -1669,19 +1689,31 @@ impl MenuAction {
             MenuAction::Resume => Some("resume-row"),
             MenuAction::ClosePortal => Some("close-portal"),
             MenuAction::PortalPicker => Some("open-in-portal"),
+            MenuAction::ReleaseHold => Some("release-hold"),
+            MenuAction::ToggleSplitOpens => Some("toggle-split-opens"),
             _ => None,
         }
     }
 }
 
-/// What the numbered move picker is relocating: a whole tab (selector `m`) or a
-/// single pane-hosted row's live pane (the row menu's Move-to-workspace entry).
-/// Both list destination workspaces and resolve the same way; only the command
-/// the digit sends differs (`MoveTab` vs `MovePane`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the numbered move picker is relocating: a whole tab (selector `m`), a
+/// single pane-hosted row's live pane, or a session by hand (the row menu's
+/// Move-to-workspace entry). The first three list destination workspaces and
+/// resolve the same way; only the command the digit sends differs (`MoveTab`,
+/// `MovePane`, `PinThread`). `Folder` reuses the picker for a workspace
+/// section's Add folder: its `squads` hold indices into `folders`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum MoveSrc {
     Tab(TabId),
     Pane(u64),
+    Row {
+        harness: String,
+        harness_session_id: String,
+    },
+    Folder {
+        squad: u64,
+        folders: Vec<String>,
+    },
 }
 
 /// (US4/US5) The sideline MENU popup and the minimal settings modal share
@@ -1760,10 +1792,6 @@ pub(crate) enum AuxAction {
     SettingsBack,
     /// Open the macOS file picker for a theme file.
     ThemePick,
-    /// Open the "press the new key" capture for an action id, or "prefix".
-    KeyCapture(String),
-    /// Open the key config in `$EDITOR`, then reload the keymap.
-    EditKeysFile,
     /// Open the color picker for one `[sideline.colors]` axis key
     /// (existing or just typed). The axis names its table
     /// (`harness` / `route` / `model` / `row`).
@@ -1794,6 +1822,7 @@ mod messages_view;
 mod org_board;
 mod org_detail;
 mod org_graph;
+mod org_table;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -1815,6 +1844,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
 // every existing bare-name caller (the tests' `use super::*` chain) resolving.
 #[cfg(test)]
@@ -1912,6 +1942,10 @@ impl View {
         // safe to resolve against the empty placeholder layout a real attach
         // constructs with. A missing or corrupt store reads as the defaults.
         let (density, agent_sort, stored_width) = view_store::load_prefs();
+        let agent_group = view_store::load_agent_group();
+        let show_card_head = view_store::load_card_head();
+        let manual_order = view_store::load_manual_order();
+        let pinned_agents = view_store::load_pinned();
         // The stored intent, resolved once. Deliberately NOT clamped to
         // the current terminal here: `panel_w` clamps transiently on every paint,
         // and pre-clamping the stored value would let a small startup terminal
@@ -1930,6 +1964,10 @@ impl View {
             density,
             sideline_width,
             agent_sort,
+            agent_group,
+            show_card_head,
+            manual_order,
+            pinned_agents,
             status_on: true,
             resource_meter_on: false,
             confirm_lifecycle: view_store::load_confirm_lifecycle(),
@@ -1996,6 +2034,7 @@ impl View {
             digest: None,
             notice: None,
             reply_notice_tx: None,
+            details_tx: None,
             next_reply_request_id: 1,
             pending_reply_journals: HashMap::new(),
             row_stamp: None,
@@ -2019,10 +2058,11 @@ impl View {
             board_full: view_store::load_board_full(),
             experimental_backlog: view_store::load_experimental_backlog_view(),
             settings_tab: SettingsTab::General,
+            keys_modal_return: false,
+            split_opens: SplitOpens::Pane,
             lane: LaneColorsUi::default(),
             theme_import: theme_import_ui::ThemeImportUi::Idle,
             theme_import_gen: 0,
-            key_capture: None,
             hover_pending: None,
             link_hover: LinkHoverState::default(),
             hover_row: None,
@@ -2039,6 +2079,7 @@ impl View {
             modal_release_swallow: false,
             close_chips: Default::default(),
             create: None,
+            folder_pick: Default::default(),
             create_esc: Vec::new(),
             rename: None,
             rename_esc: Vec::new(),
@@ -2413,6 +2454,7 @@ impl View {
         self.recruit_esc.clear();
         self.clear_peek();
         self.create = Some(String::new());
+        self.folder_pick = Default::default();
         self.create_esc.clear();
     }
 
@@ -2634,92 +2676,6 @@ impl View {
     /// removed twice. Now there is one.
     fn attach_dst_squads(&self) -> Vec<u64> {
         self.layout.squads.iter().map(|s| s.id).collect()
-    }
-
-    /// Open the row context menu on `display_rows()` index `i`, anchored at
-    /// `anchor` (US2): the agent lifecycle menu, or a section header's
-    /// clear-dead menu (a squad name row or a `~` band). Returns whether it
-    /// opened - `false` for a row with no menu, which the caller turns into
-    /// "close whatever is open".
-    fn open_row_menu(&mut self, i: usize, anchor: Anchor) -> bool {
-        enum Pick {
-            Menu(Box<RowMenu>),
-            Section(SectionKey, String, Option<u64>),
-        }
-        // Resolve what the row needs while `display_rows()` holds the borrow, so
-        // the section arm below is free to mutate `self`.
-        let pick = match self.display_rows().get(i) {
-            // A card's detail and metrics lines are the agent row's own
-            // span, so the menu opens from any line of the card.
-            Some(DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)) => {
-                let mut menu = build_row_menu(a, anchor);
-                // A pane-hosted row can relocate its live pane into another
-                // workspace; a paneless row already gets the `p` placement
-                // picker. Append the entry only when another
-                // workspace exists, so it never offers a move to nowhere. Built
-                // here (where the layout is) rather than in build_row_menu so
-                // the per-state builder stays layout-free and its direct tests
-                // stay untouched.
-                if a.pane_id.is_some() {
-                    let move_dsts = self.move_dst_squads(a.squad);
-                    if !move_dsts.is_empty() {
-                        menu.popup.rows.push(PopupRow::Rule);
-                        menu.popup.rows.push(PopupRow::Entry {
-                            glyph: "↪".into(),
-                            label: "Move to workspace".into(),
-                            hint: String::new(),
-                            enabled: true,
-                        });
-                        menu.actions.push(MenuAction::MoveToWorkspace);
-                    }
-                }
-                Some(Pick::Menu(Box::new(menu)))
-            }
-            Some(DisplayRow::Sel(row)) if row.tab.is_none() => squad_key(&self.layout, row.squad)
-                .map(|key| {
-                    let label = self
-                        .layout
-                        .squads
-                        .iter()
-                        .find(|s| s.id == row.squad)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_default();
-                    Pick::Section(key, label, Some(row.squad))
-                }),
-            Some(DisplayRow::Header { key, label, .. }) => {
-                Some(Pick::Section(key.clone(), (*label).to_string(), None))
-            }
-            _ => None,
-        };
-        match pick {
-            Some(Pick::Menu(m)) => {
-                self.clear_peek();
-                self.row_menu = Some(*m);
-                self.row_menu_esc.clear();
-                true
-            }
-            Some(Pick::Section(key, label, squad)) => {
-                // A section with nothing to clear would leave a one-entry menu
-                // whose only entry is a no-op; say so instead (the row menu's
-                // "no dead item ever renders" rule, applied to the whole menu).
-                // "nothing to clear" covers both an all-live section and a key
-                // `section_dead_rows` refused as ambiguous - it never claims
-                // there are no dead rows when the truth is we won't guess which.
-                let dead = self.section_dead_rows(&key, squad).len();
-                // A workspace section always has a menu (it can be renamed). A
-                // non-workspace header (Elsewhere) with nothing to clear
-                // says so rather than opening a one-entry no-op menu.
-                if dead == 0 && squad.is_none() {
-                    self.set_notice(format!("no dead rows in {label}"));
-                    return false;
-                }
-                self.clear_peek();
-                self.row_menu = Some(build_section_menu(key, label, squad, dead, anchor));
-                self.row_menu_esc.clear();
-                true
-            }
-            None => false,
-        }
     }
 
     /// (5.1) Open the tab-strip context menu on the tab cell at
@@ -2996,7 +2952,11 @@ impl View {
             return Some(self.confirm_overlay_layout(rows, action));
         }
         if let Some(name) = &self.create {
-            return Some(self.name_modal_layout("new workspace", name, None));
+            return Some(self.name_modal_layout(
+                "new workspace",
+                name,
+                Some(&self.create_hint(name)),
+            ));
         }
         if let Some((target, name)) = &self.rename {
             let noun = match target {
@@ -4639,6 +4599,9 @@ impl View {
                     .collect()
             }
             SectionKey::Elsewhere => self.orphans().into_iter().filter(|a| a.exited).collect(),
+            // A group-by band keeps no dead-row middle state: the cycle is
+            // Expanded <-> Collapsed (next_view skips LiveOnly on has_dead=false).
+            SectionKey::Group(_) => Vec::new(),
         }
     }
 
@@ -4920,6 +4883,10 @@ impl View {
         let (rows, cols) = self.term;
         let (rows, cols) = (rows.max(1) as usize, cols.max(1) as usize);
         let mut cells = vec![Cell::default(); rows * cols];
+        // The composer sheet's editor cursor cell, when the launcher drew
+        // this frame and no picker holds the keyboard: the terminal's real
+        // cursor belongs there, ahead of any pane's cursor.
+        let mut launcher_cursor = None;
         let panel_w = self.panel_w() as usize;
         chrome::close_chips_begin();
         backlog_style::node_spans_begin();
@@ -4990,7 +4957,13 @@ impl View {
         } else if let Some(m) = &self.aux {
             // US4/US5: the sideline MENU popup or settings modal.
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
-        } else if agent_launcher::draw_overlay(self, &mut cells, rows, cols) {
+        } else if self.launcher.is_some() {
+            // The sheet paints whenever the launcher is open, even while a
+            // picker holds the keyboard (the returned cursor cell is then
+            // None): the chain stops here so a later overlay never draws
+            // over the composer, and the pane branch below never shows a
+            // pane's cursor behind it.
+            launcher_cursor = agent_launcher::draw_overlay(self, &mut cells, rows, cols);
         } else if let Some(sel) = self.answers {
             // needs-me queue (grown from the answer overlay,
             // folded MINE in as the first lane): MINE then the
@@ -5181,54 +5154,10 @@ impl View {
             messages_view::paint_full(self, &mut cells, rows, cols);
         }
 
-        // Terminal cursor: the FOCUSED pane's, offset into its rect - the
-        // one place the cursor may sit (AC1-UI/AC5-UI).
-        let (mut cur_r, mut cur_c, mut cur_vis) = (0u16, 0u16, false);
-        if self.selector.is_none()
-            && self.answers.is_none()
-            && self.yard.is_none()
-            && self.digest.is_none()
-            && self.move_pick.is_none()
-            && self.attach_place.is_none()
-            && self.portal_pick.is_none()
-            && self.nav.is_none()
-            && self.peek.is_none()
-            && self.connections.is_none()
-            && self.keys_modal.is_none()
-            && self.row_menu.is_none()
-            && self.aux.is_none()
-            && !((self.backlog_board.is_some() || self.org_board.is_some())
-                && (self.board_full || self.input_owner() == region_focus::RegionOwner::Board))
-            && self.messages_board.is_none()
-        {
-            if let Some((_, rect)) = self
-                .layout
-                .panes
-                .iter()
-                .find(|(id, _)| *id == self.layout.focus)
-            {
-                if let Some(f) = self.frames.get(&self.layout.focus) {
-                    // The cursor sits in the pty grid, which is the CONTENT
-                    // rect for a framed pane.
-                    let content = crate::pane_border::content_rect(*rect);
-                    cur_r =
-                        TAB_BAR_ROWS + content.y + f.cursor_row.min(content.rows.saturating_sub(1));
-                    cur_c = self.left_chrome_w()
-                        + content.x
-                        + f.cursor_col.min(content.cols.saturating_sub(1));
-                    if !self.sideline_full && self.layout.area != (0, 0) {
-                        // Never in the filler (AC1-UI), even mid-race when a
-                        // stale rect exceeds the just-shrunk area. Skipped in
-                        // full-screen sideline: the cursor belongs to the
-                        // composer, not a pane that is not painted.
-                        cur_r = cur_r.min(TAB_BAR_ROWS + self.layout.area.0.saturating_sub(1));
-                        cur_c =
-                            cur_c.min(self.left_chrome_w() + self.layout.area.1.saturating_sub(1));
-                    }
-                    cur_vis = f.cursor_visible;
-                }
-            }
-        }
+        // Terminal cursor: the composer sheet's editor while it is open (the
+        // keyboard owner), else the FOCUSED pane's, offset into its rect -
+        // the one place the cursor may sit (AC1-UI/AC5-UI).
+        let (cur_r, cur_c, cur_vis) = terminal_cursor::compose_cursor(self, launcher_cursor);
         *self.close_chips.borrow_mut() = chrome::close_chips_end();
         backlog_style::node_spans_end();
         Frame {
@@ -5444,19 +5373,23 @@ impl View {
     /// refuses a stale id regardless.
     fn move_pick_lines(&self, picker: &MovePick) -> Vec<String> {
         const W: usize = 40;
-        let verb = match picker.src {
+        let verb = match &picker.src {
             MoveSrc::Tab(_) => "move tab to:",
             MoveSrc::Pane(_) => "move pane to:",
+            MoveSrc::Row { .. } => "move session to:",
+            MoveSrc::Folder { .. } => "add folder:",
         };
         let mut lines = vec![pad_to(&format!(" {verb}"), W)];
         for (i, &sid) in picker.squads.iter().enumerate() {
-            let name = self
-                .layout
-                .squads
-                .iter()
-                .find(|s| s.id == sid)
-                .map(|s| s.name.as_str())
-                .unwrap_or("(gone)");
+            let folder = workspace_folder::folder_label(&picker.src, sid);
+            let name = folder.as_deref().unwrap_or_else(|| {
+                self.layout
+                    .squads
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(gone)")
+            });
             let marker = if i == picker.cursor { '›' } else { ' ' };
             // Only the first nine are digit-addressable; the rest get a blank
             // gutter, so the drawn numbering never promises a key that does
@@ -5849,6 +5782,10 @@ impl View {
     ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
         let needs = self.attention_needs();
         let now = crate::digest_overlay::now_secs();
+        let order = &AgentOrder {
+            manual: &self.manual_order,
+            pinned: &self.pinned_agents,
+        };
         let mut out: Vec<(DisplayRow<'_>, usize)> = Vec::with_capacity(rows.len());
         let mut group = Vec::new();
         let mut iter = rows.into_iter().zip(depths).peekable();
@@ -5865,16 +5802,24 @@ impl View {
                             self.agent_sort,
                             &needs,
                             now,
+                            order,
                         );
                     }
                 }
                 row => {
-                    append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now);
+                    append_sorted_agent_group(
+                        &mut out,
+                        &mut group,
+                        self.agent_sort,
+                        &needs,
+                        now,
+                        order,
+                    );
                     out.push((row, depth));
                 }
             }
         }
-        append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now);
+        append_sorted_agent_group(&mut out, &mut group, self.agent_sort, &needs, now, order);
         out.into_iter().unzip()
     }
 
@@ -5895,6 +5840,9 @@ impl View {
     /// [`Self::display_rows_with_depths`]). The depth is computed over the
     /// EMITTED set after every display filter, never re-derived in the painter.
     fn tree_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+        if self.agent_group != AgentGroup::Workspace {
+            return agent_group::grouped_rows_with_depths(self);
+        }
         let mut out = Vec::new();
         // Display index -> lineage depth for agent rows, filled at emit time.
         let mut agent_depth_at: HashMap<usize, usize> = HashMap::new();
@@ -6014,7 +5962,7 @@ impl View {
             let rollup = section_rollup(orphans.iter().map(|&a| agent_lattice_state(a)));
             let view = self.section_view(&SectionKey::Elsewhere);
             out.push(DisplayRow::Header {
-                label: "~ elsewhere",
+                label: "~ elsewhere".to_string(),
                 rollup,
                 key: SectionKey::Elsewhere,
                 view,
@@ -6124,7 +6072,7 @@ enum DisplayRow<'a> {
     /// `display_rows` time from the section's own rows (orphans / cards), so the
     /// painter renders it without re-deriving section membership.
     Header {
-        label: &'static str,
+        label: String,
         rollup: Vec<(LatticeState, usize)>,
         /// Which section this header owns, so a click cycles it
         /// without the action path re-deriving the section from `label`.
@@ -6218,7 +6166,7 @@ fn squad_matches(s: &SquadMeta, key: &SectionKey) -> bool {
     match key {
         SectionKey::Squad(ident) if !s.canonical_cwd.is_empty() => &s.canonical_cwd == ident,
         SectionKey::Squad(ident) => &s.name == ident,
-        SectionKey::Elsewhere => false,
+        SectionKey::Elsewhere | SectionKey::Group(_) => false,
     }
 }
 
@@ -6229,7 +6177,7 @@ fn section_is_live(layout: &LayoutView, key: &SectionKey) -> bool {
     match key {
         SectionKey::Squad(_) => layout.squads.iter().any(|s| squad_matches(s, key)),
         // The pull-sections are always considered live (their rows come and go).
-        SectionKey::Elsewhere => true,
+        SectionKey::Elsewhere | SectionKey::Group(_) => true,
     }
 }
 
@@ -7174,130 +7122,7 @@ fn agent_lane_fg(a: &AgentRow, st: LatticeState, fallback: Color) -> Color {
     .unwrap_or(fallback)
 }
 
-/// (US2) Severity order for the header rollup strip: most-severe first,
-/// so the strip reads `▲ ✓ ● ○ ∅ ✗ ?` and narrow-panel truncation drops from
-/// the least-severe (`?`) end. `Unmeasured` sits after `Exited`: it is a
-/// sub-case of the same terminal bucket, just less certain, so it never
-/// outranks a live state. `Empty` sits after `Idle` and before the
-/// terminal pair: a pristine shell is less severe than any worker state but
-/// still a live pane, not a terminal one. The one ordering the fold and the
-/// truncation share.
-///
-/// NOT the same ordering as [`PaneState`]'s derive, and this comment used to
-/// claim to be "the single ordering authority" beside a sibling claiming the
-/// same thing, which cannot both be true. They answer different questions and
-/// have disagreed since before, on `Working` versus `DoneUnseen`. This
-/// one answers IN WHAT ORDER A SECTION'S COUNTS ARE LISTED AND TRUNCATED;
-/// `PaneState` answers WHICH ROW IS WORST for a `min()` rollup. A known
-/// consequence of the split, left as is: `Unmeasured` is now reachable for
-/// LIVE rows, and truncation drops from that end, so a narrow panel can keep
-/// a dead `✗` count and drop live `?` rows. Changing that is a display-policy
-/// decision, not a correctness fix - do not "align" the two lists to make it
-/// go away.
-const SEVERITY_ORDER: [LatticeState; 7] = [
-    LatticeState::Blocked,
-    LatticeState::DoneUnseen,
-    LatticeState::Working,
-    LatticeState::Idle,
-    LatticeState::Empty,
-    LatticeState::Exited,
-    LatticeState::Unmeasured,
-];
-
-/// (US2) Fold a section's rows into per-state counts, nonzero only, in
-/// severity order. Exhaustive over `LatticeState` (the lock-3 posture):
-/// a new state is a compile error here, never a silently uncounted glyph.
-fn section_rollup(states: impl Iterator<Item = LatticeState>) -> Vec<(LatticeState, usize)> {
-    let mut counts = [0usize; SEVERITY_ORDER.len()];
-    for st in states {
-        let idx = match st {
-            LatticeState::Blocked => 0,
-            LatticeState::DoneUnseen => 1,
-            LatticeState::Working => 2,
-            LatticeState::Idle => 3,
-            LatticeState::Empty => 4,
-            LatticeState::Exited => 5,
-            LatticeState::Unmeasured => 6,
-        };
-        // The match is exhaustive (a new state breaks the build), but the index
-        // mapping is coupled by hand to SEVERITY_ORDER's order; this catches a
-        // reorder that would silently miscount (gemini review).
-        debug_assert_eq!(
-            SEVERITY_ORDER[idx], st,
-            "SEVERITY_ORDER and section_rollup indices are out of sync"
-        );
-        counts[idx] += 1;
-    }
-    SEVERITY_ORDER
-        .iter()
-        .zip(counts)
-        .filter(|&(_, n)| n > 0)
-        .map(|(&s, n)| (s, n))
-        .collect()
-}
-
-/// The flag set for a section header, demoted from the old always-on
-/// INVERSE band: the full-width INVERSE is now the focused-row signal, not the
-/// header's, so a header carries zero standing INVERSE cells. The rollup counts
-/// (`header_band_text`) are unchanged and still fill the full width.
-///
-/// EVERY header is BOLD, active or not: the earlier split left an inactive
-/// header at exactly the weight of the agent rows beneath it. Active stays
-/// legible through the `*` marker and the accented caret. Weight alone does not
-/// separate a section though - see [`section_rule`].
-fn header_band_flags(_active: bool) -> u8 {
-    cell_flags::BOLD
-}
-
-/// (US1+US2) Compose one section header band: the label at the left, the
-/// rollup counts right-aligned, spaces between so the whole string is exactly
-/// the panel width `w` (the caller paints it as one INVERSE band). Counts are
-/// compact `{glyph}{n}` pairs; when the panel is too narrow, whole pairs drop
-/// from the least-severe (`✗`) end - a glyph never renders without its count
-/// (AC11) - and the label clips (via `chrome::clip`, no marker) only after every pair is
-/// gone. Widths are measured in DISPLAY columns via `glyph_cols` (matching the
-/// painter), so a double-width char in a squad name aligns the band instead of
-/// overflowing it.
-/// The `gap` columns between a header's label and its rollup counts, drawn as a
-/// horizontal rule with a space of breathing room at each end (`gap < 3` stays
-/// blank - a one-cell dash reads as debris, not a rule).
-///
-/// The section separator, and the only one available. A terminal grid has one
-/// font at one size, and the rest of the vocabulary is already spoken for: BOLD
-/// is agent liveness (`lattice_style` bolds working, blocked and done rows, so a
-/// header cannot out-weigh a busy workspace), full-width INVERSE is the focused
-/// row, DIM is dead, amber is needs-attention. A rule spends none of them and
-/// costs no rows, filling space the header already padded with blanks.
-fn section_rule(gap: usize) -> String {
-    match gap {
-        0..=2 => " ".repeat(gap),
-        _ => format!(" {} ", "\u{2500}".repeat(gap - 2)),
-    }
-}
-
-fn header_band_text(label: &str, rollup: &[(LatticeState, usize)], w: usize) -> String {
-    let mut pairs: Vec<String> = rollup
-        .iter()
-        .map(|(s, n)| format!("{}{}", lattice_glyph(*s).0, n))
-        .collect();
-    loop {
-        if pairs.is_empty() {
-            let label_w: usize = label.chars().map(glyph_cols).sum();
-            return match w.checked_sub(label_w) {
-                Some(gap) => format!("{label}{}", section_rule(gap)),
-                None => crate::chrome::clip(label, w),
-            };
-        }
-        let counts = pairs.join(" ");
-        let label_w: usize = label.chars().map(glyph_cols).sum();
-        let counts_w: usize = counts.chars().map(glyph_cols).sum();
-        if label_w + 1 + counts_w <= w {
-            let gap = w - label_w - counts_w;
-            return format!("{label}{}{counts}", section_rule(gap));
-        }
-        pairs.pop(); // drop the least-severe pair and retry
-    }
-}
+use header_band::{header_band_flags, header_band_text, section_rollup, SEVERITY_ORDER};
 
 /// The sideline/nav fold state maps 1:1 onto the lattice (no `Exited` - a folded
 /// pane's exit is already flattened to `Idle` by `nav_agent_state`).
@@ -7382,6 +7207,7 @@ async fn attach_and_run(
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));
     view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
+    view.split_opens = crate::digest_overlay::split_opens(Path::new(&cwd));
     view.status_on = crate::digest_overlay::status_row_enabled(Path::new(&cwd));
     view.org = crate::org_overlay::Panel::with_detail(
         crate::digest_overlay::load_readout_detailed(Path::new(&cwd)),
@@ -7524,16 +7350,11 @@ async fn attach_and_run(
     let (copy_tx, mut copy_rx) =
         tokio::sync::mpsc::unbounded_channel::<(usize, crate::clipboard::CopyOutcome)>();
 
-    // opening a clicked URL execs `open`/`xdg-open`, which can block for
-    // as long as a cold browser launch takes. Same shape as the copy leg above:
-    // run it on a blocking thread and report the outcome back here, so the
-    // select loop keeps drawing frames while the browser starts.
+    // the link leg: a tap runs the session-aware opener off-loop (a cold
+    // browser must not stall rendering; over ssh the tap copies to the
+    // terminal's clipboard instead), and reports (url, outcome) back here.
     let (link_tx, mut link_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(String, Result<(), String>)>();
-
-    // Resolve sender taps off-loop; the CLI can cold-start.
-    let (sender_tx, mut sender_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(String, Option<String>)>();
+        tokio::sync::mpsc::unbounded_channel::<(String, crate::client::open_link::LinkOutcome)>();
 
     // the needs-me event-fold leg runs off the UI loop and reports back
     // here, tagged with the generation token it was kicked under, so a slow
@@ -7561,6 +7382,9 @@ async fn attach_and_run(
     )>();
     let (reply_notice_tx, mut reply_notice_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     view.reply_notice_tx = Some(reply_notice_tx);
+    let (details_tx, mut details_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(String, Option<serde_json::Value>)>();
+    view.details_tx = Some(details_tx);
     let (bell_tx, mut bell_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, Result<serde_json::Value, String>)>();
 
@@ -7586,10 +7410,10 @@ async fn attach_and_run(
     let (yard_tx, mut yard_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, Option<Vec<crate::yard_overlay::YardItem>>)>();
 
-    // The org fold leg: single-flight + the TTL are the whole
-    // concurrency contract; no generation to supersede.
+    // The org fold leg: one channel, three halves, each half single-flight
+    // on its own stamp; no generation to supersede.
     let (org_fold_tx, mut org_fold_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Option<crate::org_overlay::Org>>();
+        tokio::sync::mpsc::unbounded_channel::<crate::org_overlay::FoldPart>();
 
     // the Connections modal's read fold runs off the UI loop and reports
     // back here, tagged with the generation it was kicked under, so a slow `fno`
@@ -7736,11 +7560,8 @@ async fn attach_and_run(
                 let _ = tx.send((gen, result));
             });
         }
-        if view.org.take_want() {
-            let tx = org_fold_tx.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(crate::org_overlay::fold_now().await);
-            });
+        if let Some(want) = view.org.take_want(&view.layout.agents) {
+            crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.
@@ -7985,8 +7806,8 @@ async fn attach_and_run(
                     | ServerMsg::Ok
                     | ServerMsg::WaitDone { .. }
                     | ServerMsg::Err { .. }
-                    // (v41) Script-layout replies: control-connection only,
-                    // never sent to an attached client - ignore, don't desync.
+                    // (v41+) control-connection-only replies: ignore, don't
+                    // desync. The attach handshake carries the same list.
                     | ServerMsg::TabList { .. }
                     | ServerMsg::LayoutTree { .. }
                     | ServerMsg::PaneLocation { .. }
@@ -7996,10 +7817,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
                     | ServerMsg::TabClosed { .. }
-                    // (v60/v71/v75/v78) one-shot control-verb replies.
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
+                Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
                     // exec first, OSC 52 to the outer terminal as fallback
@@ -8017,12 +7838,12 @@ async fn attach_and_run(
                 }
                 Ok(ServerMsg::OpenLink { url }) => {
                     // External opens run off-loop; a cold browser must not stall
-                    // rendering. The router names the opener for each pseudo
-                    // scheme; the message leg finishes here on the UI loop.
+                    // rendering. The router names the opener per pseudo scheme;
+                    // open_link::finish lands the UI-loop legs.
                     if let Some(routed) =
-                        crate::client::open_link::start(&url, link_tx.clone(), sender_tx.clone())
+                        crate::client::open_link::start(&url, link_tx.clone())
                     {
-                        messages_view::open_message(&mut view, routed.id);
+                        crate::client::open_link::finish(routed, &mut view);
                         if let Err(e) = compositor.draw(&view.compose()) {
                             break Err(format!("draw: {e}"));
                         }
@@ -8188,21 +8009,13 @@ async fn attach_and_run(
                 // button, so BOTH outcomes get a notice - the browser may not
                 // even raise itself above the terminal.
                 let notice = match outcome {
-                    Ok(()) => format!("opened {}", crate::link::for_notice(&url)),
+                    Ok(opened) => opened.notice(&url),
                     Err(e) => {
                         let _ = raw_out(b"\x07");
                         format!("open failed: {e}")
                     }
                 };
                 view.set_notice(notice);
-                if let Err(e) = compositor.draw(&view.compose()) {
-                    break Err(format!("draw: {e}"));
-                }
-            }
-            Some((id, resolved)) = sender_rx.recv() => {
-                // the fmail id resolved (or not); open the shared
-                // open-session chooser on the owning row, or say why not.
-                open_for_session(&mut view, &id, resolved);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -8327,6 +8140,15 @@ async fn attach_and_run(
                 view.set_notice(text);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
+                }
+            }
+            Some((key, tokens)) = details_rx.recv() => {
+                // The stale-key and double-answer guards live beside the
+                // modal; this arm only repaints on a real hit.
+                if messages_detail::apply_token_answer(&mut view, &key, tokens) {
+                    if let Err(e) = compositor.draw(&view.compose()) {
+                        break Err(format!("draw: {e}"));
+                    }
                 }
             }
             Some((gen, projection)) = bell_rx.recv() => {
@@ -8778,7 +8600,7 @@ async fn attach_and_run(
                 eprintln!("fno: {n}");
             }
             // The update modal's restart unwinds here: run the verb in the foreground, exec the fresh client.
-            if let Some(err) = update_menu::maybe_reattach(code, &view.session).await {
+            if let Some(err) = update_menu::maybe_reattach(code, &mut view).await {
                 return Err(err);
             }
             Ok(code)
@@ -9128,6 +8950,24 @@ async fn dispatch_event(
             // the density cycle this needs no resize round trip.
             view.toggle_agent_sort();
         }
+        Event::CycleAgentGroup => {
+            // Pure local state, like the sort cycle: no geometry, no wire.
+            view.agent_group = view.agent_group.next();
+            view_store::save_agent_group(view.agent_group);
+            let word = match view.agent_group {
+                AgentGroup::Workspace => "workspace",
+                AgentGroup::Team => "lead",
+                AgentGroup::Cwd => "cwd",
+                AgentGroup::Status => "status",
+            };
+            view.set_notice(format!("grouping by {word}"));
+        }
+        Event::ToggleCardHead => {
+            // Pure local state: the head row is one display row, and the
+            // scroll math reads painted_rows() every pass.
+            view.show_card_head = !view.show_card_head;
+            view_store::save_card_head(view.show_card_head);
+        }
         Event::ToggleStatus => {
             view.status_on = !view.status_on;
             // Same accounting as the sideline: the content area grew or
@@ -9164,12 +9004,8 @@ async fn dispatch_event(
             // decides, and the off case notices instead of opening.
             backlog_board::open_pref_gated(view);
         }
-        Event::CycleSidelineView => {
-            // The sideline's view cycle: agents <-> backlog. The backlog
-            // leg rides the experimental pref and opens the board (the
-            // board IS the view); the agents leg closes it.
-            backlog_board::cycle_sideline_view(view);
-        }
+        Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
+        Event::OpenOrgView => backlog_board::toggle_org_view(view),
         Event::OpenSettings => {
             execute_aux_action(view, AuxAction::OpenSettings, sock_w).await?;
         }
@@ -9501,202 +9337,6 @@ async fn confirm_keys(
     Ok(StdinFlow::Continue)
 }
 
-/// Run the row menu's selected entry (Enter/click), then close - the popup never
-/// lingers after execute (AC1-FR).
-async fn row_menu_execute_selected(
-    view: &mut View,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
-    let picked = view.row_menu.as_ref().and_then(|m| {
-        m.actions
-            .get(m.popup.sel)
-            .copied()
-            .map(|a| (a, m.target.clone()))
-    });
-    view.row_menu = None;
-    if let Some((action, target)) = picked {
-        execute_row_menu_action(view, action, target, sock_w).await?;
-    }
-    Ok(())
-}
-
-/// Row-menu keys (US2): arrows walk the entries + 2x2 grid (scrolling to
-/// keep the selection on-screen), pgup/pgdn scroll, Enter runs the selection,
-/// Esc/`q`/any unbound key dismiss (the shared popup contract, codex P2). Esc is
-/// carried across reads like every overlay, so a split arrow never leaks; no key
-/// reaches a pane.
-async fn row_menu_keys(
-    view: &mut View,
-    bytes: &[u8],
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<StdinFlow, String> {
-    let trows = view.term.0 as usize;
-    let mut esc = std::mem::take(&mut view.row_menu_esc);
-    let toks = fold_modal_keys(&mut esc, bytes);
-    view.row_menu_esc = esc;
-    for tok in toks {
-        if view.row_menu.is_none() {
-            break;
-        }
-        match tok {
-            ModalKey::Esc => view.row_menu = None,
-            ModalKey::Up => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.nav(NavDir::Up);
-                    m.popup.follow_sel(view.term);
-                }
-            }
-            ModalKey::Down => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.nav(NavDir::Down);
-                    m.popup.follow_sel(view.term);
-                }
-            }
-            ModalKey::Left => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.nav(NavDir::Left);
-                }
-            }
-            ModalKey::Right => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.nav(NavDir::Right);
-                }
-            }
-            ModalKey::PageUp => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.scroll_by(-(trows as isize - 2).max(1));
-                    m.popup.clamp_sel_to_view(view.term);
-                }
-            }
-            ModalKey::PageDown => {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.scroll_by((trows as isize - 2).max(1));
-                    m.popup.clamp_sel_to_view(view.term);
-                }
-            }
-            ModalKey::Enter => row_menu_execute_selected(view, sock_w).await?,
-            // A printable byte first resolves against the accelerators
-            // of the actions THIS menu offers: a hit moves the selection to
-            // that entry and runs it through the SAME execute path Enter and a
-            // click use, so keyboard and mouse execution cannot drift. A byte
-            // no selectable entry answers keeps the shared popup contract and
-            // dismisses. Disabled rows contribute no action, so an inert entry
-            // is never accelerated.
-            ModalKey::Byte(b) => {
-                let hit = view.row_menu.as_ref().and_then(|m| {
-                    m.actions.iter().position(|a| {
-                        a.accelerator_id()
-                            .and_then(crate::keys::menu_byte_for)
-                            .is_some_and(|kb| kb == b)
-                    })
-                });
-                match hit {
-                    Some(i) => {
-                        if let Some(m) = view.row_menu.as_mut() {
-                            m.popup.select(i);
-                            m.popup.follow_sel(view.term);
-                        }
-                        row_menu_execute_selected(view, sock_w).await?;
-                    }
-                    None => view.row_menu = None,
-                }
-            }
-        }
-    }
-    Ok(StdinFlow::Continue)
-}
-
-/// One mouse report while the row menu is open (US2): hover selects, a
-/// left click runs the entry, a right press re-anchors on the row under the
-/// pointer (or dismisses off the sideline), a click off the popup dismisses.
-async fn row_menu_mouse(
-    view: &mut View,
-    rep: crate::mouse::MouseReport,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
-    match rep.kind {
-        MouseKind::Move => {
-            if let Some(t) = view.row_menu_hit(rep.row, rep.col) {
-                if let Some(m) = view.row_menu.as_mut() {
-                    m.popup.select(t);
-                }
-            }
-        }
-        MouseKind::Press(MouseButton::Left) => {
-            match view.row_menu_hit(rep.row, rep.col) {
-                Some(t) => {
-                    if let Some(m) = view.row_menu.as_mut() {
-                        m.popup.select(t);
-                    }
-                    row_menu_execute_selected(view, sock_w).await?;
-                }
-                // A click inside the block that hit no target (a Header or Rule, which
-                // contribute none) is swallowed; only a click OFF the menu dismisses.
-                None => {
-                    if !view.row_menu_block_contains(rep.row, rep.col) {
-                        view.row_menu = None;
-                    }
-                }
-            }
-        }
-        MouseKind::Press(MouseButton::Right) => {
-            // The menu's own body swallows the press, never re-anchors and
-            // never dismisses - and it must win over EVERY re-anchor arm
-            // below, not just the pane one: a menu anchored at a sideline row
-            // or the strip extends over those cells too, and a press on its
-            // visible body must not silently re-anchor onto whatever row or
-            // tab cell happens to sit underneath (review finding).
-            if view.row_menu_block_contains(rep.row, rep.col) {
-                return Ok(());
-            }
-            // (5.1) A tab cell re-anchors the tab menu, the same
-            // one-press contract a sideline row gets below; the strip and the
-            // sideline own disjoint columns, so the two cannot contend.
-            if view.tab_cell_at(rep.row, rep.col).is_some() {
-                if !view.open_tab_menu(
-                    rep.row,
-                    rep.col,
-                    Anchor::At {
-                        row: rep.row,
-                        col: rep.col,
-                    },
-                ) {
-                    view.row_menu = None;
-                }
-                return Ok(());
-            }
-            match view.sideline_row_at(rep.row, rep.col) {
-                // Re-anchor on the row under the second right-press (never stack two
-                // menus); a non-agent row leaves nothing open.
-                Some(i) => {
-                    if !view.open_row_menu(
-                        i,
-                        Anchor::At {
-                            row: rep.row,
-                            col: rep.col,
-                        },
-                    ) {
-                        view.row_menu = None;
-                    }
-                }
-                // A pane cell re-anchors too - panes are
-                // menu-bearing now, and a second right-press on another
-                // pane swapping in that pane's agent menu keeps the
-                // one-press contract the tab re-anchor above cites.
-                // hit_test is overlay-blind, but the block-contains check at
-                // the top of this arm has already settled menu-body cells.
-                None => {
-                    if !view.open_pane_menu(rep.row, rep.col) {
-                        view.row_menu = None;
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 /// Run one aux-popup action (US4/US5). Menu entries open a surface or
 /// detach; settings toggles flip a session-local view flag and rebuild the modal
 /// so its glyph reflects the new state (the popup stays open for another toggle).
@@ -9717,7 +9357,6 @@ async fn execute_aux_action(
         AuxAction::OpenSettings => {
             view.lane.reset();
             theme_import_ui::reset(view);
-            view.key_capture = None;
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
@@ -9783,8 +9422,6 @@ async fn execute_aux_action(
         | AuxAction::ThemeImportCancel
         | AuxAction::ThemePick
         | AuxAction::SettingsBack
-        | AuxAction::KeyCapture(_)
-        | AuxAction::EditKeysFile
         | AuxAction::LaneColorEdit(..)
         | AuxAction::LaneColorAdd(_)
         | AuxAction::LaneColorCustom(..)
@@ -9861,6 +9498,9 @@ async fn aux_keys(
                     m.popup.nav(NavDir::Right);
                 }
             }
+            // No split cells on a settings page either: the folded
+            // Shift+arrow is inert, never a dismissal.
+            ModalKey::ShiftArrow(_) => {}
             ModalKey::PageUp => {
                 if let Some(m) = view.aux.as_mut() {
                     m.popup.scroll_by(-(trows as isize - 2).max(1));
@@ -9945,7 +9585,6 @@ async fn aux_mouse(
                     if !view.aux_block_contains(rep.row, rep.col) {
                         view.lane.clear_entry();
                         theme_import_ui::reset(view);
-                        view.key_capture = None;
                         view.aux = None;
                     }
                 }
@@ -10089,6 +9728,7 @@ async fn selector_keys(
     // open, never a mis-toggle. A modified Right (`ESC [ 1; 5 C`) does not
     // contain the contiguous triple, so it still drops as unmapped.
     let mut rights = 0usize;
+    let mut shifts: Vec<isize> = Vec::new();
     let mut cleaned: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
@@ -10100,7 +9740,24 @@ async fn selector_keys(
             i += 1;
         }
     }
-    let keys = fold_selector_keys(&mut esc, &cleaned);
+    let mut j = 0;
+    let mut cleaned2: Vec<u8> = Vec::with_capacity(cleaned.len());
+    while j < cleaned.len() {
+        if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'A']) {
+            // Shift+Up reorders the focused agent row: the selector reads
+            // J/K as the WORKSPACE reorder, so the agent move needs its own
+            // strip (the generic fold drops a parameterised sequence whole).
+            shifts.push(-1);
+            j += 6;
+        } else if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'B']) {
+            shifts.push(1);
+            j += 6;
+        } else {
+            cleaned2.push(cleaned[j]);
+            j += 1;
+        }
+    }
+    let keys = fold_selector_keys(&mut esc, &cleaned2);
     view.sel_esc = esc;
     for _ in 0..rights {
         // Same cursor as every other selector verb: pointer-follow works
@@ -10126,6 +9783,14 @@ async fn selector_keys(
             Some(key) => view.toggle_idle(key),
             None => view.set_notice("only a workspace row has a caret".into()),
         }
+    }
+    for delta in shifts.drain(..) {
+        // The agent reorder acts on the same per-key cursor the other
+        // selector verbs read, so a close mid-chunk swallows the rest.
+        let Some(cur) = view.selector else {
+            break;
+        };
+        agent_group::reorder_agent_rows(view, cur, delta);
     }
     for &k in &keys {
         // Rows are re-read per key (via the View helpers below) so a layout
@@ -10519,6 +10184,28 @@ async fn selector_keys(
                     None => view.set_notice("no other workspace to move this tab to".into()),
                 }
             }
+            b'.' => {
+                // Pin/unpin the agent row under the cursor. Pinned rows lead
+                // every sort (the operator's 2026-10-07 ask), persisted like
+                // the sort itself; a non-agent row notices why.
+                match view.display_rows().get(cur) {
+                    Some(DisplayRow::Agent(a)) => {
+                        let name = a.name.clone();
+                        let pinned =
+                            if let Some(pos) = view.pinned_agents.iter().position(|n| *n == name) {
+                                view.pinned_agents.remove(pos);
+                                false
+                            } else {
+                                view.pinned_agents.push(name.clone());
+                                true
+                            };
+                        view_store::save_pinned(&view.pinned_agents);
+                        let word = if pinned { "pinned" } else { "unpinned" };
+                        view.set_notice(format!("{word} {name}"));
+                    }
+                    _ => view.set_notice("pin works on an agent row".into()),
+                }
+            }
             0x1b | b'q' => view.selector = None,
             _ => {}
         }
@@ -10615,67 +10302,7 @@ async fn move_pick_keys(
             return Ok(StdinFlow::Continue);
         };
         let (src, squads) = (picker.src, picker.squads);
-        {
-            match squads.get(idx) {
-                // The captured id must still name a live squad; the server
-                // refuses a stale id regardless, but pre-validating saves a
-                // round-trip and keeps the BEL local.
-                Some(&sq) if view.layout.squads.iter().any(|s| s.id == sq) => match src {
-                    MoveSrc::Tab(tab) => {
-                        write_msg(
-                            sock_w,
-                            &ClientMsg::Command(Command::MoveTab { tab, squad: sq }),
-                        )
-                        .await
-                        .map_err(|e| format!("move-tab send failed: {e}"))?;
-                    }
-                    // A pane move needs an anchor pane in the destination: its
-                    // active tab's focus leaf (else the first leaf). MovePane
-                    // grafts the mover beside that anchor, de-recruiting it from
-                    // the source workspace (the `move_pane_cross_tab` path).
-                    // `target` is mandatory for a cross-tab move; without it the
-                    // server navigates from the mover, which lives in another
-                    // tab, and the move is refused.
-                    MoveSrc::Pane(pid) => {
-                        // Prefer the active tab's focus leaf; if that tab has no
-                        // panes (transient during a close, or an older server with
-                        // empty TabMeta.panes), fall back to the first leaf in any
-                        // tab so a valid anchor is not missed.
-                        let anchor = view
-                            .layout
-                            .squads
-                            .iter()
-                            .find(|s| s.id == sq)
-                            .and_then(|s| {
-                                s.tabs
-                                    .get(s.active_tab)
-                                    .and_then(|t| t.panes.first())
-                                    .or_else(|| s.tabs.iter().flat_map(|t| t.panes.first()).next())
-                                    .map(|p| p.id)
-                            });
-                        match anchor {
-                            Some(anchor) => {
-                                write_msg(
-                                    sock_w,
-                                    &ClientMsg::Command(Command::MovePane {
-                                        mover: Some(pid),
-                                        target: Some(anchor),
-                                        dir: Dir::Right,
-                                    }),
-                                )
-                                .await
-                                .map_err(|e| format!("move-pane send failed: {e}"))?;
-                            }
-                            None => view
-                                .set_notice("no pane in that workspace to anchor against".into()),
-                        }
-                    }
-                },
-                _ => {
-                    let _ = raw_out(b"\x07");
-                }
-            }
-        }
+        move_pick::commit(view, sock_w, src, &squads, idx).await?;
         return Ok(StdinFlow::Continue);
     }
     Ok(StdinFlow::Continue)
@@ -10813,4 +10440,10 @@ mod sideline;
 #[path = "client/agent_sort.rs"]
 mod agent_sort;
 
-use agent_sort::append_sorted_agent_group;
+#[path = "client/agent_group.rs"]
+mod agent_group;
+
+#[path = "client/header_band.rs"]
+mod header_band;
+
+use agent_sort::{append_sorted_agent_group, AgentOrder};

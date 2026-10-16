@@ -304,3 +304,60 @@ fn source_sync_fast_forwards_or_refuses_naming_the_gap() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_second_update_joins_only_an_update_holder() {
+    assert_eq!(update_holder_pid("fno-update-pid4242"), Some(4242));
+    assert_eq!(update_holder_pid("target-session:abc"), None);
+    assert_eq!(update_holder_pid("fno-update-pidX"), None);
+}
+
+#[test]
+fn rev_on_origin_main_reads_merged_local_and_unanswered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    let path = repo.to_string_lossy().into_owned();
+    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let base = git_ok(&repo, &["rev-parse", "HEAD"]);
+    git_ok(&repo, &["update-ref", "refs/remotes/origin/main", &base]);
+    // A merged rev (origin/main points at it) is CI-buildable; a local rev
+    // ahead of origin is not; an origin-less repo is unanswerable.
+    assert_eq!(rev_on_origin_main(&repo, &base), Some(true));
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "local"]);
+    let local = git_ok(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(rev_on_origin_main(&repo, &local), Some(false));
+    let bare = tempfile::tempdir().unwrap();
+    git_ok(bare.path(), &["init", "-q", "-b", "main"]);
+    assert_eq!(rev_on_origin_main(bare.path(), &base), None);
+}
+
+#[test]
+fn python_holds_whenever_rust_trails_the_source() {
+    // The 2026-10-14 iMac shape: no tarball for the merged rev, so the wheel
+    // must not move ahead of the bins it talks to.
+    for trails in [
+        "waiting-ci",
+        "installed-newest-published",
+        "skipped-no-origin",
+        "skipped-no-cargo",
+        "failed",
+    ] {
+        let line = python_hold_line(Some(trails)).expect(trails);
+        assert!(
+            line.contains(trails) && line.starts_with("python held"),
+            "{line}"
+        );
+    }
+    // Rust current, wheel-only machines, and --no-rust move Python freely.
+    for moves in [
+        "fresh",
+        "refreshed",
+        "partial",
+        "skipped-no-binary",
+        "skipped-no-crate",
+    ] {
+        assert_eq!(python_hold_line(Some(moves)), None, "{moves}");
+    }
+    assert_eq!(python_hold_line(None), None);
+}

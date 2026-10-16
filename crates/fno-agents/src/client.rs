@@ -153,7 +153,7 @@ pub fn resolve_daemon_bin() -> PathBuf {
 /// working flock (`flock_self_test`), so failing open here preserves today's
 /// behavior and its error message rather than wedging every verb behind a
 /// question the filesystem cannot answer.
-fn daemon_lock_is_free(home: &AgentsHome) -> bool {
+pub(crate) fn daemon_lock_is_free(home: &AgentsHome) -> bool {
     let file = match std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -580,8 +580,14 @@ pub enum RestartError {
     SigkillFailed { pid: u32, reason: String },
     #[error("daemon pid {pid} survived SIGKILL; it is still running - check it manually")]
     DidNotDie { pid: u32 },
-    #[error("daemon pid {pid} did not release the supervisor lock after SIGKILL within {secs}s; check it manually")]
-    ForceDidNotFree { pid: u32, secs: u64 },
+    #[error(
+        "the supervisor lock stayed held {secs}s after SIGKILL to daemon pid {pid} ({observed})"
+    )]
+    ForceDidNotFree {
+        pid: u32,
+        secs: u64,
+        observed: String,
+    },
     #[error(
         "the supervisor lock is held but the lockfile names no pid - there is no --force target. \
          A daemon from before the lockfile-content change may hold it; find its pid with \
@@ -596,8 +602,9 @@ pub enum RestartError {
 
 /// The grace a SIGTERM'd daemon gets before the restart escalates to SIGKILL.
 /// 30s because a loaded machine measured `fno agents list` at 11.5-18.7s the
-/// same hour, and restart.py wraps the verb in a 120s subprocess timeout:
-/// 30s grace + 2s kill + FORCE_LOCK_TIMEOUT + start_fresh fits inside it.
+/// same hour, and restart.py wraps the verb in a 600s subprocess timeout:
+/// 30s grace + two load-aware teardown waits (up to 30s each) + a 60s
+/// start_fresh stays far inside it.
 const RESTART_SIGTERM_GRACE: Duration = Duration::from_secs(30);
 
 /// The result of [`terminate_confirmed`]. `Survived` is the honest-failure
@@ -609,10 +616,40 @@ enum Termination {
     Survived,
 }
 
-/// Bounded wait for a SIGKILLed holder's flock to dissolve. The kernel closes
-/// the descriptors of a SIGKILLed process synchronously enough that this is
-/// normally one poll; the bound only names the worst case.
-const FORCE_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+/// The post-SIGKILL waits (old pid exit, flock release, and the booting
+/// replacement's first answer) share one load-aware bound. On an idle machine
+/// each resolves in one poll, so the base stays 5s; at ~17 jobs per core a
+/// real restart measured the old pid gone and a fresh daemon holding the lock
+/// only past 5s, so the bound stretches toward 30s by load.
+const TEARDOWN_BASE_SECS: u64 = 5;
+const TEARDOWN_MAX_SECS: u64 = 30;
+
+/// Read the live load once and scale the bound. The wait exits on the first
+/// success, so generosity only costs the already-failing arm; an unreadable
+/// load therefore reads as loaded.
+fn teardown_bound() -> Duration {
+    let cores = std::thread::available_parallelism().map_or(1.0, |n| n.get() as f64);
+    teardown_bound_for(
+        crate::machine_sample::load_average().map(|(one, _, _)| one),
+        cores,
+    )
+}
+
+/// Scale 5s to 30s linearly over 1.0 to 8.0 of 1-minute load per core. Pure so
+/// the scaling is unit-testable; `teardown_bound` supplies the live inputs.
+fn teardown_bound_for(load_1m: Option<f64>, cores: f64) -> Duration {
+    match load_1m {
+        Some(load) if cores > 0.0 => {
+            let fraction = (((load / cores) - 1.0) / 7.0).clamp(0.0, 1.0);
+            Duration::from_secs(
+                TEARDOWN_BASE_SECS
+                    + (fraction * f64::from((TEARDOWN_MAX_SECS - TEARDOWN_BASE_SECS) as u32))
+                        .round() as u64,
+            )
+        }
+        _ => Duration::from_secs(TEARDOWN_MAX_SECS),
+    }
+}
 
 enum SignalResult {
     /// Signal delivered.
@@ -684,31 +721,149 @@ async fn terminate_confirmed(
             return Err(RestartError::SigkillFailed { pid, reason });
         }
     }
-    if crate::daemon::pid_gone_within(pid, recorded_start, Duration::from_secs(2)).await {
+    if crate::daemon::pid_gone_within(pid, recorded_start, teardown_bound()).await {
         Ok(Termination::Escalated)
     } else {
         Ok(Termination::Survived)
     }
 }
 
-/// True once nothing holds the supervisor singleton lock, bounded by
-/// [`FORCE_LOCK_TIMEOUT`].
-async fn await_lock_free(home: &AgentsHome) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < FORCE_LOCK_TIMEOUT {
-        if daemon_lock_is_free(home) {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+/// What [`stop_daemon`] found and did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonStop {
+    /// No daemon answered, or the recorded pid was no longer ours.
+    WasDown,
+    /// The daemon exited on SIGTERM.
+    Exited { pid: u32 },
+    /// The daemon ignored SIGTERM past the grace and was SIGKILLed.
+    Escalated { pid: u32 },
+}
+
+/// Stop the serving daemon and start nothing: the termination half of
+/// `restart_daemon` with the same pid-reuse guard and the same refusal to
+/// claim a stop that did not happen. The cutover quiesce uses it, because a
+/// snapshot taken beside a live daemon is not a snapshot.
+pub async fn stop_daemon(home: &AgentsHome) -> Result<DaemonStop, RestartError> {
+    let status = Request::new(1, "agent.status", json!({}));
+    let result = match call_if_running(home, &status).await {
+        Ok(resp) => resp.result().cloned(),
+        Err(ClientError::DaemonNotRunning) => None,
+        Err(e) => return Err(RestartError::Client(e)),
+    };
+    let Some(result) = result else {
+        return Ok(DaemonStop::WasDown);
+    };
+    let daemon = result.get("daemon");
+    let pid = daemon
+        .and_then(|d| d.get("pid"))
+        .and_then(Value::as_u64)
+        .ok_or(RestartError::StatusMissingPid)? as u32;
+    let recorded_start = daemon
+        .and_then(|d| d.get("pid_start_time"))
+        .and_then(Value::as_u64);
+    if !crate::daemon::pid_is_ours(pid, recorded_start) {
+        return Ok(DaemonStop::WasDown);
     }
-    daemon_lock_is_free(home)
+    match terminate_confirmed(pid, recorded_start, RESTART_SIGTERM_GRACE).await? {
+        Termination::Exited => Ok(DaemonStop::Exited { pid }),
+        Termination::Escalated => Ok(DaemonStop::Escalated { pid }),
+        Termination::Survived => Err(RestartError::DidNotDie { pid }),
+    }
+}
+
+/// Wait for the singleton to become startable again after a confirmed kill,
+/// WITHOUT demanding the lock sit free (bounded by `bound`, `teardown_bound()`
+/// in production). Whatever supervises the daemon can re-bind a fresh one the
+/// moment the old pid dies, and that new holder owns the lock; requiring a
+/// free lock turned that heal into a false FAILED (`ForceDidNotFree`) while a
+/// healthy daemon was already coming up on the new build. So wait on the NEW
+/// daemon instead: `Ok(Some(pid))` adopts a serving daemon whose pid differs
+/// from `old_pid`; `Ok(None)` means the lock freed (start fresh ourselves);
+/// `Err` means the whole bound was spent with the lock held and no new daemon
+/// answering - the real wedge the failure arm exists for.
+///
+/// Each probe is wrapped in a 2s hard bound so a bound holder that accepts but
+/// never answers (a wedged rebinding) costs one tick, not the response
+/// deadline.
+async fn await_lock_free_or_rebound(
+    home: &AgentsHome,
+    old_pid: u32,
+    recorded_start: Option<u64>,
+    bound: Duration,
+) -> Result<Option<u32>, RestartError> {
+    let start = Instant::now();
+    while start.elapsed() < bound {
+        let serving =
+            match tokio::time::timeout(Duration::from_secs(2), read_daemon_pid(home)).await {
+                Ok(Ok(pid)) => Some(pid),
+                Ok(Err(_)) | Err(_) => None,
+            };
+        if let Some(pid) = serving {
+            if pid != old_pid {
+                return Ok(Some(pid));
+            }
+        }
+        if daemon_lock_is_free(home) {
+            return Ok(None);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(RestartError::ForceDidNotFree {
+        pid: old_pid,
+        secs: bound.as_secs(),
+        observed: describe_lock_wait(
+            old_pid,
+            crate::daemon::pid_is_ours(old_pid, recorded_start),
+            &lock_observation(home),
+        ),
+    })
+}
+
+/// What the spent wait saw, one line for the failure receipt. The message
+/// reports facts instead of "check it manually": whether the old pid exited,
+/// who holds the supervisor lock now, and (implicitly) that no new daemon
+/// answered within the bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LockObservation {
+    Free,
+    HeldBy(u32),
+    HeldUnpublished,
+}
+
+/// Read the live lock state into the small observation the receipt fold uses.
+fn lock_observation(home: &AgentsHome) -> LockObservation {
+    if daemon_lock_is_free(home) {
+        return LockObservation::Free;
+    }
+    match crate::paths::supervisor_lock_holder(home) {
+        Some((pid, _)) => LockObservation::HeldBy(pid),
+        None => LockObservation::HeldUnpublished,
+    }
+}
+
+/// Fold the wait's observations into the receipt line. Pure and unit-tested:
+/// the failure line reports what was found, never "check it manually".
+fn describe_lock_wait(old_pid: u32, old_alive: bool, lock: &LockObservation) -> String {
+    let old = if old_alive {
+        format!("old pid {old_pid} still alive")
+    } else {
+        format!("old pid {old_pid} gone")
+    };
+    let lock = match lock {
+        LockObservation::Free => "lock free".to_string(),
+        LockObservation::HeldBy(pid) => format!("lock held by pid {pid}"),
+        LockObservation::HeldUnpublished => "lock held but the lockfile names no pid".to_string(),
+    };
+    format!("{old}; {lock}; no new daemon answered")
 }
 
 /// Read the lockfile's holder, tolerating the bind window: a daemon takes the
 /// exclusive flock BEFORE it writes its pid into the content, so a `--force`
 /// arriving in those milliseconds sees a held lock and no target. Bounded wait
 /// for the content to appear (or the lock to free, which answers `None` and
-/// lets the caller take the plain-restart path).
+/// lets the caller take the plain-restart path). The bind window is
+/// milliseconds on an idle machine; under load a booting daemon publishes the
+/// content late, so the wait rides the same load-aware teardown bound.
 async fn await_lock_holder(home: &AgentsHome) -> Option<(u32, Option<u64>)> {
     let start = Instant::now();
     loop {
@@ -718,7 +873,7 @@ async fn await_lock_holder(home: &AgentsHome) -> Option<(u32, Option<u64>)> {
         if daemon_lock_is_free(home) {
             return None;
         }
-        if start.elapsed() >= FORCE_LOCK_TIMEOUT {
+        if start.elapsed() >= teardown_bound() {
             return None;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -728,7 +883,11 @@ async fn await_lock_holder(home: &AgentsHome) -> Option<(u32, Option<u64>)> {
 /// Lazy-start a fresh daemon and return its pid. Shared by every restart exit.
 async fn start_fresh(home: &AgentsHome, daemon_bin: &Path) -> Result<u32, RestartError> {
     let started = Instant::now();
-    let budget = Duration::from_secs(10);
+    // 60s: a stress-loaded runner measures process spawns at 30s and more,
+    // and the e2e harness backstops at 180s for the same reason. restart.py's
+    // 600s subprocess wrap still fits (30s grace + two teardown waits of up
+    // to 30s each + 60s).
+    let budget = Duration::from_secs(60);
     loop {
         ensure_daemon(home, daemon_bin).await?;
         match read_daemon_pid(home).await {
@@ -811,11 +970,27 @@ pub async fn restart_daemon(
                             return Err(RestartError::SigkillFailed { pid, reason })
                         }
                     }
-                    if !await_lock_free(home).await {
-                        return Err(RestartError::ForceDidNotFree {
-                            pid,
-                            secs: FORCE_LOCK_TIMEOUT.as_secs(),
-                        });
+                    match await_lock_free_or_rebound(
+                        home,
+                        pid,
+                        Some(recorded_start),
+                        teardown_bound(),
+                    )
+                    .await
+                    {
+                        Ok(Some(new_pid)) => {
+                            return Ok(RestartOutcome {
+                                old_pid: Some(pid),
+                                new_pid,
+                                forced: true,
+                                note: Some(format!(
+                                    "SIGKILLed pid {pid}; a fresh daemon rebound the singleton \
+                                     before the lock cleared; adopted it"
+                                )),
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Err(e),
                     }
                     let new_pid = start_fresh(home, daemon_bin).await?;
                     return Ok(RestartOutcome {
@@ -925,15 +1100,34 @@ pub async fn restart_daemon(
     if termination == Termination::Survived {
         return Err(RestartError::DidNotDie { pid: old_pid });
     }
-    // Both arms wait for the supervisor flock to dissolve before starting
-    // fresh, so start_fresh never binds while the old daemon still holds it.
-    if !await_lock_free(home).await {
-        return Err(RestartError::ForceDidNotFree {
-            pid: old_pid,
-            secs: FORCE_LOCK_TIMEOUT.as_secs(),
-        });
+    // Both arms wait for the singleton to become startable again before
+    // starting fresh, so start_fresh never binds while the old daemon still
+    // holds it - and a supervisor that re-binds a fresh daemon in that window
+    // is a SUCCESS to adopt, not a wedge to fail on (see the helper).
+    let escalated = termination == Termination::Escalated;
+    match await_lock_free_or_rebound(home, old_pid, recorded_start, teardown_bound()).await {
+        Ok(Some(new_pid)) => {
+            return Ok(RestartOutcome {
+                old_pid: Some(old_pid),
+                new_pid,
+                forced: escalated,
+                note: Some(if escalated {
+                    format!(
+                        "pid {old_pid} died after escalation to SIGKILL; a fresh daemon \
+                         rebound the singleton before the lock cleared; adopted it"
+                    )
+                } else {
+                    format!(
+                        "pid {old_pid} died; a fresh daemon rebound the singleton before \
+                         the lock cleared; adopted it"
+                    )
+                }),
+            });
+        }
+        Ok(None) => {}
+        Err(e) => return Err(e),
     }
-    if termination == Termination::Escalated {
+    if escalated {
         let new_pid = start_fresh(home, daemon_bin).await?;
         return Ok(RestartOutcome {
             old_pid: Some(old_pid),
@@ -1112,6 +1306,158 @@ mod response_timeout_tests {
         assert_eq!(response.result().unwrap()["removed"], true);
         server.await.unwrap();
         std::fs::remove_file(&sock_path).ok();
+    }
+}
+
+#[cfg(test)]
+mod restart_rebound_tests {
+    use super::*;
+    use crate::protocol::{write_response, Response};
+    use tokio::net::UnixListener;
+
+    fn temp_home(tag: &str) -> (AgentsHome, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("fno-agents-rebound-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        (AgentsHome::at(root.clone()), root)
+    }
+
+    /// Hold the supervisor lock the way a booting daemon would, so
+    /// `daemon_lock_is_free` reads false for the helper's whole bound.
+    fn hold_lock(home: &AgentsHome) -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(home.supervisor_lock())
+            .unwrap();
+        file.try_lock().expect("exclusive hold");
+        file
+    }
+
+    /// Serve `agent.status` naming `pid` for the helper's probes; accepts up
+    /// to 8 connects (one per 100ms tick of a 2s bound, plus slop).
+    async fn serve_status(sock: PathBuf, pid: u64) -> tokio::task::JoinHandle<()> {
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            for _ in 0..8 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let resp = Response::ok(1, json!({"daemon": {"pid": pid}}));
+                let _ = write_response(&mut stream, &resp).await;
+            }
+        })
+    }
+
+    /// The three arms in one contract test (the suite is shrink-only):
+    /// adopt a rebound daemon, fail loud on a held lock with nothing
+    /// answering, and return the start-fresh arm the moment the lock frees.
+    #[tokio::test]
+    async fn rebound_waits_on_the_new_daemon_not_the_lock() {
+        // Adopt: the lock is held and a fresh daemon answers on the socket.
+        let (home, root) = temp_home("adopt");
+        let _lock = hold_lock(&home);
+        let old_pid: u32 = 424242;
+        let new_pid: u32 = 424243;
+        let server = serve_status(home.supervisor_sock(), u64::from(new_pid)).await;
+        let out =
+            super::await_lock_free_or_rebound(&home, old_pid, None, Duration::from_secs(2)).await;
+        server.abort();
+        match out {
+            Ok(Some(pid)) => assert_eq!(pid, new_pid, "the rebound daemon is adopted"),
+            other => panic!("expected adoption of pid {new_pid}, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        // Wedge: the lock is held and nothing ever answers; the bound spent
+        // is the loud failure, naming the pid.
+        let (home, root) = temp_home("wedge");
+        let _lock = hold_lock(&home);
+        let out =
+            super::await_lock_free_or_rebound(&home, 424242, None, Duration::from_millis(400))
+                .await;
+        match out {
+            Err(RestartError::ForceDidNotFree {
+                pid,
+                secs,
+                observed,
+            }) => {
+                assert_eq!(pid, 424242);
+                assert_eq!(secs, 0, "the bound names itself in the error");
+                assert!(
+                    observed.contains("old pid 424242 gone"),
+                    "the receipt names the old pid's fate: {observed}"
+                );
+            }
+            other => panic!("expected ForceDidNotFree, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        // Free: the start-fresh arm answers on its first tick, no probe penalty.
+        let (home, root) = temp_home("free");
+        let started = std::time::Instant::now();
+        let out =
+            super::await_lock_free_or_rebound(&home, 424242, None, Duration::from_secs(2)).await;
+        assert!(
+            matches!(out, Ok(None)),
+            "a free lock is the start-fresh arm, got {out:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the free arm returns on its first tick"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The post-SIGKILL waits scale with load: idle stays at the base, the
+    /// incident shape (~17 jobs/core) saturates the max, the midpoint scales
+    /// linearly, and an unreadable load reads as loaded (the wait exits on
+    /// first success, so generosity only costs the failing arm).
+    #[test]
+    fn teardown_bound_scales_with_load_per_core() {
+        // Idle 8-core box: base.
+        assert_eq!(
+            super::teardown_bound_for(Some(4.0), 8.0),
+            Duration::from_secs(5),
+            "idle load keeps the base bound"
+        );
+        // The incident shape: ~17 jobs per core saturates.
+        assert_eq!(
+            super::teardown_bound_for(Some(136.0), 8.0),
+            Duration::from_secs(30),
+            "the incident load saturates the bound"
+        );
+        // Midpoint scales linearly (4.5 load/core -> 17.5s -> 18).
+        assert_eq!(
+            super::teardown_bound_for(Some(36.0), 8.0),
+            Duration::from_secs(18),
+            "the bound scales linearly with load per core"
+        );
+        // An unreadable load reads as loaded: the wait exits on first
+        // success, so generosity only costs the already-failing arm.
+        assert_eq!(
+            super::teardown_bound_for(None, 8.0),
+            Duration::from_secs(30),
+            "an unreadable load reads as loaded"
+        );
+    }
+
+    /// The spent-wait receipt reports facts, never "check it manually": the
+    /// old pid's fate, the lock holder, and the absent answer.
+    #[test]
+    fn the_spent_wait_names_what_it_found() {
+        assert_eq!(
+            super::describe_lock_wait(424242, false, &super::LockObservation::HeldBy(424243)),
+            "old pid 424242 gone; lock held by pid 424243; no new daemon answered"
+        );
+        assert_eq!(
+            super::describe_lock_wait(424242, true, &super::LockObservation::Free),
+            "old pid 424242 still alive; lock free; no new daemon answered"
+        );
+        assert_eq!(
+            super::describe_lock_wait(424242, false, &super::LockObservation::HeldUnpublished),
+            "old pid 424242 gone; lock held but the lockfile names no pid; no new daemon answered"
+        );
     }
 }
 

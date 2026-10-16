@@ -19,6 +19,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -426,15 +427,9 @@ def test_alias_lock_contention_is_bounded_to_canonical_handle(tmp_path, monkeypa
         job_id="deadbeef",
         cwd="/Users/x/code/project",
     )
-    monkeypatch.setattr(discover, "_ALIAS_LOCK_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(discover, "_ALIAS_LOCK_POLL_SECONDS", 0.005)
-    lock_path = name_map.with_suffix(name_map.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(lock_path, "w") as holder:
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
-        started = time.monotonic()
-        sessions = discover.discover_live_sessions(
+    def scan():
+        return discover.discover_live_sessions(
             sessions_dir=sdir,
             projects_dir=tmp_path / "no-projects",
             codex_sessions_dir=tmp_path / "no-codex",
@@ -446,7 +441,51 @@ def test_alias_lock_contention_is_bounded_to_canonical_handle(tmp_path, monkeypa
             classify_truth=False,
         )
 
-    assert time.monotonic() - started < 0.5
+    # Contrast pass: with the lock free the same scan writes the map, so the
+    # contended pass can attribute its fallback to the lock timeout alone.
+    baseline = scan()
+    assert len(baseline) == 1
+    assert name_map.exists()
+    name_map.unlink()
+
+    monkeypatch.setattr(discover, "_ALIAS_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(discover, "_ALIAS_LOCK_POLL_SECONDS", 0.005)
+    lock_path = name_map.with_suffix(name_map.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The contender consumes its timeout on a controlled clock: monotonic
+    # advances only when the lock loop sleeps, so a paused runner cannot
+    # inflate the contended pass. Wall time is never measured.
+    real_time = discover.time
+    now = 0.0
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(
+        discover,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: now,
+            sleep=fake_sleep,
+            time=lambda: real_time.time(),
+        ),
+    )
+
+    with open(lock_path, "w") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        sessions = scan()
+
+    # Gave up at the deadline on the controlled clock, one poll-sized sleep
+    # at a time, then fell back to the canonical handle without the write.
+    budget = discover._ALIAS_LOCK_TIMEOUT_SECONDS
+    poll = discover._ALIAS_LOCK_POLL_SECONDS
+    assert sleeps
+    assert all(d <= poll for d in sleeps)
+    assert now == pytest.approx(budget, abs=poll / 2)
     assert [session.handle for session in sessions] == ["aaaaaaaa"]
     assert not name_map.exists()
 
@@ -2013,6 +2052,41 @@ def test_us2_registry_handle_resolves(tmp_path, monkeypatch):
     assert by_short is not None
 
 
+def test_identity_only_sweep_skips_falsifier_and_project(tmp_path, monkeypatch):
+    """The address sweep reads identity alone: the falsifier spawns a holder
+    probe per claude row and a project resolve parses every settings file."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.registry import AgentEntry, write_registry
+
+    reg = tmp_path / "registry.json"
+    write_registry(
+        [
+            AgentEntry(
+                name="x-foo",
+                harness="claude",
+                cwd="/Users/x/code/proj",
+                log_path="/tmp/x-foo.log",
+                short_id="9a063cd3",
+                harness_session_id="9a063cd3-69d4-415a-ada5-649b0164189c",
+            )
+        ],
+        path=reg,
+    )
+    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(tmp_path / "no-daemon"))
+    calls: list[str] = []
+    monkeypatch.setattr(discover, "registry_falsifier", lambda e: calls.append("falsify"))
+    seams = _empty_seams(tmp_path)
+    seams["project_resolver"] = lambda cwd: calls.append("project")
+    sessions = discover.discover_live_sessions(
+        registry_path=reg, classify_truth=False, identity_only=True, **seams
+    )
+    assert [s.name for s in sessions] == ["x-foo"]
+    assert sessions[0].project is None
+    assert calls == []
+    discover.discover_live_sessions(registry_path=reg, classify_truth=False, **seams)
+    assert sorted(calls) == ["falsify", "project"]
+
+
 def test_us2_registry_name_resolves_codex_after_cross_store_uniqueness_check(tmp_path):
     """US2/AC1-HP: truth resolves a live codex pane worker by its registered NAME.
 
@@ -3485,171 +3559,6 @@ def test_resolve_reachable_canonical_and_legacy_collision_fails_ambiguous(tmp_pa
     found, ambiguous = discover.resolve_reachable("deadbeef", projects_dir=project.parent)
     assert found is None
     assert sorted(ambiguous) == sorted([legacy_sid, canonical_sid])
-
-
-# --------------------------------------------------------------------------
-# Harness-native subagent discovery (x-af92): read-only sidechain visibility
-# --------------------------------------------------------------------------
-def _write_subagent(projects_dir, *, enc_cwd, parent_sid, agent_id, mtime_age=5.0, record=None):
-    """Sidechain transcript at <enc-cwd>/<session>/subagents/agent-*.jsonl."""
-    sdir = projects_dir / enc_cwd / parent_sid / "subagents"
-    sdir.mkdir(parents=True, exist_ok=True)
-    f = sdir / f"agent-{agent_id}.jsonl"
-    rec = (
-        record
-        if record is not None
-        else {
-            "isSidechain": True,
-            "agentId": agent_id,
-            "sessionId": parent_sid,
-            "cwd": "/Users/x/code/proj",
-            "gitBranch": "main",
-            "type": "user",
-        }
-    )
-    f.write_text(json.dumps(rec) + "\n", encoding="utf-8")
-    mt = time.time() - mtime_age
-    os.utime(f, (mt, mt))
-    return f
-
-
-def test_subagent_discovery_reads_fields_and_liveness(tmp_path):
-    """AC4-HP: a live sidechain surfaces with agentId, parent, cwd, branch, verdict."""
-    projects = tmp_path / "projects"
-    parent = "62ec5501-9d77-4430-bc34-a2d036dbeb79"
-    _write_subagent(
-        projects,
-        enc_cwd="-Users-x-code-proj",
-        parent_sid=parent,
-        agent_id="af8f986001a0cc559",
-        mtime_age=30.0,
-        record={
-            "isSidechain": True,
-            "agentId": "af8f986001a0cc559",
-            "sessionId": parent,
-            "cwd": "/Users/x/code/proj",
-            "gitBranch": "feature/x",
-            "type": "user",
-        },
-    )
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert warnings == []
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.agent_id == "af8f986001a0cc559"
-    assert r.parent_session_id == parent
-    assert r.cwd == "/Users/x/code/proj"
-    assert r.git_branch == "feature/x"
-    assert r.verdict == "active"
-    assert r.age_seconds == pytest.approx(30.0, abs=2.0)
-
-
-def test_subagent_liveness_idle_within_scan_window(tmp_path):
-    """AC4-HP: past the live threshold but inside the scan window -> idle, kept."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="p-1-2-3-4-5",
-        agent_id="deadbeef0011000",
-        mtime_age=1200.0,  # 20 min: past 600s live, within the 2h scan window
-    )
-    rows, _ = discover.discover_subagents(
-        projects_dir=projects, live_within_seconds=600.0, scan_window_seconds=7200.0
-    )
-    assert len(rows) == 1
-    assert rows[0].verdict == "idle"
-
-
-def test_subagent_aged_out_past_scan_window(tmp_path):
-    """A frozen transcript ages out entirely past the scan window (parent-dies case)."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="p-1-2-3-4-5",
-        agent_id="aged00000000000",
-        mtime_age=3 * 3600.0,
-    )
-    rows, warnings = discover.discover_subagents(projects_dir=projects, scan_window_seconds=7200.0)
-    assert rows == []
-    assert warnings == []  # pruned by mtime, not a read failure
-
-
-def test_subagent_malformed_first_record_skipped(tmp_path):
-    """AC5-EDGE: a malformed first record is skipped; the sweep continues."""
-    projects = tmp_path / "projects"
-    _write_subagent(projects, enc_cwd="-c", parent_sid="p-1-2-3-4-5", agent_id="good00000000001")
-    sdir = projects / "-c" / "p-1-2-3-4-5" / "subagents"
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "agent-bad00000000002.jsonl").write_text("{not json\n", encoding="utf-8")
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert warnings == []
-    assert [r.agent_id for r in rows] == ["good00000000001"]
-
-
-def test_subagent_missing_fields_fall_back_to_filename_and_dir(tmp_path):
-    """A record missing agentId/sessionId resolves off the filename stem and parent dir."""
-    projects = tmp_path / "projects"
-    parent = "9aaa0000-1111-2222-3333-444455556666"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid=parent,
-        agent_id="cafe00000000000f",
-        record={"isSidechain": True, "type": "user"},
-    )
-    rows, _ = discover.discover_subagents(projects_dir=projects)
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.agent_id == "cafe00000000000f"
-    assert r.parent_session_id == parent
-    assert r.cwd == ""
-    assert r.git_branch is None
-
-
-def test_subagent_dedups_on_agent_id_across_sessions(tmp_path):
-    """Two session dirs holding the same agentId collapse to one row."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="sess-1-1-1-1-1",
-        agent_id="share0000000000a",
-        mtime_age=60.0,
-    )
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="sess-2-2-2-2-2",
-        agent_id="share0000000000a",
-        mtime_age=10.0,
-    )
-    rows, _ = discover.discover_subagents(projects_dir=projects)
-    assert len(rows) == 1
-    assert rows[0].agent_id == "share0000000000a"
-
-
-def test_subagent_absent_store_is_silent_zero(tmp_path):
-    """AC7-EDGE: a store with no subagents/ dirs -> zero rows, no warning."""
-    projects = tmp_path / "empty-projects"
-    projects.mkdir()
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert rows == []
-    assert warnings == []
-
-
-def test_subagent_unreadable_root_emits_one_warning(tmp_path, monkeypatch):
-    """AC5-EDGE: a read error from the scan -> exactly one warning, zero rows, no raise."""
-
-    def _boom(*_a, **_k):
-        raise OSError("permission denied")
-
-    monkeypatch.setattr("pathlib.Path.glob", _boom)
-    rows, warnings = discover.discover_subagents(projects_dir=tmp_path / "projects")
-    assert rows == []
-    assert len(warnings) == 1
-    assert "unreadable" in warnings[0]
 
 
 def test_disambiguate_does_not_compound_a_non_unique_short_id():

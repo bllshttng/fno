@@ -9,7 +9,7 @@
 //! is the session-free floor: it shells the same bare
 //! `fno backlog reconcile --json` the SessionStart hook runs, with no
 //! session in the loop. The closure decision stays in
-//! `graph._reconcile.scan_merge_drift`; nothing here re-implements it.
+//! `drift_scan::scan_merge_drift`; nothing here re-implements it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -59,11 +59,28 @@ fn unreadable(stdout: &str) -> CloseOutcome {
     }
 }
 
+/// A rate-limit refusal in a failure row is a backoff, not the sweep's
+/// failure: the row reports a wait. Covers the local request budget and
+/// GitHub's own refusal, since both clear by waiting.
+fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
+    row.get("error")
+        .or_else(|| row.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|error| {
+            error.contains("outcome=budget_refused")
+                || error.contains("gh budget:")
+                || error.contains("rate limit")
+        })
+}
+
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
 /// strings. The verb pretty-prints its JSON across many lines, so the whole
 /// trimmed stdout parses as one object - never a search for a `{` line. A
 /// run that did not report a readable `closed` array is an error, never a
-/// zero: a fabricated zero reads as "in sync" (the stale-summary rule).
+/// zero: a fabricated zero reads as "in sync" (the stale-summary rule). A
+/// GitHub budget refusal is a wait, not a failure: it is counted under
+/// `waiting` and never counts toward the failure verdict.
 pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
     let stdout = match run {
         Ok(stdout) => stdout,
@@ -111,20 +128,37 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
             .map_or(0, |a| a.len()) as u64
     };
     let acted = closed.len() as u64;
-    let failures = count_of("failures");
-    let evidence = count_of("supersession_evidence_failures");
+    let rows = parsed
+        .get("failures")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let waiting = rows.iter().filter(|row| is_rate_limit_wait(row)).count() as u64;
+    let failures = rows.len() as u64 - waiting;
+    // Evidence rows carry their cause under `reason`; a rate-limited
+    // evidence read waits the same way.
+    let evidence_rows = parsed
+        .get("supersession_evidence_failures")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let evidence_waiting = evidence_rows
+        .iter()
+        .filter(|row| is_rate_limit_wait(row))
+        .count() as u64;
+    let evidence = evidence_rows.len() as u64 - evidence_waiting;
+    let waiting = waiting + evidence_waiting;
     let mut detail = format!(
         "closed={acted} promise_unmet={} failures={failures}",
         count_of("promise_unmet")
     );
+    if waiting > 0 {
+        detail.push_str(&format!(" waiting={waiting} (GitHub rate limit)"));
+    }
     if evidence > 0 {
         detail.push_str(&format!(" evidence_failures={evidence}"));
     }
-    if let Some(first) = parsed
-        .get("failures")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|a| a.first())
-    {
+    if let Some(first) = rows.iter().find(|row| !is_rate_limit_wait(row)) {
         let node = first
             .get("node_id")
             .and_then(serde_json::Value::as_str)
@@ -157,6 +191,8 @@ pub fn outcome_from_reconcile(run: Result<String, String>) -> CloseOutcome {
             None
         } else if failures > 0 || evidence > 0 {
             Some("failures".to_string())
+        } else if waiting > 0 {
+            Some("rate_limited".to_string())
         } else {
             Some("none_to_close".to_string())
         },
@@ -216,6 +252,7 @@ fn reconcile_result(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<S
 fn emit_one(
     home: &AgentsHome,
     pause: &DispatchPause,
+    backoff_s: i64,
     run: impl FnOnce() -> Result<String, String>,
 ) -> CloseOutcome {
     let outcome = if pause.is_paused() {
@@ -224,6 +261,12 @@ fn emit_one(
             acted: 0,
             skip_reason: Some(pause.skip_reason().to_string()),
             detail: pause.detail(),
+        }
+    } else if backoff_s > 0 {
+        CloseOutcome {
+            acted: 0,
+            skip_reason: Some("rate_limited".to_string()),
+            detail: format!("GitHub rate limit backoff, {backoff_s}s left; the sweep waits"),
         }
     } else {
         outcome_from_reconcile(run())
@@ -269,7 +312,15 @@ fn maybe_tick_with(
     let flag = Arc::clone(&arm.in_flight);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        emit_one(&home, &crate::loops_pause::dispatch_pause(), run);
+        // A sweep inside the backoff only spends reads the limit refuses.
+        // Unarmed (a test), the machine's real ledger is never read.
+        let backoff_s = if crate::gh_budget::admission_armed() {
+            crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), crate::gh_budget::now_ms())
+                .backoff_remaining_s
+        } else {
+            0
+        };
+        emit_one(&home, &crate::loops_pause::dispatch_pause(), backoff_s, run);
     });
 }
 
@@ -362,6 +413,44 @@ mod tests {
             "closed=0 promise_unmet=0 failures=1; first: x-1 PR #1: gh down"
         );
 
+        // A budget refusal is the limiter's wait, not the sweep's failure.
+        let wait_error = "backlog-evidence: external read 'backlog-evidence' outcome=budget_refused elapsed_s=- stderr_tail=\"gh budget: fleet GitHub rate limit held locally\"";
+        let stdout = serde_json::json!({
+            "closed": [],
+            "promise_unmet": [],
+            "failures": [
+                {"node_id": "x-2", "pr_number": 2, "error": wait_error},
+                {"node_id": "x-3", "pr_number": 3, "error": wait_error},
+            ]
+        })
+        .to_string();
+        let o = outcome_from_reconcile(Ok(stdout));
+        assert_eq!(o.acted, 0);
+        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
+        assert_eq!(
+            o.detail,
+            "closed=0 promise_unmet=0 failures=0 waiting=2 (GitHub rate limit)"
+        );
+
+        // A wait beside a real failure counts only the failure, and the
+        // first-row text names the failure, never the wait.
+        let stdout = serde_json::json!({
+            "closed": [],
+            "promise_unmet": [],
+            "failures": [
+                {"node_id": "x-2", "pr_number": 2, "error": wait_error},
+                {"node_id": "x-1", "pr_number": 1, "error": "gh down"},
+            ]
+        })
+        .to_string();
+        let o = outcome_from_reconcile(Ok(stdout));
+        assert_eq!(o.acted, 0);
+        assert_eq!(o.skip_reason.as_deref(), Some("failures"));
+        assert_eq!(
+            o.detail,
+            "closed=0 promise_unmet=0 failures=1 waiting=1 (GitHub rate limit); first: x-1 PR #1: gh down"
+        );
+
         let stdout = r#"{
   "closed": [],
   "promise_unmet": [],
@@ -425,6 +514,19 @@ mod tests {
             "detail: {}",
             o.detail
         );
+
+        // A rate-limited evidence read waits; it is not an evidence failure.
+        let stdout = r#"{
+  "closed": [],
+  "failures": [],
+  "supersession_evidence_failures": [{"node_id": "x-2", "reason": "API rate limit exceeded"}]
+}"#;
+        let o = outcome_from_reconcile(Ok(stdout.to_string()));
+        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
+        assert_eq!(
+            o.detail,
+            "closed=0 promise_unmet=0 failures=0 waiting=1 (GitHub rate limit)"
+        );
     }
 
     #[test]
@@ -484,7 +586,7 @@ mod tests {
             state: "paused".to_string(),
             detail: "loops paused by test".to_string(),
         };
-        let o = emit_one(&h, &pause, || panic!("a paused tick spawns no child"));
+        let o = emit_one(&h, &pause, 0, || panic!("a paused tick spawns no child"));
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("loops_paused"));
         assert_eq!(o.detail, "loops paused by test");
@@ -497,7 +599,7 @@ mod tests {
 
         let h = home();
         let pause = DispatchPause::Clear;
-        let o = emit_one(&h, &pause, || {
+        let o = emit_one(&h, &pause, 0, || {
             Ok("{\"closed\": [], \"promise_unmet\": [], \"failures\": []}".to_string())
         });
         assert_eq!(o.acted, 0);
@@ -509,5 +611,15 @@ mod tests {
             "log: {log}"
         );
         assert!(log.contains("\"interval_s\":900"), "log: {log}");
+    }
+
+    #[test]
+    fn a_live_backoff_skips_the_sweep() {
+        let h = home();
+        let pause = DispatchPause::Clear;
+        let o = emit_one(&h, &pause, 120, || panic!("a backoff tick spawns no child"));
+        assert_eq!(o.acted, 0);
+        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
+        assert!(o.detail.contains("120s left"), "detail: {}", o.detail);
     }
 }

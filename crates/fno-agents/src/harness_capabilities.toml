@@ -13,6 +13,15 @@ map_version = 24
 # The value is the composer check's verdict (tests/mail-header-composer-smoke.sh),
 # read as data by the renderer - never a branch in code.
 mail_header_at = true
+# THE LEAD BEAT. What keeps a lead waking between events, read when
+# `agents.<harness>.beat` is `auto` (the default). `daemon`: the daemon's
+# lead-wake mail is the only beat. `loop`: the lead also arms the native
+# `/loop`. `goal`: the provider goal is the continuation. `schedule`: the
+# harness's own recurring schedule tool. An absent key reads `daemon`.
+# Claude keeps `loop` until the daemon wake has a delivery bound past the
+# user-typing hold and a stopped daemon is reported at SessionStart; then
+# this row flips to `daemon` and the /loop retires.
+beat = "loop"
 permission_bypass = ["--dangerously-skip-permissions"]
 # LAUNCHER CHOICE LISTS. The mux composer's picker chips read these. Three
 # states: key ABSENT = no surface at all (the chip reads "not offered");
@@ -139,6 +148,16 @@ headless = "argv-add-dir"
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir", "launch_role", "agent", "tools", "deny_tools"]
 passthrough = ["*"]
 
+# THE NATIVE BG LINE. The lane's launch argv, filled by spawn-overlay's
+# `print` kind and by the exec path - one renderer, two readers. A `{hole}`
+# token takes the spawn's value; an `optional` hole whose value is empty
+# drops its hole token AND the flag before it, so a lane with no route,
+# model or effort still renders a legal argv. A `[[routing.models]]` row may
+# override the argv with its own `launch` list, validated by the same rules.
+[harness.claude.launch]
+argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
+optional = ["settings", "model", "effort", "permission_mode"]
+
 [harness.claude.permission_response.allow_once]
 supported = true
 rule_ids = ["permission_prompt"]
@@ -205,6 +224,9 @@ state = "native"
 
 [harness.codex]
 mail_header_at = true
+# The provider goal keeps a Codex lead working between wakes. It stays
+# while mail to an idle thread can fail to start a turn.
+beat = "goal"
 permission_bypass = ["--dangerously-bypass-approvals-and-sandbox"]
 # efforts: the keys of model_switch_strategy.effort_labels below.
 # permission_modes: the two shortcuts plus every <sandbox>:<approval> pair
@@ -510,6 +532,8 @@ state = "capable"
 
 [harness.agy]
 mail_header_at = true
+# agy documents a recurring `schedule` tool (internal/agy/docs/Hookslink.md:135).
+beat = "schedule"
 permission_bypass = ["--dangerously-skip-permissions"]
 # efforts: agy's own `--effort (low|medium|high)`. permission_modes: exactly
 # the vocabulary permission_pane_tokens maps (codex_posture.rs).
@@ -673,6 +697,7 @@ clear_modal = ["trust (?:this )?folder|do you trust", "\r"]
 
 [harness.opencode]
 mail_header_at = true
+beat = "daemon"
 permission_bypass = ["--dangerously-skip-permissions"]
 # efforts EMPTY: the door passes provider values through, so the picker
 # offers free text rather than a list.
@@ -975,14 +1000,15 @@ session_binding = { strategy = "caller-assigned-cwd-scoped", required = true, ti
 # thread is unsandboxed by that same reading, earned rather than borrowed: the
 # restart journey ran a real keeper-hosted pi child on this lane, and that
 # process is as ordinary and unsandboxed as a pane child. headless stays
-# `unmeasured` - nothing has run pi headless yet, so no claim write has ever
-# been observed there, and a lane nothing dispatches must not inherit a stance
-# from the lanes that do. The spawn arm shipped and enforces that
-# stance in code: `_check_spawn_harness` refuses the unmeasured substrate by
-# name, and the lane opens only when its own journey lands.
+# headless is measured the same way, by running it: on 2026-10-16 a headless
+# `pi --print --mode json --no-session --model openai-codex/gpt-6.1-sol`
+# turn, run from one directory, wrote a file in a sibling directory outside its
+# cwd and replied `done`. That is the lane `pi_ask.rs` builds. The lane stayed
+# `unmeasured` until that run, because a lane nothing dispatches must not
+# inherit a stance from the lanes that do.
 pane = "unsandboxed"
 thread = "unsandboxed"
-headless = "unmeasured"
+headless = "unsandboxed"
 
 # pi has no approval UI, so there is no keystroke answer to record and all
 # three actions are unsupported. This is an absence in pi, not an unmeasured
@@ -1664,15 +1690,17 @@ headless = "unsandboxed"
 state = "native"
 measured_by = { reader = "session-id resume journey", version = "3.14.3", date = "2026-09-29" }
 
-# footnote: footnote's own turn loop (crates/fno-agents/src/footnote_harness),
-# run in-process by the client over a borrowed model endpoint. Headless only:
-# no pane, no thread, no TUI. The id is footnote's own fno_id, minted before
-# the first record, so the binding is preassigned.
+# footnote: footnote's own turn loop (the fnh binary), a child binary the
+# client launches with one launch spec on stdin. A pane hosts its TUI:
+# `footnote --spec <file>`, no thread lane. The id is footnote's own fno_id,
+# minted before the first record, so the binding is preassigned.
 [harness.footnote]
 mail_header_at = true
 permission_bypass = []
 efforts = []
-permission_modes = []
+# permission_modes: the modes the fnh binary reads from launch spec v2,
+# Claude Code's own names. dontAsk denies what default would ask.
+permission_modes = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"]
 resume = "native-session"
 autonomous_pane = false
 route_on_pane = false
@@ -1705,10 +1733,12 @@ supported = false
 rule_ids = []
 keys = []
 
-# No TUI exists: the loop is a function in the client process.
+# The TUI (a terminal stdin) takes no session flag: it opens its own
+# sessions from one launch spec file, `--spec <path>` (fnh src/tui/mod.rs).
+# The pane arm appends the path of the spec the Rust owner writes.
 [harness.footnote.resume_strategy.forms.interactive_create]
-kind = "unsupported"
-tokens = []
+kind = "flag"
+tokens = ["footnote", "--spec"]
 
 [harness.footnote.resume_strategy.forms.interactive_resume]
 kind = "unsupported"
@@ -1718,7 +1748,7 @@ tokens = []
 kind = "unsupported"
 tokens = []
 
-# In-process forms: the client runs the loop; no child argv exists.
+# The verbs a user types; the client turns each into a footnote child.
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["fno-agents", "spawn", "-H", "footnote", "--substrate", "headless"]
@@ -1871,11 +1901,11 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinje
 
 [harness.footnote.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/footnote_harness/hooks.rs"]
+via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/footnote_harness/mod.rs"]
 
 [harness.footnote.hooks.lead_reinject]
-state = "impossible"
-reason = "the footnote harness compacts in-process (footnote_harness maybe_compact) and fires no compaction hook event, so the postcompact carrier never runs; the lead brief rides SessionStart only"
+state = "supported"
+via = ["hooks/hooks.json", "hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.gemini.hooks.lead_guard]
 state = "missing"
@@ -1933,17 +1963,36 @@ blocked = "none"
 state = "supported"
 via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 
+# agy pushes per-turn state, not only the session-start presence report:
+# hook/adapter/agy.rs normalizes agy's payloads and the two event-pinned
+# shims (agy-session-state-pre-invocation.sh, agy-session-state-stop.sh)
+# feed the entry, so the row reads inside-leg state instead of the screen
+# scrape. agy exposes no permission-prompt event, so blocked stays "none"
+# and the screen backstop keeps the row. opencode and pi push presence
+# only: one `fno-agents report --kind session` at session start, so the
+# registry knows the session id and transcript, and their rows still read
+# their turn state from the screen scrape.
 [harness.agy.hooks.session_state]
 state = "supported"
-via = ["hooks/agy-session-report.sh", "crates/fno-agents/src/agy_hooks.rs"]
+via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/adapter/agy.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# PreInvocation is agy's turn start (it fires before each model call), Stop
+# ends the execution loop. agy exposes no permission-prompt event, so
+# blocked stays "none"; the payload contract names no model or effort
+# field, so the row's served axes ride only when a payload carries them.
+[harness.agy.hooks.session_state.wiring]
+events = { PreInvocation = "working", Stop = "done" }
+blocked = "none"
 
 [harness.opencode.hooks.session_state]
 state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js"]
+reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
 
 [harness.pi.hooks.session_state]
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts"]
+reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
 
 [harness.gemini.hooks.session_state]
 state = "missing"
@@ -1989,7 +2038,7 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/event_r
 
 [harness.footnote.hooks.event_rules]
 state = "supported"
-via = ["crates/fno-agents/src/footnote_harness/hooks.rs", "crates/fno-agents/src/hook/stop.rs"]
+via = ["crates/fno-agents/src/footnote_harness/mod.rs", "crates/fno-agents/src/hook/stop.rs"]
 
 [harness.gemini.hooks.event_rules]
 state = "impossible"

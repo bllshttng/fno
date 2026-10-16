@@ -193,7 +193,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 | Mark complete | `fno backlog done <id>` | closes only on a MERGED PR; sets `completed_at`, unblocks dependents |
 | Reopen it | `fno backlog reopen <id> --reason "..."` | clears `completed_at`; refuses when a referenced PR is MERGED |
 | Remove permanently | `fno backlog remove <id>` | hard delete (use for dupes / dead nodes) |
-| Sweep old terminal nodes | `fno backlog archive --apply` | moves them to `graph-archive.json`, still readable; runs daily via `fno backlog groom` |
+| Sweep old terminal nodes | `fno backlog archive --apply` | stamps `archived_at` in the same store, still readable; runs daily via `fno backlog groom` |
 | Bring one back | `fno backlog unarchive <id>` | returns it to the working graph |
 | Browse what shipped | `fno backlog album` | pages the archive newest-first; `--project`, `--json` |
 | Fix a working/archive id collision | `fno backlog archive-dedupe-ids --apply` | reminds the archived side; old id resolves via `previous_id` |
@@ -215,6 +215,8 @@ The usual remedy is to file what remains as its own node.
 `--force --reason` records a deliberate reopen of shipped work.
 Ancestor epics the cascade auto-closed come back with the child.
 An epic closed on its own evidence is left alone and named, because reopening it discards a judgment the verb never made.
+
+Two facts hold a reopen against the children rollup, which otherwise re-derives `done` from the closed children on the next read. A parent with a bound plan and no PR of its own is never auto-closed. Its deliverables are unverified, so it closes through its own door on its own evidence. A reopen that postdates every child's close stamps `reopened_at`, and the rollup respects that stamp until a new child close lands.
 
 ## Deferred kinds
 
@@ -289,7 +291,7 @@ Four edges connect nodes, and only the first two gate anything.
 
 `source_node_id` and `related` are deliberately different questions.
 
-`contained_in` is not defer. Containment says the node's work ships inside the owner's PR. The row stays on the board with a `ships inside: <owner>` line and never dispatches alone. When the owner's merge cascades, the row closes with it. Defer is a judgement any groom pass can make and it hides the row. If the intent is "this ships with that", adopt, never defer. Full contract: [subtask-containment](architecture/subtask-containment.md).
+`contained_in` is not defer. Containment says the node's work ships inside the owner's PR. The row stays on the board with a `ships inside: <owner>` line and never dispatches alone. When the owner's merge cascades, the row closes with it. Pass `--surface <repo-relative-path>` at contain time. Pass the flag once per path. When the owner's merged PR touches a declared surface, the cascade closes the row. When the owner's PR body binds the child through a closure line, the cascade closes the row too. With neither, the cascade releases the containment. The row stays open and dispatches again. Undeclared children close as before. Defer is a judgement any groom pass can make and it hides the row. If the intent is "this ships with that", adopt, never defer. Full contract: [subtask-containment](architecture/subtask-containment.md).
 Origin is where the decision to think about this was made; affinity is asserted by whoever notices it, in either direction, and neither implies the other.
 
 **Origin capture is ambient first.** Filing a node from a session that already knows its node stamps the origin with no flag, through three branches in precedence order: an explicit `--source-node`, then an owned `.fno/target-state.md`, then the `FNO_NODE` a spawn exported. Pass `--source-node <id>` only when none of those apply, or to override them.
@@ -491,6 +493,33 @@ fno backlog update <id> --no-public
 fno backlog roadmap --project fno --out ROADMAP.md
 ```
 
-The roadmap emits only title / priority / size grouped Now / Next / Later / Shipped (Triage folds into Later), markdown only: the rendered public HTML projections retired with the second board (2026-09-30), and the flags refuse by name. The output emits no IDs, details, plan paths, cwd, blockers, PR links, or sessions.
+The roadmap emits only title / priority / size grouped Now / Next / Later / Shipped (Triage folds into Later), markdown only. The output emits no IDs, details, plan paths, cwd, blockers, PR links, or sessions. The public HTML board now rides `fno backlog publish` (below), or `fno backlog roadmap --backlog-html <path>` for a local file.
 
-Before any public file is replaced, the shared gate scans every emitted title for PR references, graph IDs, home paths, and session IDs. One offender makes the command exit nonzero, prints the complete cleanup queue on private stderr, and leaves every requested output unchanged.
+Before any public file is replaced, the shared gate scans every emitted title for home paths and session IDs. One offender makes the command exit nonzero, prints the complete cleanup queue on private stderr, and leaves every requested output unchanged.
+
+## Publish a public board
+
+One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection. Only open rows (in progress, ready, blocked, idea) and rows not marked `--no-public` appear. Every title clears the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
+
+```bash
+fno backlog publish --project fno --out site/backlog
+```
+
+Three targets:
+
+- `--out <dir>` writes `<dir>/index.html` for any static host and prints a `file://` URL. Pass `--url` to print a different address.
+- `--exec '<command with {file}>'` hands the staged page to any uploader. The Cloudflare KV line that serves footnote.sh/backlog:
+
+```bash
+fno backlog publish --project fno --exec 'npx wrangler kv key put --binding ROADMAP fno-backlog --path {file} --remote' --url https://footnote.sh/backlog
+```
+
+- With neither flag, the board publishes a `backlog/` subtree to the project repo's `gh-pages` branch through git plumbing. Your checkout never moves. The first publish enables Pages (`gh-pages`, `/`). An unchanged board pushes nothing (`unchanged: <url>`). A repo whose origin is not GitHub, and a project with no path in `work.workspaces`, refuse naming `--out` and `--exec`.
+
+Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-identical output, so a scheduler can run the command as often as it wants.
+
+```bash
+*/15 * * * * fno backlog publish --project <slug>
+```
+
+Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.

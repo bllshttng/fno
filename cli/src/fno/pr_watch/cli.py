@@ -30,9 +30,6 @@ cli = typer.Typer(
     no_args_is_help=True,
 )
 
-_LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
-
-
 def _resolve_fno_binary() -> str:
     """Return the absolute path to the fno binary.
 
@@ -101,10 +98,9 @@ def _bounce_sender(window_s: float = 15.0) -> str:
     """
     try:
         import time
-        from fno.paths import state_dir
-        from fno.pr_watch._install import _BOUNCE_SIDECAR
+        from fno.pr_watch._install import bounce_sidecar_path
 
-        raw = json.loads((state_dir() / _BOUNCE_SIDECAR).read_text(encoding="utf-8"))
+        raw = json.loads(bounce_sidecar_path().read_text(encoding="utf-8"))
         if time.time() - float(raw["ts"]) <= window_s:
             return f"{raw['caller']} pid {raw['pid']} via {raw.get('parent', '')}".rstrip()
     except Exception:  # noqa: BLE001 - evidence, never a gate
@@ -511,6 +507,21 @@ def _tick_outcome(result, tick_failed: Optional[str], timed_out: bool) -> str:
         return "degraded"
     return "ok"
 
+
+
+def _replay_views() -> None:
+    """Replay the native view pass. The provenance cache moves no store
+    version, so the keeper's render pass would never see the change."""
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is not None:
+        subprocess.run(
+            [str(binary), "backlog", "render-views"],
+            capture_output=True, check=False, timeout=600,
+        )
 
 @cli.command()
 def tick() -> None:
@@ -1434,9 +1445,7 @@ def tick() -> None:
                     f"acted={acted_n} failed={failed_n}"
                 )
                 if changed:
-                    from fno.graph.render import render_graph_md
-                    from fno.graph.store import read_graph_strict
-                    render_graph_md(read_graph_strict())
+                    _replay_views()
             except _WatchdogBudgetSpent as exc:
                 log.info("pr-watch: stranded leg skipped: %s", exc)
             except Exception as exc:  # noqa: BLE001 - never let the stranded sweep break pr-watch
@@ -1551,27 +1560,34 @@ def install(
     """Render and install the global PR-state watcher LaunchAgent, then load it.
 
     Prints the full plist before writing.  Requires explicit confirmation
-    before writing to ~/Library/LaunchAgents/, then runs ``launchctl load`` so
-    enabled means running.  Pass ``--no-activate`` to write only.
+    before writing to ~/Library/LaunchAgents/, then bootout/bootstrap/kickstart
+    bounces the agent so enabled means running.  Pass ``--no-activate`` to
+    write only.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    settings = load_settings()
-    cfg = settings.pr_watch
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
 
-    _interval = interval if interval > 0 else cfg.interval_seconds
-
-    m.install(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=_interval,
-        dry_run=dry_run,
-        activate=not no_activate,
-    )
-    # A fresh install sees the healer's arm state beside the watcher's.
-    from fno.pr_watch._install import heal_status_line
-
-    typer.echo(heal_status_line())
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr watch install: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    argv = [str(binary), "pr-watch", "install", "--fno-binary", _resolve_fno_binary()]
+    if dry_run:
+        argv.append("--dry-run")
+    if interval > 0:
+        argv += ["--interval", str(interval)]
+    if no_activate:
+        argv.append("--no-activate")
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @cli.command()
@@ -1583,93 +1599,34 @@ def refresh() -> None:
     and is safe to run by hand. A no-op when ``pr_watch.enabled`` is false, so
     an install that does not use the watcher gets nothing. Never fails loud:
     the update chain calls it best-effort and a refresh failure must not fail
-    the update.
+    the update. Force and caller identity (doctor --fix) are verb-level
+    flags on ``fno-agents pr-watch refresh`` itself; a new flag is a new
+    verb and belongs in crates.
     """
-    from fno.pr_watch import _install as m
+    from fno.pr.cli import _forward_to_binary
 
-    settings = load_settings()
-    if not settings.pr_watch.enabled:
-        typer.echo("pr-watch: disabled; nothing to refresh.")
-        return
-
-    msg, _rc = m.refresh_watcher(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=settings.pr_watch.interval_seconds,
-        defer_when_ticking=True,
-        caller="refresh",
-    )
-    typer.echo(f"pr-watch refresh: {msg}")
-    from fno.pr_watch._install import heal_status_line
-
-    typer.echo(heal_status_line())
+    argv = ["refresh", "--fno-binary", _resolve_fno_binary(), "--caller", "refresh"]
+    _forward_to_binary("pr-watch", argv)
 
 
 # Single-flight window for the SessionStart self-heal: long enough to cover the
 # render + bounce round-trip, short enough that a crashed heal recovers soon.
-_HEAL_TTL_MS = 5 * 60 * 1000
-
+# The window (and the gate itself) live in the heal verb now.
 
 @cli.command()
 def heal() -> None:
     """Revive a previously-enabled-but-dead watcher (idempotent, race-guarded).
 
-    The SessionStart self-heal entrypoint: fired when the liveness verdict is
-    ``dead``. Acts only when ``pr_watch.enabled`` is true, so a never-enabled
-    watcher is never auto-installed; a claim single-flights concurrent
-    SessionStarts so the reinstall happens at most once per window. The heal
-    itself is ``refresh_watcher`` (re-render plist + bounce), which cures both
-    an unloaded agent and the wedged-job state a plain ``launchctl load``
-    cannot fix.
+    Forward to the fno-agents pr-watch heal verb: the disabled gate, the
+    bounce-pending guard and the single-flight live in crates now, and the
+    cure is the same re-render + bounce the SessionStart hook always ran.
+    Verb-level flags (--caller, --fno-binary) belong to the verb itself; a
+    new flag is a new verb and belongs in crates.
     """
-    from fno.claims.io import global_claims_root
-    from fno.pr_watch import _install as m
+    from fno.pr.cli import _forward_to_binary
 
-    settings = load_settings()
-    if not settings.pr_watch.enabled:
-        typer.echo("pr-watch heal: disabled; nothing to heal")
-        return
-
-    # A bounce that has not had its first tick yet is not a wedge to cure:
-    # bouncing again re-arms the healthy-pending grace over the same fault
-    # and hides it for another 2x interval.
-    try:
-        report = _liveness_via_binary()
-    except Exception:  # noqa: BLE001 - a probe that cannot read never blocks a cure
-        report = {}
-    if report.get("bounce_pending") is True:
-        typer.echo(
-            f"pr-watch heal: a bounce is pending its first tick ({report.get('detail')}); "
-            "skipped. Run fno do pr watch refresh to bounce anyway."
-        )
-        return
-
-    from fno.backlog.single_flight import acquire_flight
-
-    heal_root = global_claims_root()
-    flight = acquire_flight(
-        "pr-watch:heal", scope="pr-watch SessionStart self-heal",
-        name="pr-watch-heal", root=heal_root, ttl_ms=_HEAL_TTL_MS,
-    )
-    if flight is None or flight.held:
-        # Someone else is on it, not a reason to abort this SessionStart
-        # hook with a traceback.
-        typer.echo("pr-watch heal: another session is healing; skipped")
-        return
-    try:
-        msg, rc = m.refresh_watcher(
-            launch_agents_dir=_LAUNCH_AGENTS_DIR,
-            fno_binary=_resolve_fno_binary(),
-            interval=settings.pr_watch.interval_seconds,
-            defer_when_ticking=True,
-            caller="heal",
-            force_bounce=True,
-        )
-        typer.echo(f"pr-watch heal: {msg}")
-        if rc != 0:
-            raise typer.Exit(1)
-    finally:
-        flight.release()
+    argv = ["heal", "--fno-binary", _resolve_fno_binary(), "--caller", "heal"]
+    _forward_to_binary("pr-watch", argv)
 
 
 # ---------------------------------------------------------------------------
@@ -1682,22 +1639,59 @@ def ensure_watcher_activated() -> str:
 
     The config-set hook path: it must never prompt (the interactive install
     confirm would wedge a headless `fno config set`).  Returns the outcome
-    string from ``_install.ensure_activated``.
+    string from the ``fno-agents pr-watch install --ensure`` verb.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    return m.ensure_activated(
-        launch_agents_dir=_LAUNCH_AGENTS_DIR,
-        fno_binary=_resolve_fno_binary(),
-        interval=load_settings().pr_watch.interval_seconds,
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # No binary, no activation leg. The caller's warning names the remedy
+        # and the config write stays enabled for doctor to flag.
+        return "load-failed"
+    proc = subprocess.run(
+        [
+            str(binary), "pr-watch", "install", "--ensure",
+            "--fno-binary", _resolve_fno_binary(),
+            "--interval", str(load_settings().pr_watch.interval_seconds),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
     )
+    word = proc.stdout.strip()
+    known = {"already-running", "activated", "write-failed", "load-failed"}
+    return word if word in known else "load-failed"
 
 
 def deactivate_watcher() -> str:
     """Unload the watcher (keep the plist) when pr_watch.enabled is set false."""
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    return m.unload_only(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # No binary, no deactivation leg. The caller's warning names the remedy
+        # and the config write stays enabled for doctor to flag.
+        return "unload-failed"
+    try:
+        proc = subprocess.run(
+            [str(binary), "pr-watch", "uninstall", "--unload-only"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        # A wedged launchctl (a documented hang mode here) or an
+        # unexecutable binary degrades to the caller's loud warning.
+        return "unload-failed"
+    word = proc.stdout.strip()
+    known = {"not-installed", "already-unloaded", "unloaded", "unload-failed"}
+    return word if word in known else "unload-failed"
 
 
 # ---------------------------------------------------------------------------
@@ -1712,39 +1706,29 @@ def uninstall() -> None:
     Preserves ~/.fno/pr-watcher-state.json so a reinstall does not re-fire
     previously handled PRs.
     """
-    from fno.pr_watch import _install as m
+    import subprocess
 
-    m.uninstall(launch_agents_dir=_LAUNCH_AGENTS_DIR)
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr watch uninstall: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    argv = [str(binary), "pr-watch", "uninstall"]
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
-
-
-def _liveness_via_binary() -> dict:
-    """The one liveness probe the remaining Python consumers share: the Rust
-    verb's ``--json`` object. Any failure reads as an empty report, so a
-    probe that cannot run never blocks a cure."""
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        return {}
-    try:
-        proc = subprocess.run(
-            [str(binary), "pr-watch", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        report = json.loads(proc.stdout)
-    except Exception:  # noqa: BLE001 - a probe that cannot read never blocks a cure
-        return {}
-    return report if isinstance(report, dict) else {}
 
 
 @cli.command()

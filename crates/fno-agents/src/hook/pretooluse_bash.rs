@@ -118,9 +118,127 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if refusals.is_empty() {
+        if let Some(reason) = gate_native_launch(&payload, &cwd) {
+            refusals.push(reason);
+        }
+    }
+    if refusals.is_empty() {
+        record_launch(&payload, &cwd);
         super::emit_allow()
     } else {
         super::emit_block(&refusals.join("\n\n"))
+    }
+}
+
+/// Decision D1: a native launch line an agent types passes the same spawn
+/// gate a spawn passes, before its launch record is written. A person typing
+/// in a plain terminal runs no hook, so a human launch is never gated. The
+/// hook holds nothing across the launch: the verdict is taken and the keys
+/// released in the same call. A gate that cannot answer is not a refusal -
+/// the hook is foreground-bounded and fails open, never wedging the Bash
+/// call on a daemon that is down.
+fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
+    let Some(cmd) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return None;
+    };
+    if !crate::launch_record::may_launch(cmd) {
+        return None;
+    }
+    // `fno agents spawn` runs the gate itself; gating it here too would
+    // double-count the slot and double-queue the lane. The floor setter is
+    // the exception: the learned-cap floor is the user's setting, so an
+    // agent tool call that carries `--floor` is refused here. A person
+    // typing the same line in a shell runs no PreToolUse hook and writes.
+    if cmd.contains("agents spawn") {
+        return refuse_floor_setter(cmd);
+    }
+    let launches = crate::launch_record::parse_command(cmd, &cwd.to_string_lossy());
+    if launches.is_empty() {
+        return None;
+    }
+    let home = crate::paths::AgentsHome::from_env();
+    let caller_session = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    for launch in launches {
+        let input = crate::spawn_gate::GateInput {
+            name: launch.name.clone().unwrap_or_default(),
+            substrate: crate::launch_record::native_substrate_word(&launch.harness).into(),
+            flags: crate::spawn_gate::GateFlags {
+                force: false,
+                no_wait: true,
+            },
+            route_provider: None,
+            node: launch.node.clone(),
+            account: None,
+            caller_session: caller_session.clone(),
+            succession_scope: None,
+            holder_pid: Some(std::process::id()),
+            seed: None,
+            session_phase: None,
+        };
+        let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        match crate::spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
+            Ok(mut guard) => guard.release(),
+            Err(refusal) => {
+                if refusal.exit_code == crate::spawn_gate::EXIT_GATE_UNAVAILABLE {
+                    eprintln!("pretooluse-bash: spawn gate unavailable; launch allowed");
+                    continue;
+                }
+                let receipt = refusal.receipt.as_ref();
+                let reason = receipt
+                    .and_then(|r| r.get("reason"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let remedy = receipt
+                    .and_then(|r| r.get("remedy"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("check fno agents gate-status");
+                let remedy = crate::capacity::native_remedy(remedy, receipt);
+                let place = crate::spawn_gate_queue::place_note(receipt);
+                return Some(format!(
+                    "spawn gate refused the native launch ({reason}{place}): {remedy}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// The host word a natively launched session reports as. `claude --bg` is
+/// Not a guard. An allowed command that starts a harness session leaves a
+/// launch record, which the child claims at SessionStart: a `claude --bg`
+/// child cannot see its launcher any other way (see launch_record.rs).
+fn record_launch(payload: &Value, cwd: &Path) {
+    let Some(cmd) = payload
+        .pointer("/tool_input/command")
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    if !crate::launch_record::may_launch(cmd) {
+        return;
+    }
+    let (ambient_session, harness, _) = crate::claims::ambient_parent_edge();
+    let session = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or(ambient_session);
+    let home = crate::paths::AgentsHome::from_env();
+    if let Err(error) = crate::launch_record::record_command(
+        home.root(),
+        cmd,
+        &cwd.to_string_lossy(),
+        session.as_deref(),
+        harness.as_deref(),
+        crate::claims::now_ms(),
+    ) {
+        eprintln!("pretooluse-bash: launch record not written: {error}");
     }
 }
 
@@ -206,4 +324,56 @@ fn python_refusal(stdout: &[u8]) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .or_else(|| Some("a Bash PreToolUse guard denied this command".to_string()))
+}
+
+/// The learned-cap floor is the user's setting: the hook refuses an agent
+/// tool call that runs the setter. The user's own shell line runs no
+/// PreToolUse hook, so the same line still works from a person. The scan is
+/// a token sweep like every probe here: `--floor` or `--floor=` before the
+/// first `--` fence on an `agents spawn` line is the setter. A quote edge
+/// flips payload state, so a quoted payload string never trips the flag
+/// test.
+fn refuse_floor_setter(cmd: &str) -> Option<String> {
+    let mut at_spawn = false;
+    let mut quoted = false;
+    for tok in cmd.split_whitespace() {
+        if tok == "--" {
+            return None;
+        }
+        if !quoted && at_spawn && (tok == "--floor" || tok.starts_with("--floor=")) {
+            return Some(
+                "spawn-gate: the spawn cap floor is the user's setting, so an agent tool call \
+                 cannot run it. The user sets it in a shell: fno agents spawn --floor N"
+                    .to_string(),
+            );
+        }
+        if tok.matches('"').count() % 2 == 1 {
+            quoted = !quoted;
+        }
+        if tok == "spawn" {
+            at_spawn = true;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod floor_setter_tests {
+    use super::refuse_floor_setter;
+
+    #[test]
+    fn hook_refuses_a_floor_tool_call_and_passes_the_rest() {
+        assert!(refuse_floor_setter("fno agents spawn --floor 8").is_some());
+        assert!(refuse_floor_setter("fno agents spawn --floor=8 w1 hi").is_some());
+        assert!(refuse_floor_setter("fno agents spawn w1 hi --floor 2").is_some());
+        // Past the fence the flag is the harness's, and other lines never
+        // refuse.
+        assert!(refuse_floor_setter("fno agents spawn -- --floor 3").is_none());
+        assert!(refuse_floor_setter("fno agents spawn w1 hi").is_none());
+        assert!(refuse_floor_setter("fno agents gate-status").is_none());
+        assert!(refuse_floor_setter("git status").is_none());
+        // A quoted payload string is payload, never the setter.
+        assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
+        assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
+    }
 }

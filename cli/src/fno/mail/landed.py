@@ -13,6 +13,7 @@ from fno.bus.log import (
     CROSS_SESSION_DELIVERY,
     HOSTED_DELIVERY,
     TYPED_DELIVERY,
+    dedupe_by_id,
     iter_messages,
     landed_ids,
     record_landed,
@@ -178,7 +179,7 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
     from fno.config import load_settings
 
     now = _dt.now(tz=_tz.utc)
-    all_msgs = list(iter_messages())
+    all_msgs = dedupe_by_id(iter_messages(), last=True)
     retracted = withdrawn_ids(all_msgs)
     already_landed = landed_ids(all_msgs)
     abandon_ttl = load_settings().inbox.landed_abandon_ttl

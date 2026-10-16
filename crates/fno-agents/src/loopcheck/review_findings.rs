@@ -21,11 +21,18 @@ pub struct UnattestedReviewer {
 /// The committed event lines for one journal family: the store's rows in
 /// commit order, pre-cutover bytes imported first (hash-dedupe free).
 pub(crate) fn event_lines(journal: &Path) -> Result<Vec<String>, String> {
+    event_lines_of(journal, &[])
+}
+
+/// [`event_lines`] narrowed to `types` plus the typeless rows (corrupt lines,
+/// which a scan still counts), read through the type index. A stop-path scan
+/// that matches only these types sees the same lines it would pick out of the
+/// full read: a project store holds over a million rows, and loading them all
+/// on every stop was most of the stop hook's time. Empty `types` reads every
+/// row.
+pub(crate) fn event_lines_of(journal: &Path, types: &[&str]) -> Result<Vec<String>, String> {
     crate::event_store::import_all(journal)?;
-    let q = crate::event_store::EventQuery {
-        include_rejected: true,
-        ..Default::default()
-    };
+    let q = crate::event_store::EventQuery::of_types(types);
     let rows = crate::event_store::query_events(journal, &q)?;
     Ok(rows.into_iter().map(|r| r.line).collect())
 }
@@ -71,7 +78,7 @@ pub fn unattested_reviewers_scan(
 ) -> (Vec<UnattestedReviewer>, usize) {
     // no committed evidence -> gate unmet (fail closed); an unreadable store
     // is the same shape, never an empty-but-satisfied read
-    let content = match event_lines(events_path) {
+    let content = match event_lines_of(events_path, &["review_attestation"]) {
         Ok(lines) => lines.join("\n"),
         Err(_) => {
             let unsatisfied = reviewers
@@ -159,12 +166,16 @@ pub(super) fn demote_unmeasured_coverage(coverage: &mut Coverage, resolver: &Fre
 }
 
 /// The local attestation axis: every project-log rotation PLUS the global
-/// journal's slug-scoped attestations. A review fork emits into its own
-/// checkout's project log and mirrors to the global journal, and when the
-/// fork's checkout dies the mirror alone survives (measured on PR 2137:
-/// three attestations for one head, zero copies in any surviving project
-/// log). Mirrors of rows the project log still holds are deduped, so a round
-/// is never counted twice. An unreadable journal degrades to project-only.
+/// journal's slug-scoped attestations PLUS the shared primary's rows for
+/// this repo. A review fork emits into its own checkout's project log and
+/// mirrors to the global journal, and when the fork's checkout dies the
+/// mirror alone survives (measured on PR 2137: three attestations for one
+/// head, zero copies in any surviving project log). Mirrors of rows the
+/// project log still holds are deduped, so a round is never counted twice.
+/// The primary carries the rows a PEER machine committed: reviewed on one
+/// machine, merged from another, the merge read only the local journals and
+/// paid a second review round. An unreadable journal degrades to
+/// project-only; a pull failure degrades to machine-local coverage.
 pub(super) fn review_journal_text(
     events_path: &Path,
     global_events_path: &Path,
@@ -172,10 +183,110 @@ pub(super) fn review_journal_text(
 ) -> String {
     let project_text = crate::event_store::review_text(events_path);
     let global_text = crate::event_store::review_text(global_events_path);
-    let extra_global = missing_global_attestations(&global_text, &project_text, repo_slug);
-    if extra_global.is_empty() {
-        project_text
-    } else {
-        format!("{project_text}\n{extra_global}")
+    merge_attestation_text(
+        &project_text,
+        &global_text,
+        primary_attestation_text(repo_slug),
+        repo_slug,
+    )
+}
+
+/// The remote half of [`review_journal_text`], isolated so the pure merge
+/// stays unit-testable: `configured()` answers None on an unshared store
+/// and under test, and a failed pull degrades to no primary rows.
+fn primary_attestation_text(repo_slug: &str) -> Option<String> {
+    if repo_slug.is_empty() {
+        return None;
+    }
+    let remote = crate::store_remote::configured().ok()??;
+    crate::attest::pull_lines(repo_slug, &remote)
+        .map(|lines| lines.join("\n"))
+        .ok()
+}
+
+/// The pure merge over the three sources, re-sorted by envelope ts when the
+/// primary contributed rows: the pass scan takes the LAST line as a
+/// reviewer's latest verdict, so appending an older primary row after a
+/// newer local one would promote the older verdict. Stable on lines with no
+/// readable ts (they sort first, preserving their relative order).
+fn merge_attestation_text(
+    project_text: &str,
+    global_text: &str,
+    primary_text: Option<String>,
+    repo_slug: &str,
+) -> String {
+    let extra_global = missing_global_attestations(global_text, project_text, repo_slug);
+    let mut merged = project_text.to_string();
+    if !extra_global.is_empty() {
+        merged.push('\n');
+        merged.push_str(&extra_global);
+    }
+    let had_primary = primary_text.is_some();
+    if let Some(primary_text) = primary_text {
+        let extra_primary = missing_primary_attestations(&primary_text, &merged);
+        if !extra_primary.is_empty() {
+            merged.push('\n');
+            merged.push_str(&extra_primary);
+        }
+    }
+    if had_primary {
+        let mut rows: Vec<(String, usize, String)> = merged
+            .lines()
+            .enumerate()
+            .map(|(idx, line)| {
+                let ts = serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|val| {
+                        val.get("ts")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                (ts, idx, line.to_string())
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        merged = rows
+            .into_iter()
+            .map(|(_, _, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    merged
+}
+
+#[cfg(test)]
+mod primary_merge_tests {
+    use super::*;
+
+    fn attest(ts: &str, reviewer: &str, head: &str) -> String {
+        serde_json::json!({
+            "type": "review_attestation",
+            "ts": ts,
+            "data": {"reviewer": reviewer, "head_sha": head, "verdict": "pass"},
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_primary_row_absent_locally_lands_and_a_local_copy_dedups() {
+        // No primary source is the pre-carrier merge: the project text alone.
+        let project = format!("{}\n", attest("2026-10-13T09:00:00Z", "peer", "aaa"));
+        let merged = merge_attestation_text(&project, "", None, "github.com/o/r");
+        assert_eq!(merged.lines().count(), 1);
+        let primary = format!(
+            "{}\n{}\n",
+            attest("2026-10-13T09:00:00Z", "peer", "aaa"),
+            attest("2026-10-13T09:00:01Z", "code-review", "bbb")
+        );
+        let merged = merge_attestation_text(&project, "", Some(primary), "github.com/o/r");
+        // The merge joins sources with blank separators; every consumer
+        // skips them, so the assertion counts envelope lines only.
+        let rows: Vec<&str> = merged.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(rows.len(), 2, "the local copy dedups, the peer row lands");
+        assert!(
+            rows[1].contains("\"bbb\""),
+            "the primary-only row is second"
+        );
     }
 }

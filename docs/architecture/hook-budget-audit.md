@@ -57,10 +57,8 @@ The table lists every distinct configured command variant. A command used by bot
 
 | Command variant | Registered event(s) | Action |
 |---|---|---|
-| `graph-write-protect.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | Refuses direct writes to the managed graph store. |
-| `claude-config-write-guard.sh` | Claude PreToolUse (`Edit|Write|Bash`) | Refuses protected Claude configuration edits. |
 | `worktree-write-protect.sh` | Claude and Codex PreToolUse (`Edit|Write`) | Refuses edits outside the session's permitted worktree. |
-| `generated-write-guard.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | Refuses writes to generated copies and names their source. |
+| `write-gate.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | One gate for the three write surfaces: refuses direct writes to the graph store, protected Claude configuration edits, and writes to generated copies (naming their source). Policy in `crates/fno-agents/src/hook/write_gate.rs`; the shell file only resolves the binary. |
 | `join-partition-write-guard.sh` | Claude PreToolUse (`Edit|Write`) | Refuses writes to a partition owned by another join participant. |
 | `plan-location-guard.sh` | Claude and Codex PreToolUse (`Write`) / (`Edit|Write`) | Refuses plan writes outside the configured plans directory. |
 | `lead-delegation-guard.sh` | Claude PreToolUse (`Edit|Write|NotebookEdit|Bash`) | Refuses a titled lead's direct implementation writes. |
@@ -76,6 +74,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `hooks/inside-leg-report.sh <state>` (stub) | No registration | Tombstone kept one release for out-of-tree callers; maps the state word onto the shim and execs it. |
 | `review-hold.sh acquire` | Claude PreToolUse (`Skill`) | Records that the review skill acquired the review hold. |
 | `born-with-why-offer-inject.sh` | Claude and Codex UserPromptSubmit | Offers the born-with-why intake prompt when its state says one is due. |
+| `friction-offer-inject.sh` | Claude and Codex PostToolUse (no matcher) and UserPromptSubmit | Prints this session's pending friction offer once. With no `.offer` file it exits before reading stdin. |
 | `inject-mail-notify.sh` | Claude and Codex UserPromptSubmit | Injects unread mail notifications. |
 | `inject-announce.sh prompt` | Claude and Codex UserPromptSubmit | Injects queued announcements at the prompt boundary. |
 | `inject-announce.sh compact` | Codex PostCompact | Re-injects queued announcements after compaction. |
@@ -122,7 +121,7 @@ The DeepSeek search was `RIPGREP_CONFIG_PATH= rg -uu -n -g '!.git/**' -g '!**/ta
 
 ## Recorded Guard Decisions
 
-The decision rate is `block / (allow + block)` among rows that carry `type=guard_decision`. The raw project-space logs cover 2026-09-20 20:53:55Z through 2026-09-23 06:14:55Z. The current worktree log covers 2026-09-27 16:47:33Z through 17:42:37Z. These are partial samples, not lifetime rates.
+The decision rate is `block / (allow + block)` among rows that carry `type=guard_decision`. The raw project-space logs cover 2026-09-20 20:53:55Z through 2026-09-23 06:14:55Z. The current worktree log covers 2026-09-27 16:47:33Z through 17:42:37Z. These are partial samples, not lifetime rates. The store now keeps allow rows for 24 hours and block rows for 7 days. A rerun over raw rows counts both inside the last 24 hours. For a longer window, add the `pruned` counts from `fno doctor event signals` to the live rows, so allows and blocks cover the same days.
 
 | Guard | Observed allow | Observed block | Recorded block rate | Coverage |
 |---|---:|---:|---:|---|

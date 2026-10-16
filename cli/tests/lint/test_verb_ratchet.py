@@ -54,10 +54,12 @@ def test_python_surface_captures_hidden_opts_on_every_leaf_kind():
     assert doctor and any("!--context-audit" in leaf for leaf in doctor)
     agents = [leaf for leaf in py if leaf.startswith("agents ")]
     assert agents and any("!--output-format" in leaf for leaf in agents)
-    # The review leaf enumerates bare: the sigma options it once hid are
-    # retired, and the refusal command carries no hidden flags.
+    # The review leaf enumerates EMPTY: the sigma options it once hid were
+    # retired, and the root claim then moved to the rust front door, so the
+    # python surface carries no review leaf at all. The pin keeps a zombie
+    # registration from coming back.
     review = [leaf for leaf in py if leaf == "review" or leaf.startswith("review ")]
-    assert review == ["review"]
+    assert review == []
 
 
 def test_fno_agents_front_prefers_worktree_build_before_path(monkeypatch, tmp_path):

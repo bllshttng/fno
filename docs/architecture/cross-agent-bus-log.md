@@ -38,6 +38,10 @@ One JSON object per line (`fno.bus.log.Envelope`):
 
 A root message threads under its own id. A reply sets `in_reply_to`.
 
+### The staged body row
+
+Every live injection leg stages the body row first: the name-lane ladder, the dispatch live leg, and a `--force` pane send. The stage is one ordinary `send` row with no `delivery` mark, written through the bus-append door before the first keystroke. The bus row is the body's only home. It must be on the bus before an inject can confirm into its id. A post-confirm append failure otherwise leaves the delivered Read line pointing at a row that never lands. The door's record seam writes the chats record before the bus line and fails closed. A confirmed inject therefore always finds its row. When the inject confirms, the receipt row (`hosted` or `typed`) lands under the same id. A hosted receipt supersedes the staged twin at the drain (`scan_unread`). A typed receipt does not supersede. Pane bytes are not proven consumed, and the staged row is the recovery after a pane discards them. A staged row whose inject never confirmed is simply a durable row. The recipient's drain delivers it once.
+
 From the Messages tab, the user types a reply into the chosen pane. After focus and input succeed, the client records one `delivery: "typed"` bus row. The row sets `from` to `user` and `in_reply_to` to the tapped message id, then enters the paired chat projection. Typed rows are audit records, so the drain does not deliver them again. If the selected session has no pane, the client writes no reply.
 
 ### Control lane word ledger
@@ -125,7 +129,7 @@ A job address outlives its holder. That is the structural fix for the dead-handl
 
 Two outcomes, matching the name lane's one-line stdout contract. There is no second delivery-verification receipt, because a receipt claiming delivery happened after the fact is the shape that has lied four times.
 
-- A holder exists (claim live or suspect): live-inject to the holder's session. A confirmed inject IS delivery and writes no durable copy, the same as a hosted name-lane send. A live miss floors to a durable envelope addressed to `node:<id>`, so a successor drains it. The owner is `wake-daemon`. The holder exists and the inject missed, so the message waits for a drain rather than a turn boundary. A `node:<id>` thread surfaces at a holder's SessionStart scan, because the notify-self scan reads only the session's own handle. The receipt must not promise turn-boundary visibility.
+- A holder exists (claim live or suspect): live-inject to the holder's session. A confirmed inject IS delivery and writes no durable copy, the same as a hosted name-lane send. A live miss floors to a durable envelope addressed to `node:<id>`, so a successor drains it. The owner is `wake-daemon`. The holder exists and the inject missed, so the message waits for a drain rather than a turn boundary. A `node:<id>` thread surfaces at a holder's SessionStart scan, because the turn-boundary scan reads only the session's own handle. The receipt must not promise turn-boundary visibility.
 - No holder (free, stale, corrupted, or no node): REFUSE, exit 16, queue nothing. Queueing strands the message at the job address, which is the defect again, one address over.
 
 The inject targets the session id. Both `control.sock` and the codex daemon are keyed by it and cwd-independent, so a holder in another worktree is reachable from the sender's cwd. A bus-only holder is refused inside the injector, so the receipt names the policy rather than a miss.

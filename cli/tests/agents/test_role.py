@@ -159,6 +159,12 @@ def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     else:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", grantor_env)
+    if role.get("succession"):
+        # The machine names successors: seal the pending draw so the typed
+        # name counts as accepting it.
+        from tests.agents._name_draw_seed import seed_pending_draw
+
+        seed_pending_draw("Avery", role["role_scope"])
 
     from fno.agents.mux_spawn import dispatch_spawn_pane
 
@@ -318,6 +324,10 @@ def test_settle_spawn_role_outcomes(tmp_path: Path, monkeypatch, native_backlog_
 
     def plan_for(rows, succession=False):
         update_registry(lambda _: rows)
+        if succession:
+            from tests.agents._name_draw_seed import seed_pending_draw
+
+            seed_pending_draw("Avery", "epic-x")
         refusal, plan = plan_spawn_role("epic-x", None, succession, proposed_name="Avery" if succession else None)
         assert refusal is None
         assert plan is not None
@@ -404,6 +414,9 @@ def test_settle_spawn_role_reown_skips_a_provenance_less_child(
         spawned_by_session="caller-sess",
     )
     update_registry(lambda _: [caller, child])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     rows, outcome, vacated = settle_spawn_role(
@@ -432,6 +445,9 @@ def test_settle_spawn_role_declines_when_rust_is_unavailable(
     use_tmpdir(monkeypatch, tmp_path)
     caller = _role_row("caller")
     update_registry(lambda _: [caller])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     assert plan is not None
@@ -531,55 +547,6 @@ def test_list_serialize_marks_the_role() -> None:
     assert js["role"] == "L1 epic-x"
     assert js["role_level"] == 1 and js["role_grantor"] == "human"
     assert serialize_entry(plain, None)["role"] is None
-
-
-def test_top_rows_join_the_role_by_name() -> None:
-    from fno.agents.spawn_gate import LiveWorker
-    from fno.agents.top import _rows
-
-    def worker(name: str) -> "LiveWorker":
-        return LiveWorker(
-            source="fno", name=name, harness="claude",
-            substrate="pane", pid=1, status="live",
-        )
-
-    # TWO workers and TWO roles, deliberately: with one of each, a _rows that
-    # ignored the name entirely and handed back the only role present would
-    # still pass. The join is only observable when a wrong one is available to
-    # pick.
-    rows = _rows(
-        [worker("lead-epic"), worker("lead-other"), worker("plain")],
-        {"lead-epic": "L1 epic-x", "lead-other": "L2 epic-y"},
-    )
-    by_name = {row["name"]: row["role"] for row in rows}
-    assert by_name["lead-epic"] == "L1 epic-x"
-    assert by_name["lead-other"] == "L2 epic-y"
-    assert by_name["plain"] is None
-    assert _rows([worker("lead-epic")], {})[0]["role"] is None
-
-
-def test_top_rows_join_the_role_through_session_id_when_names_differ(monkeypatch) -> None:
-    """AC3-HP: a foreign claude row is labelled by the FIRST 8 hex of its
-    session uuid, while the registry role map is keyed by the handle the
-    registry itself uses (the LAST 8) - the exact mismatch that read as
-    `None` for a promoted session before the join went through session_id."""
-    from fno.agents import top
-    from fno.agents.spawn_gate import LiveWorker
-
-    monkeypatch.setattr(
-        top, "_registry_maps", lambda: ({"full-session-uuid": "last8reg"}, {})
-    )
-    w = LiveWorker(
-        source="claude",
-        name="first8row",
-        harness="claude",
-        substrate="pane",
-        pid=1,
-        status="live",
-        session_id="full-session-uuid",
-    )
-    rows = top._rows([w], {"last8reg": "L2 epic-x"})
-    assert rows[0]["role"] == "L2 epic-x"
 
 
 # --- attended in-place role promotion --------------------------------------
@@ -2677,47 +2644,6 @@ def test_a_two_epic_scope_arms_both(tmp_path: Path, monkeypatch) -> None:
     assert armed == {"e-1", "e-2"}
 
 
-def test_a_graph_fault_leaves_the_role_committed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import fno.backlog.advance as advance_mod
-    from fno.agents.role import journal_spawn_role, promote_existing_session
-    from fno.agents.registry import load_registry
-
-    def _raisers(epic_id, active):
-        raise RuntimeError("graph write refused")
-
-    monkeypatch.setattr(advance_mod, "_set_mission_active", _raisers)
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                status="idle",
-            )
-        ],
-    )
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"},
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-        ],
-    )
-
-    # The spawn leg returns normally even though the arming write raised.
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    receipt = promote_existing_session("worker", ["e-1"])
-    assert receipt["missions_armed"] is None
-    # The role row still stands.
-    row = next(r for r in load_registry() if r.name == "worker")
-    assert (row.role_level, row.role_scope) == (2, "e-1")
 
 
 def test_recrowning_an_armed_epic_emits_nothing(

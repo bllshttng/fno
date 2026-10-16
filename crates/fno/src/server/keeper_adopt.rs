@@ -60,72 +60,59 @@ impl Core {
         id: u64,
         dir: Option<&std::path::Path>,
     ) -> Result<Option<u64>, String> {
-        let mut last = String::from("no shell candidate produced a keeper argv");
-        let mut attempted = false;
-        for cand in &self.shells {
-            let Some((argv, rc_dir)) = crate::pty::keeper_shell_argv(cand, &self.session_name, id)
-            else {
-                continue;
-            };
-            attempted = true;
-            let permit = match crate::process_admission::admit_fleet() {
-                Ok(permit) => permit,
-                Err(e) => {
-                    let _ = std::fs::remove_dir_all(&rc_dir);
-                    return Err(e.to_string());
-                }
-            };
-            match crate::pty::PtyShell::spawn_cmd_keeper_with_permit(
-                &keeper_worker_bin(),
-                &argv,
-                rows,
-                cols,
-                dir,
-                &self.session_name,
-                id,
-                self.out_tx.clone(),
-                self.exit_tx.clone(),
-                permit,
-            ) {
-                Ok((shell, ring)) => {
-                    // A shell pane carries no node provenance (no wrapper
-                    // argv worth parsing: the env prefix is integration, not
-                    // identity).
-                    self.register_pane(
-                        id,
-                        shell,
-                        rows,
-                        cols,
-                        None,
-                        None,
-                        cwd.to_string(),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        false,
-                    )?;
-                    if !ring.is_empty() {
-                        if let Some(entry) = self.panes.get_mut(&id) {
-                            entry.vt.feed(&ring);
-                        }
+        match super::pane_spawn::walk_shell_candidates(
+            &self.shells,
+            &self.session_name,
+            id,
+            rows,
+            cols,
+            dir,
+            &self.out_tx,
+            &self.exit_tx,
+        )? {
+            super::pane_spawn::ShellWalk::Kept {
+                shell,
+                ring,
+                rc_dir,
+            } => {
+                // A shell pane carries no node provenance (no wrapper
+                // argv worth parsing: the env prefix is integration, not
+                // identity).
+                self.register_pane(
+                    id,
+                    shell,
+                    rows,
+                    cols,
+                    None,
+                    None,
+                    cwd.to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                )?;
+                if !ring.is_empty() {
+                    if let Some(entry) = self.panes.get_mut(&id) {
+                        entry.vt.feed(&ring);
+                        // Replay is history, not news: a notification that
+                        // scrolled by before this server existed must not
+                        // fire a duplicate desktop alert on re-adoption.
+                        entry.vt.clear_notices();
                     }
-                    self.shell_rc_dirs.insert(id, rc_dir);
-                    return Ok(Some(id));
                 }
-                Err(e) => {
-                    last = e.to_string();
-                    let _ = std::fs::remove_dir_all(&rc_dir);
-                }
+                self.shell_rc_dirs.insert(id, rc_dir);
+                Ok(Some(id))
             }
+            super::pane_spawn::ShellWalk::AllFailed { last } => {
+                self.notice_all(format!(
+                    "keeper spawn failed for pane {id} ({last}); opening an unkept inline shell"
+                ));
+                Ok(None)
+            }
+            super::pane_spawn::ShellWalk::NoCandidate => Ok(None),
         }
-        if attempted {
-            self.notice_all(format!(
-                "keeper spawn failed for pane {id} ({last}); opening an unkept inline shell"
-            ));
-        }
-        Ok(None)
     }
 
     /// Re-adopt surviving keeper panes at server start, BEFORE restore runs
@@ -248,6 +235,9 @@ impl Core {
                     if !adoption.ring.is_empty() {
                         if let Some(entry) = self.panes.get_mut(&id) {
                             entry.vt.feed(&adoption.ring);
+                            // Replay is history, not news (see the spawn-side
+                            // clear): stale notices never re-fire.
+                            entry.vt.clear_notices();
                         }
                     }
                     if !reconciled {

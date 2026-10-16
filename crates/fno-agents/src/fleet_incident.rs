@@ -1010,7 +1010,7 @@ fn print_receipt(record: &IncidentRecord) {
 
 fn print_usage() {
     println!(
-        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
+        "usage: fno-agents fleet-incident stop --reason <text> [--hold spawns,tests,merges,loops] [--session <id>|--territory <scope>] [--ttl <dur>] | clear --reason <text> [--session <id>|--territory <scope>] | claim <incident> --pr <n> [--by <who>] [--note <text>] | cutover save|restore (see `fleet-incident cutover --help`) | status [--json] | check [--scope spawns|tests|merges|loops] [--json]"
     );
 }
 

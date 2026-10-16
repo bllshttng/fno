@@ -1,5 +1,6 @@
 //! The daemon's worktree sweep: one report per repo on a 6h floor.
-//! Report-only until a merge-minted cleanup order stands, then applying.
+//! Report-only until a merge proof stands - a minted cleanup order, or the
+//! verb's own dry-run judgment for an outside merge - then applying.
 //! Moved out of daemon.rs (shrink-only file) with its tests; the event
 //! carries `enumerated` and `judged` alongside the judged-bucket counts so a
 //! truncated read cannot be told from a partial sweep.
@@ -18,7 +19,9 @@ pub(crate) const WORKTREE_SWEEP_INTERVAL_SECS: u64 = 21_600;
 /// Each root is canonicalised before dedupe: raw registry paths could spell
 /// the same repository four ways (symlinked bases, /var vs /private/var on
 /// macOS), and one repo read as four roots swept four times per window and
-/// collided on the sweep lock (measured 2026-09-14T22:31:45Z).
+/// collided on the sweep lock (measured 2026-09-14T22:31:45Z). A row whose
+/// fallback cwd resolves to no repository is skipped: a head launched
+/// outside any repo is not a sweepable root.
 pub(crate) fn registry_repo_roots(home: &AgentsHome) -> Vec<String> {
     let Ok(loaded) = crate::state::load_registry(&home.registry_json()) else {
         return Vec::new();
@@ -37,12 +40,16 @@ pub(crate) fn registry_repo_roots(home: &AgentsHome) -> Vec<String> {
         if !root.is_dir() {
             continue;
         }
-        let canonical = crate::paths::canonical_repo_root(root)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(raw);
-        if std::path::Path::new(&canonical).is_dir() {
-            seen.insert(canonical);
-        }
+        // A head registered from a cwd outside any repo (HOME launch, empty
+        // project_root) used to enter the set as the raw dir and the sweep
+        // read HOME for a repo that never lived there. Unresolvable means
+        // skip, not sweep-as-is.
+        let Some(canonical) =
+            crate::paths::canonical_repo_root(root).map(|p| p.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        seen.insert(canonical);
     }
     // The request read spans the rotated generation too (merge_reap's reader),
     // so a repo whose only request rotated aside stays in the roots.
@@ -125,14 +132,33 @@ pub fn parse_worktree_sweep(stdout: &str) -> Option<WorktreeSweepReport> {
     })
 }
 
+/// The sweep's apply authority for one repository, decided from evidence
+/// reads alone.
+///
+/// A pending `merge_cleanup_requested` envelope is the fno-merge proof. An
+/// outside merge (`gh pr merge`, the web button) mints no envelope, so with
+/// none standing the verb's own dry-run summary is the same proof in git
+/// form: a tree it would archive reads merged-or-done and clean, and the
+/// `--apply` pass re-judges every guard tree by tree. An unreadable or
+/// empty dry-run authorizes nothing: a probe that cannot read never
+/// widens the sweep's authority.
+pub fn apply_authority(pending: bool, dry_run_summary: Option<&str>) -> bool {
+    pending
+        || dry_run_summary
+            .and_then(parse_worktree_sweep)
+            .is_some_and(|report| report.eligible > 0)
+}
+
 /// Worktree sweep, one line per repo, on a 6h floor: report-only until a
-/// merge-minted cleanup request stands, then applying.
+/// merge proof stands, then applying.
 ///
 /// A timer tick proves nothing on its own, so an unearned tick still only
-/// REPORTS. Removal is merge-triggered: `fno do pr merge` (and the post-merge
+/// REPORTS. Removal is merge-evidenced: `fno do pr merge` (and the post-merge
 /// ritual, as its second mint site) writes the `merge_cleanup_requested`
 /// envelope, and while a pending request stands for a repository (`orders`
-/// injects that scoped read) that repository's pass runs with `--apply`. The
+/// injects that scoped read) that repository's pass runs with `--apply`. An
+/// outside merge mints no envelope, so `orders` may also read the verb's own
+/// dry-run judgment there (`apply_authority` carries that policy). The
 /// primary consumer is the merge reaper (merge_reap.rs), which stops the
 /// harness, drops the rows, and takes the tree; this sweep only catches what
 /// that pass leaves behind. The sweep's own guards - reapable, live claim,
@@ -241,6 +267,42 @@ mod tests {
         home
     }
 
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Seed the registry from row-shaped raw JSON, the shape the rows take
+    /// from disk; no test-side struct construction.
+    fn seed_registry(home: &AgentsHome, rows: &[Value]) {
+        let body = json!({
+            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+            "agents": rows,
+        });
+        std::fs::write(home.registry_json(), body.to_string()).unwrap();
+    }
+
+    fn row_shaped(name: &str, cwd: &std::path::Path, project_root: &str) -> Value {
+        json!({
+            "name": name,
+            "harness": "claude",
+            "harness_session_id": Value::Null,
+            "cwd": cwd.to_string_lossy(),
+            "project_root": project_root,
+            "created_at": "2026-10-01T00:00:00Z",
+            "status": "live",
+        })
+    }
+
     /// The real summary line, copied from this machine's output.
     const REAL_SUMMARY: &str = "would-archive      feature/sample-branch   /some/wt\n\
     Summary: 12 would archive, 37 kept (19 unmerged, 11 unpushed, 5 dirty, 0 live-session, 1 processes, 0 salvage-failed, 0 needs-confirmation, 1 app-owned, 1 permanent), 0 failed  [dry-run: no changes made; pass --apply to execute]\n";
@@ -289,6 +351,34 @@ mod tests {
         assert_eq!(r.dirty, 1);
         assert_eq!(r.enumerated, Some(3));
         assert_eq!(r.judged, Some(3));
+    }
+
+    #[test]
+    fn registry_repo_roots_skips_a_cwd_that_resolves_to_no_repo() {
+        // The head-row shape that swept HOME for six hours: an empty
+        // project_root drops the row to its launch cwd, and that cwd sat
+        // outside any repo. Unresolvable rows are skipped; real roots stay.
+        let home = tmp_home("roots-skip");
+        let outside = home.root().join("plain-dir");
+        std::fs::create_dir_all(&outside).unwrap();
+        let repo = home.root().join("real-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+
+        seed_registry(
+            &home,
+            &[
+                row_shaped("head", &outside, ""),
+                row_shaped("worker", &repo, repo.to_string_lossy().as_ref()),
+            ],
+        );
+
+        let roots = registry_repo_roots(&home);
+        let canonical = crate::paths::canonical_repo_root(&repo)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(roots, vec![canonical], "only the real repo enters the set");
     }
 
     #[test]
@@ -545,5 +635,30 @@ mod tests {
         let log = crate::events::committed_journal_text(&home.events_jsonl());
         assert!(log.contains("\"exit_code\":0"));
         assert!(log.contains("\"stderr\":\"\""));
+    }
+
+    #[test]
+    fn apply_authority_pending_order_stands_without_a_dry_run() {
+        // The fno-merge proof needs no dry-run read at all.
+        assert!(apply_authority(true, None));
+        assert!(apply_authority(true, Some("garbage\n")));
+    }
+
+    #[test]
+    fn apply_authority_unminted_merge_reads_the_dry_run() {
+        // Outside merges mint no envelope; eligible trees in the verb's own
+        // dry-run summary are the same merge proof in git form.
+        let summary = "Summary: 2 would archive, 3 kept (1 unmerged, 1 dirty), 0 failed\n";
+        assert!(apply_authority(false, Some(summary)));
+    }
+
+    #[test]
+    fn apply_authority_no_false_authority() {
+        // A probe that cannot read never widens the sweep's authority, and
+        // zero eligible trees is not a proof either.
+        let zero = "Summary: 0 would archive, 4 kept (2 unmerged, 1 dirty), 0 failed\n";
+        assert!(!apply_authority(false, Some(zero)));
+        assert!(!apply_authority(false, None));
+        assert!(!apply_authority(false, Some("no summary line\n")));
     }
 }

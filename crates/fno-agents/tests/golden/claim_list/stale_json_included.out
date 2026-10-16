@@ -1,0 +1,1 @@
+[{"key":"session:gone-3","state":"stale","basis":"ttl-expired-unresolved","holder":"pty:par","schema_version":1,"pid":4242,"pid_unavailable":false,"host":"testhost","machine_id":"MACH","acquired_at":1791138000000,"expires_at":1591138000000,"expired":true,"harness":"claude","session_id":"sess-file","session_basis":"unresolved"}]

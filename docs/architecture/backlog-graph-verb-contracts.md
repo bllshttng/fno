@@ -53,9 +53,9 @@ The delivery lives in the VERB, not in ``append_progress_note``. The status-fano
 
 Every outcome prints. A delivery prints ``notified <address> (<why>): <transport> <msg-id>``. When the author is the only bound reader, the note is written and one line names the binding: ``notify: you are the only reader bound to <id> (<why>); nobody else to tell``, exit 0. When nobody is bound, or a fault makes the bindings unreadable, the verb REFUSES BEFORE the append: nothing is written, stderr carries the refusal with every arm reading, and it exits 3 (a node that resolves to nothing stays exit 1). A resolution fault refuses for the same reason a vacant one does: neither can prove anyone would be told, and a note no reader would hear is a silent drop wearing a receipt. ``--quiet`` is the acknowledgment: it skips resolution, writes the note, and mails nobody. After the sends, exit 0 needs at least one ``notified`` receipt; when every receipt is ``notify FAILED`` or ``notify UNCONFIRMED``, the note stays written, one summary line goes to stderr, and the exit code is 4. A failed send - a budget refusal included - prints ``notify FAILED`` on stderr. Each send is bounded at 30 seconds because a live inject waits on the recipient's per-agent flock and one measured run wedged past 150; an unanswered recipient prints ``notify UNCONFIRMED`` on stderr, which says the delivery is unknown rather than done - so an UNCONFIRMED send is not a positive marker, and the exit-4 summary says to check before re-sending.
 
-## cmd_encounter
+## encounter
 
-Record ONE encounter with this node, from this session, with evidence.
+The verb is native: `crates/fno-agents/src/backlog/encounter_cli.rs`. Record ONE encounter with this node, from this session, with evidence.
 
 An encounter is a thing that happened, not an opinion. A poll count of N agents who like a node is unfalsifiable; N distinct sessions that each name what the node cost them is falsifiable against a transcript. That is why evidence is required, and why an agent vote needs a provable identity: a vote no transcript can vouch for is a poll. The one exception is the operator lane: on this single-operator machine the human may vote from a plain terminal by passing --operator, which votes under the stable ``operator`` voter key. That lane is a declaration, not proof - any session can pass the flag - so the record keeps the casting session's id whenever one is provable, and the demand read displays the agent/operator split instead of folding the two kinds together.
 
@@ -63,7 +63,19 @@ Read the signal with ``fno backlog demand``. This verb never writes rank and nev
 
 There is no correction verb: an encounter is a thing that happened and cannot be edited or withdrawn. An edit path would make the record deniable, which is the property this signal exists to prevent. A later correction is a ``fno backlog note``.
 
-Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or an unknown node), 3 duplicate, 4 style, 5 unprovable identity. 2 is typer's usage error and is deliberately unused here: an identity refusal sharing a code with a mistyped flag is a refusal nothing can verify.
+Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or an unknown node), 3 duplicate, 4 style, 5 unprovable identity. 2 is the usage error and is deliberately unused here. An identity refusal that shares a code with a mistyped flag is a refusal nothing can verify.
+
+The record carries model and effort only for claude, and reads them from the env. A codex session launched from a claude shell inherits those names. Written onto a codex vote, they name a model that did not cast it. `CLAUDE_EFFORT` is the claude binary's own name. If `ANTHROPIC_BASE_URL` is not set beside it, `ANTHROPIC_MODEL` does not count. The launcher that owns the route sets both, and a lone model string proves nothing. A harness with nothing to report omits the keys.
+
+### Friction offers and `--friction`
+
+A `friction` event (`crates/fno-agents/src/friction.rs`) records that a session hit a real problem. Six doors write it, and nothing else does. The Stop path writes one for a `<help>` tag or a `RESULT: BLOCKED` return. If the spawn, join or done gate refuses the session's own action, the gate writes one. Loop-check's read of the session's own PR writes one for a review round spent without a pass, and one for a red CI check. PreToolUse guards and style refusals never write one: they fire on ordinary tool calls.
+
+Each row names the harness session, the working node, the evidence and a 12-hex fingerprint. If the stage is known, the row names it too. A session writes one row per fingerprint. The match is off by default, and the row still lands.
+
+With `friction.match.enabled = true`, the producer runs one guarded match before it writes the row. Three offers per session is the cap. A fingerprint already in the session ledger is skipped. The match is one read connection that is interrupted past 200 ms, and it never waits. A match that finds open nodes writes `agents/friction/<session>.offer`, and `hooks/friction-offer-inject.sh` prints it once at the next tool call or prompt. Nothing votes on its own.
+
+`fno backlog encounter <id> --evidence "..." --friction <fingerprint>` is the confirm. The flag reads the offer from this session's ledger and adds `working_node`, `stage` and `friction` to the vote. If the vote has no `model`, the flag adds the one the offer recorded. An unknown fingerprint refuses with exit 2 and writes nothing. The one-vote-per-node rule still holds.
 
 ## cmd_demand
 
@@ -177,7 +189,9 @@ Close every node that shipped inside ``node_id``'s PR (task 1.5).
 
 Called inside the close mutator right after a delivery unit's completion fields are set. A node carrying ``contained_in`` was folded into that unit by ``decompose ... adopt:``; its work rides the unit's PR, so it has no PR of its own and ``scan_merge_drift`` - which only ever returns nodes carrying a PR - can never see it. Before this, dispatch and cost had each learned to read containment and completion had no inference at all, so a contained node stayed open forever behind a merged PR.
 
-Deliberately NOT the inverse of ``_cascade_close_parents``. That one closes a parent when its last child lands (bottom-up, conditional on the siblings); this closes children off their owner's merge (top-down, unconditional). One level only: containment is a direct relation to the node that owns the PR, not a chain, so a node contained in a contained node is a shape decompose cannot produce.
+Deliberately NOT the inverse of ``_cascade_close_parents``. That one closes a parent after its last child lands (bottom-up, conditional on the siblings). This one closes children off their owner's merge (top-down, evidence-gated). One level only. Containment is a direct relation to the node that owns the PR, not a chain. A node contained in a contained node is a shape decompose cannot produce.
+
+The evidence gate. A child that declared ``containment_surfaces`` closes only with evidence that its work shipped in the owner's PR. Two kinds of evidence close it. The first: the owner's merged PR changes a file that matches a declared surface. The second: the PR body bound the child through a closure-line claim, which leaves the child's own ``pr_number`` set to this PR. With neither, the cascade releases the containment instead of closing. The row drops ``contained_in``, drops the owner's PR refs, and stamps ``released_from``. The node stays open, keeps its parent, and dispatches again. A child with no declaration closes as before, so existing containments behave identically. The stranded sweep follows the same rule. A declared child of an out-of-band-done owner is released, never closed, because no merged-PR file set exists to prove its work shipped. The reconcile report and JSON name every release under ``contained_released``.
 
 Three deliberate omissions, each load-bearing:
 
@@ -304,24 +318,6 @@ Clear the deferral facts on ``node_id``. A transport over the patch door (``back
 The readback refusal is the verb's honesty contract: the door clears the facts, recomputes, and refuses unless the derived status actually left ``deferred``. A node carrying BOTH ``superseded_by`` and ``deferred_at`` (74 rows at the 2026-09-13 read) is refused outright by the transport - the park rides on the supersession, so leaving deferred alone would either lie (the old ``Undeferred`` receipt printed while the node stayed superseded) or no-op. The refusal names the route that revives the node: ``fno backlog update <id> --status idea``, or ``fno backlog unsupersede <id>``.
 
 A node that is not deferred answers ``unchanged`` with exit 0, a warning on stderr, no ``Undeferred`` line, and no boundary event.
-
-## _encounter_provenance
-
-Model/effort provenance for an encounter record, or nothing.
-
-    Read from the harness's own env, and only for the harness that owns those
-    names. The variables survive a fork, so a codex session launched from a
-    claude shell inherits them; writing them onto a codex vote would attribute
-    it to a model that did not cast it, which reads as measured. A harness with
-    nothing to report omits the keys rather than writing a plausible default.
-
-    The two names are not equally first-party. CLAUDE_EFFORT lives in the
-    claude binary's own namespace, so its presence is claude's doing.
-    ANTHROPIC_MODEL is a provider SDK name a shell can export for unrelated
-    tooling, so it counts only when ANTHROPIC_BASE_URL is exported beside it:
-    the launcher that owns the model string owns the endpoint and sets the
-    pair, and a lone model string says nothing about the route this session
-    actually ran on.
 
 ## _cascade_reopen_parents
 

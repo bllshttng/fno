@@ -73,6 +73,7 @@ class TickResult:
     rows_read: int = 0  # status rows the pass read; 0 on an unchanged store
     locked_out: bool = False  # another tick held the per-project lock; skipped
     lease_lost: bool = False  # lock was stolen; cursor persistence was aborted
+    undeliverable_sinks: "tuple[str, ...]" = ()  # enabled sinks' url unresolved; no read attempted
 
 
 # ── event stream (rotation-aware, skip-and-count) ───────────────────────────
@@ -138,8 +139,11 @@ def _stream_pass(
     seq and is read whole."""
     from fno.events.store_client import read_projection
 
-    rows, skipped, *high = read_projection(
-        active, "--status-stream", {"since_ts": since_ts, "after_seq": after_seq})
+    query: "dict[str, Any]" = {"since_ts": since_ts, "after_seq": after_seq}
+    if since_ts:
+        # SQL-level window bound; the fold applies since_ts only post-read.
+        query["since_ms"] = int(_timestamp_key(since_ts).timestamp() * 1000)
+    rows, skipped, *high = read_projection(active, "--status-stream", query)
     return rows, skipped, (high[0] if high else None)
 
 
@@ -167,6 +171,15 @@ def _eof_cursor(active: Path) -> "tuple[str, int]":
     except FileNotFoundError:
         pass
     return last_ts, count
+
+
+def _fresh_floor(active: Path) -> "tuple[str, int]":
+    """Fresh-sink floor on a store-backed journal: wall-clock now. A store
+    answers with every retained generation, so the file-EOF floor ("", 0)
+    reads as "from the epoch" over the store. Store-less keeps the read."""
+    if (active.parent / "events.db").exists():
+        return (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), 0)
+    return _eof_cursor(active)
 
 
 # ── cursor io (atomic) ──────────────────────────────────────────────────────
@@ -265,6 +278,12 @@ def run_tick(
     enabled = [s for s in sinks if s.enabled]
     if not enabled:
         return TickResult()  # clean no-op: no cursor writes, no lock churn
+    if not any(_sink_configured(s) for s in enabled):
+        # Every enabled sink's url is unresolved (e.g. url_env unset): dispatch
+        # would short-circuit and hold the scan cursor, so every later tick
+        # rereads the whole journal. Skip before any read; the sink's stored
+        # cursor resumes the backlog once the url resolves.
+        return TickResult(undeliverable_sinks=tuple(s.name for s in enabled))
 
     lock = _TickLock(project_root)
     if not lock.acquire():
@@ -294,7 +313,7 @@ def _run_locked(
     if scan is not None:
         eof = (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), 0)
     elif any(fresh.values()):
-        eof = _eof_cursor(active)  # (ts, count_at_ts) - the fresh-sink floor
+        eof = _fresh_floor(active)  # (ts, count_at_ts) - the fresh-sink floor
     start = {name: cur if cur is not None else eof for name, cur in cursors.items()}
 
     # Read from the oldest cursor ts INCLUSIVE so every sink sees its own same-ts
@@ -600,6 +619,16 @@ def _resolve_url(sink: StatusSinkConfig) -> "tuple[Optional[str], Optional[str]]
     return None, "no url configured"
 
 
+def _sink_configured(sink: StatusSinkConfig) -> bool:
+    """A sink this tick could deliver through: a webhook whose url resolves
+    now (``url``, process env, then ~/.fno/.env), or a type that needs no url.
+    An enabled webhook with an unresolved url_env is not configured work."""
+    if sink.type not in ("json-webhook", "text-webhook"):
+        return True
+    url, _ = _resolve_url(sink)
+    return url is not None
+
+
 # ── adapter router + adapters ───────────────────────────────────────────────
 
 
@@ -846,7 +875,11 @@ def tick_cmd(
         return
     # The daemon ticks every few seconds: an idle pass prints nothing.
     if not result.sinks and dry_run:
-        typer.echo("status-fanout: no enabled sinks (no-op)")
+        if result.undeliverable_sinks:
+            typer.echo("status-fanout: no deliverable sink (url unresolved; no-op): "
+                       + ", ".join(result.undeliverable_sinks))
+        else:
+            typer.echo("status-fanout: no enabled sinks (no-op)")
     verb = "would-send" if dry_run else "dispatched"
     for sr in result.sinks:
         if not (dry_run or sr.matched or sr.dropped or sr.short_circuited):

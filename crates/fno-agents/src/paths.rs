@@ -291,6 +291,13 @@ impl AgentsHome {
         self.root.join("team_names.json")
     }
 
+    /// The append-only name history (`name_history.json`), beside
+    /// `team_names.json`: every name ever drawn or bound on this host, so a
+    /// retired lead's name never comes back. See [`crate::team_names`].
+    pub fn name_history_json(&self) -> PathBuf {
+        self.root.join("name_history.json")
+    }
+
     /// Per-provider injection gate record (`injection-gate.json`), stored next
     /// to `registry.json` in the agents root.
     pub fn injection_gate_json(&self) -> PathBuf {
@@ -355,11 +362,24 @@ impl AgentsHome {
         self.root.join("transcripts.jsonl")
     }
 
+    /// The last footprint probe answer (`footprint-cache.json`). Any real
+    /// probe run writes it; readers that can serve a recent answer read it
+    /// instead of re-spawning the probe child. See [`crate::spawn_gate`].
+    pub fn footprint_cache_json(&self) -> PathBuf {
+        self.root.join("footprint-cache.json")
+    }
+
     /// Local OTel ingest tree: `port` (the receiver's bound port) and
     /// `otel.db` (one `api_requests` row per API request, harness-neutral).
     /// Owned by the daemon's otel_ingest arm.
     pub fn otel_dir(&self) -> PathBuf {
         self.root.join("otel")
+    }
+
+    /// The OTLP exporter's own state: `state.json` (delivery memory) and
+    /// `receipts.jsonl` (one line per post attempt).
+    pub fn otlp_export_dir(&self) -> PathBuf {
+        self.root.join("otlp_export")
     }
 
     /// Directory of terminal-stop markers. `finalize` drops one file
@@ -525,9 +545,10 @@ pub fn is_file_mode_0600(path: &Path) -> bool {
     }
 }
 
-/// Resolve the canonical (main checkout) repo root from `cwd` via
-/// `git worktree list --porcelain`, returning the first real working tree (the
-/// main checkout; git lists it first). This is robust across the layouts the
+/// Resolve the canonical (main checkout) repo root from `cwd`. A main checkout
+/// and a linked worktree answer from the `.git` markers alone, with no fork;
+/// every other layout asks `git worktree list --porcelain` and takes the first
+/// real working tree (the main checkout; git lists it first). This is robust across the layouts the
 /// `--git-common-dir` parent gets wrong: a bare repo (no working tree) and a
 /// `--separate-git-dir` mis-report both resolve to None here, so callers fall
 /// back to the caller cwd -- the safe side (Failure Modes > Boundaries). From a
@@ -540,9 +561,269 @@ pub fn is_file_mode_0600(path: &Path) -> bool {
 /// A THIRD implementation of this question lives in `fno::digest_overlay`, which
 /// crate `fno` needs because it does not depend on `fno-agents`. It parses the
 /// linked worktree's `.git` file instead of shelling out, so it costs no
-/// subprocess on the mux attach path and, unlike this one, cannot see a repo
-/// whose git dir lives outside the checkout. Change one and check the other.
+/// subprocess on the mux attach path and, unlike the git fallback here, cannot
+/// see a repo whose git dir lives outside the checkout. The marker fast path in
+/// this file reads the same `.git` file. Change one and check the other.
 pub fn canonical_repo_root(cwd: &Path) -> Option<PathBuf> {
+    // Production shape: the memo + the git resolver. The resolver is a fn
+    // parameter on the memo body so the fork-once contract is assertable
+    // hermetically, without PATH games a parallel test could race.
+    canonical_repo_root_cached(cwd, &canonical_repo_root_uncached)
+}
+
+/// Memoized per process: one hook fire re-asks the same cwd many times
+/// (every guard decision re-resolves the events space), and each miss was
+/// a `git worktree list` fork. Measured 2026-10-08: 18 forks per
+/// PreToolUse fire, 7 per Stop fire, 4 inside every `state path events`
+/// child - the per-user fork burst that hits kern.maxprocperuid when a
+/// fleet of sessions fires hooks at once. The answer for a cwd is stable
+/// within a fire; the short TTL bounds how long a long-lived daemon can
+/// serve a stale root after a repo move. Negative answers cache too: a
+/// non-repo cwd re-forked git on every ask before. Concurrent misses for
+/// one cwd single-flight on an in-flight marker (the daemon resolves
+/// spawns for the same repo on parallel `spawn_blocking` tasks), while
+/// different cwds never block each other.
+fn canonical_repo_root_cached(
+    cwd: &Path,
+    resolve: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let (state, cv) = canonical_root_cache();
+    let mut cache = state.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let now = std::time::Instant::now();
+        if let Some((hit, at)) = cache.entries.get(cwd) {
+            if now.duration_since(*at) < CANONICAL_ROOT_TTL {
+                return hit.clone();
+            }
+        }
+        if cache.inflight.contains(cwd) {
+            let (woken, _) = cv
+                .wait_timeout(cache, std::time::Duration::from_millis(100))
+                .unwrap_or_else(|e| e.into_inner());
+            cache = woken;
+            continue;
+        }
+        break;
+    }
+    cache.inflight.insert(cwd.to_path_buf());
+    let marker = InflightMarker(cwd.to_path_buf());
+    drop(cache);
+    let resolved = resolve(cwd);
+    let mut cache = state.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if cache.entries.len() >= CANONICAL_ROOT_CAP {
+        cache
+            .entries
+            .retain(|_, (_, at)| now.duration_since(*at) < CANONICAL_ROOT_TTL);
+    }
+    if cache.entries.len() >= CANONICAL_ROOT_CAP {
+        cache.entries.clear();
+    }
+    cache
+        .entries
+        .insert(cwd.to_path_buf(), (resolved.clone(), now));
+    // The marker's drop re-locks the cache; the publish guard must be gone
+    // first or the same thread blocks on a non-reentrant Mutex forever.
+    drop(cache);
+    drop(marker);
+    resolved
+}
+
+const CANONICAL_ROOT_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+const CANONICAL_ROOT_CAP: usize = 256;
+
+struct RootCache {
+    entries: std::collections::HashMap<PathBuf, (Option<PathBuf>, std::time::Instant)>,
+    /// Cwds a thread is resolving right now. A same-key miss waits on the
+    /// condvar instead of forking its own git; a panic in the resolver still
+    /// clears the marker through `InflightMarker`'s drop.
+    inflight: std::collections::HashSet<PathBuf>,
+}
+
+fn canonical_root_cache() -> &'static (std::sync::Mutex<RootCache>, std::sync::Condvar) {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<(std::sync::Mutex<RootCache>, std::sync::Condvar)> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        (
+            std::sync::Mutex::new(RootCache {
+                entries: std::collections::HashMap::new(),
+                inflight: std::collections::HashSet::new(),
+            }),
+            std::sync::Condvar::new(),
+        )
+    })
+}
+
+/// Clears this thread's in-flight marker on every exit path, including a
+/// resolver panic, so waiters can take over the resolution.
+struct InflightMarker(PathBuf);
+
+impl Drop for InflightMarker {
+    fn drop(&mut self) {
+        let (state, cv) = canonical_root_cache();
+        let mut cache = state.lock().unwrap_or_else(|e| e.into_inner());
+        cache.inflight.remove(&self.0);
+        cv.notify_all();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn canonical_root_cache_reset() {
+    let (state, _) = canonical_root_cache();
+    let mut cache = state.lock().unwrap_or_else(|e| e.into_inner());
+    cache.entries.clear();
+    cache.inflight.clear();
+}
+
+/// The cache is process-global and cargo runs tests in parallel threads.
+/// Two tests that reset it must not overlap: one reset can erase the
+/// other's in-flight marker and a waiter then re-resolves.
+#[cfg(test)]
+static CANONICAL_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// What the filesystem alone says about the repo around a cwd.
+enum RepoProbe {
+    /// Something git may read differently (env redirect, malformed marker,
+    /// relative or missing cwd): ask git.
+    Unsure,
+    /// No ancestor carries a `.git`: git would find no work tree either.
+    NoRepo,
+    /// The nearest ancestor with a valid `.git`, and that marker's shape.
+    Found(PathBuf, DotGit),
+}
+
+enum DotGit {
+    /// A real `.git` directory: a main checkout.
+    Dir,
+    /// A `.git` file: the git dir it points at (linked worktree or submodule).
+    File(PathBuf),
+}
+
+#[cfg(unix)]
+fn device_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| m.dev())
+}
+
+#[cfg(not(unix))]
+fn device_of(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// True when the environment moves git's own discovery, so the markers alone
+/// would answer a different question than `git` does.
+fn git_discovery_redirected() -> bool {
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ]
+    .iter()
+    .any(|k| std::env::var_os(k).is_some())
+}
+
+/// Walk up from `cwd` the way git's discovery does, reading only markers.
+/// This is the hook allow path: every guard row resolves the events space, and
+/// a fork per resolve stalled each Bash call for seconds once the fleet
+/// saturated the per-user process table. Git stops at a filesystem boundary by
+/// default; so does this walk, handing the question back to git there.
+fn probe_repo(cwd: &Path) -> RepoProbe {
+    if !cwd.is_absolute() || !cwd.is_dir() {
+        return RepoProbe::Unsure;
+    }
+    // Real path first: a symlinked cwd must climb its target's ancestors, not
+    // the link's, or a repo above the target reads as no repo at all.
+    let Ok(cwd) = std::fs::canonicalize(cwd) else {
+        return RepoProbe::Unsure;
+    };
+    let start_dev = device_of(&cwd);
+    for dir in cwd.ancestors() {
+        if device_of(dir) != start_dev {
+            return RepoProbe::Unsure;
+        }
+        let dot = dir.join(".git");
+        let Ok(meta) = std::fs::metadata(&dot) else {
+            continue;
+        };
+        if meta.is_dir() {
+            if !dot.join("HEAD").is_file() {
+                return RepoProbe::Unsure;
+            }
+            return RepoProbe::Found(dir.to_path_buf(), DotGit::Dir);
+        }
+        let target = std::fs::read_to_string(&dot).ok().and_then(|text| {
+            let line = text.lines().next()?;
+            let target = line.strip_prefix("gitdir:")?.trim();
+            (!target.is_empty()).then(|| dir.join(target))
+        });
+        return match target {
+            Some(gitdir) => RepoProbe::Found(dir.to_path_buf(), DotGit::File(gitdir)),
+            None => RepoProbe::Unsure,
+        };
+    }
+    RepoProbe::NoRepo
+}
+
+/// `Some(answer)` when the markers settle the question without git. Only the
+/// unambiguous layouts answer: a main checkout, and a linked worktree whose
+/// common dir is `<root>/.git`. A bare repo, a `--separate-git-dir` layout and
+/// a submodule return `None` so git's rules stay the authority there.
+fn canonical_root_from_markers(cwd: &Path) -> Option<Option<PathBuf>> {
+    if git_discovery_redirected() {
+        return None;
+    }
+    canonical_root_of(probe_repo(cwd))
+}
+
+fn canonical_root_of(probe: RepoProbe) -> Option<Option<PathBuf>> {
+    match probe {
+        RepoProbe::Unsure => None,
+        RepoProbe::NoRepo => Some(None),
+        RepoProbe::Found(top, DotGit::Dir) => {
+            Some(Some(std::fs::canonicalize(&top).unwrap_or(top)))
+        }
+        RepoProbe::Found(_, DotGit::File(gitdir)) => {
+            let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+            let common = std::fs::canonicalize(gitdir.join(common.trim())).ok()?;
+            if common.file_name()? != ".git" {
+                return None;
+            }
+            let root = common.parent()?;
+            root.join(".git").is_dir().then(|| Some(root.to_path_buf()))
+        }
+    }
+}
+
+/// The work tree root containing `cwd`, `None` outside any work tree. Markers
+/// first; git only when they cannot settle it.
+pub fn worktree_toplevel(cwd: &Path) -> Option<PathBuf> {
+    if !git_discovery_redirected() {
+        match probe_repo(cwd) {
+            RepoProbe::Found(top, _) => return Some(std::fs::canonicalize(&top).unwrap_or(top)),
+            RepoProbe::NoRepo => return None,
+            RepoProbe::Unsure => {}
+        }
+    }
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|stdout| stdout.trim().to_string())
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .map(|root| std::fs::canonicalize(&root).unwrap_or(root))
+}
+
+fn canonical_repo_root_uncached(cwd: &Path) -> Option<PathBuf> {
+    if let Some(answer) = canonical_root_from_markers(cwd) {
+        return answer;
+    }
     let mut cmd = std::process::Command::new("git");
     cmd.arg("-C")
         .arg(cwd)
@@ -595,20 +876,7 @@ pub fn worktree_repo_root(cwd: &Path) -> PathBuf {
     if cwd.join(".git").exists() {
         return std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     }
-    let resolved = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|stdout| stdout.trim().to_string())
-        .filter(|root| !root.is_empty())
-        .map(PathBuf::from);
-    resolved
-        .and_then(|root| std::fs::canonicalize(&root).ok().or(Some(root)))
-        .unwrap_or_else(|| cwd.to_path_buf())
+    worktree_toplevel(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 /// `Path.resolve()` for a path that may not exist: canonicalize the deepest
@@ -827,18 +1095,6 @@ pub fn events_path(cwd: &Path) -> PathBuf {
     let path = space_dir(cwd).join("events.jsonl");
     migrate_from_checkout(
         &worktree_repo_root(cwd).join(".fno").join("events.jsonl"),
-        &path,
-    );
-    path
-}
-
-/// The per-checkout cost ledger on the space, with the same legacy migration
-/// as [`events_path`]: a pre-space `<checkout>/.fno/ledger.json` moves on
-/// first read so budget caps stay enforceable across the move.
-pub fn ledger_path(cwd: &Path) -> PathBuf {
-    let path = worktree_space_dir(cwd).join("ledger.json");
-    migrate_from_checkout(
-        &worktree_repo_root(cwd).join(".fno").join("ledger.json"),
         &path,
     );
     path
@@ -1322,6 +1578,166 @@ mod tests {
             "a bare repo must resolve to None (safe-side fallback), not a wrong parent"
         );
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    fn canonical_root_of_probe(cwd: &Path) -> Option<Option<PathBuf>> {
+        canonical_root_of(probe_repo(cwd))
+    }
+
+    #[test]
+    fn markers_resolve_main_and_linked_worktree_without_spawning_git() {
+        // Hand-built layout, so a pass proves the answer came from the
+        // markers: no git binary is involved in building or reading it.
+        let base = tmp("markers");
+        let main = base.join("main");
+        let gitdir = main.join(".git/worktrees/wt");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let linked = base.join("wt");
+        std::fs::create_dir_all(linked.join("sub")).unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+        std::fs::create_dir_all(main.join("deep")).unwrap();
+
+        let want = std::fs::canonicalize(&main).unwrap();
+        assert_eq!(
+            canonical_root_of_probe(&linked.join("sub")),
+            Some(Some(want.clone()))
+        );
+        assert_eq!(
+            canonical_root_of_probe(&main.join("deep")),
+            Some(Some(want.clone()))
+        );
+        // A symlinked cwd climbs its target's ancestors, not the link's.
+        let link = base.join("link");
+        std::os::unix::fs::symlink(main.join("deep"), &link).unwrap();
+        assert_eq!(canonical_root_of_probe(&link), Some(Some(want)));
+        let linked_real = std::fs::canonicalize(&linked).unwrap();
+        assert!(
+            matches!(probe_repo(&linked.join("sub")), RepoProbe::Found(top, _) if top == linked_real),
+            "the walk stops at the linked worktree, not the main checkout"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn markers_defer_to_git_when_the_layout_is_ambiguous() {
+        let base = tmp("markers-unsure");
+        // Submodule shape: a `.git` file whose git dir has no commondir.
+        let sub = base.join("sub");
+        let modules = base.join("super/.git/modules/sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&modules).unwrap();
+        std::fs::write(sub.join(".git"), format!("gitdir: {}\n", modules.display())).unwrap();
+        assert_eq!(canonical_root_of_probe(&sub), None);
+        // An empty `.git` dir is not a repo marker git would accept.
+        let hollow = base.join("hollow");
+        std::fs::create_dir_all(hollow.join(".git")).unwrap();
+        assert_eq!(canonical_root_of_probe(&hollow), None);
+        // No marker anywhere above: git would find nothing either.
+        let bare = base.join("plain");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(canonical_root_of_probe(&bare), Some(None));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn canonical_repo_root_memoizes_one_resolve_per_cwd_per_ttl_window() {
+        // The fork-storm contract: repeated asks for one cwd resolve once.
+        // Negative answers cache the same way, so a non-repo cwd stops
+        // re-forking git too. Hermetic by injection; no PATH mutation that a
+        // parallel test's git spawn could race.
+        let _serial = CANONICAL_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        canonical_root_cache_reset();
+        let repo = tmp("memo");
+        let empty = tmp("memo-empty");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&empty).unwrap();
+        use std::cell::RefCell;
+        let count = RefCell::new(0u32);
+        let resolver = |p: &Path| {
+            *count.borrow_mut() += 1;
+            if p == empty.as_path() {
+                None
+            } else {
+                Some(p.to_path_buf())
+            }
+        };
+        assert_eq!(
+            canonical_repo_root_cached(&repo, &resolver),
+            Some(repo.clone())
+        );
+        assert_eq!(*count.borrow(), 1);
+        assert_eq!(
+            canonical_repo_root_cached(&repo, &resolver),
+            Some(repo.clone()),
+            "same cwd inside the TTL window must hit the memo"
+        );
+        assert_eq!(*count.borrow(), 1);
+        assert_eq!(canonical_repo_root_cached(&empty, &resolver), None);
+        assert_eq!(*count.borrow(), 2);
+        assert_eq!(
+            canonical_repo_root_cached(&empty, &resolver),
+            None,
+            "a miss must cache too, or a non-repo cwd re-forks git per ask"
+        );
+        assert_eq!(*count.borrow(), 2);
+        std::fs::remove_dir_all(&repo).ok();
+        std::fs::remove_dir_all(&empty).ok();
+    }
+
+    #[test]
+    fn canonical_repo_root_coalesces_concurrent_misses_for_one_cwd() {
+        // The daemon resolves spawns for one repo on parallel spawn_blocking
+        // tasks; without single-flight each miss forks its own git. Four
+        // threads, one cwd: the resolver must run exactly once and every
+        // caller gets the same answer.
+        let _serial = CANONICAL_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        canonical_root_cache_reset();
+        let repo = tmp("memo-concurrent");
+        std::fs::create_dir_all(&repo).unwrap();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(4));
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let calls = calls.clone();
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let resolver = |p: &Path| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    if p == repo.as_path() {
+                        Some(p.to_path_buf())
+                    } else {
+                        None
+                    }
+                };
+                assert_eq!(
+                    canonical_repo_root_cached(&repo, &resolver),
+                    Some(repo.clone())
+                );
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "concurrent misses for one cwd must single-flight into one resolve"
+        );
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]

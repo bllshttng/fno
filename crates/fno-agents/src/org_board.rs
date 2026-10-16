@@ -37,6 +37,7 @@ pub(crate) mod budget;
 mod claims;
 mod classify;
 pub mod pr_closure;
+pub mod pr_closure_produce;
 pub(crate) mod prs;
 mod queues;
 pub(crate) mod scope;
@@ -116,6 +117,7 @@ pub(crate) const SRC_QUESTIONS: &str = "fno inbox outstanding --json";
 pub(crate) const SRC_NEEDS: &str = "fno agents needs --json";
 pub(crate) const SRC_DISTRESS: &str =
     "~/.fno/events.jsonl (blocked rows) + bus/messages.jsonl + fno agents distress-verdicts";
+pub(crate) const SRC_STRANDED: &str = "git worktree list --porcelain (per repo) + per-tree probe";
 
 fn worked_node_ids(read: &SourceRead) -> HashSet<String> {
     read.payload
@@ -211,6 +213,56 @@ fn partition_held(
     (SourceRead::ok(Value::Array(kept)), held_rows)
 }
 
+/// Split dispatch-held nodes out of the undispatched feed: an active
+/// `dispatch_hold` (plan frontmatter or the node row's own field, walked
+/// through parents and contained owners) parks the node the same way an open
+/// question does, so it never renders as the next undispatched actionable
+/// row; it is named under `held` with its hold reason. The verdict is the
+/// same one `undriven_pr` reads, so one hold answers every queue alike. A
+/// feed that never answered passes through untouched, like `partition_held`.
+fn partition_dispatch_held(
+    undispatched: SourceRead,
+    entries: Option<&[Value]>,
+) -> (SourceRead, Vec<Value>) {
+    if !undispatched.is_ok() {
+        return (undispatched, Vec::new());
+    }
+    let by_id: std::collections::BTreeMap<String, Value> = entries
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|e| {
+            e.get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), e.clone()))
+        })
+        .collect();
+    let (mut kept, mut held_rows) = (Vec::new(), Vec::new());
+    for mut row in undispatched.rows() {
+        let hold_entry = row
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| by_id.get(id))
+            .unwrap_or(&row);
+        let receipt = crate::backlog_ready::hold_verdict_receipt(hold_entry, &by_id);
+        if receipt.as_ref().is_some_and(|v| v.held) {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert(
+                    "hold_reason".to_string(),
+                    json!(receipt
+                        .as_ref()
+                        .map(|v| v.reason.as_str())
+                        .unwrap_or_default()),
+                );
+                obj.insert("held_by".to_string(), json!("dispatch_hold"));
+            }
+            held_rows.push(row);
+        } else {
+            kept.push(row);
+        }
+    }
+    (SourceRead::ok(Value::Array(kept)), held_rows)
+}
+
 // ---------------------------------------------------------------------------
 // SourceRead: one source's answer, or the reason there is no answer
 // ---------------------------------------------------------------------------
@@ -283,29 +335,6 @@ impl SourceRead {
 
 pub(crate) fn s_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
-}
-
-/// The probe feed a board slice can afford, as `(tokens, cap_warning)`.
-///
-/// The per-handle arithmetic the batch prices with (`0.75s` a handle after a
-/// `20s` cold start, ceiling `60s`) bounds the feed to a measured prefix:
-/// claim-derived holders ride first, so a cap withholds the roster tail,
-/// which the unmeasured-holders warning then names. `affordable == 0` keeps
-/// the whole feed: the page bound declines to spawn and the run reads
-/// timed-out, the receipt the board-budget pins expect, never a silent
-/// trim. `affordable >= len` feeds everything.
-pub(crate) fn bound_truth_feed(
-    tokens: Vec<String>,
-    affordable: usize,
-) -> (Vec<String>, Option<String>) {
-    if affordable == 0 || affordable >= tokens.len() {
-        return (tokens, None);
-    }
-    let note = format!(
-        "truth probe: measuring the first {affordable} of {} holders within the board slice; the tail reads unmeasured",
-        tokens.len()
-    );
-    (tokens[..affordable].to_vec(), Some(note))
 }
 
 pub(crate) fn s_i64(v: &Value, key: &str) -> Option<i64> {
@@ -547,6 +576,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let s_needs = budget.start(SRC_NEEDS);
     let s_truth = budget.start("truth probe");
     let s_blocked_child = budget.start(SRC_DISTRESS);
+    let s_stranded = budget.start(SRC_STRANDED);
 
     // Mostly in-process: graph already read; claims scan, claimed-node lookups,
     // the needs fold, and the lane file.
@@ -626,6 +656,18 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         }
     }
 
+    // Blocked child and stranded tree ride the SAME concurrent thread pool
+    // as worked/prs/ready/outstanding/needs below (t_blocked_child,
+    // t_stranded), not a sequential step ahead of it: an earlier version of
+    // this fix ran them sequentially before that pool, which stopped them
+    // starving but meant their own wall time (the distress journal read, a
+    // `git worktree list` + per-tree probe per repo) now sat on the
+    // critical path ahead of every other source, so a slow repo could just
+    // as easily starve worked/prs/ready/outstanding/needs instead (P1,
+    // reviewed). True concurrency - every source bounded by the one shared
+    // deadline, none of them ordered ahead of or behind the others - is
+    // what actually fixes it rather than reassigning it.
+
     // The reads that can take real wall time run concurrently: gh pr
     // list, `fno inbox outstanding`, the batched truth
     // probe, the ready selection (in-process; its plan-document disk reads
@@ -662,6 +704,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         holder_activity,
         holder_activity_error,
         holder_starved,
+        blocked_child,
+        stranded,
     ) = std::thread::scope(|s| {
         // The worked read answers in-process now: the authority is native
         // (backlog::worked), and the Python leg it used to shell out to is a
@@ -841,12 +885,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                             .unwrap_or_else(|| h.clone())
                     })
                     .collect();
-                let affordable =
-                    crate::truth_probe::family1_truth_affordable_handles(Budget::spawn_bound(dl));
-                let (tokens, cap_note) = bound_truth_feed(tokens, affordable);
-                if let Some(note) = cap_note {
-                    warnings.push(note);
-                }
                 Some(s.spawn(move || {
                     crate::truth_probe::family1_truth_probe_many_measured_within(&tokens, Some(dl))
                 }))
@@ -893,6 +931,150 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             })
         });
 
+        // Blocked child: read the global distress journal and resolve every
+        // candidate's answered/unanswered state HERE, where claims, the
+        // graph, and the verdict subprocess already live - build_board only
+        // scope-filters and renders what this collects. No catch_unwind here:
+        // `AgentsHome::from_env()` panicking under a test process with no
+        // declared hermetic root (paths.rs) used to need one because this ran
+        // inline on the main thread; now it runs on its own spawned thread,
+        // and the join below already converts a panic there into
+        // "blocked_child: reader panicked" - a second layer of the same
+        // protection would be dead weight, not defense in depth.
+        let t_blocked_child = s_blocked_child.map(|dl| {
+            let claims = &claims;
+            let entries = entries_ref;
+            let cwd = cwd_for_threads.clone();
+            let spent_err = spent_err.clone();
+            s.spawn(move || {
+                if Budget::spawn_bound(dl).is_zero() {
+                    return SourceRead::over_budget(spent_err);
+                }
+                let home = crate::paths::AgentsHome::from_env();
+                let journal = crate::daemon::global_events_path(&home);
+                match read_blocked_rows(&journal) {
+                    Err(e) => SourceRead::err(e),
+                    Ok(rows) => {
+                        let claim_rows = claims.rows();
+                        let claim_state_by_node: HashMap<String, String> = claim_rows
+                            .iter()
+                            .filter_map(|row| {
+                                let node = s_str(row, "key")?.strip_prefix("node:")?;
+                                Some((
+                                    node.to_string(),
+                                    s_str(row, "state").unwrap_or("").to_string(),
+                                ))
+                            })
+                            .collect();
+                        let status_by_node: HashMap<String, String> = entries
+                            .unwrap_or(&[])
+                            .iter()
+                            .filter_map(|n| {
+                                Some((
+                                    s_str(n, "id")?.to_string(),
+                                    s_str(n, "status").unwrap_or("").to_string(),
+                                ))
+                            })
+                            .collect();
+                        let candidates = queues::resolve_blocked_child_candidates(
+                            rows,
+                            &claim_state_by_node,
+                            &claim_acquired_at_by_node(&claim_rows),
+                            &status_by_node,
+                            blocked_child_grace_minutes(&cwd),
+                            now_secs_board() as i64,
+                        );
+                        if candidates.is_empty() {
+                            SourceRead::ok(Value::Array(Vec::new()))
+                        } else {
+                            // A row keyed by its run id is never bus-addressed;
+                            // the node's live claim names the harness session
+                            // the bus does address.
+                            let claim_session_by_node: HashMap<String, String> = claim_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    let node = s_str(row, "key")?.strip_prefix("node:")?;
+                                    Some((node.to_string(), s_str(row, "session_id")?.to_string()))
+                                })
+                                .collect();
+                            let mail_candidates: Vec<(String, Option<String>, String)> = candidates
+                                .iter()
+                                .map(|(row, _)| {
+                                    let holder = row
+                                        .node
+                                        .as_deref()
+                                        .and_then(|n| claim_session_by_node.get(n))
+                                        .cloned();
+                                    (row.session.clone(), holder, row.ts.clone())
+                                })
+                                .collect();
+                            let answered =
+                                queues::mail_answered_since(&bus_live_log_path(), &mail_candidates);
+
+                            let mut sessions: Vec<String> = Vec::new();
+                            for (session, holder, _) in &mail_candidates {
+                                for key in [Some(session.as_str()), holder.as_deref()]
+                                    .into_iter()
+                                    .flatten()
+                                {
+                                    if !sessions.iter().any(|s| s == key) {
+                                        sessions.push(key.to_string());
+                                    }
+                                }
+                            }
+                            let mut cmd = fno_py_cmd();
+                            cmd.extend([
+                                "agents".to_string(),
+                                "distress-verdicts".to_string(),
+                                "--sessions".to_string(),
+                                serde_json::to_string(&sessions)
+                                    .unwrap_or_else(|_| "[]".to_string()),
+                            ]);
+                            let verdict_bound = Budget::spawn_bound(dl);
+                            let verdict_payload = if verdict_bound.is_zero() {
+                                SourceRead::err(spent_err.clone())
+                            } else {
+                                run_json(cmd, &cwd, verdict_bound)
+                            };
+                            let verdicts: HashMap<String, String> = mail_candidates
+                                .iter()
+                                .filter_map(|(session, holder, _)| {
+                                    queues::verdict_for(
+                                        verdict_payload.payload.as_ref(),
+                                        session,
+                                        holder.as_deref(),
+                                    )
+                                    .map(|v| (session.clone(), v))
+                                })
+                                .collect();
+                            SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
+                                candidates, &answered, &verdicts,
+                            )))
+                        }
+                    }
+                }
+            })
+        });
+
+        // The stranded-tree read: which linked worktrees hold uncommitted or
+        // unpushed work under an open lead-priority node. Candidates come
+        // from the one graph read; repos from the workspace map plus this
+        // repo's canonical root, so a board run anywhere lands the same
+        // tree set.
+        let t_stranded = s_stranded.map(|dl| {
+            let entries = entries_ref;
+            let cwd = cwd_for_threads.clone();
+            let spent_err = spent_err.clone();
+            s.spawn(move || {
+                if Budget::spawn_bound(dl).is_zero() {
+                    return SourceRead::over_budget(spent_err);
+                }
+                let candidates = entries.map(stranded_candidates).unwrap_or_default();
+                let repos = scope::project_repo_paths(&cwd);
+                read_stranded_trees(&repos, &candidates, dl, &spent_err)
+            })
+        });
+
         let (prs, pr_nodes, pr_warnings, prs_truncated, pr_gates) = match t_prs {
             None => {
                 let err = budget.spent_error();
@@ -921,21 +1103,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 .join()
                 .unwrap_or(SourceRead::err("ready: reader panicked")),
         };
-        // An open question whose blocks names the node holds it out of ready
-        //; the held rows land under a `held` source beside `ready`.
-        let (ready, held_rows) = partition_held(ready, &held_map);
-        if !held_rows.is_empty() {
-            sources.insert(
-                "held".to_string(),
-                json!({
-                    "ok": true,
-                    "truncated": false,
-                    "error": "",
-                    "count": held_rows.len(),
-                    "rows": held_rows,
-                }),
-            );
-        }
         let outstanding = match t_outstanding {
             None => budget.spent_read(),
             Some(h) => h
@@ -957,6 +1124,20 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 .join()
                 .unwrap_or_else(|_| SourceRead::err("needs: reader panicked")),
         };
+        let blocked_child = match t_blocked_child {
+            None => budget.spent_read(),
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked")),
+        };
+        mark(&mut sources, "blocked_child", &blocked_child, false);
+        let stranded = match t_stranded {
+            None => budget.spent_read(),
+            Some(h) => h
+                .join()
+                .unwrap_or_else(|_| SourceRead::err("stranded: reader panicked")),
+        };
+        mark(&mut sources, "stranded", &stranded, false);
         let (holder_activity, holder_activity_error, holder_starved): (
             HashMap<String, crate::truth_probe::TruthProbe>,
             Option<String>,
@@ -1002,6 +1183,28 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             Some(rows) => SourceRead::ok(Value::Array(rows)),
             None => undispatched,
         };
+        // An open question whose blocks names the node holds it out of ready
+        //; the held rows land under a `held` source beside `ready`.
+        let (ready, mut held_rows) = partition_held(ready, &held_map);
+        // A ruling dispatch_hold parks a node the same way: it leaves the
+        // undispatched queue (never again the next actionable row) and is
+        // named under held with its hold reason. The split runs after the
+        // shape re-wrap above, on the canonical array payload rows() reads.
+        let (undispatched, dispatch_held_rows) =
+            partition_dispatch_held(undispatched, entries.as_deref());
+        held_rows.extend(dispatch_held_rows);
+        if !held_rows.is_empty() {
+            sources.insert(
+                "held".to_string(),
+                json!({
+                    "ok": true,
+                    "truncated": false,
+                    "error": "",
+                    "count": held_rows.len(),
+                    "rows": held_rows,
+                }),
+            );
+        }
         (
             undispatched,
             prs,
@@ -1016,6 +1219,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             holder_activity,
             holder_activity_error,
             holder_starved,
+            blocked_child,
+            stranded,
         )
     });
     warnings.extend(pr_warnings);
@@ -1151,159 +1356,6 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             .join("bus")
             .join("messages.jsonl")
     }
-
-    // Blocked child: read the global distress journal and resolve every
-    // candidate's answered/unanswered state HERE, where claims, the graph,
-    // and the verdict subprocess already live - build_board only
-    // scope-filters and renders what this collects. Gated on
-    // `s_blocked_child` like every other source, so an exhausted board
-    // budget skips it rather than running an unbounded read anyway - the
-    // ONE bound this module's own contract promises. Wrapped in
-    // catch_unwind for the same reason the needs thread's `.join()` is:
-    // `AgentsHome::from_env()` panics under a test process with no
-    // declared hermetic root (paths.rs), and this function's own contract
-    // is "never panics on a source" (see doc comment above).
-    let blocked_child = match s_blocked_child {
-        None => {
-            spent(&mut sources, "blocked_child", &budget);
-            budget.spent_read()
-        }
-        Some(dl) => {
-            if Budget::spawn_bound(dl).is_zero() {
-                spent(&mut sources, "blocked_child", &budget);
-                budget.spent_read()
-            } else {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let home = crate::paths::AgentsHome::from_env();
-                    let journal = crate::daemon::global_events_path(&home);
-                    match read_blocked_rows(&journal) {
-                        Err(e) => SourceRead::err(e),
-                        Ok(rows) => {
-                            let claim_rows = claims.rows();
-                            let claim_state_by_node: HashMap<String, String> = claim_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                    Some((
-                                        node.to_string(),
-                                        s_str(row, "state").unwrap_or("").to_string(),
-                                    ))
-                                })
-                                .collect();
-                            let status_by_node: HashMap<String, String> = entries
-                                .as_deref()
-                                .unwrap_or(&[])
-                                .iter()
-                                .filter_map(|n| {
-                                    Some((
-                                        s_str(n, "id")?.to_string(),
-                                        s_str(n, "status").unwrap_or("").to_string(),
-                                    ))
-                                })
-                                .collect();
-                            let candidates = queues::resolve_blocked_child_candidates(
-                                rows,
-                                &claim_state_by_node,
-                                &claim_acquired_at_by_node(&claim_rows),
-                                &status_by_node,
-                                blocked_child_grace_minutes(&cwd),
-                                now_secs_board() as i64,
-                            );
-                            if candidates.is_empty() {
-                                SourceRead::ok(Value::Array(Vec::new()))
-                            } else {
-                                // A row keyed by its run id is never bus-addressed;
-                                // the node's live claim names the harness session
-                                // the bus does address.
-                                let claim_session_by_node: HashMap<String, String> = claim_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                        Some((
-                                            node.to_string(),
-                                            s_str(row, "session_id")?.to_string(),
-                                        ))
-                                    })
-                                    .collect();
-                                let mail_candidates: Vec<(String, Option<String>, String)> =
-                                    candidates
-                                        .iter()
-                                        .map(|(row, _)| {
-                                            let holder = row
-                                                .node
-                                                .as_deref()
-                                                .and_then(|n| claim_session_by_node.get(n))
-                                                .cloned();
-                                            (row.session.clone(), holder, row.ts.clone())
-                                        })
-                                        .collect();
-                                let answered = queues::mail_answered_since(
-                                    &bus_live_log_path(),
-                                    &mail_candidates,
-                                );
-
-                                let mut sessions: Vec<String> = Vec::new();
-                                for (session, holder, _) in &mail_candidates {
-                                    for key in [Some(session.as_str()), holder.as_deref()]
-                                        .into_iter()
-                                        .flatten()
-                                    {
-                                        if !sessions.iter().any(|s| s == key) {
-                                            sessions.push(key.to_string());
-                                        }
-                                    }
-                                }
-                                let mut cmd = fno_py_cmd();
-                                cmd.extend([
-                                    "agents".to_string(),
-                                    "distress-verdicts".to_string(),
-                                    "--sessions".to_string(),
-                                    serde_json::to_string(&sessions)
-                                        .unwrap_or_else(|_| "[]".to_string()),
-                                ]);
-                                let verdict_bound = Budget::spawn_bound(dl);
-                                let verdict_payload = if verdict_bound.is_zero() {
-                                    SourceRead::err(spent_err.clone())
-                                } else {
-                                    run_json(cmd, &cwd, verdict_bound)
-                                };
-                                let verdicts: HashMap<String, String> = mail_candidates
-                                    .iter()
-                                    .filter_map(|(session, holder, _)| {
-                                        queues::verdict_for(
-                                            verdict_payload.payload.as_ref(),
-                                            session,
-                                            holder.as_deref(),
-                                        )
-                                        .map(|v| (session.clone(), v))
-                                    })
-                                    .collect();
-                                SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
-                                    candidates, &answered, &verdicts,
-                                )))
-                            }
-                        }
-                    }
-                }));
-                let read =
-                    result.unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked"));
-                mark(&mut sources, "blocked_child", &read, false);
-                read
-            }
-        }
-    };
-
-    // The stranded-tree read: which linked worktrees hold uncommitted or
-    // unpushed work under an open lead-priority node. Candidates come from
-    // the one graph read; repos from the workspace map plus this repo's
-    // canonical root, so a board run anywhere lands the same tree set.
-    let candidates = entries
-        .as_deref()
-        .map(|e| stranded_candidates(e))
-        .unwrap_or_default();
-    let repos = scope::project_repo_paths(&cwd);
-    let stranded = read_stranded_trees(&repos, &candidates, &mut budget);
-    mark(&mut sources, "stranded", &stranded, false);
 
     // The fleet-task read: a local questions.jsonl fold, sub-millisecond,
     // so it runs inline instead of taking a budget slice or a thread. An
@@ -1649,6 +1701,47 @@ mod tests {
                 .collect();
         let (ready, held_rows) = partition_held(ready, &held);
         assert!(!ready.is_ok());
+        assert!(held_rows.is_empty());
+    }
+
+    #[test]
+    fn dispatch_hold_partition_moves_the_row_and_names_the_reason() {
+        // An active dispatch_hold parks the node: it leaves the undispatched
+        // feed and is named under held with its hold reason.
+        let dir = tempfile::tempdir().unwrap();
+        let plan_path = write_hold_plan(
+            dir.path(),
+            "dispatch_hold:\n  reason: waiting on legal\n  release_when: legal clears\n  review_on: 2099-01-01\n  set_by: operator\n",
+        );
+        let entries = vec![json!({
+            "id": "x-hold1",
+            "priority": "p1",
+            "status": "ready",
+            "plan_path": plan_path,
+        })];
+        let feed = ok_read(json!([
+            {"id": "x-free", "priority": "p1", "title": "free"},
+            {"id": "x-hold1", "priority": "p1", "title": "held dispatch"}
+        ]));
+        let (kept, held_rows) = partition_dispatch_held(feed, Some(&entries));
+        let ids: Vec<String> = kept
+            .rows()
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(ids, vec!["x-free".to_string()]);
+        assert_eq!(held_rows.len(), 1);
+        assert_eq!(held_rows[0]["id"], json!("x-hold1"));
+        assert_eq!(held_rows[0]["held_by"], json!("dispatch_hold"));
+        assert_eq!(held_rows[0]["hold_reason"], json!("waiting on legal"));
+    }
+
+    #[test]
+    fn dispatch_hold_partition_never_reads_an_unreadable_feed_as_held_free() {
+        let feed = SourceRead::err("undispatched: reader panicked");
+        let (kept, held_rows) = partition_dispatch_held(feed, None);
+        assert!(!kept.is_ok());
         assert!(held_rows.is_empty());
     }
 
@@ -2610,30 +2703,6 @@ mod tests {
     }
 
     #[test]
-    fn the_probe_feed_is_capped_to_the_affordable_prefix_and_names_the_tail() {
-        // The per-handle bound converts a killed empty page into a measured
-        // prefix: a slice funding part of the feed keeps the prefix
-        // (claim-derived holders ride first) and names the withheld tail.
-        let tokens: Vec<String> = (0..5).map(|i| format!("t-{i}")).collect();
-        let (feed, note) = bound_truth_feed(tokens.clone(), 3);
-        assert_eq!(feed, tokens[..3].to_vec());
-        let note = note.expect("a mid-feed cap names the tail");
-        assert!(
-            note.contains("measuring the first 3 of 5 holders"),
-            "{note:?}"
-        );
-        // A slice funding everything, and one funding nothing (the page
-        // bound declines to spawn, the run reads timed out - the receipt
-        // the budget pins expect), keep the whole feed and stay quiet.
-        let (feed, note) = bound_truth_feed(tokens.clone(), 5);
-        assert_eq!(feed, tokens);
-        assert!(note.is_none());
-        let (feed, note) = bound_truth_feed(tokens, 0);
-        assert_eq!(feed.len(), 5);
-        assert!(note.is_none());
-    }
-
-    #[test]
     fn a_working_handover_holder_keeps_its_node_out_of_unplanned_and_stale() {
         // AC7-HP: the ready feed cannot see a stale launch-window lease
         // (include_stale=false excludes it, worked ids too), so the old
@@ -3421,64 +3490,33 @@ mod tests {
     }
 
     #[test]
-    fn a_timed_out_truth_batch_on_a_quiet_board_reads_not_read_never_unreadable() {
-        // At load 335 on 12 cores the truth batch timed out on budget and the
-        // claim-dependent queues read unreadable, so a quiet board blocked
-        // completion on about ten consecutive stops with nothing to act on.
-        // A timeout against the board's own deadline is the board stopping,
-        // not the source failing: the queues must read not-read, the flag
-        // must stay off, and the receipt must name the read. The board also
-        // returns inside budget plus the serialization reserve, and the
-        // holder reads unmeasured by the "timed out" receipt word - never
-        // no-evidence.
+    fn blocked_child_and_stranded_read_ok_despite_a_slow_concurrent_source() {
+        // blocked_child and stranded_tree used to run AFTER the
+        // concurrent block (gh pr list / inbox outstanding / the truth
+        // probe / the needs fold), so on a loaded fleet they checked the
+        // one shared board deadline LAST and printed READER FAILED
+        // "board budget exhausted after registry::load_registry" even
+        // though their own slice claim had succeeded early. Moving their
+        // actual read to run right after the registry load (before that
+        // concurrent block spends real wall time) means they must read ok
+        // no matter how slow a concurrent source is, as long as it stays
+        // bounded by the same deadline. A 5s sleep under a 3,000ms budget
+        // reproduces the starvation shape the lead's check-ins measured.
         let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _restore = EnvRestore::take(&[
-            "FNO_AGENTS_HOME",
-            "FNO_SPACES_DIR",
-            "HOME",
-            "FNO_CLAIMS_ROOT",
-        ]);
+        let _restore = EnvRestore::take(&["FNO_AGENTS_HOME", "FNO_SPACES_DIR", "HOME"]);
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("FNO_AGENTS_HOME", dir.path().join("agents"));
         std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
         std::env::set_var("HOME", dir.path());
-        std::env::set_var("FNO_CLAIMS_ROOT", dir.path());
-        // ONE stale claim: the dead-stated holder is exactly the token the
-        // board probes, so the truth batch runs and (stubbed below) times
-        // out against the budget-derived page bound.
-        let now_ms = crate::claims::now_ms();
-        let lock = crate::claims::claim_path("node:lead-truth-holder", Some(dir.path())).unwrap();
-        std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
-        std::fs::write(
-            &lock,
-            serde_json::json!({
-                "schema_version": crate::claims::PID_UNAVAILABLE_SCHEMA_VERSION,
-                "key": "node:lead-truth-holder",
-                "holder": "claude:t-2440-truth",
-                "acquired_at": now_ms - 3_600_000,
-                "host": "board-test-off-host",
-                "pid_unavailable": true,
-                "expires_at": now_ms - 1_800_000,
-            })
-            .to_string(),
-        )
-        .unwrap();
-        // The truth batch execs bare `fno`; stub it to sleep 30s. `gh` gets
-        // an empty-open-PR listing so the prs reads never reach the network.
-        // Everything else answers at once.
+        crate::paths::pin_test_claims_root(dir.path());
+        let script =
+            crate::write_exec_stub(dir.path(), "sleepy-fno-py", "#!/bin/sh\nexec sleep 5\n");
         let stub_dir = dir.path().join("stub-bin");
         std::fs::create_dir_all(&stub_dir).unwrap();
-        let stub = crate::write_exec_stub(
-            &stub_dir,
-            "fno",
-            "#!/bin/sh\nif [ \"$1\" = agents ] && [ \"$2\" = truth ]; then exec sleep 30; fi\necho '{}'\n",
-        );
         crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\necho '[]'\n");
-        let prev_py = std::env::var_os("FNO_PY");
+        let prev = std::env::var_os("FNO_PY");
         let prev_path = std::env::var_os("PATH");
-        let prev_bin = std::env::var_os("FNO_BIN");
-        std::env::set_var("FNO_PY", &stub);
-        std::env::set_var("FNO_BIN", &stub);
+        std::env::set_var("FNO_PY", &script);
         std::env::set_var(
             "PATH",
             format!(
@@ -3487,20 +3525,12 @@ mod tests {
                 prev_path.as_deref().and_then(|p| p.to_str()).unwrap_or("")
             ),
         );
-
-        let start = std::time::Instant::now();
         let payload = read_board(&BoardOpts {
-            // The budget must survive the pre-truth sources on a loaded
-            // runner (measured: 2,000ms expired before the batch spawned and
-            // the queues read spent, never timed out), so the batch is the
-            // thing the budget kills, at its deadline-derived bound.
-            budget_ms: 8_000,
+            budget_ms: 3_000,
             cwd: Some(dir.path().to_path_buf()),
             ..Default::default()
         });
-        let elapsed = start.elapsed();
-
-        match prev_py {
+        match prev {
             Some(v) => std::env::set_var("FNO_PY", v),
             None => std::env::remove_var("FNO_PY"),
         }
@@ -3508,37 +3538,15 @@ mod tests {
             Some(v) => std::env::set_var("PATH", v),
             None => std::env::remove_var("PATH"),
         }
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
+        let sources = payload.get("sources").and_then(Value::as_object).unwrap();
+        for name in ["blocked_child", "stranded"] {
+            let s = sources.get(name).unwrap_or(&Value::Null);
+            assert_eq!(
+                s.get("ok"),
+                Some(&Value::Bool(true)),
+                "{name} must read ok despite the slow concurrent source: {s}"
+            );
         }
-        let parsed = crate::lead_termination::parse_org_board_value(&payload).expect("parses");
-        assert!(
-            !parsed.unreadable_sources,
-            "a timed-out batch is a budget kill, never an unreadable source: {payload}"
-        );
-        assert!(
-            parsed
-                .blind_queues
-                .iter()
-                .any(|q| q.contains("stale_claim not read: truth probe: batch of")),
-            "the receipt must name the timed-out read: {:?}",
-            parsed.blind_queues
-        );
-        // The board must return inside budget plus the serialization
-        // reserve, and the holder must read unmeasured by the receipt word,
-        // never no-evidence.
-        assert!(
-            elapsed < std::time::Duration::from_millis(8_750),
-            "board took {elapsed:?} against an 8,000ms budget with a 30s truth stub"
-        );
-        let err = payload["sources"]["holder_activity"]["error"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            err.contains("timed out"),
-            "the holder must read unmeasured, got holder_activity error: {err:?}"
-        );
     }
 
     #[test]

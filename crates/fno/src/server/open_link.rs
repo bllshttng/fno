@@ -21,6 +21,7 @@ impl Core {
         if !(crate::link::is_openable(&url)
             || crate::link::is_sender_uri(&url)
             || crate::link::is_message_uri(&url)
+            || crate::link::is_handle_uri(&url)
             || crate::link::is_file_uri(&url))
         {
             return;
@@ -34,6 +35,189 @@ impl Core {
             );
             self.clients.retain(|c| c.id != client_id);
             self.push_layout(true);
+        }
+    }
+
+    /// The claim half of an fno-token click on a mouse-owning pane. A LEFT
+    /// press whose cell carries an fno token URI (`@handle`, a bare or
+    /// headered `fmail-` id) claims the pair instead of forwarding; the
+    /// matching release consumes the claim and answers OpenLink, and a
+    /// release on any other cell is swallowed with it (the app saw no press,
+    /// so it gets no torn tail). A drag off a claimed press replays the
+    /// press ahead of the drag, so an app-side text selection starting on a
+    /// token still begins whole. Claims are PER PANE, so one client's plain
+    /// events never consume another client's pending pair; every unclaimed
+    /// event forwards (return `false`) and drops only its own pane's claim.
+    /// A release for which no claim is held forwards untouched, so an
+    /// app-owned click pair stays byte-identical.
+    pub(super) fn claim_fno_token_click(
+        &mut self,
+        client_id: u64,
+        pane: u64,
+        event: &crate::proto::MouseEvent,
+    ) -> bool {
+        let token_at = |core: &Self, row: u16, col: u16| {
+            core.pane_link_span(pane, row, col)
+                .map(|span| span.uri)
+                .filter(|url| crate::link::is_fno_uri(url))
+        };
+        match event.kind {
+            crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
+                // A second press means the previous gesture's release never
+                // came (dragged off-pane, or dropped client-side on chrome):
+                // that pair is abandoned. Drop it so the new gesture's
+                // release can never consume a stale claim.
+                self.fno_token_claims.remove(&pane);
+                let claimed = token_at(self, event.row, event.col).is_some();
+                if claimed {
+                    self.fno_token_claims
+                        .insert(pane, (event.row, event.col, client_id));
+                }
+                claimed
+            }
+            crate::proto::MouseKind::Release(crate::proto::MouseButton::Left) => {
+                match self.fno_token_claims.remove(&pane) {
+                    Some((row, col, c)) if c == client_id => {
+                        // The pair is ours wherever it ended: the app saw no
+                        // press, so it gets no torn tail. Same cell is the
+                        // click that opens; any other cell was a tiny drag.
+                        if (row, col) == (event.row, event.col) {
+                            if let Some(url) = token_at(self, event.row, event.col) {
+                                self.send_open_link(client_id, url);
+                            }
+                        }
+                        true
+                    }
+                    other => {
+                        if let Some(claim) = other {
+                            self.fno_token_claims.insert(pane, claim);
+                        }
+                        false
+                    }
+                }
+            }
+            crate::proto::MouseKind::Drag(crate::proto::MouseButton::Left) => {
+                // A drag off a claimed press is an app-owned selection whose
+                // press the mux swallowed: replay the press ahead of this
+                // drag so the gesture starts whole, then hand the pair back.
+                // The replay carries the CLAIMED press's cell, never this
+                // drag event's (a selection must begin where it began).
+                if let Some((row, col, c)) = self.fno_token_claims.remove(&pane) {
+                    if c == client_id {
+                        let press = crate::proto::MouseEvent {
+                            row,
+                            col,
+                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
+                            alt: event.alt,
+                        };
+                        let bytes = super::sgr_mouse_bytes(&press);
+                        if let Some(entry) = self.panes.get(&pane) {
+                            let _ = entry.pty.write_input(&bytes);
+                        }
+                    } else {
+                        self.fno_token_claims.insert(pane, (row, col, c));
+                    }
+                }
+                false
+            }
+            _ => {
+                // A non-press event on the pane breaks its own pending pair
+                // (the pointer moved on); other panes' claims are untouched.
+                self.fno_token_claims.remove(&pane);
+                false
+            }
+        }
+    }
+
+    /// The claim half of an alt-click link open on a mouse-reporting pane
+    /// (v112). The SelectRelease open path only runs in panes that never
+    /// negotiated mouse reporting, so in a Claude Code / codex TUI pane - both
+    /// ask for the mouse - no link was ever openable from the mux. The alt
+    /// modifier is the gesture: SGR reports alt (bit 8) from Ghostty, iTerm2
+    /// and WezTerm alike, while cmd has no SGR bit and is invisible to every
+    /// client. An ALT left press whose cell resolves a link claims the pair
+    /// instead of forwarding; the matching release consumes the claim and
+    /// answers OpenLink; a plain press and a link-less alt press forward
+    /// byte-identical (the alt bit rides `sgr_mouse_bytes`). Pair mechanics -
+    /// same-cell open, drag replay, per-pane claims, non-press break - mirror
+    /// [`Core::claim_fno_token_click`]; read there for the why. Runs AFTER the
+    /// token claim, so an alt press on a token cell stays a token open.
+    /// Hover stays app-owned on these panes (`link_hover`'s guard), so the
+    /// gesture is documented, not underlined.
+    pub(super) fn claim_link_click(
+        &mut self,
+        client_id: u64,
+        pane: u64,
+        event: &crate::proto::MouseEvent,
+    ) -> bool {
+        let link_at = |core: &Self, row: u16, col: u16| {
+            core.pane_link_span(pane, row, col).map(|span| span.uri)
+        };
+        match event.kind {
+            crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
+                // A second press means the previous gesture's release never
+                // came (dragged off-pane, or dropped client-side on chrome):
+                // that pair is abandoned. Drop it so the new gesture's plain
+                // press - which forwarded - keeps its release too.
+                self.link_click_claims.remove(&pane);
+                let claimed = event.alt && link_at(self, event.row, event.col).is_some();
+                if claimed {
+                    self.link_click_claims
+                        .insert(pane, (event.row, event.col, client_id));
+                }
+                claimed
+            }
+            crate::proto::MouseKind::Release(crate::proto::MouseButton::Left) => {
+                match self.link_click_claims.remove(&pane) {
+                    Some((row, col, c)) if c == client_id => {
+                        // The pair is ours wherever it ended (a tiny drag off
+                        // the link swallows, never mis-opens); same cell opens.
+                        if (row, col) == (event.row, event.col) {
+                            if let Some(url) = link_at(self, event.row, event.col) {
+                                self.send_open_link(client_id, url);
+                            }
+                        }
+                        true
+                    }
+                    other => {
+                        if let Some(claim) = other {
+                            self.link_click_claims.insert(pane, claim);
+                        }
+                        false
+                    }
+                }
+            }
+            crate::proto::MouseKind::Drag(crate::proto::MouseButton::Left) => {
+                // A drag off a claimed alt press is an app-owned selection
+                // whose press the mux swallowed: replay it (alt bit included)
+                // ahead of this drag so the gesture starts whole, then hand
+                // the pair back. The replay carries the CLAIMED press's
+                // cell, never this drag event's (a selection must begin
+                // where it began).
+                if let Some((row, col, c)) = self.link_click_claims.remove(&pane) {
+                    if c == client_id {
+                        let press = crate::proto::MouseEvent {
+                            row,
+                            col,
+                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
+                            alt: event.alt,
+                        };
+                        let bytes = super::sgr_mouse_bytes(&press);
+                        if let Some(entry) = self.panes.get(&pane) {
+                            let _ = entry.pty.write_input(&bytes);
+                        }
+                    } else {
+                        self.link_click_claims.insert(pane, (row, col, c));
+                    }
+                }
+                false
+            }
+            _ => {
+                // A non-press event on the pane breaks its own pending pair;
+                // other panes' claims are untouched.
+                self.link_click_claims.remove(&pane);
+                false
+            }
         }
     }
 }

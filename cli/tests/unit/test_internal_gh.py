@@ -243,6 +243,48 @@ def test_coverage_review_read_preserves_refusal_body_byte_for_byte(monkeypatch):
     assert json.loads(result.stdout)["comments"][0]["body"] == refusal
 
 
+def test_a_held_budget_stops_the_coverage_read_after_two_runner_calls(monkeypatch):
+    # The REST runner consults the fleet budget per request. A hold on the
+    # third consult stops the read: two gh reads went out, the comments page
+    # never does, and the stderr carries the gh budget: marker the Rust
+    # adapter wrapper classifies.
+    calls: list[list[str]] = []
+
+    def admit(argv):
+        if len(calls) >= 2:
+            return (
+                "gh budget: fleet GitHub rate limit held locally "
+                "(budget: 2/1 points in 60s)"
+            )
+        return None
+
+    def runner(cmd, **kwargs):
+        calls.append(list(cmd))
+        endpoint = cmd[-1]
+        if endpoint == "repos/o/r/pulls/930":
+            return Result(0, json.dumps(PULL), "")
+        if endpoint == "repos/o/r/pulls/930/reviews?per_page=100&page=1":
+            return Result(0, "[]", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(_internal_gh._quota, "admit", admit)
+    monkeypatch.setattr(
+        _internal_gh._rest, "_slug_or_reason", lambda cwd, runner, repo=None: ("o/r", "")
+    )
+    result = _internal_gh.execute(
+        "coverage",
+        ["pr", "view", "930", "--json", "reviews,comments"],
+        runner=runner,
+        real_gh="/real/gh",
+    )
+    assert result.returncode == 1
+    assert "gh budget:" in result.stderr
+    assert calls == [
+        ["/real/gh", "api", "repos/o/r/pulls/930"],
+        ["/real/gh", "api", "repos/o/r/pulls/930/reviews?per_page=100&page=1"],
+    ]
+
+
 def test_coverage_review_read_empty_collections_are_known_empty(monkeypatch):
     def runner(cmd, **kwargs):
         endpoint = cmd[-1]
@@ -376,3 +418,52 @@ def test_execute_turns_a_proxy_identity_failure_into_a_result(monkeypatch):
     result = _internal_gh.execute("discretionary", ["auth", "status"])
     assert result.returncode == 2
     assert "cannot identify its own install directory" in result.stderr
+
+
+def test_real_runner_serves_plain_rest_gets_through_the_conditional_door(monkeypatch):
+    import fno.rust_binary as rust_binary
+
+    spawned: list[list[str]] = []
+    asked: list[dict] = []
+    answers = iter(
+        [
+            {"eligible": True, "ok": True, "stdout": '{"n":1}', "stderr": ""},
+            {"eligible": False},
+            rust_binary.VerbUnavailable("no binary"),
+        ]
+    )
+
+    def door(verb, payload, **kwargs):
+        asked.append(payload)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def spawn(cmd, **kwargs):
+        spawned.append(list(cmd))
+        return Result(0, "plain", "")
+
+    monkeypatch.setattr(rust_binary, "verb_call", door)
+    monkeypatch.setattr(_internal_gh, "run", spawn)
+    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
+    invoke = _internal_gh._rest_runner("/real/gh", spawn)
+
+    served = invoke(["gh", "api", "repos/o/r/pulls/1"], cwd="/repo")
+    assert (served.returncode, served.stdout) == (0, '{"n":1}')
+    assert asked[0] == {"op": "status-rest-get", "cwd": "/repo", "path": "repos/o/r/pulls/1"}
+    assert spawned == []
+
+    # An ineligible path, an unreachable door, and a non-GET shape all run here.
+    assert invoke(["gh", "api", "rate_limit"], cwd="/repo").stdout == "plain"
+    assert invoke(["gh", "api", "repos/o/r/pulls/2"], cwd="/repo").stdout == "plain"
+    assert invoke(["gh", "api", "-X", "POST", "repos/o/r/x"], cwd="/repo").stdout == "plain"
+    assert len(spawned) == 3
+    assert len(asked) == 3
+
+    # A caller-supplied runner keeps its own transport and never meets the door.
+    injected = _internal_gh._rest_runner(
+        "/real/gh", lambda cmd, **kwargs: Result(0, "fake", "")
+    )
+    assert injected(["gh", "api", "repos/o/r/pulls/1"], cwd=None).stdout == "fake"
+    assert len(asked) == 3

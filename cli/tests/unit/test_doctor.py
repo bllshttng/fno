@@ -7,7 +7,7 @@ partial evidence -> not stale, --fix rust-only leg runs the refresh helper,
 never shells out to cargo directly).
 
 The signal collectors (_resolve_source, _source_rev, _read_marker,
-_probe_installed_verb, _rust_report, _read_rust_marker, _rust_source_rev,
+_probe_installed_verb, _rust_report, _rust_source_rev,
 _cargo_bin) are module-level so each test stubs them for a hermetic,
 network-free verdict.
 """
@@ -76,7 +76,6 @@ def _stub_signals(
         lambda: {"binary": rust_binary, "revision": rust_marker},
     )
     monkeypatch.setattr(doctor, "_daemon_drift_warning", lambda: None)
-    monkeypatch.setattr(doctor, "_read_rust_marker", lambda: rust_marker)
     monkeypatch.setattr(doctor, "_rust_source_rev", lambda source: rust_source_rev)
     monkeypatch.setattr(doctor, "_cargo_bin_present", lambda: cargo_bin_present)
     # Component convergence (deployed-shape probes + native verdict): default
@@ -922,13 +921,29 @@ def test_fix_heals_dead_pr_watch_on_fresh_binary(monkeypatch: pytest.MonkeyPatch
     _stub_signals(monkeypatch, src=Path("/src"), source_rev="abc", marker="abc",
                   capture_present="present")
     _dead_pr_watch(monkeypatch)
-    import fno.pr_watch._install as pw
-    heal_calls: list = []
-    monkeypatch.setattr(pw, "heal_watcher", lambda **kw: heal_calls.append(kw) or ("bounced x", 0))
+    import subprocess
+
+    import fno.rust_binary as rb
+    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
+
+    spawn: list = []
+    real_run = subprocess.run
+
+    def _fake_run(argv, **kw):
+        if argv[:3] == ["/x/fno-agents", "pr-watch", "heal"]:
+            spawn.append(argv)
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="pr-watch heal: bounced x\n", stderr=""
+            )
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
 
     result = runner.invoke(app, ["doctor", "--fix"])
     assert result.exit_code == 0  # advisory: a dead watcher never flips the exit
-    assert len(heal_calls) == 1
+    assert len(spawn) == 1
+    assert spawn[0][1:3] == ["pr-watch", "heal"]
+    assert "doctor-fix" in spawn[0]
     assert "pr-watch heal" in result.stderr
 
 
@@ -949,25 +964,36 @@ def test_fix_refreshes_wedged_pr_watch_instead_of_healing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A wedged watermark is fresh, so the tick already runs: the cure is the
-    plist re-render (refresh_watcher), never the plain bounce."""
+    refresh verb, never the plain bounce."""
     _stub_signals(monkeypatch, src=Path("/src"), source_rev="abc", marker="abc",
                   capture_present="present")
     _wedged_pr_watch(monkeypatch)
-    import fno.pr_watch._install as pw
-    refresh_calls: list = []
+    import subprocess
 
-    def _fail_heal(**kw):
-        raise AssertionError("wedged must re-render the plist, not bounce it")
+    import fno.rust_binary as rb
+    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
 
-    monkeypatch.setattr(
-        pw, "refresh_watcher",
-        lambda **kw: refresh_calls.append(kw) or ("re-rendered and bounced x", 0),
-    )
-    monkeypatch.setattr(pw, "heal_watcher", _fail_heal)
+    spawn: list = []
+    real_run = subprocess.run
+
+    def _fake_run(argv, **kw):
+        if argv[:3] == ["/x/fno-agents", "pr-watch", "heal"]:
+            raise AssertionError("wedged must re-render the plist, not bounce it")
+        if argv[:3] == ["/x/fno-agents", "pr-watch", "refresh"]:
+            spawn.append(argv)
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="pr-watch refresh: re-rendered and bounced x\n", stderr=""
+            )
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
 
     result = runner.invoke(app, ["doctor", "--fix"])
     assert result.exit_code == 0  # advisory: never flips the exit
-    assert len(refresh_calls) == 1
+    assert len(spawn) == 1
+    assert spawn[0][1:3] == ["pr-watch", "refresh"]
+    assert "--force-bounce" in spawn[0]
+    assert "doctor-fix" in spawn[0]
     assert "pr-watch refresh" in result.stderr
 
 
@@ -1577,8 +1603,9 @@ def test_fix_installs_the_groom_agent_when_nothing_schedules_it(
     monkeypatch.setattr(doctor.sys, "platform", "darwin")  # the install is launchd-only
     calls: list = []
     monkeypatch.setattr(
-        "fno.backlog.groom.install_groom_agent",
-        lambda **kw: calls.append(kw) or {"status": "installed", "detail": "ok"},
+        doctor,
+        "_groom_install_agent",
+        lambda: calls.append(1) or {"status": "installed", "detail": "ok"},
     )
     result = runner.invoke(app, ["doctor", "--fix"])
     assert len(calls) == 1
@@ -1599,10 +1626,10 @@ def test_fix_skips_the_install_when_the_agent_is_already_there(
     # platform guard - off launchd it would pass without exercising anything.
     monkeypatch.setattr(doctor.sys, "platform", "darwin")
 
-    def _boom(**kw):
+    def _boom():
         raise AssertionError("must not reinstall an agent that is already installed")
 
-    monkeypatch.setattr("fno.backlog.groom.install_groom_agent", _boom)
+    monkeypatch.setattr(doctor, "_groom_install_agent", _boom)
     runner.invoke(app, ["doctor", "--fix"])
 
 
@@ -1656,10 +1683,10 @@ def test_fix_does_not_attempt_a_launchd_install_off_darwin(
     )
     monkeypatch.setattr(doctor.sys, "platform", "linux")
 
-    def _boom(**kw):
+    def _boom():
         raise AssertionError("must not attempt a launchd install off darwin")
 
-    monkeypatch.setattr("fno.backlog.groom.install_groom_agent", _boom)
+    monkeypatch.setattr(doctor, "_groom_install_agent", _boom)
     result = runner.invoke(app, ["doctor", "--fix"])
     assert "groom agent" not in result.stderr
 
@@ -1843,6 +1870,54 @@ def test_plugin_cache_stage_check_transport_failure_is_unknown(tmp_path, monkeyp
     assert "boom" in (report.get("detail") or "")
     assert report["roots"] == []
     assert doctor._blockers({"plugin_cache": report}) == []
+
+
+def test_disk_free_blocker_fires_under_the_floor_and_names_the_reclaim(monkeypatch):
+    """A free-disk reading under the floor is a blocker naming the reclaim;
+    at or above the floor it is not, and an unreadable volume blocks nothing."""
+    import shutil as real_shutil
+
+    def usage(free_gb):
+        total = 1_000_000_000_000
+        free = int(free_gb * 1_000_000_000)
+        return real_shutil._ntuple_diskusage(total, total - free, free)
+
+    monkeypatch.setattr(doctor.shutil, "disk_usage", lambda path: usage(10.0))
+    report = doctor._disk_free_report()
+    assert report["verdict"] == "low"
+    blockers = doctor._blockers({"disk_free": report})
+    assert any("free disk is 10.0 GB" in b and "reclaim --apply" in b for b in blockers)
+
+    monkeypatch.setattr(doctor.shutil, "disk_usage", lambda path: usage(40.0))
+    assert doctor._disk_free_report()["verdict"] == "ok"
+    assert doctor._blockers({"disk_free": {"verdict": "ok"}}) == []
+
+    def boom(path):
+        raise OSError("no volume")
+
+    monkeypatch.setattr(doctor.shutil, "disk_usage", boom)
+    assert doctor._disk_free_report()["verdict"] == "unreadable"
+    assert doctor._blockers({"disk_free": {"verdict": "unreadable"}}) == []
+
+
+def test_old_git_echo_falls_back_and_doctor_names_the_git(monkeypatch):
+    """git under 2.31 echoes --path-format=absolute back as a line and exits 0.
+    The common-dir reader refuses that text, reads plain, and joins it to cwd;
+    doctor blocks on the version so the cause is named."""
+    from fno.paths import git_common_dir
+
+    def old_git(argv, **kwargs):
+        out = "--path-format=absolute\n.git\n" if "--path-format=absolute" in argv else ".git\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    assert git_common_dir("/work/repo", runner=old_git) == Path("/work/repo/.git")
+
+    monkeypatch.setattr(doctor, "_bounded_command", lambda argv: (0, "git version 2.26.2\n", ""))
+    report = doctor._git_version_report()
+    assert report == {"version": "2.26", "verdict": "old"}
+    assert any("git 2.26 is under 2.31" in b for b in doctor._blockers({"git_version": report}))
+    monkeypatch.setattr(doctor, "_bounded_command", lambda argv: (0, "git version 2.50.1 (Apple Git-155)\n", ""))
+    assert doctor._git_version_report()["verdict"] == "ok"
 
 
 def test_plugin_cache_stage_check_needs_a_cargo_binary(tmp_path, monkeypatch):

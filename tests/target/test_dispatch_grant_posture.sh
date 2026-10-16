@@ -62,12 +62,11 @@ grep -q "would run: fno agents spawn --node $NODE_ID --substrate thread --name t
 echo "PASS: the launcher passes the node and nothing posture-shaped"
 
 echo "== the grant is read at target init, inside the door's resolver =="
-# resolve_node_spawn is the ONE preference resolver the door's node-seeded
-# branch and the advance path share; the grant call must live there, never in
-# a shell launcher.
-node_dispatch="$REPO_ROOT/cli/src/fno/agents/node_dispatch.py"
-grep -q "auto_merge_grant(settings_obj)" "$node_dispatch" \
-  || { echo "FAIL: resolve_node_spawn no longer reads auto_merge_grant"; exit 1; }
+# The native shared resolver reads the literal dispatch grant for the door
+# and advance callers. The retired Python resolver is no longer an owner.
+node_dispatch="$REPO_ROOT/crates/fno-agents/src/backlog/dispatch_resolve.rs"
+grep -Fq 'text_key(&["auto_merge", "grant"]).as_deref() == Some("dispatch")' "$node_dispatch" \
+  || { echo "FAIL: native dispatch resolver no longer reads the literal dispatch grant"; exit 1; }
 ! grep -q "auto_merge_grant" "$DISPATCH" \
   || { echo "FAIL: the shell launcher must not read the grant itself"; exit 1; }
 echo "PASS: the grant is read once, in the shared resolver"

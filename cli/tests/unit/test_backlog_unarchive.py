@@ -7,17 +7,15 @@ proves neither verb can drop a node from both populations.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.graph.store import read_graph_strict
 
-runner = CliRunner()
 
 
 @pytest.fixture
@@ -75,7 +73,7 @@ def _archived_ids(graph: Path) -> set[str]:
 
 def test_an_archived_node_comes_back(store):
     _seed(store, [_node("ab-22222222", archived_at="2026-02-01T00:00:00Z")])
-    res = runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    res = native_backlog("backlog", "unarchive", "ab-22222222")
     assert res.exit_code == 0, res.output
     assert "ab-22222222" in _live_ids(store)
 
@@ -87,7 +85,7 @@ def test_a_reminted_node_comes_back_by_its_previous_id(store):
         store,
         [_node("ab-99999999", previous_id="ab-22222222", archived_at="2026-02-01T00:00:00Z")],
     )
-    res = runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    res = native_backlog("backlog", "unarchive", "ab-22222222")
     assert res.exit_code == 0, res.output
     assert "ab-99999999" in _live_ids(store)
     assert "ab-99999999" not in _archived_ids(store)
@@ -96,7 +94,7 @@ def test_a_reminted_node_comes_back_by_its_previous_id(store):
 def test_the_archive_copy_is_dropped(store):
     """Otherwise read-through would resolve the node twice."""
     _seed(store, [_node("ab-22222222", archived_at="2026-02-01T00:00:00Z")])
-    runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    native_backlog("backlog", "unarchive", "ab-22222222")
     assert "ab-22222222" not in _archived_ids(store)
 
 
@@ -108,7 +106,7 @@ def test_other_archived_nodes_are_untouched(store):
             _node("ab-33333333", archived_at="2026-02-01T00:00:00Z"),
         ],
     )
-    runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    native_backlog("backlog", "unarchive", "ab-22222222")
     assert _archived_ids(store) == {"ab-33333333"}
 
 
@@ -117,7 +115,7 @@ def test_the_node_keeps_its_fields(store):
         store,
         [_node("ab-22222222", pr_number=9, cost_usd=1.5, archived_at="2026-02-01T00:00:00Z")],
     )
-    runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    native_backlog("backlog", "unarchive", "ab-22222222")
     node = {e["id"]: e for e in _rows(store)}["ab-22222222"]
     assert node["pr_number"] == 9
     assert node["cost_usd"] == 1.5
@@ -125,19 +123,19 @@ def test_the_node_keeps_its_fields(store):
 
 def test_a_node_already_live_warns_and_changes_nothing(store):
     _seed(store, [_node("ab-22222222")])
-    res = runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    res = native_backlog("backlog", "unarchive", "ab-22222222")
     assert res.exit_code == 0
     assert "already in the working graph" in res.output
 
 
 def test_a_node_in_neither_population_is_an_error(store):
-    res = runner.invoke(app, ["backlog", "unarchive", "ab-99999999"])
+    res = native_backlog("backlog", "unarchive", "ab-99999999")
     assert res.exit_code == 1
     assert "neither" in res.output
 
 
 def test_a_bad_id_is_rejected(store):
-    res = runner.invoke(app, ["backlog", "unarchive", "not-an-id"])
+    res = native_backlog("backlog", "unarchive", "not-an-id")
     assert res.exit_code == 1
 
 
@@ -145,12 +143,12 @@ def test_archive_then_unarchive_round_trips(store):
     """The pair, end to end: no window where the node is in neither population."""
     old = _node("ab-22222222", completed_at="2025-01-01T00:00:00+00:00")
     _seed(store, [old])
-    res = runner.invoke(app, ["backlog", "archive", "--apply"])
+    res = native_backlog("backlog", "archive", "--apply")
     assert res.exit_code == 0, res.output
     assert _live_ids(store) == set()
     assert _archived_ids(store) == {"ab-22222222"}
 
-    res = runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    res = native_backlog("backlog", "unarchive", "ab-22222222")
     assert res.exit_code == 0, res.output
     assert _live_ids(store) == {"ab-22222222"}
     assert _archived_ids(store) == set()
@@ -186,7 +184,7 @@ def test_the_round_trip_survives_reopen(tmp_path, monkeypatch):
     assert code == 4, out + err
     assert "unarchive" in out + err
 
-    back = runner.invoke(app, ["backlog", "unarchive", "ab-22222222"])
+    back = native_backlog("backlog", "unarchive", "ab-22222222")
     assert back.exit_code == 0, back.output
     code, out, err = door(root, ["reopen", "ab-22222222", "--reason", "x"])
     assert code == 0, out + err

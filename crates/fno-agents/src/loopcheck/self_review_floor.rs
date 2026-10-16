@@ -34,8 +34,9 @@ pub(super) const REVIEW_ORDER: &str = "close every finding, commit and push firs
 /// explicit choice, documented in docs/architecture/review-lanes.md.
 /// `sigma` is RETIRED: its invocation names the replacement (the default
 /// lane), never a hint that the panel runs, and a config still naming sigma
-/// is refused at init by the Python capability check with the same
-/// replacement in the refusal. No `--fix` in any hint: a fix pass moves HEAD
+/// is refused at init by the native capability door (`review-level
+/// capability`) with the same replacement in the refusal. No `--fix` in any
+/// hint: a fix pass moves HEAD
 /// and voids the attestation the round just earned. Kept honest against the
 /// Python descriptor table by check-reviewer-descriptor-parity.sh.
 pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
@@ -47,8 +48,9 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
 /// `(invocation, is_self_cert, per_harness)`. The flag mirrors the Python
 /// descriptor's `asserts` field: a surface that names `declare` without saying
 /// it asserts nothing invites an operator to clear the gate with no review
-/// behind it.
-pub(super) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
+/// behind it. `pub(crate)`: the review-capability renderer reads the same
+/// row for the `code-review` base spelling.
+pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {
     REVIEWER_INVOCATIONS
         .iter()
         .find(|(n, _, _, _)| *n == name)
@@ -95,45 +97,16 @@ pub(crate) fn is_documentation_path(path: &str) -> bool {
     p.ends_with(".md") || p.starts_with("docs/")
 }
 
-/// Whether this harness can run the review this machinery recommends. The
-/// recommendation is the fno-owned review lane, which runs as ordinary tool
-/// calls wherever the plugin runs, so every harness qualifies unconditionally.
-/// The native per-harness verbs this used to gate on (claude `/code-review`,
-/// codex `/review`) remain the operator's explicit choice; no machinery
-/// depends on them any more, which is the point of owning the reviewer.
-/// Mirrors `harness_can_self_review` in `cli/src/fno/review_capability.py`.
-pub(super) fn harness_can_self_review(_harness: Option<&str>) -> bool {
-    true
-}
-
-/// The KNOWN harnesses with no native self-review verb. A set, not
-/// `!harness_can_self_review()`, so an UNRECOGNIZED spelling floors instead of
-/// passing through as verbless. Python derives this set from `KNOWN_HARNESSES`
-/// in `cli/src/fno/harness_names.py` minus the verb table in
-/// `cli/src/fno/review_capability.py`; the two are pinned to each other by
-/// `test_floor_verbless_set_stays_locked_to_the_rust_twin`, so a harness lands
-/// on both sides or the suite goes red. Empty since the owned lane retired
-/// the verb table: the fno review lane runs wherever the plugin runs, so no
-/// KNOWN harness is verbless for review purposes and every attributed run
-/// floors.
-pub(super) const KNOWN_VERBLESS_HARNESSES: &[&str] = &[];
-
-/// The self-review FLOOR policy on the author harness. Distinct from
-/// the capability question above: `None` answers "unattributable", not
-/// "verbless". With the owned lane as the default reviewer no KNOWN harness
-/// escapes the floor - claude and codex never did, and gemini/agy/opencode
-/// stopped when their release table emptied. An UNRESOLVED harness (absent
-/// or ambiguous ambient markers - a claude session started from a codex
-/// shell) floors, because ambiguity about who authored the run is not
-/// permission to skip its review. The explicit `--author-harness none` pin is
-/// the hermetic opt-out and stays unfloored. Mirrors `_harness_can_self_review`
-/// in cli/src/fno/pr/_merge.py so the stop gate and the merge gate cannot
-/// disagree on the same PR.
+/// The self-review FLOOR policy on the author harness. `None` answers
+/// "unattributable", not "verbless": an UNRESOLVED harness (absent or
+/// ambiguous ambient markers - a claude session started from a codex shell)
+/// floors, because ambiguity about who authored the run is not permission to
+/// skip its review. Every attributed harness floors too - the owned review
+/// lane runs wherever the plugin runs, so every harness can self-review and
+/// nothing releases. The explicit `--author-harness none` pin is the
+/// hermetic opt-out and stays unfloored.
 pub(crate) fn self_review_floor_applies(author_harness: Option<&str>, pinned_none: bool) -> bool {
-    match author_harness {
-        Some(h) => harness_can_self_review(Some(h)) || !KNOWN_VERBLESS_HARNESSES.contains(&h),
-        None => !pinned_none,
-    }
+    author_harness.is_some() || !pinned_none
 }
 
 /// Pure payload classifier: CODE iff any changed path is not documentation.

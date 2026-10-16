@@ -360,6 +360,7 @@ fn awaiting_review_only_requires_every_other_conjunct() {
                 scope: None,
                 refusal_reason: None,
                 reviewer_context: None,
+                attest_machine: None,
                 required: true,
                 passed: false,
             }],
@@ -1416,10 +1417,10 @@ fn watch_idle_rejects_non_open_pr() {
 
 #[test]
 fn watch_idle_window_defaults_clamps_and_slacks() {
-    // Default (no tag timeout): 30m + 12m slack.
+    // Default (no tag timeout): 15m + 12m slack.
     assert_eq!(
         watch_window_ms(None),
-        30 * 60_000 + watch_lease::WATCH_SLACK_MS
+        15 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
     // Honored within range.
     assert_eq!(
@@ -1439,7 +1440,7 @@ fn watch_idle_window_defaults_clamps_and_slacks() {
     // Garbage falls back to the default.
     assert_eq!(
         watch_window_ms(Some("soon")),
-        30 * 60_000 + watch_lease::WATCH_SLACK_MS
+        15 * 60_000 + watch_lease::WATCH_SLACK_MS
     );
     // The event deadline uses the normalized watch duration, not claim slack.
     assert_eq!(watch_lease::watch_expiry_ms(Some("30m"), 1_000), 1_801_000);
@@ -1630,6 +1631,7 @@ fn optional_only_refusal_is_not_awaiting_review() {
         scope: None,
         refusal_reason: None,
         reviewer_context: None,
+        attest_machine: None,
         required,
         passed: false,
     };

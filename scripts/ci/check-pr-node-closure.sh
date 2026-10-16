@@ -14,8 +14,10 @@
 # is on the closure line, so an approved retarget needs no branch rename.
 #
 # Run: PR_BODY="<body>" PR_HEAD_REF="<branch>" bash scripts/ci/check-pr-node-closure.sh
-# Env: PR_BODY (the PR body), PR_HEAD_REF (the PR's head branch name).
-# Exit: 0 pass or skip (non-node branch, no PR_HEAD_REF set), 1 missing claim.
+# Env: PR_BODY (the PR body), PR_HEAD_REF (the PR's head branch name),
+# FNO_AGENTS_BIN (fno-agents binary; default fno-agents on PATH).
+# Exit: 0 pass or skip (non-node branch, no PR_HEAD_REF set), 1 missing claim,
+# 2 cannot judge (the branch scanner binary is missing or failed).
 
 set -euo pipefail
 
@@ -52,50 +54,41 @@ if [[ -n "${FNO_CLOSURE_ID_FAMILIES:-}" ]]; then
   fi
 fi
 
-# Extract every delimiter-bounded candidate segment from the head ref. Split on
-# '/' FIRST, then on '-' inside each path component, so each candidate is
-# compared whole, not as a substring of a longer token (mirrors
-# `_branch_matches_node`'s delimiter-bounded match, never a bare substring).
+# Candidate ids come from the fno-agents binary's pr-closure-branch-ids verb:
+# the same delimiter-bounded scanner the merge-time bind runs, so this gate can
+# no longer disagree with the producer about what the ref names. The bash
+# re-glue loop this replaced kept its own split table (a single `IFS='/-'` once
+# re-glued "target/deadbeef" as "target-deadbeef") and red a PR over a line
+# nothing could generate.
 #
-# The two splits stay separate because the re-glue below joins with a literal
-# '-'. A single `IFS='/-'` split forgot WHICH delimiter it consumed, so it
-# re-glued two segments that a '/' separated and demanded an id the branch
-# never names: "feat/cafe" asked for "feat-cafe", "target/deadbeef" for
-# "target-deadbeef". Those refs name no node, and the producer
-# (fno.pr.closure.branch_node_ids) recognizes only complete, delimiter-bounded
-# ids and writes no trailer for them - so the gate red a PR over a line nothing
-# could generate.
+# The scanner returns grammar candidates, not confirmed nodes: CI reads no
+# graph, so the family filter below still decides which ids this repo mints.
+# Any other shape - "pr-2809" on a revert branch - stays an ordinary branch
+# word and skips the gate.
+bin="${FNO_AGENTS_BIN:-fno-agents}"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+set +e
+printf '%s' "$(jq -cn --arg h "$PR_HEAD_REF" '{head_ref:$h}')" \
+  | "$bin" pr-closure-branch-ids >"$tmp_dir/ids.json" 2>"$tmp_dir/err"
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then
+  cause="$(tr '\n' ' ' <"$tmp_dir/err" | sed 's/[[:space:]]*$//')"
+  echo "check-pr-node-closure: fno-agents pr-closure-branch-ids unavailable (${cause:-exit $rc}); build it first" >&2
+  exit 2
+fi
+if ! jq -e '(.ids | type) == "array"' "$tmp_dir/ids.json" >/dev/null 2>&1; then
+  echo "check-pr-node-closure: fno-agents pr-closure-branch-ids unavailable (stdout was not an ids array); build it first" >&2
+  exit 2
+fi
 candidates=()
-IFS='/' read -ra _paths <<< "$PR_HEAD_REF"
-for _path in "${_paths[@]}"; do
-  IFS='-' read -ra _segments <<< "$_path"
-  i=0
-  while [[ $i -lt ${#_segments[@]} ]]; do
-    segment="${_segments[$i]}"
-    if [[ "$segment" =~ ^${node_id_re}$ ]]; then
-      candidates+=("$segment")
-      i=$((i + 1))
-      continue
-    fi
-    # Re-glue two adjacent segments (the id's own prefix/suffix straddle the
-    # '-' IFS split point: "x" and "59a6" from "feature/x-aaaa").
-    if [[ $((i + 1)) -lt ${#_segments[@]} ]]; then
-      pair="${_segments[$i]}-${_segments[$((i + 1))]}"
-      if [[ "$pair" =~ ^${node_id_re}$ ]]; then
-        candidates+=("$pair")
-        # Skip BOTH consumed segments, not just one: a real id's all-hex
-        # suffix (e.g. "cdef" in "x-bbbb") is itself a valid node-id PREFIX
-        # shape, so sliding by one would re-glue it with the next segment
-        # ("cdef-1234") and invent a second, bogus candidate. Reproduced
-        # live: PR_HEAD_REF="feature/x-bbbb-1234" used to demand a
-        # "Backlog-Closure: cdef-1234" line that names nothing real.
-        i=$((i + 2))
-        continue
-      fi
-    fi
-    i=$((i + 1))
-  done
-done
+while IFS= read -r cand; do
+  [[ -z "$cand" ]] && continue
+  if [[ "$cand" =~ ^${node_id_re}$ ]]; then
+    candidates+=("$cand")
+  fi
+done < <(jq -r '.ids[]' "$tmp_dir/ids.json")
 
 if [[ ${#candidates[@]} -eq 0 ]]; then
   echo "check-pr-node-closure: no node id in HEAD ref '$PR_HEAD_REF', skipping (non-node branch)."
@@ -103,8 +96,8 @@ if [[ ${#candidates[@]} -eq 0 ]]; then
 fi
 
 # The LAST closure line only, either spelling, colon optional (mirrors the
-# Rust parser behind fno.pr.closure.parse_closure_trailer: a stale earlier
-# line, e.g. carried forward by a rebase, must not satisfy this).
+# binary's pr-closure-parse grammar: a stale earlier line, e.g. carried
+# forward by a rebase, must not satisfy this).
 trailer_line=$(printf '%s\n' "$PR_BODY" | grep -iE '^(fixes|backlog-closure):?[[:space:]]*' | tail -1 || true)
 
 # Strip the keyword itself (plus its optional colon and any immediate
@@ -122,7 +115,7 @@ if [[ -n "$trailer_line" ]]; then
 fi
 
 # The approved Retarget line, mirroring the Rust grammar in
-# lead_board/pr_closure.rs (retarget/retargeted_from): keyword case-insensitive
+# org_board/pr_closure.rs (retarget/retargeted_from): keyword case-insensitive
 # with optional colon, then exactly three tokens - two differing node ids and
 # an approval (msg-... or d-...). Ids stay case-sensitive, so no lowercasing
 # here. The LAST well-formed line wins; prose never erases it.
@@ -172,8 +165,8 @@ done
 # AT LEAST ONE claimed, never all of them. This gate has no graph (see the
 # format-check note above), so it cannot tell a real node id from ordinary
 # English that fits the same grammar. The producer CAN, and refuses to claim
-# an id the graph does not carry, because one unknown id makes
-# bind_closure_claims refuse the WHOLE binding at merge.
+# an id the graph does not carry, because one unknown id makes the
+# merge-time bind-created leg refuse the WHOLE binding at merge.
 #
 # Demanding all of them therefore made some branches unsatisfiable rather than
 # merely strict: on "feature/x-cccc-cache-dead" the producer writes x-cccc and
@@ -186,7 +179,7 @@ done
 claimed=$(( ${#candidates[@]} - ${#missing[@]} ))
 if [[ $claimed -eq 0 ]]; then
   # How many exact trailer lines the body holds, and what the LAST one (the
-  # only line this gate and parse_closure_trailer read) names - the shape a
+  # only line this gate and pr-closure-parse read) names - the shape a
   # two-line body needs to understand before it can be fixed.
   trailer_count=$(printf '%s\n' "$PR_BODY" | grep -icE '^(fixes|backlog-closure):?[[:space:]]*' || true)
   {

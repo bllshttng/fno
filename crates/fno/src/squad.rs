@@ -228,21 +228,25 @@ impl Session {
     /// squad. Named (empty-origin) squads own nothing, so they are bypassed
     /// here - explicit creation is the only way into them. The LONGEST owning
     /// origin wins, so a home-rooted squad never captures a repo cwd its
-    /// deeper origin describes better; on equal length the FIRST
-    /// squad keeps it, because two rows may share one origin by design and
-    /// the first is the established answer. An empty `cwd` owns nothing.
+    /// deeper origin describes better; on equal length a named workspace
+    /// beats an unnamed squad, and otherwise the FIRST squad keeps it,
+    /// because two rows may share one origin by design and the first is the
+    /// established answer. An empty `cwd` owns nothing.
     pub fn find_by_cwd(&self, cwd: &str) -> Option<u64> {
         if cwd.is_empty() {
             return None;
         }
-        let mut best: Option<(usize, u64)> = None;
+        let mut best: Option<((usize, bool), u64)> = None;
         for s in &self.squads {
             let Some(len) = s.owning_origin_len(cwd) else {
                 continue;
             };
-            // STRICTLY greater, so an equal-length origin keeps the incumbent.
-            if best.is_none_or(|(best_len, _)| len > best_len) {
-                best = Some((len, s.id));
+            // A named workspace is a deliberate claim on its folder, so it
+            // beats an unnamed squad of equal length. STRICTLY greater
+            // otherwise: an equal rank keeps the incumbent.
+            let rank = (len, s.name.is_some());
+            if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+                best = Some((rank, s.id));
             }
         }
         best.map(|(_, id)| id)
@@ -466,25 +470,35 @@ pub fn resolve_key(cwd: &str) -> String {
     canonical_root("git", cwd, GIT_TIMEOUT).unwrap_or_else(|| cwd.to_string())
 }
 
-/// One bounded `git rev-parse --path-format=absolute --git-common-dir` run.
-/// `None` on any failure: not a repo, git missing, non-zero exit, non-UTF-8
-/// output, or the timeout expiring (the child is killed). The parent of the
-/// common `.git` dir is the canonical root for the main checkout AND every
-/// linked worktree; a bare repo's common-dir is the repo dir itself.
+/// The canonical root from the shared common-dir reader, whose reads all share
+/// ONE `timeout` deadline. `None` on any failure: not a repo, git missing,
+/// non-zero exit, non-UTF-8 output, or the timeout expiring (the child is
+/// killed). The parent of the common `.git` dir is the canonical root for the
+/// main checkout AND every linked worktree; a bare repo's common-dir is the
+/// repo dir itself.
 fn canonical_root(git: &str, cwd: &str, timeout: Duration) -> Option<String> {
     if !std::path::Path::new(cwd).is_dir() {
         return None; // Command::current_dir on a missing dir errors anyway
     }
+    let deadline = Instant::now() + timeout;
+    let common = crate::git_paths::common_dir_with(std::path::Path::new(cwd), |args| {
+        rev_parse_bounded(git, cwd, args, deadline)
+    })?;
+    Some(root_from_common_dir(&common.to_string_lossy()))
+}
+
+/// One `git rev-parse <args>` run, killed at `deadline`; stdout on exit 0.
+fn rev_parse_bounded(git: &str, cwd: &str, args: &[&str], deadline: Instant) -> Option<String> {
     let mut command = crate::process_admission::std_command(git);
     command
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .arg("rev-parse")
+        .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     let mut child = crate::process_admission::std_spawn(&mut command).ok()?;
 
-    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -508,11 +522,7 @@ fn canonical_root(git: &str, cwd: &str, timeout: Duration) -> Option<String> {
     // child can never have blocked on write and reading after exit is safe.
     let mut out = String::new();
     child.stdout.take()?.read_to_string(&mut out).ok()?;
-    let common = out.trim();
-    if common.is_empty() {
-        return None;
-    }
-    Some(root_from_common_dir(common))
+    Some(out)
 }
 
 /// `<root>/.git` -> `<root>`; a bare repo's common-dir (no `.git` suffix) is
@@ -641,6 +651,10 @@ mod tests {
         s.add_squad(2, vec!["/home/u".into()], None, tab(&[20]));
         assert_eq!(s.find_by_cwd("/home/u"), Some(1));
         assert_eq!(s.find_by_cwd("/home/u/deep"), Some(1));
+        // A named workspace is a deliberate claim: it wins an equal-length tie
+        // over unnamed squads that were there first.
+        s.add_squad(3, vec!["/home/u".into()], Some("home".into()), tab(&[30]));
+        assert_eq!(s.find_by_cwd("/home/u/deep"), Some(3));
     }
 
     #[test]

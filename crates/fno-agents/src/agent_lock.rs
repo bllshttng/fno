@@ -65,7 +65,7 @@ pub(crate) fn holder_note(home: &AgentsHome, name: &str) -> String {
 /// previous holder's line can outlive it. Naming a dead pid is the
 /// 31-hour-corpse misreading this stamp exists to end, told with more
 /// authority than the bare mtime ever had, so the reader drops it.
-fn pid_is_alive(pid: u64) -> bool {
+pub(crate) fn pid_is_alive(pid: u64) -> bool {
     if pid == 0 || pid > i32::MAX as u64 {
         return false;
     }
@@ -75,6 +75,28 @@ fn pid_is_alive(pid: u64) -> bool {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Gone means the pid is dead, a zombie, or a DIFFERENT process than the
+/// recorded incarnation. `pid_is_alive` alone calls a zombie alive (a
+/// SIGKILLed-but-unreaped holder answers kill(pid,0) with 0) and a recycled
+/// pid alive, so a lock ticket naming either never prunes and every later
+/// waiter burns its whole budget behind it. A zombie closed its fds
+/// at exit, so it can hold neither a flock nor a ticket. `recorded_start` is
+/// the start time stamped when the holder registered (the lockfile's
+/// pid + start incarnation contract); a live pid at a different start is a
+/// recycled pid. A pid that signals but probes unreadable (another uid,
+/// kernel task) stays conservatively alive.
+pub(crate) fn pid_is_gone(pid: u64, recorded_start: Option<u64>) -> bool {
+    if !pid_is_alive(pid) {
+        return true;
+    }
+    match crate::process_probe::process_bsd(pid as u32) {
+        Some((actual_start, zombie)) => {
+            zombie || recorded_start.is_some_and(|recorded| recorded != actual_start)
+        }
+        None => false,
+    }
 }
 
 /// Write this process as the lock's holder, in the shape the Python reader

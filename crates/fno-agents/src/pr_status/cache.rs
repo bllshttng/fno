@@ -28,7 +28,7 @@ impl<P: GhProbe> GhProbe for CountingProbe<P> {
     }
 }
 
-fn ttl() -> u64 {
+pub(crate) fn ttl() -> u64 {
     let raw = std::env::var("FNO_PR_STATUS_TTL").unwrap_or_default();
     raw.parse::<u64>().map(|v| v.max(1)).unwrap_or(60)
 }
@@ -187,15 +187,23 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (code, out, stderr_lines, calls) = cached_status(cwd_str, pr, refresh);
+    // The verb's readers act on `ready` and the local gates, so it composes
+    // here and never serves a peer's row.
+    let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {
         stderr.push('\n');
     }
     stderr.push_str(&format!(
-        "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s\n",
-        snap.points_60s, snap.cap
+        "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s{}\n",
+        snap.points_60s,
+        snap.cap,
+        format!(
+            "{}{}",
+            crate::gh_etag::note_suffix(),
+            crate::gh_poller::note_suffix()
+        )
     ));
     let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
     (code, stdout, stderr)
@@ -204,10 +212,27 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// `cached_status`: the coalescing chokepoint. Head-keyed rows, one live
 /// read per TTL under the per-key flock, a zero-network backoff pre-check,
 /// and the fail-closed stale serve when the head read itself refuses.
+/// `head_read` is the caller's own light head read (the wait's per tick):
+/// a complete block is both the fresh-serve guard and the key material, so
+/// the tick spends the read once; a refused read (empty sha) guards with a
+/// sha no row can carry; None is the self-reading status verb.
 pub(crate) fn cached_status(
     cwd_str: &str,
     pr: u64,
     refresh: bool,
+    head_read: Option<&Value>,
+) -> (i32, Value, Vec<String>, usize) {
+    cached_status_via(cwd_str, pr, refresh, head_read, true)
+}
+
+/// `cached_status` with the shared-row follow switched by `follow`. Only the
+/// callers that read the verdict and the settled flag follow a peer poller.
+fn cached_status_via(
+    cwd_str: &str,
+    pr: u64,
+    refresh: bool,
+    head_read: Option<&Value>,
+    follow: bool,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
@@ -231,14 +256,21 @@ pub(crate) fn cached_status(
     // per-tick head check it replaces was the read that kept a cache "hit"
     // at ~6 calls; a head that moves mid-window is noticed one TTL late,
     // which is the freshness contract the TTL already sells. `refresh` is
-    // the escape hatch.
+    // the escape hatch. A caller that names a head is answered only by a
+    // row minted for that head, so a push never hands the wait the old
+    // head's settled record; a refused caller read names an empty sha,
+    // which no row carries.
+    let require_head =
+        head_read.map(|block| block.get("head_sha").and_then(Value::as_str).unwrap_or(""));
     if !refresh {
-        if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
-            if now - num(&row, "ts") < ttl() as f64 {
-                if let Some(answer) = serve(&row, false) {
-                    return into_answer(answer, 0);
-                }
-            }
+        if let Some(answer) = fresh_serve(&dir, &slug_key, &pr.to_string(), now, require_head) {
+            return into_answer(answer, 0);
+        }
+        if let Some(answer) = follow
+            .then(|| follower_serve(&dir, &slug, &slug_key, pr, require_head))
+            .flatten()
+        {
+            return into_answer(answer, 0);
         }
     }
     // Backoff pre-check, zero network: inside a live refusal every waiter's
@@ -250,15 +282,25 @@ pub(crate) fn cached_status(
     {
         if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
             let stale = now - num(&row, "ts") >= ttl() as f64;
-            if let Some(answer) = serve(&row, stale) {
-                return into_answer(answer, 0);
+            // A stale row serves degraded either way; a fresh one must be
+            // minted for the required head, or the ride-out would lie
+            // settled about a head the push already superseded.
+            if stale || serve_head_ok(&row, require_head) {
+                if let Some(answer) = serve(&row, stale) {
+                    return into_answer(answer, 0);
+                }
             }
         }
     }
     // The light head read that mints the key. A refusal fails CLOSED: the
-    // newest row degraded, or the loud live read when there is no row.
+    // newest row degraded, or the loud live read when there is no row. A
+    // complete caller block is the same read fetched seconds earlier; the
+    // reuse keeps the tick at one head call instead of two.
     let probe = fresh_probe();
-    let head = read_head(&probe, cwd, &slug, pr);
+    let head = match head_read {
+        Some(block) if require_head.is_some_and(|sha| !sha.is_empty()) => Ok(block.clone()),
+        _ => read_head(&probe, cwd, &slug, pr),
+    };
     let (head_sha, pr_state, pulls) = match &head {
         Ok(info) => (
             info.get("head_sha")
@@ -339,6 +381,54 @@ pub(crate) fn cached_status(
     )
 }
 
+/// A peer host holds the poller lease and shared a row young enough to
+/// serve: answer with zero gh calls, and keep the row locally under its key
+/// so this host's other processes read it from disk.
+fn follower_serve(
+    dir: &Path,
+    slug: &str,
+    slug_key: &str,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let (key, mut row) = crate::gh_poller::follow(dir, slug, pr)?;
+    without_publisher_gates(&mut row);
+    if key.contains(['/', '\\']) || !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    let answer = serve(&row, false)?;
+    write_row(dir, &key, &row);
+    prune_rows(dir, slug_key, &pr.to_string(), &key);
+    Some(answer)
+}
+
+/// The fields a peer composed from its own journal, graph and merge config.
+/// They say nothing about this host, so a shared row drops them and reads as
+/// not ready: the verdict and the check counts are the GitHub facts.
+fn without_publisher_gates(row: &mut Value) {
+    let Some(out) = row.get_mut("output").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for key in [
+        "review_coverage",
+        "review_posture",
+        "merge_authority",
+        "merge_execution",
+        "review_activity",
+        "dispatch_hold",
+        "merge_decision",
+        "coverage_waiver",
+        "rounds_used",
+        "max_rounds",
+        "rounds_exhausted",
+        "rounds_note",
+    ] {
+        out.remove(key);
+    }
+    out.insert("ready".into(), json!(false));
+    out.insert("ready_blockers".into(), json!(["status_shared"]));
+}
+
 fn fresh_probe() -> CountingProbe<crate::pr_status_facts::RealGhProbe> {
     CountingProbe {
         inner: crate::pr_status_facts::RealGhProbe,
@@ -389,10 +479,58 @@ pub(crate) fn git_slug(cwd: &Path) -> Option<String> {
     crate::merge_gates::repo_slug_from_origin(&url)
 }
 
-fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
+pub(crate) fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
     let path = rows_newest_first(dir, slug_key, pr).into_iter().next()?;
     let row = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&row).ok()
+}
+
+/// A row's head, from the payload it was written from.
+fn row_head(row: &Value) -> Option<&str> {
+    row.pointer("/output/head").and_then(Value::as_str)
+}
+
+/// The head guard on the pre-key serves: a caller that names a head (the
+/// wait, from its own light read) is never answered by a row minted for a
+/// different one. None (the status verb) keeps the zero-network serve.
+fn serve_head_ok(row: &Value, require_head: Option<&str>) -> bool {
+    match require_head {
+        None => true,
+        Some(head) => row_head(row) == Some(head),
+    }
+}
+
+/// The pre-network serve, head-guarded: the newest (slug, pr) row answers
+/// only inside the TTL and only when no head is required or the row was
+/// minted for that head.
+fn fresh_serve(
+    dir: &Path,
+    slug_key: &str,
+    pr: &str,
+    now: f64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let row = newest_row(dir, slug_key, pr)?;
+    if now - num(&row, "ts") >= ttl() as f64 {
+        return None;
+    }
+    if !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    serve(&row, false)
+}
+
+/// The light head read behind the wait's cache guard: `read_head`'s block
+/// (head sha, state, pulls) with the gh calls it spent, or None when the
+/// read refuses (the caller then guards with an empty sha and rides the
+/// degraded serve until the read recovers).
+pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
+    let Some(slug) = git_slug(cwd) else {
+        return (None, 0);
+    };
+    let probe = fresh_probe();
+    let block = read_head(&probe, cwd, &slug, pr).ok();
+    (block, probe.calls.load(Ordering::SeqCst))
 }
 
 /// The light read that mints the key: the PR's head sha and state, one call.
@@ -506,6 +644,7 @@ fn live_through(
         write_row(dir, key, &row);
         let slug_key = slug.replace('/', "--");
         prune_rows(dir, &slug_key, &pr.to_string(), key);
+        crate::gh_poller::publish(dir, slug, pr, key, &row);
     }
     (code, out, lines, calls)
 }
@@ -532,4 +671,89 @@ fn into_answer(answer: (i32, String, String), calls: usize) -> (i32, Value, Vec<
     let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
     let _ = calls;
     (code, payload, lines, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_cache_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-pr-status-cache-{tag}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn seed_row(dir: &Path, name: &str, head: &str) {
+        let row = json!({
+            "ts": now_secs(),
+            "exit": 0,
+            "output": {"head": head, "verdict": "green", "settled": true, "green": true},
+        });
+        write_row(dir, name, &row);
+    }
+
+    #[test]
+    fn a_row_for_head_a_never_serves_a_wait_on_head_b() {
+        let dir = temp_cache_dir("mismatch");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("bbbbbb2222")).is_none(),
+            "a row minted for head A must not answer a wait on head B"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A peer's shared row serves with no gh call while it is under two TTLs
+    /// old on the store clock; past that the follower reads GitHub itself.
+    #[test]
+    fn a_follower_serves_the_peers_row_until_it_is_two_ttls_old() {
+        let primary = crate::store_remote::test_primary::start();
+        let (peer_dir, dir) = (temp_cache_dir("peer"), temp_cache_dir("follower"));
+        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-b".into())));
+        let row = json!({"exit": 0, "output": {"head": "h1", "verdict": "green", "settled": true}});
+        crate::gh_poller::publish(&peer_dir, "Owner/Repo", 7, "Owner--Repo-7-h1", &row);
+        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-a".into())));
+
+        let (code, stdout, _) = follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None)
+            .expect("a live peer lease and a young row serve");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(stdout.contains("status_shared"), "{stdout}");
+        assert!(!stdout.contains("merge_execution"), "{stdout}");
+        assert!(dir.join("Owner--Repo-7-h1.json").exists());
+
+        let sql = format!(
+            "UPDATE gh_status_rows SET ts = {} - 121000",
+            crate::claim_store::CLOCK
+        );
+        primary.db.lock().unwrap().execute(&sql, []).unwrap();
+        assert!(
+            follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None).is_none(),
+            "a row past two TTLs falls through to the live read"
+        );
+        crate::gh_poller::route_to(None);
+        for d in [peer_dir, dir] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn the_guard_serves_the_matching_head_and_the_unguarded_status_verb() {
+        let dir = temp_cache_dir("match");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        let (code, stdout, _) =
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
+                .expect("the matching head serves");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_some(),
+            "no required head keeps the zero-network serve"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

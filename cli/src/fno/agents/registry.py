@@ -34,6 +34,7 @@ import contextlib
 import fcntl
 import json
 import os
+import random
 import re
 import sys
 import tempfile
@@ -584,7 +585,7 @@ class AgentEntry:
     # v14: this recipient's MAIL DELIVERY POLICY. ``"bus-only"`` means
     # mail to this session never prompt-line injects and always takes the
     # durable bus (the recipient surfaces it at its turn boundary via
-    # ``fno agents mail notify-self``); ``None`` is the default injectable policy every
+    # ``fno-agents mail-notify-self``); ``None`` is the default injectable policy every
     # worker keeps. A DELIVERY-POLICY fact, never a liveness verdict - the same
     # distinction that renamed NOT_INJECTABLE off "not-live"
     # (crates/fno-agents/src/mail_inject.rs): a bus-only session may be alive
@@ -643,9 +644,27 @@ class AgentEntry:
     requested_provider: Optional[str] = None
     requested_effort: Optional[str] = None
 
+    # v41: the seed payload the spawner handed this session at birth, verbatim
+    # as delivered (post-render, post-brevity-enrichment). The attended guard
+    # exempts a harness-rendered slash-command turn matching this text: a
+    # spawn seeded with a slash command writes one user-shaped
+    # CommandInvocation turn that is the machine's, never a person's, so it
+    # must not hold the row against stop or reap for 15 minutes. Stamped by
+    # the mint doors that hold the delivered message; None on adopt, keeper
+    # thread lane B (payload delivered after the mint), and daemon-hosted
+    # mints. ABSENCE MEANS UNKNOWN, the `origin` discipline. Rust's
+    # RegistryEntry mirrors it as additive-optional passthrough so a daemon
+    # write-back preserves the stamp.
+    spawn_payload: Optional[str] = None
+
     # v26 served facts; the Rust sweep writes them, python is a passthrough.
     liveness: Optional[str] = None
     liveness_measured_at: Optional[str] = None
+    # v42: the last session report's arrival stamp (Rust session-report
+    # ingest writes it), the capacity reader's freshness source for pid-less
+    # rows no probe reaches (d-d0c63de7). Passthrough here; asdict re-emits
+    # it so a python read-modify-write preserves the stamp.
+    last_report_at: Optional[str] = None
     context_used_pct: Optional[int] = None
     context_used_tokens: Optional[int] = None
     context_window_tokens: Optional[int] = None
@@ -1337,23 +1356,29 @@ def _refuse_probe_or_row_loss_write(target: Path, raw: Optional[dict], entries: 
         )
 
 
-def write_registry(entries: list[AgentEntry], path: Optional[Path] = None) -> None:
+def write_registry(
+    entries: list[AgentEntry], path: Optional[Path] = None, *, revision: Optional[int] = None
+) -> None:
     """Write the registry rows through the native table door.
 
     The table revision read here guards the write: a writer that landed
-    between the read and the commit makes the door refuse.
+    between the read (or the caller's ``revision``) and the commit makes the door refuse.
     """
     from fno.registry_door import (
         RegistryDoorError,
+        RegistryRevisionConflict,
         commit_registry_document,
         read_registry_document,
     )
 
     target = _registry_path(path)
     try:
-        raw, revision = read_registry_document(target)
+        raw, current = read_registry_document(target)
     except RegistryDoorError as exc:
         raise RegistryVersionError(str(exc)) from exc
+    if revision is not None and revision != current:
+        raise RegistryRevisionConflict(f"revision_conflict: {target} moved past {revision}")
+    revision = current
     _refuse_source_ahead_schema_bump(raw, target)
     _refuse_probe_or_row_loss_write(target, raw, entries)
     existing = _existing_row_names(raw)
@@ -1367,6 +1392,8 @@ def write_registry(entries: list[AgentEntry], path: Optional[Path] = None) -> No
     }
     try:
         commit_registry_document(target, payload, revision)
+    except RegistryRevisionConflict:
+        raise
     except RegistryDoorError as exc:
         raise RegistryVersionError(str(exc)) from exc
 
@@ -1673,11 +1700,12 @@ def spawn_row_session_ids(harness: str, registry_path: Optional[Path] = None) ->
 
 
 class LoadedRegistry(list[AgentEntry]):
-    """Registry rows plus whether a forward read retained every raw row."""
+    """Registry rows, whether a forward read kept every raw row, and the read revision."""
 
-    def __init__(self, rows=(), *, complete: bool = True) -> None:
+    def __init__(self, rows=(), *, complete: bool = True, revision=None) -> None:
         super().__init__(rows)
         self.complete = complete
+        self.revision = revision
 
 
 def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
@@ -1704,7 +1732,7 @@ def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
 
     target = _registry_path(path)
     try:
-        raw = read_registry_document(target)[0]
+        raw, rev = read_registry_document(target)
     except RegistryDoorError as exc:
         raise RegistryVersionError(f"registry at {target} is unreadable: {exc}") from exc
 
@@ -1937,7 +1965,7 @@ def load_registry(path: Optional[Path] = None) -> list[AgentEntry]:
             "are invisible to this process until it is upgraded.",
             file=sys.stderr,
         )
-    return LoadedRegistry(entries, complete=not read_forward and not skipped_rows)
+    return LoadedRegistry(entries, complete=not read_forward and not skipped_rows, revision=rev)
 
 
 def register_existing_session(
@@ -2493,57 +2521,6 @@ def restamp_harness_session_id(
     return restamped[0] if restamped else None
 
 
-def heal_mux_ref(
-    *,
-    name: str,
-    harness: str,
-    mux_session: str,
-    pane_id: int,
-    session_id: Optional[str] = None,
-    registry_path: Optional[Path] = None,
-) -> Optional[tuple[Optional[dict], dict]]:
-    """Re-point a spawned worker's row at the pane it actually runs in.
-
-    Target prefers ``session_id`` so a branched session heals its own row.
-    ``mux`` is written and ``short_id`` cleared in ONE transaction (mux XOR
-    worker XOR bg; the clear is what makes the write land inside the
-    fail-open hook). Returns ``(old_mux, new_mux)`` when the row moved,
-    else ``None`` (the idempotent no-op never rewrites the file); the write
-    is verified against what persisted before the caller emits the event.
-    """
-    if not name or not harness or not mux_session or type(pane_id) is not int or pane_id < 0:
-        return None
-
-    new_mux = {"session": mux_session, "pane_id": pane_id}
-
-    def _find(entries: list[AgentEntry]) -> Optional[AgentEntry]:
-        for e in entries:
-            if session_id and e.harness == harness and e.harness_session_id == session_id:
-                return e
-        for e in entries:
-            if e.harness == harness and (e.name == name or name in e.aliases):
-                return e
-        return None
-
-    # Pre-read so the idempotent no-op never rewrites the file; the updater
-    # re-decides under the lock so a racing writer cannot double-write.
-    row = _find(load_registry(path=registry_path))
-    if row is None or row.mux == new_mux:
-        return None  # no such row, or already on the pair: no write, no event
-    before = dict(row.mux) if row.mux else None
-
-    def _updater(entries: list[AgentEntry]) -> list[AgentEntry]:
-        target = _find(entries)
-        if target is not None and target.mux != new_mux:
-            target.mux = dict(new_mux)
-            target.short_id = ""
-        return entries
-
-    persisted = update_registry(_updater, path=registry_path)
-    healed = _find(persisted)
-    if healed is None or healed.mux != new_mux:
-        return None  # write did not land, or a racing writer replaced the row
-    return before, new_mux
 
 
 def heal_own_cwd(
@@ -2843,6 +2820,9 @@ def record_session_observation(
     return observed[0], outcome
 
 
+_CONFLICT_RETRY_SECONDS = 30.0
+
+
 def update_registry(
     updater: Callable[[list[AgentEntry]], list[AgentEntry]],
     path: Optional[Path] = None,
@@ -2863,13 +2843,30 @@ def update_registry(
     remains the low-level primitive for cases that already hold the
     lock (test fixtures, repair tooling).
     """
+    from fno.registry_door import RegistryRevisionConflict
+
     target = _registry_path(path)
     with _hold_registry_lock(target, timeout=lock_timeout):
-        current = load_registry(path=target)
-        before = {entry.name: _identity_signature(entry) for entry in current}
-        new_entries = updater(list(current))
-        _validate_changed_identities(before, new_entries)
-        write_registry(new_entries, path=target)
+        # A non-flock writer (the Rust side skips this lock) can land in the
+        # read-to-commit window; reload and re-apply on a deadline, not a count,
+        # so a spawn that already launched outlasts a burst of writers.
+        budget = _CONFLICT_RETRY_SECONDS if lock_timeout is None else lock_timeout
+        deadline = time.monotonic() + budget
+        while True:
+            current = load_registry(path=target)
+            before = {entry.name: _identity_signature(entry) for entry in current}
+            new_entries = updater(list(current))
+            try:
+                _validate_changed_identities(before, new_entries)
+                write_registry(
+                    new_entries, path=target, revision=getattr(current, "revision", None)
+                )
+            except RegistryRevisionConflict as exc:
+                if time.monotonic() >= deadline:
+                    raise RegistryVersionError(str(exc)) from exc
+                time.sleep(random.uniform(0.01, 0.25))
+                continue
+            break
         # Removal accounting runs on the Rust choke point's own path: the
         # before-rows ride the payload, the after-rows read from disk, and
         # the existing accounting stages the receipts and emits the events.

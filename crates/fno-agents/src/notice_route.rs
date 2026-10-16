@@ -209,6 +209,7 @@ fn emit_tick_row(
 /// One lead-scope warning lifted from a reconcile result file: the kind
 /// (the bucket the hook used to render), the node it names when it has
 /// one, and the cause text the hook printed, word for word.
+#[derive(Clone)]
 pub(crate) struct Warning {
     pub(crate) kind: &'static str,
     pub(crate) node: Option<String>,
@@ -217,38 +218,57 @@ pub(crate) struct Warning {
 
 /// Read `.fno/.reconcile-result.json` into warnings. The same buckets the
 /// deleted hook render block surfaced, so the cause text the lead's mail
-/// carries is the text the hook printed.
+/// carries is the text the hook printed. A held-node row that carries the
+/// reconcile refusal line keeps it verbatim as the cause: the lead reads
+/// node, reason, and remedy instead of a pointer to a command.
 pub(crate) fn read_reconcile(raw: &str) -> Vec<Warning> {
     let Ok(v) = serde_json::from_str::<Value>(raw) else {
         return Vec::new();
     };
-    let node_list = |key: &str| -> Vec<String> {
+    let held_rows = |key: &str| -> Vec<(String, String)> {
         v.get(key)
             .and_then(Value::as_array)
             .map(|rows| {
                 rows.iter()
-                    .filter_map(|r| r.get("node_id").and_then(Value::as_str).map(str::to_string))
+                    .filter_map(|r| {
+                        let node = r
+                            .get("node_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)?;
+                        let reason = r.get("reason").and_then(Value::as_str).unwrap_or("");
+                        Some((node, reason.to_string()))
+                    })
                     .collect()
             })
             .unwrap_or_default()
     };
     let mut out = Vec::new();
-    for node in node_list("promise_unmet") {
+    for (node, reason) in held_rows("promise_unmet") {
+        let cause = if reason.trim().is_empty() {
+            format!(
+                "last sweep held 1 node open on the promise gate ({node}). Run `fno backlog reconcile` for the per-node cause (unharvested carve-out / failed close_probe / short ship count); resolve, or close with --force --reason."
+            )
+        } else {
+            format!("last sweep held {node} open on the promise gate: {reason}")
+        };
         out.push(Warning {
             kind: "promise_unmet",
-            node: Some(node.clone()),
-            cause: format!(
-                "last sweep held 1 node open on the promise gate ({node}). Run `fno backlog reconcile` for the per-node cause (unharvested carve-out / failed close_probe / short ship count); resolve, or close with --force --reason."
-            ),
+            node: Some(node),
+            cause,
         });
     }
-    for node in node_list("promise_unknown") {
+    for (node, reason) in held_rows("promise_unknown") {
+        let cause = if reason.trim().is_empty() {
+            format!(
+                "last sweep could not read the ship count for 1 node ({node}); they stay open. The read failed retryably, so a later sweep clears them by itself. Do not force these closed - the count is unconfirmed, not short."
+            )
+        } else {
+            format!("last sweep could not read the ship count for 1 node ({node}): {reason}")
+        };
         out.push(Warning {
             kind: "promise_unknown",
-            node: Some(node.clone()),
-            cause: format!(
-                "last sweep could not read the ship count for 1 node ({node}); they stay open. The read failed retryably, so a later sweep clears them by itself. Do not force these closed - the count is unconfirmed, not short."
-            ),
+            node: Some(node),
+            cause,
         });
     }
     let sync = v.get("sync_catchup");
@@ -383,12 +403,14 @@ fn route_groups(
     (acted, terminal)
 }
 
-/// The dedupe key: sha256 over the sorted kind:node pairs. A repeat inside
-/// the open window is not resent (AC11).
+/// The dedupe key: sha256 over the sorted kind:node:cause triples. The
+/// cause rides so a changed refusal reason (a merged count moved) is a
+/// new notice, never a swallowed repeat; an identical repeat inside the
+/// open window is not resent (AC11).
 fn fingerprint_of(warnings: &[Warning]) -> String {
     let mut pairs: Vec<String> = warnings
         .iter()
-        .map(|w| format!("{}:{}", w.kind, w.node.as_deref().unwrap_or("")))
+        .map(|w| format!("{}:{}:{}", w.kind, w.node.as_deref().unwrap_or(""), w.cause))
         .collect();
     pairs.sort();
     let joined = pairs.join("|");
@@ -405,6 +427,40 @@ fn sent_recently(fingerprint: &str) -> bool {
         Some(v) => NOTICE_OPEN_SECS > now - v.get("ts").and_then(Value::as_i64).unwrap_or(0),
         None => false,
     }
+}
+
+/// The question-page dedupe subject: every warning's cause flattened to
+/// one capped line. It carries the nodes, the reasons, and the remedy
+/// verbs (the reconcile refusal text), which is what question-intake
+/// stores as the question. It is the dedupe subject: an identical repeat
+/// pass produces the same subject, so the intake's subject+node dedup
+/// holds one open page per warning set; any change to the set or to a
+/// reason mints a new subject and files fresh.
+fn refusal_subject(group: &OwnerGroup) -> String {
+    let joined = group
+        .warnings
+        .iter()
+        .map(|w| w.cause.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let mut flat = String::new();
+    for word in joined.split_whitespace() {
+        // The cap clears the first warnings whole-word; the trailing
+        // count suffix keeps sets of different sizes apart even when the
+        // tail beyond the cap is cut.
+        if flat.chars().count() + word.len() + 1 > 400 {
+            break;
+        }
+        if !flat.is_empty() {
+            flat.push(' ');
+        }
+        flat.push_str(word);
+    }
+    let more = group.warnings.len().saturating_sub(1);
+    if more > 0 {
+        flat.push_str(&format!(" (+{more} more warning(s) in the page body)"));
+    }
+    flat
 }
 
 /// One mail per owner through the system-sender lane with the resume
@@ -433,20 +489,16 @@ fn mail_owner(sid: &str, group: &OwnerGroup, fingerprint: &str, now: i64) -> boo
     sent
 }
 
-/// The user-rung leg: one question page per warning group, filed through
-/// `fno inbox outstanding ask --question-file`. The page carries the same
-/// cause text and the required intake sections.
-fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
-    let dir = match notice_route_dir() {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return false;
-    }
-    let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
+/// The page body: the refusal subject as the `# ` heading (question-intake
+/// stores a question file's title as the question, so this is what the
+/// lead reads on the board), then the fixed intake sections and the
+/// warnings.
+fn question_page_body(group: &OwnerGroup, subject: &str) -> String {
     let mut body = String::new();
     body.push_str("---\nrecommend: 1\n---\n\n");
+    body.push_str("# ");
+    body.push_str(subject);
+    body.push_str("\n\n");
     body.push_str("Reconcile warnings your territory needs a ruling on.\n\n");
     body.push_str("## Options\n1. I will resolve the named nodes this beat.\n");
     body.push_str("    What happens next: the warnings stop re-surfacing\n");
@@ -476,22 +528,58 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
     }
     body.push_str("## Warnings\n\n");
     body.push_str(&causes);
+    body
+}
+
+/// The user-rung leg: one question page per warning group, filed through
+/// `fno inbox outstanding ask --question-file`. A repeat pass over the
+/// same warning set produces the same subject, so the intake door's own
+/// subject+node dedup refuses the second ask; that refusal ("already
+/// waits") counts as delivered and the page file is rewritten in place,
+/// so the open page is updated rather than filed anew. The index lives
+/// where the Python intake door resolves it; the router never derives it.
+fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
+    let dir = match notice_route_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
+    let subject = refusal_subject(group);
+    let body = question_page_body(group, &subject);
     if std::fs::write(&page_path, body).is_err() {
         return false;
     }
     let mut cmd = crate::loop_dispatch::fno_cmd("fno");
     cmd.args(["inbox", "outstanding", "ask", "--question-file"]);
     cmd.arg(&page_path);
+    cmd.args(["--subject"]);
+    cmd.arg(&subject);
     if let Some(node) = group.warnings.iter().find_map(|w| w.node.as_deref()) {
         cmd.arg("--node");
         cmd.arg(node);
     }
     let ran = crate::bounded_cmd::output_with_timeout_result(cmd, 30);
-    let ok = ran.map(|o| o.status.success()).unwrap_or(false);
-    if ok {
+    let ran = match ran {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if ran.status.success() {
         record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        return true;
     }
-    ok
+    // The intake's subject+node dedup refused a repeat ask: the open page
+    // already covers this warning set, and the rewrite above refreshed
+    // its page file, so the pass counts as delivered rather than
+    // retrying forever.
+    let stderr = String::from_utf8_lossy(&ran.stderr);
+    if stderr.contains("already waits") {
+        record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        return true;
+    }
+    false
 }
 
 /// The pass: read the world once, walk the workspace project roots'
@@ -1408,6 +1496,23 @@ mod tests {
         assert_eq!(orphan_warnings[1].kind, "orphan_held");
         assert_eq!(dir.as_deref(), Some("/p"));
 
+        // A terminal-rung plan reads history: its verdict must ride the
+        // same silent arm as bound and terminal, or a shipped plan mails
+        // its lead asking for a rebind.
+        let (history_warnings, _) = read_orphan(
+            serde_json::json!({
+                "plans_dir": "/p",
+                "rows": [
+                    {"node_id": "n-9", "verdict": "history"},
+                    {"node_id": "n-8", "verdict": "unfinalized"}
+                ]
+            })
+            .to_string()
+            .as_str(),
+        );
+        assert_eq!(history_warnings.len(), 1);
+        assert_eq!(history_warnings[0].node.as_deref(), Some("n-8"));
+
         // AC11: the same fingerprint is not resent inside the open window.
         let _root = crate::paths::DeclaredRoot::declare("notice_sent_dedupe");
         let fp = fingerprint_of(&warnings);
@@ -1527,5 +1632,89 @@ mod tests {
                 .any(|a| matches!(a, FoldAction::FileNode { .. })),
             "a spike past three times the 7-day average files: {actions:?}"
         );
+    }
+
+    #[test]
+    fn held_node_refusal_rides_the_page_and_dedupes_by_node_and_reason() {
+        // The result row's reason (node, reason, remedy) verbatim; a row
+        // without one keeps the generic bucket text.
+        let reason = "Refused: ab-d327 promised 11 ships; only 4 merged.\n  plan: internal/fno/p.md\n\n  Two legal exits:\n    ship the rest, then close; or\n    file the remainder (`fno backlog idea`) and close with\n      --force --reason \"remaining ships filed as <id>\"";
+        let raw = serde_json::json!({
+            "promise_unmet": [{"node_id": "ab-d327", "reason": reason}]
+        })
+        .to_string();
+        let warnings = read_reconcile(&raw);
+        assert!(warnings[0]
+            .cause
+            .contains("promised 11 ships; only 4 merged"));
+        assert!(warnings[0].cause.contains("Two legal exits"));
+        assert!(warnings[0].cause.contains("fno backlog idea"));
+
+        let bare = read_reconcile(
+            serde_json::json!({"promise_unmet": [{"node_id": "ab-d327"}]})
+                .to_string()
+                .as_str(),
+        );
+        assert!(bare[0].cause.contains("promise gate"));
+        assert!(bare[0].cause.contains("--force --reason"));
+
+        // The page subject flattens the refusal to one capped line, and
+        // the page body carries it as the title the intake stores. The
+        // subject is deterministic: two passes over the same warning set
+        // produce the same dedupe subject, so the intake door's own
+        // subject+node dedup holds one open question.
+        let group = OwnerGroup {
+            owner: crate::owner_ladder::Owner {
+                rung: crate::owner_ladder::Rung::NodeLead,
+                scope: Some("scope-a".to_string()),
+                holder: None,
+                session: None,
+            },
+            warnings,
+        };
+        let subject = refusal_subject(&group);
+        assert!(!subject.contains('\n'));
+        assert!(subject.contains("ab-d327"));
+        assert!(subject.contains("fno backlog idea"));
+        assert!(subject.chars().count() <= 400);
+        let again = refusal_subject(&group);
+        assert_eq!(subject, again);
+        let body = question_page_body(&group, &subject);
+        let title_line = body
+            .lines()
+            .find(|l| l.starts_with("# "))
+            .expect("page carries a title heading");
+        assert!(title_line.contains("ab-d327"));
+
+        // A set whose size grows mints a new subject even when the added
+        // warning's text is beyond the cap: the trailing count keeps
+        // sets of different sizes apart.
+        let mut grown = group.warnings.clone();
+        grown.push(Warning {
+            kind: "promise_unmet",
+            node: Some("ab-9999".to_string()),
+            cause: "last sweep held ab-9999 open on the promise gate".to_string(),
+        });
+        let grown_group = OwnerGroup {
+            owner: group.owner.clone(),
+            warnings: grown,
+        };
+        let grown_subject = refusal_subject(&grown_group);
+        assert_ne!(subject, grown_subject);
+        assert!(grown_subject.contains("(+1 more warning(s) in the page body)"));
+
+        // The fingerprint folds the cause, so a changed refusal reason is
+        // a new notice, never a swallowed repeat (the reviewer's P2).
+        let reason_b = reason.replace("only 4 merged", "only 5 merged");
+        let raw_b = serde_json::json!({
+            "promise_unmet": [{"node_id": "ab-d327", "reason": reason_b}]
+        })
+        .to_string();
+        let warnings_b = read_reconcile(&raw_b);
+        let fingerprint_a = fingerprint_of(&group.warnings);
+        let fingerprint_b = fingerprint_of(&warnings_b);
+        assert_ne!(fingerprint_a, fingerprint_b);
+        let fingerprint_again = fingerprint_of(&group.warnings);
+        assert_eq!(fingerprint_a, fingerprint_again);
     }
 }

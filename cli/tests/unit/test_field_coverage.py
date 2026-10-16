@@ -92,9 +92,13 @@ def test_source_coverage_accounts_current_agent_entry(monkeypatch) -> None:
     # PR 2618 added transcript_path + start_source (the SessionStart facts
     # the daemon's session-report ingest stamps), storage_only: 68 -> 70.
     # v38 adds the five daemon-measured context and unread fields.
-    assert payload["declared_count"] == 78
+    # v41 adds spawn_payload (the delivered seed the attended guard exempts
+    # by), storage_only: 78 -> 79.
+    # v42 adds last_report_at (the capacity reader's freshness source for
+    # pid-less rows no probe reaches), storage_only: 79 -> 80.
+    assert payload["declared_count"] == 80
     assert payload["required_count"] == 46
-    assert payload["accounted_count"] == 78
+    assert payload["accounted_count"] == 80
     assert payload["known_gaps"] == {}
 
 

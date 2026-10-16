@@ -27,7 +27,9 @@ pub const HOT_ESCALATION_SECS: u64 = 1800;
 const BASELINE_WINDOW_TICKS: usize = 12;
 const BASELINE_MIN_TICKS: usize = 4;
 const PROCESS_RUNAWAY_FACTOR: f64 = 2.0;
-const SWAP_RUNAWAY_FRACTION: f64 = 0.5;
+const MEMORY_RUNAWAY_FRACTION: f64 = 0.5;
+/// The kernel's critical level in `kern.memorystatus_vm_pressure_level` (1 normal, 2 warning, 4 critical).
+const MEMORY_PRESSURE_CRITICAL: u64 = 4;
 /// Notice titles. The arm's runaway leg keys off the runaway one.
 pub const RUNAWAY_TITLE: &str = "Machine overloaded";
 pub const HOT_TITLE: &str = "Machine busy";
@@ -92,21 +94,35 @@ pub fn decide(
     load_band: f64,
     baseline: Option<u64>,
 ) -> (String, String) {
-    let swap_runaway = sample
-        .swap_used_gb
-        .zip(sample.swap_total_gb)
-        .is_some_and(|(used, total)| total > 0.0 && used / total > SWAP_RUNAWAY_FRACTION);
+    // Swap used is not a pressure signal: macOS keeps swap allocated long
+    // after pressure ends, so the number only ratchets. Judge on the kernel's
+    // pressure level and on the compressor share the org view prints.
+    let memory = crate::capacity::memory_figure(sample);
+    let pressure_critical = sample
+        .memory_pressure_level
+        .is_some_and(|level| level >= MEMORY_PRESSURE_CRITICAL);
+    let compressor_full = memory
+        .as_ref()
+        .is_some_and(|m| m.used_fraction > MEMORY_RUNAWAY_FRACTION);
+    let memory_runaway = pressure_critical || compressor_full;
     let process_runaway = sample
         .processes
         .zip(baseline.filter(|base| *base > 0))
         .is_some_and(|(processes, base)| processes as f64 > PROCESS_RUNAWAY_FACTOR * base as f64);
-    if swap_runaway || process_runaway {
-        let reason = if swap_runaway {
-            format!(
-                "Machine out of memory: {} of {} GB of swap in use (fine is under half)",
-                opt(sample.swap_used_gb),
-                opt(sample.swap_total_gb)
-            )
+    if memory_runaway || process_runaway {
+        let reason = if memory_runaway {
+            match memory.as_ref() {
+                Some(m) => format!(
+                    "Machine out of memory: compressed memory holds {:.1} of {:.1} GB of RAM (fine is under half), kernel pressure {}",
+                    m.compressor_occupied_gb,
+                    m.total_gb,
+                    pressure_word(sample.memory_pressure_level)
+                ),
+                None => format!(
+                    "Machine out of memory: kernel pressure {}",
+                    pressure_word(sample.memory_pressure_level)
+                ),
+            }
         } else {
             format!(
                 "Machine overloaded: {} processes running, more than twice the usual {} over the last hour",
@@ -171,6 +187,17 @@ pub fn decide(
         )
     };
     (verdict.into(), reason)
+}
+
+/// The human word for the kernel's `kern.memorystatus_vm_pressure_level`:
+/// 1 normal, 2 warning, 4 critical, anything else unreadable.
+fn pressure_word(level: Option<u64>) -> &'static str {
+    match level {
+        Some(1) => "normal",
+        Some(2) => "warning",
+        Some(value) if value >= MEMORY_PRESSURE_CRITICAL => "critical",
+        _ => "unknown",
+    }
 }
 
 /// The busy-core count a person reads: `12`, or `unknown` when the host ticks
@@ -434,7 +461,7 @@ fn emit_notice(
 }
 
 /// Mean process count over the trailing hour, armed at 4 readings. `None`
-/// until then: a cold arm never fires the process runaway leg, and the swap
+/// until then: a cold arm never fires the process runaway leg, and the memory
 /// leg covers the gap.
 pub fn process_baseline(window: &[(Instant, u64)], now: Instant) -> Option<u64> {
     let hour_ago = now.checked_sub(Duration::from_secs(3600))?;
@@ -841,6 +868,22 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             home.events_jsonl(),
             crate::daemon::global_events_path(&home),
         );
+        // A server that is up but runs no compile for clients parked past the
+        // bound is restarted; the new pid feeds the restart counter next tick.
+        if let Some(wedge) = crate::cargo_build_dirs::sccache_wedge(
+            &sample.procs,
+            crate::cargo_build_dirs::SCCACHE_WEDGE_CLIENT_SECS,
+        ) {
+            crate::cargo_build_dirs::restart_wedged_sccache(wedge.server_pid);
+            let _ = journal.append(
+                "sccache_wedge_restart",
+                serde_json::json!({
+                    "server_pid": wedge.server_pid,
+                    "stuck_clients": wedge.stuck_clients,
+                    "oldest_client_secs": wedge.oldest_client_secs,
+                }),
+            );
+        }
         // Whose load the box is in, from the one footprint answerer the
         // spawn CPU axis already reads: unreadable or fleet-majority keeps
         // today's path, a minority share is outside load.
@@ -1282,13 +1325,32 @@ mod tests {
     }
 
     #[test]
-    fn the_runaway_arms_fire_on_swap_and_on_an_armed_process_baseline() {
+    fn the_runaway_arms_fire_on_memory_pressure_and_on_an_armed_process_baseline() {
         let mut s = sample(None, None);
-        s.swap_used_gb = Some(50.0);
-        s.swap_total_gb = Some(95.0);
+        s.swap_used_gb = Some(9.0);
+        s.swap_total_gb = Some(10.0);
+        s.compressor_gb = Some(2.0);
+        s.total_mem_gb = Some(128.0);
+        s.memory_pressure_level = Some(1);
+        let (verdict, _) = decide(&s, 0.9, 10.0, None);
+        assert_ne!(verdict, "runaway", "swap used is not pressure");
+        let mut s = sample(None, None);
+        s.swap_used_gb = Some(9.0);
+        s.swap_total_gb = Some(10.0);
+        s.compressor_gb = Some(2.0);
+        s.total_mem_gb = Some(128.0);
+        s.memory_pressure_level = Some(4);
         let (verdict, reason) = decide(&s, 0.9, 10.0, None);
-        assert_eq!(verdict, "runaway", "swap needs no history");
-        assert!(reason.contains("swap"), "reason names the signal: {reason}");
+        assert_eq!(verdict, "runaway");
+        assert!(reason.contains("out of memory"), "{reason}");
+        assert!(reason.contains("critical"), "{reason}");
+        let mut s = sample(None, None);
+        s.compressor_gb = Some(70.0);
+        s.total_mem_gb = Some(128.0);
+        s.memory_pressure_level = None;
+        let (verdict, reason) = decide(&s, 0.9, 10.0, None);
+        assert_eq!(verdict, "runaway");
+        assert!(reason.contains("compressed memory"), "{reason}");
         let mut s = sample(None, None);
         s.processes = Some(2500);
         let (verdict, _) = decide(&s, 0.9, 10.0, None);
@@ -1311,8 +1373,7 @@ mod tests {
     fn a_runaway_ticks_page_immediately_and_the_brake_names_its_group() {
         let mut state = MachineWatchState::default();
         let mut s = sample(None, None);
-        s.swap_used_gb = Some(50.0);
-        s.swap_total_gb = Some(95.0);
+        s.memory_pressure_level = Some(4);
         s.processes = Some(9000);
         s.top_names = Some(serde_json::json!([
             {"name": "git", "count": 8000, "ppid": 42}

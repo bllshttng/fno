@@ -11,8 +11,9 @@
 //! Reuses the G1 substrate for roster resolution ([`crate::claude_roster`]) ->
 //! `control.sock` + `control.key` and the attach handshake
 //! ([`crate::claude_attach`]). Post-attach the socket is a RAW keystroke pipe, so
-//! the turn is TYPED as one flattened line ([`one_line`], C17: mail is a
-//! delivery, never a paste) and submitted with a wire-level CR --
+//! the turn is TYPED as ordinary keystrokes ([`one_line`], C17: mail is a
+//! delivery, never a paste; line breaks ride as LF bytes, the node's spike
+//! proved LF submits nothing on any harness) and submitted with a wire-level CR --
 //! NOT an `op:'reply'` JSON frame, which would land (auth key included) as literal
 //! text in the recipient input box, unsent (node x-aaaa). The `<fno_mail>` envelope is
 //! rendered Python-side (the single renderer, shared by the codex/gemini + relay
@@ -122,6 +123,23 @@ pub fn keeper_lane_harness(name: &str) -> bool {
 /// The C11 quiet-gate budget, and its 1 s poll: long enough to let a burst
 /// age out, short enough that Python still answers its live-lane timeout.
 const QUIET_WAIT_S: u64 = 30;
+
+/// One live rung's worst case in seconds: the quiet gate's full wait plus
+/// the default confirm budget. A runner that kills a send sooner can cut it
+/// inside the confirm and skip the withdraw.
+pub const LIVE_RUNG_WORST_S: u64 =
+    QUIET_WAIT_S + DEFAULT_ATTEMPTS as u64 * DEFAULT_INTERVAL_MS / 1000;
+
+/// How long a claude row reported Done may hold delivery as "in Stop hooks"
+/// with no `turn_duration` row after it. The Done report fires when the Stop
+/// hooks START, and a CR typed while they run lands as a newline in the
+/// composer. Observed hook runs reach 2m48s; the cap keeps a build or an
+/// interrupted turn that never writes `turn_duration` from holding forever.
+const STOP_HOOK_HOLD_MAX_MS: i64 = 180_000;
+
+/// How much of the transcript tail the turn-end read scans: the row it looks
+/// for was written after the Done report, seconds to minutes ago.
+const TURN_END_TAIL_BYTES: u64 = 256 * 1024;
 
 /// Live-inject target harness. `claude` is the default `control.sock` path;
 /// `codex` routes to the app-server daemon ([`crate::codex_inject`], US8);
@@ -549,18 +567,25 @@ fn emit(delivered: bool, reason: &str) -> i32 {
     outcome_exit(delivered)
 }
 
-/// The glyph every newline in a mail delivery is typed as (C17, team ruling
-/// d-9187ccf6): one constant, so the user can change the glyph on one line.
-/// Space-padded so the surrounding words survive the flattening.
+/// The glyph legacy stored turns use as their one-line body separator
+/// ("header ⏎ body" on ONE physical line). The live delivery no longer
+/// types it: user law d-b720d23c puts a real newline between header and
+/// body. The readers still parse the stored form, and the relay hop's
+/// one-line wire keeps it.
 pub(crate) const NEWLINE_GLYPH: &str = " ⏎ ";
 
-/// Flatten a mail body to ONE typable line (C17: mail is a delivery, never a
-/// paste). Every newline run (`\r\n`, `\n`, `\r`) becomes [`NEWLINE_GLYPH`], a
-/// tab becomes one space, and every other control char -- ESC included -- is
-/// dropped, so nothing the raw-keystroke path would act on survives: no byte
-/// submits line-by-line, no ESC opens an escape sequence. The durable bus copy
-/// keeps the real newlines; only the typed keystrokes are flattened.
+/// Flatten a mail body to its typable keystrokes (C17: mail is a delivery,
+/// never a paste). Every newline run (`\r\n`, `\n`, `\r`) becomes ONE LF
+/// byte (0x0a): the node's spike (2026-10-10, proof by delivery in real
+/// panes) showed every harness - claude, codex, opencode, pi, agy - takes
+/// LF as a line break that does NOT submit, and a separate CR then submits
+/// one turn. A trailing newline run is stripped, so the submit CR lands
+/// against the body's last line, not an empty one. A tab becomes one
+/// space, and every other control char - ESC included - is dropped, so
+/// nothing else the raw-keystroke path would act on survives: no ESC opens
+/// an escape sequence. The durable bus copy keeps the real newlines.
 fn one_line(text: &str) -> String {
+    let text = text.trim_end_matches(['\r', '\n']);
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -569,9 +594,9 @@ fn one_line(text: &str) -> String {
                 if chars.peek() == Some(&'\n') {
                     chars.next();
                 }
-                out.push_str(NEWLINE_GLYPH);
+                out.push('\n');
             }
-            '\n' => out.push_str(NEWLINE_GLYPH),
+            '\n' => out.push('\n'),
             '\t' => out.push(' '),
             other if other.is_control() => {}
             other => out.push(other),
@@ -580,29 +605,27 @@ fn one_line(text: &str) -> String {
     out
 }
 
-/// The content-confirm marker for a typed inject: the typed text up to its
-/// first [`NEWLINE_GLYPH`]. That is the same first line `text.lines().next()`
-/// gave when multi-line bodies were bracketed pastes -- the open tag carries
-/// no newline, so flattening never moves it.
+/// The content-confirm marker for a typed inject: the typed text up to its first line break.
 fn typed_marker(text: &str) -> String {
     let typed = one_line(text);
-    match typed.find(NEWLINE_GLYPH) {
+    match typed.find('\n') {
         Some(idx) => typed[..idx].to_string(),
         None => typed,
     }
 }
 
-/// Type the envelope as RAW BYTES on the ATTACHED transport -- flattened to
-/// one line by [`one_line`] (C17: a delivery is typed as ordinary keystrokes
-/// and never wears the operator-clipboard paste label; a paste is only the
-/// user's own) -- settle, then send a separate raw `\r` byte as the Enter.
-/// Post-attach the `control.sock` is a raw keystroke pipe (node x-aaaa): an
-/// `op:'reply'` JSON write here lands its frames -- auth key included -- as
-/// literal text in the recipient input box, unsent. So we type the turn
-/// exactly as a human would: one line, then a wire-level CR. The CR is a
-/// distinct write, NOT `\r` appended to the line. Refuses text carrying a
-/// detach sentinel before any write. Extracted so the raw sequence is
-/// unit-testable against a `Fake` transport (settle=ZERO).
+/// Type the envelope as RAW BYTES on the ATTACHED transport -- line breaks
+/// typed as LF bytes by [`one_line`] (C17: a delivery is typed as ordinary
+/// keystrokes and never wears the operator-clipboard paste label; a paste
+/// is only the user's own) -- settle, then send a separate raw `\r` byte
+/// as the Enter. Post-attach the `control.sock` is a raw keystroke pipe
+/// (node x-aaaa): an `op:'reply'` JSON write here lands its frames -- auth
+/// key included -- as literal text in the recipient input box, unsent. So
+/// we type the turn exactly as a human would: the lines (LF breaks do not
+/// submit; the node's spike proved that per harness), then a wire-level
+/// CR. The CR is a distinct write, NOT `\r` appended to the text. Refuses
+/// text carrying a detach sentinel before any write. Extracted so the raw
+/// sequence is unit-testable against a `Fake` transport (settle=ZERO).
 fn inject_with_submit<T: crate::claude_attach::ControlTransport>(
     transport: &mut T,
     text: &str,
@@ -626,7 +649,10 @@ fn inject_with_submit<T: crate::claude_attach::ControlTransport>(
 /// and on total silence withdraw the typed line with DEL bytes -- unless the
 /// operator has typed since the inject (a typing row newer than
 /// `typed_since_ms`), because their text is in the composer now and the
-/// withdraw would eat it. `withdraw_on_silence: false` keeps the keeper
+/// withdraw would eat it; that skip answers `left-in-composer`. The DEL count
+/// covers both CRs too: a composer that took a CR as a newline holds one more
+/// character per CR, and DEL on an empty composer does nothing.
+/// `withdraw_on_silence: false` keeps the keeper
 /// `Unconfirmable` arm's shape: it types and never withdraws, because no
 /// landing can be seen there. Replaces the old re-Enter-every-8-polls
 /// cadence: one extra Enter is the measured fix for a swallowed CR, and a
@@ -666,9 +692,9 @@ fn confirm_or_withdraw<T: crate::claude_attach::ControlTransport>(
     let ts = crate::operator_witness::typing_state(journal, session, now_ms());
     let typed_since_inject = ts.newest_typing_ms.is_some_and(|t| t > typed_since_ms);
     if ts.recent || typed_since_inject {
-        return Err("not-confirmed");
+        return Err("left-in-composer");
     }
-    let _ = transport.send_line(&"\u{7f}".repeat(typed_chars));
+    let _ = transport.send_line(&"\u{7f}".repeat(typed_chars + 2));
     Err("not-confirmed")
 }
 
@@ -682,9 +708,10 @@ fn now_ms() -> i64 {
 
 /// The C11/C14 quiet gate: poll the recipient's typing witness and its
 /// effective registry state every `poll` for up to `budget`, so mail never
-/// lands over a live draft or into a session that is asking the operator a
-/// question. Proceeds when the operator is neither typing nor holding an
-/// unfinished draft and the row is not Blocked. On timeout the reason is
+/// lands over a live draft, into a session that is asking the operator a
+/// question, or into a claude composer while its Stop hooks run. Proceeds
+/// when the operator is neither typing nor holding an unfinished draft and
+/// [`session_hold`] reads no hold. On timeout the reason is
 /// whichever blocker held last, and a Blocked row names its stored reason
 /// (the question text, the permission prompt) so the queued mail says WHAT
 /// the session is waiting on; Python maps any not-delivered reason to the
@@ -693,6 +720,7 @@ fn now_ms() -> i64 {
 fn wait_for_quiet_in(
     journal: &Path,
     registry_path: &Path,
+    projects_base: &Path,
     session: &str,
     budget: Duration,
     poll: Duration,
@@ -702,15 +730,11 @@ fn wait_for_quiet_in(
     let deadline = now() + budget.as_millis() as i64;
     loop {
         let ts = crate::operator_witness::typing_state(journal, session, now());
-        let blocked = blocked_reason(registry_path, session);
-        if !ts.recent && !ts.draft && blocked.is_none() {
+        let hold = session_hold(registry_path, projects_base, session, now());
+        if !ts.recent && !ts.draft && hold.is_none() {
             return Ok(());
         }
-        let blocker = match blocked.as_deref() {
-            Some(reason) if !reason.is_empty() => format!("session-asking: {reason}"),
-            Some(_) => "session-asking".to_string(),
-            None => "user-typing".to_string(),
-        };
+        let blocker = hold.unwrap_or_else(|| "user-typing".to_string());
         if now() >= deadline {
             return Err(blocker);
         }
@@ -718,12 +742,23 @@ fn wait_for_quiet_in(
     }
 }
 
-/// The stored reason of the registry row `session` addresses when it is
-/// effectively Blocked (a question picker, a permission wall): the C14
-/// "session-asking" state. `None` when the row is not Blocked; an unreadable
-/// registry or no row never blocks. The reason rides `inside_leg.reason` and
-/// falls back to the screen verdict's label for hook-less rows.
-fn blocked_reason(registry_path: &Path, session: &str) -> Option<String> {
+/// Why the registry row `session` addresses cannot take a typed turn now,
+/// or `None`; an unreadable registry or no row never holds. Two holds:
+///
+/// - effectively Blocked (a question picker, a permission wall): the C14
+///   "session-asking" state, naming the stored reason. The reason rides
+///   `inside_leg.reason` and falls back to the screen verdict's label for
+///   hook-less rows; a reason-less row reads as the bare class.
+/// - "stop-hooks": a claude row reported Done less than
+///   [`STOP_HOOK_HOLD_MAX_MS`] ago, and its transcript shows neither the
+///   turn's end nor its resumption since. The Done report fires as the Stop
+///   hooks start, and the composer takes a CR as a newline until they finish.
+fn session_hold(
+    registry_path: &Path,
+    projects_base: &Path,
+    session: &str,
+    now_ms: i64,
+) -> Option<String> {
     let registry = crate::state::load_registry(registry_path).ok()?;
     let entry = registry.entries.iter().find(|e| {
         e.harness_session_id.as_deref() == Some(session)
@@ -732,23 +767,74 @@ fn blocked_reason(registry_path: &Path, session: &str) -> Option<String> {
                     .as_deref()
                     .is_some_and(|id| id.starts_with(session)))
     })?;
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    if crate::wait::effective_state(entry, now_secs).0 != crate::wait::EffState::Blocked {
-        return None;
-    }
-    // A Blocked row is ALWAYS Some: an empty string renders as the bare
-    // "session-asking" label, so a reason-less row cannot read as quiet.
-    Some(
-        entry
+    let now_secs = (now_ms / 1000).max(0) as u64;
+    if crate::wait::effective_state(entry, now_secs).0 == crate::wait::EffState::Blocked {
+        let reason = entry
             .inside_leg
             .as_ref()
             .and_then(|leg| leg.reason.clone())
             .or_else(|| entry.screen_state.as_ref().map(|ss| ss.state.clone()))
-            .unwrap_or_default(),
-    )
+            .unwrap_or_default();
+        return Some(if reason.is_empty() {
+            "session-asking".to_string()
+        } else {
+            format!("session-asking: {reason}")
+        });
+    }
+    let leg = entry.inside_leg.as_ref()?;
+    if entry.harness_name() != "claude" || leg.state != crate::state::InsideLegState::Done {
+        return None;
+    }
+    let done_ms = chrono::DateTime::parse_from_rfc3339(&leg.received_at)
+        .ok()?
+        .timestamp_millis();
+    if now_ms - done_ms > STOP_HOOK_HOLD_MAX_MS {
+        return None;
+    }
+    let transcript = find_transcript_in(projects_base, entry.harness_session_id.as_deref()?)?;
+    (!turn_moved_since(&transcript, done_ms)).then(|| "stop-hooks".to_string())
+}
+
+/// Whether the transcript tail shows the turn moved on after `since_ms`, a
+/// Done report's whole-second stamp. A `turn_duration` row means the Stop
+/// hooks finished. An assistant row means a blocking Stop hook resumed the
+/// turn, and a working composer queues a typed turn. An assistant row must
+/// clear the stamp by a full second: the turn's last reply can land in the
+/// second the stamp truncates.
+fn turn_moved_since(transcript: &Path, since_ms: i64) -> bool {
+    let Ok(mut file) = std::fs::File::open(transcript) else {
+        return false;
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file
+        .seek(io::SeekFrom::Start(len.saturating_sub(TURN_END_TAIL_BYTES)))
+        .is_err()
+    {
+        return false;
+    }
+    let mut tail = Vec::new();
+    if file.read_to_end(&mut tail).is_err() {
+        return false;
+    }
+    String::from_utf8_lossy(&tail)
+        .lines()
+        .filter(|line| line.contains("\"turn_duration\"") || line.contains("\"assistant\""))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .any(|row| {
+            let floor = match row.get("type").and_then(serde_json::Value::as_str) {
+                Some("assistant") => since_ms + 1_000,
+                _ if row.get("subtype").and_then(serde_json::Value::as_str)
+                    == Some("turn_duration") =>
+                {
+                    since_ms
+                }
+                _ => return false,
+            };
+            row.get("timestamp")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .is_some_and(|t| t.timestamp_millis() > floor)
+        })
 }
 
 /// The escaped form of `marker` as it appears inside a transcript JSONL line: the
@@ -811,7 +897,7 @@ fn resolve_target_in(
     Ok((sock, worker.short_id().to_string(), transcript))
 }
 
-fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static str> {
+pub(crate) fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static str> {
     resolve_target_in(
         session,
         &crate::claude_roster::daemon_dir(),
@@ -820,7 +906,7 @@ fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static 
 }
 
 /// Deliver `text` to `session` over the daemon `control.sock`: resolve the
-/// recipient on the roster, attach, type the flattened envelope + wire-level CR submit, and
+/// recipient on the roster, attach, type the envelope (LF line breaks) + wire-level CR submit, and
 /// confirm by CONTENT that the injected turn landed in the recipient transcript.
 /// `Ok(())` == delivered (the `<fno_mail>` marker appeared after the inject);
 /// `Err(reason)` is a clean not-delivered signal whose value IS the `mail-inject`
@@ -1086,7 +1172,7 @@ fn resolve_confirm(
 }
 
 /// Deliver `text` to a keeper-hosted lane-B thread: resolve the row,
-/// connect to its keeper socket, type the envelope as one flattened line in
+/// connect to its keeper socket, type the envelope (LF line breaks) in
 /// an `Input` frame, settle the hosted harness's own delay, then
 /// send the wire-level CR - and confirm by CONTENT in the hosted harness's
 /// accepted-turn records, withdrawing on total silence like the claude lane
@@ -1265,7 +1351,7 @@ pub fn deliver_via_keeper_socket_in(
 /// Trims surrounding whitespace because Python `int()` does (`int(" 4000 ")` ==
 /// 4000); without it, a value with stray whitespace would parse on one door and
 /// fall back to the default on the other, drifting the threshold.
-fn cap_env_int(name: &str, default: i64) -> i64 {
+pub(crate) fn cap_env_int(name: &str, default: i64) -> i64 {
     std::env::var(name)
         .ok()
         .and_then(|raw| raw.trim().parse().ok())
@@ -1280,7 +1366,7 @@ fn cap_env_int(name: &str, default: i64) -> i64 {
 /// Python. A tier <= 0 disables it (fail-open); both doors read the same knob, so
 /// disabling one disables both. Pure numeric core; [`body_cap_decision`] scopes
 /// it to unwrapped bodies so framed relay/mail traffic is never refused.
-fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
+pub(crate) fn enforce_body_cap(n: usize, warn: i64, refuse: i64) -> Option<i32> {
     if refuse > 0 && n > refuse as usize {
         eprintln!(
             "error: mail body is {n} bytes (cap {refuse}). Relay mail is re-read every turn; \
@@ -1335,7 +1421,7 @@ fn opens_envelope_tag(head: &str, tag: &str) -> bool {
 
 /// Case-insensitive `haystack.contains(needle)`. `needle` is always an ASCII
 /// literal already in canonical case.
-fn contains_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(needle)
 }
 
@@ -1414,8 +1500,8 @@ fn single_line_decision(text: &str) -> Option<i32> {
     }
     let trimmed = text.trim();
     // A trailing terminator (the newline `echo` appends) was always harmless;
-    // genuine second-line content is flattened into the one submitted turn by
-    // the typing layer, so multi-line no longer refuses at all.
+    // genuine second-line content rides the LF-typed lines of the ONE
+    // submitted turn (the typing layer), so multi-line no longer refuses at all.
     if trimmed.contains('\n') || trimmed.contains('\r') {
         return None;
     }
@@ -1744,9 +1830,9 @@ fn is_well_formed_paired_fno_mail(text: &str) -> bool {
 /// refuse, just arriving through the "already framed" branch instead of the
 /// unframed one. Validate the complete structure rather than trusting the
 /// prefix, BUT ONLY when the payload contains a `</fno_mail>` at all: the
-/// documented relay single-line variant (`frame()` in
-/// `cli/src/fno/relay/envelope.py`, delivered by
-/// `cli/src/fno/relay/roundtrip.py::deliver_attached`) has no close tag by
+/// documented relay single-line variant (once built by `frame()` in
+/// the retired Python relay envelope, delivered by
+/// `deliver_attached` from the same retired package) has no close tag by
 /// design - "no close tag, no trailer... out of scope" per the plan - so a
 /// close-tag-free payload is passed through unchanged, exactly as it was
 /// before this predicate existed. A payload that DOES carry a close tag is
@@ -1803,7 +1889,7 @@ fn forged_envelope_decision_at(text: &str, registry_path: Option<&Path>) -> Opti
             }
             if !contains_ci(text, "</fno_mail>") {
                 // Close-tag-free: the documented relay single-line variant. Its
-                // producer (`frame()` in `cli/src/fno/relay/envelope.py`) embeds
+                // producer (the retired Python relay envelope's `frame()`) embeds
                 // peer-controlled body text without validating it, so a second
                 // `<fno_mail` open smuggled in there would otherwise pass
                 // through unchecked. Still require exactly one open tag.
@@ -1916,7 +2002,7 @@ impl crate::claude_attach::ControlTransport for PaneTransport {
 /// lanes, with the pane transport underneath and the HOSTED harness's own
 /// accepted-turn record (claude transcript or codex rollout) as the confirm
 /// target -- the landing confirm the codex pane never had.
-fn deliver_via_pane(
+pub(crate) fn deliver_via_pane(
     session: &str,
     address: &str,
     hosted_harness: Option<&str>,
@@ -2183,6 +2269,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
             if let Err(reason) = wait_for_quiet_in(
                 &home.events_jsonl(),
                 &home.registry_json(),
+                &crate::claude_drive::claude_projects_dir(),
                 &args.session,
                 Duration::from_secs(QUIET_WAIT_S),
                 Duration::from_secs(1),
@@ -2546,18 +2633,18 @@ mod tests {
     }
 
     #[test]
-    fn inject_with_submit_types_a_multi_line_envelope_as_one_flattened_line() {
+    fn inject_with_submit_types_a_multi_line_envelope_with_lf_breaks() {
         let mut t = Fake { sent: Vec::new() };
         let envelope = "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\">\nhi MARKER\n</fno_mail>";
         inject_with_submit(&mut t, envelope, Duration::ZERO).unwrap();
-        // The multi-line envelope is ONE write with its newlines typed as the
-        // return glyph, then a SEPARATE wire-level CR -- never a bracketed
-        // paste, and never `\r` appended to the line.
+        // The multi-line envelope is ONE write with its line breaks typed as
+        // LF bytes (the spike proved LF does not submit on any harness),
+        // then a SEPARATE wire-level CR -- never a paste, and never `\r`
+        // appended to the text.
         assert_eq!(
             t.sent,
             vec![
-                "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\"> ⏎ hi MARKER ⏎ </fno_mail>"
-                    .to_string(),
+                "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\">\nhi MARKER\n</fno_mail>".to_string(),
                 "\r".to_string()
             ]
         );
@@ -2592,24 +2679,23 @@ mod tests {
 
     #[test]
     fn inject_with_submit_flattens_tabs_and_drops_escape_bytes() {
-        // A lone CR inside a one-line body is the Enter keystroke on this
-        // transport, and the CLI preserves it in bodies by design, so it is
-        // flattened to the glyph; a tab widens to one space; an ESC byte is
-        // dropped outright. Nothing control-shaped is ever typed.
+        // A lone CR inside a body joins the LF line-break stream (the spike:
+        // LF does not submit; only the separate CR does), a tab widens to one
+        // space, an ESC byte is dropped outright, and a trailing newline run
+        // is stripped so the submit CR lands on the body's last line.
         let mut t = Fake { sent: Vec::new() };
         let payload = "one\rline\ttwo\x1b[2J MARKER";
         inject_with_submit(&mut t, payload, Duration::ZERO).unwrap();
         assert_eq!(
             t.sent,
-            vec![["one ⏎ line two[2J MARKER"].join(""), "\r".to_string()]
+            vec![["one\nline two[2J MARKER"].join(""), "\r".to_string()]
         );
     }
 
     #[test]
     fn typed_marker_is_the_first_line_unchanged_by_flattening() {
-        // The confirm marker comes from the TYPED text up to the first glyph,
-        // so flattening a multi-line body never moves the open tag the
-        // transcript grep matches.
+        // The confirm marker comes from the TYPED text up to the first line
+        // break, so a multi-line body never moves the open tag the grep matches.
         let envelope = "<fno_mail from=\"a1b2c3d4\" id=\"msg-1\">\nbody one\nbody two\n</fno_mail>";
         assert_eq!(
             typed_marker(envelope),
@@ -2617,8 +2703,11 @@ mod tests {
         );
         // A single-line payload keeps its whole text as the marker.
         assert_eq!(typed_marker("plain MARKER"), "plain MARKER");
-        // A \\r\\n run is one newline, not two glyphs.
-        assert_eq!(one_line("a\r\nb\nc"), "a ⏎ b ⏎ c");
+        // A \\r\\n run is one LF, not two; a trailing newline run is stripped
+        // so the submit CR lands on the body's last line.
+        assert_eq!(one_line("a\r\nb\nc"), "a\nb\nc");
+        assert_eq!(one_line("a\n"), "a");
+        assert_eq!(one_line("body\n\n"), "body");
     }
 
     #[test]
@@ -2739,8 +2828,8 @@ mod tests {
     #[test]
     fn multi_line_unwrapped_types_flattened_after_c17() {
         // The old refusal ("a second line rides in as a second submitted
-        // turn") died with the bracketed paste: the typing layer flattens
-        // every newline run into ONE submitted line, so a multi-line
+        // turn") died with the bracketed paste: the typing layer types
+        // every newline run as LF inside ONE submitted turn, so a multi-line
         // unframed payload delivers. The held-mail drain's digest is the
         // caller this door was stranding.
         assert_eq!(single_line_decision("/cmd\nsecond line"), None);
@@ -2888,7 +2977,7 @@ mod tests {
     #[test]
     fn forged_envelope_passes_the_documented_relay_single_line_variant() {
         // codex P1 (a real regression the earlier well-formed check
-        // introduced): `frame()` in cli/src/fno/relay/envelope.py produces
+        // introduced): the retired Python relay envelope produced
         // `<fno_mail from="..." harness="..."> body` with NO close tag, by
         // design - "no close tag, no trailer... out of scope" per the plan.
         // deliver_attached in cli/src/fno/relay/roundtrip.py pipes exactly
@@ -3468,8 +3557,8 @@ mod tests {
         assert_eq!(r, Err("not-confirmed"));
         assert_eq!(
             t.sent,
-            vec!["\r".to_string(), "\u{7f}".repeat(7)],
-            "one extra CR, then one DEL write of the typed length"
+            vec!["\r".to_string(), "\u{7f}".repeat(9)],
+            "one extra CR, then one DEL write of the typed length plus both CRs"
         );
         let _ = std::fs::remove_file(&journal);
     }
@@ -3489,7 +3578,7 @@ mod tests {
             true,
             || false,
         );
-        assert_eq!(r, Err("not-confirmed"));
+        assert_eq!(r, Err("left-in-composer"));
         assert_eq!(
             t.sent,
             vec!["\r".to_string()],
@@ -3541,6 +3630,7 @@ mod tests {
         let r = wait_for_quiet_in(
             &journal,
             &registry,
+            &registry,
             "s2",
             Duration::from_secs(30),
             Duration::ZERO,
@@ -3568,6 +3658,7 @@ mod tests {
         let mut sleeper = sleeper;
         let r = wait_for_quiet_in(
             &journal,
+            &registry,
             &registry,
             "s1",
             Duration::from_millis(50),
@@ -3622,6 +3713,7 @@ mod tests {
             let r = wait_for_quiet_in(
                 &journal,
                 &registry,
+                &dir,
                 "s1",
                 Duration::from_millis(50),
                 Duration::ZERO,
@@ -3630,6 +3722,75 @@ mod tests {
             );
             assert_eq!(r, Err(expected.to_string()));
         }
+        let _ = std::fs::remove_file(&journal);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wait_for_quiet_holds_while_claude_stop_hooks_run() {
+        // A claude row reported Done (its Stop hooks started) with no
+        // turn_duration row since: the gate holds as "stop-hooks". Once the
+        // turn_duration row lands, the same gate proceeds.
+        let journal = empty_journal("quiet-stop-hooks");
+        let dir =
+            std::env::temp_dir().join(format!("mailinj-reg-{}-stophooks", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proj")).unwrap();
+        let sid = "5d0a6c1e-2b7f-4c3e-9a1d-7e8f9a0b1c2d";
+        let transcript = dir.join("proj").join(format!("{sid}.jsonl"));
+        std::fs::write(&transcript, "{\"type\":\"assistant\"}\n").unwrap();
+        let registry = dir.join("registry.json");
+        let done = chrono::Utc::now();
+        let row = serde_json::json!({
+            "name": "wk", "status": "live", "cwd": "/repo", "harness": "claude",
+            "harness_session_id": sid, "created_at": "2026-09-26T00:00:00Z",
+            "inside_leg": {"state": "done", "seq": 2, "received_at": done.to_rfc3339()},
+        });
+        crate::registry_store::seed_raw(&registry, serde_json::json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [row]}).to_string());
+        let gate = || {
+            let base = now_ms();
+            let tick = std::cell::Cell::new(0i64);
+            wait_for_quiet_in(
+                &journal,
+                &registry,
+                &dir,
+                sid,
+                Duration::from_millis(50),
+                Duration::ZERO,
+                &mut || base + tick.get() * 10,
+                &mut |_d| tick.set(tick.get() + 1),
+            )
+        };
+        assert_eq!(gate(), Err("stop-hooks".to_string()));
+        // The turn's last reply in the Done stamp's own second still holds.
+        let last = done.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let mut f = OpenOptions::new().append(true).open(&transcript).unwrap();
+        writeln!(f, "{{\"type\":\"assistant\",\"timestamp\":\"{last}\"}}").unwrap();
+        assert_eq!(gate(), Err("stop-hooks".to_string()));
+        // A blocking Stop hook resumed the turn: a reply a full second past
+        // the stamp releases the hold, since a working composer queues it.
+        let resumed = (done + chrono::Duration::seconds(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        writeln!(f, "{{\"type\":\"assistant\",\"timestamp\":\"{resumed}\"}}").unwrap();
+        assert_eq!(gate(), Ok(()), "the resumed turn takes a queued message");
+        std::fs::write(
+            &transcript,
+            format!("{{\"type\":\"assistant\",\"timestamp\":\"{last}\"}}\n"),
+        )
+        .unwrap();
+        let mut f = OpenOptions::new().append(true).open(&transcript).unwrap();
+        let ended = (done + chrono::Duration::seconds(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        writeln!(
+            f,
+            "{{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"{ended}\"}}"
+        )
+        .unwrap();
+        assert_eq!(
+            gate(),
+            Ok(()),
+            "the turn ended, so the composer submits again"
+        );
         let _ = std::fs::remove_file(&journal);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3781,10 +3942,10 @@ mod tests {
 
     #[test]
     fn content_confirm_matches_a_transcript_recording_the_flattened_text() {
-        // C17: the typed keystrokes carry the return glyph, so a hosted
-        // harness records the FLATTENED line, not the multi-line body. The
-        // marker (the open tag) is unchanged by flattening, so the confirm
-        // still matches the recorded turn.
+        // C17: the typed keystrokes carry LF line breaks, so a hosted harness
+        // records the typed (LF-joined) text, not a paste. The marker (the
+        // first line) is unchanged by the flattening, so the confirm still
+        // matches the recorded turn.
         let path = tmp_transcript("flattened");
         let mut f = File::create(&path).unwrap();
         writeln!(
@@ -4591,14 +4752,14 @@ mod tests {
         assert_eq!(outcome, Ok(()), "the envelope lands and confirms");
 
         let frames = handle.join().unwrap();
-        assert_eq!(frames.len(), 2, "one typed line, one CR frame");
+        assert_eq!(frames.len(), 2, "one typed frame, one CR frame");
         assert!(
             matches!(&frames[0], Frame::Input(b)
                 if !b.contains(&0x1b)
                     && std::str::from_utf8(b)
-                        .is_ok_and(|s| s.contains("<fno_mail") && !s.contains('\n'))
+                        .is_ok_and(|s| s.contains("<fno_mail") && s.contains('\n'))
                     && b.windows(6).any(|w| w == b"<fno_m")),
-            "the first frame is the typed one-line envelope, no paste guards"
+            "the first frame is the typed envelope with LF line breaks, no paste guards"
         );
         assert!(
             matches!(&frames[1], Frame::Input(b) if b.as_slice() == b"\r"),

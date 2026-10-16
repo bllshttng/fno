@@ -11,12 +11,15 @@
 pub mod agents_alias;
 pub mod agents_history;
 pub mod agents_view;
+pub mod argv_witness;
 pub mod attention_api;
+pub mod attest;
 pub mod backlog_list;
 pub mod backlog_model;
 pub mod backlog_snapshot;
 pub mod backlog_view;
 pub mod backlog_write;
+pub(crate) mod band_remap;
 pub mod board_reader;
 pub mod bootstrap;
 pub mod build_drift;
@@ -33,11 +36,15 @@ pub mod doctor_update;
 #[cfg(test)]
 #[path = "doctor_update_tests.rs"]
 mod doctor_update_tests;
+pub mod effect_map;
 pub mod event_cli;
+mod event_signals;
 pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
+pub mod footnote_transcript;
 pub mod frame_html;
+pub mod git_paths;
 pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
@@ -51,6 +58,9 @@ pub mod mouse;
 pub mod mux_cli;
 pub mod mux_rows;
 pub mod needs_overlay;
+pub mod notify;
+#[path = "mux_cli/notify_verb.rs"]
+pub mod notify_verb;
 pub mod org_model;
 pub mod org_overlay;
 pub mod org_root;
@@ -71,6 +81,7 @@ pub mod pty;
 pub mod ratatui_blit;
 pub mod registry_label;
 pub mod registry_read;
+pub mod remote_target;
 pub mod restore_gate;
 pub mod restore_liveness;
 mod review_invocation;
@@ -84,8 +95,12 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_detect;
+pub mod setup_profile;
 pub mod setup_run;
+pub mod setup_services;
 pub mod sideline_color;
+pub mod spawn_floor;
 pub mod spawn_journal;
 pub mod splash;
 pub mod sprites;
@@ -95,6 +110,7 @@ pub mod squad_store;
 pub mod state_layout;
 pub mod store_client;
 pub mod store_conn;
+pub mod team_census;
 pub mod templates;
 #[cfg(test)]
 mod test_keeper_cleanup;
@@ -107,10 +123,13 @@ pub mod transcript_tail;
 pub mod transcript_transfer;
 pub mod tree;
 pub mod uninstall;
+pub(crate) mod update_prebuilt;
 pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub mod wizard;
+pub mod wizard_term;
 pub mod wordmark;
 pub mod yard_overlay;
 

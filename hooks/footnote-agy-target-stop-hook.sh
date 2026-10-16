@@ -106,9 +106,12 @@ resolve_agents_bin() { fno_agents_bin "$REPO_ROOT"; }
 # The seam sits ABOVE every `state path` read: a bare-PATH call there let an
 # ambient fno-agents answer for a tmp cwd, so a mocked fixture inherited an
 # arbitrary manifest/space answer and the delivery-retry tests went red or
-# green per machine. The fixture's FNO_AGENTS_BIN decides now.
+# green per machine. The fixture's FNO_AGENTS_BIN decides now. Every verb call
+# runs from ROOT: agy fires the global hooks.json from ~/.gemini/config, which
+# is not a git repo, so a cwd-keyed answer there is the wrong slice or a
+# rc=2 ("unable to read git worktree list").
 BIN=$(resolve_agents_bin)
-state_path_answer() { "${BIN:-fno-agents}" state path "$1" 2>/dev/null || true; }
+state_path_answer() { (cd "$ROOT" && "${BIN:-fno-agents}" state path "$1") 2>/dev/null || true; }
 
 LIVE_STATE_FILE=$(state_path_answer target-state)
 # The verb answers THIS cwd's spaces-layout slice whether or not a manifest
@@ -125,6 +128,11 @@ OTHER_WORKTREE_PRESENT=0
 (( WORKTREE_COUNT > 1 )) && OTHER_WORKTREE_PRESENT=1
 SPACE_DIR=$(dirname "$(state_path_answer events)")
 [[ -z "$SPACE_DIR" || "$SPACE_DIR" == "." ]] && SPACE_DIR="${REPO_ROOT}/.fno"
+# The retry counters (counter_path) write below, long before the synth-stage
+# mkdir at the bottom: a SPACE_DIR that does not exist yet silently fails every
+# counter write, the count never advances past 1, and the give-up ceiling can
+# never fire: the continue loops unbounded.
+mkdir -p "$SPACE_DIR" 2>/dev/null || true
 
 # The worktree that owns a resolved manifest. A space-slice manifest sits
 # outside every checkout, so its `owner_cwd:` stamp is the answer; the parent
@@ -165,7 +173,7 @@ if [[ -f "$LIVE_STATE_FILE" ]]; then
         RESOLVE_RC=2
         if [[ -n "$BIN" ]]; then
             RESOLVE_RC=0
-            RESOLVED_STATE=$("$BIN" manifest-for-session \
+            RESOLVED_STATE=$(cd "$ROOT" && "$BIN" manifest-for-session \
                 --harness-session-id "$CONVERSATION_ID" 2>/dev/null) || RESOLVE_RC=$?
         fi
         RESOLVED_CWD=""
@@ -188,7 +196,7 @@ else
     BIN=$(resolve_agents_bin)
     if [[ -n "$BIN" && -n "$CONVERSATION_ID" ]]; then
         RESOLVE_RC=0
-        RESOLVED_STATE=$("$BIN" manifest-for-session \
+        RESOLVED_STATE=$(cd "$ROOT" && "$BIN" manifest-for-session \
             --harness-session-id "$CONVERSATION_ID" 2>/dev/null) || RESOLVE_RC=$?
         RESOLVED_CWD=""
         if [[ "$RESOLVE_RC" -eq 0 && -n "$RESOLVED_STATE" && -f "$RESOLVED_STATE" ]]; then
@@ -358,7 +366,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
         # invoked against a stop it does not own.
         if [[ "$PRE_MANIFEST_NO_FILE" -eq 1 && -n "$EARLY_TRANSCRIPT_PATH" && -n "$BIN" ]]; then
             "$BIN" distress-scan --transcript "$EARLY_TRANSCRIPT_PATH" \
-                --run "$CONVERSATION_ID" --cwd "$ROOT" --harness agy >&2 || true
+                --run "$CONVERSATION_ID" --harness-session "$CONVERSATION_ID" \
+                --cwd "$ROOT" --harness agy >&2 || true
         fi
     fi
     emit '{}'
@@ -377,8 +386,8 @@ CONVERSATION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.conversationId // empty' 2
 TRANSCRIPT_PATH="$EARLY_TRANSCRIPT_PATH"
 
 # ── 4. Synthesize a claude-shaped transcript loop-check can read ───────────────
-# loop-check reads transcripts through the shared Python reader (fno agents
-# newest-assistant-text), whose claude arm filters lines on type in
+# loop-check reads transcripts in process (newest_assistant_text in
+# crates/fno-agents/src/distress.rs), whose claude arm filters lines on type in
 # (user, assistant) and reads text from /message/content (string | block
 # array). agy's transcript.jsonl uses Gemini-family conventions (likely
 # role:"model" + parts:[{text}]), which that arm would skip. Normalize the

@@ -223,18 +223,18 @@ pub fn run_note(args: &[String]) -> i32 {
     };
     // Backend-aware read: entry resolution must see post-flip nodes,
     // which exist only in graph.db; the frozen json keeper does not know
-    // them. read_rows switches on graph_meta.backend.
-    let entries = match graph_store::read_rows(&graph) {
-        Ok(e) => e,
+    // them. read_one answers the id/slug tiers with a single-row read; the
+    // whole-graph read_rows stays only as the miss-path error source.
+    let entry = match graph_store::read_one(&graph, &parsed.node) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
+            eprintln!("Error: no node resolves to '{}'", parsed.node);
+            return 1;
+        }
         Err(e) => {
             eprintln!("fno-agents backlog-note: graph read failed: {e}");
             return 5;
         }
-    };
-    let entry = crate::graph_get::find_entry(&entries, &parsed.node);
-    let Some(entry) = entry else {
-        eprintln!("Error: no node resolves to '{}'", parsed.node);
-        return 1;
     };
     let node_id = entry
         .get("id")
@@ -255,7 +255,7 @@ pub fn run_note(args: &[String]) -> i32 {
     if parsed.machine.is_some() || parsed.wave {
         return run_machine(&parsed, &graph, &node_id, body);
     }
-    write_human(&parsed, &graph, entry, body)
+    write_human(&parsed, &graph, &entry, body)
 }
 
 /// One note body: positional, `--body-file`, or `--stdin`, exactly one.
@@ -1229,6 +1229,28 @@ mod tests {
     }
 
     #[test]
+    fn read_one_resolves_the_id_and_slug_tiers_without_the_whole_graph() {
+        // The note child's entry read is one row, not the whole graph. The
+        // tiers match find_entry: exact id, then slug.
+        let (_dir, graph) = fixture("read-one.json");
+        seed_one_node(&graph);
+        let by_id = crate::graph_store::read_one(&graph, "ab-one")
+            .unwrap()
+            .expect("id tier resolves");
+        assert_eq!(by_id.get("id").and_then(Value::as_str), Some("ab-one"));
+        let by_slug = crate::graph_store::read_one(&graph, "one")
+            .unwrap()
+            .expect("slug tier resolves");
+        assert_eq!(by_slug.get("id").and_then(Value::as_str), Some("ab-one"));
+        assert!(
+            crate::graph_store::read_one(&graph, "nope")
+                .unwrap()
+                .is_none(),
+            "a token matching no id and no slug is None"
+        );
+    }
+
+    #[test]
     fn an_import_lands_the_record_under_its_original_id_and_slug() {
         let (_dir, graph) = fixture("graph.json");
         seed_one_node(&graph);
@@ -1323,11 +1345,11 @@ mod tests {
 
     /// The comment test reads the claims state through `notice_holder`'s
     /// holder probe; the hermetic guard demands a temp root, and the env is
-    /// process-global, so the tests serialize on one mutex.
+    /// process-global, so the tests serialize on the shared test-env lock.
+    /// A module-local mutex is not enough: a concurrent scenario elsewhere in
+    /// the binary (burn_watch pins FNO_CLAIMS_ROOT) must not see this flip.
     fn claims_root_pin() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let guard = LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
+        let guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = tempfile::tempdir().unwrap();

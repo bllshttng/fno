@@ -113,9 +113,9 @@ def role_reading(row) -> Optional[dict[str, Any]]:
     """The one rendering of a role, or ``None`` when ``row`` holds none.
 
     Reads ``row.role_label`` (``registry.AgentEntry.role_label``) rather than
-    re-deriving the "L{level} {scope}" string, so ``fno whoami``, ``fno agents
-    whoami`` and ``fno agents top`` cannot drift into three different renderings
-    of the same fact. Safe on the :func:`calling_agent_row` sentinels and on
+    re-deriving the "L{level} {scope}" string, so ``fno whoami`` and ``fno agents
+    whoami`` cannot drift into two renderings of the same fact (the Rust
+    ``fno agents top`` formats the same ``L{level} {scope}`` label). Safe on the :func:`calling_agent_row` sentinels and on
     ``None``: neither carries ``role_label``, so ``getattr`` answers ``None``
     rather than raising.
     """
@@ -720,6 +720,11 @@ def settle_spawn_role(
     return [updates.get(i, row) for i, row in enumerate(rows)], outcome, vacated
 
 
+def adopt_drawn_name(succession: bool, plan: Optional[dict], name: str) -> str:
+    """Adopt a succession settle's draw: the machine names the successor."""
+    return (plan or {}).get("draw", {}).get("name") or name if succession else name
+
+
 def plan_spawn_role(
     scope: str,
     caller_row,
@@ -739,6 +744,11 @@ def plan_spawn_role(
     from fno.agents.registry import load_registry
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
+    # The machine draws successor names; "redraw" is the reserved ask for a
+    # fresh draw, never a name (the pool excludes it and the refusals teach it).
+    redraw = proposed_name is not None and proposed_name.strip().lower() == "redraw"
+    if redraw:
+        proposed_name = None
     caller_name = getattr(caller_row, "name", None)
     caller = {"kind": "agent", "name": caller_name} if caller_name else {"kind": "human"}
     try:
@@ -750,6 +760,7 @@ def plan_spawn_role(
         "scope": scope,
         "succession": succession,
         "proposed_name": proposed_name,
+        "redraw": redraw,
         "caller": caller,
         "exclude_name": exclude_name,
         "rows": [asdict(row) for row in rows],
@@ -787,11 +798,8 @@ def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
     Returns the epic ids newly armed, or None when the graph write failed."""
     armed: list[str] = []
     try:
-        from fno.backlog.advance import (
-            EVENT_MISSION_ACTIVATED,
-            _emit,
-            _set_mission_active,
-        )
+        from fno.rust_binary import verb_call
+        from fno.agents import events
         from fno.graph.cli import _container_ids
 
         # ONE graph parse serves every member: a graph this rung could not
@@ -811,11 +819,10 @@ def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
                 # leaves the flag standing, which the drain then polls forever.
                 # The dispatch lever arms it once children exist.
                 continue
-            if _set_mission_active(member, True):
-                _emit(
-                    EVENT_MISSION_ACTIVATED,
-                    {"epic_id": member, "source": "role"},
-                    None,
+            if verb_call(["backlog", "advance", "--stdin"], {"op": "mission", "node_id": member, "active": True})["changed"]:
+                events.emit(
+                    "mission_activated",
+                    epic_id=member, source="role",
                 )
                 armed.append(member)
     except Exception as exc:  # noqa: BLE001 - the role already committed

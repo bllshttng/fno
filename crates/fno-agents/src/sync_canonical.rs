@@ -56,6 +56,17 @@ const PRIORITY_LANE_TTL_MS: i64 = 30 * 60 * 1000;
 // Bounds the end-of-run re-pull: a git pull over the network, not the whole
 // chain (which the sync_command timeout covers).
 const RE_PULL_TIMEOUT_SECS: u64 = 120;
+// How long the chain waits for CI to publish the merged crates rev. A build
+// lands 20 to 25 minutes after its merge; the bound keeps a run of crates
+// merges from starving the pull. Past it the chain runs without its update
+// leg, and doctor update holds python until the build lands.
+const BUILD_WAIT_MAX_MINS: i64 = 60;
+// The first-wait stamp, beside the markers: one file per checkout, so the
+// bound counts from the oldest merge still waiting, not the newest.
+const BUILD_WAIT_FILE: &str = "post-merge-sync-build-wait";
+// The release the update leg downloads from. update_prebuilt.rs in the fno
+// crate reads the same asset name, platform names and env override.
+const DEFAULT_RELEASE_REPO: &str = "bllshttng/footnote";
 
 type GhRun = Rc<dyn Fn(&[String], &Path) -> Result<String, GhErr>>;
 type GitOrigin = Rc<dyn Fn(&Path) -> Option<String>>;
@@ -63,9 +74,10 @@ type ShellRun = Rc<dyn Fn(&str, &Path) -> ShellOutcome>;
 type GitPull = Rc<dyn Fn(&Path) -> Result<String, String>>;
 type Check = Rc<dyn Fn(&Value) -> Value>;
 type Now = Rc<dyn Fn() -> DateTime<Utc>>;
+type BuildProbe = Rc<dyn Fn(&Path, &str) -> Build>;
 
 /// The seams the ported logic runs through; `real()` wires the live
-/// implementations. No trait hierarchy, six boxed closures.
+/// implementations. No trait hierarchy, seven boxed closures.
 pub(crate) struct Deps {
     pub gh: GhRun,
     pub git_origin: GitOrigin,
@@ -73,6 +85,16 @@ pub(crate) struct Deps {
     pub git_pull: GitPull,
     pub check: Check,
     pub now: Now,
+    pub build: BuildProbe,
+}
+
+/// Whether CI has published the binaries for a merge's crates/ rev.
+pub(crate) enum Build {
+    Published,
+    /// Not up yet; carries the crates rev the chain waits on.
+    Pending(String),
+    /// The probe could not answer; carries why.
+    Unknown(String),
 }
 
 pub(crate) enum GhErr {
@@ -142,6 +164,38 @@ fn read_config(cwd: &Path) -> PostMergeCfg {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+fn is_update_leg(t: &str) -> bool {
+    t == "fno update"
+        || t.starts_with("fno update ")
+        || t == "fno doctor update"
+        || t.starts_with("fno doctor update ")
+}
+
+/// A sync_command leg that compiles, or an update leg while CI has not
+/// published the merged rev: such a leg can only fall back to a local
+/// compile, so it is dropped by name. Once the build is published, the
+/// update leg downloads it and stays.
+fn is_compile_leg(leg: &str, published: bool) -> bool {
+    let t = leg.trim();
+    (!published && is_update_leg(t)) || t == "cargo install" || t.starts_with("cargo install ")
+}
+
+/// Split an `&&` chain, drop the compile legs, rejoin the rest. Returns the
+/// runnable remainder (possibly empty) and what was dropped, so the caller
+/// names each loss.
+fn strip_compile_legs(cmd: &str, published: bool) -> (String, Vec<String>) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    for leg in cmd.split("&&") {
+        if is_compile_leg(leg, published) {
+            dropped.push(leg.trim().to_string());
+        } else {
+            kept.push(leg.trim().to_string());
+        }
+    }
+    (kept.join(" && "), dropped)
+}
 
 fn synced_marker(canonical: &Path, sha: &str) -> PathBuf {
     canonical.join(".fno").join("post-merge-synced").join(sha)
@@ -636,8 +690,109 @@ impl Deps {
             git_pull: Rc::new(real_git_pull),
             check: Rc::new(|payload| crate::canonical_check::build_answer(payload)),
             now: Rc::new(chrono::Utc::now),
+            build: Rc::new(real_build),
         }
     }
+}
+
+/// This host's CI matrix name, or None where CI builds no tarball.
+fn bin_platform() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some("macos-arm64"),
+        ("macos", "x86_64") => Some("macos-x64"),
+        ("linux", "x86_64") => Some("linux-x64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        _ => None,
+    }
+}
+
+/// Fetch origin, read the merge's crates/ rev (the key main-binaries.yml
+/// publishes under), then ask the download URL for its digest. The download
+/// URL, not the REST listing: the listing is the read that answered 403 on
+/// 2026-10-14.
+fn real_build(canonical: &Path, sha: &str) -> Build {
+    let Some(platform) = bin_platform() else {
+        return Build::Unknown("CI builds no binary for this platform".to_string());
+    };
+    let mut fetch = std::process::Command::new("git");
+    fetch
+        .arg("-C")
+        .arg(canonical)
+        .args(["fetch", "--quiet", "origin"]);
+    match crate::bounded_cmd::output_with_timeout(fetch, RE_PULL_TIMEOUT_SECS) {
+        Some(out) if out.status.success() => {}
+        _ => return Build::Unknown("git fetch origin failed".to_string()),
+    }
+    let mut log = std::process::Command::new("git");
+    log.arg("-C")
+        .arg(canonical)
+        .args(["log", "-1", "--format=%H", sha, "--", "crates/"]);
+    let rev = match crate::bounded_cmd::output_with_timeout(log, PROBE_TIMEOUT_SECS) {
+        Some(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+        _ => String::new(),
+    };
+    if rev.is_empty() {
+        return Build::Unknown(format!("no crates/ rev readable at {}", sha12(sha)));
+    }
+    let repo =
+        std::env::var("FNO_RELEASE_REPO").unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string());
+    let url = format!(
+        "https://github.com/{repo}/releases/download/bin-cache/fno-bin-{rev}-{platform}.tar.gz.sha256"
+    );
+    // A GET of the small digest, read by status code: a HEAD through the
+    // asset redirect is not reliable, and curl's exit code for an HTTP error
+    // differs across versions.
+    let mut curl = std::process::Command::new("curl");
+    curl.args([
+        "-sL",
+        "--max-time",
+        "20",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+    ])
+    .arg(&url);
+    let Some(out) = crate::bounded_cmd::output_with_timeout(curl, PROBE_TIMEOUT_SECS) else {
+        return Build::Unknown("curl not found".to_string());
+    };
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "200" => Build::Published,
+        "404" => Build::Pending(rev),
+        code => Build::Unknown(format!("HTTP {code} for {url}")),
+    }
+}
+
+fn build_wait_path(canonical: &Path) -> PathBuf {
+    canonical.join(".fno").join(BUILD_WAIT_FILE)
+}
+
+/// Minutes since the first wait for a CI build, stamping now when no wait is
+/// recorded. An unreadable stamp restarts the clock (the safe direction), and
+/// so does one past twice the bound: a live wait clears its stamp at the
+/// bound, so an older one is left over from a sync that stopped before the
+/// gate (a divergence refusal) and must not cut a later wait short.
+fn build_waited_mins(canonical: &Path, now: DateTime<Utc>) -> i64 {
+    let path = build_wait_path(canonical);
+    if let Some(since) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| parse_iso(&raw))
+    {
+        let waited = (now - since).num_minutes();
+        if waited < 2 * BUILD_WAIT_MAX_MINS {
+            return waited;
+        }
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        &path,
+        now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    );
+    0
 }
 
 // ---------------------------------------------------------------------------
@@ -877,6 +1032,54 @@ fn sync_under_lease(
         return 1;
     }
 
+    // 6.7 Build gate: the chain fires after CI publishes the merge's build,
+    // not at the merge, so its update leg installs Python and Rust in one
+    // step. Until then nothing runs and the marker stays withheld; the
+    // catch-up sweep re-runs the sync. Past the bound, or when the probe
+    // cannot answer, the chain runs without its update leg.
+    let published = match (deps.build)(canonical, sha) {
+        Build::Published => true,
+        Build::Pending(rev) => {
+            let waited = build_waited_mins(canonical, (deps.now)());
+            if waited < BUILD_WAIT_MAX_MINS {
+                stdout.push(format!(
+                    "post-merge sync: waiting for CI to publish the build for crates rev {} (waited {waited}m of {BUILD_WAIT_MAX_MINS}m); marker withheld, the catch-up sweep re-runs",
+                    sha12(&rev)
+                ));
+                return 0;
+            }
+            stderr.push(format!(
+                "post-merge sync: CI has not published crates rev {} after {waited}m; running without the update leg",
+                sha12(&rev)
+            ));
+            false
+        }
+        Build::Unknown(why) => {
+            stderr.push(format!(
+                "post-merge sync: cannot tell whether CI published the build ({why}); running without the update leg"
+            ));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(build_wait_path(canonical));
+    // A post-merge sync never compiles: cargo legs always drop, and an
+    // update leg drops while the merged rev has no published build (it could
+    // only fall back to a local compile).
+    let (sync_command, dropped) = strip_compile_legs(&cfg.sync_command, published);
+    for leg in &dropped {
+        stdout.push(format!(
+            "post-merge sync: dropped '{leg}' from sync_command: a post-merge sync never compiles (cargo legs, or an update with no published build)"
+        ));
+    }
+    if sync_command.trim().is_empty() {
+        write_marker(&marker, stderr);
+        stdout.push(format!(
+            "post-merge sync: sync_command held only update/compile legs; nothing to run; marked {}",
+            sha12(sha)
+        ));
+        return 0;
+    }
+
     // 7. Run sync_command in the canonical via a login shell so uv/cargo/npm
     // on the shell-rc PATH resolve (a bare `bash -c` would miss them).
     stdout.push(format!(
@@ -901,9 +1104,17 @@ fn sync_under_lease(
             "post-merge install: test:priority held by {holder}; building without priority"
         ));
     }
-    let out = shell(&cfg.sync_command, canonical);
+    let out = shell(&sync_command, canonical);
     if matches!(prio, crate::claims::AcquireOutcome::Acquired(_)) {
-        let _ = crate::claims::release(crate::test_run::PRIORITY_KEY, &prio_holder, None, None);
+        // A swallowed release failure leaves a TTL hold the next sync parks
+        // behind, invisible in every receipt.
+        if let Err(error) =
+            crate::claims::release(crate::test_run::PRIORITY_KEY, &prio_holder, None, None)
+        {
+            stderr.push(format!(
+                "post-merge install: priority lane release failed: {error}"
+            ));
+        }
     }
     if out.timed_out {
         stderr.push(format!(
@@ -1196,7 +1407,8 @@ pub(crate) fn run_catchup(deps: &Deps, cwd: &Path) -> CatchupOut {
         out.stdout = stdout;
         out.stderr = stderr;
         out.pr_number = Some(newest.number);
-        out.detail = "sync declined (claim held or out of scope)".to_string();
+        out.detail =
+            "sync declined (claim held, out of scope, or waiting for the CI build)".to_string();
         out.stale = st.state == "stale";
         return out;
     }
@@ -1325,6 +1537,34 @@ mod tests {
         catchup_window_days = 3\n\
         sync_stale_hours = 24\n";
 
+    #[test]
+    fn strip_compile_legs_drops_update_and_cargo_only() {
+        // The observed machine shape: the update leg sits mid-chain.
+        let chain = "git checkout main && git pull origin main && fno update && fno restart";
+        let (kept, dropped) = strip_compile_legs(chain, false);
+        assert_eq!(
+            kept,
+            "git checkout main && git pull origin main && fno restart"
+        );
+        assert_eq!(dropped, vec!["fno update".to_string()]);
+
+        // A bare cargo install leg drops even with a published build.
+        let (kept, dropped) =
+            strip_compile_legs("cargo install --path crates/fno && git pull", true);
+        assert_eq!(kept, "git pull");
+        assert_eq!(dropped, vec!["cargo install --path crates/fno".to_string()]);
+
+        // A command of only compile legs runs nothing.
+        let (kept, dropped) = strip_compile_legs("fno update --rust", false);
+        assert_eq!(kept, "");
+        assert_eq!(dropped, vec!["fno update --rust".to_string()]);
+
+        // A plain command passes through untouched.
+        let (kept, dropped) = strip_compile_legs("git pull origin main", false);
+        assert_eq!(kept, "git pull origin main");
+        assert!(dropped.is_empty());
+    }
+
     fn write_cfg(cwd: &Path, body: &str) {
         std::fs::create_dir_all(cwd.join(".fno")).unwrap();
         std::fs::write(cwd.join(".fno/config.toml"), body).unwrap();
@@ -1420,6 +1660,7 @@ mod tests {
             git_pull: Rc::new(|_| Err("no pull expected".to_string())),
             check,
             now,
+            build: Rc::new(|_, _| Build::Published),
         }
     }
 
@@ -1467,6 +1708,64 @@ mod tests {
             .ends_with(&format!("post-merge sync: synced {}", &SHA[..12])));
         assert!(*ran.borrow());
         assert!(synced_marker(tmp.path(), SHA).exists());
+    }
+
+    #[test]
+    fn the_chain_waits_for_the_ci_build_then_updates_both_halves() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_cfg(
+            tmp.path(),
+            &CFG_BODY.replace("'echo hi'", "'git pull && fno update && fno restart'"),
+        );
+        let ran: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let (seen, ok) = (Rc::clone(&ran), ok_shell());
+        let shell: ShellRun = Rc::new(move |c, d| {
+            seen.borrow_mut().push(c.to_string());
+            ok(c, d)
+        });
+        let build_at = |build: fn() -> Build, mins: i64| {
+            let mut deps = sync_deps(
+                view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
+                Rc::clone(&shell),
+                Rc::new(|_| json!({})),
+            );
+            deps.build = Rc::new(move |_, _| build());
+            deps.now = Rc::new(move || fixed_now() + chrono::Duration::minutes(mins));
+            deps
+        };
+        let pending = || Build::Pending("c".repeat(40));
+
+        // Merge time: no build yet, so nothing runs and the marker waits. A
+        // stamp left over from a wait that never reached the gate is ignored.
+        std::fs::write(build_wait_path(tmp.path()), iso_at_hours_before(3)).unwrap();
+        let deps = build_at(pending, 0);
+        let (exit, stdout, _) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
+        assert_eq!(exit, 0);
+        assert!(
+            stdout.join("\n").contains("(waited 0m of 60m)"),
+            "{stdout:?}"
+        );
+        assert!(ran.borrow().is_empty());
+        assert!(!synced_marker(tmp.path(), SHA).exists());
+
+        // The build lands: the full chain runs, update leg included.
+        let deps = build_at(|| Build::Published, 25);
+        run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
+        assert_eq!(
+            *ran.borrow(),
+            vec!["git pull && fno update && fno restart".to_string()]
+        );
+        assert!(synced_marker(tmp.path(), SHA).exists());
+        assert!(!build_wait_path(tmp.path()).exists());
+
+        // A build still missing past the bound: run without the update leg.
+        std::fs::remove_file(synced_marker(tmp.path(), SHA)).unwrap();
+        ran.borrow_mut().clear();
+        run_sync_with_shell(&build_at(pending, 0), tmp.path(), 5, &shell);
+        let deps = build_at(pending, BUILD_WAIT_MAX_MINS);
+        let (_, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
+        assert!(stderr.join("\n").contains("running without the update leg"));
+        assert_eq!(*ran.borrow(), vec!["git pull && fno restart".to_string()]);
     }
 
     #[test]
@@ -1598,17 +1897,12 @@ mod tests {
                 Err("exit 1: merge conflict".to_string())
             }
         });
-        let deps = Deps {
-            gh: gh_stub(
-                view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-                ListStub::Rows("[]".to_string()),
-            ),
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
+        let mut deps = sync_deps(
+            view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
             shell,
-            git_pull,
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-        };
+            Rc::new(|_| json!({})),
+        );
+        deps.git_pull = git_pull;
 
         // Phase 1: merge B lands mid-chain; the winner drains it.
         write_pending(tmp.path(), newer, &mut Vec::new());
@@ -1635,13 +1929,22 @@ mod tests {
         assert_eq!(row["exit"], 0);
         assert_eq!(row["re_pulled"], 1);
         assert_eq!(row["pr"], 5);
-        // The priority lane was taken and released: no live hold left.
-        let (state, _) =
+        // The priority lane this run took must be released: no live hold on
+        // this run's own checkout. Sibling tests run in parallel without the
+        // env lock and their production acquire resolves the same root, so a
+        // foreign record mid-flight is a sibling's transient state, not a
+        // leak from this run.
+        let own_holder = format!("worktree:{}", tmp.path().display());
+        let (state, rec) =
             crate::claims::status(crate::test_run::PRIORITY_KEY, Some(claims_root.path()));
-        assert!(!matches!(
+        let own_hold_left = matches!(
             state,
             crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
-        ));
+        ) && matches!(&rec, Some(record) if record.holder == own_holder);
+        assert!(
+            !own_hold_left,
+            "priority lane hold left behind: {state:?} {rec:?}"
+        );
 
         // Phase 2: a failing pull keeps the marks for the next sweep.
         pulls.borrow_mut().1 = false;
@@ -1758,18 +2061,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
-        let gh = gh_stub(
+        let mut deps = sync_deps(
             view_row("MERGED", SHA, &["cli/x.py"], PR_URL),
-            ListStub::Rows("[]".to_string()),
-        );
-        let deps = Deps {
-            git_origin: Rc::new(|_| None),
-            gh,
             shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-        };
+            Rc::new(|_| json!({})),
+        );
+        deps.git_origin = Rc::new(|_| None);
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 0);
         assert!(!*ran.borrow());
@@ -1782,14 +2079,7 @@ mod tests {
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
         let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Missing));
-        let deps = Deps {
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
-            gh,
-            shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-        };
+        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 0);
         assert!(!*ran.borrow());
@@ -1802,14 +2092,7 @@ mod tests {
         write_cfg(tmp.path(), CFG_BODY);
         let (shell, ran) = spy_shell(0);
         let gh: GhRun = Rc::new(|_a, _c| Err(GhErr::Failed("exit 1: boom".to_string())));
-        let deps = Deps {
-            git_origin: Rc::new(|_| Some("owner/repo".to_string())),
-            gh,
-            shell,
-            git_pull: Rc::new(|_| Err("no pull expected".to_string())),
-            check: Rc::new(|_| json!({})),
-            now: Rc::new(fixed_now),
-        };
+        let deps = deps_with(gh, shell, Rc::new(|_| json!({})), Rc::new(fixed_now));
         let (exit, _, stderr) = run_sync_with_shell(&deps, tmp.path(), 5, &deps.shell);
         assert_eq!(exit, 1);
         assert!(!*ran.borrow());
@@ -2107,7 +2390,10 @@ mod tests {
         let deps = catchup_deps(ListStub::Rows(rows), ok_shell(), Rc::new(|_| json!({})));
         let out = run_catchup(&deps, tmp.path());
         assert_eq!(out.outcome, "skipped");
-        assert_eq!(out.detail, "sync declined (claim held or out of scope)");
+        assert_eq!(
+            out.detail,
+            "sync declined (claim held, out of scope, or waiting for the CI build)"
+        );
         crate::claims::release(FLIGHT_KEY, "someone-else", Some(tmp.path()), None).unwrap();
     }
 

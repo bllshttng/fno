@@ -163,6 +163,12 @@ pub struct GcRow {
     /// another session owns the node, so this row must not resume it.
     /// `None` when no such claim was read.
     pub node_held_elsewhere: Option<String>,
+    /// Age of the newest TYPED user turn in the row's transcript, with NO
+    /// window: a person took this session on as a conversation partner.
+    /// `None` reads absence as nothing - the untyped row is the common case
+    /// the sweep must not pay a full-transcript scan for, so the sweep
+    /// resolves this only for a row the policy would otherwise retire.
+    pub typed_turn_age_s: Option<i64>,
 }
 
 impl GcRow {
@@ -277,6 +283,10 @@ pub enum KeepReason {
     /// liveness fact the machine holds. The row is never reaped as
     /// unattended while it holds one.
     LiveClaim { detail: String },
+    /// A person typed into this session, whenever that was: the words are
+    /// the one witness a done ledger and a quiet clock never override, the
+    /// same fact the stop door refuses on. Permanent, like an operator row.
+    UserTyped { age_s: i64 },
 }
 
 impl KeepReason {
@@ -305,6 +315,7 @@ impl KeepReason {
             KeepReason::OpenPr { .. } => "open pr",
             KeepReason::DeadOpenWork { .. } => "dead open work",
             KeepReason::LiveClaim { .. } => "live claim held",
+            KeepReason::UserTyped { .. } => "user typed into this session",
         }
     }
 }
@@ -335,6 +346,14 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     }
     if row.teamed {
         return (GcAction::Keep, Some(KeepReason::Teamed));
+    }
+    // A person typed into this session, whenever that was. The words
+    // outrank every gate below - done work, quiet past the grace, a
+    // settled PR - the person is talking to THIS row, and a retirement
+    // here reaps the session (and its worktree) out from under them.
+    // Permanent, like the operator keep above.
+    if let Some(age_s) = row.typed_turn_age_s {
+        return (GcAction::Keep, Some(KeepReason::UserTyped { age_s }));
     }
     // Only a row fno itself spawned retires. An `adopted` row (a session the
     // operator took over) or a row with no origin recorded is someone else's
@@ -506,6 +525,27 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
         }
         WorkState::AllDone { .. } => grace_gate(row, grace_secs),
     }
+}
+
+/// The sweep's lazy resolution of the typed-turn fact: the
+/// full-transcript scan is the pass's one unbounded read, so it runs only
+/// when the policy would already retire the row. A typed turn flips the
+/// verdict to the permanent keep before the retirement can land; a row
+/// any cheaper gate keeps never pays the scan.
+pub fn resolve_typed_turn(
+    row: &mut GcRow,
+    verdict: (GcAction, Option<KeepReason>),
+    grace_secs: i64,
+    scan: impl FnOnce() -> Option<i64>,
+) -> (GcAction, Option<KeepReason>) {
+    if verdict.0 != GcAction::Retire {
+        return verdict;
+    }
+    if let Some(age_s) = scan() {
+        row.typed_turn_age_s = Some(age_s);
+        return gc_decide(row, grace_secs);
+    }
+    verdict
 }
 
 /// The transcript gates shared by every retire-eligible arm: an unresolved
@@ -689,6 +729,12 @@ pub fn gc_sweep(
         .map(|row| (row.node, row.harness, row.session_id))
         .collect();
     summary.settle_refused = refused;
+    // A reap leaves nothing behind: a retired worker's dead cargo still
+    // holds the build lock and a run slot under its own pid.
+    let freed = crate::claim_verbs::reap_dead_cargo_claims();
+    if freed > 0 {
+        eprintln!("reap: freed {freed} build or run-slot claim(s) held by a dead cargo");
+    }
     summary
 }
 
@@ -2706,6 +2752,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
+            typed_turn_age_s: None,
         }
     }
 
@@ -2790,6 +2837,74 @@ mod tests {
                     origin: "adopted".into()
                 })
             ),
+        );
+    }
+
+    /// A person typed into the session, so the row keeps under its
+    /// own permanent reason - past the grace, past done work, past the
+    /// origin classes - exactly where the operator and teamed keeps sit.
+    #[test]
+    fn a_row_the_user_typed_into_keeps_under_a_permanent_reason() {
+        // The incident row: quiet 17 minutes, past the 900 s grace, every
+        // node done - and the person's turn sits in the transcript.
+        let typed = GcRow {
+            typed_turn_age_s: Some(17 * 60),
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&typed, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::UserTyped { age_s: 17 * 60 })
+            ),
+            "a typed turn outranks every retire-eligible fact"
+        );
+        // The gate reads only the real fact: the same row without one
+        // retires as before.
+        assert_eq!(gc_decide(&retiring(), GRACE), (GcAction::Retire, None));
+        // The keep precedes the origin classes: a finished adopted row the
+        // person engaged keeps as its own keep, not as a corpse carve-out.
+        let adopted_typed = GcRow {
+            typed_turn_age_s: Some(17 * 60),
+            ..adopted_finished()
+        };
+        assert_eq!(
+            gc_decide(&adopted_typed, GRACE),
+            (
+                GcAction::Keep,
+                Some(KeepReason::UserTyped { age_s: 17 * 60 })
+            ),
+        );
+        // The sweep resolves the fact lazily: only a verdict that would
+        // retire pays for the read, and a typed answer flips the verdict
+        // before the retirement lands.
+        let mut row = retiring();
+        assert_eq!(
+            resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || Some(17 * 60)),
+            (
+                GcAction::Keep,
+                Some(KeepReason::UserTyped { age_s: 17 * 60 })
+            ),
+        );
+        // No typed answer: the retire verdict stands.
+        row.typed_turn_age_s = None;
+        assert_eq!(
+            resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || None),
+            (GcAction::Retire, None),
+        );
+        // A keep never pays the scan: the resolver would panic if called.
+        let mut kept = GcRow {
+            transcript_age_s: Some(4),
+            ..retiring()
+        };
+        assert_eq!(
+            resolve_typed_turn(
+                &mut kept,
+                (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
+                GRACE,
+                || panic!("a kept row must never pay the typed-turn scan"),
+            ),
+            (GcAction::Keep, Some(KeepReason::Active { age_s: 4 })),
         );
     }
 
@@ -3889,6 +4004,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
+            typed_turn_age_s: None,
         };
         assert_eq!(gc_decide(&row, 60).0, GcAction::Keep);
     }
@@ -3927,6 +4043,7 @@ mod tests {
             live_claim: None,
             worked_node: true,
             node_held_elsewhere: None,
+            typed_turn_age_s: None,
         }
     }
 

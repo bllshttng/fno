@@ -85,7 +85,7 @@ pub enum TerminationReason {
     Budget,
     NoProgress,
     /// A node held on an open operator question: the first fire blocked once
-    /// naming the question and the decide verb; this fire is the second on
+    /// naming the question and the user-side clear; this fire is the second on
     /// the same still-open question, so the loop terminates instead of
     /// re-asking. The journal (not the fingerprint) carries the held state.
     /// Terminal, NOT a ship reason: the operator answers, a later run ships.
@@ -137,6 +137,7 @@ pub use range_tiling::{compute_range_tiling, RangeTiling};
 mod review_count;
 mod review_state;
 use attestation_journal::missing_global_attestations;
+use attestation_journal::missing_primary_attestations;
 pub use attestation_journal::unattested_reviewers_scan_text;
 mod args;
 mod block_reason;
@@ -151,7 +152,7 @@ pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
 mod gh_read;
-mod intent;
+pub(crate) mod intent;
 mod local_attestation;
 mod plan_fidelity;
 mod posture;
@@ -159,8 +160,8 @@ mod pr_read;
 mod review_coverage_verb;
 mod review_findings;
 mod review_inputs;
-mod self_review_floor;
-mod settings;
+pub(crate) mod self_review_floor;
+pub(crate) mod settings;
 pub(crate) mod watch_lease;
 pub(crate) use args::{parse_args, try_flag_value, LoopCheckArgs};
 use async_wait::{arm_watch_hint, async_wait_class, conflicting_reason, merge_slot_reason};
@@ -169,6 +170,7 @@ pub use authorship::AttestationOrigin;
 use authorship::{classify_attestation_origin, default_attestation_origin};
 pub(crate) use awaiting_merge::main_head_failing_checks;
 use block_reason::{build_block_reason, sized_self_review_hint};
+pub(crate) use bot_nudge::bot_profile_logins;
 use bot_nudge::{
     classify_bot_nudge, logins_correspond, nudge_class_idlable, nudge_config_for,
     nudge_giveup_message, post_nudge_comment, profile_by_author, resolved_nudge_configs,
@@ -180,8 +182,8 @@ use bot_verdict::{clean_pass_review, usage_limit_comment_by};
 #[cfg(test)]
 use bounded_run::BOUNDED_STDERR_TAIL_CAP;
 pub(crate) use bounded_run::{
-    bounded_read, bounded_read_diagnostic, git_bounded, log_bounded_read_error, BoundedOutput,
-    GhReadError,
+    bounded_read, bounded_read_diagnostic, bounded_read_unadmitted, git_bounded,
+    log_bounded_read_error, BoundedOutput, GhReadError,
 };
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, BudgetTrip};
@@ -212,18 +214,19 @@ use coverage_status::{
 };
 use findings::{blocking_severity, compute_unaddressed_findings, max_ts, ts_after, Finding};
 use fire_history::{
-    append_loop_event, make_fingerprint, min_fire_gap_secs, read_last_row_fields, read_prior_fires,
+    append_loop_event, loop_check_rows, make_fingerprint, min_fire_gap_secs, read_last_row_fields,
+    read_prior_fires,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
 use gh_read::is_no_pr_stderr;
 use gh_read::{
     attestation_in_scope, git_head_branch, git_head_sha, graphql_exhausted_reason, head_is_shipped,
-    internal_gh_adapter, pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view,
-    refusal_is_secondary, stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail,
-    GraphqlQuota,
+    pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
+    stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail, GraphqlQuota,
 };
-pub(crate) use gh_read::{coverage_adapter, is_graphql_read};
+pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
+pub(crate) use intent::read_tail_lines;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
 #[cfg(test)]
@@ -247,16 +250,17 @@ use posture::{
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_verb::{run_review_coverage, run_review_coverage_capture};
-pub(crate) use review_findings::event_lines;
 #[cfg(test)]
 use review_findings::OpenFinding;
 use review_findings::{
     build_findings_block_reason, demote_unmeasured_coverage, open_findings_from_store,
     review_journal_text,
 };
+pub(crate) use review_findings::{event_lines, event_lines_of};
 pub use review_findings::{unattested_reviewers_scan, UnattestedReviewer};
 pub(crate) use review_inputs::{resolve_review_inputs, ReviewInputs};
 pub(crate) use self_review_floor::is_documentation_path;
+pub(crate) use self_review_floor::reviewer_entry;
 pub(crate) use self_review_floor::self_review_floor_applies;
 use self_review_floor::{
     classify_payload_for_floor, floor_self_review, reviewer_invocation_for, REVIEW_ORDER,
@@ -265,11 +269,13 @@ use settings::{
     fail_closed_settings, normalize_reviewer, parse_manifest, parse_settings_result, Manifest,
     PeerEntry,
 };
+pub(crate) use settings::{
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+};
 #[cfg(test)]
 pub(crate) use settings::{parse_settings, value_as_probe_list};
 #[cfg(test)]
 use settings::{scalar_as_singleton, MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
-pub(crate) use settings::{scan_manifest_field, session_cost_from_ledger, Settings};
 use watch_lease::{harness_can_idle, watch_target, watch_window_ms, CONTINUE_WORKING};
 use watch_lease::{CODEX_UNROUTABLE_REFUSAL, EMIT_FAILED_REFUSAL};
 
@@ -301,6 +307,13 @@ pub(crate) fn default_global_events_path() -> std::path::PathBuf {
 /// `FNO_LOOPCHECK_NO_NOTIFY=1` so unit tests never spawn a real notifier.
 fn best_effort_notify(title: &str, body: &str) {
     if std::env::var("FNO_LOOPCHECK_NO_NOTIFY").as_deref() == Ok("1") {
+        return;
+    }
+    // Under cargo test, an unpinned bin resolves to the real `fno` on PATH
+    // and its `inbox notify` toasts for real (the 2026-10-01 leak class).
+    // A test that pins `FNO_LOOPCHECK_FNO_BIN` to a stub keeps the argv
+    // assertions.
+    if cfg!(test) && std::env::var_os("FNO_LOOPCHECK_FNO_BIN").is_none() {
         return;
     }
     let fno_bin = loopcheck_fno_bin();
@@ -399,6 +412,10 @@ pub(crate) fn decide_with_payload(
     );
     let subject = pause_subject(parsed);
     if let Some(message) = crate::loops_pause::pause_message(&subject) {
+        // A cargo parked at an admission door: the session stops here and
+        // spends no turns; the park row lets the daemon wake it when that
+        // cargo exits.
+        watch_lease::record_build_park(parsed);
         return (0, paused_output(&parsed.driver, &message));
     }
     // The lead uses a separate manifest and decision path.
@@ -484,8 +501,32 @@ pub(crate) fn decide_with_payload(
         let ttl_ms = scan_manifest_field(&manifest_content, "target_claim_ttl")
             .and_then(|s| crate::claims::parse_ttl_ms(&s))
             .unwrap_or(7_200_000);
+        // Two answers from a shared primary end the run here. A primary the
+        // worker cannot reach means the turn ends and the worker holds: it
+        // can claim nothing new. A claim another machine took after this
+        // lease ran out means the work belongs to that machine now.
         match crate::claims::renew(&key, &holder, ttl_ms, None) {
-            Ok(_) => {}
+            Ok(true) => {}
+            Ok(false) => {
+                if let Some(reason) = crate::claim_store::lost_to_peer(&key, &holder) {
+                    let message =
+                        format!("claim lost: {reason}. Stop work on this node and do not push.");
+                    return (
+                        0,
+                        allow_output(
+                            "allow",
+                            Some(TerminationReason::Interrupted),
+                            &message,
+                            0,
+                            None,
+                        ),
+                    );
+                }
+            }
+            Err(e) if crate::store_remote::is_unreachable(&e) => {
+                let message = format!("holding: {e}");
+                return (0, allow_output("allow", None, &message, 0, None));
+            }
             Err(e) => eprintln!("loop-check: lease renewal for {key} failed (non-fatal): {e}"),
         }
     }
@@ -522,7 +563,7 @@ pub(crate) fn decide_with_payload(
     let ledger_path = parsed
         .ledger_path
         .clone()
-        .unwrap_or_else(|| crate::paths::ledger_path(&cwd));
+        .unwrap_or_else(|| crate::paths_cli::ledger_json(&cwd));
 
     // Now timestamp
     let now: DateTime<Utc> = if let Some(ref s) = parsed.now_override {
@@ -549,7 +590,15 @@ pub(crate) fn decide_with_payload(
             .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
     });
     let harness = scan_manifest_field(&manifest_content, "harness");
-    crate::distress::scan_and_emit(
+    // The harness session the friction row names: the payload's own id
+    // first, else the one init recorded in the manifest.
+    let harness_session = parsed
+        .harness_session
+        .as_deref()
+        .or(manifest.harness_session_id.as_deref())
+        .filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("null"))
+        .map(str::to_string);
+    let _ = crate::distress::scan_and_emit(
         &project_events,
         &global_events,
         &cwd,
@@ -558,14 +607,57 @@ pub(crate) fn decide_with_payload(
         harness.as_deref(),
         &transcript_path,
         last_assistant_message.as_deref(),
+        harness_session.as_deref(),
     );
 
-    // ── Step 1: cancel sentinel ───────────────────────────────────────────────
+    //     // ── Step 1: cancel sentinel ────────────────────────────
+    // F6: a self-cancel the SESSION wrote through its own assistant is a
+    // stuck signal, not a stop. The transcript is the truth: the newest
+    // user entry carrying the cancel verb proves a user typed it. The
+    // sentinel's own `via:` is advisory (the command writes it best-effort);
+    // the loop re-derives from the transcript at honor time.
     if let Some(hit) = check_cancel_sentinel(&cwd, &state_path, &manifest.created_at, "target") {
+        let user_typed = crate::distress::newest_user_entry_carries_cancel(&transcript_path);
+        // The transcript is the truth; a sentinel that recorded `via: user`
+        // at write time corroborates it, so a user-typed cancel never reads
+        // as a self-cancel even when the newest entry drifted.
+        let user_typed = user_typed || hit.via.as_deref() == Some("user");
+        let self_cancel = hit.author.as_deref() == Some(session_id.as_str()) && !user_typed;
+        if self_cancel {
+            // One-shot: consume the sentinel and write the stuck row instead.
+            // The router takes the follow-through from the row.
+            let _ = std::fs::remove_file(&hit.path);
+            let distress = crate::distress::help_distress_stuck(
+                "self-cancel requested by the session itself; the run routes stuck instead of stopping"
+                    .to_string(),
+                hit.reason.clone(),
+            );
+            let _ = crate::distress::emit_help_distress_blocked(
+                &project_events,
+                &global_events,
+                &cwd,
+                &session_id,
+                node_id.as_deref(),
+                harness.as_deref(),
+                &distress,
+                &format!("sentinel-{}", hit.path.display()),
+                harness_session.as_deref(),
+            );
+            return (
+                0,
+                allow_output(
+                    "allow",
+                    None,
+                    &format!(
+                        "self-cancel consumed as a stuck signal; the run routes stuck instead of stopping ({})",
+                        hit.reason.clone().unwrap_or_default()
+                    ),
+                    0,
+                    None,
+                ),
+            );
+        }
         emit("termination", hit.termination_data(&session_id));
-        // One-shot: once a sentinel has terminated this run it has done its
-        // job. Consuming it is what stops a cancel from re-terminating every
-        // later stop of a session that recovers and keeps working.
         if hit.kind == crate::cancel_sentinel::CancelKind::TargetSentinel {
             let _ = std::fs::remove_file(&hit.path);
         }
@@ -580,8 +672,7 @@ pub(crate) fn decide_with_payload(
             ),
         );
     }
-
-    // ── Step 2: legacy terminal status ───────────────────────────────────────
+    // ── Step 2: legacy terminal status ────────────────────────────────────────
     if let Some(ref status) = manifest.legacy_status {
         emit(
             "loop_check_legacy_manifest",
@@ -604,19 +695,34 @@ pub(crate) fn decide_with_payload(
 
     // ── Step 3: budget check ──────────────────────────────────────────────────
     if let Some(trip) = check_budget(&manifest, &settings, &now, &ledger_path) {
-        let axis = match &trip {
-            BudgetTrip::WallClock => "wall_clock",
-            BudgetTrip::Cost => "cost",
+        // The event names the cap axis with its numbers: the
+        // finalize terminal route quotes them back to the lead it asks.
+        let (axis, cap, value) = match &trip {
+            BudgetTrip::WallClock {
+                cap_min,
+                elapsed_min,
+            } => (
+                "wall_clock",
+                cap_min.map(|c| serde_json::json!(c)),
+                serde_json::json!(elapsed_min),
+            ),
+            BudgetTrip::Cost { cap_usd, spent_usd } => (
+                "cost",
+                cap_usd.map(|c| serde_json::json!(c)),
+                serde_json::json!(spent_usd),
+            ),
         };
-        emit(
-            "termination",
-            serde_json::json!({
-                "session_id": session_id,
-                "reason": "Budget",
-                "axis": axis,
-                "message": format!("budget exceeded (axis={axis})")
-            }),
-        );
+        let mut data = serde_json::json!({
+            "session_id": session_id,
+            "reason": "Budget",
+            "axis": axis,
+            "value": value,
+            "message": format!("budget exceeded (axis={axis})")
+        });
+        if let Some(cap) = cap {
+            data["cap"] = cap;
+        }
+        emit("termination", data);
         return (
             0,
             allow_output(
@@ -645,6 +751,7 @@ pub(crate) fn decide_with_payload(
             &cwd,
             &session_id,
             node_id.as_deref().unwrap_or(""),
+            &|id| holds::node_is_done(&cwd, id),
             &emit,
         ) {
             holds::QuestionGateStop::None => {}
@@ -792,8 +899,9 @@ pub(crate) fn decide_with_payload(
     let no_pr_fp =
         || generic.delivery_fingerprint(make_fingerprint(&head_sha, "none", "none", "none"));
     let observed_fp = no_pr_fp();
+    let fire_rows = loop_check_rows(&project_events);
     let (prior_fires, journal_streak, last_recorded_fp, streak_window) = read_prior_fires(
-        &project_events,
+        fire_rows.as_deref(),
         &session_id,
         if generic_observed {
             Some(&observed_fp)
@@ -803,7 +911,7 @@ pub(crate) fn decide_with_payload(
         now,
         min_fire_gap,
     );
-    let (last_pr_state, last_ci) = read_last_row_fields(&project_events, &session_id);
+    let (last_pr_state, last_ci) = read_last_row_fields(fire_rows.as_deref(), &session_id);
     // A fire that does not run done() inherits the last recorded fingerprint,
     // so its row stays comparable with its neighbors; only done() can move it.
     let fingerprint = if generic_observed {
@@ -992,6 +1100,20 @@ pub(crate) fn decide_with_payload(
             "termination",
             serde_json::json!({"session_id": session_id, "reason": reason, "message": message}),
         );
+    };
+    // Same row with structured cause fields merged in. NoProgress carries
+    // the fire's last PR state, CI conclusion and red check name, so the
+    // stall report reads them off the row instead of re-joining the
+    // previous loop_check row by hand.
+    let term_row_extra = |reason: &str, message: &str, extra: serde_json::Value| {
+        let mut row = serde_json::Map::new();
+        row.insert("session_id".into(), serde_json::json!(session_id));
+        row.insert("reason".into(), serde_json::json!(reason));
+        row.insert("message".into(), serde_json::json!(message));
+        if let serde_json::Value::Object(extra) = extra {
+            row.extend(extra);
+        }
+        emit("termination", serde_json::Value::Object(row));
     };
     let fire_row = |dec: &str, name: &str, fp_bad: bool, extra: serde_json::Value| {
         let mut row = serde_json::json!({
@@ -1313,6 +1435,27 @@ pub(crate) fn decide_with_payload(
 
         match done_result {
             Ok(mut pr_info) => {
+                // This session's own PR: a spent review round or a red check
+                // is friction. Best-effort; it never moves the verdict below.
+                crate::friction::on_pr_read(
+                    &crate::friction::Sinks {
+                        project: &project_events,
+                        global: &global_events,
+                    },
+                    &crate::friction::PrRead {
+                        harness_session: harness_session.as_deref(),
+                        node: node_id.as_deref(),
+                        harness: harness.as_deref(),
+                        number: pr_info.number,
+                        head_sha: &pr_info.head_oid,
+                        ci_failure: matches!(pr_info.ci_conclusion, CiConclusion::Failure(_)),
+                        failing_checks: &pr_info.failing_checks,
+                        rounds_used: pr_info.range_tiling.rounds_used,
+                        rounds_max: pr_info.range_tiling.rounds_max,
+                        unaddressed_blocking: pr_info.unaddressed_findings.len(),
+                        hard_blocker: pr_info.range_tiling.hard_blocker,
+                    },
+                );
                 // Read 4's newest activity timestamp folds into the
                 // fingerprint's 4th component: a late inline finding advances
                 // the fingerprint (re-block, not NoProgress - the codex
@@ -1556,9 +1699,10 @@ pub(crate) fn decide_with_payload(
                             &pr_info.head_oid,
                             pr_info.range_tiling.hard_blocker,
                         );
-                        // The hint renders the exact sized invocation (Python
-                        // single source) so an unreviewed-green termination
-                        // names what to run, not just that something must be.
+                        // The hint renders the exact sized invocation (the
+                        // native capability builder) so an unreviewed-green
+                        // termination names what to run, not just that
+                        // something must be.
                         // Past the round cap that hint becomes the loop: the
                         // receipt then carries the spent budget and names the
                         // terminal act instead. The max here is the same
@@ -1566,12 +1710,7 @@ pub(crate) fn decide_with_payload(
                         if waiver.is_none() {
                             let mut cov_line = coverage_receipt_line(
                                 &pr_info.coverage,
-                                sized_self_review_hint(
-                                    &parsed.fno_bin,
-                                    &cwd,
-                                    author_harness.as_deref(),
-                                )
-                                .as_deref(),
+                                sized_self_review_hint(&cwd, author_harness.as_deref()).as_deref(),
                                 pr_info.range_tiling.rounds_exhausted.then(|| {
                                     (
                                         pr_info.range_tiling.rounds_used,
@@ -1874,7 +2013,15 @@ pub(crate) fn decide_with_payload(
                         );
                     }
                     // Backstop tripped + done() false -> NoProgress
-                    term_row("NoProgress", &noprogress_msg);
+                    term_row_extra(
+                        "NoProgress",
+                        &noprogress_msg,
+                        serde_json::json!({
+                            "pr_state": pr_info.state.as_str(),
+                            "ci": pr_info.ci_conclusion.render(),
+                            "red_check": pr_info.failing_checks.first(),
+                        }),
+                    );
                     fire_row(
                         "allow",
                         "backstop",
@@ -2019,6 +2166,7 @@ pub(crate) fn decide_with_payload(
                             "read": failed_read,
                             "outcome": read_err.outcome(),
                             "stderr_tail": failed_stderr,
+                            "waited_on": read_err.waited_on(),
                             "parked": true
                         }),
                     );
@@ -2106,6 +2254,7 @@ pub(crate) fn decide_with_payload(
                         "read": failed_read,
                         "outcome": read_err.outcome(),
                         "stderr_tail": failed_stderr,
+                        "waited_on": read_err.waited_on(),
                         "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
                         "graphql_remaining": quota.as_ref().map(|q| q.remaining),
                         "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),

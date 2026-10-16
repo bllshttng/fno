@@ -58,6 +58,12 @@ def _stub_pane_path(monkeypatch, *, rec=None, brief=("the brief", "explicit")):
             pass
 
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
+
+    def dispatchable(node, holder, **kwargs):
+        return {"verdict": "dispatchable", "reservation_key": f"dispatch:{node}",
+                "reservation_holder": holder}, 0
+
+    monkeypatch.setattr("fno.agents.cli._spawn_guard_decision", dispatchable)
     monkeypatch.setattr(
         mux_spawn,
         "resolve_provenance",
@@ -660,3 +666,22 @@ def test_seam_real_binary_payload_disagreement_names_the_payload(monkeypatch, tm
     assert "the payload names /target x-1be2" in err
     assert "spawn /fno:blueprint x-1be2" in err
     assert "--node" not in err
+
+
+def test_refused_spawn_reaches_no_lane(monkeypatch, runner):
+    """A payload-verb refusal exits 2 at the front door, before any lane is
+    routed: nothing mints a registry row or takes the node claim."""
+    from fno.agents import rust_runtime as rr
+    from fno.cli import app
+
+    _stub_row(monkeypatch, _row())
+    _stub_verb(monkeypatch, {"action": "refuse", "message": "--node x-1 derives /blueprint; the payload names /target."})
+    routed: list = []
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: routed.append(list(args)))
+
+    result = runner.invoke(app, ["agents", "spawn", "-H", "claude", "--name", "w1", "--node", "x-1", "/fno:target x-1"])
+
+    assert result.exit_code == 2, result.output
+    assert "derives /blueprint" in result.output
+    assert routed == []

@@ -110,7 +110,7 @@ pub fn run(args: &[String]) -> i32 {
                 return 3;
             }
             match transaction.commit(value.clone()) {
-                Ok(()) => {
+                Ok(written) => {
                     if let (Ok(before), Ok(after)) = (
                         serde_json::from_value::<crate::state::Registry>(before),
                         serde_json::from_value::<crate::state::Registry>(value),
@@ -121,7 +121,11 @@ pub fn run(args: &[String]) -> i32 {
                             &after.entries,
                         );
                     }
-                    println!("{}", json!({"status":"written","revision":expected+1}));
+                    let revision = expected + i64::from(written);
+                    println!(
+                        "{}",
+                        json!({"status":"written","revision":revision,"changed":written})
+                    );
                     0
                 }
                 Err(error) => {
@@ -313,14 +317,17 @@ mod tests {
         assert_eq!(merged["agents"][0]["future_row"], "preserved");
         assert_eq!(merged["agents"][0]["status"], "idle");
         assert_eq!(merged["agents"][1]["future_name_row"], "preserved");
-        assert_eq!(merged["min_writer_version"], 40);
+        assert_eq!(
+            merged["min_writer_version"],
+            u64::from(crate::state::REGISTRY_MIN_WRITER_VERSION)
+        );
         assert!(merged["writer_rev"]
             .as_str()
             .unwrap()
             .ends_with("/registry-commit"));
 
         let mut breaking = disk;
-        breaking["min_writer_version"] = json!(41);
+        breaking["min_writer_version"] = json!(crate::state::REGISTRY_MIN_WRITER_VERSION + 1);
         let error = merge(
             breaking,
             &payload,

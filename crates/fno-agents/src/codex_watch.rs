@@ -366,7 +366,7 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
         home,
         &crate::codex_inject::loaded_thread_ids,
         &|cwd, pr| {
-            let (_code, out, _, _) = crate::pr_status::cache::cached_status(cwd, pr, false);
+            let (_code, out, _, _) = crate::pr_status::cache::cached_status(cwd, pr, false, None);
             Ok(PollAnswer {
                 settled: out.get("settled").and_then(Value::as_bool) == Some(true),
                 verdict: out

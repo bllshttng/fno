@@ -67,6 +67,17 @@ pub enum MuxCmd {
         #[command(flatten)]
         json: JsonOnly,
     },
+    /// `mux notify <title> <message> [--json]` (hidden): one desktop
+    /// notification through every attached client's tty; the receipt's
+    /// `clients` count is the delivery verdict (0 = none took it, so the
+    /// caller - `fno notify` - falls back to osascript).
+    #[command(hide = true)]
+    Notify {
+        title: String,
+        message: String,
+        #[command(flatten)]
+        json: JsonOnly,
+    },
     /// `mux kill-server [<name>] [--end-unkept | --stale-idle | --all] [--json]`
     KillServer {
         /// Optional server name (default resolution: flag > env > default)
@@ -155,7 +166,7 @@ pub enum MuxCmd {
     /// required; `-h` inside the tail stays the family's.
     #[command(disable_help_flag = true)]
     View(MuxTailReq),
-    /// `mux workspace prune|restore ...`: workspace-store maintenance
+    /// `mux workspace prune|restore|origin ...`: workspace-store maintenance
     /// A bare `mux workspace` refuses: clap requires the
     /// operation word.
     Workspace {
@@ -274,6 +285,9 @@ pub enum WorkspaceOp {
     /// Bring the stored workspaces' worker members back
     #[command(disable_help_flag = true)]
     Restore(MuxTail),
+    /// Add or drop a workspace's folder: `origin add|remove <name> <path>`
+    #[command(disable_help_flag = true)]
+    Origin(MuxTailReq),
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
@@ -418,6 +432,7 @@ impl WorkspaceOp {
     pub fn tail(&self) -> Vec<OsString> {
         match self {
             WorkspaceOp::Prune(t) | WorkspaceOp::Restore(t) => t.tail.clone(),
+            WorkspaceOp::Origin(t) => t.tail.clone(),
         }
     }
 
@@ -425,6 +440,7 @@ impl WorkspaceOp {
         match self {
             WorkspaceOp::Prune(_) => WorkspaceOp::Prune(t),
             WorkspaceOp::Restore(_) => WorkspaceOp::Restore(t),
+            WorkspaceOp::Origin(_) => WorkspaceOp::Origin(MuxTailReq { tail: t.tail }),
         }
     }
 }

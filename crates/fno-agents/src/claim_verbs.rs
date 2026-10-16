@@ -31,7 +31,7 @@ use std::path::PathBuf;
 pub fn run_claim(args: &[String]) -> i32 {
     let Some(op) = args.first().map(String::as_str) else {
         eprintln!(
-            "fno-agents: claim requires an operation: acquire|release|status|list|sweep|queue|session-pid|root|flight-acquire|flight-release|long-holds|release-stopped"
+            "fno-agents: claim requires an operation: acquire|release|status|list|sweep|queue|session-pid|root|export|flight-acquire|flight-release|long-holds|release-stopped"
         );
         return 2;
     };
@@ -57,6 +57,12 @@ pub fn run_claim(args: &[String]) -> i32 {
             }
         }
     }
+    if op == "export" {
+        return crate::store_export::run_store_export(&args[1..]);
+    }
+    if op == "backlog" {
+        return crate::backlog_share::run(&args[1..]);
+    }
     if op == "root" {
         return run_claim_root(&args[1..]);
     }
@@ -81,6 +87,12 @@ pub fn run_claim(args: &[String]) -> i32 {
         // keys, native pre-read for repo-local) route here.
         return crate::claim_cli::refresh::run(&args[1..]);
     }
+    if op == "status" {
+        // Wave 4 of the leaf port: the operator surface (payload, refusal,
+        // roster crosscheck and overlay, verdict line) lives in claim_cli;
+        // goldens are the contract.
+        return crate::claim_cli::status::run(&args[1..]);
+    }
     if op == "lane-acquire" {
         return crate::claim_lanes_cli::run_lane_acquire(&args[1..]);
     }
@@ -99,16 +111,20 @@ pub fn run_claim(args: &[String]) -> i32 {
         return crate::claim_queue::run_queue(&args[1..]);
     }
     if op == "session-pid" {
-        return run_claim_session_pid(&args[1..]);
+        // Wave 7 of the leaf port: the operator surface lives in claim_cli;
+        // goldens are the contract.
+        return crate::claim_cli::session_pid::run(&args[1..]);
     }
     if op == "list" {
-        return run_claim_list(&args[1..]);
+        // One dispatch line: argument parsing and the arm body live in
+        // claim_cli/list.rs, like every ported claim leaf.
+        return crate::claim_cli::list::run(&args[1..]);
     }
     if op == "release-stopped" {
         return run_release_stopped(&args[1..]);
     }
     if op == "reap" {
-        return run_claim_reap(&args[1..]);
+        return crate::claim_cli::reap::run(&args[1..]);
     }
     if op == "long-holds" {
         return crate::claims::run_claim_long_holds(&args[1..]);
@@ -317,74 +333,61 @@ fn run_claim_root(args: &[String]) -> i32 {
     0
 }
 
-/// `claim session-pid [--from-pid <pid>] [--json|-J]`: the one resolver of
-/// the durable pid arm. The Python side (`session_pid.py`, the init hook)
-/// reads THIS verb; `durable_session_pid` calls the same resolution
-/// in-process, so there is one producer and no subprocess behind the mutex.
-/// Contract matches the retired Python verb byte for byte: the pid on
-/// stdout, nothing at all when uncapturable, always exit 0 - so
-/// `$(fno agents claim session-pid)` stays the empty string. `--json`
-/// answers both halves in one read.
-fn run_claim_session_pid(args: &[String]) -> i32 {
-    let mut from_pid: Option<u32> = None;
-    let mut json = false;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--from-pid" => match it.next().and_then(|v| v.parse::<u32>().ok()) {
-                Some(pid) => from_pid = Some(pid),
-                None => return 2,
-            },
-            "--json" | "-J" => json = true,
-            other => {
-                eprintln!("fno-agents: claim session-pid: unknown flag {other}");
-                return 2;
-            }
-        }
+/// Free the build and run-slot claims a dead cargo left behind. A worker's
+/// cargo holds a compile slot (`build:cargo`, `build:cargo:1`,
+/// `build:cargo:2`) and a `test:cargo-run:<i>` slot under its own pid
+/// with no TTL, so a reaped worker whose cargo died leaves both held until a
+/// sweep reads the pid. The pid alone decides these keys and no session probe
+/// runs, so every worker reap can afford this pass. Returns the count freed.
+pub(crate) fn reap_dead_cargo_claims() -> u64 {
+    // The same test fence as `claims::build_waiters_dir`: a daemon test with
+    // no declared claims root must not resolve the machine's own.
+    let pinned = std::env::var_os("FNO_CLAIMS_ROOT").is_some_and(|v| !v.is_empty());
+    if cfg!(test) && !pinned && !crate::paths::test_root_declared() {
+        return 0;
     }
-    let start = from_pid.unwrap_or_else(|| unsafe { libc::getppid() } as u32);
-    let (pid, harness) = crate::spawn_context::session_identity_ambient(start);
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"session_pid": pid, "harness": harness})
-        );
-    } else if let Some(pid) = pid {
-        println!("{pid}");
-    }
-    // Uncapturable prints nothing: the caller degrades to TTL-only liveness.
-    0
+    let Ok(dir) = crate::claims_root::claims_dir("build:cargo", None) else {
+        return 0;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut keys: Vec<String> = crate::test_run::BUILD_SLOT_KEYS
+        .iter()
+        .map(|key| key.to_string())
+        .collect();
+    keys.extend(
+        crate::claim_store::records_in(&dir, Some("test:cargo-run:"), true)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|record| record.key),
+    );
+    keys.iter()
+        .filter_map(|key| {
+            crate::claim_store::reap_in_directory(
+                &dir,
+                true,
+                |_: &[crate::claims::ClaimRecord]| None,
+                |_: &[crate::claims::ClaimRecord]| None,
+                Some(key),
+                Some(deadline),
+            )
+            .ok()
+        })
+        .map(|result| result["reaped"].as_u64().unwrap_or(0))
+        .sum()
 }
 
-fn run_claim_reap(args: &[String]) -> i32 {
-    let mut dirs = Vec::new();
-    let mut apply = false;
-    let mut key = None;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--root" => match it.next() {
-                Some(v) => {
-                    dirs.extend(crate::claims::claims_dir_for(Some(std::path::Path::new(v))))
-                }
-                None => return 2,
-            },
-            "--claims-dir" => match it.next() {
-                Some(v) => dirs.push(PathBuf::from(v)),
-                None => return 2,
-            },
-            "--key" => match it.next() {
-                Some(v) => key = Some(v.as_str()),
-                None => return 2,
-            },
-            "--apply" => apply = true,
-            "--json" | "-J" => {}
-            other => {
-                eprintln!("fno-agents: claim reap: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
+/// The witness basis for a session the reap's deadline left unread.
+const REAP_DEADLINE_KEPT: &str = "reap-deadline-kept";
+
+/// Reap every claims root in `dirs` (the global and repo-local roots when it
+/// is empty) under one shared deadline. A root that cannot be read is named
+/// in `root_errors`, and the other roots still reap.
+pub(crate) fn reap_roots(
+    mut dirs: Vec<PathBuf>,
+    apply: bool,
+    key: Option<&str>,
+    budget: std::time::Duration,
+) -> Value {
     if dirs.is_empty() {
         if let Some(dir) = crate::claims::global_claims_dir() {
             dirs.push(dir);
@@ -395,17 +398,50 @@ fn run_claim_reap(args: &[String]) -> i32 {
     }
     dirs.sort();
     dirs.dedup();
-    let (witness, _) = default_session_witness();
-    let recheck = |record: &crate::claims::ClaimRecord| {
-        let (witness, _) = default_session_witness();
-        witness(record)
-    };
-    let mut summary = serde_json::json!({"apply":apply,"scanned":0,"would_reap":0,"reaped":0,"reap_failed":[],"roots":dirs});
+    // The roots share one deadline, so a clock-chosen first root keeps an
+    // expensive root from starving the one after it on every pass.
+    if !dirs.is_empty() {
+        let start = (crate::claims::now_ms().max(0) / 1000) as usize % dirs.len();
+        dirs.rotate_left(start);
+    }
+    let deadline = std::time::Instant::now() + budget;
+    let mut summary = serde_json::json!({"apply":apply,"scanned":0,"would_reap":0,"reaped":0,"deferred":0,"reap_failed":[],"root_errors":[],"roots":dirs});
     for dir in &dirs {
-        match crate::claim_store::reap_in_directory(dir, apply, Some(&witness), Some(&recheck), key)
-        {
+        // One batch answers a chunk's sessions, and a fresh batch over the
+        // chunk's candidates is the look before a delete: the compare-and-swap
+        // on the row cannot see a session that resumed during the scan. A lazy
+        // witness spawned one truth probe per session, which made a 400-row
+        // pass run for minutes. A session no batch answered before the
+        // deadline reads live, so its claim is kept and counted as deferred,
+        // never reaped.
+        let kept_by_deadline = std::rc::Rc::new(std::cell::Cell::new(0u64));
+        let scan = |records: &[crate::claims::ClaimRecord]| {
+            let records: Vec<&crate::claims::ClaimRecord> = records.iter().collect();
+            let (witness, _) = session_witness_primed_within(&records, Some(deadline));
+            let kept = kept_by_deadline.clone();
+            Some(Box::new(move |record: &crate::claims::ClaimRecord| {
+                let answer = witness(record);
+                if matches!(
+                    answer,
+                    crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT)
+                ) {
+                    kept.set(kept.get() + 1);
+                }
+                answer
+            }) as crate::claim_store::BoxedWitness<'static>)
+        };
+        let reaped =
+            crate::claim_store::reap_in_directory(dir, apply, scan, scan, key, Some(deadline)).map(
+                |mut result| {
+                    let deferred =
+                        result["deferred"].as_u64().unwrap_or(0) + kept_by_deadline.get();
+                    result["deferred"] = serde_json::json!(deferred);
+                    result
+                },
+            );
+        match reaped {
             Ok(result) => {
-                for field in ["scanned", "would_reap", "reaped"] {
+                for field in ["scanned", "would_reap", "reaped", "deferred"] {
                     summary[field] = serde_json::json!(
                         summary[field].as_u64().unwrap_or(0) + result[field].as_u64().unwrap_or(0)
                     );
@@ -417,70 +453,15 @@ fn run_claim_reap(args: &[String]) -> i32 {
                         .extend(errors.iter().cloned());
                 }
             }
-            Err(error) => {
-                eprintln!("fno-agents: claim reap {}: {error}", dir.display());
-                return 1;
-            }
+            Err(error) => summary["root_errors"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!(format!("{}: {error}", dir.display()))),
         }
     }
-    println!("{summary}");
-    0
+    summary
 }
 
-/// `fno-agents claim list [--prefix <prefix>] [--include-stale] [--root <dir>]`
-/// — return the same status-shaped lockfile rows as the Python list verb.
-fn run_claim_list(args: &[String]) -> i32 {
-    let mut prefix: Option<String> = None;
-    let mut root: Option<PathBuf> = None;
-    let mut include_stale = false;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--prefix" => match it.next() {
-                Some(value) => prefix = Some(value.clone()),
-                None => {
-                    eprintln!("fno-agents: claim list: --prefix requires a value");
-                    return 2;
-                }
-            },
-            "--root" => match it.next() {
-                Some(value) => root = Some(PathBuf::from(value)),
-                None => {
-                    eprintln!("fno-agents: claim list: --root requires a value");
-                    return 2;
-                }
-            },
-            "--include-stale" => include_stale = true,
-            "--json" | "-J" => {}
-            other => {
-                eprintln!("fno-agents: claim list: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
-    // An explicit --root names the one store to read; only the bare form
-    // also folds in the global root.
-    let listed = match root.as_deref() {
-        Some(root) => crate::claims::list_in(
-            &[root.join(crate::claims::CLAIMS_DIRNAME)],
-            prefix.as_deref(),
-            include_stale,
-        ),
-        None => crate::claims::list(prefix.as_deref(), None, include_stale),
-    };
-    let rows = match listed {
-        Ok(rows) => rows,
-        Err(error) => {
-            eprintln!("fno-agents: claim list: {error}");
-            return 1;
-        }
-    };
-    let payload: Vec<Value> = rows.iter().map(claim_status_value).collect();
-    println!("{}", Value::Array(payload));
-    0
-}
-
-#[allow(dead_code)]
 pub(crate) fn claim_status_value(rec: &crate::claims::ClaimRecord) -> Value {
     let (witness, witness_answer) = default_session_witness();
     let witness: crate::claims::SessionWitness = &witness;
@@ -794,6 +775,7 @@ pub(crate) fn default_session_witness() -> (
     memoized_session_witness(
         std::cell::RefCell::new(None),
         std::cell::RefCell::new(std::collections::HashMap::new()),
+        None,
     )
 }
 
@@ -807,6 +789,7 @@ pub(crate) fn default_session_witness() -> (
 fn memoized_session_witness(
     index: std::cell::RefCell<Option<SessionRegistryIndex>>,
     memo: std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
+    lazy_until: Option<std::time::Instant>,
 ) -> (
     impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
     std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
@@ -815,7 +798,7 @@ fn memoized_session_witness(
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let cell = last_answer.clone();
     let witness = move |rec: &crate::claims::ClaimRecord| -> crate::claims::SessionLiveness {
-        let answer = session_liveness_answer(rec, &index, &memo);
+        let answer = session_liveness_answer(rec, &index, &memo, lazy_until);
         *last_answer.borrow_mut() = Some(match &answer {
             crate::claims::SessionLiveness::Live(basis) => *basis,
             crate::claims::SessionLiveness::Absent => crate::claims::basis::SESSION_ABSENT,
@@ -851,6 +834,20 @@ pub(crate) fn session_witness_primed_for<'a>(
     std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
 ) {
     let records: Vec<&crate::claims::ClaimRecord> = records.into_iter().collect();
+    session_witness_primed_within(&records, None)
+}
+
+/// [`session_witness_primed_for`] with the batch bounded by `deadline`. A
+/// page the deadline cuts off seeds nothing, so its sessions fall to the lazy
+/// path exactly as a timed-out batch does.
+pub(crate) fn session_witness_primed_within(
+    records: &[&crate::claims::ClaimRecord],
+    deadline: Option<std::time::Instant>,
+) -> (
+    impl Fn(&crate::claims::ClaimRecord) -> crate::claims::SessionLiveness,
+    std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+) {
+    let records = records.to_vec();
     if records.is_empty() {
         // Nothing to classify: the lazy witness costs nothing, and skipping
         // the registry read keeps an empty claims dir at its measured 0s.
@@ -859,6 +856,7 @@ pub(crate) fn session_witness_primed_for<'a>(
         return memoized_session_witness(
             std::cell::RefCell::new(None),
             std::cell::RefCell::new(std::collections::HashMap::new()),
+            deadline,
         );
     }
     let index: std::cell::RefCell<Option<SessionRegistryIndex>> = std::cell::RefCell::new(None);
@@ -886,7 +884,7 @@ pub(crate) fn session_witness_primed_for<'a>(
             .collect()
     };
     let memo = std::cell::RefCell::new(std::collections::HashMap::new());
-    let (map, _) = crate::truth_probe::family1_truth_probe_many_measured(&wire);
+    let (map, _) = crate::truth_probe::family1_truth_probe_many_measured_within(&wire, deadline);
     {
         let registry_known = index.borrow().as_ref().is_some_and(|r| r.known);
         for (session, probe) in &map {
@@ -898,7 +896,7 @@ pub(crate) fn session_witness_primed_for<'a>(
             memo.borrow_mut().insert(session.clone(), answer);
         }
     }
-    memoized_session_witness(index, memo)
+    memoized_session_witness(index, memo, deadline)
 }
 
 /// The worker name a dispatcher-minted holder names, or `None` when the
@@ -994,6 +992,7 @@ fn session_liveness_answer(
     rec: &crate::claims::ClaimRecord,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
     memo: &std::cell::RefCell<std::collections::HashMap<String, crate::claims::SessionLiveness>>,
+    lazy_until: Option<std::time::Instant>,
 ) -> crate::claims::SessionLiveness {
     let Some(session) = resolve_subject_session(rec, index) else {
         return crate::claims::SessionLiveness::Unresolved;
@@ -1001,7 +1000,7 @@ fn session_liveness_answer(
     if let Some(answer) = memo.borrow().get(&session) {
         return answer.clone();
     }
-    let answer = session_liveness_answer_uncached(&session, index);
+    let answer = session_liveness_answer_uncached(&session, index, lazy_until);
     memo.borrow_mut().insert(session, answer.clone());
     answer
 }
@@ -1174,6 +1173,7 @@ fn row_verdict_live(registry: &SessionRegistryIndex, session: &str) -> bool {
 fn session_liveness_answer_uncached(
     session: &str,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    lazy_until: Option<std::time::Instant>,
 ) -> crate::claims::SessionLiveness {
     load_session_registry_index(index);
     let (registry_known, registry_live) = {
@@ -1198,6 +1198,11 @@ fn session_liveness_answer_uncached(
         if row_verdict_live(registry, session) {
             return crate::claims::SessionLiveness::Live(ROW_VERDICT_LIVE);
         }
+    }
+    // Past a caller's deadline no transcript probe runs: the session reads
+    // live, so the claim is kept, never reaped on evidence nobody read.
+    if lazy_until.is_some_and(|d| std::time::Instant::now() >= d) {
+        return crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT);
     }
     // The row is missing or its pid is stale (a resume leaves rows behind) -
     // the transcript still answers. Reachability is the liveness reading;
@@ -1787,188 +1792,20 @@ mod tests {
         );
     }
 
-    // ---- the primed witness's batch wire ----------------------------------
-
-    /// A PATH shim named `fno` that logs its argv and answers `--handles`
-    /// with one reachable payload per handle. Unique handle names per process
-    /// keep this test's batch off every other flight record keyed on the
-    /// same handles.
-    fn write_truth_shim(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
-        let shim_dir = dir.join("bin");
-        std::fs::create_dir_all(&shim_dir).unwrap();
-        crate::write_exec_stub(&shim_dir, "fno", &format!("#!/bin/sh\n{}", body));
-        shim_dir
-    }
-
-    fn batch_shim_body() -> String {
-        [
-            "printf '%s\\n' \"$*\" >> \"$X_A45C_SHIM_LOG\"",
-            "handles=''",
-            "prev=''",
-            "for a in \"$@\"; do",
-            "  if [ \"$prev\" = '--handles' ]; then handles=\"$a\"; fi",
-            "  prev=\"$a\"",
-            "done",
-            "first=1",
-            "printf '{'",
-            "for h in $(printf '%s' \"$handles\" | tr ',' ' '); do",
-            "  if [ \"$first\" = '1' ]; then first=0; else printf ','; fi",
-            "  printf '\"%s\":{\"state\":\"working\",\"reachability\":\"reachable\",\"basis\":\"transcript\"}' \"$h\"",
-            "done",
-            "printf '}'",
-        ]
-        .join("\n")
-    }
+    // ---- the primed witness ------------------------------------------------
 
     #[test]
-    fn primed_witness_batches_every_subject_into_one_interpreter() {
-        // The positive marker is the shim log, not an absence: exactly one
-        // line that names --handles AND carries every distinct subject. The
-        // one-line count alone would also pass for a run that spawned
-        // nothing, so the handle list is the load-bearing assertion.
-        // PATH and FNO_AGENTS_HOME are both process-global, so every mutation
-        // below rides with_registry's env lock; no outer guard, that lock is
-        // not reentrant.
-        let td = tempfile::TempDir::new().unwrap();
-        let shim_dir = write_truth_shim(td.path(), &batch_shim_body());
-        let log_path = td.path().join("shim.log");
-        let uniq = std::process::id();
-        let s_live = format!("xa45c-live-{uniq}");
-        let s_wire1 = format!("xa45c-wire-{uniq}");
-        let s_worker = format!("xa45c-worker-{uniq}");
-        let s_leg = format!("xa45c-leg-{uniq}");
-        with_registry(
-            serde_json::json!([
-                {
-                    "name": "w-live",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-12T00:00:00Z",
-                    "harness_session_id": s_live,
-                    "pid": std::process::id(),
-                    "pid_start_time": own_pid_start(),
-                },
-                {
-                    "name": "w-thread",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-12T00:00:00Z",
-                    "harness_session_id": s_worker,
-                },
-                {
-                    // The incident shape: a pidless thread row whose fresh
-                    // inside-leg report is the only live evidence. The
-                    // row_verdict rung answers it without the transcript.
-                    "name": "w-leg",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-12T00:00:00Z",
-                    "harness_session_id": s_leg,
-                    "inside_leg": {
-                        "state": "working",
-                        "seq": 1,
-                        "received_at": crate::daemon::now_rfc3339_like(),
-                        "ttl_ms": 90_000u64,
-                    },
-                },
-            ]),
-            || {
-                let old_path = std::env::var("PATH").unwrap_or_default();
-                std::env::set_var("X_A45C_SHIM_LOG", &log_path);
-                let prev_bin = std::env::var_os("FNO_BIN");
-                std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), old_path));
-                // The probe execs through scrape::fno_bin, which under
-                // cfg!(test) answers only a declared FNO_BIN: pin the same
-                // shim PATH pins.
-                std::env::set_var("FNO_BIN", shim_dir.join("fno"));
-                let records = vec![
-                    witness_rec("holder-a", &s_live),
-                    witness_rec("holder-b", &s_wire1),
-                    witness_rec("spawn-handover:w-thread", "s-elsewhere"),
-                    witness_rec("holder-leg", &s_leg),
-                ];
-                let (witness, _drain) = session_witness_primed_for(&records);
-                // The verdicts agree with the lazy path: registry-live off
-                // the wire, batch-answered sessions transcript-live.
-                assert!(matches!(
-                    witness(&records[0]),
-                    crate::claims::SessionLiveness::Live(
-                        crate::claims::basis::REGISTRY_SESSION_LIVE
-                    )
-                ));
-                // The row-verdict rung: a fresh inside-leg report on a
-                // pidless row answers Live without the transcript wire
-                // (the reap is held instead of starving).
-                assert!(matches!(
-                    witness(&records[3]),
-                    crate::claims::SessionLiveness::Live(ROW_VERDICT_LIVE)
-                ));
-                // The two WIRE sessions only: the fourth record is the
-                // row-verdict-live session, asserted above.
-                for rec in records.iter().skip(1).take(2) {
-                    assert!(matches!(
-                        witness(rec),
-                        crate::claims::SessionLiveness::Live(crate::claims::basis::TRANSCRIPT_LIVE)
-                    ));
-                }
-                let logged = std::fs::read_to_string(&log_path).unwrap();
-                match prev_bin {
-                    Some(v) => std::env::set_var("FNO_BIN", v),
-                    None => std::env::remove_var("FNO_BIN"),
-                }
-                std::env::set_var("PATH", old_path);
-                std::env::remove_var("X_A45C_SHIM_LOG");
-                // Other tests in this binary share the process PATH and can
-                // land their own probes in this log; the uniq prefix isolates
-                // THIS witness's wire from theirs.
-                let mine: Vec<&str> = logged
-                    .lines()
-                    .filter(|l| l.contains("--handles") && l.contains("xa45c-"))
-                    .collect();
-                assert_eq!(mine.len(), 1, "one batch, one interpreter: {logged:?}");
-                assert!(
-                    mine[0].contains(s_wire1.as_str()) && mine[0].contains(s_worker.as_str()),
-                    "every distinct subject on the wire: {logged:?}"
-                );
-                assert!(
-                    !logged.contains(s_live.as_str()),
-                    "the registry-live session stays off the wire: {logged:?}"
-                );
-                assert!(
-                    !logged.contains(s_leg.as_str()),
-                    "the row-verdict-live session stays off the wire: {logged:?}"
-                );
-            },
-        );
-    }
-
-    #[test]
-    fn primed_witness_answers_through_a_failed_batch_without_hanging() {
-        // A shim that refuses every call: the batch crashes twice, the
-        // per-handle fallback crashes twice more, and the witness answers
-        // Unresolved on the plain record - the same answer the lazy path
-        // gives a dead probe, never a hang and never a seeded verdict from a
-        // run that measured nothing.
-        let td = tempfile::TempDir::new().unwrap();
-        let shim_dir = write_truth_shim(td.path(), "exit 1");
+    fn primed_witness_answers_unresolved_when_truth_finds_no_transcript() {
+        // A session no store holds: the batch answers nothing for it, and the
+        // witness answers Unresolved on the plain record - the same answer
+        // the lazy path gives, never a seeded verdict from a read that
+        // measured nothing.
         let uniq = std::process::id();
         let s_wire = format!("xa45c-dead-{uniq}");
         with_registry(serde_json::json!([]), || {
-            let old_path = std::env::var("PATH").unwrap_or_default();
-            let prev_bin = std::env::var_os("FNO_BIN");
-            std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), old_path));
-            // The probe execs through scrape::fno_bin, which under
-            // cfg!(test) answers only a declared FNO_BIN: pin the same
-            // shim PATH pins.
-            std::env::set_var("FNO_BIN", shim_dir.join("fno"));
             let rec = witness_rec("holder-x", &s_wire);
             let (witness, _drain) = session_witness_primed_for(std::iter::once(&rec));
             let answer = witness(&rec);
-            match prev_bin {
-                Some(v) => std::env::set_var("FNO_BIN", v),
-                None => std::env::remove_var("FNO_BIN"),
-            }
-            std::env::set_var("PATH", old_path);
             assert!(matches!(answer, crate::claims::SessionLiveness::Unresolved));
         });
     }
@@ -2013,85 +1850,10 @@ mod tests {
     }
 
     #[test]
-    fn primed_wire_excludes_served_alive_and_keeps_a_stale_word_on_it() {
-        // AC1-HP + AC1-ERR: a fresh served word keeps the session off the
-        // probe wire; past the 120s window the word is withheld and the
-        // session rides the wire exactly as before this tier existed.
-        let td = tempfile::TempDir::new().unwrap();
-        let shim_dir = write_truth_shim(td.path(), &batch_shim_body());
-        let log_path = td.path().join("shim.log");
-        let uniq = std::process::id();
-        let s_fresh = format!("xa80a-fresh-{uniq}");
-        let s_stale = format!("xa80a-stale-{uniq}");
-        with_registry(
-            serde_json::json!([
-                {
-                    "name": "w-fresh",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-15T00:00:00Z",
-                    "harness_session_id": s_fresh,
-                    "liveness": "alive",
-                    "liveness_measured_at": z_stamp(10),
-                },
-                {
-                    "name": "w-stale",
-                    "status": "live",
-                    "cwd": "/w",
-                    "created_at": "2026-09-15T00:00:00Z",
-                    "harness_session_id": s_stale,
-                    "liveness": "alive",
-                    "liveness_measured_at": z_stamp(600),
-                },
-            ]),
-            || {
-                let old_path = std::env::var("PATH").unwrap_or_default();
-                std::env::set_var("X_A45C_SHIM_LOG", &log_path);
-                let prev_bin = std::env::var_os("FNO_BIN");
-                std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), old_path));
-                // The probe execs through scrape::fno_bin, which under
-                // cfg!(test) answers only a declared FNO_BIN: pin the same
-                // shim PATH pins.
-                std::env::set_var("FNO_BIN", shim_dir.join("fno"));
-                let records = vec![
-                    witness_rec("holder-fresh", &s_fresh),
-                    witness_rec("holder-stale", &s_stale),
-                ];
-                let (witness, _drain) = session_witness_primed_for(&records);
-                // Touch the witness so the primed answers are actually read.
-                let _ = witness(&records[0]);
-                let _ = witness(&records[1]);
-                match prev_bin {
-                    Some(v) => std::env::set_var("FNO_BIN", v),
-                    None => std::env::remove_var("FNO_BIN"),
-                }
-                std::env::set_var("PATH", old_path);
-                std::env::remove_var("X_A45C_SHIM_LOG");
-                let logged = std::fs::read_to_string(&log_path).unwrap();
-                let mine: Vec<&str> = logged
-                    .lines()
-                    .filter(|l| l.contains("--handles") && l.contains("xa80a-"))
-                    .collect();
-                assert_eq!(mine.len(), 1, "one batch, one interpreter: {logged:?}");
-                assert!(
-                    mine[0].contains(s_stale.as_str()),
-                    "a stale word never blocks the wire: {logged:?}"
-                );
-                assert!(
-                    !logged.contains(s_fresh.as_str()),
-                    "the fresh served word stays off the wire: {logged:?}"
-                );
-            },
-        );
-    }
-
-    #[test]
     fn served_dead_word_never_reads_absent() {
         // AC1-EDGE: a served `dead` only lowers the witness to the transcript
         // leg - the cached word can predate a resume, and Absent reaps a
         // same-machine claim. No transcript answer is Unresolved, not Absent.
-        let td = tempfile::TempDir::new().unwrap();
-        let shim_dir = write_truth_shim(td.path(), "exit 1");
         with_registry(
             serde_json::json!([{
                 "name": "w-dead",
@@ -2103,21 +1865,9 @@ mod tests {
                 "liveness_measured_at": z_stamp(10),
             }]),
             || {
-                let old_path = std::env::var("PATH").unwrap_or_default();
-                let prev_bin = std::env::var_os("FNO_BIN");
-                std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), old_path));
-                // The probe execs through scrape::fno_bin, which under
-                // cfg!(test) answers only a declared FNO_BIN: pin the same
-                // shim PATH pins.
-                std::env::set_var("FNO_BIN", shim_dir.join("fno"));
                 let (witness, _drain) = default_session_witness();
                 let rec = witness_rec("spawn-handover:w-dead", "s-lead-elsewhere");
                 let answer = witness(&rec);
-                match prev_bin {
-                    Some(v) => std::env::set_var("FNO_BIN", v),
-                    None => std::env::remove_var("FNO_BIN"),
-                }
-                std::env::set_var("PATH", old_path);
                 assert!(matches!(answer, crate::claims::SessionLiveness::Unresolved));
             },
         );
@@ -2138,15 +1888,6 @@ mod tests {
                 "harness_session_id": "s-worker",
             }]),
             || {
-                let td = tempfile::TempDir::new().unwrap();
-                let shim_dir = write_truth_shim(td.path(), "exit 1");
-                let old_path = std::env::var("PATH").unwrap_or_default();
-                let prev_bin = std::env::var_os("FNO_BIN");
-                std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), old_path));
-                // The probe execs through scrape::fno_bin, which under
-                // cfg!(test) answers only a declared FNO_BIN: pin the same
-                // shim PATH pins.
-                std::env::set_var("FNO_BIN", shim_dir.join("fno"));
                 let cell = std::cell::RefCell::new(None);
                 let index_cell = std::cell::RefCell::new(None);
                 let rec = witness_rec("spawn-handover:w-worker", "s-lead");
@@ -2163,11 +1904,6 @@ mod tests {
                 let row = &sweep["claims"][0];
                 assert_eq!(row["session_id"], "s-worker");
                 assert_eq!(row["metadata"]["dispatched_by_session"], "s-lead");
-                match prev_bin {
-                    Some(v) => std::env::set_var("FNO_BIN", v),
-                    None => std::env::remove_var("FNO_BIN"),
-                }
-                std::env::set_var("PATH", old_path);
             },
         );
     }
@@ -2334,5 +2070,29 @@ mod tests {
         let (holder_session, dispatched_by) = holder_session_fields(&plain, &index);
         assert_eq!(holder_session.as_deref(), Some("s1"));
         assert_eq!(dispatched_by, None);
+    }
+
+    /// Past the reap's deadline an unread session reads live, so its claim is
+    /// kept: the transcript probe never runs, and nothing is reaped on
+    /// evidence nobody read.
+    #[test]
+    fn a_session_past_the_reap_deadline_reads_live_without_a_probe() {
+        let index = std::cell::RefCell::new(Some(SessionRegistryIndex {
+            known: true,
+            by_session: std::collections::HashMap::new(),
+            by_name: std::collections::HashMap::new(),
+            by_fno_id: std::collections::HashMap::new(),
+            served: std::collections::HashMap::new(),
+            rows: std::collections::HashMap::new(),
+        }));
+        let answer =
+            session_liveness_answer_uncached("s-gone", &index, Some(std::time::Instant::now()));
+        assert!(
+            matches!(
+                answer,
+                crate::claims::SessionLiveness::Live(REAP_DEADLINE_KEPT)
+            ),
+            "{answer:?}"
+        );
     }
 }

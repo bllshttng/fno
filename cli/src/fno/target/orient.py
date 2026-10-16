@@ -18,6 +18,7 @@ This is the introspection family (``fno whoami`` / ``fno whoami status``), reusi
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,10 +35,27 @@ class OrientLine:
 # --- git helpers (self-contained so orient never imports target_cli; that
 #     module imports orient for the `status` command + init print) -----------
 
-# The one git-out helper lives in review_capability (moved there with the
-# diff-sizing path); importing it keeps this module's callers (and the tests
-# that patch `orient._git_out`) on the same name while deleting the copy.
-from fno.review_capability import _git_out  # noqa: E402  (re-export seam)
+# The one git-out helper lives HERE again: the review-capability module kept
+# it only as a re-export seam for these callers, and that module is gone -
+# the door lives in fno-agents `review-level capability` (ported 2026-10).
+# Self-contained like the rest of this block: orient never imports target_cli.
+
+
+def _git_out(cwd: Path, *args: str) -> Optional[str]:
+    """Full stdout of a git call (stripped, may be multi-line), or None.
+
+    Never raises: each status line resolves independently and a degraded
+    ``git`` prints ``unknown``, never a stack trace.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return proc.stdout.strip()
 
 
 def _is_linked_worktree(cwd: Path) -> bool:
@@ -363,7 +381,6 @@ def _required_bots(review: Any) -> List[str]:
     names the producer, and names the condition, instead of asserting a
     clearability it has no evidence for.
     """
-    from fno.review.provider_resolution import DISPATCHABLE_PROVIDERS
 
     apps: List[str] = list(review.github_apps) if review.github_apps else []
     # Aggregate providers PER LOGIN before rendering. First-seen-wins dropped
@@ -402,7 +419,7 @@ def _required_bots(review: Any) -> List[str]:
         # Same drivability rule as the identity-free producer: a name
         # `/review peer` cannot drive is not a producer, and printing one as
         # `--post` is the wedge with the other carrier's label on it.
-        drivable = [p for p in providers if p.lower() in DISPATCHABLE_PROVIDERS]
+        drivable = [p for p in providers if p.lower() in _dispatchable_providers()]
         if not drivable:
             named = ", ".join(providers) if providers else "<provider>"
             return f"no /fno:review peer runner for [{named}]"
@@ -460,8 +477,8 @@ def _optional_bots(review: Any) -> List[str]:
 # fallback, so it is filtered out of the printed set rather than offered: the
 # config is legal and arms the composite gate, but pasting the name reviews on
 # codex instead, and on a codex-authored session that fallback is then refused
-# as same-model and the gate never clears. Drivability is STATIC (the review
-# runners in `provider_resolution`), so unlike model-family ELIGIBILITY it costs
+# as same-model and the gate never clears. Drivability is STATIC (the kinds
+# the review-policy door advertises), so unlike model-family ELIGIBILITY it costs
 # no author harness -- that second gap is the one the docstring below records
 # for the identity-backed carrier, and it stays open here.
 _EMIT_ATTESTATION = "bash skills/review/scripts/emit-attestation.sh"
@@ -491,7 +508,6 @@ def _local_review_gates(review: Any) -> List[str]:
     stops the line asserting something it cannot check.
     """
     from fno.config import resolvable_reviewers
-    from fno.review.provider_resolution import DISPATCHABLE_PROVIDERS
 
     known = resolvable_reviewers(review.reviewer_registry)
     # Built-ins carry their own emit (the lane's emit step runs on a clean
@@ -536,7 +552,7 @@ def _local_review_gates(review: Any) -> List[str]:
     ]
     if named:
         unique = list(dict.fromkeys(named))
-        runnable = [p for p in unique if p.lower() in DISPATCHABLE_PROVIDERS]
+        runnable = [p for p in unique if p.lower() in _dispatchable_providers()]
         # `cross-model only` for the same reason the identity-backed carrier
         # carries it: `/review peer` refuses a provider matching the invoking
         # harness, and WHICH provider that is needs the author harness this file
@@ -574,17 +590,16 @@ def _self_review_clause(project_root: Optional[Path] = None) -> str:
     available. A refusal stays visible; it never routes a review command through
     the mail bus. Never raises."""
     try:
-        from fno.review_capability import (
-            detect_session,
-            diff_review_level,
-            self_review_invocation,
-        )
+        from fno.rust_binary import verb_call
 
-        s = detect_session()
-        verb = self_review_invocation(s.harness, level=diff_review_level(project_root))
+        argv = ["review-level", "capability", "invocation"]
+        if project_root is not None:
+            argv += ["--root", str(project_root)]
+        answer = verb_call(argv, {})
+        verb = answer["invocation"]
+        harness = answer["harness"]
     except Exception:  # noqa: BLE001 - advisory; the stop gate is the backstop
         return ""
-    harness = s.harness or "unknown"
     clause = (
         f"self-review required for code ({harness}): run `{verb}` (the lane "
         "emits its own attestation; `bash skills/review/scripts/"
@@ -856,6 +871,26 @@ def _self_check() -> None:
         out = render(lines)
         assert "node:" in out and "done-when:" in out, out
     print("orient self-check OK")
+
+
+#: The cached kinds-door read; None until the first process read lands.
+_DOOR_DISPATCHABLE: set[str] | None = None
+
+
+def _dispatchable_providers() -> set[str]:
+    """The dispatchable reviewer kinds, read once per process from the
+    native review-policy kinds door. A door error yields an empty set, so
+    the line advertises no provider it cannot prove drivable."""
+    global _DOOR_DISPATCHABLE
+    if _DOOR_DISPATCHABLE is None:
+        from fno.rust_binary import call_binary_json
+
+        _err, row = call_binary_json("review-policy", ["kinds"])
+        row = row if isinstance(row, dict) else {}
+        _DOOR_DISPATCHABLE = {
+            str(k).strip().lower() for k in (row.get("dispatchable") or [])
+        }
+    return _DOOR_DISPATCHABLE
 
 
 if __name__ == "__main__":

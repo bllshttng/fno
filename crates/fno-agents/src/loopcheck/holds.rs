@@ -3,13 +3,28 @@
 //! record.
 //!
 //! A node HELD on an open question must stop once, name the question, and
-//! never re-ask on a later fire: the first fire emits a `loop_check` block
-//! row with `gate: held_on_question`, and the second fire (the same question
-//! still open) terminates `HeldOnQuestion` with a digest naming the decide
-//! verb. The held state is the journal itself, never the fingerprint.
+//! never re-ask on a later fire: the first fire emits a
+//! `loop_check_question_gate` row with `gate: held_on_question`, and the
+//! second fire (the same question still open) terminates `HeldOnQuestion`
+//! with a digest naming the user-side clear. Only the user closes the
+//! question, so neither text names the decide verb. The held state is the
+//! journal itself, never the fingerprint.
 
 use serde_json::Value;
 use std::path::PathBuf;
+
+/// The event types the stop gate's question family reads. `event_lines_of`
+/// narrows the journal to this list, so a family type missing here is
+/// silently skipped: the folds never see its rows and the gate cannot fire
+/// on them. One list serves both folds; each `match` handles only the kinds
+/// it folds and skips the rest. The guard test below fails when the schema
+/// gains a question, decision or hold type this list lacks.
+pub(crate) const QUESTION_FAMILY_TYPES: &[&str] = &[
+    "operator_question",
+    "operator_question_closed",
+    "operator_decision",
+    "loop_check_question_gate",
+];
 
 /// A question THIS session asked, that was closed WITH an answer, and for
 /// which no `operator_decision` event exists on any reachable journal. The
@@ -43,7 +58,9 @@ pub(crate) fn scan_unrecorded_decisions(
         std::collections::HashSet::new();
     let mut recorded: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in journals {
-        let Ok(content) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(content) =
+            crate::loopcheck::event_lines_of(path, QUESTION_FAMILY_TYPES).map(|l| l.join("\n"))
+        else {
             continue;
         }; // committed rows, commit order
         for line in content.lines() {
@@ -120,17 +137,23 @@ pub(crate) struct OpenHold {
 
 /// The open questions that hold this run: a question holds when it names
 /// this node in `blocks`, or when this session asked it with a non-empty
-/// `blocks`. Everything else a question row may carry is out of scope here.
+/// `blocks`. A blocked node that `node_done` reads as finished no longer
+/// holds anything: the question is mooted, so it is skipped rather than
+/// left to wedge the asking session. Everything else a question row may
+/// carry is out of scope here.
 pub(crate) fn scan_open_holds(
     journals: &[PathBuf],
     session_id: &str,
     node_id: &str,
+    node_done: &dyn Fn(&str) -> bool,
 ) -> Vec<OpenHold> {
     let mut asked: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut blocked_once: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in journals {
-        let Ok(content) = crate::loopcheck::event_lines(path).map(|l| l.join("\n")) else {
+        let Ok(content) =
+            crate::loopcheck::event_lines_of(path, QUESTION_FAMILY_TYPES).map(|l| l.join("\n"))
+        else {
             continue;
         }; // committed rows, commit order
         for line in content.lines() {
@@ -158,7 +181,7 @@ pub(crate) fn scan_open_holds(
                 }
                 // The first fire's own block row: gate held_on_question,
                 // session-scoped, naming the questions it blocked on.
-                "loop_check" => {
+                "loop_check_question_gate" => {
                     if data.get("gate").and_then(|v| v.as_str()) == Some("held_on_question")
                         && data.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
                     {
@@ -175,6 +198,15 @@ pub(crate) fn scan_open_holds(
             }
         }
     }
+    // One graph read per distinct node per scan, however many questions name it.
+    let done_cache: std::cell::RefCell<std::collections::HashMap<String, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    let node_done = |id: &str| {
+        *done_cache
+            .borrow_mut()
+            .entry(id.to_string())
+            .or_insert_with(|| node_done(id))
+    };
     let mut holds: Vec<OpenHold> = asked
         .into_iter()
         .filter(|(qid, data)| {
@@ -193,7 +225,8 @@ pub(crate) fn scan_open_holds(
                 .unwrap_or_default();
             let asked_by_session =
                 data.get("session_id").and_then(|v| v.as_str()) == Some(session_id);
-            node_in(node_id, &blocks) || (asked_by_session && !blocks.is_empty())
+            (node_in(node_id, &blocks) && !node_done(node_id))
+                || (asked_by_session && blocks.iter().any(|b| !node_done(b)))
         })
         .map(|(qid, data)| {
             let question = data
@@ -228,6 +261,19 @@ pub(crate) fn scan_open_holds(
     holds
 }
 
+/// A node whose graph row reads done or superseded, in the store the owner
+/// cwd resolves (a configured `state_dir` included). An unreadable store, a
+/// missing row or any other status is NOT done, so a failed read leaves the
+/// hold standing instead of silently releasing a session.
+pub(crate) fn node_is_done(cwd: &std::path::Path, id: &str) -> bool {
+    use crate::backlog::model::Status;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    matches!(
+        crate::backlog::api::node(&store, id),
+        Ok(Some(n)) if matches!(n.status, Status::Done | Status::Superseded)
+    )
+}
+
 fn node_in(node_id: &str, blocks: &[String]) -> bool {
     blocks.iter().any(|b| b == node_id)
 }
@@ -250,14 +296,16 @@ pub(crate) enum QuestionGateStop {
 /// question blocks once and terminates on the second fire (step 3c). The
 /// journals fold as a UNION (operator verbs write to the canonical root's
 /// journal; a worktree stop gate reads its own cwd's), and the gate's own
-/// loop_check/termination rows land through `emit`, so the held state the
-/// second fire reads is the journal itself, never the fingerprint.
+/// loop_check_question_gate/termination rows land through `emit`, so the
+/// held state the second fire reads is the journal itself, never the
+/// fingerprint.
 pub(crate) fn question_gates(
     project_events: &std::path::Path,
     global_events: &std::path::Path,
     cwd: &std::path::Path,
     session_id: &str,
     node_id: &str,
+    node_done: &dyn Fn(&str) -> bool,
     emit: &dyn Fn(&str, serde_json::Value),
 ) -> QuestionGateStop {
     let mut journals = vec![project_events.to_path_buf(), global_events.to_path_buf()];
@@ -279,10 +327,9 @@ pub(crate) fn question_gates(
             .collect::<Vec<_>>()
             .join(", ");
         emit(
-            "loop_check",
+            "loop_check_question_gate",
             serde_json::json!({
                 "session_id": session_id,
-                "decision": "block",
                 "gate": "unrecorded_decision",
                 "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
             }),
@@ -298,9 +345,9 @@ pub(crate) fn question_gates(
         };
     }
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
-    // id and the two remedies; the second fire on the same still-open question
-    // terminates, so a held node stops once and is never re-asked.
-    let held = scan_open_holds(&journals, session_id, node_id);
+    // id and the user-side remedies; the second fire on the same still-open
+    // question terminates, so a held node stops once and is never re-asked.
+    let held = scan_open_holds(&journals, session_id, node_id, node_done);
     if !held.is_empty() {
         let qids = held
             .iter()
@@ -310,20 +357,24 @@ pub(crate) fn question_gates(
         let h = &held[0];
         if first_fire {
             emit(
-                "loop_check",
+                "loop_check_question_gate",
                 serde_json::json!({
                     "session_id": session_id,
-                    "decision": "block",
                     "gate": "held_on_question",
                     "held": qids,
                 }),
             );
             return QuestionGateStop::Block {
                 reason: format!(
-                    "held on open question {}: '{}'; answer it with \
-                     `fno backlog decide <node> \"<ruling>\" --question-id {}` \
-                     or close the question to move on",
-                    h.question_id, h.question, h.question_id
+                    "held on open question {qid}: '{}'. Only the user closes it: on the \
+                     question board, or at their own terminal with \
+                     `fno inbox outstanding clear {qid} --answer \"<answer>\"`. This \
+                     session cannot answer it, and a decide record does not close it. If \
+                     this session asked it and no longer needs it, withdraw it with \
+                     `fno inbox outstanding clear {qid}`. Otherwise end the turn. The next \
+                     stop on this question ends the loop.",
+                    h.question,
+                    qid = h.question_id
                 ),
             };
         }
@@ -333,9 +384,12 @@ pub(crate) fn question_gates(
             format!(" options: {};", h.options.join(" | "))
         };
         let digest = format!(
-            "still held on open question {}: '{}'{}. answer it with \
-             `fno backlog decide <node> \"<ruling>\" --question-id {}`",
-            h.question_id, h.question, options_line, h.question_id
+            "still held on open question {qid}: '{}'.{} The loop ends here. The user \
+             answers on the question board, or with \
+             `fno inbox outstanding clear {qid} --answer \"<answer>\"`.",
+            h.question,
+            options_line,
+            qid = h.question_id
         );
         emit(
             "termination",
@@ -375,49 +429,92 @@ mod tests {
         )
     }
 
-    fn brow(qid: &str, session: &str) -> String {
-        format!(
-            r#"{{"ts":"2026-09-17T11:30:00Z","type":"loop_check","source":"target","data":{{"session_id":"{session}","decision":"block","gate":"held_on_question","held":["{qid}"]}}}}"#
-        )
+    #[test]
+    fn open_question_blocks_once_then_terminates_through_the_real_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project-events.jsonl");
+        let global = dir.path().join("global-events.jsonl");
+        // Outside any git repo, so canonical_repo_root adds no real journal.
+        let cwd = dir.path().join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        crate::event_store::append_envelope(&project, &qrow("q-1", "sess-a", &["x-n"]), None)
+            .unwrap();
+        let emit = |t: &str, d: Value| crate::loopcheck::emit_to_both(&project, &global, t, d);
+
+        let QuestionGateStop::Block { reason } =
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
+        else {
+            panic!("first fire must block");
+        };
+        assert!(
+            reason.contains("fno inbox outstanding clear q-1"),
+            "{reason}"
+        );
+        assert!(!reason.contains("backlog decide"), "{reason}");
+
+        let QuestionGateStop::Terminate { reason, message } =
+            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
+        else {
+            panic!("second fire must terminate");
+        };
+        assert!(matches!(
+            reason,
+            super::super::TerminationReason::HeldOnQuestion
+        ));
+        assert!(message.contains("q-1"), "{message}");
+        assert!(
+            message.contains("fno inbox outstanding clear q-1 --answer"),
+            "{message}"
+        );
+        assert!(!message.contains("backlog decide"), "{message}");
+
+        let count = |ty: &str| {
+            crate::events::committed_journal_text(&project)
+                .lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter(|v| v.get("type").and_then(Value::as_str) == Some(ty))
+                .count()
+        };
+        assert_eq!(count("loop_check_question_gate"), 1, "one marker row lands");
+        assert_eq!(count("termination"), 1, "one termination row lands");
+
+        // A marker that never lands leaves every fire a first fire: the gate
+        // blocks again and never terminates without it.
+        let lost = dir.path().join("lost-events.jsonl");
+        crate::event_store::append_envelope(&lost, &qrow("q-2", "sess-b", &["x-n"]), None).unwrap();
+        let drop_rows = |_: &str, _: Value| {};
+        for _ in 0..2 {
+            assert!(matches!(
+                question_gates(&lost, &lost, &cwd, "sess-b", "x-n", &|_| false, &drop_rows),
+                QuestionGateStop::Block { .. }
+            ));
+        }
     }
 
     #[test]
-    fn open_blocking_question_holds_the_node_once() {
-        let raw = [qrow("q-1", "sess-a", &["x-n"]), brow("q-1", "sess-a")].join("\n");
-        let path = std::env::temp_dir().join(format!(
-            "fno-holds-test-1-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path.clone()];
-        let holds = scan_open_holds(&journals, "sess-a", "x-n");
-        assert_eq!(holds.len(), 1);
-        assert!(holds[0].already_blocked, "the prior block row is seen");
-        assert_eq!(holds[0].question_id, "q-1");
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn second_fire_without_a_prior_block_is_a_first_fire() {
-        let raw = qrow("q-2", "sess-b", &["x-n"]);
-        let path = std::env::temp_dir().join(format!(
-            "fno-holds-test-2-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::write(&path, format!("{raw}\n")).unwrap();
-        let journals = vec![path.clone()];
-        let holds = scan_open_holds(&journals, "sess-b", "x-n");
-        assert_eq!(holds.len(), 1);
-        assert!(!holds[0].already_blocked);
-        let _ = std::fs::remove_file(&path);
+    fn gated_types_cover_every_schema_question_family_type() {
+        let schema: Value = serde_json::from_str(include_str!("../event_store/events_schema.json"))
+            .expect("events_schema.json must parse (generated by build.rs)");
+        let names = schema
+            .get("event_types")
+            .and_then(|v| v.as_object())
+            .expect("event_types must be an object")
+            .keys();
+        let missing: Vec<String> = names
+            .filter(|n| {
+                n.starts_with("operator_question")
+                    || n.starts_with("operator_decision")
+                    || n.as_str() == "loop_check_question_gate"
+            })
+            .filter(|n| !QUESTION_FAMILY_TYPES.contains(&n.as_str()))
+            .cloned()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "question/decision/hold types the schema emits but QUESTION_FAMILY_TYPES \
+             lacks: {missing:?}; event_lines_of drops their rows before the fold, so \
+             the hold gate never sees them"
+        );
     }
 
     #[test]
@@ -438,12 +535,32 @@ mod tests {
         ));
         std::fs::write(&path, format!("{raw}\n")).unwrap();
         let journals = vec![path.clone()];
-        let mine = scan_open_holds(&journals, "sess-c", "x-n");
+        let mine = scan_open_holds(&journals, "sess-c", "x-n", &|_| false);
         assert_eq!(mine.len(), 1, "only the open one holds");
         assert_eq!(mine[0].question_id, "q-4");
         // A node the blocks never names, and a session that did not ask:
-        let other = scan_open_holds(&journals, "sess-z", "x-other");
+        let other = scan_open_holds(&journals, "sess-z", "x-other", &|_| false);
         assert!(other.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn question_on_a_done_node_holds_nothing_but_a_live_sibling_still_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let raw = [
+            qrow("q-5", "sess-d", &["x-merged"]),
+            qrow("q-6", "sess-d", &["x-merged", "x-live"]),
+        ]
+        .join("\n");
+        std::fs::write(&path, format!("{raw}\n")).unwrap();
+        let journals = vec![path];
+        let done = |id: &str| id == "x-merged";
+        // The asking session: q-5 is mooted, q-6 still blocks x-live.
+        let asker = scan_open_holds(&journals, "sess-d", "x-merged", &done);
+        let ids: Vec<&str> = asker.iter().map(|h| h.question_id.as_str()).collect();
+        assert_eq!(ids, ["q-6"]);
+        // A session whose own node merged is not held by a question naming it.
+        assert!(scan_open_holds(&journals, "sess-z", "x-merged", &done).is_empty());
     }
 }

@@ -13,6 +13,7 @@ from fno.graph.statuses import (
     is_stale_lock,
     lock_timestamp_quality,
     live_claimed_node_ids,
+    live_worked_node_ids,
     recompute_statuses,
 )
 
@@ -243,7 +244,9 @@ def test_container_rollup_does_not_pin_parent_with_deferred_child():
 
 def test_container_rollup_closes_when_every_child_is_done():
     entries = [
-        _entry("ab-parent004"),
+        # plan_path None: a parent carrying its own plan work holds against
+        # the rollup now, and this test pins the plain container auto-close.
+        _entry("ab-parent004", plan_path=None),
         _entry("ab-child006", parent="ab-parent004", completed_at="2026-01-01T00:00:00Z"),
         _entry("ab-child007", parent="ab-parent004", completed_at="2026-01-02T00:00:00Z"),
     ]
@@ -749,44 +752,17 @@ def test_lock_defect_keeps_priority_over_do_row_defect():
     )
     result = recompute_statuses([e])
     assert result[0]["ownership_defect"]["kind"] == "stale-active-owner-unverified"
+def test_an_unconsulted_roster_raises_naming_the_reader():
+    """A not-consulted roster read raises with the reader prefixed, so the
+    spawn-guard receipt points at read_roster instead of implying the node is
+    occupied. The function arrives via the module-level import: the conftest
+    autouse stub rebinds the module attribute at setup, and a test-body
+    import would bind the stub, not the real gate."""
+    from fno.claims.roster import RosterReading
 
-
-# -- x-f8b1 change 5: triage health reads the marker, because today nothing does --
-
-def test_triage_health_names_ownership_defect(monkeypatch, capsys):
-    """A defect-carrying node is named with its kind and holder; a clean
-    graph reports zero and leaves the exit code alone."""
-    import json as _json
-
-    from fno.graph import triage
-
-    defect_node = _entry("ab-dohealth1", status="in_progress")
-    defect_node["ownership_defect"] = {
-        "kind": "stale-open-do-unverified",
-        "node_id": "ab-dohealth1",
-        "holder": "s-do",
-        "liveness": "unverified",
-    }
-    fresh = (datetime.now(timezone.utc) - timedelta(minutes=17)).isoformat()
-    clean_node = _entry("ab-dohealth2", status="in_progress", sessions=[_do_row(fresh)])
-
-    monkeypatch.setattr(triage, "_triage_entries", lambda: [defect_node, clean_node])
-    triage.cmd_health(
-        project=None, all_projects=False, json_output=True, stale_days=30,
-        check=False, quiet=False,
-    )
-    report = _json.loads(capsys.readouterr().out)
-    named = [d for d in report["ownership_defects"] if d["id"] == "ab-dohealth1"]
-    assert len(named) == 1
-    assert named[0]["kind"] == "stale-open-do-unverified"
-    assert named[0]["holder"] == "s-do"
-    assert report["totals"]["ownership_defects"] == 1
-
-    monkeypatch.setattr(triage, "_triage_entries", lambda: [clean_node])
-    triage.cmd_health(
-        project=None, all_projects=False, json_output=True, stale_days=30,
-        check=False, quiet=False,
-    )
-    report = _json.loads(capsys.readouterr().out)
-    assert report["ownership_defects"] == []
-    assert report["totals"]["ownership_defects"] == 0
+    with pytest.raises(RuntimeError, match=r"^read_roster: boom$"):
+        live_worked_node_ids(
+            strict=True,
+            entries=[{"status": "ready"}],
+            reading=RosterReading(False, 0, {}, "boom"),
+        )

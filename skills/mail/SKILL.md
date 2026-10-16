@@ -265,6 +265,12 @@ drain that reads those kinds) - the error names the two real intents: drop
 pattern). Architecture and per-kind handler detail:
 [docs/architecture/cross-project-inbox.md](../../docs/architecture/cross-project-inbox.md).
 
+### Cross-host targets: `<name>@<host>`
+
+A target carrying `@host` reaches a peer on another machine: `fno agents mail send nemo@mbp3 "status?"`. With `store.remote_url` set, the send writes one row on the shared primary, and the target host's daemon injects it through the receiver's own local send. Registry resolution and holds stay the receiver's. A row waits up to 7 days for its host, then expires. `fno-agents mail-remote status` reads your own rows' outcomes. Cross-host `--raw` refuses unless the receiver lists your `user@host` in `agents.remote.raw_senders`. No shared store means the send relays over ssh. `--from-self` refuses on the ssh path, so pass `--from-name`.
+
+`fno agents peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
+
 ---
 
 ## Hard rules (non-negotiable)

@@ -7,9 +7,63 @@
 /// race claim expiry.
 pub(super) const WATCH_SLACK_MS: i64 = 12 * 60_000;
 
+/// How long a build park lasts before the daemon wakes the session anyway:
+/// the longest one agent cargo holds an admission claim by default.
+const BUILD_PARK_MS: i64 = 60 * 60_000;
+
+/// Park a session whose cargo waits at an admission door. The stop gate
+/// already lets that session stop. This records a `loop_check_watch_idle`
+/// row with blocker `build` that names the parked cargo, so the daemon's
+/// expiry arm wakes the session when that cargo exits, or at the deadline,
+/// and the park is checkable by its cargo pid. It renews the node claim
+/// lease for the same window, so a parked session keeps its node. A session
+/// with no parked cargo or no target manifest records nothing.
+pub(super) fn record_build_park(parsed: &super::LoopCheckArgs) {
+    let Some(wait) = crate::test_run::build_wait(&parsed.cwd) else {
+        return;
+    };
+    let Ok(manifest) = std::fs::read_to_string(&parsed.state_path) else {
+        return;
+    };
+    let Some(session_id) = super::parse_manifest(&manifest).and_then(|m| m.session_id) else {
+        return;
+    };
+    if let Some((key, holder)) = claim_pair(&manifest) {
+        let _ = crate::claims::renew(&key, &holder, BUILD_PARK_MS + WATCH_SLACK_MS, None);
+    }
+    let project_events = parsed
+        .events_path
+        .clone()
+        .unwrap_or_else(|| crate::paths::events_path(&parsed.cwd));
+    let global_events = parsed
+        .global_events_path
+        .clone()
+        .unwrap_or_else(super::default_global_events_path);
+    let row = serde_json::json!({
+        "session_id": session_id,
+        "pr": null,
+        "blocker": "build",
+        "reason": "build",
+        "expires_at_ms": crate::claims::now_ms() + BUILD_PARK_MS,
+        "build_cargo_pid": wait.cargo_pid,
+        "build_since_ms": wait.since_ms,
+        "build_holder": wait.holder,
+        "harness": super::scan_manifest_field(&manifest, "harness"),
+        "cwd": &parsed.cwd,
+    });
+    if let Err(e) = super::fire_history::emit_to_both_checked(
+        &project_events,
+        &global_events,
+        "loop_check_watch_idle",
+        row,
+    ) {
+        eprintln!("loop-check: build park not recorded ({e}); no daemon wake is armed");
+    }
+}
+
 /// Lease window for an idle watch: the declared timeout clamped to [5m, 2h]
-/// (never trust the tag for an unbounded hold) plus slack. Defaults to 30m when
-/// the tag omits or mangles `timeout`, giving the ~40m default lease.
+/// (never trust the tag for an unbounded hold) plus slack. Defaults to 15m when
+/// the tag omits or mangles `timeout`, giving the ~27m default lease.
 pub(super) fn watch_window_ms(timeout: Option<&str>) -> i64 {
     watch_timeout_ms(timeout) + WATCH_SLACK_MS
 }
@@ -18,7 +72,7 @@ pub(super) fn watch_window_ms(timeout: Option<&str>) -> i64 {
 pub(super) fn watch_timeout_ms(timeout: Option<&str>) -> i64 {
     timeout
         .and_then(crate::claims::parse_ttl_ms)
-        .unwrap_or(30 * 60_000)
+        .unwrap_or(15 * 60_000)
         .clamp(5 * 60_000, 2 * 3_600_000)
 }
 
@@ -51,11 +105,11 @@ pub(super) fn watch_target(reason: &str, pr: Option<&str>) -> (&'static str, Opt
 pub(super) const CONTINUE_WORKING: &str = "continue working; no completion signal. If you are \
 only waiting with nothing to do, arm a harness-tracked watcher with a hard timeout and end your \
 turn with the tag. A PR wait: background Bash `fno do pr wait <N> --until settled \
---timeout=30m` (REST through the coalescing cache, 60s interval, never `gh pr checks --watch`, \
+--timeout=15m` (REST through the coalescing cache, 60s interval, never `gh pr checks --watch`, \
 which spends the shared GraphQL quota; a review wait is `--until review`), then `<watching \
-reason=\"ci|review\" pr=\"<N>\" timeout=\"30m\">`. A local run (a test suite, a build, a review \
+reason=\"ci|review\" pr=\"<N>\" timeout=\"15m\">`. A local run (a test suite, a build, a review \
 fork) is its own background task; include its actual harness task id \
-(e.g. task-123) in `<watching reason=\"local\" task_id=\"task-123\" timeout=\"30m\">` with no \
+(e.g. task-123) in `<watching reason=\"local\" task_id=\"task-123\" timeout=\"15m\">` with no \
 pr: pr is a real PR number or left out, never 0. The session idles until the watcher exits \
 instead of re-waking every tick.";
 
@@ -556,7 +610,7 @@ mod tests {
             super::super::Intent::Watching {
                 reason: "local".into(),
                 pr: None,
-                timeout: Some("30m".into()),
+                timeout: Some("15m".into()),
                 task_id: Some("task-123".into()),
             }
         );

@@ -176,6 +176,25 @@ def test_a_plain_ask_is_refused_for_context_and_records_nothing(root: Path):
     assert len(_question_rows(root)) == 0, "the refused ask recorded nothing"
 
 
+@requires_rust
+def test_the_template_prints_a_file_that_passes_the_gate(
+    root: Path, tmp_path: Path
+):
+    """--question-file template prints a filled question file, and feeding
+    that exact text back through --question-file must record a question."""
+    printed = runner.invoke(outstanding_app, ["ask", "--question-file", "template"])
+    assert printed.exit_code == 0, printed.output
+    assert "## Reversible" in printed.stdout
+    assert "What happens next:" in printed.stdout
+    qfile = tmp_path / "question.md"
+    qfile.write_text(printed.stdout, encoding="utf-8")
+    asked = runner.invoke(
+        outstanding_app, ["ask", "--question-file", str(qfile), "--node", "x-tmpl"]
+    )
+    assert asked.exit_code == 0, asked.output
+    assert asked.stdout.strip().startswith("q-"), asked.output
+
+
 def test_carveout_leg_names_the_verb_that_clears_it(root: Path):
     _write_carveouts(root, [_carveout("cv-1", "oos-bug")])
     result = runner.invoke(outstanding_app, [])
@@ -1851,8 +1870,11 @@ def test_capture_leg_reports_oldest_age_from_capture_add_events(capture_roots):
     old = (datetime.now(timezone.utc) - timedelta(days=62)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     events.write_text(
-        _capture_event("fu-aaaaaa", old) + "\n" + _capture_event("fu-bbbbbb", "2026-08-14T00:00:00Z") + "\n",
+        _capture_event("fu-aaaaaa", old) + "\n" + _capture_event("fu-bbbbbb", recent) + "\n",
         encoding="utf-8",
     )
 

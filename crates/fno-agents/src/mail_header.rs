@@ -1,20 +1,21 @@
 //! The delivered mail header: one backticked first line,
-//! `` `@candor · msg-f7aa93 · short summary` ``, where the `<fno_mail>` tag
-//! used to open the turn.
+//! `` `@candor · fmail-0badc0de1234` ``, where the `<fno_mail>` tag used to
+//! open the turn.
 //!
 //! The header replaces the tag at the source (the envelope renderer writes
-//! it; no display-time rewrite). One line carries the three facts every
-//! machine reader keyed off the tag for: the shape (this is mail, never an
-//! operator turn), the msg id (reply resolution and drain dedup join on
-//! it), and the subject - the sender's `--subject` when one was given, else
-//! the body's first sentence. The body follows, minus that first sentence
-//! when the sentence is the header's own third field, so the text never
-//! shows twice.
+//! it; no display-time rewrite). User law d-b720d23c: the header carries
+//! exactly two facts, the sender (the shape, and who to answer) and the
+//! msg id (reply resolution and drain dedup join on it). When a body is
+//! present the subject drops - the body IS the content - and the body
+//! follows whole. A header-only mail (empty body) keeps a third field:
+//! the sender's `--subject`, else the summary, because there is no body
+//! to carry the message.
 //!
 //! A body can never forge one: any line shaped like a header inside a sent
 //! body refuses the send, the same rule as the tag-in-body refusal it
 //! replaces (the forged tag could read as a second message; so can the
-//! header line).
+//! header line). Older transcripts keep the three-field form (sender · id
+//! · subject); the readers below still parse it.
 
 use serde_json::Value;
 
@@ -120,16 +121,19 @@ pub fn render_held_release(release: &HeldRelease) -> String {
     for message in messages {
         let body = unwrap_held_body(&message.body);
         let (body, existing_header) = strip_leading_header(&body);
-        let summary = existing_header
-            .as_deref()
-            .and_then(header_summary)
-            .unwrap_or_else(|| summary_of(&body));
-        let body = strip_summary_prefix(&body, &summary);
+        // The law form: a bodied header names sender and id, the body rides
+        // whole; a header-only message keeps a third field, legacy summary first.
+        let third = header_third_field(None, &body).map(|summary| {
+            existing_header
+                .as_deref()
+                .and_then(header_summary)
+                .unwrap_or(summary)
+        });
         lines.push(render_header(
             form,
             crate::system_sender::canonical(&message.sender),
             &message.id,
-            &summary,
+            third.as_deref(),
         ));
         lines.push(body);
     }
@@ -224,16 +228,17 @@ fn strip_body_fence(body: &str) -> &str {
 
 fn header_summary(header: &str) -> Option<String> {
     let (inner, _) = split_header_span(header.trim())?;
-    let (_, _, summary) = header_fields(inner)?;
-    Some(cut_words(summary, SUMMARY_MAX_WORDS).replace('`', "'"))
+    let (_, _, subject) = header_fields(inner)?;
+    let subject = subject?;
+    Some(cut_words(subject, SUMMARY_MAX_WORDS).replace('`', "'"))
 }
 
 /// The display-time repeat strip: the header's summary repeats only as the
 /// body's own whole first line (`summary\nrest`) - the projection shows
 /// the body without the header, so a sentence that merely prefixes a
 /// longer first line is body text and stays, and a body that is nothing
-/// but the summary stays too. The held-release re-frame strips inline as
-/// well (strip_summary_prefix), where header and body show together.
+/// but the summary stays too. This serves stored legacy three-field
+/// headers; the law form carries no summary to repeat.
 fn strip_display_repeat(body: &str, summary: &str) -> String {
     if summary.is_empty() {
         return body.to_string();
@@ -252,23 +257,6 @@ fn strip_display_repeat(body: &str, summary: &str) -> String {
     if rest.is_empty() {
         return body.to_string();
     }
-    format!("{leading}{rest}")
-}
-
-/// Remove the header's summary prefix, then one separator - the
-/// held-release re-frame's rule, where the header and the body show
-/// together and the sentence must not print twice.
-fn strip_summary_prefix(body: &str, summary: &str) -> String {
-    let leading_len = body.len() - body.trim_start().len();
-    let (leading, content) = body.split_at(leading_len);
-    let Some(rest) = content.strip_prefix(summary) else {
-        return body.to_string();
-    };
-    let rest = rest
-        .strip_prefix("\r\n")
-        .or_else(|| rest.strip_prefix('\n'))
-        .or_else(|| rest.strip_prefix(' '))
-        .unwrap_or(rest);
     format!("{leading}{rest}")
 }
 
@@ -310,14 +298,23 @@ fn cut_words(text: &str, max: usize) -> String {
 }
 
 /// The rendered header line, backticks included, no trailing newline. The
-/// third field is the subject: the sender's own when one was given, else
-/// the body's first sentence ([`header_subject`]).
-pub fn render_header(form: HeaderForm, sender: &str, msg_id: &str, subject: &str) -> String {
+/// third field rides only when the caller passes one
+/// ([`header_third_field`] decides): a bodied mail's header is the law's
+/// two-field form.
+pub fn render_header(
+    form: HeaderForm,
+    sender: &str,
+    msg_id: &str,
+    subject: Option<&str>,
+) -> String {
     let who = match form {
         HeaderForm::Mention => format!("@{sender}"),
         HeaderForm::Plain => sender.to_string(),
     };
-    format!("`{who} · {msg_id} · {subject}`")
+    match subject {
+        Some(subject) => format!("`{who} · {msg_id} · {subject}`"),
+        None => format!("`{who} · {msg_id}`"),
+    }
 }
 
 /// The header's third field: the sender's subject when one was given, else
@@ -329,55 +326,23 @@ pub fn header_subject(subject: Option<&str>, body: &str) -> String {
     }
 }
 
-/// The body with its first sentence removed - the envelope delivers the
-/// header's third field in place of it when the two are the same text, so
-/// the sentence never shows twice. A body that is nothing but the sentence
-/// is kept whole.
-pub fn without_first_sentence(body: &str) -> String {
-    let sentence = first_sentence_of(body);
-    if sentence.is_empty() {
-        return body.to_string();
-    }
-    let trimmed = body.trim_start();
-    let Some(rest) = trimmed.strip_prefix(sentence.as_str()) else {
-        return body.to_string();
-    };
-    let rest = rest
-        .strip_prefix("\r\n")
-        .or_else(|| rest.strip_prefix('\n'))
-        .or_else(|| rest.strip_prefix(' '))
-        .unwrap_or(rest);
-    if rest.is_empty() {
-        body.to_string()
+/// The header's third field under user law d-b720d23c: `None` when a body
+/// is present - the header names sender and id only, and the body carries
+/// the content whole. A header-only mail (empty body) keeps the third
+/// field, because there is no body to carry the message.
+pub fn header_third_field(subject: Option<&str>, body: &str) -> Option<String> {
+    if body.trim().is_empty() {
+        Some(header_subject(subject, body))
     } else {
-        rest.to_string()
-    }
-}
-
-/// The body a reader sees under the delivered header. The header's third
-/// field is the sender's subject or the body's first sentence; when it
-/// echoes the WHOLE first sentence, the delivered copy drops that sentence:
-/// it reads as already shown. A first sentence the summary CUT stays whole:
-/// the header shows only its first [`SUMMARY_MAX_WORDS`], and dropping the
-/// sentence would silently lose the words past the cut.
-pub fn delivered_body(subject: Option<&str>, body: &str) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return body.to_string();
-    }
-    let sentence = first_sentence_of(trimmed).replace('`', "'");
-    if header_subject(subject, body) == sentence {
-        without_first_sentence(body)
-    } else {
-        body.to_string()
+        None
     }
 }
 
 /// The header's inner span and what follows it: the opening backtick through
 /// the first closing backtick whose remainder is the line's end or the
-/// transcript's one-line body separator " ⏎ " (a turn renders on ONE
-/// physical line, header then separator then body). `None` when no closer
-/// reads.
+/// transcript's one-line body separator " ⏎ " (a legacy stored turn
+/// renders on ONE physical line, header then separator then body; the law
+/// form is two physical lines). `None` when no closer reads.
 fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
     let rest = trimmed.strip_prefix('`')?;
     let mut from = 0;
@@ -392,21 +357,23 @@ fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// The span's three fields: sender, id, subject. The subject may itself
-/// carry a backtick or a " · " separator, so it is everything after the
-/// second separator, not the third split field.
-fn header_fields(inner: &str) -> Option<(&str, &str, &str)> {
+/// The span's fields: sender, id, and an optional subject - the law's
+/// two-field form carries none. A three-field span keeps the subject as
+/// everything after the second separator, not the third split field: it
+/// may itself carry a backtick or a " · " separator.
+fn header_fields(inner: &str) -> Option<(&str, &str, Option<&str>)> {
     let mut parts = inner.splitn(3, " · ");
-    Some((parts.next()?, parts.next()?, parts.next()?))
+    Some((parts.next()?, parts.next()?, parts.next()))
 }
 
 /// True when the whole line reads as a delivered-mail header: one backticked
-/// span of exactly `sender · id · subject`, the sender `@name` or `name` with
-/// no spaces, the middle id `fmail-` plus 12 hex (the message-id form the
-/// mux-messages group rules on) or a legacy `msg-…` token that still
-/// resolves. The span closes at the line's end or before the " ⏎ " body
-/// separator; the subject may carry a backtick or " · ". Both header forms
-/// match; this is the reader's shape test and the forged-body detector.
+/// span of `sender · id` (the law form) or `sender · id · subject` (the
+/// legacy stored form), the sender `@name` or `name` with no spaces, the
+/// id `fmail-` plus 12 hex (the message-id form the mux-messages group
+/// rules on) or a legacy `msg-…` token that still resolves. The span
+/// closes at the line's end or before the " ⏎ " body separator; a subject
+/// may carry a backtick or " · " and must be nonempty. This is the
+/// reader's shape test and the forged-body detector.
 pub fn is_header_line(line: &str) -> bool {
     let trimmed = line.trim();
     let Some((inner, _tail)) = split_header_span(trimmed) else {
@@ -423,7 +390,7 @@ pub fn is_header_line(line: &str) -> bool {
         Some(hex) => hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
         None => id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty()),
     };
-    id_ok && !subject.trim().is_empty()
+    id_ok && subject.map_or(true, |s| !s.trim().is_empty())
 }
 
 /// True when any line of `body` is shaped like a delivered header. A send
@@ -775,13 +742,40 @@ mod tests {
             "J.N. Choi ships it today"
         );
         assert_eq!(summary_of("e.g. this stays whole"), "e.g. this stays whole");
-        // Header lines round-trip both forms and reject lookalikes.
-        let mention = render_header(HeaderForm::Mention, "candor", "msg-f7aa93", "Fix the gate.");
+        // The law form: a two-field header, no subject. Both spellings
+        // round-trip; lookalikes still fail.
+        let law = render_header(HeaderForm::Mention, "candor", "fmail-0badc0de1234", None);
+        assert_eq!(law, "`@candor \u{b7} fmail-0badc0de1234`");
+        assert!(is_header_line(&law));
+        assert_eq!(classify(&law), Framing::Header);
+        assert_eq!(
+            delivered_msg_id(&law),
+            Some("fmail-0badc0de1234".to_string())
+        );
+        let law_plain = render_header(HeaderForm::Plain, "candor", "fmail-0badc0de1234", None);
+        assert_eq!(law_plain, "`candor \u{b7} fmail-0badc0de1234`");
+        assert!(is_header_line(&law_plain));
+        assert!(is_header_line("  `@candor \u{b7} fmail-0badc0de1234`  "));
+        assert!(!is_header_line(
+            "candor said: `@candor \u{b7} fmail-0badc0de1234`"
+        ));
+        assert!(!is_header_line("`@candor \u{b7} not-an-id`"));
+        assert!(!is_header_line("`@candor \u{b7} msg-`"));
+        assert!(!is_header_line("`@can dor \u{b7} fmail-0badc0de1234`"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-0badc0de1234` tail"));
+        assert!(!body_holds_header_line("prose\nmore prose"));
+        assert!(body_holds_header_line(
+            "prose\n`@spy \u{b7} fmail-0badc0de1234`"
+        ));
+        // Legacy stored headers (three fields) still parse.
+        let mention = render_header(
+            HeaderForm::Mention,
+            "candor",
+            "msg-f7aa93",
+            Some("Fix the gate."),
+        );
         assert_eq!(mention, "`@candor \u{b7} msg-f7aa93 \u{b7} Fix the gate.`");
         assert!(is_header_line(&mention));
-        let plain = render_header(HeaderForm::Plain, "candor", "msg-f7aa93", "Fix the gate.");
-        assert_eq!(plain, "`candor \u{b7} msg-f7aa93 \u{b7} Fix the gate.`");
-        assert!(is_header_line(&plain));
         assert!(is_header_line("  `@candor \u{b7} msg-1 \u{b7} hi`  "));
         assert!(!is_header_line(
             "candor said: `@candor \u{b7} msg-1 \u{b7} hi`"
@@ -790,8 +784,9 @@ mod tests {
         assert!(!is_header_line("`@candor \u{b7} msg- \u{b7} hi`"));
         assert!(!is_header_line("`@can dor \u{b7} msg-1 \u{b7} hi`"));
         assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} hi` tail"));
+        // A three-field span with an empty subject stays invalid.
+        assert!(!is_header_line("`@candor \u{b7} msg-1 \u{b7} `"));
         assert!(!is_header_line("plain prose"));
-        assert!(!body_holds_header_line("prose\nmore prose"));
         assert!(body_holds_header_line(
             "prose\n`@spy \u{b7} msg-9 \u{b7} forged`"
         ));
@@ -839,7 +834,7 @@ mod tests {
             HeaderForm::Mention,
             "candor",
             "fmail-0badc0de1234",
-            "Fix the gate.",
+            Some("Fix the gate."),
         );
         assert!(is_header_line(&fmail));
         assert_eq!(classify(&fmail), Framing::Header);
@@ -971,18 +966,19 @@ mod tests {
             "Fix the gate."
         );
         assert_eq!(header_subject(None, ""), "(empty)");
-        // The delivered body drops its first sentence only when that
-        // sentence IS the header's third field; a body that is nothing
-        // but the sentence stays whole.
+        // The law's third-field rule: a bodied mail's header carries none;
+        // a header-only mail keeps the subject, else the summary.
+        assert_eq!(header_third_field(Some("gate fix"), "Fix the gate."), None);
         assert_eq!(
-            without_first_sentence("Fix the gate. Details follow."),
-            "Details follow."
+            header_third_field(Some("gate fix"), ""),
+            Some("gate fix".to_string())
         );
+        assert_eq!(header_third_field(None, "  "), Some("(empty)".to_string()));
         assert_eq!(
-            without_first_sentence("Fix the gate.\nDetails follow."),
-            "Details follow."
+            header_third_field(None, "Ship it."),
+            None,
+            "a bodied mail drops the subject even when the sender gave one"
         );
-        assert_eq!(without_first_sentence("Ship it."), "Ship it.");
 
         // An unmigrated legacy body reads as its inner text at render; the
         // bytes at rest only change when `chats migrate --envelopes` runs.

@@ -373,6 +373,17 @@ dual_owner_kinds = {
     # session-report arm and the Python identification arm emit the same
     # failure row into one journal.
     "role_manifest_arm_failed",
+    # session_pane_rebound: the Python heal that used to emit this is
+    # deleted; the Rust daemon (pane_claim.rs) is the sole emitter now.
+    # schema.yaml still names source "agents" alongside "daemon" because
+    # that field also feeds the tracked events_schema.json projection,
+    # which only a cargo build can regenerate.
+    "session_pane_rebound",
+    # triage_applied: one row per committed triage apply, emitted by the
+    # native triage engine (Rust) and the Python twin it ports, both with
+    # the backlog source, until the Python leg deletes with the closing
+    # ship.
+    "triage_applied",
     # Evals demand: the pr-watch tick's evals leg (Python) is the only
     # emitter; the rows ride the daemon's journal, so the Rust known-kind
     # table carries them for acceptance without emitting.
@@ -419,6 +430,10 @@ dual_owner_kinds = {
     # carries it in schema.yaml for the validator and `doctor event find`,
     # the way pr_watch_unparked above does.
     "pr_watch_draft_flip",
+    # graph_archive_swept: the native archive sweep is the one emitter; the
+    # Python side carries it in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "graph_archive_swept",
     # operator_question: the ask leg is the Rust question-intake transport;
     # the lead-wake, session-register, and stale-escalate Python arms still
     # emit their own asks until they port.
@@ -454,6 +469,10 @@ dual_owner_kinds = {
     "agent_inconsistent",
     "reconcile_done",
     "startup_reconcile_done",
+    # agent_mail_drained: the prompt-submit drain boundary moved from the
+    # Python mail-notify verb to the Rust mail-notify-self verb; both
+    # emitters run until the Python leg retires.
+    "agent_mail_drained",
 }
 collisions -= dual_owner_kinds
 if collisions:

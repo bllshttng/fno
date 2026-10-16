@@ -149,10 +149,11 @@ def test_force_types_the_wrapped_body_not_the_bare_text(_tmp_state, monkeypatch)
 
     _e, text, kwargs = sent[0]
     assert text.splitlines()[0].startswith("`@lead · fmail-"), text[:80]
-    # The typed turn is header only: one line; the body stays on the record.
+    # The typed turn is the header line, then the body.
     lines = text.splitlines()
-    assert len(lines) == 1, text
+    assert len(lines) == 2, text
     assert lines[0].startswith("`@lead · fmail-")
+    assert lines[1] == "status?"
     # The record plane keeps the body: the outbox row stores the full-body
     # envelope, so the id the read line names resolves to the message.
     from fno.bus.log import iter_messages
@@ -189,8 +190,10 @@ def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
         for line in bus_log_path().read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(rows) == 1, rows
-    row = rows[0]
+    # Staged body row first, typed receipt second; one id, two rows.
+    assert len(rows) == 2, rows
+    assert "delivery" not in rows[0], rows[0]
+    row = rows[1]
     assert row["delivery"] == "typed"
     assert row["meta"]["transport"] == "pane"
     assert row["meta"]["pane_id"] == "45"
@@ -208,22 +211,31 @@ def test_a_typed_row_is_not_redelivered_to_the_recipient(_tmp_state, monkeypatch
     assert is_deliverable(typed_row) is False
 
 
-def test_a_refused_pane_write_claims_nothing(_tmp_state, monkeypatch):
+def test_a_refused_pane_write_leaves_only_the_staged_row(_tmp_state, monkeypatch):
     """The gate refuses a pane showing an option prompt. Nothing was typed, so
-    no row may say it was."""
+    no row may SAY it was -- but the staged body row already landed, so the
+    message still delivers by drain instead of vanishing with the refusal."""
     from fno.bus.log import bus_log_path
 
     _entry_row, _sent = _install(monkeypatch, typed=False)
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code != 0
     assert "typed" not in result.stdout
     path = bus_log_path()
-    assert not path.exists() or path.read_text(encoding="utf-8").strip() == ""
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1, rows
+    assert "delivery" not in rows[0], rows[0]
+    assert "take option 3" in rows[0]["body"]
 
 
 def test_force_writes_the_full_sender_session_on_the_row(_tmp_state, monkeypatch):
@@ -408,6 +420,9 @@ def test_force_refuses_a_bus_only_recipient_up_front(_tmp_state, monkeypatch):
     """
     entry, sent = _install(monkeypatch)
     entry.delivery_policy = "bus-only"
+    # Hermetic gate: the in-process hold answer, never the installed binary's
+    # (whose hold store is whatever the machine deployed).
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
 
     result = runner.invoke(
         mail_app,

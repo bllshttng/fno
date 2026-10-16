@@ -50,7 +50,7 @@ annotate list
 approvals
 autonomy status
 backlog
-backlog advance !--continuation
+backlog advance
 backlog done
 backlog get
 backlog next
@@ -126,7 +126,6 @@ research
 restart
 resume
 retro
-review
 roles
 route
 scoreboard
@@ -137,7 +136,6 @@ status
 status-fanout tick
 stub-manifest
 target
-target init !--provider
 test
 think
 uninstall

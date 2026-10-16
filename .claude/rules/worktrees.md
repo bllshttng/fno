@@ -11,7 +11,7 @@ Read [worktree-mechanics](../../docs/architecture/worktree-mechanics.md) for hoo
 - **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed.
 - **`config.paths.worktrees_base: <dir>`:** worktrees land at `<dir>/<repo>/<name>` (`<repo>` = `basename $(git rev-parse --show-toplevel)`).
 - **`worktree.use_conductor_canonical: true` is DEPRECATED:** acts as `worktrees_base = ~/conductor/workspaces`. Prefer `worktrees_base`.
-- Cargo output lives in TWO places per checkout. Final binaries sit in `crates/*/target`. Intermediates land in the fno build base (`paths.cargo_targets_base`, default `~/.fno/cargo-build`), or in `~/.cargo/build` when the env is unset. `fno doctor reclaim` lane `cargo_build_dirs` sweeps both daily, and matches by `CACHEDIR.TAG`, base, and member fingerprint, never by name. Details in [worktree-mechanics](../../docs/architecture/worktree-mechanics.md). Never name-match target dirs: `cli/src/fno/target`, `skills/target`, and `tests/target` are source dirs. A 2026-09-02 name-based sweep deleted 66 across 26 worktrees.
+- Cargo output lives in TWO places per checkout. Final binaries sit in `crates/*/target`. Intermediates land in the fno build base (`paths.cargo_targets_base`, default `~/.fno/cargo-build`). With the env unset: `~/.cargo/build`. Lane `cargo_build_dirs` sweeps both hourly for every repo on the base, by `CACHEDIR.TAG`, base and member fingerprint, never by name. Details in [worktree-mechanics](../../docs/architecture/worktree-mechanics.md). Never name-match target dirs: `cli/src/fno/target`, `skills/target`, and `tests/target` are source dirs. A 2026-09-02 name-based sweep deleted 66 across 26 worktrees.
 
 ## Creating and entering one
 
@@ -38,7 +38,7 @@ The removal contract, missing until 174 trees piled up (74 GB). Four buckets, on
 - **unborn** - a branch with no commit of its own is never merged, whatever the merge-base says. Setup refuses it (`reason=unborn`, row `kept (unborn)`), so a fresh dispatch survives. Detail: [worktree-mechanics](../../docs/architecture/worktree-mechanics.md).
 - **Trigger: MERGE, never node-done.** Fires: `fno do pr merge`, the post-merge ritual. The daemon reaper pays after a grace window.
 - **Gate: `reapable`** (`fno agents workspace worktree reapable`) enforces the buckets, not each caller.
-- **Backstop: the daemon's daily `cleanup --merged` sweep** - the ritual sees its own PRs.
+- **Backstop: the daemon's `cleanup --merged` sweep**. It also reaps outside merges.
 
 **`worktree.prune_done`** judges a done tree's uncommitted tracked changes:
 

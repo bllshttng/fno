@@ -10,10 +10,10 @@
 //! filters were deleted in the same change that flipped this file.
 
 //! parity-stage: characterization
-//! parity-oracle: fno.backlog.explain.build_selection_filters
+//! parity-oracle: frozen pre-port goldens
 
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -39,51 +39,6 @@ fn canonical_repo_root() -> PathBuf {
         .find_map(|l| l.strip_prefix("worktree "))
         .expect("git worktree list names a main worktree");
     PathBuf::from(main)
-}
-
-/// The Python CLI: prefer the synced venv script, fall back to `uv run`
-/// (which syncs the venv on first use).
-fn python_cli(repo: &Path) -> (PathBuf, Vec<String>) {
-    let venv = repo.join("cli/.venv/bin/fno-py");
-    if venv.is_file() {
-        return (venv, vec![]);
-    }
-    let uv = which_uv();
-    assert!(
-        !uv.is_empty(),
-        "no cli/.venv and no uv on PATH: run `cd cli && uv sync` to provide the Python oracle"
-    );
-    (
-        PathBuf::from(uv),
-        vec![
-            "run".into(),
-            "--project".into(),
-            repo.join("cli").display().to_string(),
-            "fno-py".into(),
-        ],
-    )
-}
-
-fn which_uv() -> String {
-    std::env::var_os("PATH")
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
-        .split(':')
-        .map(PathBuf::from)
-        .find(|dir| dir.join("uv").is_file())
-        .map(|dir| dir.join("uv").display().to_string())
-        .unwrap_or_default()
-}
-
-/// The venv interpreter for the cascade oracle driver (the FULL package, not
-/// a bare python3: the cascade imports the whole fno tree).
-fn venv_python(repo: &Path) -> PathBuf {
-    let venv = repo.join("cli/.venv/bin/python");
-    assert!(
-        venv.is_file(),
-        "cli/.venv missing: run `cd cli && uv sync` to provide the Python oracle"
-    );
-    venv
 }
 
 // ---------------------------------------------------------------------------
@@ -706,203 +661,6 @@ fn materialize(case: &Case) -> (Materialized, Ctx) {
 
 /// Env for both Python legs: the fixture graph pinned by config, claims
 /// redirected, home sandboxed, hermetic pins off.
-fn py_env(dir: &Path) -> Vec<(String, String)> {
-    vec![
-        (
-            "FNO_CONFIG".into(),
-            dir.join("config.toml").display().to_string(),
-        ),
-        (
-            "FNO_CLAIMS_ROOT".into(),
-            dir.join("claims-root").display().to_string(),
-        ),
-        ("HOME".into(), dir.join("home").display().to_string()),
-    ]
-}
-
-fn run_with_env(cmd: &mut Command, env: &[(String, String)]) -> (i32, String, String) {
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().expect("spawn leg");
-    (
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-/// The Python leg's stdout: `fno backlog ready <flags>` on the fixture graph.
-fn run_python_ready(repo: &Path, dir: &Path, flags: &[&str]) -> (i32, String, String) {
-    let (bin, prefix) = python_cli(repo);
-    let mut cmd = Command::new(bin);
-    cmd.args(prefix);
-    cmd.args(["backlog", "ready"]);
-    cmd.args(flags);
-    cmd.current_dir(canonical_repo_root());
-    run_with_env(&mut cmd, &py_env(dir))
-}
-
-/// The cascade oracle: the same admitted candidates through
-/// `build_selection_filters` + `run_cascade`, printing the dropped-by map
-/// and the survivor id set. Only runs while the Python leg exists.
-const CASCADE_DRIVER: &str = r#"
-import json, sys
-from fno import paths
-from fno.graph.store import read_graph
-from fno.graph.cli import _container_ids
-from fno.graph.statuses import live_claimed_node_ids
-from fno.backlog.explain import build_selection_filters, run_cascade
-from fno.backlog.advance import _guard_staleness_days
-from fno.graph.ladder import is_cold_dispatchable
-from fno.graph._intake import descendants_of, _find_node
-
-cfg = json.loads(sys.argv[1])
-entries = read_graph(paths.graph_json())
-allowed = {"ready"}
-if cfg["include_ideas"]:
-    allowed.add("idea")
-if cfg["include_deferred"]:
-    allowed.add("deferred")
-candidates = [
-    e
-    for e in entries
-    if (e.get("status") in allowed or is_cold_dispatchable(e)) and not e.get("completed_at")
-]
-claimed = live_claimed_node_ids(strict=True)
-container_ids = _container_ids(entries)
-parent_target_id = None
-if cfg.get("parent"):
-    target = _find_node(entries, cfg["parent"])
-    if target is None:
-        sys.exit(3)
-    parent_target_id = target["id"]
-filters = build_selection_filters(
-    entries,
-    roadmap_id=cfg.get("roadmap_id"),
-    mission=cfg.get("mission"),
-    parent_target_id=parent_target_id,
-    project_filter=cfg.get("project"),
-    all_=cfg.get("all", False),
-    claimed=claimed,
-    container_ids=container_ids,
-)
-cascade = run_cascade(candidates, filters)
-print(json.dumps({
-    "drops": cascade.dropped_by,
-    "survivors": sorted(e["id"] for e in cascade.survivors),
-}))
-"#;
-
-/// The pre-port `cmd_ready` row pipeline, word for word from the commit that
-/// moved the callers onto the native leg. Every piece it names still lives in
-/// the cli package (`_dispatch_node_summary`, the sort key, the guards), so
-/// this driver stays runnable on the POST-deletion tree where
-/// `fno backlog ready` itself is the Rust leg. It is the row oracle for the
-/// scoped capture mode below.
-const ROWS_ORACLE_DRIVER: &str = r#"
-import json, sys
-from datetime import datetime, timezone
-from fno import paths
-from fno.graph.store import read_graph
-from fno.graph.cli import (
-    _container_ids,
-    _dispatch_node_summary,
-    _has_unmerged_open_pr,
-    _is_batched_member,
-)
-from fno.graph.statuses import live_claimed_node_ids
-from fno.backlog.advance import _guard_staleness_days, selection_guards
-from fno.graph.ladder import is_cold_dispatchable
-from fno.graph._intake import (
-    _find_node,
-    descendants_of,
-    filter_by_project,
-    make_selection_sort_key,
-)
-
-cfg = json.loads(sys.argv[1])
-entries = read_graph(paths.graph_json())
-allowed = {"ready"}
-if cfg["include_ideas"]:
-    allowed.add("idea")
-if cfg["include_deferred"]:
-    allowed.add("deferred")
-ready = [
-    e
-    for e in entries
-    if (e.get("status") in allowed or is_cold_dispatchable(e)) and not e.get("completed_at")
-]
-ready = filter_by_project(ready, cfg.get("project"), cfg.get("all", False))
-if cfg.get("roadmap_id"):
-    ready = [e for e in ready if e.get("roadmap_id") == cfg["roadmap_id"]]
-if cfg.get("mission"):
-    ready = [e for e in ready if e.get("mission_id") == cfg["mission"]]
-if cfg.get("parent"):
-    target = _find_node(entries, cfg["parent"])
-    if target is None:
-        sys.exit(3)
-    scope = descendants_of(entries, target["id"])
-    if not scope:
-        print("no children", file=sys.stderr)
-    ready = [e for e in ready if e.get("id") in scope]
-claimed = live_claimed_node_ids(strict=True)
-if claimed:
-    ready = [e for e in ready if e.get("id") not in claimed]
-ready = [e for e in ready if e.get("status") != "ready" or not _has_unmerged_open_pr(e)]
-container_ids = _container_ids(entries)
-ready = [e for e in ready if e.get("id") not in container_ids]
-ready = [e for e in ready if not _is_batched_member(e)]
-now = datetime.now(timezone.utc)
-by_id = {e.get("id"): e for e in entries if e.get("id")}
-ready = [
-    e
-    for e in ready
-    if not selection_guards(e, by_id, now, staleness_days=_guard_staleness_days())
-]
-ready.sort(key=make_selection_sort_key(entries, live_claimed=claimed))
-print(json.dumps([_dispatch_node_summary(e) for e in ready], indent=2))
-"#;
-
-fn run_cascade_oracle(repo: &Path, dir: &Path, case: &Case) -> (i32, String, String) {
-    let cfg = serde_json::json!({
-        "include_ideas": case.flags.contains(&"--ideas") || case.flags.contains(&"--include-ideas") || case.flags.contains(&"-I"),
-        "include_deferred": case.flags.contains(&"--include-deferred"),
-        "all": case.flags.contains(&"-A") || case.flags.contains(&"--all"),
-        "project": case.flags.iter().position(|f| *f == "-p").map(|i| case.flags[i + 1]),
-        "roadmap_id": case.flags.iter().position(|f| *f == "--roadmap-id").map(|i| case.flags[i + 1]),
-        "mission": case.flags.iter().position(|f| *f == "--mission").map(|i| case.flags[i + 1]),
-        "parent": case.flags.iter().position(|f| *f == "--parent").map(|i| case.flags[i + 1]),
-    });
-    let mut cmd = Command::new(venv_python(repo));
-    cmd.arg("-c").arg(CASCADE_DRIVER).arg(cfg.to_string());
-    cmd.current_dir(canonical_repo_root());
-    run_with_env(&mut cmd, &py_env(dir))
-}
-
-/// The pre-port row pipeline as the oracle for a scoped capture. Unlike the
-/// cascade driver this needs no deleted module: every symbol it names still
-/// lives in the cli package.
-fn run_rows_oracle(repo: &Path, dir: &Path, case: &Case) -> (i32, String, String) {
-    let cfg = serde_json::json!({
-        "include_ideas": case.flags.contains(&"--ideas") || case.flags.contains(&"--include-ideas") || case.flags.contains(&"-I"),
-        "include_deferred": case.flags.contains(&"--include-deferred"),
-        "all": case.flags.contains(&"-A") || case.flags.contains(&"--all"),
-        "project": case.flags.iter().position(|f| *f == "-p").map(|i| case.flags[i + 1]),
-        "roadmap_id": case.flags.iter().position(|f| *f == "--roadmap-id").map(|i| case.flags[i + 1]),
-        "mission": case.flags.iter().position(|f| *f == "--mission").map(|i| case.flags[i + 1]),
-        "parent": case.flags.iter().position(|f| *f == "--parent").map(|i| case.flags[i + 1]),
-    });
-    let mut cmd = Command::new(venv_python(repo));
-    cmd.arg("-c").arg(ROWS_ORACLE_DRIVER).arg(cfg.to_string());
-    cmd.current_dir(canonical_repo_root());
-    run_with_env(&mut cmd, &py_env(dir))
-}
-
-// ---------------------------------------------------------------------------
-// The Rust leg + comparison
-// ---------------------------------------------------------------------------
-
 fn rust_rows(ctx: &Ctx, case: &Case, dir: &Path) -> Value {
     let graph = dir.join("graph.json");
     let entries = fno_agents::graph_store::read_rows(&graph).expect("rust read");
@@ -971,13 +729,6 @@ fn normalize_volatile(v: &Value) -> Value {
     }
 }
 
-fn normalized_text(v: &Value) -> String {
-    format!(
-        "{}\n",
-        serde_json::to_string_pretty(&normalize_volatile(v)).unwrap()
-    )
-}
-
 /// The rows value carried a refusal: the golden surface is the exit code.
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/backlog_ready")
@@ -985,149 +736,37 @@ fn golden_dir() -> PathBuf {
 
 #[test]
 fn characterization_ready_selection_matches_the_frozen_goldens() {
-    let repo = canonical_repo_root();
-    let capture = std::env::var("FNO_CAPTURE_GOLDEN").is_ok();
-    // Scoped capture: with FNO_CAPTURE_CASES=name[,name], only those cases
-    // freeze, and their rows oracle is the pre-port pipeline driver (still
-    // fully alive in the cli package), not `fno backlog ready` - which on
-    // this tree IS the Rust leg, so a full-tree re-capture would freeze Rust
-    // over the Python goldens. A full capture (no case filter) keeps the
-    // pre-deletion contract: run it on a tree where the cascade still lives.
-    let capture_cases: Option<Vec<String>> = std::env::var("FNO_CAPTURE_CASES")
-        .ok()
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).collect());
-    let in_scope = |name: &str| {
-        capture_cases
-            .as_ref()
-            .map(|list| list.iter().any(|n| n == name))
-            .unwrap_or(true)
-    };
-    for case in cases().into_iter().filter(|c| !capture || in_scope(c.name)) {
-        let (_m, ctx) = materialize(&case);
-        let dir = _m.dir.path().to_path_buf();
-        let rs = rust_rows(&ctx, &case, &dir);
-
+    for case in cases() {
+        let (fixture, ctx) = materialize(&case);
+        let rs = rust_rows(&ctx, &case, fixture.dir.path());
         if case.expect_err {
-            if capture {
-                // The live verb refused at capture time; the refusal
-                // contract is the exit code, frozen with the goldens.
-                let (py_exit, _out, _err) = run_python_ready(&repo, &dir, case.flags);
-                assert_eq!(py_exit, 1, "[{}] python must refuse", case.name);
-            }
-            assert!(
-                rs.get("error").is_some(),
-                "[{}] rust must refuse too",
-                case.name
-            );
+            assert!(rs.get("error").is_some(), "[{}] must refuse", case.name);
             continue;
         }
-
-        // Rows: byte-equality on the projection list against the frozen
-        // golden, modulo volatile stamps. In capture mode the golden is the
-        // live Python leg's stdout, asserted equal before it freezes; in
-        // characterization mode the Python leg never runs.
-        let rs_normalized = normalized_text(rs.get("rows").unwrap());
-        if capture {
-            let (py_exit, py_out, py_err) = if capture_cases.is_some() {
-                run_rows_oracle(&repo, &dir, &case)
-            } else {
-                run_python_ready(&repo, &dir, case.flags)
-            };
-            assert_eq!(py_exit, 0, "[{}] python leg failed: {py_err}", case.name);
-            let py_rows: Value = serde_json::from_str(&py_out).unwrap_or_else(|e| {
-                panic!("[{}] python stdout is not JSON: {e}\n{py_out}", case.name)
-            });
-            let py_normalized = normalized_text(&py_rows);
-            assert_eq!(
-                rs_normalized, py_normalized,
-                "[{}] capture: rust diverged from the live python leg",
-                case.name
-            );
-            std::fs::create_dir_all(golden_dir()).unwrap();
-            std::fs::write(
-                golden_dir().join(format!("{}.out", case.name)),
-                &py_normalized,
-            )
-            .unwrap();
-        } else {
-            let golden = std::fs::read_to_string(golden_dir().join(format!("{}.out", case.name)))
-                .unwrap_or_else(|e| panic!("[{}] missing golden .out: {e}", case.name));
-            assert_eq!(
-                rs_normalized, golden,
-                "[{}] rows diverge from the golden",
-                case.name
-            );
-        }
-
-        // Drops: the cascade's dropped-by map, first-filter attribution.
-        let rs_drops: BTreeMap<&str, &str> = rs
-            .get("drops")
-            .and_then(Value::as_array)
-            .map(|ds| {
-                ds.iter()
-                    .filter_map(|d| Some((d.get("id")?.as_str()?, d.get("filter")?.as_str()?)))
-                    .collect()
+        let golden = std::fs::read_to_string(golden_dir().join(format!("{}.out", case.name)))
+            .expect("frozen rows");
+        assert_eq!(
+            normalize_volatile(&rs["rows"]),
+            serde_json::from_str::<Value>(&golden).expect("frozen rows JSON"),
+            "[{}] survivor contract",
+            case.name
+        );
+        let actual: BTreeMap<String, String> = rs["drops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d["id"].as_str().unwrap().to_string(),
+                    d["filter"].as_str().unwrap().to_string(),
+                )
             })
-            .unwrap_or_default();
-        let drops_path = golden_dir().join(format!("{}.drops.json", case.name));
-        if capture {
-            // The live cascade, one last time: attribution frozen at capture.
-            let (d_exit, d_out, d_err) = run_cascade_oracle(&repo, &dir, &case);
-            assert_eq!(d_exit, 0, "[{}] cascade oracle failed: {d_err}", case.name);
-            let oracle: Value = serde_json::from_str(&d_out).expect("oracle json");
-            let oracle_drops: BTreeMap<&str, &str> = oracle
-                .get("drops")
-                .and_then(Value::as_object)
-                .map(|m| {
-                    m.iter()
-                        .filter_map(|(k, v)| Some((k.as_str(), v.as_str()?)))
-                        .collect()
-                })
-                .unwrap_or_default();
-            assert_eq!(
-                rs_drops, oracle_drops,
-                "[{}] drop attribution diverges from the live cascade",
-                case.name
-            );
-            let rs_survivors: BTreeSet<&str> = rs
-                .get("rows")
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|r| r.get("id").and_then(Value::as_str))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let oracle_survivors: BTreeSet<&str> = oracle
-                .get("survivors")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
-            assert_eq!(
-                rs_survivors, oracle_survivors,
-                "[{}] survivor sets diverge",
-                case.name
-            );
-            std::fs::write(
-                &drops_path,
-                serde_json::to_string_pretty(&serde_json::json!(oracle_drops)).unwrap(),
-            )
-            .unwrap();
-        } else {
-            let golden_drops: BTreeMap<String, String> = serde_json::from_str(
-                &std::fs::read_to_string(&drops_path)
-                    .unwrap_or_else(|e| panic!("[{}] missing golden .drops.json: {e}", case.name)),
-            )
-            .expect("golden drops parse");
-            let rs_typed: BTreeMap<String, String> = rs_drops
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            assert_eq!(
-                rs_typed, golden_drops,
-                "[{}] drop attribution diverges from the frozen cascade",
-                case.name
-            );
-        }
+            .collect();
+        let expected: BTreeMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(golden_dir().join(format!("{}.drops.json", case.name)))
+                .expect("frozen drops"),
+        )
+        .unwrap();
+        assert_eq!(actual, expected, "[{}] drop attribution", case.name);
     }
 }

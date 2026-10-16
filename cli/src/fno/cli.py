@@ -11,13 +11,12 @@ loader brings that under 160ms (>=30% drop) by deferring imports to the
 moment the sub-app is invoked.  See ``fno._lazy_group`` for the
 mechanism and ``cli/benchmarks/measure_cli_help.py`` for measurement.
 
-Commands defined inline below (``help``, ``review``) stay eager
+Commands defined inline below (``help``) stay eager
 because they live in this file and have no module body to defer.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -49,8 +48,9 @@ from fno._lazy_group import make_lazy_group_cls
 # curated menu; everything else is hidden (invocable, just not listed). The
 # advertised set is `help`, `backlog`, `agents`, `whoami`, `doctor`, `config`
 # (6; `setup` moved under `config` in unit 6 of the reorg, and moved
-# spellings are excluded from the count by _HonestMenuGroup). `help` /
-# `review` are eager inline commands above and carry `hidden=True` on `review`;
+# spellings are excluded from the count by _HonestMenuGroup). `help` is an
+# eager inline command above; the `review` root claim moved to the rust
+# front door and carries no python registration;
 # `cost` moved under `whoami` and is a hidden lazy entry like its siblings.
 # Everything hidden here is one `fno help --all` away. New verbs default to
 # hidden; promotion to the menu is a deliberate, lint-gated act (see fno doctor lint).
@@ -64,7 +64,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
     "target": (
         "fno.target_cli:target_app",
-        "Target session bootstrap (fno do target init)",
+        "Target sessions: status, resolve-model, and check gates",
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
@@ -317,7 +317,7 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "skill-diff": set(),
     "state": set(),
     "stub-manifest": set(),
-    "target": {"init"},
+    "target": set(),
     "think": set(),
     "worker": set(),
     "worktree": set(),
@@ -604,7 +604,6 @@ SHORTHAND_POINTER = (
 _EAGER_COMMAND_HELP: dict[str, str] = {
     "help": "Show help for the root command or any subcommand.",
     "mux": "Mux pane control and the web console (forwards to the Rust front).",
-    "review": "Refuse: sigma is removed; the review lane is bare /fno:review (classify/resolve-level remain).",
     "version": "Show the installed fno version(s) (forwards to the Rust front).",
 }
 
@@ -774,64 +773,6 @@ def help_command(ctx: typer.Context) -> None:
 
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
-
-@app.command(hidden=True)
-def review(
-    ctx: typer.Context,
-    session: Optional[str] = typer.Option(
-        None, "--session-id", help="session id (overrides state file)"
-    ),
-    state: Optional[Path] = typer.Option(None, "--state", help="path to target-state.md"),
-    assess_assurance: bool = typer.Option(
-        False,
-        "--assess-assurance",
-        help="Classify the review policy from --policy-size/--risk-surface and print "
-        "the assurance verdict as JSON, then exit. Exits 3 (unsatisfied) when a "
-        "high-assurance change has no different-family reviewer.",
-    ),
-    policy_size: Optional[str] = typer.Option(
-        None, "--policy-size", help="Plan size (S/M/L) for --assess-assurance."
-    ),
-    risk_surface: Optional[list[str]] = typer.Option(
-        None,
-        "--risk-surface",
-        help="Named risk surface for --assess-assurance (repeatable).",
-    ),
-) -> None:
-    """The sigma panel is removed; the review lane is bare /fno:review.
-
-    ``fno do review classify`` / ``resolve-level`` still run as subcommands of
-    this group (the lane's emit step depends on them). Every panel surface
-    refuses here: the replacement is named and NO attestation is emitted -
-    a removed producer must never leave a path that still writes gate
-    evidence (AC8-ERR).
-    """
-    # Under ``fno do review`` this body is the GROUP's default callback, so a
-    # subcommand invocation (``fno do review classify``) reaches this line
-    # first; step aside and let the subcommand run.
-    if getattr(ctx, "invoked_subcommand", None):
-        return
-
-    if assess_assurance:
-        from fno.review.policy import resolve_session_id, review_assurance
-
-        sid = resolve_session_id(session, state or Path(".fno/target-state.md"))
-        verdict = review_assurance(
-            sid, size=policy_size, risk_surfaces=list(risk_surface or [])
-        )
-        typer.echo(json.dumps(verdict))
-        # Fail closed so a direct CLI caller gets the same block the skill does:
-        # an unsatisfied high-assurance policy must not read as a clean pass.
-        raise typer.Exit(0 if verdict["satisfied"] else 3)
-
-    typer.secho(
-        "sigma is removed: the review is bare /fno:review (the fno review lane), "
-        "which runs inline on every harness and emits its own attestation. "
-        "`fno do review classify` and `fno do review resolve-level` remain for "
-        "the lane's emit step.",
-        err=True,
-    )
-    raise typer.Exit(code=2)
 
 
 def _run_rust_front(args: list[str]) -> None:

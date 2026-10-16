@@ -9,6 +9,7 @@ Several stores hold one timeline and nothing joined them. The feed is one projec
 | Store | Holds | Contributes |
 |---|---|---|
 | `~/.fno/db/events.db` | question and team lifecycle, spawn-gate refusals, stalls, distress, daemon starts, update runs - read typed through the `events_type_ts` index | `question_asked`, `question_closed`, `decision_recorded`, `day_boundary`, `team_granted`, `team_vacated`, `session_spawned`, `session_spawn_refused`, `worker_stalled`, `help_emitted`, `update_started`, `update_finished` |
+| `~/.fno/spaces/<repo>/events.db` | one project's own journal, read typed per space | `mail_to_user` |
 | `~/.fno/graph.db` | node lifecycle as fields: `created_at`, `sessions[].started_at`, a ship-phase row beside `pr_number`, `merge_status`, `completed_at` | `node_created`, `node_started`, `node_shipped`, `pr_merged`, `node_ended` |
 | `~/.fno/agents/events.db` | the agents journal: mux close rows, spawn events, daemon starts | `session_spawned`, `session_spawn_refused`, `pane_closed`, `server_stopped`, `composer_shell_ran`, `composer_shell_refused`, `daemon_restarted` |
 | `~/.fno/agents/reap-receipts/` | one durable receipt per removed registry row, each carrying the verbatim resume line | `session_reaped` |
@@ -27,7 +28,7 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 
 | Area | Kinds |
 |---|---|
-| `mail` | `question_asked`, `question_closed`, `decision_recorded` |
+| `mail` | `question_asked`, `question_closed`, `decision_recorded`, `mail_to_user` |
 | `backlog` | `node_created`, `node_started`, `node_ended` |
 | `ship` | `node_shipped`, `pr_merged` |
 | `agents` | `session_spawned`, `session_spawn_refused`, `session_reaped`, `worker_stalled`, `help_emitted`, `team_granted`, `team_vacated` |
@@ -35,7 +36,9 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 | `fleet` | `day_boundary`, `daemon_restarted`, `update_started`, `update_finished` |
 | `ci` | `main_ci_changed` (reserved; no writer yet) |
 
-Two kinds have no writer yet: `main_ci_changed` (a durable CI source does not exist) and `mail_to_user` (no durable sink row exists). They are filed, not built here.
+One kind has no writer yet: `main_ci_changed` (a durable CI source does not exist). It is filed, not built here.
+
+`mail_to_user` derives from a `mail_escalation` event. That event marks agent mail that needs the user now. The row carries the sender, the recipient and the first line of the body. The event sits in the store of the project that sent the mail, so the feed reads each project space's store typed. The row's `cwd` is that space's repository path. The escalation runs under a per-pair debounce, so mail that lands without an escalation leaves no row. Every reason projects, a `question` mail included, because a mail question never becomes a `question_asked` row.
 
 `worker_stalled` derives from a `worker_silent` event (the handle and its silent age). `help_emitted` derives from a `blocked` event (the distress kind and its reason). A spawn-gate refusal keeps the `session_spawn_refused` kind and carries the gate axis as its `reason`. The update trio folds into `update_started` and `update_finished`.
 
@@ -171,6 +174,31 @@ For a `node_created` row with a node id, the footer offers `b: blueprint`. Press
 ## Open questions in the sideline
 
 Open questions also show as a block in the sideline, pinned above the org block. The block reads `fno-agents needs --items`, not the feed: the feed shows a question's history, and the block shows only what is open. An answer picked in the block's overlay records `sink: mux`, and the row shows the delivery rung for 15 minutes. See [attention-items](attention-items.md) for the delivery ladder.
+
+## OTLP export
+
+The feed is a local view. When you opt in, it can also feed an OpenTelemetry collector. The exporter is a daemon arm. Every five minutes it collects the feed rows of the last 24 hours and posts them as one OTLP/HTTP JSON logs batch. A batch is oldest first, at most 1000 rows.
+
+```toml
+[telemetry.otlp]
+enabled = true
+endpoint = "https://collector.example.com"  # /v1/logs is appended when absent
+log_content = false                         # titles and free text stay local
+```
+
+Auth headers come from an env var, never from the config file: `FNO_OTLP_HEADERS`, comma-separated `name=value` pairs. An unset or empty variable refuses the export rather than shipping an unauthenticated payload. The variable name itself is overridable with `headers_env`.
+
+The export is off unless `enabled = true`. Two env kill switches outrank the config: `OTEL_SDK_DISABLED` or `DO_NOT_TRACK` set to `true` or `1` force it off. The daemon reads its own environment at start. Set kill switches and the headers var where the daemon sees them. Restart the daemon after a config change.
+
+One row becomes one log record. Always-on attributes: `fno.kind`, `fno.area`, `session.id`, `event.name`, and the stable `fno.row.id`. The row id is a sha256 over kind, timestamp, node, session, ref, team, holder and name. The title is excluded, so a title edit does not resend the row. Conditional attributes: `fno.node.id`, `fno.harness`, `fno.model`, `fno.effort`, `fno.phase`, `fno.team`, `fno.actor`, `fno.parent.session.id`, `fno.ref`. With `log_content = true` the record also carries free text: `fno.title`, `fno.cwd`, `fno.reason`, `fno.detail`, `fno.url`, `fno.name`, `fno.holder`, `fno.owner`, `fno.lead`.
+
+Delivery is at-least-once keyed on `fno.row.id`. Deduplicate on that attribute at the backend. A 2xx marks the batch delivered. A 4xx other than 401, 403, 408 and 429 drops the batch, because the endpoint said never. Anything else holds it for the next beat, and the held error shows in the status line. Undelivered ids expire after 48 hours.
+
+State and receipts live under `~/.fno/agents/otlp_export/`: `state.json` holds the delivery memory, `receipts.jsonl` holds one line per post attempt.
+
+`fno agents feed --otlp` previews, never sends: it prints the batch the next beat will post to stdout, and the resolved posture to stderr. It combines with the filter flags and refuses `--json`.
+
+One risk to know: the OTLP spec does not require a server to accept the JSON encoding over HTTP. Most backends do. If yours does not, point `endpoint` at a local Collector and let it convert and forward.
 
 ## Deploy rule
 

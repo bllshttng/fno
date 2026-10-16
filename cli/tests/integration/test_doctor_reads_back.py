@@ -97,7 +97,8 @@ def test_cross_model_enabled_with_no_dispatchable_peer_is_named(
     f = _write(tmp_path / "config.toml", "schema_version = 1\n[review.cross_model]\nenabled = true\n")
     monkeypatch.setenv("FNO_CONFIG", str(f))
     monkeypatch.setattr(
-        "fno.review.provider_resolution.available_provider_kinds", lambda **_: ["claude"]
+        "fno.rust_binary.call_binary_json",
+        lambda verb, args=(), **_: (None, {"available": ["claude"]}),
     )
     problems = doctor_mod.check_enabled_with_empty_population()
     assert len(problems) == 1, problems
@@ -440,3 +441,14 @@ def test_honored_legacy_spelling_is_not_unknown(tmp_path: Path, monkeypatch: pyt
     dead = _write(tmp_path / "dead.toml", 'schema_version = 1\n[recovery]\nwatchdog_reap = true\n')
     monkeypatch.setenv("FNO_CONFIG", str(dead))
     assert any("recovery.watchdog_reap" in p for p in check_unknown_keys())
+
+
+def test_an_armed_build_freeze_is_not_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The armed freeze is a working key the Rust doors read, so the
+    walker must stay silent on it: an "unknown; ignored" line on the switch
+    that freezes the machine's agent cargo invites the reader to delete it."""
+    from fno.config_readback import check_unknown_keys
+
+    armed = _write(tmp_path / "armed.toml", 'schema_version = 1\n[build]\nagent_freeze = true\n')
+    monkeypatch.setenv("FNO_CONFIG", str(armed))
+    assert check_unknown_keys() == []

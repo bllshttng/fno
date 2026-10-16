@@ -3,11 +3,22 @@
 //! `TABLE_OWNERS` names the owners and the table_ownership test enforces
 //! Every mutation writes only the changed nodes' rows in one transaction.
 
+pub mod advance;
+pub mod advance_cli;
+pub mod advance_contract;
+pub mod advance_dispatch;
+pub mod advance_explain;
 pub mod advance_fill;
+pub mod advance_join;
+pub mod advance_lanes;
+pub mod advance_settings;
 pub mod api;
+pub mod autobrief;
 pub mod autolink;
+pub mod batch;
 pub(crate) mod binding;
 pub mod birth;
+pub mod capture;
 pub mod cli;
 pub(crate) mod closures;
 pub mod collision;
@@ -15,23 +26,34 @@ pub mod commands;
 pub mod comments;
 pub mod costs;
 pub mod create_cli;
+pub mod cutover;
 pub mod decisions;
 pub mod decisions_cli;
+pub mod decompose;
+pub mod dispatch_resolve;
 pub mod done_evidence;
 pub(crate) mod drift_emit;
 pub(crate) mod drift_scan;
 pub mod edges;
+pub mod encounter_cli;
 pub mod encounters;
 pub mod entities;
+pub mod epic;
 pub mod epic_cap;
 pub mod fields;
+pub mod finale;
 pub mod find_cli;
 pub mod findings;
 pub mod freshness;
 pub mod get_cli;
+pub mod groom;
 pub mod idea_cap;
+pub mod intake;
+pub mod maintenance;
+pub mod maintenance_archive;
 pub(crate) mod merge_evidence;
 pub(crate) mod merge_state;
+pub mod migrations;
 pub mod model;
 pub mod next;
 pub mod node_ref;
@@ -44,8 +66,12 @@ pub mod note_stale;
 pub mod orphan_plans;
 pub mod patch;
 pub mod pr_link;
+pub mod projections;
 pub(crate) mod promise;
+pub mod provenance_cli;
+pub mod publish;
 pub mod pull_requests;
+pub mod quota_route;
 pub mod rank_cli;
 pub mod receipt;
 pub(crate) mod reconcile_cli;
@@ -60,7 +86,11 @@ pub mod settings;
 pub mod style_check;
 pub(crate) mod supersession;
 pub mod target_binding;
+pub mod task;
 pub mod title_gate;
+pub mod triage;
+pub mod triage_cli;
+pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
 pub mod worked;
@@ -77,6 +107,12 @@ pub const SCHEMA_VERSION: &str = "4";
 const SCHEMA_VERSION_NUMBER: u32 = 4;
 const OPEN_SETUP_VERSION: &str = "2";
 const OPEN_SETUP_VERSION_NUMBER: u32 = 2;
+/// Fast-path stamp: when `graph_meta` carries this key with the CURRENT
+/// setup version, every open-setup step below has already run to completion
+/// on this store, so opens skip them. The value ties to `OPEN_SETUP_VERSION`
+/// so any future setup change (new migration, new column) invalidates the
+/// stamp by bumping that constant alone.
+const OPEN_FASTPATH_KEY: &str = "open_fastpath_v1";
 
 /// Each aggregate's owning module (ruling 4). The table_ownership test
 /// scans src/ against this map: a write to an owned table outside its
@@ -271,11 +307,20 @@ pub(crate) fn open_holding_lock(graph: &Path) -> Result<Connection, String> {
     open_connection(graph)
 }
 
+/// Every write connection leaves through here, so the shared-backlog write
+/// path attaches once, after setup, whichever way the setup returned.
 fn open_connection(graph: &Path) -> Result<Connection, String> {
+    let connection = open_connection_inner(graph)?;
+    crate::backlog_share::attach(&connection, graph)?;
+    Ok(connection)
+}
+
+fn open_connection_inner(graph: &Path) -> Result<Connection, String> {
     // A migration publishing under this root parks the legacy inode we
     // would otherwise open; the bounded fence wait orders us after it.
     crate::state_layout_sqlite::wait_for_fence(state_root_of(graph));
     let mut connection = crate::store_conn::open_write(&database_path(graph))?;
+    crate::backlog_share::register_writer(&connection)?;
     connection
         .execute_batch("PRAGMA foreign_keys=ON;")
         .map_err(|error| error.to_string())?;
@@ -285,6 +330,22 @@ fn open_connection(graph: &Path) -> Result<Connection, String> {
         // rows, so a healthy store pays one COUNT here and a parked store
         // folds. The DDL, migrations and one-shot imports below stay
         // setup-only.
+        //
+        // The fast path: a store stamped at the current setup version has
+        // run every step below to completion, so skip them. Two gates stay
+        // inside the skip condition, because outside readers re-check them
+        // and fall back to this open expecting the fold: the archive probe
+        // (`read_connection` re-checks it per read), and the seed COUNT (a
+        // seed can land after the stamp, and only a materialized row count
+        // proves the fold already happened).
+        let fast_path =
+            meta(&connection, OPEN_FASTPATH_KEY)?.as_deref() == Some(OPEN_SETUP_VERSION);
+        if fast_path
+            && !archive_needs_import(&connection, graph)?
+            && materialized_rows(&connection)? > 0
+        {
+            return Ok(connection);
+        }
         //
         // A store stamped before the identity columns landed carries no
         // stamp gap, so the ensure path below never runs for it and only
@@ -296,6 +357,7 @@ fn open_connection(graph: &Path) -> Result<Connection, String> {
             archive_import_if_needed(&mut connection, graph)?;
         }
         migrate_role_provenance(&mut connection)?;
+        stamp_meta(&connection, OPEN_FASTPATH_KEY, OPEN_SETUP_VERSION)?;
         return Ok(connection);
     }
     connection
@@ -322,6 +384,7 @@ fn open_connection(graph: &Path) -> Result<Connection, String> {
     archive_import_if_needed(&mut connection, graph)?;
     stamp_meta(&connection, "open_setup_version", OPEN_SETUP_VERSION)?;
     migrate_role_provenance(&mut connection)?;
+    stamp_meta(&connection, OPEN_FASTPATH_KEY, OPEN_SETUP_VERSION)?;
     Ok(connection)
 }
 
@@ -397,7 +460,7 @@ fn store_owes_a_fold(connection: &Connection) -> Result<bool, String> {
     Ok(materialized_rows(connection)? == 0)
 }
 
-fn read_connection(graph: &Path) -> Result<Connection, String> {
+pub(crate) fn read_connection(graph: &Path) -> Result<Connection, String> {
     crate::state_layout_sqlite::wait_for_fence(state_root_of(graph));
     let path = database_path(graph);
     if path.exists() {
@@ -1051,8 +1114,10 @@ fn mutate_single_row_once(
     }
     write_changed(&transaction, &rows, &working, true)?;
     nodes::recompute_status(&transaction)?;
-    let rows_after = export_rows(&transaction)?;
-    let version = content_version(&rows_after);
+    // The version hashes the rows in hand (pre-image plus this mutation's
+    // delta), not a post-write re-export of every row. authoritative_sync
+    // makes the same in-memory choice.
+    let version = content_version(&working);
     stamp_version(&transaction, &version)?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(true)
@@ -1362,6 +1427,53 @@ pub fn export_rows(connection: &Connection) -> Result<Vec<Value>, String> {
     query_rows(connection, &RowQuery::default(), None)
 }
 
+/// The light resolution index for single-node doors: id, slug, and archived
+/// flag only, in store order. The single-node loader serves the body; the
+/// whole export exists for callers that read every row. Never pass these
+/// rows as a mutation base: the store-seam guards scope counts and diffs
+/// over fields this index does not carry.
+pub fn read_resolution_index(graph: &Path) -> Result<Vec<Value>, String> {
+    let connection = read_connection(graph)?;
+    let mut statement = connection
+        .prepare("SELECT id, slug, archived_at FROM nodes ORDER BY ordinal, id")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let slug: String = row.get(1)?;
+            let archived_at: Option<String> = row.get(2)?;
+            // The archived key stays ABSENT for live rows: the live/archived
+            // partition filters on the key's absence, the shape the full
+            // export serves.
+            let mut object = serde_json::Map::new();
+            object.insert("id".into(), Value::String(id));
+            object.insert("slug".into(), Value::String(slug));
+            if let Some(ts) = archived_at {
+                object.insert("archived_at".into(), Value::String(ts));
+            }
+            Ok(Value::Object(object))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut rows: Vec<Value> = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    for (id, _, body) in nodes::raw_rows_where(&connection, None)? {
+        let mut object = serde_json::Map::new();
+        object.insert("id".into(), Value::String(id));
+        if let Some(slug) = body.get("slug").filter(|value| !value.is_null()) {
+            object.insert("slug".into(), slug.clone());
+        }
+        // The raw body rides verbatim, null included: the live/archived
+        // partition reads the key's presence, and an explicit null reads as
+        // archived exactly as it does in the whole export.
+        if let Some(value) = body.get("archived_at") {
+            object.insert("archived_at".into(), value.clone());
+        }
+        rows.push(Value::Object(object));
+    }
+    Ok(rows)
+}
+
 /// Narrow selection and projection. Whole-read defaults retain archived rows;
 /// readiness support stays internal when requested through `with_blockers`.
 #[derive(Clone, Debug)]
@@ -1534,10 +1646,27 @@ fn query_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     let mut merged = Vec::new();
+    let load_ids: Vec<String> = ids.iter().map(|(id, _)| id.clone()).collect();
+    let mut parts = nodes::load_parts_many(connection, &load_ids, fields.as_deref())?;
     for (id, ordinal) in ids {
-        let body = load(&id, fields.as_deref())?
-            .ok_or_else(|| format!("node {id} vanished mid-export"))?;
-        merged.push((ordinal, id, body));
+        let claim = node_claims.get(&id).cloned().unwrap_or_default();
+        let mut row = match nodes::load_from_parts(
+            &mut parts,
+            &id,
+            Some(claim.clone()),
+            fields.as_deref(),
+        )? {
+            Some(node) => Some(node.to_json()),
+            None => nodes::raw_rows_where(connection, Some(&[id.to_owned()]))?
+                .into_iter()
+                .find(|(raw_id, _, _)| raw_id == &id)
+                .map(|(_, _, row)| row),
+        };
+        if let Some(row) = &mut row {
+            nodes::project_claim_value(row, claim);
+        }
+        let row = row.ok_or_else(|| format!("node {id} vanished mid-export"))?;
+        merged.push((ordinal, id, row));
     }
     for (id, ordinal, mut body) in nodes::raw_rows_where(connection, filter.id_in.as_deref())? {
         if !query.include_archived
@@ -1601,21 +1730,24 @@ fn query_rows(
                 rows.push(body);
             }
         }
-        for parent in parents {
-            let mut statement = connection
-                .prepare_cached("SELECT id FROM nodes WHERE parent_id = ?1 ORDER BY ordinal, id")
-                .map_err(|error| error.to_string())?;
-            let ids = statement
-                .query_map(params![parent], |row| row.get::<_, String>(0))
-                .map_err(|error| error.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?;
-            for id in ids {
+        let mut support_ids: Vec<String> = Vec::new();
+        for children in nodes::child_ids_many(connection, &parents)?.values() {
+            for id in children {
                 if loaded.insert(id.clone()) {
-                    if let Some(row) = load(&id, Some(&support_fields))? {
-                        rows.push(row);
-                    }
+                    support_ids.push(id.clone());
                 }
+            }
+        }
+        let mut support_parts =
+            nodes::load_parts_many(connection, &support_ids, Some(&support_fields))?;
+        for id in &support_ids {
+            if let Some(node) = nodes::load_from_parts(
+                &mut support_parts,
+                id,
+                Some(node_claims.get(id).cloned().unwrap_or_default()),
+                Some(&support_fields),
+            )? {
+                rows.push(node.to_json());
             }
         }
     }
@@ -1789,7 +1921,9 @@ mod tests {
     /// path runs the identity migration, so the first reader of
     /// agent_sessions.fno_id meets the column instead of dying on it (the
     /// merge-refusal shape the fleet hit on stores minted before the
-    /// identity columns landed).
+    /// identity columns landed). Such a store predates the fast-path stamp
+    /// too, so the test clears it with the columns: a store whose stamp is
+    /// current skips the migration by design.
     #[test]
     fn a_stamped_store_without_identity_columns_opens_and_gains_them() {
         let (_dir, graph) = fixture("identity-stamped.json");
@@ -1801,7 +1935,8 @@ mod tests {
                 "DROP INDEX IF EXISTS agent_sessions_fno_id;
                  ALTER TABLE agent_sessions DROP COLUMN fno_id;
                  ALTER TABLE agent_sessions DROP COLUMN display_name;
-                 ALTER TABLE agent_sessions DROP COLUMN links;",
+                 ALTER TABLE agent_sessions DROP COLUMN links;
+                 DELETE FROM graph_meta WHERE key = 'open_fastpath_v1';",
             )
             .unwrap();
         }
@@ -1821,6 +1956,32 @@ mod tests {
                 "the stamped store opened without {column}"
             );
         }
+    }
+
+    /// A freshly dropped archive folds even when the fast-path stamp is
+    /// current: the read path re-checks `archive_needs_import` per read and
+    /// falls back to this open expecting the fold, so the stamp must not
+    /// strand it.
+    #[test]
+    fn a_fresh_archive_folds_through_the_fast_path_stamp() {
+        let (_dir, graph) = fixture("fastpath-archive.json");
+        open(&graph).unwrap();
+        std::fs::write(
+            graph.with_file_name("graph-archive.json"),
+            r#"{"entries":[{"id":"x-arch1","title":"archived","status":"intake"}]}"#,
+        )
+        .unwrap();
+        open(&graph).unwrap();
+        let conn = Connection::open(database_path(&graph)).unwrap();
+        let folded: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM nodes WHERE id = 'x-arch1')
+                      + (SELECT COUNT(*) FROM nodes_raw WHERE id = 'x-arch1')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(folded, 1, "the fast-path stamp folded over a fresh archive");
     }
 
     /// A first write that lands between an opener's unlocked row count and
@@ -1889,6 +2050,54 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    /// First writes of a brand-new store, two at once, all land: each writer
+    /// enters through the full mutate cycle (snapshot, row diff, publish),
+    /// the surface the store's clients drive, not a bare open. A conflict
+    /// heals inside the cycle; any other error fails the run.
+    #[test]
+    fn concurrent_first_writes_on_a_new_store_all_land() {
+        for iteration in 0..25 {
+            let (_dir, graph) = fixture("graph.json");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let writers: Vec<_> = (0..2)
+                .map(|writer| {
+                    let (graph, barrier) = (graph.clone(), barrier.clone());
+                    let node_id = format!("ab-w{iteration}-{writer}");
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        crate::graph_store::mutate_rows(
+                            &graph,
+                            Duration::from_secs(10),
+                            None,
+                            None,
+                            move |rows| {
+                                rows.push(serde_json::json!({
+                                    "id": node_id, "slug": node_id, "title": "First",
+                                    "type": "feature", "status": "idea", "priority": "p2",
+                                    "domain": "code",
+                                }));
+                                Ok(true)
+                            },
+                        )
+                        .map(drop)
+                    })
+                })
+                .collect();
+            for writer in writers {
+                writer.join().unwrap().unwrap();
+            }
+            let rows = crate::graph_store::read_rows(&graph).unwrap();
+            for writer in 0..2 {
+                let id = format!("ab-w{iteration}-{writer}");
+                assert!(
+                    rows.iter()
+                        .any(|row| row.get("id").and_then(|v| v.as_str()) == Some(id.as_str())),
+                    "row {id} never landed"
+                );
+            }
+        }
     }
 
     fn two_node_graph(dir: &TempDir) -> PathBuf {
@@ -1967,6 +2176,17 @@ mod tests {
                            \"created_at\": \"2026-09-01T00:00:00+00:00\"}');";
         let via_write = dir.path().join("fold-on-write.json");
         drop(open(&via_write).unwrap());
+        // The fold below runs while the fast-path stamp is current, so the
+        // seed gate inside the skip condition stays load-bearing here.
+        let stamped: String = Connection::open(database_path(&via_write))
+            .unwrap()
+            .query_row(
+                "SELECT value FROM graph_meta WHERE key = 'open_fastpath_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stamped, OPEN_SETUP_VERSION, "the first open must stamp");
         open(&via_write).unwrap().execute_batch(row_sql).unwrap();
         drop(open(&via_write).unwrap());
         assert_eq!(

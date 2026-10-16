@@ -95,9 +95,10 @@ def _gate_with_master(
 
 
 def _advance_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.backlog.advance import _auto_continue_resolve
+    from fno.rust_binary import verb_call
 
-    armed, rank = _auto_continue_resolve(project_root)
+    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "advance (node-walk)", "PR merge (reconcile / /fno:ship pr merged)",
         "config.auto_continue.enabled", armed, rank,
@@ -108,9 +109,10 @@ def _dispatch_lanes_status(project_root: Optional[Path]) -> SpawnerStatus:
     # dispatch_lanes has no gate check of its own; every caller invokes it
     # only after auto_continue_enabled() already passed (design doc,
     # x-aaaa), so its armed state and rank are the SAME resolution.
-    from fno.backlog.advance import _auto_continue_resolve
+    from fno.rust_binary import verb_call
 
-    armed, rank = _auto_continue_resolve(project_root)
+    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "dispatch_lanes (parallel fill)", "active-backlog daemon tick",
         "config.auto_continue.enabled", armed, rank,
@@ -118,9 +120,10 @@ def _dispatch_lanes_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _epic_converge_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.backlog.advance import _auto_continue_resolve
+    from fno.rust_binary import verb_call
 
-    armed, rank = _auto_continue_resolve(project_root)
+    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "epic converge (mission drain)", "fno backlog advance --epic",
         "config.auto_continue.enabled", armed, rank,
@@ -128,9 +131,10 @@ def _epic_converge_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _reconcile_dispatch_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.backlog.advance import _auto_continue_resolve
+    from fno.rust_binary import verb_call
 
-    armed, rank = _auto_continue_resolve(project_root)
+    answer = verb_call(["backlog", "advance", "--stdin"], {"op": "armed", "project_root": str(project_root) if project_root else None})
+    armed, rank = answer["armed"], answer["rank"]
     return SpawnerStatus(
         "reconcile_dispatch (G4 de-stub)", "PR merge (contract dependent's blocker closes)",
         "config.auto_continue.enabled", armed, rank,

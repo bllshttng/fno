@@ -37,7 +37,7 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 /// The per-user global config.toml, mirroring Python's `_global_settings_path` +
 /// `_prefer_toml`: read the config.toml SIBLING of `$FNO_GLOBAL_SETTINGS_PATH`
 /// when set, else `$HOME/.fno/config.toml`.
-fn global_config_path() -> Option<PathBuf> {
+pub(crate) fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         return Some(PathBuf::from(p).with_file_name("config.toml"));
     }
@@ -148,7 +148,7 @@ fn warn_once_if_yaml(path: &Path) {
 
 /// Parse a flat config.toml body into a table; `None` on any parse error (a
 /// malformed file degrades every getter to its hang-safe default).
-fn parse_config(content: &str) -> Option<toml::Table> {
+pub(crate) fn parse_config(content: &str) -> Option<toml::Table> {
     content.parse::<toml::Table>().ok()
 }
 
@@ -446,6 +446,26 @@ impl SandboxUnavailablePolicy {
     }
 }
 
+/// Default added-line budget the commit-time diff-budget guard measures a
+/// target session against when its bound plan declares no frontmatter
+/// `diff_budget`. 0 is off.
+pub const DEFAULT_PLAN_DIFF_BUDGET: u32 = 300;
+
+/// Resolve `plan.default_diff_budget`, same precedence + fail-open degrade
+/// as [`worktree_prune_done`]: a missing or malformed value takes the
+/// default, and 0 disables the guard. `$FNO_PLAN_DEFAULT_DIFF_BUDGET` is a
+/// global test/tuning override.
+pub fn default_diff_budget(cwd: &Path) -> u32 {
+    if let Some(v) = non_empty_env("FNO_PLAN_DEFAULT_DIFF_BUDGET")
+        .and_then(|s| s.to_str().and_then(|s| s.trim().parse::<u32>().ok()))
+    {
+        return v;
+    }
+    config_lookup(cwd, &["plan", "default_diff_budget"])
+        .and_then(|v| v.as_integer().and_then(|i| u32::try_from(i).ok()))
+        .unwrap_or(DEFAULT_PLAN_DIFF_BUDGET)
+}
+
 /// Apply the shared headless confinement boundary for harnesses whose own argv
 /// has no usable sandbox backend. Explicit bypass remains an operator choice;
 /// otherwise the configured policy decides whether the child may spawn.
@@ -575,6 +595,19 @@ fn scalar_to_string(v: &Value) -> Option<String> {
 /// carries a well-formed key.
 pub fn headless_yolo_enabled(provider: &str, cwd: &Path) -> bool {
     resolve(cwd, |t| table_headless_yolo(t, provider)).unwrap_or(false)
+}
+
+/// `agents.<harness>.beat`, trimmed and lowercased; `None` when unset.
+pub fn agents_beat(harness: &str, cwd: &Path) -> Option<String> {
+    resolve(cwd, |t| {
+        let word = t
+            .get("agents")?
+            .as_table()?
+            .get(harness)?
+            .as_table()?
+            .get("beat")?;
+        Some(word.as_str()?.trim().to_lowercase())
+    })
 }
 
 /// Fold the headless default into an explicit `yolo` opt-in. An explicit
@@ -1177,11 +1210,11 @@ fn affirmative(value: &toml::Value) -> bool {
 /// to a review posture below the self_review floor (rank 3), so GitHub-native
 /// auto-merge must NOT be armed.
 ///
-/// This is the GitHub-native arm of the floor the Python merge verb enforces
-/// on every granted merge (`automerge_floor_refusal` in
-/// `fno/review_capability.py`, applied by the manifest arm and the
-/// durable-grant resolver). Without it a below-floor repo that can never pass
-/// the merge verb could still hand the merge to GitHub at the green terminal.
+/// This is now the ONE enforcement arm of that floor: the Python twin
+/// (`automerge_floor_refusal` in `fno/review_capability.py`) deleted with the
+/// module, which had no production caller left. Without this arm a
+/// below-floor repo that can never pass the merge verb could still hand the
+/// merge to GitHub at the green terminal.
 ///
 /// The below-floor set is derived from the legacy-inference mirror in
 /// `loopcheck::resolve_posture_config`: only three cells resolve below rank 3
@@ -1333,6 +1366,49 @@ pub fn auto_merge_require_fresh_ci(cwd: &Path) -> bool {
     .unwrap_or(true)
 }
 
+/// Resolve `[auto_merge] require_checks_pass` (default ON). The native merge
+/// flow gates its flake-recovery probe on this switch; a malformed or absent
+/// value falls back to the safe default so a config typo cannot merge on a
+/// red run.
+pub fn auto_merge_require_checks_pass(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("require_checks_pass")?
+            .as_bool()
+    })
+    .unwrap_or(true)
+}
+
+/// Resolve `[auto_merge] remediation` (default `attempt`). The only other
+/// legal value is `verify_only`, which the verify verb's remediation arm
+/// refuses on; anything else coerces to `attempt`, exactly the Python
+/// validator's stance - a config error never grants a merge attempt.
+pub fn auto_merge_remediation(cwd: &Path) -> String {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("remediation")?
+            .as_str()
+            .map(|s| s.trim().to_string())
+    })
+    .filter(|v| matches!(v.as_str(), "attempt" | "verify_only"))
+    .unwrap_or_else(|| "attempt".to_string())
+}
+
+/// Resolve `[auto_merge] delete_branch_on_merge` (default ON). The verify
+/// remediation's post-merge cleanup reads the same switch the merge verb does,
+/// so both executors treat cleanup identically.
+pub fn auto_merge_delete_branch_on_merge(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("auto_merge")?
+            .as_table()?
+            .get("delete_branch_on_merge")?
+            .as_bool()
+    })
+    .unwrap_or(true)
+}
+
 /// The normalized raw scalar for a direct child of `agents:`, so each caller
 /// applies its own coercion.
 pub(crate) fn resolve_agents_value(cwd: &Path, key: &str) -> Option<String> {
@@ -1412,8 +1488,9 @@ pub fn notify_arm_failing_after_s(cwd: &Path) -> u64 {
     .unwrap_or(1800)
 }
 
-/// `[notify] arm_starved_after_s` (default 604800, 7 days): how long an armed loop may tick without acting on anything before the arms table calls it starved. `0` or a value that does not parse falls back to the default.
+/// `[notify] arm_starved_after_s` (default 604800, 7 days): how long an armed loop may tick without acting on anything before the arms table calls it starved. `0` or a value that does not parse falls back to the default. A value past the telemetry retention is capped at it: the store holds no older ticks to judge.
 pub fn notify_arm_starved_after_s(cwd: &Path) -> u64 {
+    let retention_s = crate::event_store::TELEMETRY_TTL_HOURS as u64 * 3600;
     resolve(cwd, |t| {
         t.get("notify")?
             .as_table()?
@@ -1423,6 +1500,7 @@ pub fn notify_arm_starved_after_s(cwd: &Path) -> u64 {
     })
     .filter(|v| *v > 0)
     .unwrap_or(604_800)
+    .min(retention_s)
 }
 
 /// `[auto_heal] enabled` (default false): whether the CI healer drive loop is armed.
@@ -1460,6 +1538,20 @@ pub fn telemetry_claude_otel(cwd: &Path) -> bool {
             .and_then(|v| v.as_bool())
     })
     .unwrap_or(true)
+}
+
+/// Opt-in OTLP export: `telemetry.otlp.enabled`, default false. The
+/// exporter stays home until the operator names it.
+pub fn otlp_export_enabled(cwd: &Path) -> bool {
+    resolve(cwd, |t| {
+        t.get("telemetry")?
+            .as_table()?
+            .get("otlp")?
+            .as_table()?
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+    })
+    .unwrap_or(false)
 }
 
 /// `[slot_cutover] enabled` (default false): whether the shared Claude slot may switch.
@@ -2754,6 +2846,34 @@ mod tests {
             "[auto_merge]\nrequire_fresh_ci = \"not-a-bool\"\n",
         );
         assert!(auto_merge_require_fresh_ci(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings("amrcp-absent", "schema_version = 1\n");
+        assert!(auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_honors_false() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd =
+            write_project_settings("amrcp-false", "[auto_merge]\nrequire_checks_pass = false\n");
+        assert!(!auto_merge_require_checks_pass(&cwd));
+    }
+
+    #[test]
+    fn auto_merge_require_checks_pass_invalid_defaults_true() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_config_env();
+        let cwd = write_project_settings(
+            "amrcp-invalid",
+            "[auto_merge]\nrequire_checks_pass = \"not-a-bool\"\n",
+        );
+        assert!(auto_merge_require_checks_pass(&cwd));
     }
 
     /// Build a main checkout + linked worktree, with `body` as the CANONICAL

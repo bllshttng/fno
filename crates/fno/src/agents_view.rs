@@ -1671,125 +1671,6 @@ pub fn overlay_truth_badges(rows: &mut [RegistryAgent], truth: &TruthBadges) {
     }
 }
 
-/// Process start time in the REGISTRY'S own units: macOS folds
-/// `proc_bsdinfo` to microseconds, Linux keeps the raw `/proc/<pid>/stat`
-/// starttime ticks. Deliberately NOT `probe_pid`: the registry's
-/// `pid_start_time` is a per-host, per-boot quantity compared only for
-/// equality against a value captured for the SAME pid, so it must be read
-/// with the same units `fno-agents`' registry writer used (daemon.rs
-/// `process_start_time`), not converted to epoch ms.
-#[cfg(target_os = "macos")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    use std::mem;
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(target_os = "linux")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse().ok()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn registry_start_time(_pid: u32) -> Option<u64> {
-    None
-}
-
-/// POSITIVE falsification of one non-terminal row's liveness by its own
-/// recorded pid. A machine restart writes nothing to the registry,
-/// so every row keeps the status it last had on disk - including "working"
-/// for workers that died with the reboot. `restore_squads` reads that set to
-/// decide which members to respawn, so an unverified status read respawns
-/// `claude attach` into sessions that no longer exist. Falsified ONLY on
-/// positive evidence, never on an inability to check:
-///
-/// - a recorded pid that is provably invalid (0, 1, or out of `pid_t` range -
-///   no real worker ever holds one), or
-/// - a recorded pid whose process is gone (`kill(pid, 0)` -> ESRCH), or
-/// - a recorded `(pid, pid_start_time)` pair whose live process now starts at
-///   a different time (the pid was reused after the worker died).
-///
-/// A row with no recorded pid, an unparsable document, an EPERM (alive but
-/// not ours to signal), or an unreadable start time keeps its status-field
-/// verdict - the fail-safe posture everywhere else in this file.
-fn row_falsified(row: &serde_json::Value, status: &str) -> bool {
-    if matches!(status, "exited" | "permanent-dead" | "permanent_dead") {
-        return false; // already terminal; nothing to falsify
-    }
-    let Some(pid) = row.get("pid").and_then(|v| v.as_u64()) else {
-        return false; // no recorded pid: the status field stays the verdict
-    };
-    if pid <= 1 || pid > i32::MAX as u64 {
-        return true; // a recorded pid no worker can hold is corruption, not liveness
-    }
-    // SAFETY: signal 0 performs no delivery, only an existence/permission probe.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc != 0 {
-        return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-    }
-    // Alive: only a start-time mismatch (a reused pid) may still falsify.
-    match (
-        row.get("pid_start_time").and_then(|v| v.as_u64()),
-        registry_start_time(pid as u32),
-    ) {
-        (Some(recorded), Some(now)) => recorded != now,
-        _ => false, // no basis to prove reuse -> trust existence
-    }
-}
-
-/// The attach-ids (`short_id`s) of claude rows whose claimed-live status
-/// their own recorded pid falsifies (see [`row_falsified`]). The restore-time
-/// liveness read subtracts this set so a reboot's stale "working" rows read
-/// dead instead of respawning. Tolerant of a malformed document: it
-/// contributes nothing, exactly like `derive_rows`.
-pub fn stale_live_attach_ids(reg_raw: &str) -> std::collections::HashSet<String> {
-    let mut stale = std::collections::HashSet::new();
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(reg_raw) else {
-        return stale;
-    };
-    let Some(rows) = doc
-        .get("agents")
-        .or_else(|| doc.get("entries"))
-        .and_then(|v| v.as_array())
-    else {
-        return stale;
-    };
-    for row in rows {
-        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        let is_claude = row
-            .get("harness")
-            .or_else(|| row.get("provider"))
-            .and_then(|v| v.as_str())
-            == Some("claude");
-        let attach_id = row
-            .get("short_id")
-            .or_else(|| row.get("claude_short_id"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        if is_claude && row_falsified(row, status) {
-            if let Some(id) = attach_id {
-                stale.insert(id.to_string());
-            }
-        }
-    }
-    stale
-}
-
 /// Derive the sideline row set from raw registry JSON at `now_secs`. Pure so
 /// the whole lattice derivation is unit-testable without a file or a clock.
 /// A malformed document yields `None` (the caller keeps its last-good rows -
@@ -2329,6 +2210,58 @@ pub fn supervisor_sock_path() -> PathBuf {
     base.join(".fno").join("agents").join("supervisor.sock")
 }
 
+/// One daemon RPC round trip: connect, write one length-prefixed request
+/// frame, read one length-prefixed answer frame, decode the envelope. The
+/// framing (a 4-byte little-endian body length, then the body, no newline
+/// anywhere) is the daemon's wire contract
+/// (crates/fno-agents/src/protocol.rs), so it lives in exactly one place;
+/// [`watch_registry`] and [`agent_list_rpc`] bound their own round trips
+/// and read their own result shapes. The 16 MiB cap mirrors the daemon's
+/// MAX_FRAME_BYTES, so an oversize answer is refused, not read.
+async fn daemon_rpc(
+    sock: &std::path::Path,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "id": 1u64,
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|e| format!("encode: {e}"))?;
+    let mut conn = tokio::net::UnixStream::connect(sock)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+    let mut frame = Vec::with_capacity(4 + body.len());
+    frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&body);
+    conn.write_all(&frame)
+        .await
+        .map_err(|e| format!("write: {e}"))?;
+    let mut len_buf = [0u8; 4];
+    conn.read_exact(&mut len_buf)
+        .await
+        .map_err(|e| format!("read: {e}"))?;
+    let len = u32::from_le_bytes(len_buf);
+    if len > MAX_FRAME_BYTES {
+        return Err(format!("{method}: answer frame too large: {len}"));
+    }
+    let mut answer = vec![0u8; len as usize];
+    conn.read_exact(&mut answer)
+        .await
+        .map_err(|e| format!("read: {e}"))?;
+    let resp: serde_json::Value =
+        serde_json::from_slice(&answer).map_err(|e| format!("decode: {e}"))?;
+    if let Some(err) = resp.get("error") {
+        return Err(format!("{method} error: {err}"));
+    }
+    resp.get("result")
+        .cloned()
+        .ok_or_else(|| format!("{method}: answer carried neither result nor error"))
+}
+
 /// One `agent.watch` round trip against the daemon, if one
 /// answers. The registry's (mtime, len) stamp is the subscription version: it
 /// travels out as `since` and back beside the document, so the caller's
@@ -2346,8 +2279,6 @@ pub async fn watch_registry(
     since: Option<(std::time::SystemTime, u64)>,
     sock: &std::path::Path,
 ) -> Result<(Option<(std::time::SystemTime, u64)>, Option<String>), String> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
     async fn round(
         since: Option<(std::time::SystemTime, u64)>,
         sock: &std::path::Path,
@@ -2362,33 +2293,8 @@ pub async fn watch_registry(
             }
             None => serde_json::Value::Null,
         };
-        let req = serde_json::json!({
-            "id": 1u64,
-            "method": "agent.watch",
-            "params": {"since": since_v},
-        });
-        let mut frame = req.to_string();
-        frame.push('\n');
-        let mut conn = tokio::net::UnixStream::connect(sock)
-            .await
-            .map_err(|e| format!("connect: {e}"))?;
-        conn.write_all(frame.as_bytes())
-            .await
-            .map_err(|e| format!("write: {e}"))?;
-        let mut reader = BufReader::new(conn);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| format!("read: {e}"))?;
-        let resp: serde_json::Value =
-            serde_json::from_str(line.trim()).map_err(|e| format!("decode: {e}"))?;
-        if let Some(err) = resp.get("error") {
-            return Err(format!("agent.watch error: {err}"));
-        }
-        let result = resp
-            .get("result")
-            .ok_or_else(|| "agent.watch: answer carried neither result nor error".to_string())?;
+        let result =
+            daemon_rpc(sock, "agent.watch", serde_json::json!({ "since": since_v })).await?;
         // Version -> stamp: the same (mtime, len) domain the file scan gates
         // with, so a served answer and a scanned answer are interchangeable
         // downstream without the reader knowing which one produced it.
@@ -2413,6 +2319,28 @@ pub async fn watch_registry(
     tokio::time::timeout(std::time::Duration::from_secs(2), round(since, sock))
         .await
         .map_err(|_| "agent.watch: round trip exceeded 2s".to_string())?
+}
+
+/// One `agent.list` round trip against the daemon, if one answers: the
+/// whole live fleet's rows, the same answer `fno agents list --json`
+/// prints after its Python cold start (the mux truth probe
+/// rides this instead of spawning the CLI, so no interpreter is ever a
+/// mux child). Params are empty exactly as the CLI's no-arg list sends
+/// them: no filter, every live row, the shape
+/// schemas/agents-list-row.json pins.
+///
+/// `Err(_)` - no daemon (refused/absent socket), transport fault, or the
+/// round-trip bound exceeded. The caller keeps the last good map.
+pub async fn agent_list_rpc(sock: &std::path::Path) -> Result<serde_json::Value, String> {
+    // Bound the WHOLE round trip: the daemon runs its per-list truth batch
+    // server-side, which can take tens of seconds on a big fleet, but a
+    // wedged daemon must release the probe latch, not hold it forever.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        daemon_rpc(sock, "agent.list", serde_json::json!({})),
+    )
+    .await
+    .map_err(|_| "agent.list: round trip exceeded 120s".to_string())?
 }
 
 /// Union the fno registry rows with claude's roster. Pure so the
@@ -2789,77 +2717,6 @@ mod tests {
 
     // --: restore liveness must not trust a status string the row's
     //    own pid falsifies -----------------------------------------------
-
-    /// A claude row with a recorded pid that ESRCHs must land in the stale
-    /// set - the reboot case, the exact respawn the fix removes.
-    #[test]
-    fn stale_live_attach_ids_rows() {
-        let mut child = crate::pty::ChildGuard::spawn(&mut std::process::Command::new("true"));
-        let pid = child.id();
-        child.wait_now();
-        let raw = reg(&format!(
-            r#"{{"name":"ghost","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"deadbeef","pid":{pid},"pid_start_time":99887766}}"#
-        ));
-        let stale = stale_live_attach_ids(&raw);
-        assert!(
-            stale.contains("deadbeef"),
-            "a reaped pid ({pid}) with a working status must read stale"
-        );
-
-        let pid = std::process::id();
-        let Some(start) = registry_start_time(pid) else {
-            return; // platform without start-time support; existence arm only
-        };
-        let matching = reg(&format!(
-            r#"{{"name":"me","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"aaaaaaaa","pid":{pid},"pid_start_time":{start}}}"#
-        ));
-        assert!(
-            !stale_live_attach_ids(&matching).contains("aaaaaaaa"),
-            "a live pid with a matching start time is not stale"
-        );
-        let reused = reg(&format!(
-            r#"{{"name":"me","cwd":"/w","status":"working","harness":"claude",
-                 "short_id":"aaaaaaaa","pid":{pid},"pid_start_time":{}}}"#,
-            start + 1
-        ));
-        assert!(
-            stale_live_attach_ids(&reused).contains("aaaaaaaa"),
-            "a live pid with a mismatched start time is a reused pid, not the worker"
-        );
-
-        let no_pid = reg(
-            r#"{"name":"a","cwd":"/w","status":"working","harness":"claude","short_id":"aaaaaaaa"}"#,
-        );
-        assert!(
-            stale_live_attach_ids(&no_pid).is_empty(),
-            "no pid -> not stale"
-        );
-        let mut child = crate::pty::ChildGuard::spawn(&mut std::process::Command::new("true"));
-        let pid = child.id();
-        child.wait_now();
-        let codex = reg(&format!(
-            r#"{{"name":"b","cwd":"/w","status":"working","harness":"codex",
-                 "short_id":"bbbbbbbb","pid":{pid}}}"#
-        ));
-        assert!(
-            stale_live_attach_ids(&codex).is_empty(),
-            "a non-claude short_id is not an attach target"
-        );
-        let terminal = reg(&format!(
-            r#"{{"name":"c","cwd":"/w","status":"exited","harness":"claude",
-                 "short_id":"cccccccc","pid":{pid}}}"#
-        ));
-        assert!(
-            stale_live_attach_ids(&terminal).is_empty(),
-            "a terminal row is dead by status; nothing to falsify"
-        );
-        assert!(
-            stale_live_attach_ids("{not json").is_empty(),
-            "a malformed document contributes nothing"
-        );
-    }
 
     /// A LIVE pid whose recorded start time matches stays live; the same pid
     /// with a mismatched recorded start (a reuse) reads stale.
@@ -4460,12 +4317,10 @@ config_dir = "~/.claude-alt"
                 "{name}"
             );
         }
-    }
-
-    #[test]
-    fn ambiguous_bare_hex_node_id_resolves_to_none() {
-        let known = HashMap::from([("x-4444".to_string(), ()), ("y-4444".to_string(), ())]);
-        assert_eq!(resolve_node_id("t-4444-finish", &known), None);
+        // Two registry rows differing only in the bare-hex slot make a bare
+        // hex lookup ambiguous: it resolves to none rather than guessing.
+        let ambiguous = HashMap::from([("x-4444".to_string(), ()), ("y-4444".to_string(), ())]);
+        assert_eq!(resolve_node_id("t-4444-finish", &ambiguous), None);
     }
 
     #[test]
@@ -4570,13 +4425,9 @@ config_dir = "~/.claude-alt"
         let now = rfc3339_like_to_secs("2026-07-09T01:07:00Z").unwrap();
         let ages = newest_fire_ages(&t.events(), now);
         assert_eq!(ages.get(SID), Some(&120), "{ages:?}");
-    }
-
-    #[test]
-    fn newest_fire_ages_is_empty_without_a_store() {
-        // AC7-HP: no rows -> no badges, never an error.
-        let t = Tmp::new("fire-ages-empty");
-        assert!(newest_fire_ages(&t.events(), 1_800_000_000).is_empty());
+        // No rows -> no badges, never an error.
+        let empty = Tmp::new("fire-ages-empty");
+        assert!(newest_fire_ages(&empty.events(), 1_800_000_000).is_empty());
     }
 
     #[test]
@@ -4720,7 +4571,7 @@ config_dir = "~/.claude-alt"
     }
 
     #[test]
-    fn reconcile_holds_a_record_observed_unknown() {
+    fn reconcile_state_rows() {
         // codex P2: a tracked id observed as Unknown (present but indeterminate)
         // is HELD as unknown, never deleted as absent.
         let mut obs = HashMap::new();
@@ -4731,10 +4582,7 @@ config_dir = "~/.claude-alt"
         );
         assert_eq!(out.len(), 1, "an unknown-observed record is not deleted");
         assert_eq!(out[0].state, ExternalState::Unknown);
-    }
 
-    #[test]
-    fn reconcile_state_rows() {
         // AC1-FR: stopping + terminal -> stopped; + live -> failed (retry); +
         // absent -> removed (dropped).
         let mut obs = HashMap::new();
