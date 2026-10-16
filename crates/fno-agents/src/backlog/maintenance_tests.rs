@@ -283,6 +283,9 @@ fn stale_ready_exempts_undesigned_contained_blocked_and_moved_work() {
         ),
         node("h", json!({})),
     ];
+    // Read after the stamps: a clock read before them makes the 80-day
+    // stamp a millisecond short of 80 days, and the age floors to 79.
+    let now = now_ms();
     let got = detect_stale_ready(&entries, 21, now);
     assert_eq!(
         got,
