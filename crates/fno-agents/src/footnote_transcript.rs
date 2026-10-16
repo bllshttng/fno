@@ -31,9 +31,8 @@ pub const KNOWN_TYPES: &[&str] = &[
     "terminal",
 ];
 
-/// The ignorable types the spec names. A reader may use them; resume never
-/// needs them, so a writer marks each one `ignorable` and an older reader
-/// skips it.
+/// The ignorable types the spec names: resume never needs them, so an older
+/// reader may skip them.
 pub const LOG_TYPES: &[&str] = &[
     "heartbeat",
     "hook_run",
@@ -43,9 +42,8 @@ pub const LOG_TYPES: &[&str] = &[
     "child_session",
 ];
 
-/// A writer appends a `heartbeat` this often while its process lives, idle
-/// included. A reader that sees none for `HEARTBEAT_STALE_SECS` stops
-/// counting the session as alive; silence alone never proves it dead.
+/// A writer appends a `heartbeat` this often for as long as it lives. A
+/// reader counts the session alive while the newest is under the stale bound.
 pub const HEARTBEAT_EVERY_SECS: u64 = 30;
 pub const HEARTBEAT_STALE_SECS: u64 = 90;
 
@@ -59,67 +57,18 @@ pub struct Heartbeat {
     pub pid: u32,
 }
 
-/// The end of one run. The totals cover the whole session record, so the
-/// newest `terminal` holds the session's spend so far.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The end of one run. Its totals cover the whole session record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Terminal {
     /// `done`, `budget`, `refused`, `interrupted` or `error`.
     pub state: String,
-    #[serde(default)]
     pub reason: String,
-    #[serde(default)]
     pub turns: u64,
-    #[serde(default)]
     pub tool_calls: u64,
-    #[serde(default)]
     pub input_tokens: u64,
-    #[serde(default)]
     pub output_tokens: u64,
-    #[serde(default)]
     pub cost_usd: f64,
-}
-
-/// One cited source and the harness's verdict on it: `accepted`, `missing`,
-/// `rejected`, `unverifiable` or `stale`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Footnote {
-    pub mark: u32,
-    pub source: String,
-    pub verdict: String,
-    pub reason_code: Option<String>,
-    pub kind: Option<String>,
-}
-
-/// A claim's verdict is `accepted` when every footnote is, else the worst of
-/// `rejected`, `missing`, `unverifiable` and `stale`. A check the harness did
-/// not run reads `not_run`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Claim {
-    pub n: u32,
-    pub text: String,
-    pub verdict: String,
-    pub reason_code: Option<String>,
-    pub footnotes: Vec<Footnote>,
-}
-
-/// The verdicts on one run's final reply.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Footnotes {
-    pub gist: String,
-    pub claims: Vec<Claim>,
-    pub claims_total: u64,
-    pub claims_accepted: u64,
-    pub claims_missing: u64,
-    pub claims_rejected: u64,
-    pub claims_unverifiable: u64,
-    pub claims_stale: u64,
-    /// `done`, or the terminal state of a run that did not end done.
-    pub ending: String,
-    /// The commit the verdicts were made at; null outside git.
-    pub head_sha: Option<String>,
 }
 
 /// The newest record of `ty`.
@@ -289,8 +238,7 @@ mod tests {
     }
 
     /// The published JSON Schema names every record type a reader knows or
-    /// the spec lists as ignorable, and every field the typed records carry;
-    /// the newest lifecycle and verdict records parse into their types.
+    /// the spec lists as ignorable, and the lifecycle types match its fields.
     #[test]
     fn the_published_schema_matches_the_record_types() {
         let schema: Value = serde_json::from_str(include_str!(
@@ -304,43 +252,27 @@ mod tests {
         let records = vec![
             json!({"type": "heartbeat", "data": {"state": "idle", "turn": 1, "spent_usd": 0.1, "wall_secs": 31, "pid": 9}}),
             json!({"type": "heartbeat", "data": {"state": "working", "turn": 2, "spent_usd": 0.2, "wall_secs": 61, "pid": 9}}),
-            json!({"type": "terminal", "data": {"state": "done", "reason": "", "turns": 2, "tool_calls": 3,
-                "input_tokens": 70, "output_tokens": 30, "cost_usd": 0.42}}),
-            json!({"type": "footnotes", "data": {"gist": "g", "claims": [{"n": 1, "text": "t", "verdict": "rejected",
-                "footnotes": [{"mark": 1, "source": "tool:a", "verdict": "rejected"}]}], "claims_total": 1,
-                "claims_rejected": 1, "ending": "done", "head_sha": "abc"}}),
+            json!({"type": "terminal", "data": {"state": "done", "turns": 2, "cost_usd": 0.42}}),
         ];
-        let beat: Heartbeat =
-            serde_json::from_value(last_of(&records, "heartbeat").unwrap()["data"].clone())
-                .unwrap();
-        assert_eq!((beat.state.as_str(), beat.turn), ("working", 2));
-        let end: Terminal =
-            serde_json::from_value(last_of(&records, "terminal").unwrap()["data"].clone()).unwrap();
-        assert_eq!(end.cost_usd, 0.42);
-        let notes: Footnotes =
-            serde_json::from_value(last_of(&records, "footnotes").unwrap()["data"].clone())
-                .unwrap();
-        assert_eq!(notes.claims[0].footnotes[0].source, "tool:a");
+        let data = |ty: &str| last_of(&records, ty).unwrap()["data"].clone();
+        let beat: Heartbeat = serde_json::from_value(data("heartbeat")).unwrap();
+        let end: Terminal = serde_json::from_value(data("terminal")).unwrap();
+        assert_eq!((beat.turn, end.cost_usd), (2, 0.42));
         assert!(last_of(&records, "usage").is_none());
-        let fields = |ty: &str, sample: Value| {
-            let props = defs[ty]["properties"]["data"]["properties"]
-                .as_object()
-                .unwrap();
+        for (ty, sample) in [("heartbeat", json!(beat)), ("terminal", json!(end))] {
+            let data = &defs[ty]["properties"]["data"];
             for key in sample.as_object().unwrap().keys() {
-                assert!(props.contains_key(key), "schema {ty} lacks data.{key}");
-            }
-            for key in defs[ty]["properties"]["data"]["required"]
-                .as_array()
-                .unwrap()
-            {
                 assert!(
-                    sample.get(key.as_str().unwrap()).is_some(),
-                    "{ty} type lacks {key}"
+                    data["properties"].get(key).is_some(),
+                    "schema {ty} lacks {key}"
                 );
             }
-        };
-        fields("heartbeat", serde_json::to_value(beat).unwrap());
-        fields("terminal", serde_json::to_value(end).unwrap());
-        fields("footnotes", serde_json::to_value(notes).unwrap());
+            for key in data["required"].as_array().unwrap() {
+                assert!(
+                    sample.get(key.as_str().unwrap()).is_some(),
+                    "{ty} lacks {key}"
+                );
+            }
+        }
     }
 }
