@@ -84,7 +84,7 @@ pub mod registry_read;
 pub mod remote_target;
 pub mod restore_gate;
 pub mod restore_liveness;
-mod review_invocation;
+pub mod review_invocation;
 pub mod role_migration;
 pub mod search_query;
 pub mod served_liveness;
