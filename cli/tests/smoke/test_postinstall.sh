@@ -21,8 +21,6 @@ if grep -q '"policy"' .claude-plugin/marketplace.json; then
 fi
 grep -q ".claude-plugin/postinstall.sh" hooks/frontdoor-nudge-session-start.sh \
   || { echo "FAIL: hooks/frontdoor-nudge-session-start.sh does not start .claude-plugin/postinstall.sh"; exit 1; }
-grep -q "context-run.sh claude-session-start" hooks/hooks.json \
-  || { echo "FAIL: hooks/hooks.json does not run context-run.sh claude-session-start"; exit 1; }
 grep -q "frontdoor-nudge-session-start.sh" hooks/context-hooks.json \
   || { echo "FAIL: hooks/context-hooks.json does not wire frontdoor-nudge-session-start.sh"; exit 1; }
 # A plugin-only install has no fno-agents, so context-run.sh must reach the hook without it.
@@ -30,8 +28,8 @@ grep -q "frontdoor-nudge-session-start.sh" hooks/context-run.sh \
   || { echo "FAIL: hooks/context-run.sh does not run the front-door hook when fno-agents is missing"; exit 1; }
 
 if claude plugin validate --help >/dev/null 2>&1; then
-  claude plugin validate . --strict >/dev/null 2>&1 \
-    || { echo "FAIL: claude plugin validate . --strict exits nonzero"; exit 1; }
+  claude plugin validate .claude-plugin/marketplace.json --strict >/dev/null 2>&1 \
+    || { echo "FAIL: marketplace validation exits nonzero"; exit 1; }
 else
   echo "SKIP: claude CLI absent, strict manifest validation not run"
 fi

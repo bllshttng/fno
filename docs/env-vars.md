@@ -62,10 +62,11 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENT_ROW_PENDING` | py | unclear: cli/src/fno/agents/register_session.py:200 |
 | `FNO_AGENT_SELF` | py+rs | unclear: cli/src/fno/agent/cli.py:363 |
 | `FNO_AGENT_SESSION` | py | unclear: cli/src/fno/agents/context.py:237 |
+| `FNO_AGENT_SUBSTRATE` | rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agents/src/target_init.rs `substrate_marks_unattended`. |
 | `FNO_ATTEST_BRANCH` | py | Overrides the attested row's branch field with the caller-resolved PR branch (the shell producer's upstream rewrite); hold join/release keep the cwd-resolved local name. Set by skills/review/scripts/emit-attestation.sh, read in cli/src/fno/review/cli.py `_attest_from_record`. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_AUTO_MEMORY_DIR` | py | unclear: cli/src/fno/inbox/drain.py:407 |
-| `FNO_BG` | py | unclear: cli/src/fno/target/orient.py:254 |
+| `FNO_BG` | py+rs | unclear: cli/src/fno/target/orient.py:254 |
 | `FNO_BIN` | py+rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/backlog_view.rs:333 |
 | `FNO_BOOTSTRAP_WHEEL` | rs | unclear: crates/fno/src/bootstrap.rs:280 |
@@ -199,7 +200,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RELEASE_REPO` | rs | The `owner/repo` whose `bin-cache` pre-release `fno update` downloads the CI-built binaries from; the default is bllshttng/footnote. The curl installer reads the same name for the nightly. |
 | `FNO_REPO_ROOT` | py+rs | unclear: cli/src/fno/outstanding/cli.py:38; the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
 | `FNO_REVIEW_INVOCATION_ID` | rs | unclear: crates/fno/src/mux_cli.rs:6090 |
-| `FNO_REVIEW_ROUND` | py | The verified round a --verify-fixes pass declares, carried to the disposition comment when the shell producer emits; the attest flow's function argument outranks it. Set by skills/review/scripts/emit-attestation.sh, read in cli/src/fno/review/cli.py `post_dispositions`. |
+| `FNO_REVIEW_ROUND` | rs | The verified round a --verify-fixes pass declares, carried to the disposition comment when the shell producer emits; the attest flow's function argument outranks it. Set by skills/review/scripts/emit-attestation.sh, read in crates/fno-agents/src/review_findings.rs `resolve_round`. |
 | `FNO_ROLES_ROOT` | py | unclear: cli/src/fno/agents/model_routing.py:1644 |
 | `FNO_ROUTE_MODEL` | rs | Fallback model a thread row stamps when the caller named no model and the writer session's observed model is absent (comment_create, api.rs). |
 | `FNO_ROUTE_PROVIDER` | py+rs | unclear: cli/src/fno/agent/cli.py:303; the lead check-in's blueprint reading also reads it (crates/fno-agents/src/lead_checkin.rs r_blueprint) to pick the blueprint-subagent ceiling. |
@@ -264,7 +265,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:906 |
 | `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agents/src/claude_ask.rs:687 |
 | `FNO_WORKER_NAME` | py | unclear: cli/src/fno/agents/cli.py:2314 |
-| `FNO_WORKTREE_POLICY` | py | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
+| `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agents/src/gemini_ask.rs:103 |
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
 | `GITHUB_ACTIONS` | py | unclear: cli/src/fno/test_cmd.py:1859 |
@@ -305,16 +306,16 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `STARSHIP_CONFIG` | py | unclear: cli/src/fno/setup/starship.py:47 |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | py | unclear: cli/src/fno/cost/_register.py:480 |
-| `TARGET_ALLOW_IN_REVIEW` | py | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
-| `TARGET_CLAIM_TTL` | py | unclear: cli/src/fno/target_cli.py:3239 |
+| `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
+| `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | py | unclear: cli/src/fno/target_cli.py:1369 |
 | `TARGET_MISSION_ID` | py | Presence marks the post-merge ritual as an autonomous run. |
 | `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |
 | `TARGET_PLAN_PATH` | py | unclear: cli/src/fno/target_cli.py:1369 |
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
-| `TARGET_SIZE` | py | unclear: cli/src/fno/target_cli.py:1734 |
+| `TARGET_SIZE` | rs | Size profile the init door hands the writer. The blast read also takes it from the caller's env as an operator pin that a low-blast downgrade must not strip. Read in crates/fno-agents/src/target_init.rs `run`. |
 | `TARGET_SUMMARY_PATH` | py | unclear: cli/src/fno/cost/_register.py:446 |
-| `TARGET_UNATTENDED` | py | unclear: cli/src/fno/target/orient.py:255 |
+| `TARGET_UNATTENDED` | py+rs | unclear: cli/src/fno/target/orient.py:255 |
 | `TASK_DO_TTL_HOURS` | rs | unclear: crates/fno-agents/src/graph_store.rs:1046 |
 | `TASK_LOCK_TTL_HOURS` | py+rs | unclear: cli/src/fno/graph/_constants.py:331 |
 | `TERM` | rs | Terminal type; a Rust front terminal capability check reads it. |

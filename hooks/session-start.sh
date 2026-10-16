@@ -391,6 +391,8 @@ append_section() {
         combined="${combined}"$'\n\n'"${section}"
     fi
 }
+plugin_source_content=$(bash "$SCRIPT_DIR/plugin-source-session-start.sh" 2>/dev/null || true)
+append_section "$plugin_source_content"
 append_section "$using_fno_content"
 append_section "$vision_content"
 append_section "$whoami_content"

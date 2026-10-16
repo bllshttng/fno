@@ -356,7 +356,7 @@ pub(super) fn refusal_is_secondary(
     !matches!(q.core_remaining, Some(0))
 }
 
-pub(super) fn internal_gh_adapter(gh_bin: &str) -> bool {
+pub(crate) fn internal_gh_adapter(gh_bin: &str) -> bool {
     Path::new(gh_bin)
         .file_name()
         .and_then(|name| name.to_str())

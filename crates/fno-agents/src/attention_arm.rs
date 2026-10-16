@@ -793,6 +793,22 @@ pub fn attention_dir() -> Result<PathBuf, std::io::Error> {
         .ok_or_else(|| std::io::Error::other("no agents home parent"))
 }
 
+/// The question folder the arm wrote on its last beat, from items.json's
+/// `questions_dir`. A reader in any cwd lands on the one folder the daemon
+/// writes. None when items.json is missing, unreadable, empty of the key, or
+/// older than the 600s the arm's beat allows: the caller then derives the
+/// folder from its own cwd.
+pub fn published_questions_dir() -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(attention_dir().ok()?.join("items.json")).ok()?;
+    let index: Value = serde_json::from_str(&raw).ok()?;
+    let as_of = index.get("as_of").and_then(Value::as_u64)?;
+    if now_secs().saturating_sub(as_of) > 600 {
+        return None;
+    }
+    let dir = index.get("questions_dir").and_then(Value::as_str)?;
+    (!dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
 /// The not-ready bounce: one wrapped mail to a not-ready item's asker,
 /// naming the id and the missing fields, once per item ever (the id saves
 /// on every attempt, so a failed send does not re-mail each beat; the

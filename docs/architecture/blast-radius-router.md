@@ -8,11 +8,11 @@ This feature adds a deterministic blast read at `/target` init that modulates th
 
 ## Where it fires
 
-Inside `fno do target init` (`cli/src/fno/target_cli.py`), after size resolution and before the bash writer (`hooks/helpers/init-target-state.sh`) renders `target-state.md`. The manifest is immutable, so the modulation lands in the `TARGET_SIZE` value handed to the writer, never after. Gated entirely on `config.target.blast.enabled`; disabled is byte-for-byte the pre-feature behavior.
+Inside `fno do target init` (`crates/fno-agents/src/target_init.rs`), after size resolution and before the bash writer (`hooks/helpers/init-target-state.sh`) renders `target-state.md`. The manifest is immutable, so the modulation lands in the `TARGET_SIZE` value handed to the writer, never after. Gated entirely on `config.target.blast.enabled`; disabled is byte-for-byte the pre-feature behavior.
 
 ## The classifier (deterministic)
 
-`fno do target blast-check <plan>` (classifier in `cli/src/fno/target/blast.py`) prints `{verdict, matched_paths, reason}` (`--quiet` -> bare token). It reads the plan's `## File Ownership Map` and classifies the touched surface against a blast map with two glob dialects:
+`fno do target blast-check <plan>` (classifier in `crates/fno-agents/src/target_blast.rs`) prints `{verdict, matched_paths, reason}` (`--quiet` -> bare token). It reads the plan's `## File Ownership Map` and classifies the touched surface against a blast map with two glob dialects:
 
 | Map part | Source | Dialect |
 |---|---|---|
@@ -50,8 +50,9 @@ Plan **and** node inputs (a File Ownership Map exists). `fno do target init` res
 
 | File | Role |
 |---|---|
-| `cli/src/fno/target/blast.py` | classifier, blast-map loader, ownership-map parser |
-| `cli/src/fno/target_cli.py` | `blast-check` verb + `_modulate_size` + init modulation + node resolution |
+| `crates/fno-agents/src/target_blast.rs` | classifier, blast-map loader, ownership-map parser, `blast-check` door |
+| `crates/fno-agents/src/target_init.rs` | init modulation wiring + node resolution |
+| `cli/src/fno/target_cli.py` | `blast-check` + `init` thin forwards to the native doors |
 | `cli/src/fno/config/__init__.py` | `config.target.blast` schema (`BlastConfig`) |
 | `skills/target/references/init-state.md` | Step 1c-blast operator documentation |
 | `cli/src/fno/target/control_plane_scope.yaml` | packaged blast-map source shared with advisory doc colocation |

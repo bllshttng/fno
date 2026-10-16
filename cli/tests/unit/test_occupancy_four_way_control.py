@@ -3,10 +3,11 @@
 One question - is someone working this node? - used to get three different
 words from readers that never said which store they read. This control
 drives the four situations through every first-class surface (the core
-reader, the CLI JSON, the target classifier) and asserts four DISTINCT
-verdicts, with the held case asserting a positive marker (state live AND
-the holder string), not merely "not free" - four flavours of nothing would
-pass a broken fixture.
+reader, the CLI JSON) and asserts four DISTINCT verdicts, with the held
+case asserting a positive marker (state live AND the holder string), not
+merely "not free" - four flavours of nothing would pass a broken fixture.
+The target classifier that shared this file is the native start port now;
+its answers are the claim-status parity goldens' to pin.
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from fno.claims.cli import cli
 from fno.claims.core import claim_status
 from fno.claims.io import claim_path, serialize_claim
 from fno.claims.types import Claim, now_ms
-from fno.target_cli import _classify_node_claim
 
 runner = CliRunner()
 
@@ -121,19 +121,3 @@ def test_four_distinct_words_through_the_cli(four_way):
     assert "ttl expired" in r.output
     fresh = runner.invoke(cli, ["status", HELD_KEY])
     assert "ttl expired" not in fresh.output
-
-
-def test_the_control_classifier_keeps_its_answers(four_way):
-    """target_cli._classify_node_claim was the one reader that always routed;
-    it must still answer held/expired/free the same way now that the default
-    routes too."""
-    verdict, info = _classify_node_claim(HELD_ID)
-    assert verdict == "foreign_live"
-    assert info["holder"] == HOLDER
-
-    verdict, info = _classify_node_claim(EXPIRED_ID)
-    assert verdict == "foreign_live"
-    assert info.get("expired") is True
-
-    verdict, info = _classify_node_claim(FREE_ID)
-    assert verdict == "free"

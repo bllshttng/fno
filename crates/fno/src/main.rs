@@ -189,11 +189,27 @@ enum Role {
     /// the sibling fno-agents `review-level` door. The rest of the review
     /// tree stays Python until its port.
     ReviewLevel(Vec<OsString>),
+    /// `fno do target init ...`: the init decision layer, exec'd through the
+    /// sibling fno-agents `target-init` door. The bash helper stays; the
+    /// parity goldens characterize the port.
+    TargetInit(Vec<OsString>),
+    /// `fno do target start ...`: the one-verb cold start, exec'd through the
+    /// sibling fno-agents `target-start` door. The ensure verb and the bash
+    /// helper stay; `--steps` rides the argv, never the environment.
+    TargetStart(Vec<OsString>),
+    /// `fno do target blast-check <plan>`: the blast classifier is native
+    /// (target_blast.rs); the Python verb is a thin forward.
+    TargetBlastCheck(Vec<OsString>),
+    /// `fno do review post-dispositions ...`: the disposition-comment leaf,
+    /// exec'd through the sibling fno-agents `review-level findings post`
+    /// door. --help forwards so the flag surface keeps its owner; the rest
+    /// of the tail passes through byte-verbatim.
+    ReviewPostDispositions(Vec<OsString>),
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
-    /// leaves keep their role: classify/post-dispositions/invocations stay
-    /// Python (resolve-level is native above), and --help forwards so typer
-    /// still lists them.
+    /// leaves keep their role: classify/invocations stay Python
+    /// (resolve-level and post-dispositions are native above), and --help
+    /// forwards so typer still lists them.
     ReviewPolicyAssess(Vec<OsString>),
     /// `fno review <tail>`: the deprecated root alias, its move notice
     /// printed on stderr before the same exec. Byte-identical to the line
@@ -382,6 +398,67 @@ fn classify_review_level(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target init ...`: the init decision layer. The literal
+/// three-token prefix claims it so it never reaches the Python forward as a
+/// near-miss of `fno do target start`.
+fn classify_target_init(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "init"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do target start ...`: the start verb's cold-start door. The same
+/// literal three-token prefix rule as init.
+fn classify_target_start(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "start"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do target blast-check <plan> [--quiet]`: the same literal three-token
+/// prefix rule as init, so the Python verb only ever serves as the forward.
+fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "target"
+        || args[2].to_str()? != "blast-check"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
+/// `fno do review post-dispositions ...`: the disposition-comment leaf,
+/// claimed by the same literal three-token prefix. --help/-h anywhere in
+/// the tail refuses the claim so the flag surface keeps forwarding to the
+/// harness that owns it.
+fn classify_review_post_dispositions(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "post-dispositions"
+    {
+        return None;
+    }
+    if args[3..]
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf and no help
 /// request. Only the FIRST tail token names a leaf (a leaf spelled later is
@@ -425,6 +502,21 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
     };
     match verb {
         "show" => Some(Role::MailShow(tail.to_vec())),
+        "reply" => {
+            // Help stays Python's, so `reply --help` still prints the full
+            // local verb's docs; only the routed tail is claimed.
+            if tail
+                .iter()
+                .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
+            {
+                return None;
+            }
+            Some(Role::RemoteMail(
+                std::iter::once(OsString::from("reply"))
+                    .chain(tail.to_vec())
+                    .collect(),
+            ))
+        }
         "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(verb))
                 .chain(tail.to_vec())
@@ -494,6 +586,18 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_level(args) {
         return Role::ReviewLevel(rest);
+    }
+    if let Some(rest) = classify_target_init(args) {
+        return Role::TargetInit(rest);
+    }
+    if let Some(rest) = classify_target_start(args) {
+        return Role::TargetStart(rest);
+    }
+    if let Some(rest) = classify_target_blast_check(args) {
+        return Role::TargetBlastCheck(rest);
+    }
+    if let Some(rest) = classify_review_post_dispositions(args) {
+        return Role::ReviewPostDispositions(rest);
     }
     if let Some((alias, rest)) = classify_review_root(args) {
         return if alias {
@@ -685,10 +789,53 @@ fn main() {
     // verb carries the brake for every door; this front door adds the
     // census and the ceiling. The same verb from a human's shell has no
     // identity to carry and admits.
+    // The floor setter: `fno agents spawn --floor N` writes the cap floor
+    // here, before any forwarding, so the Python CLI never sees the flag.
+    // Alone it prints the receipt and exits, and never admits - every caller
+    // can set the user's floor. With a payload the receipt goes to stderr,
+    // keeping stdout clean for the spawn receipt, and admission and the
+    // forward run on the peeled argv.
+    let mut args = args;
     if let (Some("agents"), Some("spawn")) = (
         args.first().and_then(|a| a.to_str()),
         args.get(1).and_then(|a| a.to_str()),
     ) {
+        let names: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let peeled = match fno::spawn_floor::peel(&names) {
+            Ok(peeled) => peeled,
+            Err(message) => {
+                eprintln!("fno agents spawn --floor: {message}");
+                std::process::exit(2);
+            }
+        };
+        if peeled.help {
+            eprintln!(
+                "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
+                 then spawn if a name or payload follows. The front door reads this flag, \
+                 so the list below does not show it."
+            );
+        }
+        // Help forwards with no write, even when a floor came with it.
+        if let Some(floor) = peeled.floor.filter(|_| !peeled.help) {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            match fno::spawn_floor::set_floor(floor, &cwd) {
+                Ok(receipt) => {
+                    if peeled.rest.len() == 2 {
+                        println!("{receipt}");
+                        std::process::exit(0);
+                    }
+                    eprintln!("{receipt}");
+                }
+                Err(err) => {
+                    eprintln!("fno agents spawn --floor: {}", err.message);
+                    std::process::exit(err.code);
+                }
+            }
+        }
+        args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {
             eprintln!("fno agents spawn: {failure}");
             std::process::exit(1);
@@ -767,7 +914,7 @@ fn main() {
             &rest,
         )),
         Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
-            "fno agents mail send|peek <name>@<host>",
+            "fno agents mail send|peek|reply <name>@<host>",
             &["mail-remote"],
             &rest,
         )),
@@ -818,6 +965,26 @@ fn main() {
         Role::ReviewLevel(rest) => std::process::exit(fno_agents_exec(
             "fno do review resolve-level",
             &["review-level"],
+            &rest,
+        )),
+        Role::TargetInit(rest) => std::process::exit(fno_agents_exec(
+            "fno do target init",
+            &["target-init"],
+            &rest,
+        )),
+        Role::TargetStart(rest) => std::process::exit(fno_agents_exec(
+            "fno do target start",
+            &["target-start"],
+            &rest,
+        )),
+        Role::TargetBlastCheck(rest) => std::process::exit(fno_agents_exec(
+            "fno do target blast-check",
+            &["target-blast-check"],
+            &rest,
+        )),
+        Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
+            "fno do review post-dispositions",
+            &["review-level", "findings", "post"],
             &rest,
         )),
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
@@ -1080,6 +1247,24 @@ mod tests {
             ),
             Role::MailSeedProvenance(os(&["seed-provenance", "--registry", "r.json"]))
         );
+        // The cross-host reply claims its verb on both mounts, tail
+        // included; help stays with the Python reply.
+        assert_eq!(
+            decide_role(
+                &os(&["agents", "mail", "reply", "--to", "fmail-x", "hi"]),
+                false
+            ),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["mail", "reply", "--to", "fmail-x", "hi"]), false),
+            Role::RemoteMail(os(&["reply", "--to", "fmail-x", "hi"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "mail", "reply", "--help"]), false),
+            Role::Forward,
+            "help stays Python's"
+        );
     }
 
     #[test]
@@ -1103,6 +1288,42 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
+        );
+    }
+
+    #[test]
+    fn review_post_dispositions_claims_the_leaf_prefix() {
+        // The disposition-comment leaf is native now: the literal
+        // three-token prefix claims it, the tail rides byte-verbatim.
+        assert_eq!(
+            decide_role(
+                &os(&[
+                    "do",
+                    "review",
+                    "post-dispositions",
+                    "--findings-file",
+                    "f.json",
+                    "--head",
+                    "abc"
+                ]),
+                false
+            ),
+            Role::ReviewPostDispositions(os(&["--findings-file", "f.json", "--head", "abc"]))
+        );
+        // --help keeps its old role (the Python forward), and the sibling
+        // leaves keep theirs.
+        assert_eq!(
+            decide_role(&os(&["do", "review", "post-dispositions", "--help"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "classify"]), false),
+            Role::Forward
+        );
+        // The bare group keeps its native assess role.
+        assert_eq!(
+            decide_role(&os(&["do", "review"]), false),
+            Role::ReviewPolicyAssess(os(&[]))
         );
     }
 

@@ -11,16 +11,20 @@ pub fn dispatch(verb: &str, rest: &[String]) -> Option<i32> {
         "review-summary" => Some(crate::review_summary::run_review_summary(rest)),
         "review-level" => Some(run_review_level_door(rest)),
         "review-policy" => Some(crate::review_policy::run_review_policy(rest)),
+        "target-init" => Some(crate::target_init::run(rest)),
+        "target-start" => Some(crate::target_start::run(rest)),
+        "target-blast-check" => Some(crate::target_blast::run_blast_check(rest)),
         _ => None,
     }
 }
 
-/// The `review-level` door: the capability group rides UNDER it, so
-/// fno-agents gains no root verb and menu-caps stays at root 12/12. The
-/// interception runs before the level parser, and only when the second
-/// token is one of the four action words - `capability` is not a level
-/// word, so no valid level call changes, and a bare `review-level
-/// capability` falls through to the level door (its usage refusal).
+/// The `review-level` door: the capability group and the findings actions
+/// ride UNDER it, so fno-agents gains no root verb and menu-caps stays at
+/// root 12/12. The interception runs before the level parser, and only when
+/// the second token is one of the action words - `capability` and
+/// `findings` are not level words, so no valid level call changes, and a
+/// bare `review-level capability` or `review-level findings` falls through
+/// to the level door (its usage refusal).
 fn run_review_level_door(rest: &[String]) -> i32 {
     if rest.first().map(String::as_str) == Some("capability")
         && rest.get(1).map(String::as_str).is_some_and(|action| {
@@ -31,6 +35,13 @@ fn run_review_level_door(rest: &[String]) -> i32 {
         })
     {
         crate::review_capability::run(&rest[1..])
+    } else if rest.first().map(String::as_str) == Some("findings")
+        && rest
+            .get(1)
+            .map(String::as_str)
+            .is_some_and(|action| matches!(action, "record" | "categories" | "post"))
+    {
+        crate::review_findings::run_findings_door(&rest[1..])
     } else {
         crate::review_level::run_review_level(rest)
     }

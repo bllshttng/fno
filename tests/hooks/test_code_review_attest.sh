@@ -120,6 +120,18 @@ if [[ -z "$CLASSIFY_PYTHON" ]]; then
   exit 77
 fi
 export CLASSIFY_PYTHON
+CLASSIFY_BIN=""
+for candidate in \
+  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+  if [[ -x "$candidate" ]]; then CLASSIFY_BIN="$candidate"; break; fi
+done
+if [[ -z "$CLASSIFY_BIN" ]]; then
+  echo "SKIP: no built fno-agents binary for the native classifier read" >&2
+  echo "  tried crates/fno-agents/target/{release,debug}/fno-agents." >&2
+  exit 77
+fi
+export CLASSIFY_BIN
 cat > "$BIN/fno-stub" <<STUB
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
@@ -159,18 +171,7 @@ if [[ "\${1:-}" == "do" && "\${2:-}" == "review" && "\${3:-}" == "classify" ]]; 
     esac
   done
   printf '%s\n' "\$f" >> "$CLASSIFY_MARKER"
-  record="\$(PYTHONPATH="\$CLASSIFY_PYTHONPATH" "\$CLASSIFY_PYTHON" - "\$f" <<'PY'
-import json, sys
-from fno.review.cli import build_emit_record, RecordBuildError
-with open(sys.argv[1], encoding="utf-8") as fh:
-    payload = json.load(fh)
-try:
-    print(json.dumps(build_emit_record(payload)))
-except RecordBuildError as exc:
-    print(f"classify: {exc}", file=sys.stderr)
-    raise SystemExit(2)
-PY
-)" || exit \$?
+  record="\$("$CLASSIFY_BIN" review-level findings record --findings-file "\$f")" || exit \$?
   if [[ -n "\$attest" ]]; then
     # The shell delegates its findings-path emit to `classify --attest`; the
     # stub mirrors the verb contract: verdict measured from the classified

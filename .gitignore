@@ -62,6 +62,9 @@ __pycache__/
 # Logs
 *.log
 **/*.log
+# The review-findings goldens freeze the fake gh's argv log per post case; the
+# parity replay diffs its own stub's log against them. Data, not run output.
+!crates/fno-agents/tests/golden/review_findings/*.log
 
 # Cache
 .cache/

@@ -30,9 +30,6 @@ cli = typer.Typer(
     no_args_is_help=True,
 )
 
-_LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
-
-
 def _resolve_fno_binary() -> str:
     """Return the absolute path to the fno binary.
 
@@ -1614,69 +1611,22 @@ def refresh() -> None:
 
 # Single-flight window for the SessionStart self-heal: long enough to cover the
 # render + bounce round-trip, short enough that a crashed heal recovers soon.
-_HEAL_TTL_MS = 5 * 60 * 1000
-
+# The window (and the gate itself) live in the heal verb now.
 
 @cli.command()
 def heal() -> None:
     """Revive a previously-enabled-but-dead watcher (idempotent, race-guarded).
 
-    The SessionStart self-heal entrypoint: fired when the liveness verdict is
-    ``dead``. Acts only when ``pr_watch.enabled`` is true, so a never-enabled
-    watcher is never auto-installed; a claim single-flights concurrent
-    SessionStarts so the reinstall happens at most once per window. The heal
-    itself is ``refresh_watcher`` (re-render plist + bounce), which cures both
-    an unloaded agent and the wedged-job state a plain ``launchctl load``
-    cannot fix.
+    Forward to the fno-agents pr-watch heal verb: the disabled gate, the
+    bounce-pending guard and the single-flight live in crates now, and the
+    cure is the same re-render + bounce the SessionStart hook always ran.
+    Verb-level flags (--caller, --fno-binary) belong to the verb itself; a
+    new flag is a new verb and belongs in crates.
     """
-    from fno.claims.io import global_claims_root
-    from fno.pr_watch import _install as m
+    from fno.pr.cli import _forward_to_binary
 
-    settings = load_settings()
-    if not settings.pr_watch.enabled:
-        typer.echo("pr-watch heal: disabled; nothing to heal")
-        return
-
-    # A bounce that has not had its first tick yet is not a wedge to cure:
-    # bouncing again re-arms the healthy-pending grace over the same fault
-    # and hides it for another 2x interval.
-    try:
-        report = _liveness_via_binary()
-    except Exception:  # noqa: BLE001 - a probe that cannot read never blocks a cure
-        report = {}
-    if report.get("bounce_pending") is True:
-        typer.echo(
-            f"pr-watch heal: a bounce is pending its first tick ({report.get('detail')}); "
-            "skipped. Run fno do pr watch refresh to bounce anyway."
-        )
-        return
-
-    from fno.backlog.single_flight import acquire_flight
-
-    heal_root = global_claims_root()
-    flight = acquire_flight(
-        "pr-watch:heal", scope="pr-watch SessionStart self-heal",
-        name="pr-watch-heal", root=heal_root, ttl_ms=_HEAL_TTL_MS,
-    )
-    if flight is None or flight.held:
-        # Someone else is on it, not a reason to abort this SessionStart
-        # hook with a traceback.
-        typer.echo("pr-watch heal: another session is healing; skipped")
-        return
-    try:
-        msg, rc = m.refresh_watcher(
-            launch_agents_dir=_LAUNCH_AGENTS_DIR,
-            fno_binary=_resolve_fno_binary(),
-            interval=settings.pr_watch.interval_seconds,
-            defer_when_ticking=True,
-            caller="heal",
-            force_bounce=True,
-        )
-        typer.echo(f"pr-watch heal: {msg}")
-        if rc != 0:
-            raise typer.Exit(1)
-    finally:
-        flight.release()
+    argv = ["heal", "--fno-binary", _resolve_fno_binary(), "--caller", "heal"]
+    _forward_to_binary("pr-watch", argv)
 
 
 # ---------------------------------------------------------------------------
@@ -1779,31 +1729,6 @@ def uninstall() -> None:
 # ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
-
-
-def _liveness_via_binary() -> dict:
-    """The one liveness probe the remaining Python consumers share: the Rust
-    verb's ``--json`` object. Any failure reads as an empty report, so a
-    probe that cannot run never blocks a cure."""
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        return {}
-    try:
-        proc = subprocess.run(
-            [str(binary), "pr-watch", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        report = json.loads(proc.stdout)
-    except Exception:  # noqa: BLE001 - a probe that cannot read never blocks a cure
-        return {}
-    return report if isinstance(report, dict) else {}
 
 
 @cli.command()

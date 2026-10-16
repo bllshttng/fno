@@ -11,20 +11,12 @@
 
 use serde_json::Value;
 
-/// The gate's own copy of the harmless-category allowlist, held equal to
-/// `DEFAULT_NONBLOCKING_CATEGORIES` on the Python side by tests (Locked
-/// Decision 6: two implementations, one corpus).
-const GATE_NONBLOCKING_CATEGORIES: &[&str] = &[
-    "style",
-    "formatting",
-    "naming",
-    "docs",
-    "typo",
-    "nit",
-    "simplification",
-    "test-coverage",
-];
-
+/// The gate re-derives blocking from the primitive's own fields with the
+/// ONE shipped allowlist, shared with the producer side
+/// (`review_findings::DEFAULT_NONBLOCKING_CATEGORIES`); the old
+/// Python-side twin and this module's own copy both went with the port.
+/// It still never reads the config key: a configured extension widens the
+/// producer, not the gate.
 fn gate_finding_blocks(primitive: &Value) -> bool {
     if primitive
         .get("has_required_fields")
@@ -45,7 +37,7 @@ fn gate_finding_blocks(primitive: &Value) -> bool {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let lowered = category.trim().to_lowercase();
-    !GATE_NONBLOCKING_CATEGORIES.contains(&lowered.as_str())
+    !crate::review_findings::DEFAULT_NONBLOCKING_CATEGORIES.contains(&lowered.as_str())
 }
 
 /// One non-terminal blocking finding, named by its finding_key plus the axis

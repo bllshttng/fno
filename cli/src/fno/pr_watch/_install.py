@@ -34,7 +34,6 @@ _PLIST_FILENAME = f"{_LABEL}.plist"
 # Written by _record_bounce, read by cli._bounce_sender; rename both or the
 # sender join breaks silently.
 _BOUNCE_SIDECAR = "pr-watch-bounce.json"
-_LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 
 
 _PLIST_TEMPLATE = """\
@@ -406,21 +405,6 @@ def bounce(
     return (f"bounced {target}; awaiting first tick", 0)
 
 
-def heal_watcher(
-    *, launch_agents_dir: Path, defer_when_ticking: bool = False, caller: str = "unknown"
-) -> tuple[str, int]:
-    """Resolve the plist path and bounce the watcher. Doctor's --fix entrypoint.
-
-    Returns ``(message, exit_code)``; nonzero when the plist is absent or a step wedged.
-    """
-    plist_path = launch_agents_dir / _PLIST_FILENAME
-    if not plist_path.exists():
-        return (f"no plist at {plist_path}; run `fno do pr watch install`", 1)
-    return bounce(
-        plist_path=plist_path, defer_when_ticking=defer_when_ticking, caller=caller
-    )
-
-
 def refresh_watcher(
     *,
     launch_agents_dir: Path,
@@ -433,14 +417,15 @@ def refresh_watcher(
 ) -> tuple[str, int]:
     """Re-render the plist onto the current binary, then bounce. Post-update hook.
 
-    Unlike :func:`heal_watcher` (bounce the existing plist), this REWRITES the
-    plist first so the daemon picks up the freshly-installed binary path, a
-    fresh captured PATH, and a new mtime (so doctor's ``healthy-pending`` grace
-    applies until the next tick instead of a transient false ``dead`` - unless
-    the recent ends are a broken streak, which reads ``wedged``). Called
-    by ``fno do pr watch refresh`` at the tail of ``fno doctor update`` so an update
-    leaves an enabled watcher running the new binary and un-wedges a job a
-    mid-tick reinstall may have broken. Returns ``(message, exit_code)``.
+    This REWRITES the plist first so the daemon picks up the freshly-installed
+    binary path, a fresh captured PATH, and a new mtime (so doctor's
+    ``healthy-pending`` grace applies until the next tick instead of a
+    transient false ``dead`` - unless the recent ends are a broken streak,
+    which reads ``wedged``). Called by the refresh verb at the tail of
+    ``fno doctor update`` so an update leaves an enabled watcher running the
+    new binary and un-wedges a job a mid-tick reinstall may have broken, and
+    by the heal verb as the cure behind the SessionStart self-heal. Returns
+    ``(message, exit_code)``.
     """
     plist_path = launch_agents_dir / _PLIST_FILENAME
     try:

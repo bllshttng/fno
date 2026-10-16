@@ -131,11 +131,12 @@ fn home_root() -> PathBuf {
 }
 
 /// Deliver pending rows in seq order. A row leaves the pending pool only
-/// through a successful local send (exit 0) or a style-refused body (below):
-/// any other failure stays pending, backs its next attempt down the retry
-/// ladder ([`retry_backoff`]), and the TTL bounds it. The seen ledger
-/// records msg_ids after a zero exit, so a redelivered row never injects
-/// twice (at-least-once, edge 5).
+/// through a local send whose receiver owns the copy (exit 0, or the NOT
+/// LANDED durable demotion - the durable copy is written) or a
+/// style-refused body (below): any other failure stays pending, backs its
+/// next attempt down the retry ladder ([`retry_backoff`]), and the TTL
+/// bounds it. The seen ledger records msg_ids after a delivered send, so a
+/// redelivered row never injects twice (at-least-once, edge 5).
 pub(crate) fn pull_rows(remote: &Remote, rows: Vec<BusRow>, home: &std::path::Path) -> usize {
     pull_rows_with(remote, rows, home, &mut |row| inject_row(remote, home, row))
 }
@@ -252,6 +253,30 @@ fn brief(text: &[u8], cap: usize) -> String {
     }
 }
 
+/// What one local send's exit means for its bus row. `Delivered` ends the
+/// row (the receiver's mail owns the copy), `Refused` marks the loss visible
+/// to the sender, `Pending` leaves the row on the retry ladder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SendVerdict {
+    Delivered,
+    Refused,
+    Pending,
+}
+
+/// The exit reading, lifted out of [`inject_row`] so the table is testable:
+/// exit 0 and the Python receipts' NOT LANDED (a durable demotion - the
+/// durable copy is written, only the live inject went unconfirmed) both read
+/// delivered; exit 1 with a confirming style door reads refused; every
+/// other code, and a signal (`None`), stays pending. The door closure runs
+/// only on the ambiguous exit 1, so a clean verdict never pays the consult.
+pub(crate) fn send_verdict(code: Option<i32>, style_refused: impl FnOnce() -> bool) -> SendVerdict {
+    match code {
+        Some(0) | Some(crate::mail_receipt::NOT_LANDED_EXIT) => SendVerdict::Delivered,
+        Some(1) if style_refused() => SendVerdict::Refused,
+        _ => SendVerdict::Pending,
+    }
+}
+
 /// The style door's receipt naming violations: the deterministic refusal.
 /// Mirrors the mail gate's own clean rule: a non-empty `exception` makes an
 /// excepted body clean whatever the violations carry, and a clean or
@@ -336,17 +361,45 @@ fn mail_word_cap() -> Option<i64> {
 /// budget window, a down door, or an internal error. The body rides a
 /// writer thread, so a payload wider than the pipe buffer cannot deadlock
 /// the read.
-fn style_door_refuses(payload: &str) -> bool {
+pub(crate) fn style_door_refuses(payload: &str) -> bool {
+    ask_style_door(&style_door_argv(mail_word_cap()), payload)
+        .map(|output| door_confirms_refusal(&output.stdout))
+        .unwrap_or(false)
+}
+
+/// The sender-side consult: run the same door before a cross-host store
+/// send writes its row, so a refused body dies at the sender instead of in
+/// transit, where only the sender's `mail status` shows the loss.
+/// `Some(report)` when the door names violations; `None` when the body is
+/// clean or the door cannot run, which reads clean exactly as the pull
+/// side does.
+pub(crate) fn style_door_report(payload: &str) -> Option<String> {
+    let output = ask_style_door(&style_door_report_argv(mail_word_cap()), payload)?;
+    (output.status.code() == Some(1)).then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The report form of the door consult: the same argv without --json, so
+/// exit 1 with the human report is the refusal and stdout rides to the
+/// sender.
+pub(crate) fn style_door_report_argv(word_cap: Option<i64>) -> Vec<String> {
+    style_door_argv(word_cap)
+        .into_iter()
+        .filter(|word| word != "--json")
+        .collect()
+}
+
+/// Spawn the door with `argv`, feed it the payload through a writer
+/// thread, and return the output. `None` when the door cannot start or a
+/// read fails - both read clean.
+fn ask_style_door(argv: &[String], payload: &str) -> Option<std::process::Output> {
     let mut cmd = std::process::Command::new(crate::mail_remote::fno_binary());
-    cmd.args(style_door_argv(mail_word_cap()));
-    let Ok(mut child) = cmd
+    cmd.args(argv);
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
-    else {
-        return false;
-    };
+        .ok()?;
     let payload = payload.to_string();
     let mut pipe = child.stdin.take();
     std::thread::spawn(move || {
@@ -354,10 +407,7 @@ fn style_door_refuses(payload: &str) -> bool {
             let _ = stdin.write_all(payload.as_bytes());
         }
     });
-    match child.wait_with_output() {
-        Ok(output) => door_confirms_refusal(&output.stdout),
-        Err(_) => false,
-    }
+    child.wait_with_output().ok()
 }
 
 /// True when the row was already delivered by an earlier beat.
@@ -408,16 +458,6 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     match cmd.output() {
-        Ok(output) if output.status.success() => {
-            if record_seen(home, &row.msg_id).is_ok() {
-                let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED);
-                return true;
-            }
-            // The send landed but the ledger write failed: leave pending, so
-            // the next beat at least reconciles the row state (the send
-            // itself does not replay: this process ran it once).
-            false
-        }
         Ok(output) => {
             let code = output.status.code();
             // The receiver's own style gate refusing the body replays the
@@ -426,18 +466,45 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             // consult keeps a transient exit 1 (a budget window, a down
             // door, an internal error) riding pending to a beat that can
             // still deliver.
-            if code == Some(1) && style_door_refuses(&row.payload) {
-                eprintln!(
-                    "mail-arm: local send for {} refused (exit {code:?}): {}",
-                    row.msg_id,
-                    brief(&output.stderr, 300)
-                );
-                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
-                    eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+            match send_verdict(code, || style_door_refuses(&row.payload)) {
+                SendVerdict::Delivered => {
+                    if record_seen(home, &row.msg_id).is_ok() {
+                        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED);
+                        return true;
+                    }
+                    // The send landed but the ledger write failed: leave
+                    // pending, so the next beat reconciles the row state.
+                    // The cost is one replayed local send on the next beat
+                    // (the ledger is the at-least-once dedup, so delivering
+                    // without it would trade one duplicate for unbounded
+                    // ones on a redelivered row).
+                    false
                 }
-                return true;
+                SendVerdict::Refused => {
+                    eprintln!(
+                        "mail-arm: local send for {} refused (exit {code:?}): {}",
+                        row.msg_id,
+                        brief(&output.stderr, 300)
+                    );
+                    if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                        eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
+                    }
+                    true
+                }
+                SendVerdict::Pending => {
+                    // The only trace a failed pull attempt leaves: without
+                    // this line a row retrying forever is silent (the
+                    // measured incident's rows stayed pending with no log).
+                    eprintln!(
+                        "mail-arm: local send for {} exit {}: {}; the row stays pending",
+                        row.msg_id,
+                        code.map(|c| c.to_string())
+                            .unwrap_or_else(|| "signal".to_string()),
+                        brief(&output.stderr, 300)
+                    );
+                    false
+                }
             }
-            false
         }
         Err(e) => {
             eprintln!("mail-arm: local send for {}: {e}", row.msg_id);

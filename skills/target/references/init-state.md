@@ -78,7 +78,7 @@ Also pass `TARGET_SIZE` (the size resolved in Step 1c - `S`, `M`, or `L`) so the
 
 Pass `--beastmode` / `--beast` (or `TARGET_BEASTMODE=1`) when the invocation carried the `beastmode` / `beast` modifier, so init stamps `authority: full`. Without it the field is absent and the session keeps the default stop-and-ask posture. See [SKILL.md §Authority](../SKILL.md#authority-the-beastmode-grant).
 
-Pass `TARGET_TURN_MODE=steps` on the helper invocation when the invocation carried the `steps` / `ordinary` / `regular` modifier, or a trailing `--steps` token, so init stamps `turn_mode: steps`. Only the literal `steps` stamps; the other two are input synonyms. Without it the field is absent and the run keeps the looping stop-gate default. In steps mode the stop hook allows each stop without releasing the claim or finalizing, so an outer skill advances the run one instructed step at a time.
+Pass `--steps` to `fno do target init` when the invocation carried the `steps` / `ordinary` / `regular` modifier, or a trailing `--steps` token, so init stamps `turn_mode: steps`. Only the literal `steps` stamps; the other two are input synonyms. Without it the field is absent and the run keeps the looping stop-gate default. In steps mode the stop hook allows each stop without releasing the claim or finalizing, so an outer skill advances the run one instructed step at a time.
 
 Per-flag CLI overrides from Step 1c (e.g. `--no-docs`) can be layered on top via `TARGET_NO_EXTERNAL`, `TARGET_NO_DOCS`, `TARGET_NO_SHIP`, `TARGET_NO_BROWSER`, `TARGET_NO_CLEAN`, `TARGET_NO_HOW_TO`, `TARGET_NO_MEMORY` (any of `1` / `true` / `yes` to set the flag, empty / unset to keep the profile default).
 
