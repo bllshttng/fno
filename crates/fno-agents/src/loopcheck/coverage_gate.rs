@@ -20,13 +20,14 @@
 use super::*;
 use crate::authorized_merge::Probes;
 use crate::pr_status::reviews::{read_review_coverage, review_lane};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::Read;
 
 /// Exit polarity of the three-state answer, kept from the verb's own
-/// contract: 0 covered, 3 refused, 4 unanswered.
+/// contract: 0 covered, 3 refused, 4 unanswered. Pub because the verdict
+/// rides the pub `Probes::coverage_verdict` surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GateState {
+pub enum GateState {
     Covered,
     Refused,
     Unanswered,
@@ -51,11 +52,11 @@ impl GateState {
 /// note naming a recompute outcome, a dead probe, a waiver, or a discharged
 /// budget.
 #[derive(Debug, Clone)]
-pub(crate) struct GateVerdict {
-    pub(crate) state: GateState,
-    pub(crate) refusal: String,
-    pub(crate) covered_head: String,
-    pub(crate) note: String,
+pub struct GateVerdict {
+    pub state: GateState,
+    pub refusal: String,
+    pub covered_head: String,
+    pub note: String,
 }
 
 /// The caller's discriminator: an overridden COVERED is a merge that landed
@@ -491,7 +492,11 @@ fn git_toplevel(cwd: &Path) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// `owner/repo` from the checkout's origin remote, for the waiver subject.
