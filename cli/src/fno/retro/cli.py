@@ -104,7 +104,7 @@ def _resolve_pr_session_ids(
         sessions, reason, infra = [], f"ledger unreadable: {exc}", True
     else:
         sessions = list(out.get("sessions") or [])
-        reason = out.get("reason")
+        reason = str(out.get("reason") or "")
         infra = bool(out.get("infra"))
     # Flattening to [] hides WHY. A benign no-match is the designed read-only
     # case and stays quiet; a broken environment must not read as "no owning

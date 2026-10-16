@@ -165,7 +165,7 @@ where
     RouteDecision {
         route: "cold",
         reason: cold_reason,
-        delivering_session_id: ship_sid,
+        delivering_session_id: ship_sid.clone(),
         delivering_harness: ship_sid
             .as_ref()
             .map(|_| ship_harness.unwrap_or(""))
@@ -348,16 +348,16 @@ fn resolve_canonical(pinned: Option<PathBuf>, node_cwd: Option<&str>) -> PathBuf
 fn read_auto_run(canonical: &Path) -> Option<bool> {
     let table = crate::agents_config::config_table_merged(canonical, &["post_merge"])?;
     let pm = table.get("post_merge")?;
-    Some(
-        pm.get("auto_run")
-            .and_then(Value::as_bool)
-            .or_else(|| {
-                pm.get("auto_run")
-                    .and_then(Value::as_str)
-                    .map(|s| crate::ledger_axes::truthy(&serde_json::Value::String(s.to_string())))
-            })
-            .unwrap_or(false),
-    )
+    Some(match pm.get("auto_run") {
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(toml::Value::String(s)) => {
+            matches!(
+                s.trim().to_lowercase().as_str(),
+                "true" | "1" | "yes" | "on"
+            )
+        }
+        _ => false,
+    })
 }
 
 /// Step 0.5 read: the ritual's mutex claim on the GLOBAL root. Live means the
@@ -628,7 +628,7 @@ fn run_dispatch(
         && origin_transcript_exists(source_session_id, source_cwd, source_harness)
     {
         if let (Some(sid), Some(cwd)) = (source_session_id, source_cwd) {
-            let tpath = origin_transcript_path(sid, cwd, source_harness);
+            let tpath = origin_transcript_path(Some(sid), cwd, source_harness);
             if let Some(tpath) = tpath {
                 finalized_origin =
                     (seams.finalize_origin)(cwd, &tpath.display().to_string(), source_harness);
@@ -767,9 +767,9 @@ fn family1_state(handle: &str) -> Option<String> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    let mut cursors = crate::session_truth::cursor::global();
+    let cursors = crate::session_truth::cursor::global();
     let payload =
-        crate::session_truth::resolve_payload(rows.as_deref(), handle, now, &stores, &mut cursors);
+        crate::session_truth::resolve_payload(rows.as_deref(), handle, now, &stores, cursors);
     payload
         .get("state")
         .and_then(Value::as_str)

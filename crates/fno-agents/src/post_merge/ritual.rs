@@ -118,10 +118,10 @@ struct PostMergeConfig {
     sync_command_set: bool,
 }
 
-fn truthy(v: Option<&Value>) -> bool {
+fn truthy(v: Option<&toml::Value>) -> bool {
     match v {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => matches!(
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(toml::Value::String(s)) => matches!(
             s.trim().to_lowercase().as_str(),
             "true" | "1" | "yes" | "on"
         ),
@@ -133,26 +133,29 @@ fn post_merge_config(canon: &Path) -> Option<PostMergeConfig> {
     let table = crate::agents_config::config_table_merged(canon, &["post_merge"])?;
     let pm = table.get("post_merge")?;
     Some(PostMergeConfig {
-        enabled: truthy(pm.get("enabled")).unwrap_or(true),
+        enabled: match pm.get("enabled") {
+            Some(v) => truthy(Some(v)),
+            None => true,
+        },
         model: pm
             .get("model")
-            .and_then(Value::as_str)
+            .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         maintainer_marker: pm
             .get("maintainer_marker")
-            .and_then(Value::as_str)
+            .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         parking_lot_path: pm
             .get("parking_lot_path")
-            .and_then(Value::as_str)
+            .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         self_reap: truthy(pm.get("self_reap")),
         sync_command_set: pm
             .get("sync_command")
-            .and_then(Value::as_str)
+            .and_then(|v| v.as_str())
             .is_some_and(|s| !s.is_empty()),
     })
 }
@@ -339,7 +342,7 @@ impl Ritual {
             .and_then(|t| {
                 t.get("project")
                     .and_then(|p| p.get("id"))
-                    .and_then(Value::as_str)
+                    .and_then(|v| v.as_str())
                     .map(str::to_string)
             })
             .unwrap_or_default();
@@ -348,7 +351,7 @@ impl Ritual {
             .and_then(|t| {
                 t.get("project")
                     .and_then(|p| p.get("id"))
-                    .and_then(Value::as_str)
+                    .and_then(|v| v.as_str())
                     .map(str::to_string)
             })
             .unwrap_or_default();
@@ -533,13 +536,9 @@ impl Ritual {
         let key = format!("reconcile:pr-{}", self.pr);
         let opts = crate::claims::AcquireOpts {
             pid: Some(std::process::id()),
-            pid_unavailable: false,
             ttl_ms: Some(900_000),
             reason: Some("post-merge ritual".to_string()),
-            metadata: None,
-            pid_provenance: None,
-            root: None,
-            events_dir: None,
+            ..Default::default()
         };
         match crate::claims::acquire(&key, &self.holder, opts) {
             crate::claims::AcquireOutcome::Acquired(_) => {
@@ -693,7 +692,7 @@ impl Ritual {
             self.emit(
                 "reconcile",
                 DEFERRED,
-                &format!("closure binding refused: {closure_refused}"),
+                &format!("closure binding refused: {closure_refused:?}"),
             );
         } else if errs > 0 || sync_outcome == Some("failed") {
             // reconcile exits 0 here (only unresolvable PRs exit 4), so the
@@ -1162,7 +1161,7 @@ Self-end when done; never spawn further work."
         // process itself, so the reap leg runs no stop.
         let mut removed = 0usize;
         for name in &rows {
-            let argv: Vec<String> = ["agents".to_string(), "rm".to_string(), name.clone()];
+            let argv: Vec<String> = vec!["agents".to_string(), "rm".to_string(), name.clone()];
             let cwd = self.canon_path();
             let r = run_leg(&argv, &cwd, Duration::from_secs(30), false);
             if r.ok() {
@@ -1181,7 +1180,7 @@ Self-end when done; never spawn further work."
             crate::merge_reap::rows_for_cleanup(&home, None, &self.node_ids)
                 .into_iter()
                 .collect();
-        let argv: Vec<String> = [
+        let argv: Vec<String> = vec![
             "agents".to_string(),
             "list".to_string(),
             "--json".to_string(),
@@ -1396,8 +1395,6 @@ pub fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// AC7-ORDER: reaping must follow the retro. Reaping before the retro
     /// destroys the evidence the retro reads, and archiving after the row
     /// drop orphans the tree with nothing pointing at it. The ported

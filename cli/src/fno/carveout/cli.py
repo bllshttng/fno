@@ -233,7 +233,7 @@ def list_carveouts(
                 },
             )
             session_id = list(out.get("sessions") or [])
-            reason = out.get("reason")
+            reason = str(out.get("reason") or "")
         except VerbUnavailable as exc:
             session_id, reason = [], f"ledger unreadable: {exc}"
 
