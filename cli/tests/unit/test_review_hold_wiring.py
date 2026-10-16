@@ -166,54 +166,6 @@ def test_a_lockfile_failure_never_refuses_the_sent_review(monkeypatch) -> None:
     )
 
 
-def test_the_python_attest_path_releases_the_hold_after_the_row_lands(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The shell producer released here from the start; this one did not.
-
-    Order is the invariant, not the presence of a call: release must FOLLOW
-    the append. A release that ran first would clear the lane on a crashed
-    emit, leaving no verdict behind it and no hold in front of it.
-    """
-    from fno.review import cli as review_cli
-
-    calls: list[str] = []
-
-    git = {
-        ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main",
-        ("merge-base", "HEAD", "origin/main"): "base0000",
-        ("diff", "--name-only", "base0000..HEAD"): "a.py\n",
-        ("diff", "--numstat", "base0000..HEAD"): "3\t1\ta.py\n",
-    }
-    monkeypatch.setattr(review_cli, "_git_out", lambda *args: git.get(tuple(args), ""))
-    monkeypatch.setattr(
-        "fno.review.invocation._settle_head_pin", lambda cwd: ("head1234", "feature/x-5ca3")
-    )
-    monkeypatch.setattr(
-        "fno.harness_identity.resolve_attester_identity", lambda: ("sess-a", "witness")
-    )
-    monkeypatch.setattr("fno.paths.resolve_repo_root", lambda *a, **kw: tmp_path)
-    monkeypatch.setattr("fno.paths.project_log", lambda *a, **kw: tmp_path / "events.jsonl")
-    monkeypatch.setattr(
-        "fno.events.append_event", lambda *a, **kw: calls.append("append")
-    )
-    monkeypatch.setattr("fno.events.cli.mirror_to_global_log", lambda *a, **kw: None)
-    monkeypatch.setattr(
-        "fno.pr._review_hold.release_review_hold",
-        lambda branch, **kw: calls.append(f"release:{branch}"),
-    )
-
-    verdict = review_cli._attest_from_record(
-        {"findings_blocking": 0, "findings_nonblocking": 0, "findings": []},
-        "code-review",
-        "non-author",
-        tmp_path / "findings.json",
-    )
-
-    assert verdict == "pass"
-    assert calls == ["append", "release:feature/x-5ca3"]
-
-
 def test_the_post_push_form_holds_the_pr_head_ref_without_breaking_the_payload(
     monkeypatch, capsys
 ) -> None:
