@@ -79,6 +79,7 @@ pub mod proto_slot;
 pub mod provider_key;
 pub mod pty;
 pub mod ratatui_blit;
+pub mod redact;
 pub mod registry_label;
 pub mod registry_read;
 pub mod remote_target;
