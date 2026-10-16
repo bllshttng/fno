@@ -1120,7 +1120,7 @@ mod shape_review_coverage_tests {
         if let Some((tiled, chain)) = tiling {
             data["range_tiling"] = json!({
                 "tiled": tiled,
-                "gaps": if tiled { [] } else { ["c1..c3"] },
+                "gaps": if tiled { json!([]) } else { json!(["c1..c3"]) },
                 "dropped": [],
                 "chain_heads": chain,
             });
