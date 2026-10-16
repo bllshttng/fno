@@ -28,7 +28,7 @@ impl<P: GhProbe> GhProbe for CountingProbe<P> {
     }
 }
 
-fn ttl() -> u64 {
+pub(crate) fn ttl() -> u64 {
     let raw = std::env::var("FNO_PR_STATUS_TTL").unwrap_or_default();
     raw.parse::<u64>().map(|v| v.max(1)).unwrap_or(60)
 }
@@ -187,7 +187,9 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (code, out, stderr_lines, calls) = cached_status(cwd_str, pr, refresh, None);
+    // The verb's readers act on `ready` and the local gates, so it composes
+    // here and never serves a peer's row.
+    let (code, out, stderr_lines, calls) = cached_status_via(cwd_str, pr, refresh, None, false);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {
@@ -197,7 +199,11 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s{}\n",
         snap.points_60s,
         snap.cap,
-        crate::gh_etag::note_suffix()
+        format!(
+            "{}{}",
+            crate::gh_etag::note_suffix(),
+            crate::gh_poller::note_suffix()
+        )
     ));
     let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
     (code, stdout, stderr)
@@ -215,6 +221,18 @@ pub(crate) fn cached_status(
     pr: u64,
     refresh: bool,
     head_read: Option<&Value>,
+) -> (i32, Value, Vec<String>, usize) {
+    cached_status_via(cwd_str, pr, refresh, head_read, true)
+}
+
+/// `cached_status` with the shared-row follow switched by `follow`. Only the
+/// callers that read the verdict and the settled flag follow a peer poller.
+fn cached_status_via(
+    cwd_str: &str,
+    pr: u64,
+    refresh: bool,
+    head_read: Option<&Value>,
+    follow: bool,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
@@ -246,6 +264,12 @@ pub(crate) fn cached_status(
         head_read.map(|block| block.get("head_sha").and_then(Value::as_str).unwrap_or(""));
     if !refresh {
         if let Some(answer) = fresh_serve(&dir, &slug_key, &pr.to_string(), now, require_head) {
+            return into_answer(answer, 0);
+        }
+        if let Some(answer) = follow
+            .then(|| follower_serve(&dir, &slug, &slug_key, pr, require_head))
+            .flatten()
+        {
             return into_answer(answer, 0);
         }
     }
@@ -355,6 +379,54 @@ pub(crate) fn cached_status(
         Some(&pulls),
         hold_state,
     )
+}
+
+/// A peer host holds the poller lease and shared a row young enough to
+/// serve: answer with zero gh calls, and keep the row locally under its key
+/// so this host's other processes read it from disk.
+fn follower_serve(
+    dir: &Path,
+    slug: &str,
+    slug_key: &str,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let (key, mut row) = crate::gh_poller::follow(dir, slug, pr)?;
+    without_publisher_gates(&mut row);
+    if key.contains(['/', '\\']) || !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    let answer = serve(&row, false)?;
+    write_row(dir, &key, &row);
+    prune_rows(dir, slug_key, &pr.to_string(), &key);
+    Some(answer)
+}
+
+/// The fields a peer composed from its own journal, graph and merge config.
+/// They say nothing about this host, so a shared row drops them and reads as
+/// not ready: the verdict and the check counts are the GitHub facts.
+fn without_publisher_gates(row: &mut Value) {
+    let Some(out) = row.get_mut("output").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for key in [
+        "review_coverage",
+        "review_posture",
+        "merge_authority",
+        "merge_execution",
+        "review_activity",
+        "dispatch_hold",
+        "merge_decision",
+        "coverage_waiver",
+        "rounds_used",
+        "max_rounds",
+        "rounds_exhausted",
+        "rounds_note",
+    ] {
+        out.remove(key);
+    }
+    out.insert("ready".into(), json!(false));
+    out.insert("ready_blockers".into(), json!(["status_shared"]));
 }
 
 fn fresh_probe() -> CountingProbe<crate::pr_status_facts::RealGhProbe> {
@@ -572,6 +644,7 @@ fn live_through(
         write_row(dir, key, &row);
         let slug_key = slug.replace('/', "--");
         prune_rows(dir, &slug_key, &pr.to_string(), key);
+        crate::gh_poller::publish(dir, slug, pr, key, &row);
     }
     (code, out, lines, calls)
 }
@@ -632,6 +705,40 @@ mod tests {
             "a row minted for head A must not answer a wait on head B"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A peer's shared row serves with no gh call while it is under two TTLs
+    /// old on the store clock; past that the follower reads GitHub itself.
+    #[test]
+    fn a_follower_serves_the_peers_row_until_it_is_two_ttls_old() {
+        let primary = crate::store_remote::test_primary::start();
+        let (peer_dir, dir) = (temp_cache_dir("peer"), temp_cache_dir("follower"));
+        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-b".into())));
+        let row = json!({"exit": 0, "output": {"head": "h1", "verdict": "green", "settled": true}});
+        crate::gh_poller::publish(&peer_dir, "Owner/Repo", 7, "Owner--Repo-7-h1", &row);
+        crate::gh_poller::route_to(Some((primary.remote.clone(), "mac-a".into())));
+
+        let (code, stdout, _) = follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None)
+            .expect("a live peer lease and a young row serve");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(stdout.contains("status_shared"), "{stdout}");
+        assert!(!stdout.contains("merge_execution"), "{stdout}");
+        assert!(dir.join("Owner--Repo-7-h1.json").exists());
+
+        let sql = format!(
+            "UPDATE gh_status_rows SET ts = {} - 121000",
+            crate::claim_store::CLOCK
+        );
+        primary.db.lock().unwrap().execute(&sql, []).unwrap();
+        assert!(
+            follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None).is_none(),
+            "a row past two TTLs falls through to the live read"
+        );
+        crate::gh_poller::route_to(None);
+        for d in [peer_dir, dir] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
