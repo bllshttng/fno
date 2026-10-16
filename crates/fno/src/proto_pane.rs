@@ -80,6 +80,19 @@ pub struct PaneInfo {
 }
 
 impl PaneInfo {
+    /// The head of a `pane ls` line. `cwd` is the squad root; the pane's own
+    /// directory follows only when it sits apart from the root.
+    pub fn ls_head(&self, tab: &str, pid: &str, fno: &str, name: &str) -> String {
+        let mut line = format!(
+            "{} squad={} tab={tab} tab_id={} pid={pid} fno_id={fno} name={name} cwd={}",
+            self.pane_id, self.squad_id, self.tab_id, self.cwd
+        );
+        if let Some(dir) = self.pane_cwd.as_deref().filter(|dir| *dir != self.cwd) {
+            line.push_str(&format!(" pane_cwd={dir}"));
+        }
+        line
+    }
+
     /// Whether the pane's joined row answers to this id: its own fno_id or
     /// its harness session id, either spelling.
     pub fn answers_id(&self, id: &str) -> bool {

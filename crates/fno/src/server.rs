@@ -2548,9 +2548,8 @@ impl Core {
         });
     }
 
-    /// Every pane's metadata for `pane ls`, ordered by pane id so the listing
-    /// is stable and machine-readable. A pane mid-teardown (not in the tree)
-    /// is still listed with what is known rather than dropped silently.
+    /// Every pane's metadata for `pane ls`, ordered by pane id (stable, machine-readable).
+    /// A pane mid-teardown is still listed with what is known rather than dropped silently.
     fn pane_infos_with_agents(&self, agents: &[RegistryAgent]) -> Vec<PaneInfo> {
         // (v71) One evidence read feeds every pane row's orphan verdict.
         let evidence = self.member_evidence();
@@ -2574,10 +2573,6 @@ impl Core {
                         }
                         None => (0, None, 0, String::new(), None, None),
                     };
-                // `cwd` above is the squad root. A `pane run --cwd <subdir>`
-                // pane lives in <subdir> while the squad key resolves to the
-                // enclosing repo root, so the pane's own directory rides apart.
-                let pane_cwd = crate::pane_cwd::live_or_spawn(entry.pty.child_pid(), &entry.cwd);
                 // The lineage join: when exactly ONE registry row
                 // hosts this pane, its identity fields ride the listing so
                 // the stable thread id (fno_id) and the CURRENT harness
@@ -2603,7 +2598,7 @@ impl Core {
                     squad_name,
                     tab_id,
                     cwd,
-                    pane_cwd: Some(pane_cwd),
+                    pane_cwd: crate::pane_cwd::listed(entry.pty.child_pid(), &entry.cwd),
                     child_pid: entry.pty.child_pid(),
                     title: entry.vt.osc_title().map(str::to_string),
                     // A portal seat never reads pristine: the seat is
