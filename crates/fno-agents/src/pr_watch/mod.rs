@@ -5,6 +5,7 @@
 
 mod heal;
 mod install;
+mod mint;
 pub(crate) mod refresh;
 mod render;
 mod sessions;
@@ -20,9 +21,10 @@ pub fn run(args: &[String]) -> i32 {
         Some("uninstall") => install::run_uninstall(&args[1..]),
         Some("heal") => heal::run(&args[1..]),
         Some("pr-sessions") => sessions::run(&args[1..]),
+        Some("merge-cleanup-mint") => mint::run(&args[1..]),
         _ => {
             eprintln!(
-                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions> [--json|-J] [-N]"
+                "usage: fno-agents pr-watch <status|install|refresh|uninstall|heal|pr-sessions|merge-cleanup-mint> [--json|-J] [-N]"
             );
             2
         }

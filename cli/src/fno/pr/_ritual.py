@@ -48,11 +48,7 @@ import typer
 
 from fno._subprocess_util import fno_cmd, fno_py_cmd
 from fno.agents.naming import mint_or_none
-from fno.agents.events import (
-    emit_merge_cleanup_requested,
-    pr_node_ids,
-    rows_for_cleanup,
-)
+from fno.agents.events import pr_node_ids, rows_for_cleanup
 from fno.config import load_settings_for_repo
 from fno.paths import agents_home_dir
 from fno.pr._proc import Result, ToolMissing, run as _run
@@ -610,22 +606,31 @@ class Ritual:
             # envelope and its request id key on it - leg_reap_rows runs the
             # same recovery several legs later, too late for this mint.
             self.ctx.node_ids = self._recover_node_for_pr()
-        request_id = emit_merge_cleanup_requested(
-            repo=str(self.canon) if self.canon else "",
-            project=self.ctx.project,
-            pr=self.ctx.pr,
-            branch=branch,
-            worktree=worktree,
-            node_ids=[str(node) for node in self.ctx.node_ids],
-            session_id=None,
-            harness=None,
-            merged_at=self._merged_state()[2],
-            # x-bbbb: always emit the exact candidates - a PR whose worktree
-            # path is gone still carries name-matched rows for the reaper.
-            candidate_row_names=rows_for_cleanup(
-                worktree, self.ctx.node_ids, runner=self._sh
-            ),
-        )
+        from fno.rust_binary import VerbUnavailable, verb_call
+
+        try:
+            out = verb_call(
+                ["pr-watch", "merge-cleanup-mint"],
+                {
+                    "repo": str(self.canon) if self.canon else "",
+                    "project": self.ctx.project,
+                    "pr": self.ctx.pr,
+                    "branch": branch,
+                    "worktree": worktree,
+                    "node_ids": [str(node) for node in self.ctx.node_ids],
+                    "session_id": None,
+                    "harness": None,
+                    "merged_at": self._merged_state()[2],
+                },
+            )
+            request_id = str(out.get("request_id") or "")
+        except VerbUnavailable as exc:
+            # The leg reads the refusal, not a crash: order_written goes false
+            # and archive reports failed with the refusal named.
+            return f"reap-order-unwritten: {str(exc)[:200]}"
+        # x-bbbb: the mint reads the exact candidate rows itself, so a PR
+        # whose worktree path is gone still carries name-matched rows for the
+        # reaper.
         # Minting makes the next idle tick the request's first payment window.
         (agents_home_dir() / "worktree-sweep.stamp").unlink(missing_ok=True)
         return f"cleanup-requested request_id={request_id}; {why}"

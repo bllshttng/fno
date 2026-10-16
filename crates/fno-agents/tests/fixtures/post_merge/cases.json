@@ -98,5 +98,74 @@
     ],
     "pr": 507,
     "slug": "o/r"
+  },
+  {
+    "label": "mint_bound_ids",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "node_ids": ["x-b", "x-a"],
+      "session_id": "sess-1",
+      "harness": "claude",
+      "merged_at": "2026-09-07T15:00:00Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:00Z"
+  },
+  {
+    "label": "mint_empty_ids_no_store",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": [],
+      "repo_slug": "o/r",
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "session_id": null,
+      "harness": null,
+      "merged_at": "2026-09-07T15:00:00Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:00Z"
+  },
+  {
+    "label": "mint_candidates_passed",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": ["x-1"],
+      "candidate_row_names": ["target-x-1-worker"],
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": "/repo/wt",
+      "session_id": null,
+      "harness": null,
+      "merged_at": "2026-09-07T15:00:01Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:01Z"
+  },
+  {
+    "label": "mint_merged_at_missing",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": ["x-1"],
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "session_id": null,
+      "harness": null
+    },
+    "agents_home": true,
+    "merged_at_volatile": true
   }
 ]

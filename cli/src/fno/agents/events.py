@@ -402,17 +402,6 @@ MERGE_CLEANUP_SKIP_REASONS = (
 )
 
 
-def merge_cleanup_request_id(project: Any, pr: int, branch: str) -> str:
-    """The daemon's fold key for one exact merge: project, PR and branch.
-
-    Worktree and node ids left the key: the two mint sites know different
-    amounts about them (the merge mint can bind [], the ritual recovers), so
-    keying on them split one merge into two requests that never folded.
-    """
-    identity = "|".join([str(project), str(pr), branch])
-    return "merge-cleanup-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
-
-
 def scan_pr_nodes(entries, pr: int, slug: Optional[str]) -> list[str]:
     """Graph-derived node ids whose pr_url matches this PR's repo.
 
@@ -499,49 +488,6 @@ def rows_for_cleanup(worktree: Optional[str], node_ids, *, runner=None) -> list[
         ):
             out.append(name)
     return out
-
-
-def emit_merge_cleanup_requested(
-    *,
-    repo: str,
-    project: str,
-    pr: int,
-    branch: str,
-    worktree: Optional[str],
-    node_ids,
-    session_id: Optional[str],
-    harness: Optional[str],
-    merged_at: Optional[str] = None,
-    candidate_row_names,
-    repo_slug: Optional[str] = None,
-) -> str:
-    """Mint the durable reap order in the daemon lifecycle log; ``merged_at``
-    anchors the grace clock (``None`` stamps now). Returns the request id.
-
-    A caller that bound no node ids passes ``repo_slug`` (the PR's
-    ``owner/repo``) so the mint recovers them from the sidecar store itself,
-    the way the ritual's mint always has."""
-    ids = [str(node) for node in node_ids]
-    if not ids and repo_slug:
-        ids = pr_node_ids(pr, repo_slug)
-    request_id = merge_cleanup_request_id(project, pr, branch)
-    _emit_daemon_envelope(
-        KIND_MERGE_CLEANUP_REQUESTED,
-        {
-            "request_id": request_id,
-            "repo": repo,
-            "project": str(project),
-            "pr": int(pr),
-            "branch": branch,
-            "worktree": worktree,
-            "node_ids": sorted(ids),
-            "candidate_row_names": list(candidate_row_names),
-            "merged_at": merged_at or _utc_now_iso(),
-            "session_id": session_id,
-            "harness": harness,
-        },
-    )
-    return request_id
 
 
 def emit_merge_cleanup_skipped(

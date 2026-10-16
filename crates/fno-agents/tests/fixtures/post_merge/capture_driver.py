@@ -78,6 +78,19 @@ def build_case(root_path, case, index):
     subject = case.get("subject") or "pr-sessions"
     if subject == "pr-sessions":
         return build_pr_sessions_case(root_path, case, index)
+    if subject == "mint":
+        return build_mint_case(root_path, case, index)
+    raise SystemExit("unknown subject: %r" % subject)
+
+
+def build_mint_case(root_path, case, index):
+    case_dir = root_path / ("case-%02d" % index)
+    (case_dir / "agents-home").mkdir(parents=True)
+    (case_dir / "payload.json").write_text(
+        json.dumps(case["payload"], sort_keys=True) + "\n"
+    )
+    (case_dir / "case.json").write_text(json.dumps(case, sort_keys=True, indent=2) + "\n")
+    return case_dir
 
 
 def mask(text, case_dir):
@@ -127,7 +140,13 @@ def capture(only):
         if only and key != only:
             continue
         case_dir = build_case(root_path, case, index)
-        envelope = run_child(case_dir)
+        try:
+            envelope = run_child(case_dir)
+        except SystemExit as exc:
+            # A dead oracle (its module deleted by the port) only bars a
+            # RE-freeze of its cases; the frozen goldens on disk stand.
+            print("skip %s (oracle gone): %s" % (case["label"], exc), flush=True)
+            continue
         freeze(key, envelope, case_dir)
         frozen += 1
         print("froze %s -> %s (exit %s)" % (case["label"], key, envelope["exit"]), flush=True)
@@ -177,6 +196,54 @@ def run_entry(case):
                 separators=(",", ":"),
             )
             + "\n",
+            "stderr": "",
+        }
+        sys.stdout.write(json.dumps(envelope) + "\n")
+        return
+    if subject == "mint":
+        import subprocess as sp
+        import types
+
+        # The capture pin: the last commit that still carried the Python mint
+        # (this PR's task 2.1 deleted it from events.py). A golden can only be
+        # re-frozen by running THIS driver at that ref.
+        pin = "6ef818c913"
+        raw = sp.run(
+            ["git", "show", pin + ":cli/src/fno/agents/events.py"],
+            capture_output=True, text=True, check=True, cwd=str(REPO_ROOT),
+        ).stdout
+        import fno.agents.events as live_events
+
+        old = types.ModuleType("fno.agents.events")
+        exec(compile(raw, "events_capture_pin.py", "exec"), old.__dict__)
+        kwargs = json.loads((Path.cwd() / "payload.json").read_text())
+
+        journal = Path.cwd() / "capture-journal.jsonl"
+
+        def write_row(kind, data, source="python"):
+            with journal.open("a") as fh:
+                fh.write(
+                    json.dumps(
+                        {"ts": "<TS>", "type": kind, "source": source, "data": data},
+                        sort_keys=True, separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+
+        old._emit_daemon_envelope = write_row
+        kwargs.setdefault(
+            "candidate_row_names",
+            old.rows_for_cleanup(kwargs.get("worktree"), kwargs.get("node_ids") or []),
+        )
+        old.emit_merge_cleanup_requested(**kwargs)
+        rows = [json.loads(ln) for ln in journal.read_text().splitlines() if ln.strip()]
+        requested = [r for r in rows if r["type"] == "merge_cleanup_requested"]
+        data = dict(requested[-1]["data"])
+        if kwargs.get("merged_at") is None:
+            data["merged_at"] = "<STAMP>"
+        envelope = {
+            "exit": 0,
+            "stdout": json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n",
             "stderr": "",
         }
         sys.stdout.write(json.dumps(envelope) + "\n")

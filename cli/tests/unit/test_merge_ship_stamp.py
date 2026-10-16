@@ -567,10 +567,35 @@ def _requested_rows(log: Path) -> list[dict]:
     ]
 
 
+def _stub_mint_verb(monkeypatch):
+    """Stub the verb_call seam both mint sites ride: record payloads, answer
+    the receipt with the fold-key formula the native mint implements. The
+    envelope itself is pinned by the Rust goldens."""
+    import hashlib
+
+    import fno.rust_binary as rust_binary
+
+    seen = []
+
+    def fake_verb_call(verb, payload, *args, **kwargs):
+        seen.append((tuple(verb), payload))
+        identity = "|".join(
+            [str(payload.get("project")), str(payload.get("pr")), payload.get("branch") or ""]
+        )
+        return {
+            "request_id": "merge-cleanup-"
+            + hashlib.sha256(identity.encode()).hexdigest()[:20]
+        }
+
+    monkeypatch.setattr(rust_binary, "verb_call", fake_verb_call)
+    return seen
+
+
 def test_post_merge_followups_mints_cleanup_request(tmp_path, monkeypatch):
-    # AC1-HP: a confirmed merge with no ritual run writes the request itself,
-    # carrying merged_at, the closed node ids, and the session identity.
-    import fno.agents.events as E
+    # AC1-HP: a confirmed merge with no ritual run mints the request itself,
+    # carrying merged_at, the bound node ids, and the session identity. The
+    # envelope fields (candidates, sorted ids, ts-vs-merged_at) are pinned by
+    # the Rust goldens; this side pins what the merge sends.
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -581,29 +606,25 @@ def test_post_merge_followups_mints_cleanup_request(tmp_path, monkeypatch):
     # A linked worktree's `.git` is a FILE; this fixture needs the merge
     # cleanup to see cwd as one (x-7b9c inlined the predicate in _merge.py).
     (tmp_path / ".git").write_text("gitdir: /elsewhere/worktrees/t/.git\n")
-    monkeypatch.setattr(
-        E, "rows_for_cleanup",
-        lambda worktree, node_ids, runner=None: ["target-x-07dc-a1"],
-    )
+    seen = _stub_mint_verb(monkeypatch)
 
     M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=["x-07dc"])
 
-    rows = _requested_rows(log)
-    assert len(rows) == 1
-    data = rows[0]["data"]
-    assert data["pr"] == 9
-    assert data["branch"] == "feature/x-07dc"
-    assert data["node_ids"] == ["x-07dc"]
-    assert data["session_id"] == "sess-abc"
-    assert data["harness"] == "claude"
-    assert data["candidate_row_names"] == ["target-x-07dc-a1"]
-    assert data["merged_at"] and data["merged_at"].endswith("Z")
-    assert data["request_id"].startswith("merge-cleanup-")
+    assert len(seen) == 1
+    verb, payload = seen[0]
+    assert verb == ("pr-watch", "merge-cleanup-mint")
+    assert payload["pr"] == 9
+    assert payload["branch"] == "feature/x-07dc"
+    assert payload["node_ids"] == ["x-07dc"]
+    assert payload["session_id"] == "sess-abc"
+    assert payload["harness"] == "claude"
+    assert payload["merged_at"] and payload["merged_at"].endswith("Z")
+    assert _requested_rows(log) == []
 
 
 def test_merge_with_no_bound_nodes_still_mints_empty(tmp_path, monkeypatch):
     # Held shape: a reconcile that bound nothing still mints, with
-    # node_ids [] - the daemon's doneness re-read holds that request.
+    # node_ids [] - the native mint recovers what it can (Rust goldens).
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -611,27 +632,27 @@ def test_merge_with_no_bound_nodes_still_mints_empty(tmp_path, monkeypatch):
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     _write_manifest(tmp_path)
+    seen = _stub_mint_verb(monkeypatch)
 
     M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=[])
 
-    rows = _requested_rows(log)
-    assert len(rows) == 1
-    assert rows[0]["data"]["node_ids"] == []
-    assert rows[0]["data"]["worktree"] is None
+    assert len(seen) == 1
+    assert seen[0][1]["node_ids"] == []
+    assert seen[0][1]["worktree"] is None
+    assert _requested_rows(log) == []
 
 
 def test_ritual_mint_shares_request_id_with_merge_mint(tmp_path, monkeypatch):
     # AC1-EDGE: the ritual's mint and the merge's mint carry ONE request id,
-    # so the daemon's fold keeps a single pending request, not two.
-    import fno.agents.events as E
+    # so the daemon's fold keeps a single pending request, not two. The id
+    # keys on project, PR and branch alone - asserted here through the two
+    # callers' payloads and the formula the native mint implements.
+    import hashlib
+
+    import fno.pr._merge as M
     import fno.pr._ritual as R
 
     log = _patch_events_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        R, "rows_for_cleanup",
-        lambda worktree, node_ids, runner=None: ["target-x-07dc-a1"],
-    )
-    monkeypatch.setattr(R, "agents_home_dir", lambda: tmp_path / "agents-home")
     ritual = R.Ritual.__new__(R.Ritual)
     ritual.cwd = tmp_path
     # The mint reads the memoized gh read for the grace anchor; a bare
@@ -649,23 +670,30 @@ def test_ritual_mint_shares_request_id_with_merge_mint(tmp_path, monkeypatch):
         holder="",
         node_ids=["x-07dc"],
     )
+    seen = _stub_mint_verb(monkeypatch)
+
     order = ritual._register_cleanup_request(
         "feature/x-07dc", str(tmp_path / "wt"), "merged-pr"
     )
-    twin = E.emit_merge_cleanup_requested(
-        repo=str(tmp_path),
-        project="proj",
-        pr=9,
-        branch="feature/x-07dc",
-        worktree=str(tmp_path / "wt"),
-        node_ids=["x-07dc"],
-        session_id=None,
-        harness=None,
-        candidate_row_names=[],
-    )
-    ids = [row["data"]["request_id"] for row in _requested_rows(log)]
+
     assert "cleanup-requested" in order
-    assert ids == [twin, twin]
+    assert len(seen) == 1
+    ritual_payload = seen[0][1]
+
+    # The merge-side twin: same project/pr/branch key, different knowledge.
+    _stub_gh_merged(monkeypatch, M)
+    _stub_git_root(monkeypatch, M, tmp_path)
+    M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
+    _write_manifest(tmp_path)
+    seen.clear()
+    M._run_post_merge_followups(9, "squash", str(tmp_path), bound_node_ids=["x-07dc"])
+    merge_payload = seen[0][1]
+
+    identity = "|".join(["proj", "9", "feature/x-07dc"])
+    expected = "merge-cleanup-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+    fold_key = lambda p: (p["project"], p["pr"], p["branch"])
+    assert fold_key(ritual_payload) == fold_key(merge_payload) == ("proj", 9, "feature/x-07dc")
+    assert re.search(r"request_id=(\S+)", order).group(1) == expected
 
 
 def _patch_sidecar(monkeypatch, rows):
@@ -683,10 +711,11 @@ def _patch_sidecar(monkeypatch, rows):
     )
 
 
-def test_merge_mint_recovers_node_ids_from_sidecar(tmp_path, monkeypatch):
-    # AC1-HP: a merge whose reconcile bound nothing recovers the PR's node
-    # ids from the sidecar store (repo-scoped off the PR url), so the request
-    # names what it can reap instead of holding on no-node-ids for a day.
+def test_merge_mint_hands_recovery_to_the_native_mint(tmp_path, monkeypatch):
+    # AC1-HP: a merge whose reconcile bound nothing sends node_ids [] plus
+    # the PR's repo slug; the native mint recovers the ids from the working
+    # graph itself (pinned by the Rust goldens). The sidecar store must not
+    # be read Python-side anymore.
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -694,42 +723,24 @@ def test_merge_mint_recovers_node_ids_from_sidecar(tmp_path, monkeypatch):
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     _write_manifest(tmp_path)
+    seen = _stub_mint_verb(monkeypatch)
     _patch_sidecar(monkeypatch, [
         {"id": "fno-abc1", "pr_number": 7,
          "pr_url": "https://github.com/owner/repo/pull/7"}])
 
     M._run_post_merge_followups(7, "squash", str(tmp_path), bound_node_ids=[])
 
-    rows = _requested_rows(log)
-    assert len(rows) == 1
-    assert rows[0]["data"]["node_ids"] == ["fno-abc1"]
-
-
-def test_both_mints_carry_one_request_id(tmp_path, monkeypatch):
-    # AC1-FOLD: the merge mint (worktree /wt, node_ids []) and the ritual
-    # mint (worktree null, node_ids [x-1]) key on project, PR and branch,
-    # so one merge produces ONE request id either way.
-    import fno.agents.events as E
-
-    log = _patch_events_log(monkeypatch, tmp_path)
-    _patch_sidecar(monkeypatch, [])
-    E.emit_merge_cleanup_requested(
-        repo=str(tmp_path), project="proj", pr=7, branch="feature/x",
-        worktree="/wt", node_ids=[], session_id=None, harness=None,
-        candidate_row_names=[], repo_slug="owner/repo",
-    )
-    E.emit_merge_cleanup_requested(
-        repo=str(tmp_path), project="proj", pr=7, branch="feature/x",
-        worktree=None, node_ids=["x-1"], session_id=None, harness=None,
-        candidate_row_names=[],
-    )
-    ids = [row["data"]["request_id"] for row in _requested_rows(log)]
-    assert ids[0] == ids[1]
+    assert len(seen) == 1
+    payload = seen[0][1]
+    assert payload["node_ids"] == []
+    assert payload["repo_slug"] == "owner/repo"
+    assert _requested_rows(log) == []
 
 
 def test_merge_mint_excludes_foreign_repo_sidecar_nodes(tmp_path, monkeypatch):
     # AC1-EDGE: a sidecar node whose pr_url names another repo sharing the
-    # PR number stays out of the recovered ids (repo-scoped, never guessed).
+    # PR number stays out of the recovered ids (repo-scoped, never guessed);
+    # the merge sends the PR's own url slug and no ids of its own.
     import fno.pr._merge as M
 
     log = _patch_events_log(monkeypatch, tmp_path)
@@ -737,12 +748,14 @@ def test_merge_mint_excludes_foreign_repo_sidecar_nodes(tmp_path, monkeypatch):
     _stub_git_root(monkeypatch, M, tmp_path)
     M._REPO_ROOT_CACHE[str(tmp_path)] = str(tmp_path)
     _write_manifest(tmp_path)
+    seen = _stub_mint_verb(monkeypatch)
     _patch_sidecar(monkeypatch, [
         {"id": "fno-forei", "pr_number": 7,
          "pr_url": "https://github.com/other/repo/pull/7"}])
 
     M._run_post_merge_followups(7, "squash", str(tmp_path), bound_node_ids=[])
 
-    rows = _requested_rows(log)
-    assert len(rows) == 1
-    assert rows[0]["data"]["node_ids"] == []
+    assert len(seen) == 1
+    assert seen[0][1]["repo_slug"] == "owner/repo"
+    assert seen[0][1]["node_ids"] == []
+    assert _requested_rows(log) == []
