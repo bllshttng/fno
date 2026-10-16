@@ -4,9 +4,9 @@ import argparse
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="export")
-    parser.add_argument("--out", required=True, help="file to write")
+    parser.add_argument("--output", required=True, help="file to write")
     args = parser.parse_args(argv)
-    with open(args.out, "w", encoding="utf-8") as fh:
+    with open(args.output, "w", encoding="utf-8") as fh:
         fh.write("rows\n")
     return 0
 
