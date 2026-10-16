@@ -383,3 +383,31 @@ def test_telemetry_keys_roundtrip_as_nested_tables(tmp_path, key, raw, parts, ex
     for part in parts:
         node = node[part]
     assert node == expected
+
+
+# ---------------------------------------------------------------------------
+# The attention keys the Rust daemon reads are modeled, so `config set`
+# accepts `attention.sinks` as a list of tables and `attention.enabled`.
+# ---------------------------------------------------------------------------
+
+
+def test_attention_sinks_roundtrip_as_a_list_of_tables(tmp_path):
+    row = (
+        '[{"name": "phone", "type": "ntfy", "url": "https://ntfy.sh",'
+        ' "topic": "fno-questions", "token_env": "NTFY_TOKEN"}]'
+    )
+    set_config_value("attention.sinks", row, scope="project", repo_root=tmp_path)
+    assert _read(tmp_path)["attention"]["sinks"] == [
+        {
+            "name": "phone",
+            "type": "ntfy",
+            "url": "https://ntfy.sh",
+            "topic": "fno-questions",
+            "token_env": "NTFY_TOKEN",
+        }
+    ]
+
+
+def test_attention_enabled_roundtrips(tmp_path):
+    set_config_value("attention.enabled", "false", scope="project", repo_root=tmp_path)
+    assert _read(tmp_path)["attention"]["enabled"] is False

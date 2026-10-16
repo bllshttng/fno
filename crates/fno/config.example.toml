@@ -184,6 +184,12 @@ headers_env = "FNO_OTLP_HEADERS"
 # Export event titles as log text (default off: only the event kind).
 log_content = false
 
+[attention]
+# Kill switch for the attention arm (question pages and sinks; default on).
+enabled = true
+# Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full).
+sinks = []
+
 [research]
 # Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses).
 # output_dir = <unset>   # optional; no default
