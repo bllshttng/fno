@@ -618,6 +618,10 @@ fn run_request(
             kept.push(format!("{}:kept_operator", entry.name));
             continue;
         }
+        if crate::keep_mark::for_row(home, &entry).is_some() {
+            kept.push(format!("{}:kept_marked", entry.name));
+            continue;
+        }
         rows.push(entry);
     }
     // 4+5. The session half of every candidate runs through the SAME sequence
@@ -942,7 +946,10 @@ pub(crate) fn consume_merge_cleanup_requests(
             }
             let mut rows = Vec::new();
             for entry in merge_cleanup_rows(home, request) {
-                if entry.role_level.is_some() || entry.origin.as_deref() == Some("operator") {
+                if entry.role_level.is_some()
+                    || entry.origin.as_deref() == Some("operator")
+                    || crate::keep_mark::for_row(home, &entry).is_some()
+                {
                     continue;
                 }
                 batch_entries.push(entry.clone());
@@ -1767,8 +1774,10 @@ mod tests {
             &[
                 claude_row("target-x-1-worker", false),
                 claude_row("lead-x-1", true),
+                claude_row("marked-x-1", false),
             ],
         );
+        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
         let request = settled_request("/repo/wt");
         let seams = RequestSeams {
             finished: &|_entry| true,
@@ -1805,6 +1814,11 @@ mod tests {
             kept.iter()
                 .any(|k| k.as_str().starts_with("lead-x-1:kept_promoted")),
             "the teamed row must be named under kept_promoted: {kept:?}"
+        );
+        assert!(
+            kept.iter()
+                .any(|k| k.as_str().starts_with("marked-x-1:kept_marked")),
+            "the marked row must be named under kept_marked: {kept:?}"
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
