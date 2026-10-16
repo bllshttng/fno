@@ -352,9 +352,9 @@ fn read_auto_run(canonical: &Path) -> Option<bool> {
         pm.get("auto_run")
             .and_then(Value::as_bool)
             .or_else(|| {
-                pm.get("auto_run").and_then(Value::as_str).map(|s| {
-                    crate::ledger_axes::truthy(&serde_json::Value::String(s.to_string()))
-                })
+                pm.get("auto_run")
+                    .and_then(Value::as_str)
+                    .map(|s| crate::ledger_axes::truthy(&serde_json::Value::String(s.to_string())))
             })
             .unwrap_or(false),
     )
@@ -859,7 +859,10 @@ fn origin_transcript_exists(
         return false;
     };
     match origin_transcript_path(session_id, cwd, harness) {
-        Some(_) => Path::new(cwd).join(".fno").join("target-state.md").is_file(),
+        Some(_) => Path::new(cwd)
+            .join(".fno")
+            .join("target-state.md")
+            .is_file(),
         None => false,
     }
 }
@@ -914,7 +917,7 @@ fn real_seams() -> Seams {
                 // gemini/unknown: no live-inject vehicle, cold path.
                 _ => None,
             }
-        },
+        }),
         death_confirmed: Box::new(|sid, _harness, _cwd| {
             if sid.is_empty() {
                 return false;
@@ -968,7 +971,16 @@ mod tests {
 
     #[test]
     fn decide_defers_when_auto_run_off() {
-        let d = decide(false, Some("s1"), None, None, None, None, |_, _| None, |_, _, _| false);
+        let d = decide(
+            false,
+            Some("s1"),
+            None,
+            None,
+            None,
+            None,
+            |_, _| None,
+            |_, _, _| false,
+        );
         assert_eq!(d.route, "defer");
         assert_eq!(d.reason, "auto-run-disabled");
     }
@@ -1011,7 +1023,16 @@ mod tests {
         );
         assert_eq!(d.route, "warm");
         assert_eq!(d.borrowed_session_id.as_deref(), Some("src-1"));
-        let cold = decide(true, Some("ship-1"), None, Some("src-1"), None, None, |_, _| None, |_, _, _| false);
+        let cold = decide(
+            true,
+            Some("ship-1"),
+            None,
+            Some("src-1"),
+            None,
+            None,
+            |_, _| None,
+            |_, _, _| false,
+        );
         assert_eq!(cold.route, "cold");
         assert_eq!(cold.reason, "no-live-source-session");
     }
@@ -1073,8 +1094,20 @@ mod tests {
 
     fn dispatch_all(pr: i64, auto_run: bool, canonical: &Path, seams: &Seams) -> DispatchResult {
         dispatch_claim_root(
-            pr, Some(format!("sha-{pr}")), auto_run, canonical, None, None, None, None, None,
-            None, None, 300.0, seams, None,
+            pr,
+            Some(format!("sha-{pr}")),
+            auto_run,
+            canonical,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            300.0,
+            seams,
+            None,
         )
     }
 
@@ -1086,7 +1119,10 @@ mod tests {
         assert_eq!(out.outcome, "disabled");
         assert_eq!(out.detail.as_deref(), Some("auto-run-disabled"));
         assert!(!marker_path(canon.path(), "sha-41").exists());
-        assert_eq!(log.lock().unwrap().as_slice(), ["deferred:auto-run-disabled"]);
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            ["deferred:auto-run-disabled"]
+        );
     }
 
     #[test]
@@ -1097,7 +1133,10 @@ mod tests {
         let out = dispatch_all(42, true, canon.path(), &seams);
         assert_eq!(out.outcome, "already-dispatched");
         assert_eq!(out.detail.as_deref(), Some("marker-exists"));
-        assert!(log.lock().unwrap().is_empty(), "no receipt on a marker skip");
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "no receipt on a marker skip"
+        );
 
         let claim_dir = tempfile::tempdir().expect("claims tempdir");
         let opts = crate::claims::AcquireOpts {
@@ -1108,16 +1147,34 @@ mod tests {
         let seeded = crate::claims::acquire(
             "reconcile:pr-43",
             "other-runner",
-            crate::claims::AcquireOpts { root: Some(claim_dir.path().to_path_buf()), ..opts },
+            crate::claims::AcquireOpts {
+                root: Some(claim_dir.path().to_path_buf()),
+                ..opts
+            },
         );
         assert!(matches!(seeded, crate::claims::AcquireOutcome::Acquired(_)));
         let out = dispatch_claim_root(
-            43, Some("sha-43".to_string()), true, canon.path(), None, None, None, None, None,
-            None, None, 300.0, &seams, Some(claim_dir.path()),
+            43,
+            Some("sha-43".to_string()),
+            true,
+            canon.path(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            300.0,
+            &seams,
+            Some(claim_dir.path()),
         );
         assert_eq!(out.outcome, "already-dispatched");
         assert_eq!(out.detail.as_deref(), Some("ritual-claim-live"));
-        assert!(marker_path(canon.path(), "sha-43").exists(), "live claim persists the marker");
+        assert!(
+            marker_path(canon.path(), "sha-43").exists(),
+            "live claim persists the marker"
+        );
     }
 
     #[test]
@@ -1139,7 +1196,10 @@ mod tests {
         let out = dispatch_all(45, true, canon2.path(), &bad_seams);
         assert_eq!(out.outcome, "failed");
         assert_eq!(out.detail.as_deref(), Some("verb-nonzero"));
-        assert!(!marker_path(canon2.path(), "sha-45").exists(), "no marker on failure");
+        assert!(
+            !marker_path(canon2.path(), "sha-45").exists(),
+            "no marker on failure"
+        );
         assert_eq!(
             bad_log.lock().unwrap().as_slice(),
             ["reserved:reserved", "failed:verb-nonzero"]

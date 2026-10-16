@@ -51,10 +51,7 @@ fn receipt_line(step: &str, status: &str, detail: &str) -> String {
 
 /// `git rev-parse` text, empty on any failure (the ported `_git_text`).
 fn git_text(argv: &[&str], cwd: &Path) -> String {
-    let out = Command::new("git")
-        .args(argv)
-        .current_dir(cwd)
-        .output();
+    let out = Command::new("git").args(argv).current_dir(cwd).output();
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => String::new(),
@@ -192,24 +189,14 @@ impl LegRun {
         } else {
             self.stdout.clone()
         };
-        text.trim()
-            .lines()
-            .last()
-            .unwrap_or("")
-            .trim()
-            .to_string()
+        text.trim().lines().last().unwrap_or("").trim().to_string()
     }
 }
 
 /// The ONE leg-runner seam: every fno-family verb this ritual shells goes
 /// through here, over `fno_bin()`. Detached legs start their own session so a
 /// detached sync survives the slice kill upstream.
-fn run_leg(
-    argv: &[String],
-    cwd: &Path,
-    timeout: Duration,
-    detached: bool,
-) -> LegRun {
+fn run_leg(argv: &[String], cwd: &Path, timeout: Duration, detached: bool) -> LegRun {
     let mut cmd = Command::new(crate::scrape::fno_bin());
     cmd.args(argv)
         .current_dir(cwd)
@@ -251,7 +238,7 @@ pub(crate) fn bounded(mut cmd: Command, timeout: Duration) -> LegRun {
     let err_pipe = child.stderr.take();
     let out_buf = Arc::new(Mutex::new(Vec::new()));
     let err_buf = Arc::new(Mutex::new(Vec::new()));
-    let spawn_reader = |pipe: Option<Box<dyn Read + Send>>, buf: Arc<Mutex<Vec<u8>>>>| {
+    let spawn_reader = |pipe: Option<Box<dyn Read + Send>>, buf: Arc<Mutex<Vec<u8>>>| {
         std::thread::spawn(move || {
             let Some(mut pipe) = pipe else {
                 return;
@@ -269,10 +256,14 @@ pub(crate) fn bounded(mut cmd: Command, timeout: Duration) -> LegRun {
             }
         })
     };
-    let _out_thread =
-        spawn_reader(out_pipe.map(|p| Box::new(p) as Box<dyn Read + Send>), Arc::clone(&out_buf));
-    let _err_thread =
-        spawn_reader(err_pipe.map(|p| Box::new(p) as Box<dyn Read + Send>), Arc::clone(&err_buf));
+    let _out_thread = spawn_reader(
+        out_pipe.map(|p| Box::new(p) as Box<dyn Read + Send>),
+        Arc::clone(&out_buf),
+    );
+    let _err_thread = spawn_reader(
+        err_pipe.map(|p| Box::new(p) as Box<dyn Read + Send>),
+        Arc::clone(&err_buf),
+    );
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     let code;
@@ -466,7 +457,13 @@ impl Ritual {
 
     fn merged_state_read(&self) -> (Option<String>, Option<String>, Option<String>) {
         let run = self.gh(
-            &["pr", "view", &self.pr.to_string(), "--json", "state,headRefName,mergedAt"],
+            &[
+                "pr",
+                "view",
+                &self.pr.to_string(),
+                "--json",
+                "state,headRefName,mergedAt",
+            ],
             Duration::from_secs(30),
         );
         if run.spawn_error.is_some() || !run.ok() {
@@ -603,7 +600,12 @@ impl Ritual {
             }
         }
         let cwd = self.canon_path();
-        let r = run_leg(&argv, &cwd, Duration::from_secs(RECONCILE_TIMEOUT_SECS), true);
+        let r = run_leg(
+            &argv,
+            &cwd,
+            Duration::from_secs(RECONCILE_TIMEOUT_SECS),
+            true,
+        );
         if let Some(err) = &r.spawn_error {
             self.emit("reconcile", FAILED, err);
             return;
@@ -658,7 +660,9 @@ impl Ritual {
             // the work visibly owed rather than reading as a no-drift run.
             let detail = format!(
                 "held, a sweep was already in flight (requests={}, holder={})",
-                obj.get("requests").map(|v| v.to_string()).unwrap_or_default(),
+                obj.get("requests")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
                 obj.get("holder").map(|v| v.to_string()).unwrap_or_default(),
             );
             self.emit("reconcile", DEFERRED, &detail);
@@ -728,7 +732,12 @@ impl Ritual {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        self.leg("plan-reconcile", &argv, Duration::from_secs(LEG_TIMEOUT_SECS), false);
+        self.leg(
+            "plan-reconcile",
+            &argv,
+            Duration::from_secs(LEG_TIMEOUT_SECS),
+            false,
+        );
     }
 
     fn leg_harvest(&mut self) {
@@ -769,7 +778,12 @@ impl Ritual {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        self.leg("skill-diff", &argv, Duration::from_secs(LEG_TIMEOUT_SECS), false);
+        self.leg(
+            "skill-diff",
+            &argv,
+            Duration::from_secs(LEG_TIMEOUT_SECS),
+            false,
+        );
     }
 
     /// Step 3d: the guard chain lives in the native verb (sync_canonical.rs).
@@ -805,7 +819,14 @@ impl Ritual {
             return Some(slug);
         }
         let run = self.gh(
-            &["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            &[
+                "repo",
+                "view",
+                "--json",
+                "nameWithOwner",
+                "-q",
+                ".nameWithOwner",
+            ],
             Duration::from_secs(30),
         );
         if !run.ok() {
@@ -875,7 +896,8 @@ impl Ritual {
             return;
         };
         let order = self.register_cleanup_request(&branch, "merged-pr");
-        let order_written = order.contains("cleanup-requested") && !order.contains("reap-order-unwritten");
+        let order_written =
+            order.contains("cleanup-requested") && !order.contains("reap-order-unwritten");
         let status = if order_written { DEFERRED } else { FAILED };
         self.emit(
             "archive",
@@ -959,7 +981,11 @@ impl Ritual {
         let has_inputs = deferred > 0 || above_bar;
         if !self.autonomous {
             // An attended session does the judgment itself (skill body).
-            self.emit("judgment", OK, &format!("deferred-to-skill (attended); {inputs}"));
+            self.emit(
+                "judgment",
+                OK,
+                &format!("deferred-to-skill (attended); {inputs}"),
+            );
             return;
         }
         if !has_inputs {
@@ -984,7 +1010,12 @@ impl Ritual {
     /// with no recovered node binding refuses the spawn rather than
     /// substituting the PR number as a fake node.
     fn spawn_judgment(&self, deferred: i64, files: i64, lines: i64) -> bool {
-        let node_ids: Vec<String> = self.node_ids.iter().filter(|n| !n.is_empty()).cloned().collect();
+        let node_ids: Vec<String> = self
+            .node_ids
+            .iter()
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .collect();
         let Some(node0) = node_ids.first() else {
             eprintln!(
                 "post-merge judgment: skipped, PR {} binds no node; no pm-r worker spawned ",
@@ -1115,10 +1146,7 @@ Self-end when done; never spawn further work."
             return;
         }
         if !reap_on {
-            let cmds: Vec<String> = rows
-                .iter()
-                .map(|n| format!("fno agents rm {n}"))
-                .collect();
+            let cmds: Vec<String> = rows.iter().map(|n| format!("fno agents rm {n}")).collect();
             self.emit(
                 "reap-rows",
                 OK,
@@ -1153,7 +1181,11 @@ Self-end when done; never spawn further work."
             crate::merge_reap::rows_for_cleanup(&home, None, &self.node_ids)
                 .into_iter()
                 .collect();
-        let argv: Vec<String> = ["agents".to_string(), "list".to_string(), "--json".to_string()];
+        let argv: Vec<String> = [
+            "agents".to_string(),
+            "list".to_string(),
+            "--json".to_string(),
+        ];
         let cwd = self.canon_path();
         let r = run_leg(&argv, &cwd, Duration::from_secs(LEG_TIMEOUT_SECS), false);
         if !r.ok() {
@@ -1161,7 +1193,12 @@ Self-end when done; never spawn further work."
         }
         let obj: Value = serde_json::from_str(r.stdout.trim()).unwrap_or(json!({}));
         let mut out = Vec::new();
-        for a in obj.get("agents").and_then(Value::as_array).into_iter().flatten() {
+        for a in obj
+            .get("agents")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let name = a.get("name").and_then(Value::as_str).unwrap_or("");
             if !candidates.contains(name) {
                 continue;
@@ -1252,7 +1289,10 @@ Self-end when done; never spawn further work."
             self.emit(
                 step,
                 FAILED,
-                &format!("timeout after {}s; {lines} progress lines", timeout.as_secs()),
+                &format!(
+                    "timeout after {}s; {lines} progress lines",
+                    timeout.as_secs()
+                ),
             );
             return;
         }
@@ -1283,13 +1323,21 @@ Self-end when done; never spawn further work."
         if !pm.enabled {
             // config.post_merge.enabled is the ritual's off switch; a repo
             // that sets it false must not acquire the mutex or run any leg.
-            self.emit("config", SKIPPED, "post_merge.enabled is false; ritual disabled");
+            self.emit(
+                "config",
+                SKIPPED,
+                "post_merge.enabled is false; ritual disabled",
+            );
             return 0;
         }
         if !crate::backlog::advance_settings::autonomy_master_enabled(self.canon.as_deref()) {
             // The master panic switch outranks post_merge.enabled too - checked
             // separately so the receipt names WHICH one fired.
-            self.emit("config", SKIPPED, "autonomy.enabled is false; ritual disabled");
+            self.emit(
+                "config",
+                SKIPPED,
+                "autonomy.enabled is false; ritual disabled",
+            );
             return 0;
         }
         self.emit(
@@ -1298,7 +1346,11 @@ Self-end when done; never spawn further work."
             &format!(
                 "pr={} source={}",
                 self.pr,
-                if self.pr_supplied { "caller" } else { "most-recent-merge" }
+                if self.pr_supplied {
+                    "caller"
+                } else {
+                    "most-recent-merge"
+                }
             ),
         );
         if !self.acquire_mutex() {
@@ -1368,9 +1420,7 @@ mod tests {
             let at = run_body.find(removal).expect(removal);
             assert!(at > retro, "{removal} must run after the retro");
         }
-        let archive = run_body
-            .find("self.leg_archive();")
-            .expect("archive leg");
+        let archive = run_body.find("self.leg_archive();").expect("archive leg");
         let reap = run_body
             .find("self.leg_reap_rows();")
             .expect("reap-rows leg");

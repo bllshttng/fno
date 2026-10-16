@@ -24,7 +24,6 @@ Phase 5 (MCP channel + streaming) additions are grouped at the bottom.
 """
 from __future__ import annotations
 
-import json
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
