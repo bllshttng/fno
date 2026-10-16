@@ -666,7 +666,7 @@ fn router(ctx: Ctx) -> Router {
 /// page's own script reads `FNO_SHARE` and runs the share path.
 fn share_fragment(pane: u64) -> String {
     format!(
-        r#"<nav class="fno-nav" data-base="/"><span class="share-tag">shared pane {pane}</span> <span id="share-who"></span></nav>
+        r#"<nav class="fno-nav share-nav" data-base="/"><span class="share-tag">shared pane {pane}</span> <span id="share-who"></span></nav>
 <div id="share-wait" class="share-banner" hidden>waiting for the driver to let you in</div>
 <form id="share-boxes" class="share-boxes" hidden>
   <input id="share-coach" maxlength="400" placeholder="note to the driver (never reaches the agent)">

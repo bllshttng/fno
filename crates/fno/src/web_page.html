@@ -99,10 +99,13 @@
     text-align: center; padding: 24px; }
   #overlay.show { display: flex; }
   /* Share mode (`fno mux serve --share`): the driver admits each viewer. */
+  nav.share-nav { padding: 6px 10px; font-size: 13px; border-bottom: 1px solid #1c2230; }
   .fno-nav .share-tag { color: #f0c674; }
   .share-banner { padding: 6px 10px; background: #1a2030; color: #f0c674; font-size: 13px; }
   .share-boxes { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px;
     border-bottom: 1px solid #1c2230; font-size: 13px; }
+  /* A class display rule outranks the hidden attribute, so restate it. */
+  .share-boxes[hidden] { display: none; }
   .share-boxes input { flex: 1 1 14em; font: inherit; background: #141a26; color: #c5cdd9;
     border: 1px solid #232b3a; border-radius: 5px; padding: 4px 8px; }
   .share-boxes button { font: inherit; cursor: pointer; background: #24406b; color: #fff;
