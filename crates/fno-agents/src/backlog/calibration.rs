@@ -193,7 +193,18 @@ pub fn friction_counts_by_node(journal: &Path) -> BTreeMap<String, BTreeMap<Stri
     };
     let rows = match crate::event_store::query_events(journal, &query) {
         Ok(rows) => rows,
-        Err(_) => return out,
+        Err(err) => {
+            // Unlike a fresh node with no friction ever recorded, this is an
+            // unreadable store (locked, corrupt, or a newer schema this
+            // build cannot parse) - every node would read falsely smooth
+            // with no sign anything was wrong. Warn so that silence is never
+            // mistaken for a clean signal.
+            eprintln!(
+                "fno backlog calibration: could not read the friction event store ({err}); \
+every node's friction count reads as zero rather than unknown."
+            );
+            return out;
+        }
     };
     for row in rows {
         // The canonical identity reader (resolves both the "node_id" and

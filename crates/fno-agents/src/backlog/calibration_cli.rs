@@ -46,6 +46,18 @@ pub fn run(tail: &[String]) -> i32 {
         );
         return 2;
     };
+    // Mirrors session_cli.rs/create_cli.rs: calibration reads the local
+    // graph directly and has no Python/external-tracker leg to forward to
+    // (unlike get/find), so an external backend must refuse rather than
+    // silently compute over a store the tracker no longer treats as
+    // authoritative.
+    if crate::graph_get::external_backend_selected() {
+        eprintln!(
+            "fno backlog calibration: this verb reads graph state directly; under an \
+external tracker backend it is refused rather than computed over a non-authoritative store."
+        );
+        return 1;
+    }
     let graph_path = super::settings::graph_path();
     let query = super::RowQuery {
         filter: super::api::NodeFilter {
