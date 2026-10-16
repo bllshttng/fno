@@ -223,6 +223,9 @@ pub(crate) fn handle_session_report(
 
     let mut outcome = Outcome::Unknown;
     let mut row_name: Option<String> = None;
+    // The freshness stamp every report leaves on the row: the capacity
+    // reader's liveness source for rows no probe reaches (d-d0c63de7).
+    let now_stamp = crate::daemon::now_rfc3339_like();
     // Set when this report is the successor's first self-identification: the
     // primary id filled on a promoted row. The manifest arm runs after the
     // registry write commits.
@@ -233,6 +236,8 @@ pub(crate) fn handle_session_report(
                 Some(mint) => {
                     let mut entry = mint.entry.clone();
                     entry.name = crate::native_adopt::unique_name(&r.entries, &entry.name);
+                    // The report that mints the row is its first report.
+                    entry.last_report_at = Some(now_stamp.clone());
                     row_name = Some(entry.name.clone());
                     r.entries.push(entry);
                     let new_idx = r.entries.len() - 1;
@@ -329,6 +334,7 @@ pub(crate) fn handle_session_report(
         if let Some(src) = &source {
             entry.start_source = Some(src.clone());
         }
+        entry.last_report_at = Some(now_stamp.clone());
         row_name = Some(entry.name.clone());
     }) {
         return Response::err(
@@ -1048,6 +1054,24 @@ mod tests {
         assert_eq!(
             row.claude_session_uuid.as_deref(),
             Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d")
+        );
+    }
+
+    #[test]
+    fn the_session_report_stamps_last_report_at() {
+        let (_d, home) = temp_home("report-stamp");
+        seed_registry(&home, claude_row());
+        let params = report_params("claude", "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d", json!({}));
+        let resp = handle_session_report(&home, &emitter(&home), &req(params));
+        assert_eq!(response_json(&resp)["result"]["stored"], true);
+        let row = &read_rows(&home)[0];
+        let stamp = row
+            .last_report_at
+            .as_deref()
+            .expect("the report stamps last_report_at");
+        assert!(
+            crate::state::rfc3339_like_to_secs(stamp).is_some(),
+            "the stamp parses: {stamp}"
         );
     }
 
