@@ -524,7 +524,6 @@ Neither layer covers the specimens alone. The probe cannot see the window betwee
 | `PreToolUse` on the Skill tool (`hooks/review-hold.sh`) | takes it | all three specimens were reviews the worker self-invoked through this tool, which is not footnote code and cannot register on its own. The hold keys the named PR's head ref, resolved from GitHub, or a named branch; only an invocation with no target reads the cwd |
 | `fno do target request-self-review` | takes it | the requester side, in footnote's own code, for a lead or operator asking another session for a round; the ordinary pipeline review runs in-session through the Skill row above and never passes here. It takes nothing on a refused or unconfirmed send: no review is running. It passes the branch it resolved and takes no hold when the PR read has no head ref |
 | `skills/review/scripts/emit-attestation.sh` | releases it | the positive completion marker: a verdict now exists for this head, so the release and the proof are one event |
-| `fno do review classify --attest` | releases it | the Python producer of the same row. It emitted the verdict and left the hold standing for the full TTL |
 | the TTL | ages it out | the review did not attest inside its lease, whether or not its session still runs. See the receipt rule below |
 | a human or an unhooked harness | takes nothing | the named residual gap, covered only by the worktree probe |
 
