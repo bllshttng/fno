@@ -2269,6 +2269,14 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         fno_agents::merge_posture::apply_env_from_message(message);
     }
 
+    // A payload verb the node does not derive refuses before the registry,
+    // the launch and the claim transfer: a refused spawn leaves nothing behind.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Some(refusal) = fno_agents::node_seed::spawn_payload_verb_refusal(params, &cwd) {
+        eprintln!("fno-agents spawn: {refusal}");
+        return Some(2);
+    }
+
     let provider_param = params.get("provider").and_then(|v| v.as_str());
     // `substrate` is a CLIENT-ONLY routing key: build_request validates and
     // inserts it (default `pane`) for the spawn verb and this is its sole

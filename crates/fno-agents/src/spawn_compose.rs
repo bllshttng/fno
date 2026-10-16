@@ -136,7 +136,7 @@ fn resolve_node_id(
 
 /// The grid row Python's `_grid_node` read: the node's entry in the graph
 /// store, advisory only.
-fn graph_row_for(node_id: &str) -> Option<Value> {
+pub(crate) fn graph_row_for(node_id: &str) -> Option<Value> {
     let rows = crate::graph_store::read_rows_where(
         &crate::graph_get::default_graph_path(),
         &crate::backlog::RowQuery {
