@@ -52,12 +52,20 @@ def emitted_events(monkeypatch):
     cwd-relative events.jsonl path. The builder still runs real (it validates
     via _build), so a captured event is exactly what would have been appended.
     """
-    events: list[dict] = []
+    class Captured(list):
+        mirrored: list[dict]
 
-    def capture(event: dict) -> None:
+    events = Captured()
+    events.mirrored = []
+
+    def capture(event: dict, *_args, **_kwargs) -> None:
         events.append(event)
 
     monkeypatch.setattr("fno.events.append_event", capture)
+    monkeypatch.setattr(
+        "fno.events.cli.mirror_to_global_log",
+        lambda event, *_args: events.mirrored.append(event),
+    )
     return events
 
 
@@ -128,6 +136,7 @@ def test_question_send_emits_one_valid_overlay_event(runner, mailbox, emitted_ev
     ev = emitted_events[0]
     assert ev["type"] == "mail_escalation"
     fno.events.validate(ev)  # raises if the envelope/shape is invalid
+    assert emitted_events.mirrored == [ev], "the fleet feed reads the global log copy"
     d = ev["data"]
     assert d["reason"] == "question"
     assert d["sender"] == "etl"

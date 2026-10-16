@@ -469,16 +469,20 @@ def _escalate_to_human(
     # never breaks the notifier or the send.
     try:
         from fno.events import append_event, mail_escalation
+        from fno.events.cli import mirror_to_global_log
+        from fno.paths import project_events_json, resolve_repo_root
 
-        append_event(
-            mail_escalation(
-                reason=reason,
-                sender=sender,
-                recipient=recipient,
-                summary=summary.split("\n", 1)[0][:120],
-                msg_id=msg_id,
-            )
+        event = mail_escalation(
+            reason=reason,
+            sender=sender,
+            recipient=recipient,
+            summary=summary.split("\n", 1)[0][:120],
+            msg_id=msg_id,
         )
+        events_path = project_events_json()
+        append_event(event, events_path)
+        # The fleet feed reads the global log; the overlay reads the project one.
+        mirror_to_global_log(event, events_path, resolve_repo_root())
     except Exception:  # noqa: BLE001 - an overlay miss never breaks the send
         pass
     # Only report escalation when the notification actually displayed:
