@@ -146,3 +146,74 @@ fn the_launcher_refuses_a_login_endpoint_and_a_missing_binary() {
     assert!(reg.find("fx-missing").is_none());
     assert!(reg.find("fx-plan").is_none());
 }
+
+/// A running headless child carries its start token, and the stop helper ends
+/// it. Before, a stop marked the row stopped and left the pid running, and a
+/// row with no start token wedged the fleet-wide footprint check.
+#[test]
+fn a_running_child_carries_a_start_token_and_a_stop_ends_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        "#!/bin/sh\ncat >/dev/null\nsleep 60\n",
+    );
+    let vars = [
+        ("FNO_FOOTNOTE_BIN", bin.to_string_lossy().to_string()),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://api.z.ai/api/anthropic".to_string(),
+        ),
+        ("ANTHROPIC_AUTH_TOKEN", "k".to_string()),
+    ];
+    let saved: Vec<_> = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in &vars {
+        std::env::set_var(k, v);
+    }
+    let (h, cwd) = (home.clone(), tmp.path().to_path_buf());
+    let run = std::thread::spawn(move || {
+        let params = serde_json::json!({});
+        dispatch_once(
+            &h,
+            "fx-run",
+            "hi",
+            "tester",
+            &cwd,
+            Some("glm-test"),
+            None,
+            &params,
+        )
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let row = loop {
+        let row = load_registry(&home.registry_json())
+            .ok()
+            .and_then(|r| r.find("fx-run").cloned())
+            .filter(|e| e.pid.is_some());
+        if let Some(row) = row {
+            break row;
+        }
+        assert!(std::time::Instant::now() < deadline, "no running row");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let (pid, started) = (row.pid.unwrap(), row.pid_start_time);
+    let stopped = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(stop_confirmed(pid, started));
+    run.join().unwrap();
+    for (k, v) in saved {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    assert!(started.is_some(), "the row carries no pid start token");
+    assert!(stopped, "the child outlived the stop");
+}
