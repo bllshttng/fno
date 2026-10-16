@@ -36,12 +36,16 @@ pub(crate) fn run(args: &[String]) -> i32 {
     // separators: readers parse it positionally, and a sorted-key rebuild
     // would fork the contract on the first reader that compares bytes.
     println!(
-        "{\"pr\":{},\"posted\":{},\"note\":{}}",
+        "{{\"pr\":{},\"posted\":{},\"note\":{}}}",
         pr,
         posted,
         serde_json::to_string(&note).unwrap_or_else(|_| "\"\"".to_string()),
     );
-    if posted { 0 } else { 1 }
+    if posted {
+        0
+    } else {
+        1
+    }
 }
 
 /// POST the verdict and answer `(posted, note)`. Never raises.

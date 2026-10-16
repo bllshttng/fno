@@ -1083,7 +1083,10 @@ fn do_merge(
     // process). Best-effort: the durable verdict is the event row, and a
     // failed POST leaves the status absent, which the ruleset reads as
     // not-passing.
-    let (posted, note) = crate::loopcheck::coverage_gate::publish::publish(repo, pr, None);
+    let (posted, note) = match u64::try_from(pr) {
+        Ok(pr_u64) => crate::loopcheck::coverage_gate::publish::publish(repo, pr_u64, None),
+        Err(_) => (false, format!("pr number {pr} is not a u64")),
+    };
     if !posted {
         flow.lines.push((
             true,
