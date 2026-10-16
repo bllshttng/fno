@@ -18,8 +18,10 @@
 //! (the lead check-in's own capacity line, which quotes a past gate verdict
 //! such as "gate refused on provider_cap") can bury those same words deep
 //! in otherwise-clean output. Only a result with no flag at all (codex has
-//! none) falls back to a short header check, since a real refusal fronts
-//! its marker at the very start of the output.
+//! none, and a malformed claude row might omit it) falls back to the same
+//! bucket scan `buckets_of` uses for categorization - `is_refused` is the
+//! one place this decision is made, shared with `lead_eval.rs`'s identical
+//! read so the two readings can never diverge on the same transcript.
 
 use serde_json::{json, Value};
 use std::sync::OnceLock;
@@ -50,19 +52,6 @@ pub(crate) const REFUSAL_BUCKETS: [(&str, &str); 7] = [
 /// Matches the 4000-char lead the lead-control retro measured against.
 const CONTENT_LEAD_CHARS: usize = 4000;
 
-/// The much shorter lead checked to decide whether a call was REFUSED at
-/// all, for a result with no structural error flag to trust (codex, or a
-/// claude row that omits `is_error`). A real refusal fronts its marker
-/// (`spawn-gate:`, a guard tag, `"status": "refused"`) at the very start of
-/// the output, because the whole output IS the refusal message. A
-/// successful multi-line read that merely reports on a past gate event
-/// (the lead check-in's capacity line quoting "gate refused on
-/// provider_cap") buries the same words well past this window, so this
-/// shorter lead is what tells the two apart - `buckets_of` above still
-/// scans the wider `CONTENT_LEAD_CHARS` lead, but only to CATEGORIZE a call
-/// already known to be refused.
-const HEADER_LEAD_CHARS: usize = 200;
-
 static BUCKET_SET: OnceLock<regex::RegexSet> = OnceLock::new();
 
 fn bucket_set() -> &'static regex::RegexSet {
@@ -80,22 +69,18 @@ pub(crate) fn buckets_of(text: &str) -> impl Iterator<Item = &'static str> + '_ 
         .filter_map(move |(idx, (bucket, _))| matches.matched(idx).then_some(*bucket))
 }
 
-/// Whether the HEADER lead of `text` opens with a refusal marker. Used only
-/// when there is no structural error state to trust - see `is_refused`.
-fn has_refusal_header(text: &str) -> bool {
-    bucket_set().is_match(lead(text, HEADER_LEAD_CHARS))
-}
-
 /// A call is refused when its own `is_error` flag says so; a claude
 /// `tool_result` always carries one for a real failure (confirmed against
 /// `user_reject` and gate-refusal samples alike), so a `false` flag is
 /// trusted outright and never overridden by words the successful output
 /// happens to contain. `None` (no flag at all - codex has none, and a
-/// malformed claude row might omit it) falls back to the header check.
-fn is_refused(text: &str, is_error: Option<bool>) -> bool {
+/// malformed claude row might omit it) falls back to the same bucket scan
+/// `buckets_of` runs for categorization: unchanged from before this fix,
+/// and the only option left once there is no structural signal to trust.
+pub(crate) fn is_refused(text: &str, is_error: Option<bool>) -> bool {
     match is_error {
         Some(refused) => refused,
-        None => has_refusal_header(text),
+        None => buckets_of(text).next().is_some(),
     }
 }
 
@@ -244,11 +229,11 @@ pub fn rate_from_text(
 ) -> Result<Value, String> {
     let trailing = trailing_calls(harness, text, window);
     let total = trailing.len();
-    // `refused` decides per-call via `is_refused` (structural flag, or a
-    // header check when there is none); `buckets_of` runs over the wider
-    // lead only to CATEGORIZE an already-refused call for the load discount
-    // below - it never decides refused-or-not on its own, so a successful
-    // read's buried gate words can no longer flip it.
+    // `refused` decides per-call via `is_refused` (the structural flag when
+    // there is one); `buckets_of` is also collected per call to CATEGORIZE
+    // an already-refused call for the load discount below, but on its own
+    // it never decides refused-or-not, so a successful read's buried gate
+    // words can no longer flip a call that carries `is_error: false`.
     let calls: Vec<(bool, Vec<&'static str>)> = trailing
         .iter()
         .map(|call| match call {

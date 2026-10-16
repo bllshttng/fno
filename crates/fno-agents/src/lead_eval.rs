@@ -441,22 +441,28 @@ fn fold_transcript(
             ) {
                 let payload = row.get("payload").unwrap_or(&Value::Null);
                 let text = crate::session_activity::codex_output_text(payload);
-                note_refusal_text(&mut fold, window_idx, &text);
+                // x-2c85: codex carries no `is_error` flag, so this is the
+                // same bucket-scan fallback `is_refused(_, None)` uses for a
+                // claude row without one - one decision, shared with the
+                // `refusal_rate` reading, so the two can never diverge.
+                if crate::refusal_rate::is_refused(&text, None) {
+                    note_refusal_text(&mut fold, window_idx, &text);
+                }
             }
         } else if let Some(content) = row.pointer("/message/content").and_then(Value::as_array) {
             for block in content {
                 if block.get("type").and_then(Value::as_str) != Some("tool_result") {
                     continue;
                 }
-                // A result explicitly marked successful (`is_error: false`)
-                // is never a refusal, whatever gate words its text quotes -
-                // the same x-2c85 fix `refusal_rate::is_refused` applies.
-                // No flag at all still falls through to the text buckets.
-                if block.get("is_error").and_then(Value::as_bool) == Some(false) {
-                    continue;
-                }
                 let text = content_text(block.get("content").unwrap_or(&Value::Null));
-                note_refusal_text(&mut fold, window_idx, &text);
+                let is_error = block.get("is_error").and_then(Value::as_bool);
+                // x-2c85: a result explicitly marked successful is never a
+                // refusal, whatever gate words its text quotes - decided by
+                // the same `refusal_rate::is_refused` the refusal_rate
+                // reading uses, so the two readings never diverge.
+                if crate::refusal_rate::is_refused(&text, is_error) {
+                    note_refusal_text(&mut fold, window_idx, &text);
+                }
             }
         }
     }
