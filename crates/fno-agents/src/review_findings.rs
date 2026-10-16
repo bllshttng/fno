@@ -859,7 +859,7 @@ fn retired_flag_message(flag: &str) -> String {
     )
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ClassifyArgs {
     findings_file: Option<String>,
     emit_record: bool,
@@ -871,6 +871,7 @@ struct ClassifyArgs {
 
 /// Why `parse_classify_args` refuses: a flag-surface refusal prints its own
 /// full line, a usage error rides the door's usage posture.
+#[derive(Debug)]
 enum ClassifyReject {
     Refuse(String),
     Usage(String),
