@@ -678,7 +678,7 @@ fn rest_get_op_reads_eligible_paths_and_leaves_the_rest_to_the_caller() {
         "an ineligible path spawns nothing"
     );
 
-    let hold = |_: &[String]| Some("gh budget: fleet GitHub rate limit held locally".to_string());
+    let hold = |_: &[String]| Some("gh budget: held by the test".to_string());
     let out = rest_get_op(
         &probes,
         hold,
