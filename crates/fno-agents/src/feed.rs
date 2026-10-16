@@ -746,6 +746,7 @@ pub fn project(
                 let state = s_field(data, "state").unwrap_or_default();
                 let sha = s_field(data, "sha").unwrap_or_default();
                 let short: String = sha.chars().take(8).collect();
+                let repo = s_field(data, "repo").unwrap_or_default();
                 let failing = data
                     .get("failing_checks")
                     .and_then(Value::as_array)
@@ -761,8 +762,8 @@ pub fn project(
                     kind: "main_ci_changed".into(),
                     r#ref: Some(sha),
                     title: match &failing {
-                        Some(f) => format!("main CI {state} at {short} ({f})"),
-                        None => format!("main CI {state} at {short}"),
+                        Some(f) => format!("{repo} main CI {state} at {short} ({f})"),
+                        None => format!("{repo} main CI {state} at {short}"),
                     },
                     reason: failing,
                     ..FeedRow::default()
@@ -2697,7 +2698,7 @@ mod tests {
             "\n",
             r#"{"ts":"2026-09-30T10:08:00Z","type":"mail_escalation","source":"target","data":{"reason":"question","sender":"c698b69a","recipient":"operator","summary":"which branch?"}}"#,
             "\n",
-            r#"{"ts":"2026-09-30T10:09:00Z","type":"main_ci_changed","source":"agents","data":{"sha":"0123456789abcdef","state":"red","previous_state":"green","failing_checks":["cli-ci","guards"]}}"#,
+            r#"{"ts":"2026-09-30T10:09:00Z","type":"main_ci_changed","source":"agents","data":{"repo":"o/r","sha":"0123456789abcdef","state":"red","previous_state":"green","failing_checks":["cli-ci","guards"]}}"#,
         );
         let daemon = r#"{"ts":"2026-09-30T10:06:00Z","type":"daemon_started","source":"daemon","data":{"pid":15714,"version":"0.4.1","recovery_mode":"preserve"}}"#;
         let p = project("", &[], &[], "", "", daemon, main, None);
@@ -2734,7 +2735,7 @@ mod tests {
         );
         assert_eq!(find("daemon_restarted").title, "daemon 0.4.1 pid 15714");
         let ci = find("main_ci_changed");
-        assert_eq!(ci.title, "main CI red at 01234567 (cli-ci, guards)");
+        assert_eq!(ci.title, "o/r main CI red at 01234567 (cli-ci, guards)");
         assert_eq!(ci.area, "ci");
         assert_eq!(ci.reason.as_deref(), Some("cli-ci, guards"));
         let mail = find("mail_to_user");

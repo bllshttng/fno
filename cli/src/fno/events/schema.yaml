@@ -6874,8 +6874,11 @@ event_types:
     description: "The default branch's CI verdict flipped between red and green. One row per transition, never per probe: the writer compares each live reading with the newest stored row and appends only when the state differs. A pending reading writes nothing. The row is durable, and the activity feed projects it as a ci-area row."
     sources: [agents]
     data:
-      required: [sha, state, previous_state, failing_checks]
+      required: [repo, sha, state, previous_state, failing_checks]
       properties:
+        repo:
+          type: string
+          description: "The repository slug the reading judged. The store is machine-wide, so the comparison with the newest earlier row is per repo."
         sha:
           type: string
           description: "The head sha of main the reading judged."

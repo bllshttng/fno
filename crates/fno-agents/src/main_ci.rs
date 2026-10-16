@@ -357,11 +357,14 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
         main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
     attach_incident(cwd, &mut token, red);
     // Best effort: a store fault must never fail the CI read it rides on.
-    let _ = crate::main_ci_transition::record(
-        &crate::paths_cli::global_events_json(cwd),
-        &head_sha,
-        &token,
-    );
+    if let Some(repo) = crate::finalize::slug_from_git_remote(cwd) {
+        let _ = crate::main_ci_transition::record(
+            &crate::paths_cli::global_events_json(cwd),
+            &repo,
+            &head_sha,
+            &token,
+        );
+    }
     Ok(token)
 }
 
