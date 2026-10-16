@@ -283,8 +283,8 @@ fn derive_log_path(home: &crate::paths::AgentsHome, name: &str) -> std::path::Pa
         .join(format!("{}.jsonl", name))
 }
 
-/// Drive one `<harness> run` subprocess (opencode, and pi through `pi_ask`): stdin `/dev/null` (never block on a
-/// non-TTS input wait), stdout captured as plain text, stderr drained on a
+/// Drive one one-shot subprocess (opencode here, pi through `pi_ask`): stdin
+/// `/dev/null` (never block on a non-TTS input wait), stdout captured as plain text, stderr drained on a
 /// thread (bounded pipe), the whole call bounded by the shared watchdog. Lean
 /// mirror of `agy_ask::run_agy` - same shape, no elaborate stderr taxonomy: a
 /// non-zero exit surfaces the stderr tail, a hang maps to the timeout code.
@@ -314,7 +314,7 @@ pub(crate) fn run_one_shot(
     // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
-    // Own process group so SIGTERM/SIGKILL/SIGINT reach opencode's subshells.
+    // Own process group so SIGTERM/SIGKILL/SIGINT reach the child's subshells.
     unsafe {
         cmd.pre_exec(|| {
             libc::setpgid(0, 0);
@@ -330,7 +330,7 @@ pub(crate) fn run_one_shot(
         Err(e) => return Err((2, format!("OSError invoking {harness}: {e}"))),
     };
     let pid = child.id();
-    // Forward operator Ctrl-C to opencode's process group for this call. RAII
+    // Forward operator Ctrl-C to the child's process group for this call. RAII
     // guard held for the whole function - do NOT discard to `_`.
     let _sigint_guard = crate::subprocess_ask::SigintForwarder::install(pid);
 
