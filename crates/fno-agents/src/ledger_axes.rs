@@ -285,6 +285,60 @@ fn sessions_or_unresolved(candidates: &[String]) -> Value {
     Value::Array(out)
 }
 
+/// Write one execution row keyed on `fno_id`, under the ledger lock. A
+/// session that reports its spend again updates its row, so a resumed
+/// session never counts twice. An unreadable ledger refuses: never reset it.
+pub(crate) fn upsert_execution(ledger: &Path, row: Value) -> Result<(), String> {
+    let fno_id = row
+        .get("fno_id")
+        .and_then(Value::as_str)
+        .ok_or("execution row has no fno_id")?
+        .to_string();
+    if let Some(parent) = ledger.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOCK_PATH)
+        .map_err(|e| format!("cannot open {LOCK_PATH}: {e}"))?;
+    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
+    let result = upsert_locked(ledger, &fno_id, row);
+    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+    result
+}
+
+fn upsert_locked(ledger: &Path, fno_id: &str, row: Value) -> Result<(), String> {
+    let mut data: Value = match std::fs::read_to_string(ledger) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| format!("{}: not JSON: {e}", ledger.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"entries": []}),
+        Err(e) => return Err(format!("{}: {e}", ledger.display())),
+    };
+    let entries = match data.as_array_mut() {
+        Some(list) => list,
+        None => data
+            .get_mut("entries")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| format!("{}: no entries list", ledger.display()))?,
+    };
+    match entries
+        .iter_mut()
+        .find(|e| e["type"] == "execution" && e["fno_id"] == fno_id)
+    {
+        // Merge, never replace: other writers stamp the row (pr_number),
+        // and a resume that lost a field (plan_path) must not null it.
+        Some(existing) => {
+            if let (Some(old), Value::Object(new)) = (existing.as_object_mut(), row) {
+                old.extend(new.into_iter().filter(|(_, v)| !v.is_null()));
+            }
+        }
+        None => entries.push(row),
+    }
+    write_ledger(ledger, &data)
+}
+
 /// Atomic replace, matching `_write_ledger_data`: temp file in the ledger's
 /// directory, then rename. Pretty JSON, 2-space indent, trailing newline.
 pub(crate) fn write_ledger(path: &Path, doc: &Value) -> Result<(), String> {
