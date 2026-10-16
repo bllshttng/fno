@@ -397,7 +397,7 @@ impl Ritual {
         self.canon.clone().unwrap_or_else(|| self.cwd.clone())
     }
 
-    fn emit(&mut self, step: &str, status: &str, detail: &str) {
+    fn step(&mut self, step: &str, status: &str, detail: &str) {
         println!("{}", receipt_line(step, status, detail));
         if status == FAILED {
             self.any_failed = true;
@@ -424,11 +424,11 @@ impl Ritual {
         let cwd = self.canon_path();
         let run = run_leg(argv, &cwd, timeout, detached);
         if let Some(err) = &run.spawn_error {
-            self.emit(step, FAILED, err);
+            self.step(step, FAILED, err);
             return run;
         }
         if run.timed_out {
-            self.emit(step, FAILED, "timeout");
+            self.step(step, FAILED, "timeout");
             return run;
         }
         let last = run.last_line();
@@ -438,14 +438,14 @@ impl Ritual {
             } else {
                 last
             };
-            self.emit(step, OK, &detail);
+            self.step(step, OK, &detail);
         } else {
             let detail = if last.is_empty() {
                 format!("exit={}", run.code)
             } else {
                 format!("exit={} {last}", run.code)
             };
-            self.emit(step, FAILED, &detail);
+            self.step(step, FAILED, &detail);
         }
         run
     }
@@ -531,7 +531,7 @@ impl Ritual {
             Some(s) => format!("not-merged (state={s})"),
             None => "merge-state unreadable".to_string(),
         };
-        self.emit(step, SKIPPED, &detail);
+        self.step(step, SKIPPED, &detail);
         false
     }
 }
@@ -579,15 +579,15 @@ impl Ritual {
         match crate::claims::acquire(&key, &self.holder, opts) {
             crate::claims::AcquireOutcome::Acquired(_) => {
                 self.owns_claim = true;
-                self.emit("mutex", OK, "acquired");
+                self.step("mutex", OK, "acquired");
                 true
             }
             crate::claims::AcquireOutcome::HeldByOther { .. } => {
-                self.emit("mutex", SKIPPED, "already-held by another runner");
+                self.step("mutex", SKIPPED, "already-held by another runner");
                 false
             }
             crate::claims::AcquireOutcome::Error(e) => {
-                self.emit("mutex", SKIPPED, &format!("acquire-error: {e}"));
+                self.step("mutex", SKIPPED, &format!("acquire-error: {e}"));
                 true
             }
         }
@@ -642,17 +642,17 @@ impl Ritual {
             true,
         );
         if let Some(err) = &r.spawn_error {
-            self.emit("reconcile", FAILED, err);
+            self.step("reconcile", FAILED, err);
             self.leg_plan_reconcile();
             return;
         }
         if r.timed_out {
-            self.emit("reconcile", FAILED, "timeout");
+            self.step("reconcile", FAILED, "timeout");
             self.leg_plan_reconcile();
             return;
         }
         if !r.ok() {
-            self.emit("reconcile", FAILED, &format!("exit={}", r.code));
+            self.step("reconcile", FAILED, &format!("exit={}", r.code));
             self.leg_plan_reconcile();
             return;
         }
@@ -706,7 +706,7 @@ impl Ritual {
                     .unwrap_or_default(),
                 obj.get("holder").map(|v| v.to_string()).unwrap_or_default(),
             );
-            self.emit("reconcile", DEFERRED, &detail);
+            self.step("reconcile", DEFERRED, &detail);
         } else if !held.is_empty() {
             // Held open, not clean: the PR merged but the promise gate did not
             // clear the close. Unmet and unknown count apart: an unmet promise
@@ -726,12 +726,12 @@ impl Ritual {
                 ids.join(", "),
                 more,
             );
-            self.emit("reconcile", DEFERRED, &detail);
+            self.step("reconcile", DEFERRED, &detail);
         } else if closure_refused.is_some_and(|v| truthy_json(Some(v))) {
             // The trailer-claimed nodes never got bound: a flaky gh query,
             // cross-repo mismatch, or unmerged PR refusal. Never silently
             // readable as "no-drift".
-            self.emit(
+            self.step(
                 "reconcile",
                 DEFERRED,
                 &format!("closure binding refused: {closure_refused:?}"),
@@ -740,7 +740,7 @@ impl Ritual {
             // reconcile exits 0 here (only unresolvable PRs exit 4), so the
             // leg is not failed - but cascade-close failures and a failed
             // canonical sync must not read as a clean run.
-            self.emit(
+            self.step(
                 "reconcile",
                 OK,
                 &format!(
@@ -756,7 +756,7 @@ impl Ritual {
                 .and_then(Value::as_array)
                 .is_some_and(|a| !a.is_empty())
         {
-            self.emit("reconcile", OK, &format!("closed={}", closed.len()));
+            self.step("reconcile", OK, &format!("closed={}", closed.len()));
         } else if ["contained_closed", "healed_epics", "reverted"]
             .iter()
             .any(|k| obj.get(k).is_some_and(|v| v.as_bool() == Some(true)))
@@ -764,9 +764,9 @@ impl Ritual {
         {
             // Drift was found and healed without a new close. NOT no-drift -
             // the run mutated state.
-            self.emit("reconcile", OK, "healed-only");
+            self.step("reconcile", OK, "healed-only");
         } else {
-            self.emit("reconcile", OK, "no-drift");
+            self.step("reconcile", OK, "no-drift");
         }
         // Step 2a: plan frontmatter. Idempotent.
         self.leg_plan_reconcile();
@@ -839,7 +839,7 @@ impl Ritual {
             return;
         };
         if !pm.sync_command_set {
-            self.emit("sync-canonical", SKIPPED, "not configured");
+            self.step("sync-canonical", SKIPPED, "not configured");
             return;
         }
         // detached: a sync in its own session survives the slice kill upstream.
@@ -931,22 +931,22 @@ impl Ritual {
     fn leg_archive(&mut self) {
         let (state, branch, _) = self.merged_state();
         let Some(state) = state else {
-            self.emit("archive", SKIPPED, "gh-unavailable");
+            self.step("archive", SKIPPED, "gh-unavailable");
             return;
         };
         if state != "MERGED" {
-            self.emit("archive", SKIPPED, &format!("not-merged (state={state})"));
+            self.step("archive", SKIPPED, &format!("not-merged (state={state})"));
             return;
         }
         let Some(branch) = branch else {
-            self.emit("archive", SKIPPED, "no-branch");
+            self.step("archive", SKIPPED, "no-branch");
             return;
         };
         let order = self.register_cleanup_request(&branch, "merged-pr");
         let order_written =
             order.contains("cleanup-requested") && !order.contains("reap-order-unwritten");
         let status = if order_written { DEFERRED } else { FAILED };
-        self.emit(
+        self.step(
             "archive",
             status,
             &format!("{order}; daemon resolves the tree from {branch}"),
@@ -1028,7 +1028,7 @@ impl Ritual {
         let has_inputs = deferred > 0 || above_bar;
         if !self.autonomous {
             // An attended session does the judgment itself (skill body).
-            self.emit(
+            self.step(
                 "judgment",
                 OK,
                 &format!("deferred-to-skill (attended); {inputs}"),
@@ -1041,14 +1041,14 @@ impl Ritual {
             } else {
                 "diff-below-bar"
             };
-            self.emit("judgment", SKIPPED, &format!("reason={reason}; {inputs}"));
+            self.step("judgment", SKIPPED, &format!("reason={reason}; {inputs}"));
             return;
         }
         let spawned = self.spawn_judgment(deferred, files, lines);
         if spawned {
-            self.emit("judgment", OK, &format!("spawned headless; {inputs}"));
+            self.step("judgment", OK, &format!("spawned headless; {inputs}"));
         } else {
-            self.emit("judgment", FAILED, &format!("spawn-failed; {inputs}"));
+            self.step("judgment", FAILED, &format!("spawn-failed; {inputs}"));
         }
     }
 
@@ -1183,18 +1183,18 @@ Self-end when done; never spawn further work."
             self.node_ids = self.recover_node_for_pr();
         }
         if self.node_ids.is_empty() {
-            self.emit("reap-rows", SKIPPED, "no closed node ids");
+            self.step("reap-rows", SKIPPED, "no closed node ids");
             return;
         }
         let reap_on = self.pm.as_ref().map(|pm| pm.self_reap).unwrap_or(false);
         let rows = self.dead_target_rows();
         if rows.is_empty() {
-            self.emit("reap-rows", OK, "no lingering rows");
+            self.step("reap-rows", OK, "no lingering rows");
             return;
         }
         if !reap_on {
             let cmds: Vec<String> = rows.iter().map(|n| format!("fno agents rm {n}")).collect();
-            self.emit(
+            self.step(
                 "reap-rows",
                 OK,
                 &format!(
@@ -1216,7 +1216,7 @@ Self-end when done; never spawn further work."
                 removed += 1;
             }
         }
-        self.emit("reap-rows", OK, &format!("reaped {removed}/{}", rows.len()));
+        self.step("reap-rows", OK, &format!("reaped {removed}/{}", rows.len()));
     }
 
     /// Non-live rows for the nodes this ritual closed, by canonical parse with
@@ -1271,13 +1271,13 @@ Self-end when done; never spawn further work."
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                self.emit(step, FAILED, &format!("spawn-error: {e}"));
+                self.step(step, FAILED, &format!("spawn-error: {e}"));
                 return;
             }
         };
         let Some(mut out) = child.stdout.take() else {
             let _ = child.kill();
-            self.emit(step, FAILED, "spawn-error: no stdout pipe");
+            self.step(step, FAILED, "spawn-error: no stdout pipe");
             return;
         };
         let progress = Arc::new(Mutex::new(0usize));
@@ -1365,7 +1365,7 @@ Self-end when done; never spawn further work."
         }
         let lines = progress.lock().map(|p| *p).unwrap_or(0);
         if timed_out {
-            self.emit(
+            self.step(
                 step,
                 FAILED,
                 &format!(
@@ -1381,18 +1381,18 @@ Self-end when done; never spawn further work."
         } else {
             format!("exit={code}")
         };
-        self.emit(step, status, &detail);
+        self.step(step, status, &detail);
     }
 
     // -- driver --------------------------------------------------------------
 
     fn run(&mut self) -> i32 {
         if self.pr == 0 {
-            self.emit("resolve", FAILED, "no merged PR found; pass a PR number");
+            self.step("resolve", FAILED, "no merged PR found; pass a PR number");
             return 1;
         }
         let Some(pm) = &self.pm else {
-            self.emit(
+            self.step(
                 "config",
                 FAILED,
                 "post_merge config unreadable (not a repo / bad config)",
@@ -1402,7 +1402,7 @@ Self-end when done; never spawn further work."
         if !pm.enabled {
             // config.post_merge.enabled is the ritual's off switch; a repo
             // that sets it false must not acquire the mutex or run any leg.
-            self.emit(
+            self.step(
                 "config",
                 SKIPPED,
                 "post_merge.enabled is false; ritual disabled",
@@ -1412,14 +1412,14 @@ Self-end when done; never spawn further work."
         if !crate::backlog::advance_settings::autonomy_master_enabled(self.canon.as_deref()) {
             // The master panic switch outranks post_merge.enabled too - checked
             // separately so the receipt names WHICH one fired.
-            self.emit(
+            self.step(
                 "config",
                 SKIPPED,
                 "autonomy.enabled is false; ritual disabled",
             );
             return 0;
         }
-        self.emit(
+        self.step(
             "resolve",
             OK,
             &format!(

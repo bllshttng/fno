@@ -1593,6 +1593,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The post-merge route's per-attempt attribution receipt (route.rs);
     // observability only, never a dedup input.
     "post_merge_dispatch_receipt",
+    // One row per post-merge ritual archive attempt (ritual.rs archive leg);
+    // Python emitted the kind unregistered, the port registers it.
+    "post_merge_archive",
     // The question intake's journal write (the ask port): the durable half
     // of `fno inbox outstanding ask`.
     "operator_question",
