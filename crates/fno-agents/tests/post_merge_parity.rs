@@ -211,3 +211,109 @@ fn mint_matches_python_goldens() {
         assert_eq!(got + "\n", want, "[{slug}] mint data");
     }
 }
+
+/// The ritual subject: drive the `pr-watch ritual` arm per case against the
+/// frozen Python receipts. The Python oracle (the pre-port `_ritual.py`) is
+/// restored only by the capture driver's pin; this test never re-freezes. The
+/// mutex-held case seeds a REAL claim through the production claim CLI so the
+/// arm's acquire reads HeldByOther the way the capture's stubbed exit 1 read.
+#[test]
+fn ritual_matches_python_goldens() {
+    if common::capture_mode() {
+        return;
+    }
+    let root = tempfile::tempdir().expect("fixture tempdir");
+    let driver = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/post_merge/capture_driver.py");
+    let built = Command::new(common::python_executable())
+        .arg(&driver)
+        .arg("--build-only")
+        .arg(root.path())
+        .output()
+        .expect("capture_driver --build-only runs");
+    assert!(
+        built.status.success(),
+        "--build-only failed:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let start = built
+        .stdout
+        .iter()
+        .position(|&b| b == b'{')
+        .expect("--build-only prints a JSON map");
+    let map: Value = serde_json::from_slice(&built.stdout[start..]).expect("build map parses");
+    let mut ritual_cases: Vec<Value> = map["cases"]
+        .as_array()
+        .expect("cases list")
+        .iter()
+        .filter(|entry| entry["slug"].as_str().unwrap_or("").starts_with("ritual_"))
+        .cloned()
+        .collect();
+    ritual_cases.sort_by_key(|entry| entry["slug"].as_str().unwrap_or("").to_string());
+    assert_eq!(ritual_cases.len(), 8, "the ritual corpus is eight cases");
+
+    for entry in ritual_cases {
+        let slug = entry["slug"].as_str().expect("case slug").to_string();
+        let case_dir = PathBuf::from(entry["dir"].as_str().expect("case dir"));
+        let case: Value =
+            serde_json::from_str(&fs::read_to_string(case_dir.join("case.json")).expect("case"))
+                .expect("case.json parses");
+        let env = &case["env"];
+        // Hermetic on purpose: clear the ambient session, then apply exactly
+        // the pins the capture child applied.
+        let base = |cmd: &mut Command| {
+            cmd.env_clear();
+            for (k, v) in env.as_object().expect("case env object") {
+                cmd.env(k, v.as_str().expect("env string value"));
+            }
+        };
+        let slug_for_seed = slug.clone();
+        if slug_for_seed == "ritual_mutex_held" {
+            // A live foreign holder: pid 1 outlives the test, so the claim
+            // classifies LIVE and is not stealable.
+            let key = format!("reconcile:pr-{}", case["pr"].as_i64().expect("pr"));
+            let mut seed = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+            base(&mut seed);
+            let st = seed
+                .args([
+                    "claim",
+                    "acquire",
+                    &key,
+                    "--holder",
+                    "parity-other",
+                    "--ttl",
+                    "15m",
+                    "--pid",
+                    "1",
+                ])
+                .current_dir(&case_dir)
+                .output()
+                .expect("claim seed runs");
+            assert!(st.status.success(), "[{slug}] claim seed failed");
+        }
+        let pr = case["pr"].as_i64().expect("pr");
+        let mut argv = vec!["pr-watch".to_string(), "ritual".to_string(), pr.to_string()];
+        if case["autonomous"].as_bool().unwrap_or(false) {
+            argv.push("--autonomous".to_string());
+        }
+        let mut run = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+        base(&mut run);
+        let out = run
+            .args(&argv)
+            .current_dir(&case_dir)
+            .output()
+            .expect("pr-watch ritual runs");
+        let got_out = mask(&String::from_utf8_lossy(&out.stdout), &case_dir);
+        let want_out = golden(&slug, "out").unwrap_or_else(|| panic!("[{slug}] no frozen golden"));
+        assert_eq!(got_out, want_out, "[{slug}] stdout");
+        let got_err = mask(&String::from_utf8_lossy(&out.stderr), &case_dir);
+        let want_err = golden(&slug, "err").unwrap_or_default();
+        assert_eq!(got_err, want_err, "[{slug}] stderr");
+        let want_exit: i32 = golden(&slug, "exit")
+            .unwrap_or_else(|| panic!("[{slug}] no frozen exit"))
+            .trim()
+            .parse()
+            .expect("exit golden parses");
+        assert_eq!(out.status.code(), Some(want_exit), "[{slug}] exit");
+    }
+}

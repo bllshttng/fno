@@ -24,7 +24,6 @@ Phase 5 (MCP channel + streaming) additions are grouped at the bottom.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from dataclasses import asdict
@@ -33,7 +32,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from fno import paths
-from fno.agents.naming import AgentNameError, parse_dispatch_agent_name
 
 if TYPE_CHECKING:
     from fno.agents.context import EventContext
@@ -387,9 +385,8 @@ def emit_session_transition(
     _emit_daemon_envelope(kind, data)
 
 
-# Merge-triggered cleanup: the merge mints the reap order itself; the
-# ritual reuses the same helper, one request-id formula for both.
-KIND_MERGE_CLEANUP_REQUESTED = "merge_cleanup_requested"
+# The skip kind stays Python-side (the merge verb's cleanup gate owns it);
+# the requested mint is native (crates/fno-agents/src/merge_reap.rs).
 KIND_MERGE_CLEANUP_SKIPPED = "merge_cleanup_skipped"
 
 # Taken verbatim from the ritual's archive leg so the two legs cannot drift.
@@ -400,94 +397,6 @@ MERGE_CLEANUP_SKIP_REASONS = (
     "no-branch",
     "emit-failed",
 )
-
-
-def scan_pr_nodes(entries, pr: int, slug: Optional[str]) -> list[str]:
-    """Graph-derived node ids whose pr_url matches this PR's repo.
-
-    Repo-scoped because pr_number is unique only within a repo (cross-project
-    graph): a foreign repo sharing the number is excluded. A url-less or
-    non-string pr_url is skipped, never fatal (a corrupt entry cannot drop the
-    legitimate nodes after it). Pure so the ACs test it directly.
-    """
-    if not slug:
-        return []
-    needle = f"/{slug.lower()}/pull/"
-    out: list[str] = []
-    for e in entries or []:
-        if not isinstance(e, dict) or e.get("pr_number") != pr:
-            continue
-        url = e.get("pr_url")
-        if not isinstance(url, str) or needle not in url.lower():
-            continue
-        nid = e.get("id")
-        if nid and nid not in out:
-            out.append(nid)
-    return out
-
-
-def pr_node_ids(pr: int, slug: Optional[str]) -> list[str]:
-    """Node ids this PR shipped, read from the sidecar store (repo-scoped).
-
-    The one answerer of "which nodes did this PR ship?" for both mint sites;
-    an unreadable store degrades to no recovery.
-    """
-    if not slug:
-        return []
-    try:
-        from fno.tracker import sidecar as sidecar_store
-
-        rows = [
-            {"id": nid, "pr_number": sc.pr_number, "pr_url": sc.pr_url}
-            for nid, sc in sidecar_store.load_all().items()
-        ]
-    except Exception:  # noqa: BLE001 - unreadable store degrades to no recovery
-        return []
-    return scan_pr_nodes(rows, pr, slug)
-
-
-def rows_for_cleanup(worktree: Optional[str], node_ids, *, runner=None) -> list[str]:
-    """Row names whose cwd IS the merged worktree or whose name targets one
-    of the closed nodes (``target-<node>-*``). Best-effort: any failure
-    reads as no candidates (the daemon's registry scan is the second net).
-    """
-    try:
-        if runner is not None:
-            r = runner(["agents", "list", "--json"])
-        else:
-            from fno._subprocess_util import fno_py_cmd
-            from fno.pr._proc import run
-
-            r = run([*fno_py_cmd(), "agents", "list", "--json"])
-    except Exception:  # noqa: BLE001 - a failed candidate read proposes nothing
-        return []
-    if not r.ok:
-        return []
-    try:
-        payload = json.loads(r.stdout or "{}")
-    except json.JSONDecodeError:
-        return []
-    rows = payload if isinstance(payload, list) else payload.get("agents") or []
-    ids = {str(node) for node in node_ids}
-    out = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "")
-        if worktree is not None and row.get("cwd") == worktree:
-            out.append(name)
-            continue
-        try:
-            parsed = parse_dispatch_agent_name(name)
-        except AgentNameError:
-            # Stale/missing binary: this row falls back to the legacy prefix
-            # leg, keeping the best-effort contract (never no candidates).
-            parsed = None
-        if (parsed is not None and parsed.node in ids) or any(
-            name.startswith(f"target-{node}-") for node in ids
-        ):
-            out.append(name)
-    return out
 
 
 def emit_merge_cleanup_skipped(
