@@ -401,7 +401,7 @@ fn apply_issues(
             .map(|m| m.as_str())
         {
             match record_upvote(rows, target, project, &voter_key, &link, issue.number) {
-                Ok(true) => {
+                Ok(()) => {
                     outcome.votes += 1;
                     outcome.receipt.push(format!("vote {target}"));
                 }
@@ -526,7 +526,7 @@ fn record_upvote(
     voter_key: &str,
     link: &str,
     issue: i64,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let Some(row) = rows.iter().find(|r| {
         crate::graph_store::entry_id(r) == Some(target)
             && r.get("project").and_then(Value::as_str) == Some(project)
@@ -546,7 +546,7 @@ fn record_upvote(
     });
     let verdict = super::encounters::append_refusing_duplicate(rows, target, record);
     if verdict["appended"] == Value::Bool(true) {
-        Ok(true)
+        Ok(())
     } else {
         Err(verdict["error"]
             .as_str()

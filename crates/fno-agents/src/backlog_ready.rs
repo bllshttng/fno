@@ -2112,12 +2112,12 @@ mod tests {
     #[test]
     fn an_outside_vote_counts_nowhere_in_ranking_or_the_stale_drain() {
         let row = |encs: serde_json::Value| {
-            json!({
+            serde_json::json!({
                 "id": "x-voted",
                 "encounters": encs,
             })
         };
-        let ranked = encounter_voters(&row(json!([
+        let ranked = encounter_voters(&row(serde_json::json!([
             {"voter_key": "agent-a", "voter_kind": "agent"},
             {"voter_key": "github:v1", "voter_kind": "external"},
             {"voter_key": "github:v2", "voter_kind": "external"},
@@ -2126,7 +2126,7 @@ mod tests {
         assert_eq!(ranked, BTreeSet::from(["agent-a".to_string()]));
         assert_eq!(
             encounter_voters(&row(
-                json!([{"voter_key": "agent-a", "voter_kind": "agent"}])
+                serde_json::json!([{"voter_key": "agent-a", "voter_kind": "agent"}])
             )),
             ranked,
             "the board order is the same with and without the outside votes"
@@ -2134,7 +2134,7 @@ mod tests {
         let now_ms = parse_iso_ms("2026-10-16T00:00:00Z").unwrap_or(0);
         let day = 86_400_000i64;
         let recent = |voter_key: &str, voter_kind: &str| {
-            json!({
+            serde_json::json!({
                 "id": "x-drain",
                 "encounters": [{
                     "voter_key": voter_key,
