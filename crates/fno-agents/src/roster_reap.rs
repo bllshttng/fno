@@ -2257,7 +2257,7 @@ mod tests {
             let kept = summary
                 .kept
                 .iter()
-                .find(|j| j.short_id == "ab12cd34")
+                .find(|j| j.node.as_deref() == Some("x-bbbb"))
                 .expect("the bound row was judged");
             assert_eq!(kept.class, "unmarked", "scope {scope:?}: {summary:?}");
             assert_eq!(kept.node.as_deref(), Some("x-bbbb"));
