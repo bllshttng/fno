@@ -77,6 +77,7 @@ pub fn run_op(op: &str, payload: &Value) -> String {
         "status-merge-blocker" => merge_blocker(&RealGhProbe, payload).to_string(),
         "status-failure-cause" => failure_cause(payload).to_string(),
         "status-zero-job-runs" => zero_job_runs_op(&RealGhProbe, payload).to_string(),
+        "status-rest-get" => rest_get_op(&RealGhProbe, payload).to_string(),
         "status-cache-key" => status_cache_key(payload).to_string(),
         "status-branch-history" => branch_history_op(&RealGhProbe, payload).to_string(),
         other => json!({"error": format!("unknown op {other}")}).to_string(),
@@ -479,6 +480,29 @@ pub(crate) fn timeout_annotation(annotations: &Value) -> Option<String> {
             .find_map(timeout_message)
     } else {
         rows.iter().find_map(timeout_message)
+    }
+}
+
+/// The `status-rest-get` op: one plain `gh api <path>` read through the
+/// conditional door, for the Python loop-check adapter. `gh_etag::eligible`
+/// owns which paths qualify, so the adapter holds no copy of the rule: an
+/// ineligible path answers `eligible: false` and the adapter runs its own
+/// read. An eligible read answers gh's `ok`, body and stderr as the plain
+/// call would, a 304 already swapped for the stored body.
+fn rest_get_op<P: GhProbe>(probes: &P, payload: &Value) -> Value {
+    let Some(path) = payload.get("path").and_then(Value::as_str) else {
+        return json!({"error": "status-rest-get needs a path"});
+    };
+    let cwd = PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let args = vec!["api".to_string(), path.to_string()];
+    if crate::gh_etag::eligible(&args).is_none() {
+        return json!({"eligible": false});
+    }
+    match probes.run_gh(&cwd, &args) {
+        Ok((ok, stdout, stderr)) => {
+            json!({"eligible": true, "ok": ok, "stdout": stdout, "stderr": stderr})
+        }
+        Err(err) => json!({"eligible": true, "ok": false, "stdout": "", "stderr": err}),
     }
 }
 
