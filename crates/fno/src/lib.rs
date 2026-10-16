@@ -100,6 +100,7 @@ pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
+pub mod share;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;

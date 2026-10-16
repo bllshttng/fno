@@ -40,7 +40,7 @@ use tokio::sync::{broadcast, oneshot};
 use crate::proto::{self, ClientMsg, ServerMsg, BUILD_VERSION, PROTO_VERSION};
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
-const PAGE: &str = include_str!("web_page.html");
+pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// The backlog board page, vendored like PAGE. It draws the read model
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
@@ -58,8 +58,8 @@ const BROADCAST_CAP: usize = 256;
 /// a proto-level pane-closed signal is the real fix, deferred with Locked 4).
 const MAX_SNAPSHOT_PANES: usize = 128;
 /// Reconnect backoff bounds (Errors: preserve the view on upstream EOF).
-const BACKOFF_START: Duration = Duration::from_millis(250);
-const BACKOFF_MAX: Duration = Duration::from_secs(5);
+pub(crate) const BACKOFF_START: Duration = Duration::from_millis(250);
+pub(crate) const BACKOFF_MAX: Duration = Duration::from_secs(5);
 
 /// Connect bound for the upstream attach. A wedged server (never accepts)
 /// turns into a reconnect-with-backoff instead of blocking the bridge task
@@ -68,7 +68,7 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A connection must stay up at least this long before its drop resets the
 /// backoff. An accept-then-EOF flap stays below it, so the backoff keeps growing
 /// (and each quick drop logs) instead of spinning a silent 250ms reconnect loop.
-const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
+pub(crate) const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
 
 /// Parsed `fno mux serve --web` arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -849,7 +849,7 @@ async fn upstream_loop(
 /// Connect, send the observer `Attach`, relinquish the write half, and read the
 /// first reply. A `Bye` here is a refused/skewed attach (`Err`); anything else
 /// means the attach took, and the message is returned as preamble to forward.
-async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
+pub(crate) async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
     let stream = tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, UnixStream::connect(socket))
         .await
         .map_err(|_| {
@@ -968,13 +968,13 @@ fn forward(mut msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<
 
 /// A bridge-injected control line (not a `ServerMsg`) the browser reads to drive
 /// its connection banner.
-fn bridge_status(state: &str) -> String {
+pub(crate) fn bridge_status(state: &str) -> String {
     format!("{{\"_bridge\":{{\"state\":\"{state}\"}}}}")
 }
 
 /// `host:port`, bracketing an IPv6 literal so `[::1]:8722` parses - a bare
 /// `::1:8722` does not (the colons are ambiguous).
-fn bind_addr(bind: &str, port: u16) -> String {
+pub(crate) fn bind_addr(bind: &str, port: u16) -> String {
     if bind.contains(':') {
         format!("[{bind}]:{port}")
     } else {
@@ -1744,7 +1744,7 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
 
 /// 32 random bytes from `/dev/urandom` as hex. `None` if the device is
 /// unreadable (fail closed - never mint a guessable token).
-fn mint_token() -> Option<String> {
+pub(crate) fn mint_token() -> Option<String> {
     use std::io::Read;
     let mut buf = [0u8; 32];
     std::fs::File::open("/dev/urandom")
@@ -1756,7 +1756,7 @@ fn mint_token() -> Option<String> {
 /// Constant-time equality over the compared bytes. The token length is not
 /// secret (always 64 hex chars), so an early length mismatch is fine; the byte
 /// comparison itself never short-circuits.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
