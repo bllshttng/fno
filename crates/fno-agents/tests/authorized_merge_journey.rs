@@ -115,13 +115,9 @@ impl Probes for FakeGitHub {
         let _ = args;
         Ok((Some(0), br#"{"refused": false}"#.to_vec(), Vec::new()))
     }
-    fn coverage_verdict(
-        &self,
-        _cwd: &Path,
-        _pr: u64,
-    ) -> fno_agents::loopcheck::coverage_gate::GateVerdict {
-        fno_agents::loopcheck::coverage_gate::GateVerdict {
-            state: fno_agents::loopcheck::coverage_gate::GateState::Covered,
+    fn coverage_verdict(&self, _cwd: &Path, _pr: u64) -> fno_agents::loopcheck::GateVerdict {
+        fno_agents::loopcheck::GateVerdict {
+            state: fno_agents::loopcheck::GateState::Covered,
             refusal: String::new(),
             covered_head: self.head.borrow().clone(),
             note: String::new(),
