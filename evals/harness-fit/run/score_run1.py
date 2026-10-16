@@ -6,9 +6,9 @@
 Rules (README amendments 2 and 4): a stall (worker ran out its budget) is a
 scored attempt with no accepted change. opencode rows are re-read from the
 opencode store by session id: model = providerID/modelID, output += reasoning.
-Unavailable, substituted and contaminated rows are counted by reason, never
-scored. A row with lane_status unverified counts as an attempt, never a rule.
-"""
+Unavailable, unverified, substituted and contaminated rows are counted by
+reason, never scored. An unverified row still counts as an attempt, never a
+rule (README Scope and limits)."""
 import json
 import math
 import sqlite3
@@ -83,6 +83,10 @@ def classify(r: dict) -> dict:
         kind = f"excluded:{r['excluded_reason']}"
     elif lane_status == "substituted":
         kind = "excluded:substituted"
+    elif lane_status == "unverified":
+        # Identity before the stall rule: an unverified read is an attempt,
+        # never a scored one (README Scope and limits).
+        kind = "excluded:unverified"
     elif stalled:
         kind = "stall"
     elif r.get("status") != "graded":

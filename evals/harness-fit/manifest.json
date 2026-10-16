@@ -161,7 +161,7 @@
     "scope": "a fifth Run 1 lane, footnote, before any footnote attempt or result; no grade or decision rule changes",
     "lane": "harness-fit-footnote: harness footnote, model zai/glm-5.3-flash, no effort key, band medium; the zai/ prefix routes the spawn to the z.ai Anthropic endpoint",
     "identity": "the observe door joins model_request.provider_id with the reported model, the footnote side of the Amendment 4 join; a transcript with no provider id reads the bare model and substituted against a prefixed lane",
-    "binary": "run1.sh exports FNO_FOOTNOTE_BIN, default $WS/bin/footnote; setup-imac.sh installs it with cargo install --locked --git https://github.com/bllshttng/fnh --rev $FNH_SHA --root $WS",
+    "binary": "run1.sh exports FNO_FOOTNOTE_BIN, default $WS/bin/footnote; setup-imac.sh installs it with cargo install --locked --git https://github.com/bllshttng/fnh --rev $FNH_SHA --root $WS and rebuilds fno-agents on every run, so a stale release binary cannot serve the lane",
     "fnh_sha": "ce42622f79567181361ae326a929dd69cab957b9",
     "fnh_sha_note": "fnh origin/main when the amendment landed (2026-10-16); a run that starts after fnh moves updates the pin here and in README Amendment 14 before the first footnote attempt; FNH_SHA overrides without an edit",
     "effort": "the footnote lane carries no effort key, so effort is the provider default for footnote and opencode alike, since opencode's --effort high never reached the model either",
@@ -169,6 +169,7 @@
     "baseline_rerun": "a footnote run that starts more than 30 days after 2026-10-03 re-runs the opencode smoke first",
     "gate": "footnote minus opencode in points on paired tasks; PASS at -15.0 or better; the paired 95% bootstrap interval prints beside it (4,000 resamples, seed 272); an arm under 20 graded attempts fires no rule alone",
     "smoke": "one attempt on replay-x-c911 before any paid footnote attempt: lane_status ok, usage_source footnote-transcript, and the footnote transcript header carries permission_mode bypassPermissions",
+    "scorer": "score_run1.py excludes unverified identity rows, counted by reason, as Scope and limits already said; the published Run 1 record holds no unverified rows, so no earlier number moves",
     "spend": "before the lane, spent dollars plus the smoke cost per attempt times 30 (10 tasks times 3 repeats) must stay under the 200 USD ceiling, Amendment 1's stop rule"
   }
 }
