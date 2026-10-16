@@ -414,10 +414,8 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
             status,
         });
     }
-    for row in rows() {
-        for entry in migrate_rows(root, std::slice::from_ref(row), apply, &stamp) {
-            receipt.entries.push(entry);
-        }
+    for entry in migrate_rows(root, rows(), apply, &stamp) {
+        receipt.entries.push(entry);
     }
     for entry in park_nested_duplicates(root, apply, &stamp) {
         receipt.entries.push(entry);
