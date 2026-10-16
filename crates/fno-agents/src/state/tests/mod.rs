@@ -2820,6 +2820,7 @@ fn registry_schema_fields() {
         effort: Some("value".into()),
         liveness: Some("value".into()),
         liveness_measured_at: Some("value".into()),
+        last_report_at: Some("value".into()),
         context_used_pct: Some(1),
         context_used_tokens: Some(1),
         context_window_tokens: Some(1),

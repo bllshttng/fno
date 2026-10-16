@@ -93,10 +93,12 @@ def test_source_coverage_accounts_current_agent_entry(monkeypatch) -> None:
     # the daemon's session-report ingest stamps), storage_only: 68 -> 70.
     # v38 adds the five daemon-measured context and unread fields.
     # v41 adds spawn_payload (the delivered seed the attended guard exempts
-    # by), storage_only: 78 -> 79. v42 adds node_basis (where the row's node
-    # came from when the first-prompt hook bound it), storage_only: 79 -> 80,
-    # and it joins the required list: 46 -> 47.
-    assert payload["declared_count"] == 80
+    # by), storage_only: 78 -> 79. v42 adds last_report_at (the capacity
+    # reader's freshness source for pid-less rows no probe reaches) and
+    # node_basis (where the row's node came from when the first-prompt hook
+    # bound it): storage_only: 79 -> 81, and node_basis joins the required
+    # list: 46 -> 47.
+    assert payload["declared_count"] == 81
     assert payload["required_count"] == 47
     assert payload["accounted_count"] == 80
     assert payload["known_gaps"] == {}

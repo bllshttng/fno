@@ -14,10 +14,10 @@ use super::{birth, node_ref};
 
 /// The captured `fno backlog add --help` (typer's rendering, byte for byte);
 /// the cut-over wave prints this where the forward used to.
-const ADD_HELP: &str = include_str!("create_help.txt");
+pub(crate) const ADD_HELP: &str = include_str!("create_help.txt");
 
-const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
-const SOURCE_KINDS: [&str; 5] = [
+pub(crate) const DIFFICULTY_HELP: &str = "Intrinsic work difficulty: expected duration, edge cases, unknowns, and a senior tech lead's estimate. Do not use current capacity or model quality.";
+pub(crate) const SOURCE_KINDS: [&str; 5] = [
     "organic",
     "from_inbox",
     "from_observation",
@@ -50,6 +50,18 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
+    // The legacy `new` word's extras (node_builder.cmd_new's surface, which
+    // `fno inbox drain` files with): scoped opt-outs and inbox provenance.
+    pub source_project: Option<String>,
+    pub source_inbox_msg: Option<String>,
+    pub source_inbox_thread: Option<String>,
+    pub source_session_id: Option<String>,
+    pub unscoped: bool,
+    pub force_domain: bool,
+    /// Set programmatically by the `new` word's arm (never a CLI flag): the
+    /// scoped-create spelling stamps `source: "fno-new"` where plain add
+    /// records null.
+    pub scoped_new: bool,
     pub help: bool,
 }
 
@@ -81,6 +93,10 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--tag",
         "--source-node",
         "--source-kind",
+        "--source-project",
+        "--source-inbox-msg",
+        "--source-inbox-thread",
+        "--source-session-id",
         "--related",
     ];
     if long.contains(&arg) {
@@ -99,6 +115,8 @@ fn flag_name(arg: &str) -> Option<&str> {
 fn flag_bool(arg: &str) -> Option<&'static str> {
     match arg {
         "--blocks-everything" => Some("--blocks-everything"),
+        "--unscoped" => Some("--unscoped"),
+        "--force-domain" => Some("--force-domain"),
         _ => None,
     }
 }
@@ -120,6 +138,12 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
             "--help" | "-h" => return ParsedAdd::Help,
             "--blocks-everything" => {
                 args.blocks_everything = true;
+            }
+            "--unscoped" => {
+                args.unscoped = true;
+            }
+            "--force-domain" => {
+                args.force_domain = true;
             }
             _ if flag_bool(arg).is_some() => unreachable!(),
             _ if flag_name(arg).is_some() => {
@@ -164,6 +188,10 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--batch" => args.batch = Some(value),
                     "--source-node" => args.source_node = Some(value),
                     "--source-kind" => args.source_kind = value,
+                    "--source-project" => args.source_project = Some(value),
+                    "--source-inbox-msg" => args.source_inbox_msg = Some(value),
+                    "--source-inbox-thread" => args.source_inbox_thread = Some(value),
+                    "--source-session-id" => args.source_session_id = Some(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -245,7 +273,7 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     None
 }
 
-fn work_pairs(doc: &Value) -> Vec<(String, String)> {
+pub(crate) fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let Some(work) = doc.get("work") else {
         return out;
@@ -274,7 +302,7 @@ fn work_pairs(doc: &Value) -> Vec<(String, String)> {
     out
 }
 
-fn expand_home(path: &str) -> PathBuf {
+pub(crate) fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
@@ -285,7 +313,7 @@ fn expand_home(path: &str) -> PathBuf {
 
 /// The shared priority gate: PRIORITY_ORDER membership, then the write rule.
 /// Exit 1 is the membership miss, exit 2 the write rule.
-fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
+pub(crate) fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refusal> {
     if !["p0", "p1", "p2", "p3"].contains(&priority) {
         return Err(refused(
             format!("Error: invalid priority '{priority}'. Must be: p0, p1, p2, p3"),
@@ -304,7 +332,7 @@ fn validate_priority(priority: &str, blocks_everything: bool) -> Result<(), Refu
     Ok(())
 }
 
-fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
+pub(crate) fn normalize_difficulty(value: &str) -> Result<String, Refusal> {
     let band = value.trim().to_lowercase();
     if !["low", "medium", "high"].contains(&band.as_str()) {
         return Err(refused(
@@ -366,14 +394,15 @@ fn active_backend_name() -> String {
 /// One birth record through the native owner, in-process. Returns
 /// `(origin, evidence_ref, refused)`; the caller refuses operator_request
 /// births the origin did not grant.
-fn stamp_request_origin(
+pub(crate) fn stamp_request_origin(
     source_kind: &str,
+    birth_channel: &str,
     origin_evidence: Option<&str>,
 ) -> (String, Option<String>, Option<String>) {
     let record = crate::node_origin::BirthRecord {
         request_origin: None,
         source_kind: Some(source_kind.to_string()),
-        birth_channel: Some("idea".to_string()),
+        birth_channel: Some(birth_channel.to_string()),
         origin_evidence: origin_evidence.map(str::to_string),
     };
     let pending = if record.source_kind.as_deref() == Some("operator_request") {
@@ -503,7 +532,9 @@ pub(crate) fn session_provenance(
 /// Mint a fresh, collision-free node id against the snapshot's ids, the
 /// legacy archive pool, the mint tombstones, and every id a plan
 /// frontmatter names. Must run inside the locked write.
-fn mint_node_id(existing: &std::collections::BTreeSet<String>) -> Result<String, String> {
+pub(crate) fn mint_node_id(
+    existing: &std::collections::BTreeSet<String>,
+) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
@@ -960,6 +991,41 @@ pub(crate) fn create_node(
             1,
         ));
     }
+    // The `new` word's domain suggestion (the wheel's suggest_domain): a
+    // unique case-insensitive prefix match over the filed domains proposes
+    // the full name and refuses until --domain spells it out or
+    // --force-domain keeps the shorthand. Exact and unfamiliar pass through;
+    // plain add has never suggested.
+    if args.scoped_new && !args.force_domain {
+        let graph = super::settings::graph_path();
+        let domains: std::collections::BTreeSet<String> =
+            match crate::graph_store::read_rows(&graph) {
+                Ok(rows) => rows
+                    .iter()
+                    .filter_map(|r| r.get("domain").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect(),
+                Err(_) => Default::default(),
+            };
+        let q = args.domain.trim();
+        if !q.is_empty() && !domains.contains(q) {
+            let ql = q.to_lowercase();
+            let hits: Vec<&String> = domains
+                .iter()
+                .filter(|d| d.to_lowercase().starts_with(&ql))
+                .collect();
+            if hits.len() == 1 {
+                let m = hits[0];
+                return Err(refused(
+                    format!(
+                        "fno backlog new: did you mean --domain {m}? Pass --domain {m} or add --force-domain to keep {:?}.",
+                        args.domain
+                    ),
+                    2,
+                ));
+            }
+        }
+    }
     if args.details.is_some() && args.description.is_some() {
         return Err(refused(
             "Error: pass --details or --description, not both",
@@ -978,7 +1044,7 @@ pub(crate) fn create_node(
         }
     }
     let (origin, origin_evidence_ref, refused_note) =
-        stamp_request_origin(&args.source_kind, args.origin_evidence.as_deref());
+        stamp_request_origin(&args.source_kind, "idea", args.origin_evidence.as_deref());
     if args.source_kind == "operator_request" && origin != "operator_request" {
         return Err(refused(
             format!("Error: {}", refused_note.unwrap_or_default()),
@@ -989,27 +1055,37 @@ pub(crate) fn create_node(
     // Store an absolute path so downstream detection finds matches. No
     // explicit --cwd: record the canonical main checkout, not os.getcwd().
     let cwd_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resolved_cwd: String = match &args.cwd {
-        Some(cwd) => {
-            let p = Path::new(cwd);
-            let joined = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                cwd_root.join(p)
-            };
-            joined.to_string_lossy().into_owned()
-        }
-        None => match &args.project {
-            Some(project) => {
-                super::settings::project_root(project).unwrap_or_else(|| repo_root(&cwd_root))
-            }
-            None => repo_root(&cwd_root),
-        },
-    };
-    let resolved_project = args
+    // The scope ladder: an explicit --project derives cwd from the work map
+    // REGARDLESS of --unscoped (a named project is a stronger signal than the
+    // auto-scope opt-out); --unscoped otherwise skips the git-root auto-scope.
+    let mapped = args
         .project
-        .clone()
-        .or_else(|| detect_project(&PathBuf::from(&resolved_cwd)));
+        .as_deref()
+        .and_then(super::settings::project_root);
+    let (resolved_project, resolved_cwd): (Option<String>, Option<String>) =
+        if args.unscoped && mapped.is_none() {
+            (None, None)
+        } else {
+            let cwd: String = match (mapped, &args.cwd) {
+                (Some(root), _) => root,
+                (None, Some(cwd)) => {
+                    let p = Path::new(cwd);
+                    let joined = if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd_root.join(p)
+                    };
+                    joined.to_string_lossy().into_owned()
+                }
+                (None, None) => repo_root(&cwd_root),
+            };
+            (
+                args.project
+                    .clone()
+                    .or_else(|| detect_project(&PathBuf::from(&cwd))),
+                Some(cwd),
+            )
+        };
 
     // One snapshot read feeds the fail-closed assertions, the mint, and the
     // mutation: an unresolvable assertion must leave the graph untouched. The
@@ -1135,13 +1211,22 @@ pub(crate) fn create_node(
             "pr_url": Value::Null,
             "merge_status": Value::Null,
             "created_at": now,
-            "source": Value::Null,
+            // The `new` word's birth mark (node_builder.cmd_new stamped
+            // source="fno-new"; plain add records null).
+            "source": if args.scoped_new {
+                Value::String("fno-new".to_string())
+            } else {
+                Value::Null
+            },
             "source_kind": args.source_kind,
-            "source_project": Value::Null,
-            "source_inbox_msg": Value::Null,
+            "source_project": args.source_project,
+            "source_inbox_msg": args.source_inbox_msg,
+            "source_inbox_thread": args.source_inbox_thread,
             "artifact_url": Value::Null,
             "completion_note": Value::Null,
-            "source_session_id": source_session_id,
+            // A --source-session-id flag (the `new` word's inbox provenance)
+            // outranks the ambient walk's value.
+            "source_session_id": args.source_session_id.clone().or(source_session_id),
             "source_harness": source_harness,
             "source_model": source_model,
             "source_effort": source_effort,
@@ -1377,7 +1462,7 @@ fn append_filing_think_row(graph: &Path, node_id: &str, harness: &str, sid: &str
 /// The single-entry status ladder the Python model derives on every read:
 /// terminal fields, then PR, blockers, lock, then the plan rung (no plan ->
 /// idea; unreadable plan or a plan-side terminal -> ready; design -> design).
-fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
+pub(crate) fn derive_status(entry: &serde_json::Map<String, Value>, _graph: &Path) -> String {
     if entry.get("completed_at").is_some_and(|v| !v.is_null()) {
         return "done".into();
     }
@@ -1765,6 +1850,41 @@ mod tests {
             ParsedAdd::Refusal { exit, .. } => assert_eq!(exit, 2),
             _ => panic!("refuses"),
         }
+    }
+
+    #[test]
+    fn the_new_word_flags_parse() {
+        // The scoped-create word's surface (node_builder.cmd_new's contract,
+        // which `fno inbox drain` files with): provenance flags parse, the
+        // two opt-outs are bare flags, and difficulty stays optional here
+        // (run_new injects the medium default).
+        let tail: Vec<String> = [
+            "T",
+            "--source-kind",
+            "from_inbox",
+            "--source-project",
+            "proj",
+            "--source-inbox-msg",
+            "msg-01",
+            "--source-session-id",
+            "sess-7",
+            "--unscoped",
+            "--force-domain",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let a = match parse(&tail) {
+            ParsedAdd::Args(a) => a,
+            _ => panic!("parses"),
+        };
+        assert_eq!(a.source_kind, "from_inbox");
+        assert_eq!(a.source_project.as_deref(), Some("proj"));
+        assert_eq!(a.source_inbox_msg.as_deref(), Some("msg-01"));
+        assert_eq!(a.source_session_id.as_deref(), Some("sess-7"));
+        assert!(a.unscoped);
+        assert!(a.force_domain);
+        assert_eq!(a.difficulty, None);
     }
 
     #[test]

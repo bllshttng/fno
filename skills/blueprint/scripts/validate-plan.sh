@@ -594,8 +594,8 @@ fi
 # no longer the thing that arms it - the `idea` rung is undispatchable on every
 # surface now - but an unfilled scaffold that reaches a builder is still wasted
 # work, so this check refuses to pass one and the link step (skill body) and
-# this validator agree on "filled". Keep STUB_MARKERS in sync with
-# cli/src/fno/graph/_decompose.py.
+# this validator agree on "filled". Keep STUB_MARKERS in sync with the
+# scaffold writer: crates/fno-agents/src/backlog/decompose.rs.
 echo ""
 echo "--- Stub Markers (decompose child) ---"
 if [[ -f "$PLAN_DIR" ]]; then

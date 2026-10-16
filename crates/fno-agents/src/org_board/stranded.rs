@@ -13,7 +13,7 @@ use crate::node_branch;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// A tree idle at least this long with work at risk reads stranded. A const,
 /// not a knob: a knob comes when someone needs to tune it.
@@ -113,16 +113,15 @@ fn run_git(args: &[String], cwd: &Path, bound: Duration) -> Result<String, RunFa
     run_with_timeout(args, cwd, bound).map(|out| String::from_utf8_lossy(&out).into_owned())
 }
 
-fn probe_tree(
-    tree: &Path,
-    branch: &Option<String>,
-    budget: &mut Budget,
-) -> Result<Value, RunFailure> {
-    let git = |args: Vec<&str>, budget: &mut Budget| -> Result<String, RunFailure> {
-        let dl = match budget.start("stranded tree probe") {
-            Some(dl) => dl,
-            None => return Err(RunFailure::KilledAtSlice(BUDGET_EXHAUSTED.to_string())),
-        };
+fn probe_tree(tree: &Path, branch: &Option<String>, dl: Instant) -> Result<Value, RunFailure> {
+    // `dl` is the ONE deadline every tree probe and every repo's listing
+    // share (see `read_stranded_trees`): a plain Instant rather than
+    // `&mut Budget` so this whole read can run as a thread in the board's
+    // existing concurrent pool instead of serializing ahead of it.
+    let git = |args: Vec<&str>| -> Result<String, RunFailure> {
+        if Budget::spawn_bound(dl).is_zero() {
+            return Err(RunFailure::KilledAtSlice(BUDGET_EXHAUSTED.to_string()));
+        }
         let mut cmd: Vec<String> = vec![
             "git".to_string(),
             "-C".to_string(),
@@ -131,17 +130,14 @@ fn probe_tree(
         cmd.extend(args.into_iter().map(str::to_string));
         run_git(&cmd, Path::new("."), Budget::spawn_bound(dl))
     };
-    let dirty_text = git(vec!["status", "--porcelain"], budget)?;
+    let dirty_text = git(vec!["status", "--porcelain"])?;
     let dirty = dirty_text.lines().filter(|l| !l.trim().is_empty()).count() as i64;
-    let unpushed_text = git(
-        vec!["rev-list", "--count", "HEAD", "--not", "--remotes"],
-        budget,
-    )?;
+    let unpushed_text = git(vec!["rev-list", "--count", "HEAD", "--not", "--remotes"])?;
     let unpushed: i64 = unpushed_text.trim().parse().unwrap_or(0);
 
     // Newest write among the git dir's index + reflog and the dirty paths.
     let mut newest: Option<std::time::SystemTime> = None;
-    let git_dir_out = git(vec!["rev-parse", "--git-dir"], budget)?;
+    let git_dir_out = git(vec!["rev-parse", "--git-dir"])?;
     let git_dir = tree.join(git_dir_out.trim());
     for tail in ["index", "logs/HEAD"] {
         if let Ok(m) = std::fs::metadata(git_dir.join(tail)) {
@@ -185,16 +181,26 @@ fn probe_tree(
 /// The source read over every known repo. A budget kill marks the whole
 /// source over-budget (never a clean zero); a per-tree git failure drops
 /// just that tree.
+///
+/// `dl` is a plain Instant, not `&mut Budget`: the caller pre-claims it
+/// (one `budget.start(...)` on the main thread, same as every other
+/// concurrent source) so this read can run as a thread in the board's
+/// existing concurrent pool - serializing it ahead of that pool starved
+/// the OTHER sources on a slow repo instead of fixing anything, since
+/// every source shares the one board deadline either way. `spent_err` is
+/// that same pre-claim's message, cloned in for the already-exhausted
+/// case, exactly like the board's other concurrent sources.
 pub(crate) fn read_stranded_trees(
     repos: &[PathBuf],
     candidates: &HashMap<String, Value>,
-    budget: &mut Budget,
+    dl: Instant,
+    spent_err: &str,
 ) -> SourceRead {
     let mut rows: Vec<Value> = Vec::new();
     for repo in repos {
-        let Some(dl) = budget.start("stranded trees") else {
-            return SourceRead::over_budget(budget.spent_error());
-        };
+        if Budget::spawn_bound(dl).is_zero() {
+            return SourceRead::over_budget(spent_err.to_string());
+        }
         let cmd = vec![
             "git".to_string(),
             "-C".to_string(),
@@ -215,7 +221,7 @@ pub(crate) fn read_stranded_trees(
             if !candidates.contains_key(&id) {
                 continue;
             }
-            match probe_tree(&tree, &branch, budget) {
+            match probe_tree(&tree, &branch, dl) {
                 Ok(mut row) => {
                     if let Some(obj) = row.as_object_mut() {
                         obj.insert("id".to_string(), json!(id));

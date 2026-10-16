@@ -5,6 +5,7 @@
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
 use crate::gh_cache;
+use crate::pr_list::parse_origin_slug;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -148,30 +149,9 @@ fn emit_bypass_escape(pr: u64, reason: &str) {
         .status();
 }
 
-/// `owner/repo` from a GitHub origin URL; None for anything else. The
-/// post-merge scan's parser: lowercase, optional scheme and user@, host must
-/// be github.com, exactly one slash in the path, `.git` stripped.
-fn parse_origin_slug(url: &str) -> Option<String> {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^/@]*@)?github\.com(?::[0-9]+)?[:/](.+)$")
-            .unwrap()
-    });
-    let lowered = url.trim().to_lowercase();
-    let rest = re.captures(&lowered)?.get(1)?.as_str().to_string();
-    let mut rest = rest.trim_end_matches('/').to_string();
-    if rest.ends_with(".git") {
-        rest.truncate(rest.len() - 4);
-    }
-    if rest.matches('/').count() != 1 {
-        return None;
-    }
-    let (owner, repo) = rest.split_once('/')?;
-    if owner.is_empty() || repo.is_empty() {
-        return None;
-    }
-    Some(rest)
-}
+// The origin-slug parser lives once, in pr_list (parse_origin_slug); this
+// module's post-merge scan calls the crate copy. The retired gate_probes
+// twin's tests moved beside the surviving owner.
 
 fn fetch_ref(cwd: &Path, ref_name: &str, run: RunProbe) -> bool {
     let spec = format!("+refs/heads/{ref_name}:refs/remotes/origin/{ref_name}");

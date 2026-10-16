@@ -1076,8 +1076,10 @@ def test_us2_schema_version_is_three() -> None:
     # v40 migrates the authority vocabulary and fences older writers.
     # v41: additive `spawn_payload` - the delivered seed, so the attended
     # guard exempts the machine's own slash-command turn.
-    # v42: additive `node_basis` - where the row's node came from when the
-    # first-prompt hook bound it, so a refresh never downgrades the bind.
+    # v42: additive `last_report_at` - the capacity reader's freshness
+    # source for pid-less rows no probe reaches; and additive `node_basis` -
+    # where the row's node came from when the first-prompt hook bound it,
+    # so a refresh never downgrades the bind.
     assert SCHEMA_VERSION == 42
 
 

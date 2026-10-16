@@ -668,6 +668,11 @@ class AgentEntry:
     # v26 served facts; the Rust sweep writes them, python is a passthrough.
     liveness: Optional[str] = None
     liveness_measured_at: Optional[str] = None
+    # v42: the last session report's arrival stamp (Rust session-report
+    # ingest writes it), the capacity reader's freshness source for pid-less
+    # rows no probe reaches (d-d0c63de7). Passthrough here; asdict re-emits
+    # it so a python read-modify-write preserves the stamp.
+    last_report_at: Optional[str] = None
     context_used_pct: Optional[int] = None
     context_used_tokens: Optional[int] = None
     context_window_tokens: Optional[int] = None

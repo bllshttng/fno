@@ -142,9 +142,18 @@ def test_inbox_default_appends_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     Settings are isolated to obsidian-off so the resolved default does not
     depend on the dev's ambient ~/.fno/settings.yaml (which is why this
     previously passed locally on an obsidian-enabled machine but failed in CI).
+    The writer is the native capture lane, so the dev build is the subject
+    under test; the shards that delete it skip, same contract as the other
+    native-door tests.
     """
     from fno.paths_testing import use_tmpdir
+    from fno.rust_binary import find_dev_binary
+
     use_tmpdir(monkeypatch, tmp_path)
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (the smoke shard deletes it on purpose)")
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
     land_candidates(
         [_node(tier=TIER_INBOX, title="a nit")], mode=MODE_AUTONOMOUS, repo_root=tmp_path,
         create_fn=lambda **k: "x",

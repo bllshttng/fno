@@ -6115,6 +6115,25 @@ event_types:
           type: string
           description: "Bounded diagnostic: the warm miss reason or the ritual receipt tail."
 
+  - name: post_merge_archive
+    description: "One row per post-merge ritual archive attempt (worktree archived or refused). Written by the ritual verb's archive leg; Python's ritual emitted the same kind unregistered, so this entry lands with the port."
+    sources: [daemon]
+    data:
+      required: [pr, project, outcome, detail]
+      properties:
+        pr:
+          type: integer
+          description: "GitHub PR number the ritual archived against."
+        project:
+          type: string
+          description: "Project slug the ritual ran under."
+        outcome:
+          type: string
+          description: "The archive step's receipt status (ok | failed | skipped)."
+        detail:
+          type: string
+          description: "The archive step's receipt detail line."
+
   - name: merge_grant_execution
     description: "One attributable attempt by the PR watcher to execute a durable dispatch grant on an OPEN PR: reserved under the per-PR lock before the canonical merge core runs, then executed, held, or failed from the core's verdict. Held and failed rows carry the merge core's printed reason."
     sources: [daemon, agents]
