@@ -1,25 +1,20 @@
 """Attention settings (``attention.*``). The Rust daemon reads every key here."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
 
-
-class AttentionSinkBlock(BaseModel):
-    """One ``[[attention.sinks]]`` row. ``type`` is ntfy or webhook, which the daemon
-    checks itself; ``token_env`` names the env var holding the bearer token."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str = ""
-    type: str = "ntfy"
-    url: str = ""
-    topic: str = ""
-    token_env: str = ""
-    answer_base_url: str = ""
-    body: str = "title-only"
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AttentionBlock(BaseModel):
+    """``sinks`` rows stay raw tables: the daemon checks each one and names a refusal."""
+
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool = True
-    sinks: list[AttentionSinkBlock] = Field(default_factory=list)
+    sinks: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_retired_rows(cls, v: Any) -> Any:
+        """A leftover ``[[attention]]`` list is dead config, never a load failure."""
+        return {} if isinstance(v, list) else v

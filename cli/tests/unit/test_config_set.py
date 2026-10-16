@@ -408,6 +408,14 @@ def test_attention_sinks_roundtrip_as_a_list_of_tables(tmp_path):
     ]
 
 
+def test_a_retired_attention_row_list_loads_as_defaults():
+    from fno.config import ConfigBlock
+
+    block = ConfigBlock(attention=[{"name": "old"}]).attention
+    assert block.enabled is True
+    assert block.sinks == []
+
+
 def test_attention_enabled_roundtrips(tmp_path):
     set_config_value("attention.enabled", "false", scope="project", repo_root=tmp_path)
     assert _read(tmp_path)["attention"]["enabled"] is False
