@@ -261,10 +261,10 @@ fn posture_refusal(row: &Value, recomputed: bool) -> Option<String> {
     if row.get("coverage").and_then(Value::as_str) != Some("covered") {
         return None;
     }
-    let Some(posture) = row.get("review_posture") else {
-        return None;
-    };
-    let Some(posture) = posture.as_object() else {
+    // An ABSENT field and a non-object value are the same read, exactly as
+    // the Python gate's single `isinstance(posture, dict)` branch held them:
+    // both mean "no readable rung", and only a recomputed row refuses on it.
+    let Some(posture) = row.get("review_posture").and_then(Value::as_object) else {
         if !recomputed {
             return None;
         }
@@ -1088,3 +1088,32 @@ fn run_op_door() -> i32 {
 
 pub(crate) mod publish;
 pub(crate) mod waive;
+
+#[cfg(test)]
+mod posture_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn absent_posture_refuses_on_a_recomputed_row() {
+        let row = json!({"coverage": "covered"});
+        assert_eq!(
+            posture_refusal(&row, true).unwrap(),
+            "review posture unknown: a fresh coverage recompute resolved no \
+review.posture, so the ladder cannot answer what review the rung demands. \
+Remedy: refresh the fno-agents binary (`fno doctor update`) and re-run the \
+merge"
+        );
+    }
+
+    #[test]
+    fn absent_posture_passes_a_stored_pre_posture_row() {
+        let row = json!({"coverage": "covered"});
+        assert_eq!(posture_refusal(&row, false), None);
+    }
+
+    #[test]
+    fn null_posture_refuses_on_a_recomputed_row() {
+        let row = json!({"coverage": "covered", "review_posture": null});
+        assert!(posture_refusal(&row, true).is_some());
+    }
+}
