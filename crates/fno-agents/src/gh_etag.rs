@@ -128,7 +128,7 @@ pub(crate) fn conditional_api_get(
     spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
 ) -> Result<(bool, String, String), String> {
     match crate::gh_cache::rows_root(cwd) {
-        Some(root) => conditional_api_get_at(&root, path, spawn),
+        Some(root) => conditional_api_get_at(&root, path, &NOT_MODIFIED, spawn),
         None => plain_get(path, spawn),
     }
 }
@@ -141,11 +141,14 @@ fn plain_get(
     Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
 }
 
-/// The door with the row store pinned, so tests can point it at a tempdir
-/// without touching the process-global FNO_GH_FACTS_DIR.
+/// The door with the row store and the 304 counter pinned, so tests point
+/// them at a tempdir and a counter of their own: the process-global
+/// counter belongs to the spend note, and a test that reads it can race a
+/// parallel test's bump.
 pub(crate) fn conditional_api_get_at(
     root: &Path,
     path: &str,
+    served_304: &AtomicUsize,
     spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
 ) -> Result<(bool, String, String), String> {
     let row = read_row_at(root, path, crate::gh_cache::now_secs());
@@ -166,7 +169,7 @@ pub(crate) fn conditional_api_get_at(
     match status {
         304 => match row {
             Some(row) => {
-                NOT_MODIFIED.fetch_add(1, Ordering::SeqCst);
+                served_304.fetch_add(1, Ordering::SeqCst);
                 Ok((true, row.body, String::new()))
             }
             None => Ok((ok, body, stderr)),
@@ -209,19 +212,19 @@ mod tests {
     fn conditional_serves_row_on_304() {
         let root = tempfile::tempdir().unwrap();
         write_row_at(root.path(), "repos/o/r/pulls/1", "W/\"abc\"", "{\"n\":1}");
-        let before = NOT_MODIFIED.load(Ordering::SeqCst);
+        let counter = AtomicUsize::new(0);
         let spawn = spawn_of(
             "HTTP/2.0 304 Not Modified\r\netag: W/\"abc\"\r\n\r\n",
             false,
         );
         let (ok, body, stderr) =
-            conditional_api_get_at(root.path(), "repos/o/r/pulls/1", spawn).unwrap();
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/1", &counter, spawn).unwrap();
         assert!(ok);
         assert_eq!(body, "{\"n\":1}");
         assert_eq!(stderr, "");
-        // The counter is process-global and tests run in parallel, so a
-        // sibling can bump it mid-test. Assert the rise, never the step.
-        assert!(NOT_MODIFIED.load(Ordering::SeqCst) > before);
+        // The test's own counter sees exactly this call's serve, so a
+        // parallel test on the process-global counter cannot touch it.
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -244,8 +247,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let stdout = "HTTP/2.0 200 OK\r\ncontent-type: application/json\r\nEtag: W/\"zz\"\r\n\r\n{\"y\":2}\n";
         let spawn = spawn_of(stdout, true);
+        let counter = AtomicUsize::new(0);
         let (ok, body, _) =
-            conditional_api_get_at(root.path(), "repos/o/r/pulls/2", spawn).unwrap();
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/2", &counter, spawn).unwrap();
         assert!(ok);
         assert_eq!(body, "{\"y\":2}\n");
         let now = crate::gh_cache::now_secs();
@@ -258,16 +262,17 @@ mod tests {
     fn budget_refusal_propagates_and_writes_no_row() {
         let root = tempfile::tempdir().unwrap();
         write_row_at(root.path(), "repos/o/r/pulls/3", "W/\"old\"", "{\"n\":0}");
-        let before = NOT_MODIFIED.load(Ordering::SeqCst);
+        let counter = AtomicUsize::new(0);
         let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
             Err("pr-status: refused by the fleet request budget".to_string())
         };
-        let err = conditional_api_get_at(root.path(), "repos/o/r/pulls/3", spawn).unwrap_err();
+        let err =
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/3", &counter, spawn).unwrap_err();
         assert!(err.contains("refused"));
         let now = crate::gh_cache::now_secs();
         let row = read_row_at(root.path(), "repos/o/r/pulls/3", now).expect("row untouched");
         assert_eq!(row.etag, "W/\"old\"");
-        assert_eq!(NOT_MODIFIED.load(Ordering::SeqCst), before);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
     #[test]
