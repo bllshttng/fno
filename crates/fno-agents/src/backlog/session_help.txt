@@ -4,6 +4,8 @@ Usage: fno backlog session [OPTIONS] COMMAND [ARGS]...
 
 Commands:
   add        Stamp a node with a lifecycle phase record (idempotent, append-only).
+             --origin fills started_at from the named session's transcript and
+             first-fills the node's origin session (never overwrites).
   open       Hold node:<id> under blueprint-session:<id> for this session's planner.
   close      Close the blueprint phase with one identity-guarded completion receipt.
   backfill   Fill missing session starts and ends from transcripts and merge commits.

@@ -1095,6 +1095,13 @@ pub(crate) fn create_node(
     // so two concurrent filings both persist.
     let graph = super::settings::graph_path();
     let mut retry = 0u8;
+    // The filing session's identity, captured per retry and read after the
+    // loop: the filing session's own think row rides on it. The initializer
+    // is always overwritten before the first read (the capture runs in every
+    // iteration, before any break), which is exactly the shape
+    // unused_assignments names.
+    #[allow(unused_assignments)]
+    let mut filing_think: (Option<String>, Option<String>) = (None, None);
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
         let base_version = crate::graph_store::base_version(&graph)
@@ -1142,6 +1149,9 @@ pub(crate) fn create_node(
             source_plan_path,
             dropped,
         ) = provenance;
+        // Captured before the node json! consumes the pair: the filing
+        // session's think row rides on it.
+        filing_think = (source_session_id.clone(), source_harness.clone());
         // The creating session's registry row AT BIRTH: the lane facts the
         // activity feed's provenance view prints for a node_created row. A
         // session no registry row holds (a human filing by hand) reads as
@@ -1314,6 +1324,12 @@ pub(crate) fn create_node(
     } else if let Some(sid) = &source_node_id {
         eprintln!("origin: {sid}");
     }
+    // The filing session's own think row: the node's sessions[] shows what
+    // the filing looked like from inside, with started_at at the session's
+    // first user turn. Strictly best-effort - never fails the filing.
+    if let (Some(sid), Some(harness)) = (&filing_think.0, &filing_think.1) {
+        append_filing_think_row(&graph, &minted, harness, sid);
+    }
     // Filing-time dedup net, fresh read, non-fatal. The corpus adds the
     // archived residents: a shipped done node is the answer to a duplicate.
     {
@@ -1393,6 +1409,54 @@ pub(crate) fn create_node(
         id: minted,
         reused: None,
     })
+}
+
+/// The one think row an `idea` filing appends for the session that filed the
+/// node: started_at at that session's first user turn, ended_at at the
+/// filing time. When the transcript cannot be read, both stamps are the
+/// filing time and the receipt says so. Best-effort end to end: a refused
+/// row or an unreadable transcript never fails the filing that already
+/// landed.
+fn append_filing_think_row(graph: &Path, node_id: &str, harness: &str, sid: &str) {
+    let ended = crate::graph_store::now_isoformat();
+    let (started, basis) = match super::super::session_backfill::first_user_turn(harness, sid) {
+        Some(ts) => {
+            let basis = format!("first turn {ts}");
+            (ts, basis)
+        }
+        None => (
+            ended.clone(),
+            "transcript unreadable; started_at = filing time".to_string(),
+        ),
+    };
+    let row = match crate::graph_keeper::session_row(
+        "think",
+        harness,
+        sid,
+        None,
+        Some(&started),
+        Some(&ended),
+        None,
+        None,
+    ) {
+        Ok(row) => row,
+        Err(e) => {
+            eprintln!(
+                "session: think row refused for {harness}:{sid} ({e}); the node stands without it"
+            );
+            return;
+        }
+    };
+    let appended = crate::backlog::mutate_single_row(graph, "session_append", |rows| {
+        crate::graph_keeper::session_append(rows, node_id, row.clone())
+            .map(|(found, _added)| found)
+            .map_err(|e| e.to_string())
+    });
+    match appended {
+        Ok(true) => eprintln!("session: think {harness}:{sid} on {node_id} ({basis})"),
+        Ok(false) => eprintln!("session: think row skipped; {node_id} not found on rewrite"),
+        Err(e) => eprintln!("session: think row failed, the node stands without it: {e}"),
+    }
 }
 
 /// The single-entry status ladder the Python model derives on every read:
@@ -1539,6 +1603,32 @@ mod tests {
         assert!(minted.starts_with("x-"));
         assert_eq!(minted.len(), 6);
         assert!(minted[2..].bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    // AC18, transcript-unreadable arm: a session whose transcript cannot be
+    // read still gets its think row, with both stamps at the filing time -
+    // and the filing itself never fails over it.
+    #[test]
+    fn filing_think_row_falls_back_to_filing_time_without_a_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[serde_json::json!({"id": "x-aaaa", "title": "t", "status": "ready"})],
+        )
+        .unwrap();
+        let sid = "00000000-1111-4222-8333-444455556666";
+        super::append_filing_think_row(&graph, "x-aaaa", "claude", sid);
+        let rows = crate::graph_store::read_rows(&graph).unwrap();
+        let sessions = rows[0]["sessions"].as_array().expect("sessions array");
+        assert_eq!(sessions.len(), 1, "{rows:?}");
+        assert_eq!(sessions[0]["phase"], "think");
+        assert_eq!(sessions[0]["session_id"], sid);
+        assert_eq!(sessions[0]["harness"], "claude");
+        assert_eq!(
+            sessions[0]["started_at"], sessions[0]["ended_at"],
+            "no transcript: both stamps are the filing time"
+        );
     }
 
     #[test]

@@ -896,6 +896,7 @@ pub(crate) struct View {
     /// it is open, so an index into `feed.items` would silently re-point at a
     /// different event; the inspected event never changes under the reader.
     feed_detail: Option<feed_detail::FeedDetailModal>,
+    viewer: file_viewer::ViewerState,
     /// Pending escape bytes in feed-focus / feed-detail mode (same split-arrow
     /// safety as [`View::ans_esc`]).
     feed_esc: Vec<u8>,
@@ -1351,6 +1352,7 @@ pub(crate) use confirm::{remove_dead, ConfirmAction, ConfirmKind, CLEAR_DEAD_MAX
 mod bell;
 mod feed_detail;
 pub(crate) mod feed_view;
+mod file_viewer;
 mod keys_modal;
 mod needs_view;
 mod questions;
@@ -2000,6 +2002,7 @@ impl View {
             feed: None,
             region_owner: region_focus::RegionOwner::Pane,
             feed_detail: None,
+            viewer: Default::default(),
             feed_esc: Vec::new(),
             feed_width: view_store::load_feed_width().unwrap_or(feed_view::FEED_DEFAULT_W),
             feed_offset: 0,
@@ -3085,7 +3088,7 @@ impl View {
                 .max(1),
             self.term
                 .1
-                .saturating_sub(self.panel_w() + self.feed_panel_w())
+                .saturating_sub(self.panel_w() + self.feed_panel_w() + self.viewer_panel_w())
                 .max(1),
         )
     }
@@ -4893,6 +4896,7 @@ impl View {
         self.draw_bottom_row(&mut cells, rows, cols);
         // Chrome, not an overlay: after panes, before modals.
         self.draw_feed_panel(&mut cells, rows, cols);
+        file_viewer::draw(self, &mut cells, rows, cols);
         bell::draw(self, &mut cells, rows, cols);
         let (overlay_origin, overlay_dims) = self.overlay_viewport();
         if let Some(m) = &self.feed_detail {
@@ -7981,17 +7985,11 @@ async fn attach_and_run(
                 }
             }
             Some((url, outcome)) = link_rx.recv() => {
-                // a click that opens nothing visible reads as a broken
-                // button, so BOTH outcomes get a notice - the browser may not
-                // even raise itself above the terminal.
-                let notice = match outcome {
-                    Ok(opened) => opened.notice(&url),
-                    Err(e) => {
-                        let _ = raw_out(b"\x07");
-                        format!("open failed: {e}")
-                    }
-                };
-                view.set_notice(notice);
+                if let Err(e) =
+                    crate::client::open_link::land(&mut view, &url, outcome, &mut sock_w).await
+                {
+                    break Err(e);
+                }
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

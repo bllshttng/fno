@@ -250,8 +250,14 @@ enum Role {
     /// `fno agents mail send <name>@<host> ...` and `agents peek
     /// <handle>@<host> ...`: the cross-host relay. The carried
     /// tail runs `fno-agents mail-remote`; every other argv forwards
-    /// byte-verbatim.
+    /// byte-verbatim. A plain-name send target claims here too: the relay
+    /// resolves it against the local registry then the shared store, and
+    /// forwards byte-verbatim when nothing binds.
     RemoteMail(Vec<OsString>),
+    /// `fno agents org promote <name>@<host> ...`: the cross-machine
+    /// hand-off. The carried tail runs `fno-agents org-remote`; a target
+    /// without `@` forwards byte-verbatim to the local verb.
+    RemoteOrg(Vec<OsString>),
     /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
     /// do-not-disturb hold leaf. The verb and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
@@ -721,14 +727,19 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // agents_history: the people spelling of the role verbs rewrites to the
     // argv that answers today, and the old spellings forward with a notice
     // for the alias release.
-    if let Some(out) = fno::agents_alias::classify(args) {
-        return Role::AgentsAlias(out);
-    }
-    // The cross-host intercept claims an `@host` target before the agents
-    // tree forwards: `mail send`/`peek` with a remote target is a different
-    // transport, not a local verb with a funny name.
+    // The cross-host intercept claims before the alias rewriter: `mail
+    // send`/`peek` with a remote target is a different transport, a
+    // plain-name send goes to the relay's resolver, and `org promote` with an
+    // `@host` target is the cross-machine hand-off. Anything it does not
+    // claim, the agents tree forwards byte-verbatim.
     if let Some(rest) = fno::remote_target::classify(args) {
         return Role::RemoteMail(rest);
+    }
+    if let Some(rest) = fno::remote_target::classify_org(args) {
+        return Role::RemoteOrg(rest);
+    }
+    if let Some(out) = fno::agents_alias::classify(args) {
+        return Role::AgentsAlias(out);
     }
     // The backlog namespace claims itself lexically, like doctor-event: the
     // sibling dispatcher owns the whole namespace's spelling (grouped and
@@ -1030,6 +1041,11 @@ fn main() {
         Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail send|peek|reply <name>@<host>",
             &["mail-remote"],
+            &rest,
+        )),
+        Role::RemoteOrg(rest) => std::process::exit(fno_agents_exec(
+            "fno agents org promote <name>@<host> --scope <scope>",
+            &["org-remote"],
             &rest,
         )),
         Role::MailHold(rest) => std::process::exit(fno_agents_exec(

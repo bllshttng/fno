@@ -1220,6 +1220,16 @@ fn repo_root(cwd: &Path) -> PathBuf {
     canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
+/// Is this manifest posture init's `default-off` stamp? Init stamps
+/// `default-off` when its config read found nothing (a yq-less dotted-key
+/// read fails on every tier), so the field records a FAILED LOOKUP, not a
+/// decision. Consumers must treat it as unset and fall through to the live
+/// config, where an explicit refusal (`flag-no-merge`, or config set false)
+/// still wins: `flag-no-merge` and a config refusal never carry this source.
+pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str>) -> bool {
+    approved == Some(false) && source.map(str::trim) == Some("default-off")
+}
+
 /// The authority fold, in the order init folds it. A per-run refusal outranks
 /// every grant - EXCEPT the head-scoped operator grant, the one sanctioned
 /// remedy for a per-run no-merge, recorded out-of-band by a person at a
@@ -1259,6 +1269,13 @@ fn authority_refusal<P: Probes>(
             }
             crate::merge_grant::BoundRead::None => {}
         }
+    }
+    // A `default-off` stamp is init's failed config read, never a refusal:
+    // normalize to unset so the live-config arm below decides, the same
+    // fall-through an absent field already gets.
+    if posture_is_default_off(approved, folded_source.as_deref()) {
+        approved = None;
+        folded_source = None;
     }
     let source = folded_source
         .as_deref()
