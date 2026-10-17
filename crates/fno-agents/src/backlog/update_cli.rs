@@ -465,11 +465,17 @@ fn lower_op(
             if a.add_pr.is_some() {
                 return Err("Error: additional_prs takes one += per call.".to_string());
             }
+            if let Some(message) = check_pr_int("additional_prs+=", &value) {
+                return Err(message);
+            }
             a.add_pr = Some(value);
         }
         ("additional_prs", update_ops::Op::Remove) => {
             if a.remove_pr.is_some() {
                 return Err("Error: additional_prs takes one -= per call.".to_string());
+            }
+            if let Some(message) = check_pr_int("additional_prs-=", &value) {
+                return Err(message);
             }
             a.remove_pr = Some(value);
         }
@@ -524,6 +530,12 @@ fn lower_op(
 /// The integer gate `--fixes-pr` and `fixes_pr=` share; the label is the
 /// spelling the refusal quotes.
 fn check_fixes_pr_int(label: &str, v: &str) -> Option<String> {
+    check_pr_int(label, v)
+}
+
+/// The integer gate the PR-number tokens share: the legacy flags carried
+/// typer's INTEGER type, so an operator token refuses the same shape.
+fn check_pr_int(label: &str, v: &str) -> Option<String> {
     if v.parse::<i64>().is_err() {
         Some(format!(
             "Error: Invalid value for '{label}': '{v}' is not a valid integer."
