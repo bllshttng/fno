@@ -9,6 +9,9 @@
   styled <span> runs - no ANSI reconstruction, no xterm.js. Read-only: the page
   never sends a byte upstream; pane selection only changes which cached frame we
   draw locally.
+  Share mode (`fno mux serve --share`, window.FNO_SHARE) sends one knock to
+  the share bridge, which never writes to the mux socket, and posts coach and
+  steer notes the driver reads first.
 
   NOT SCROLLBACK. A Frame is a composite of the CURRENT VISIBLE GRID
   and the bridge caches only the latest one per pane, so no history reaches this
@@ -95,6 +98,20 @@
     justify-content: center; background: rgba(11,14,20,.85); font-size: 15px;
     text-align: center; padding: 24px; }
   #overlay.show { display: flex; }
+  /* Share mode (`fno mux serve --share`): the driver admits each viewer. */
+  nav.share-nav { padding: 6px 10px; font-size: 13px; border-bottom: 1px solid #1c2230; }
+  .fno-nav .share-tag { color: #f0c674; }
+  .share-banner { padding: 6px 10px; background: #1a2030; color: #f0c674; font-size: 13px; }
+  .share-boxes { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px;
+    border-bottom: 1px solid #1c2230; font-size: 13px; }
+  /* A class display rule outranks the hidden attribute, so restate it. */
+  .share-boxes[hidden] { display: none; }
+  .share-boxes input { flex: 1 1 14em; font: inherit; background: #141a26; color: #c5cdd9;
+    border: 1px solid #232b3a; border-radius: 5px; padding: 4px 8px; }
+  .share-boxes button { font: inherit; cursor: pointer; background: #24406b; color: #fff;
+    border: 1px solid #3763ac; border-radius: 5px; padding: 4px 10px; }
+  #share-note { color: #8a93a6; align-self: center; }
+  .share-history { color: #8a93a6; }
 </style>
 </head>
 <body>
@@ -485,8 +502,63 @@
       draw();
       return;
     }
+    if (obj._share) { onShare(obj._share); return; }
     if (obj.Bye) { setBar("ended", "session ended", obj.Bye.reason || ""); showOverlay("session ended\n" + (obj.Bye.reason || "")); return; }
     // Notice / ModeSync / control replies: irrelevant to a read-only viewer.
+  }
+
+  // ---- share mode ----
+  // The share secret rides the URL fragment, so it never enters an HTTP
+  // request line or a proxy log. It is read once and removed from the
+  // address bar. The socket knocks with it and a display name; the driver
+  // admits the viewer, and only then do frames arrive.
+  const SHARE = window.FNO_SHARE === true;
+  let shareKey = "", shareName = "", viewerToken = "";
+  if (SHARE) {
+    shareKey = new URLSearchParams(location.hash.slice(1)).get("k") || "";
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  function shareNote(text) { const n = $("share-note"); if (n) n.textContent = text; }
+  function onShare(m) {
+    if (m.state === "waiting") { $("share-wait").hidden = false; setBar("connecting", "waiting", "the driver admits each viewer"); }
+    if (m.state === "admitted") {
+      viewerToken = m.viewer || "";
+      $("share-wait").hidden = true;
+      $("share-boxes").hidden = false;
+      $("share-steer-row").hidden = !m.steer;
+    }
+    if (m.history != null) {
+      let el = $("share-history");
+      if (!el) {
+        el = document.createElement("span");
+        el.id = "share-history"; el.className = "share-history";
+        term.insertBefore(el, term.firstChild);
+      }
+      el.textContent = m.history ? "earlier output (plain text, masked)\n" + m.history + "\n" : "";
+    }
+    if (m.history_error) shareNote("no earlier output: " + m.history_error);
+    if (typeof m.steer === "number") shareNote(`steer s${m.steer}: ${m.state}` + (m.verdict ? ` (${m.verdict})` : ""));
+  }
+  async function sharePost(path, input, done) {
+    const text = input.value.trim();
+    if (!text) return;
+    try {
+      const r = await fetch(path, { method: "POST",
+        headers: { "Authorization": "Bearer " + viewerToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ text }) });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) { input.value = ""; shareNote(done(body)); } else { shareNote(body.error || `refused (${r.status})`); }
+    } catch (_) { shareNote("not sent: connection lost"); }
+  }
+  if (SHARE) {
+    const coach = () => sharePost("coach", $("share-coach"), () => "note shown to the driver");
+    const steer = () => sharePost("steer", $("share-steer"), (b) => `steer s${b.pending} waits for the driver`);
+    $("share-coach-send").onclick = coach;
+    $("share-steer-send").onclick = steer;
+    // Enter sends the box it was typed in; the form itself never submits.
+    $("share-boxes").onsubmit = (e) => { e.preventDefault(); };
+    $("share-coach").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); coach(); } };
+    $("share-steer").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); steer(); } };
   }
 
   // ---- websocket ----
@@ -501,10 +573,29 @@
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const base = document.querySelector("nav.fno-nav").dataset.base;
-    const ws = new WebSocket(`${proto}://${location.host}${base}ws?t=${encodeURIComponent(token)}`);
-    ws.onopen = () => setBar("connecting", "connecting…", "waiting for first frame");
+    const url = SHARE
+      ? `${proto}://${location.host}${base}ws`
+      : `${proto}://${location.host}${base}ws?t=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(url);
+    ws.onopen = () => {
+      setBar("connecting", "connecting…", "waiting for first frame");
+      if (SHARE) ws.send(JSON.stringify({ knock: { k: shareKey, name: shareName } }));
+    };
     ws.onmessage = (ev) => { try { onMsg(JSON.parse(ev.data)); } catch (_) {} };
     ws.onclose = (ev) => {
+      if (SHARE && (ev.code === 1008 || ev.code === 1001)) {
+        // A refusal (wrong link, declined, too many waiting) or the end of the
+        // share: say why and do not knock again.
+        $("share-wait").hidden = true; $("share-boxes").hidden = true;
+        setBar("ended", ev.code === 1001 ? "share ended" : "not admitted", ev.reason || "");
+        showOverlay(ev.reason || "the share is closed");
+        return;
+      }
+      if (SHARE) {
+        // A dropped socket loses its admission: the reconnect knocks again,
+        // and the driver admits it anew with a fresh viewer token.
+        viewerToken = ""; $("share-boxes").hidden = true;
+      }
       // 1008 = policy violation: our token check refused the upgrade. A normal
       // socket close (server/bridge gone) just retries.
       if (ev.code === 1008 || ev.code === 4401) {
@@ -517,7 +608,16 @@
     };
     ws.onerror = () => ws.close();
   }
-  connect();
+  if (!SHARE) {
+    connect();
+  } else if (!shareKey) {
+    setBar("authfailed", "incomplete link", "");
+    showOverlay("this link is incomplete: ask the driver for the whole join link");
+  } else {
+    shareName = (prompt("Your name, so the driver knows who is asking to watch:") || "").trim();
+    if (!shareName) { setBar("authfailed", "no name", ""); showOverlay("a display name is needed to ask the driver; reload to try again"); }
+    else { $("share-who").textContent = "watching as " + shareName; connect(); }
+  }
 })();
 </script>
 </body>

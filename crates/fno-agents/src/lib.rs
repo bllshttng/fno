@@ -209,6 +209,7 @@ pub mod gh_cache;
 pub mod gh_etag;
 pub mod gh_incident;
 pub mod gh_poller;
+pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;

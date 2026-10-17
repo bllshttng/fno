@@ -195,6 +195,9 @@ pub struct Card {
     pub encounters: usize,
     /// The operator subset (`voter_kind == "operator"`).
     pub encounters_operator: usize,
+    /// The outside-vote subset (`voter_kind == "external"`): shown on the
+    /// public pill, never counted in demand ranking.
+    pub encounters_external: usize,
 }
 
 /// The row's newest stamp: max of `touched_at`, `created_at`, `completed_at`
@@ -246,21 +249,29 @@ fn voter_key(e: &Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Distinct encounter voters and the operator subset, per row.
-fn encounter_counts(e: &Value) -> (usize, usize) {
+/// Distinct encounter voters, the operator subset and the outside-vote
+/// subset, per row.
+fn encounter_counts(e: &Value) -> (usize, usize, usize) {
     let mut voters: HashSet<&str> = HashSet::new();
     let mut operators: HashSet<&str> = HashSet::new();
+    let mut externals: HashSet<&str> = HashSet::new();
     if let Some(items) = e.get("encounters").and_then(Value::as_array) {
         for v in items {
             if let Some(key) = voter_key(v) {
                 voters.insert(key);
-                if v.get("voter_kind").and_then(Value::as_str) == Some("operator") {
-                    operators.insert(key);
+                match v.get("voter_kind").and_then(Value::as_str) {
+                    Some("operator") => {
+                        operators.insert(key);
+                    }
+                    Some("external") => {
+                        externals.insert(key);
+                    }
+                    _ => {}
                 }
             }
         }
     }
-    (voters.len(), operators.len())
+    (voters.len(), operators.len(), externals.len())
 }
 
 /// A link to another node the read holds; an id-only link names a node the
@@ -591,7 +602,7 @@ pub(crate) fn card_of(
         underway,
         inp.effective_priority.get(&id).map(String::as_str),
     )?;
-    let (encounters, encounters_operator) = encounter_counts(e);
+    let (encounters, encounters_operator, encounters_external) = encounter_counts(e);
     Some(Card {
         order: order.get(&id).copied().unwrap_or(usize::MAX),
         rank: e.get("rank").and_then(Value::as_f64),
@@ -646,6 +657,7 @@ pub(crate) fn card_of(
         session_ids: row_session_ids(e),
         encounters,
         encounters_operator,
+        encounters_external,
     })
 }
 
