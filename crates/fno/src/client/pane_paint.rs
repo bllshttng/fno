@@ -388,6 +388,7 @@ impl View {
             node: meta.and_then(|m| m.node.as_deref()),
             branch: meta.and_then(|m| m.branch.as_deref()),
             ctx: meta.and_then(|m| m.ctx.as_deref()),
+            observers: self.observers.iter().filter(|o| o.pane_id == pid).count(),
         };
         let laid = crate::pane_border::edges(&fields, rect, has_grip);
         // The focused edge reads t.border like every other border (the
@@ -424,6 +425,7 @@ impl View {
                     Some((_, _, fg, _)) => (fg, 0),
                     None => dim,
                 },
+                Part::Observers => (self.theme.needs_you, cell_flags::BOLD),
                 Part::Model | Part::Node | Part::Branch | Part::Ctx => dim,
             }
         };
