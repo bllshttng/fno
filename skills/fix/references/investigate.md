@@ -108,8 +108,12 @@ Bug findings must use this format:
 - **Hypothesis:** [what was suspected]
 - **Evidence:** [code and experiment result]
 - **Root cause:** [why it happens]
-- **Suggested fix:** [concrete change]
+- **Producer:** `file:line` [the code that made the bad state]
+- **State:** legitimate | illegitimate [can the world hand the code this state?]
+- **Suggested fix:** [concrete change; at the producer when the state is illegitimate]
 ```
+
+`/fix from-debug` reads `Producer` and `State` to decide between a defensive check and a producer fix. The rule is in [fix-loop.md](fix-loop.md#name-the-root-cause-before-the-fix).
 
 ### 6. Log
 

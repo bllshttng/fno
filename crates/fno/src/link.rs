@@ -738,19 +738,24 @@ pub fn plan_link(plan_path: Option<&Path>, cfg: &ObsidianCfg) -> PlanLink {
         // reader is permissive. Unavailable rather than synthesise a name.
         return PlanLink::Unavailable(PlanUnavailable::ObsidianOff);
     };
+    match vault_file_uri(plan, vault_cfg) {
+        Some(uri) => PlanLink::Obsidian { uri },
+        None => PlanLink::PlainFile(plan.to_path_buf()),
+    }
+}
+
+/// The `obsidian://open` URI for `path` when it sits under the vault root that
+/// `vault_cfg` resolves to, else `None`. The one vault-relative step, shared by
+/// [`plan_link`] and the file open router.
+pub(crate) fn vault_file_uri(path: &Path, vault_cfg: &str) -> Option<String> {
     let root = resolve_vault_root(vault_cfg);
     let vault_name = root
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(vault_cfg);
-    if let Ok(rel) = plan.strip_prefix(&root) {
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        PlanLink::Obsidian {
-            uri: obsidian_open_uri(vault_name, &rel_str),
-        }
-    } else {
-        PlanLink::PlainFile(plan.to_path_buf())
-    }
+    let rel = path.strip_prefix(&root).ok()?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    Some(obsidian_open_uri(vault_name, &rel_str))
 }
 
 /// Resolve the obsidian vault root from its config value, mirroring
