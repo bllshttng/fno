@@ -425,14 +425,11 @@ pub(crate) fn bounded_read(
     // code instead (the conditional-door path exits 1 with the same ledger
     // line). Only footnote machinery prints `gh budget:`, so the marker on
     // a nonzero exit is the contract, and the outcome word and waited_on()
-    // read unchanged.
-    if matches!(out.status.code(), Some(code) if code != 0)
-        && out.stderr_tail.contains("gh budget:")
-    {
-        return Err(GhReadError::budget_refused_with_detail(
-            read_name,
-            out.stderr_tail,
-        ));
+    // read unchanged. The drain keeps stderr as bytes; the marker check and
+    // the error row both read it as UTF-8 with lossy replacement.
+    let tail = String::from_utf8_lossy(&out.stderr_tail).into_owned();
+    if matches!(out.status.code(), Some(code) if code != 0) && tail.contains("gh budget:") {
+        return Err(GhReadError::budget_refused_with_detail(read_name, tail));
     }
     Ok(out)
 }
