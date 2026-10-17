@@ -1,7 +1,7 @@
 //! The mux's side of the pane share. A key or menu row starts a managed
 //! `fno mux serve --share` on the focused pane and copies its join link. Each
-//! knock from a viewer raises a popup on whatever pane the driver is on, and
-//! Enter admits. The share ends when the driver stops it or the client exits:
+//! knock from a viewer raises a popup on whatever pane the driver is on;
+//! Up then Enter admits. The share ends when the driver stops it or the client exits:
 //! the child reads its commands from our pipe, so closing the pipe ends it.
 
 use super::*;
@@ -170,18 +170,19 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: ShareMsg) {
             if let Some(s) = view.share.as_mut() {
                 s.knocks.push((id, name));
             }
+            // A second knock refreshes the count but leaves the cursor where
+            // the driver put it.
+            let sel = knock_popup_sel(view);
             open_knocks(view);
+            if let (Some(sel), Some(aux)) = (sel, view.aux.as_mut()) {
+                aux.popup.sel = sel;
+            }
         }
         ShareMsg::Gone(id) => {
             if let Some(s) = view.share.as_mut() {
                 s.knocks.retain(|(k, _)| *k != id);
             }
-            let showing = view.aux.as_ref().is_some_and(|a| {
-                a.actions
-                    .iter()
-                    .any(|x| matches!(x, AuxAction::Share(Act::Admit(_))))
-            });
-            if showing {
+            if knock_popup_sel(view).is_some() {
                 open_knocks(view);
             }
         }
@@ -196,7 +197,18 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: ShareMsg) {
     }
 }
 
-/// The popup for the oldest waiting knock, or no popup when none waits.
+/// The cursor row of the knock popup while one is showing.
+fn knock_popup_sel(view: &View) -> Option<usize> {
+    let aux = view.aux.as_ref()?;
+    aux.actions
+        .iter()
+        .any(|x| matches!(x, AuxAction::Share(Act::Admit(_))))
+        .then_some(aux.popup.sel)
+}
+
+/// The popup for the oldest waiting knock, or no popup when none waits. The
+/// cursor starts on deny: the popup can appear while the driver is typing
+/// into a pane, and a stray Enter must never let a stranger in.
 fn open_knocks(view: &mut View) {
     let Some(share) = view.share.as_ref() else {
         return;
@@ -217,6 +229,7 @@ fn open_knocks(view: &mut View) {
     };
     let rows = vec![
         PopupRow::Header(format!("{name} asks to watch pane {}{more}", share.pane)),
+        PopupRow::Text("Enter denies. Up, then Enter, admits.".into()),
         PopupRow::Rule,
         entry("✓", "admit"),
         entry("✗", "deny"),
@@ -225,10 +238,9 @@ fn open_knocks(view: &mut View) {
         AuxAction::Share(Act::Admit(id)),
         AuxAction::Share(Act::Deny(id)),
     ];
-    view.aux = Some(AuxPopup {
-        popup: Popup::new(rows, Anchor::Center),
-        actions,
-    });
+    let mut popup = Popup::new(rows, Anchor::Center);
+    popup.sel = 1;
+    view.aux = Some(AuxPopup { popup, actions });
     view.aux_esc.clear();
 }
 

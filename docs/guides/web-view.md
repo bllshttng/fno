@@ -81,7 +81,7 @@ A teacher can watch a learner's agent from another network with no tailscale and
 
 The quick way: focus the pane and press `prefix X`, or pick `share focused pane` in the menu. The mux starts a tunnelled share, copies the join link, and keeps running it until you pick `stop sharing` or close the mux. Press `prefix X` again to copy the link again. This path needs `cloudflared`.
 
-When a viewer knocks, a popup appears on whatever pane you are on. Press Enter to admit them, or move down and press Enter to deny. If you dismiss the popup, the menu shows how many knocks wait.
+When a viewer knocks, a popup appears on whatever pane you are on. The cursor starts on deny, so a stray Enter while you type never lets anyone in. Press Up, then Enter, to admit. If you dismiss the popup, the menu shows how many knocks wait.
 
 To run the share by hand, use a terminal you can see, for example a mux pane beside the agent:
 

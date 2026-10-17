@@ -65,7 +65,12 @@ pub(crate) fn toggle(view: &mut View, flag: Flag) {
                 backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
             }
         }
-        Flag::PaneShare => view.experimental_pane_share = on,
+        Flag::PaneShare => {
+            view.experimental_pane_share = on;
+            if !on {
+                view.share = None;
+            }
+        }
     }
     crate::view_store::save_experimental(flag.name(), on);
     let word = if on { "on" } else { "off" };
