@@ -453,14 +453,12 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread(
             f"child_pid={row.keeper_child_pid} "
             f"keeper_pid={row.pid} session_id={session_id}"
         )
-        import fno.rust_binary as rust_binary_mod
-
         child_pid = row.keeper_child_pid
         # A stop refusal under load is not a strand: agy's own exit can outlast
         # the stop grace window while the Kill contract still completes. The
         # gate is the child's DEATH, verified, never the verb's receipt.
         stopped = subprocess.run(
-            [str(rust_binary_mod.resolve_installed_binary()), "stop", _JOURNEY_NAME],
+            [str(_client_bin), "stop", _JOURNEY_NAME],
             capture_output=True,
             text=True,
             timeout=60,

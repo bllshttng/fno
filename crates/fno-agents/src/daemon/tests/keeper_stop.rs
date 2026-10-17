@@ -1,4 +1,4 @@
-//! The keeper stop arm's cursor leg (x-581b): a cursor-agent keeper-thread
+//! The keeper stop arm's cursor leg: a cursor-agent keeper-thread
 //! row's detached worker-server is captured before the Kill and reaped after
 //! the confirmation, and a reap that cannot end a captured server refuses
 //! the terminal stamp. The non-cursor arm contracts (confirm-then-stamp,

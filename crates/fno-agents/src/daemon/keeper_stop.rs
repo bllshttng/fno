@@ -17,7 +17,6 @@ use super::{
     RegistryEntry, Request, Response,
 };
 use crate::protocol::ErrorCode;
-use crate::state;
 use crate::AgentStatus;
 
 pub(super) async fn stop_keeper_row(

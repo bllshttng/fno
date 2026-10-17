@@ -529,10 +529,8 @@ def test_AC1_HP_the_restart_journey_on_a_real_pi_thread(tmp_path, monkeypatch, c
         # stop arm drives the SAME socket the journey proved survives, and the
         # child goes with it. A lane that cannot be stopped is the leak class
         # that nearly cost the operator the machine.
-        import fno.rust_binary as rust_binary_mod
-
         stop = subprocess.run(
-            [str(rust_binary_mod.resolve_installed_binary()), "stop", session_name],
+            [str(_client_bin), "stop", session_name],
             capture_output=True,
             text=True,
             timeout=60,
