@@ -1108,6 +1108,10 @@ use argv_facts::*;
 /// The label chain and the pure `PaneMeta` builder live in [`pane_meta`]
 /// (file-budget ratchet); re-imported so callers and tests resolve.
 use pane_meta::pane_label;
+// The server_tests family resolves `tab_label` through this module's
+// namespace; the production layout builder now lives in pane_meta itself.
+#[cfg(test)]
+use pane_meta::tab_label;
 
 mod osc_reply;
 mod pane_meta;
