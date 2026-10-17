@@ -114,35 +114,54 @@ pub(crate) fn tab_label(
 /// [`pane_ctx`] joins: the row whose `mux` names this session and pane. A
 /// rename rewrites only this row (the pane's `FNO_AGENT_SELF` is env, frozen
 /// at spawn), so the frame and tab chrome read it at layout time and fall
-/// back to the spawn-captured name.
+/// back to the spawn-captured name. `pane_pid` is the pane's current child
+/// pid: a recycled pane id reuses the (session, pane) pair across server
+/// incarnations, so a row whose recorded pid disagrees is a dead row wearing
+/// the pair and must not name the pane. A row that records no pid (legacy)
+/// cannot be falsified, and a caller that cannot know the child (`None`)
+/// keeps the unguarded read.
 pub(crate) fn pane_registry_name(
     agents: &[crate::agents_view::RegistryAgent],
     session_name: &str,
-    pid: u64,
+    pane_id: u64,
+    pane_pid: Option<u32>,
 ) -> Option<String> {
-    let mux_row = |a: &&crate::agents_view::RegistryAgent| matches!(&a.mux, Some((s, p)) if s == session_name && *p == pid);
+    let hosts = |a: &&crate::agents_view::RegistryAgent| {
+        matches!(&a.mux, Some((s, p)) if s == session_name && *p == pane_id)
+            && match (pane_pid, a.pid) {
+                (Some(child), Some(row_pid)) => u64::from(child) == row_pid,
+                _ => true,
+            }
+    };
     // A recycled pane id can leave an exited row on the same (session, pane);
     // the live row is the one still hosting the pane.
     agents
         .iter()
-        .find(|a| mux_row(a) && !a.exited)
-        .or_else(|| agents.iter().find(|a| mux_row(a)))
+        .find(|a| hosts(a) && !a.exited)
+        .or_else(|| agents.iter().find(hosts))
         .map(|a| a.name.clone())
 }
 
 /// The context reading for one pane, joined through the registry row that
-/// hosts it: the row whose `mux` names this session and pane, keyed by the
-/// same transcript identity the tail pass reads. `None` reads as "no
-/// reading" and the frame drops the field.
+/// hosts it: the row whose `mux` names this session and pane, gated on the
+/// pane's child pid the same way [`pane_registry_name`] gates the label
+/// join. `None` reads as "no reading" and the frame drops the field.
 pub(crate) fn pane_ctx(
     agents: &[crate::agents_view::RegistryAgent],
     session_name: &str,
     ctx_by_session: &std::collections::HashMap<String, String>,
-    pid: u64,
+    pane_id: u64,
+    pane_pid: Option<u32>,
 ) -> Option<String> {
     agents
         .iter()
-        .find(|a| matches!(&a.mux, Some((s, p)) if s == session_name && *p == pid))
+        .find(|a| {
+            matches!(&a.mux, Some((s, p)) if s == session_name && *p == pane_id)
+                && match (pane_pid, a.pid) {
+                    (Some(child), Some(row_pid)) => u64::from(child) == row_pid,
+                    _ => true,
+                }
+        })
         .and_then(|a| {
             a.claude_session_uuid
                 .clone()
@@ -191,24 +210,72 @@ mod tests {
         // A rename rewrites the registry row; the pane's FNO_AGENT_SELF
         // env is frozen at spawn. The chrome reads the row (live row
         // first); the layout layer falls back to the spawn-captured name
-        // when this returns None. An unhosted pane reads None.
+        // when this returns None. An unhosted pane reads None. A caller
+        // that cannot know the child pid (`None`) keeps the unguarded
+        // read.
         let agents = vec![
-            agent("kestrel-successor", Some(("mux0", 7)), true),
-            agent("bob", Some(("mux0", 7)), false),
+            agent("kestrel-successor", Some(("mux0", 7)), true, None),
+            agent("bob", Some(("mux0", 7)), false, None),
         ];
         assert_eq!(
-            pane_registry_name(&agents, "mux0", 7).as_deref(),
+            pane_registry_name(&agents, "mux0", 7, None).as_deref(),
             Some("bob")
         );
-        let other = vec![agent("other", Some(("mux0", 9)), false)];
-        assert_eq!(pane_registry_name(&other, "mux0", 7), None);
+        let other = vec![agent("other", Some(("mux0", 9)), false, None)];
+        assert_eq!(pane_registry_name(&other, "mux0", 7, None), None);
     }
 
-    fn agent(name: &str, mux: Option<(&str, u64)>, exited: bool) -> RegistryAgent {
+    // The recycle case: a server restart hands the same pane id to a new
+    // pane, and the dead worker's row from the previous incarnation wears
+    // the same (session, pane) pair. A row whose recorded pid disagrees
+    // with the pane's current child is refused, so the label falls through
+    // to the spawn-captured name instead of the dead worker's.
+    #[test]
+    fn recycled_pane_id_refuses_a_foreign_pid_row() {
+        let stale = vec![agent("kestrel", Some(("mux0", 7)), true, Some(100))];
+        assert_eq!(pane_registry_name(&stale, "mux0", 7, Some(200)), None);
+        // Keeper re-adoption keeps the same child pid: the row still
+        // names its pane across the restart.
+        assert_eq!(
+            pane_registry_name(&stale, "mux0", 7, Some(100)).as_deref(),
+            Some("kestrel")
+        );
+        // A caller that cannot know the child pid keeps the unguarded
+        // read, and a legacy row that records no pid cannot be falsified.
+        assert_eq!(
+            pane_registry_name(&stale, "mux0", 7, None).as_deref(),
+            Some("kestrel")
+        );
+        assert_eq!(
+            pane_registry_name(
+                &[agent("legacy", Some(("mux0", 7)), true, None)],
+                "mux0",
+                7,
+                Some(200)
+            )
+            .as_deref(),
+            Some("legacy")
+        );
+        // The pid gate applies to a live row too: a row wearing the pair
+        // with a foreign pid is not this pane's worker.
+        let foreign_live = vec![agent("impostor", Some(("mux0", 7)), false, Some(999))];
+        assert_eq!(
+            pane_registry_name(&foreign_live, "mux0", 7, Some(200)),
+            None
+        );
+    }
+
+    fn agent(
+        name: &str,
+        mux: Option<(&str, u64)>,
+        exited: bool,
+        pid: Option<u64>,
+    ) -> RegistryAgent {
         RegistryAgent {
             name: name.into(),
             mux: mux.map(|(s, p)| (s.to_string(), p)),
             exited,
+            pid,
             ..Default::default()
         }
     }

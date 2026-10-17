@@ -8100,11 +8100,15 @@ impl Core {
                         // The registry row hosting the focus pane carries the
                         // LIVE name (a rename rewrites the row, never the
                         // pane's spawn-captured env), so it leads the derived
-                        // chain ahead of `FNO_AGENT_SELF`.
+                        // chain ahead of `FNO_AGENT_SELF`. The join is gated
+                        // on the pane's child pid so a recycled pane id
+                        // cannot inherit a dead row's name.
+                        let focus_entry = self.panes.get(&t.focus);
                         let focus_reg = pane_meta::pane_registry_name(
                             &self.agents,
                             &self.session_name,
                             t.focus,
+                            focus_entry.and_then(|e| e.pty.child_pid()),
                         );
                         TabMeta {
                             id: t.id,
@@ -8114,7 +8118,7 @@ impl Core {
                             named: t.name.is_some(),
                             name: tab_label(
                                 t.name.as_deref(),
-                                self.panes.get(&t.focus).map(|e| {
+                                focus_entry.map(|e| {
                                     (
                                         focus_reg.as_deref().or(e.name.as_deref()),
                                         e.node.as_deref(),
@@ -8132,16 +8136,19 @@ impl Core {
                                 .iter()
                                 .map(|pid| {
                                     let e = self.panes.get(pid);
+                                    let pane_pid = e.and_then(|e| e.pty.child_pid());
                                     let ctx = pane_meta::pane_ctx(
                                         &self.agents,
                                         &self.session_name,
                                         &self.ctx_by_session,
                                         *pid,
+                                        pane_pid,
                                     );
                                     let reg = pane_meta::pane_registry_name(
                                         &self.agents,
                                         &self.session_name,
                                         *pid,
+                                        pane_pid,
                                     );
                                     let name = reg
                                         .as_deref()
