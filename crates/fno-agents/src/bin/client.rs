@@ -349,6 +349,11 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_remote::run(&args[1..]);
     }
 
+    // The cross-machine hand-off relay; binary-direct like `mail-remote`. Contract: org_remote's module docs.
+    if matches!(verb, "org-remote") {
+        return fno_agents::org_remote::run(&args[1..]);
+    }
+
     // Binary-direct mail transport for the events/note Python adapters; not routable.
     if matches!(verb, "machine-mail-send") {
         return fno_agents::machine_mail::run(&args[1..]).await;
@@ -3356,35 +3361,16 @@ fn run_reap(rest: &[String]) -> i32 {
         return if report.passes() { 0 } else { 1 };
     }
 
-    // The release verb: apply a ruling to one escalated hold
-    // through the sweep's own door. Classify, refuse fresh holds and open
-    // work by name, apply, print the whole-sweep receipt.
-    if let Some(pos) = rest.iter().position(|a| a == "--release") {
-        let handle = rest.get(pos + 1).map(String::as_str).unwrap_or("");
-        if handle.is_empty() || handle.starts_with("--") {
-            eprintln!(
-                "fno-agents: reap --release needs a row handle (name, short id or session id)"
-            );
-            return 2;
-        }
-        // Everything except the flag pair and the handle is an error; only
-        // --json is legal beside a release.
-        let extras: Vec<String> = rest
-            .iter()
-            .enumerate()
-            .filter(|(i, a)| *i != pos && *i != pos + 1 && !matches!(a.as_str(), "--json" | "-J"))
-            .map(|(_, a)| a.clone())
-            .collect();
-        if !extras.is_empty() {
-            eprintln!(
-                "fno-agents: reap --release takes only a handle and --json (got: {})",
-                extras.join(" ")
-            );
-            return 2;
-        }
-        let home = AgentsHome::from_env();
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        return fno_agents::reap_release::run(&home, &cwd, handle);
+    // The release verb: apply a ruling to one escalated hold through the
+    // sweep's own door. Classify, refuse fresh holds and open work by name,
+    // apply, print the whole-sweep receipt. The keep mark: set, clear, or
+    // list the user's standing exception. Both parse beside the sweep; the
+    // binary shrinks by the moved parse.
+    if let Some(code) = fno_agents::reap_release::from_args(rest) {
+        return code;
+    }
+    if let Some(code) = fno_agents::keep_mark::from_args(rest) {
+        return code;
     }
 
     let dry_run = rest.iter().any(|a| a == "--dry-run");

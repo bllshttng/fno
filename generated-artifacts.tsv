@@ -21,6 +21,7 @@ crates/fno-agents/src/events_limits.toml	cli/src/fno/events/schema.yaml	cargo bu
 cli/src/fno/pr/_check_supersession_generated.py	crates/fno-agents/codegen/check_supersession.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.toml	cd cli && uv run fno-py doctor harness-matrix --write
 docs/harnesses/verb-matrix.md	crates/fno-agents/src/harness_capabilities.toml and skills/*/SKILL.md frontmatter	cd cli && uv run fno-py doctor harness-matrix --write
+skills/agent/references/launch-*.md	docs/harnesses/launch/launch-*.md and docs/harnesses/help/*.txt	cd cli && uv run fno-py doctor harness-matrix --write
 .codex/agents/*.toml	agents/*.md	python3 scripts/sync-codex-agents.py
 docs/configuration-guide.md	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --markdown --write
 docs/config.example.toml	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --toml --write

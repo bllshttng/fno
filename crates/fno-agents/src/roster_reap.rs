@@ -378,6 +378,18 @@ pub(crate) fn run_with_scope_workers(
             ));
             continue;
         }
+        // The user's keep mark on the session itself: an unowned session the
+        // user ruled kept. The class is owned - the user owns it by ruling.
+        if let Some(why) = row
+            .session_id
+            .as_deref()
+            .and_then(|sid| crate::keep_mark::for_session(home, sid))
+        {
+            summary
+                .kept
+                .push(judgement_class(&ident, None, why, false, "owned"));
+            continue;
+        }
         // Scope off retires nothing and judges nothing: no graph read, no
         // transcript probe.
         if scope == crate::agents_config::RosterScope::Off {
@@ -1200,7 +1212,11 @@ mod tests {
         let home = crate::paths::AgentsHome::at(dir.join("home"));
         home.ensure_root().unwrap();
         let transcript = quiet_transcript(&dir, "sid-1");
-        let rows = vec![row("ab12cd34", Some("sid-1"), Some("hand-typed-name"))];
+        let transcript2 = quiet_transcript(&dir, "sid-2");
+        let rows = vec![
+            row("ab12cd34", Some("sid-1"), Some("hand-typed-name")),
+            row("ef56ab78", Some("sid-2"), Some("hand-typed-2")),
+        ];
         // Stage the receipt under a hermetic HOME: the receipt builder reads
         // the harness store index for the resume locator.
         let store_home = tempfile::tempdir().unwrap();
@@ -1216,6 +1232,17 @@ mod tests {
             crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
                 .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        let mut entry = RegistryEntry::new(
+            Some("sid-2".into()),
+            crate::state::Lineage::unproven("test receipt staging"),
+        );
+        entry.harness = Some("claude".into());
+        entry.short_id = "ef56ab78".into();
+        let receipt =
+            crate::receipt::build_reap_receipt(&entry, None, crate::receipt::Writer::RosterReap)
+                .expect("receipt builds");
+        crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
+        crate::keep_mark::set(&home, "sid-2", "hand-typed-2").unwrap();
         let summary = run(
             &home,
             900,
@@ -1224,11 +1251,24 @@ mod tests {
             &roster(rows),
             &[],
             &|| Some(GraphRead::default()),
-            &|_e| Some(vec![transcript.clone()]),
+            &|e| {
+                if crate::gc::row_handle(e) == "sid-2" {
+                    Some(vec![transcript2.clone()])
+                } else {
+                    Some(vec![transcript.clone()])
+                }
+            },
             &|entries| {
                 entries
                     .iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                    .map(|e| {
+                        let t = if crate::gc::row_handle(e) == "sid-2" {
+                            transcript2.clone()
+                        } else {
+                            transcript.clone()
+                        };
+                        (crate::gc::row_handle(e), mtime_age(&[t]))
+                    })
                     .collect::<HashMap<_, _>>()
             },
             crate::daemon::now_epoch_secs(),
@@ -1245,6 +1285,14 @@ mod tests {
                 .contains("no provenance; harness state done"),
             "{summary:?}"
         );
+
+        // AC3-HP: the marked twin is kept, the reason names the mark.
+        let marked = summary
+            .kept
+            .iter()
+            .find(|j| j.short_id == "sid-2")
+            .expect("the marked session is kept");
+        assert!(marked.reason.starts_with("keep mark:"), "{marked:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2211,5 +2259,57 @@ mod tests {
         );
         assert_eq!(summary.retired[0].class, "fleet");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // AC15: a first-turn bind is not an ownership marker. The door minted a
+    // synthesized registry row beside the bind, so the roster row reads as
+    // owned: kept at every scope through the owned gate, the fleet gates
+    // never consulted, never retired as fleet work.
+    #[test]
+    fn first_turn_bind_reads_as_a_plain_session_to_the_reaper() {
+        for scope in [RosterScope::Provenanced, RosterScope::All] {
+            let dir = tmpdir("first-turn-bind");
+            let transcript = quiet_transcript(&dir, "sid-1");
+            let mut bound = RegistryEntry::default();
+            bound.name = "w-bound".into();
+            bound.harness_session_id = Some("sid-1".into());
+            bound.node = Some("x-bbbb".into());
+            bound.node_basis = Some("first-turn".into());
+            let summary = run(
+                &no_home(),
+                900,
+                scope,
+                true,
+                &roster(vec![row("ab12cd34", Some("sid-1"), Some("hand-typed"))]),
+                &[bound],
+                &|| {
+                    Some(GraphRead {
+                        statuses: [("x-bbbb".to_string(), "ready".to_string())].into(),
+                        ..Default::default()
+                    })
+                },
+                &|_| Some(vec![transcript.clone()]),
+                &|entries| {
+                    entries
+                        .iter()
+                        .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                        .collect::<HashMap<_, _>>()
+                },
+                crate::daemon::now_epoch_secs(),
+                &|_| CascadeOutcome::NotApplicable,
+            );
+            assert!(
+                summary.retired.is_empty(),
+                "scope {scope:?} retired a first-turn-bound row: {summary:?}"
+            );
+            assert_eq!(summary.kept_owned, 1, "scope {scope:?}: {summary:?}");
+            let kept = summary.kept.first().expect("the bound row was judged");
+            assert_eq!(kept.class, "owned", "scope {scope:?}: {summary:?}");
+            assert_eq!(
+                kept.reason, "owned by an fno row",
+                "scope {scope:?}: {summary:?}"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }
