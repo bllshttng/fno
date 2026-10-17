@@ -906,7 +906,15 @@ enum ManifestFold {
 fn bound_fold(root: &Path, node_id: &str) -> ManifestFold {
     match bound_node_posture(root, node_id) {
         Ok(Some(bound)) => {
-            if bound.approved == Some(false) {
+            // A `default-off` stamp is init's failed config read, never a
+            // refusal: it folds as Permit, so the receipt+config verdict
+            // stands and provenance still rides. Only an explicit refusal
+            // (flag-no-merge, or a config-sourced false) downgrades.
+            let default_off = crate::authorized_merge::posture_is_default_off(
+                bound.approved,
+                bound.source.as_deref(),
+            );
+            if bound.approved == Some(false) && !default_off {
                 ManifestFold::Refuse(bound)
             } else {
                 ManifestFold::Permit(bound)
