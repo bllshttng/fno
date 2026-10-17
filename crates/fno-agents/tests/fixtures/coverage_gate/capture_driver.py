@@ -350,7 +350,7 @@ def main():
         # the agents door to the front door, so the call journals under the
         # agents fold with the hop's original name and the fold vocabulary
         # survives the transport move.
-        pr = argv[2] if len(argv) > 2 else ""
+        pr = argv[3] if len(argv) > 3 else ""
         with open(os.path.join(journals, "fno-agents.jsonl"), "a") as fh:
             fh.write(json.dumps({"op": "pr-head", "pr": pr}, sort_keys=True) + "\n")
         path = os.path.join(answers_dir, "front-pr-info.json")
@@ -358,7 +358,10 @@ def main():
             sys.stderr.write("stub fno: no answers/front-pr-info.json\n")
             sys.exit(3)
         with open(path) as fh:
-            emit(json.load(fh))
+            # The file holds the bare facts payload, not an answer envelope:
+            # emit() would write nothing for it (no "json"/"stdout" key) and
+            # the probe would read an empty success. Wrap it here.
+            emit({"json": json.load(fh)})
         return
     sys.stderr.write("stub fno: unhandled argv: %s\n" % " ".join(argv))
     sys.exit(3)
