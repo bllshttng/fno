@@ -89,7 +89,11 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
         .unwrap_or_else(|e| e.into_inner());
     std::env::set_var("FNO_SPACES_DIR", home.root().join("spaces"));
     std::env::set_var("FNO_CLAIMS_ROOT", home.root().join("claims-root"));
-    let sock = home.root().join("threads").join("cur-stop.sock");
+    let sock = home
+        .root()
+        .join("mux")
+        .join("threads")
+        .join("cur-stop.sock");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
     let mut worker = spawn_worker_server(":");
@@ -145,7 +149,11 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
     // fails the reap, the response is an error naming it, and the row stays
     // non-terminal so a retry can reach the leak.
     let home = keeper_sweep_home("kperr");
-    let sock = home.root().join("threads").join("cur-hard.sock");
+    let sock = home
+        .root()
+        .join("mux")
+        .join("threads")
+        .join("cur-hard.sock");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
     let mut worker = spawn_worker_server("trap \"\" TERM");
