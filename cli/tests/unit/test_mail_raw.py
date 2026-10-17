@@ -1467,9 +1467,16 @@ _DOOR_PARSE_TABLE = {
 
 def _patch_invocation_door(monkeypatch, seen):
     """Stand in for the native invocations door: parse answers from the
-    table, reserve mints a fixed id, emit records the data dict."""
+    table, reserve mints a fixed id, emit records the data dict. Every
+    non-door verb rides the real seam, so the style gate still runs."""
+
+    from fno import rust_binary as _rust_binary
+
+    real_call = _rust_binary.call_binary_json
 
     def fake_call_binary_json(verb, args=(), **kwargs):
+        if verb != "review-level":
+            return real_call(verb, args, **kwargs)
         if "parse" in args:
             payload = args[args.index("--raw") + 1]
             return None, _DOOR_PARSE_TABLE.get(payload)
