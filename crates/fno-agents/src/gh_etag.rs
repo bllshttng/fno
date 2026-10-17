@@ -254,17 +254,22 @@ pub(crate) fn conditional_api_get_at(
 
 /// Like [`conditional_api_get`], but the resource is a caller-assembled
 /// multi-page read (check-runs, annotations, an open-pulls listing): the
-/// probe conditions on page 1's ETag, and a 304 there means the WHOLE
-/// assembly is unchanged (GitHub mints a fresh ETag whenever the
-/// underlying collection changes at all), so the row caches the full
-/// assembled body, not just page 1's. A non-304 answer that still names no
-/// further page answers from the probe's own page-1 body - the common
-/// case for check-runs/annotations/open-pulls, which almost never exceed
-/// one page - so a resource that changes on nearly every poll never costs
-/// more than the single unconditional call this replaces. Only a genuinely
-/// multi-page answer pays `fetch_all` (the caller's real paginated fetch),
-/// which is re-cached under the fresh ETag; `fetch_all` never runs on a
-/// 304.
+/// probe conditions on page 1's ETag. GitHub ETags each page
+/// independently (its own REST API guidance: a page's representation, and
+/// so its ETag, can change without any other page changing), so a 304 on
+/// page 1 proves only that page 1 is unchanged - it is never, by itself,
+/// proof that a LATER page is. This door therefore only ever caches (and
+/// so only ever trusts a future 304 for) a resource it confirmed was a
+/// single page at write time: when GitHub names no further page, the
+/// probe's own page-1 body already IS the whole answer, no `fetch_all`
+/// needed - the common case for check-runs/annotations/open-pulls, which
+/// almost never exceed one page, so a resource that changes on nearly
+/// every poll never costs more than the single unconditional call this
+/// replaces. A genuinely multi-page answer always pays `fetch_all` (the
+/// caller's real paginated fetch) and is never cached, so every later
+/// read for that path probes unconditionally (no stored ETag to send) and
+/// pays the same full fetch every time - exactly today's cost, never
+/// less, but never a stale answer either.
 pub(crate) fn conditional_paginated_get(
     cwd: &Path,
     path: &str,
@@ -299,7 +304,10 @@ pub(crate) fn conditional_paginated_get_at(
     let Some((status, headers, probe_body)) = split_http(&stdout) else {
         // An unparseable probe answers nothing about change; the real
         // fetch_all is the only thing that can still answer truthfully.
-        return Ok((ok, fetch_all()?, stderr));
+        // It just ran successfully (its `?` would have returned on
+        // failure), so this is a real success, never the probe's stale
+        // failure status.
+        return Ok((true, fetch_all()?, stderr));
     };
     record_core_from_headers(&headers);
     if status == 304 {
@@ -316,17 +324,25 @@ pub(crate) fn conditional_paginated_get_at(
         // never caches and never pays a second read to confirm it.
         return Ok((false, String::new(), stderr));
     }
-    let body = if has_next_link(&headers) {
-        fetch_all()?
-    } else {
-        match serde_json::from_str::<Value>(&probe_body) {
-            Ok(page1) => serde_json::to_string(&Value::Array(vec![page1]))
-                .map_err(|e| format!("gh api {path} page unserializable: {e}"))?,
-            // An unparseable 200 body is the same shape as a truncated
-            // transfer the `!ok` check above did not catch; fetch_all is
-            // the only thing left that can still answer truthfully.
-            Err(_) => fetch_all()?,
-        }
+    if has_next_link(&headers) {
+        // Genuinely multi-page: page 1's ETag vouches only for page 1
+        // (GitHub ETags each page independently), never for page 2+, so
+        // this answer is never cached - a cached row would let a later
+        // 304 on page 1 alone replay a stale assembly whose later pages
+        // may have changed on their own. `row` (if any) is left exactly
+        // as it was; it can only have been written by the single-page
+        // branch below, so trusting it there stays sound.
+        return Ok((true, fetch_all()?, stderr));
+    }
+    let body = match serde_json::from_str::<Value>(&probe_body) {
+        Ok(page1) => serde_json::to_string(&Value::Array(vec![page1]))
+            .map_err(|e| format!("gh api {path} page unserializable: {e}"))?,
+        // An unparseable 200 body is the same shape as a truncated
+        // transfer the `!ok` check above did not catch; fetch_all is the
+        // only thing left that can still answer truthfully. Also never
+        // cached: a body this call could not even parse names nothing to
+        // seed the row with.
+        Err(_) => return Ok((true, fetch_all()?, stderr)),
     };
     if let Some(etag) = header_value(&headers, "etag") {
         write_row_at(root, path, &etag, &body);
@@ -541,7 +557,13 @@ mod tests {
     }
 
     #[test]
-    fn paginated_200_with_a_next_link_refetches_everything_and_recaches_under_the_fresh_etag() {
+    fn paginated_200_with_a_next_link_refetches_everything_and_is_never_cached() {
+        // A genuinely multi-page resource: page 1's ETag vouches only for
+        // page 1 (GitHub ETags each page independently), so a cached row
+        // here would let a later 304-on-page-1 replay a stale assembly
+        // whose page 2 changed on its own - the exact risk a reviewer
+        // named. The pre-existing row must therefore survive UNCHANGED,
+        // never overwritten with this read's fresh etag/body.
         let root = tempfile::tempdir().unwrap();
         write_row_at(
             root.path(),
@@ -568,10 +590,39 @@ mod tests {
         assert_eq!(body, "[{\"a\":1},{\"a\":2},{\"a\":3}]");
         let now = crate::gh_cache::now_secs();
         let row = read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now)
-            .expect("row recached");
-        assert_eq!(row.etag, "W/\"new\"");
-        assert_eq!(row.body, "[{\"a\":1},{\"a\":2},{\"a\":3}]");
+            .expect("the pre-existing row must survive, untouched");
+        assert_eq!(row.etag, "W/\"old\"");
+        assert_eq!(row.body, "[{\"a\":1}]");
         assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn paginated_unparseable_probe_still_reports_a_successful_fallback_fetch() {
+        // A probe response gh could not even frame as HTTP (a transient
+        // connection failure before headers arrive) must not leak its
+        // stale failure status past a fetch_all that then succeeds -
+        // reviewer finding: the caller must not discard a good body
+        // because of an unrelated probe failure.
+        let root = tempfile::tempdir().unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
+            Ok((
+                false,
+                b"not http at all".to_vec(),
+                "connection reset".to_string(),
+            ))
+        };
+        let fetch_all = || -> Result<String, String> { Ok("[{\"a\":1},{\"a\":2}]".to_string()) };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"a\":1},{\"a\":2}]");
     }
 
     #[test]
