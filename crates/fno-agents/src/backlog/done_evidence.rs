@@ -82,7 +82,7 @@ pub fn enforce(pre: &[Value], post: &[Value]) -> Result<(), String> {
              artifact_url. Nothing was written. Close it with one of: \
              fno backlog done {id} --pr-number <n>, --note \"<why it is done>\", \
              or --link <artifact url>. To stamp the note before a bare close, use \
-             the native door: fno-agents backlog update {id} --completion-note \"<why>\"."
+             the native door: fno-agents backlog update {id} completion_note+=\"<why>\"."
         ));
     }
     Ok(())

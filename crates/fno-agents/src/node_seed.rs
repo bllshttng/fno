@@ -380,7 +380,7 @@ fn decide_in(payload: &Value, rows: &[Value]) -> Value {
         Some(v) => v,
         None => {
             return json!({"action": "refuse", "message": format!(
-                "--node {node} declares no dispatch verb; encode one with fno backlog update {node} --dispatch-verb <verb>")});
+                "--node {node} declares no dispatch verb; encode one with fno backlog update {node} dispatch_verb=<verb>")});
         }
     };
 
