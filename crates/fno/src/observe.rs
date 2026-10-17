@@ -88,6 +88,13 @@ fn spawn_keys() -> mpsc::UnboundedReceiver<Vec<u8>> {
     rx
 }
 
+fn header(pane: u64, name: &str, frame: &Frame) -> String {
+    format!(
+        "watching pane {pane} ({}x{}) as {name} - q to leave",
+        frame.cols, frame.rows
+    )
+}
+
 fn redraw(frame: &Frame, header: &str, size: (u16, u16), clear: bool) {
     let (cols, rows) = size;
     let mut out = Vec::new();
@@ -202,11 +209,7 @@ async fn watch(args: ObserveArgs, socket: PathBuf, identity: String) -> (i32, St
                 }
                 other => {
                     if let Some(frame) = share::masked_pane_frame(other, args.pane) {
-                        let header = format!(
-                            "watching pane {} ({}x{}) as {name} - q to leave",
-                            args.pane, frame.cols, frame.rows
-                        );
-                        redraw(&frame, &header, term, false);
+                        redraw(&frame, &header(args.pane, &name, &frame), term, false);
                         latest = Some(frame);
                     }
                 }
@@ -227,11 +230,7 @@ async fn watch(args: ObserveArgs, socket: PathBuf, identity: String) -> (i32, St
                 if now != term {
                     term = now;
                     if let Some(frame) = &latest {
-                        let header = format!(
-                            "watching pane {} ({}x{}) as {name} - q to leave",
-                            args.pane, frame.cols, frame.rows
-                        );
-                        redraw(frame, &header, term, true);
+                        redraw(frame, &header(args.pane, &name, frame), term, true);
                     }
                 }
             }

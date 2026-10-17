@@ -121,7 +121,7 @@ ssh -t your-host fno mux serve --observe --pane 3 --name teacher
 
 The watcher sees the same masked cells the browser share sends. Press `q` or Ctrl-C to leave. No key typed in the watch reaches the pane or the agent. A watch cannot send coach or steer notes. Use the browser share for those.
 
-You see every watcher. The pane border shows a count such as `◉ 2` on its top edge. The sideline lists each watcher with the name, the route (`ssh` or `browser`) and the pane. A browser viewer you admit through the share appears the same way, and both disappear when the watcher leaves.
+You see every watcher. The pane border shows a count such as `◉ 2` on its top edge. The sideline lists each watcher with the name, the route (`ssh` or `browser`) and the pane. A browser viewer you admit through the share appears the same way. Both kinds of watcher disappear from your view as soon as they leave.
 
 The ssh login is the only check. Anyone who can run `fno` as your user can already attach to the mux, so the watch adds no new door. The same masking limits apply as for the browser share.
 
