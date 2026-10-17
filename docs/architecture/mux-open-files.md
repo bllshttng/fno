@@ -80,12 +80,12 @@ The slice will be small. `md_lines` (`crates/fno/src/client/backlog_md.rs:7`) al
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
-Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. A standing ruling bars new Python, so these edits wait for the user's grant. The router slice waits for that grant too. It does not ship keys that the supported config path cannot set.
+Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. The user granted both edits, so the router ships with the keys that `fno config set` can set. The router lives in `crates/fno/src/open_router.rs`, and `link::vault_file_uri` is the shared vault-relative step. The client reads `mux.open_with` on each click. Nothing reads `mux.viewer` until the viewer ships.
 
 ## 7. Slices, in order
 
 1. Clickable file paths in pane text. Shipped (section 1).
-2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. It starts after the user grants the two Python edits.
+2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. Shipped.
 3. The viewer surface: panel or modal, the keys, and the text preview (section 2).
 4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). It starts with the spike.
 5. PDF pages through `hayro` and the image path (section 4).
