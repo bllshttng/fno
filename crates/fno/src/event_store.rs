@@ -1787,6 +1787,28 @@ fn has_recovery_history(conn: &Connection) -> Result<bool, String> {
     .map_err(|e| e.to_string())
 }
 
+fn store_has_events(conn: &Connection) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The no-store read: the journal that was named. A rotated path must
+/// yield its own bytes, not the live file live_journal folds it into -
+/// folding double-counted the live lines under the rotation's name
+/// and blamed a corrupt live line on the rotation.
+fn read_journal_text_direct(journal: &Path, live: &Path) -> Result<String, String> {
+    let direct = if journal.is_file() { journal } else { live };
+    match std::fs::read_to_string(direct) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(format!("{}: {err}", direct.display())),
+    }
+}
+
 /// Recovery provenance is read metadata. The canonical envelope stays unchanged.
 pub fn recovery_envelope(row: &EventRow) -> serde_json::Value {
     let mut value = serde_json::from_str::<serde_json::Value>(&row.line)
@@ -2065,22 +2087,17 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     let live = live_journal(journal);
     let store = store_path(&live);
     if !store.is_file() {
-        // No store: read the journal that was named. A rotated path must
-        // yield its own bytes, not the live file live_journal folds it into
-        // - folding double-counted the live lines under the rotation's name
-        // and blamed a corrupt live line on the rotation.
-        let direct = if journal.is_file() {
-            journal
-        } else {
-            live.as_path()
-        };
-        return match std::fs::read_to_string(direct) {
-            Ok(text) => Ok(text),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(err) => Err(format!("{}: {err}", direct.display())),
-        };
+        return read_journal_text_direct(journal, &live);
     }
     let conn = open_read(&store)?;
+    if !store_has_events(&conn)? {
+        // A store path that exists but holds no events table (a 0-byte stub
+        // some writer created) can never serve the query: prepare would fail
+        // with "no such table" and route every read through the caller's
+        // Err fallback, which re-reads the whole live file. The direct read
+        // is the honest shape for a store that never was one.
+        return read_journal_text_direct(journal, &live);
+    }
     let recovery = has_recovery_history(&conn)?;
     let (sql, args) = q.build_sql(recovery);
     let mut stmt = conn
