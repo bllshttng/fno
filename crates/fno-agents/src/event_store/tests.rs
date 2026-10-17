@@ -1141,6 +1141,22 @@ fn journal_text_checked_errs_on_a_broken_store_and_journal_text_falls_back() {
 }
 
 #[test]
+fn journal_text_checked_reads_direct_when_the_store_is_a_table_less_stub() {
+    // A 0-byte store file is a valid empty SQLite database: it exists, so
+    // the no-store branch never fired, and every read failed prepare with
+    // "no such table" and paid the caller-side whole-file fallback. The
+    // read answers Ok(live bytes) at the seam instead.
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("events.jsonl");
+    append(&live, &[checkin("2026-09-10T12:00:00Z", "x-aaaa", "live")]);
+    std::fs::write(dir.path().join("events.db"), b"").unwrap();
+    assert_eq!(
+        journal_text_checked(&live, &EventQuery::of_types(&["lead_checkin"])).unwrap(),
+        std::fs::read_to_string(&live).unwrap()
+    );
+}
+
+#[test]
 fn journal_text_appends_only_the_live_lines_the_store_lacks() {
     // AC1-EDGE: store rows A and B, then the un-imported live line C.
     let dir = tempfile::tempdir().unwrap();

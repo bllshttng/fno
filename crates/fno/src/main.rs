@@ -20,7 +20,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
@@ -228,6 +228,11 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents status ...`: the read verb hooks and wait loops spend,
+    /// exec'd natively for the same reason as agents_top: the Python front
+    /// only turned around and exec'd the same binary. The argv passes
+    /// through byte-verbatim.
+    AgentsStatus(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -317,7 +322,14 @@ fn exit_mux(code: i32) -> ! {
 /// child's exit code returned. A missing binary is a refusal, never a silent
 /// empty read.
 fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
-    let mut cmd = std::process::Command::new(fno::digest_overlay::fno_agents_bin());
+    fno_agents_exec_bin(label, action, rest, &fno::digest_overlay::fno_agents_bin())
+}
+
+/// [`fno_agents_exec`] against a caller-resolved binary: the status claim
+/// resolves through the Python auto semantics (a stale `$FNO_AGENTS_BIN`
+/// falls through) instead of the env-honoring paired lookup.
+fn fno_agents_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
+    let mut cmd = std::process::Command::new(bin);
     cmd.args(action);
     cmd.args(rest);
     match cmd.status() {
@@ -402,6 +414,17 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
 
 fn classify_agents_verb(args: &[OsString], verb: &str) -> Option<Vec<OsString>> {
     classify_group_verb(args, "agents", verb)
+}
+
+/// `fno agents status ...`: claimed natively like agents_top. The one
+/// documented escape keeps working: `FNO_AGENTS_RUNTIME=python` forces the
+/// Python path, whose status verb refuses with its "no Python implementation"
+/// message, so the front door does not claim the argv out from under it.
+fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
+    if std::env::var_os("FNO_AGENTS_RUNTIME").is_some_and(|v| v.to_str() == Some("python")) {
+        return None;
+    }
+    classify_agents_verb(args, "status")
 }
 
 fn classify_group_verb(args: &[OsString], group: &str, verb: &str) -> Option<Vec<OsString>> {
@@ -661,6 +684,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_verb(args, "top") {
         return Role::AgentsTop(rest);
+    }
+    if let Some(rest) = classify_agents_status(args) {
+        return Role::AgentsStatus(rest);
     }
     if let Some(role) = classify_mail_show(args) {
         return role;
@@ -1016,6 +1042,24 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
+            Some(bin) => std::process::exit(fno_agents_exec_bin(
+                "fno agents status",
+                &["status"],
+                &rest,
+                &bin,
+            )),
+            None => {
+                eprintln!(
+                    "fno agents status: requires the 'fno-agents' binary, which was not found \
+                     (a runnable $FNO_AGENTS_BIN, beside the front door, the dev target, PATH -- \
+                     the default lookup deliberately skips a stale or non-executable override). \
+                     Get it via `pip install fno` (bundled), `cargo install fno-agents`, or \
+                     `cargo build --release -p fno-agents` plus `export FNO_AGENTS_BIN=<path>`."
+                );
+                std::process::exit(127);
+            }
+        },
         Role::DoctorBuilds(rest) => std::process::exit(fno_agents_exec(
             "fno doctor builds",
             &["test-run", "builds"],
@@ -1483,6 +1527,28 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
+    }
+
+    #[test]
+    fn agents_status_claims_natively_python_runtime_keeps_its_refusal_path() {
+        // The read verb every hook and wait loop spends skips the Python
+        // front, whose status verb only execs the same binary.
+        assert_eq!(
+            decide_role(&os(&["agents", "status", "--json"]), false),
+            Role::AgentsStatus(os(&["--json"]))
+        );
+        // The documented escape: FNO_AGENTS_RUNTIME=python keeps the Python
+        // path, whose status verb refuses with its own message.
+        let prev = std::env::var_os("FNO_AGENTS_RUNTIME");
+        std::env::set_var("FNO_AGENTS_RUNTIME", "python");
+        assert_eq!(
+            decide_role(&os(&["agents", "status", "--json"]), false),
+            Role::Forward
+        );
+        match prev {
+            Some(v) => std::env::set_var("FNO_AGENTS_RUNTIME", v),
+            None => std::env::remove_var("FNO_AGENTS_RUNTIME"),
+        }
     }
 
     #[test]
