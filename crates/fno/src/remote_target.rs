@@ -100,7 +100,8 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     if !target.contains('@') {
         return None;
     }
-    Some(args[3..].to_vec())
+    // The tail keeps the verb: org_remote::run routes on it.
+    Some(args[2..].to_vec())
 }
 
 #[cfg(test)]
