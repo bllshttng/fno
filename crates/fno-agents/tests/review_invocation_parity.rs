@@ -399,8 +399,21 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
     // Run two: idempotent. A second sweep appends nothing.
     let out2 = run(&runtime);
     let rows2: Value = serde_json::from_slice(&out2.stdout).expect("second settle prints JSON");
-    if rows2.as_array().map(Vec::is_empty) != Some(true) {
-        bad(format!("the second sweep must add nothing, got {rows2}"));
+    // Idempotent in rows, not in printout: a sweep that SETTLED everything
+    // answers an empty list the second time, but a sweep that REFUSED (no
+    // readable head) still owns those lost rows and re-reports the refusal.
+    let settled_all = got.as_array().is_some_and(|rows| {
+        rows.iter()
+            .all(|r| r.get("settled") == Some(&serde_json::json!(true)))
+    });
+    if settled_all {
+        if rows2.as_array().map(Vec::is_empty) != Some(true) {
+            bad(format!("the second sweep must add nothing, got {rows2}"));
+        }
+    } else if rows2 != got {
+        bad(format!(
+            "the second sweep must repeat the refusal unchanged\ngolden={got}\nrust  ={rows2}"
+        ));
     }
     let appended2 = settled_rows(&runtime.journal);
     if appended2 != appended {
