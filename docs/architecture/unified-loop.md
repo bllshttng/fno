@@ -208,7 +208,7 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 |---|---|---|
 | `operator_lane` | `cat ~/.fno/my-priorities.md` | yes, by filing a node or parking with a reason |
 | `undispatched` | `fno backlog undispatched --json` | yes, by spawning a worker |
-| `unplanned` | `fno backlog ready --json -A` | yes, by blueprinting it |
+| `unplanned` | `fno backlog ready --json -A`, minus nodes a deeper live team owns (`territory::owner_read`, the read the check-in skips them by) | yes, by blueprinting it |
 | `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents peek <holder>` | yes, by one wake per node |
 | `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
 | `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> --add-pr <n>`); the resume gate reads that same binding and refuses a relaunch over the new holder |
