@@ -100,7 +100,7 @@ def test_source_coverage_accounts_current_agent_entry(monkeypatch) -> None:
     # list: 46 -> 47.
     assert payload["declared_count"] == 81
     assert payload["required_count"] == 47
-    assert payload["accounted_count"] == 80
+    assert payload["accounted_count"] == 81
     assert payload["known_gaps"] == {}
 
 
