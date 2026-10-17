@@ -444,6 +444,25 @@ mod probe {
             }
         }
 
+        // The machine admission door, the SAME call the gate makes one door
+        // after the incident stop. Without it a lead's saturation read sees
+        // `accepted` while every spawn is refused on the runaway brake.
+        if let Err(refusal) = crate::spawn_gate_admission::process_admission_gate() {
+            let detail = refusal
+                .event
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("machine runaway brake holds")
+                .to_string();
+            return refuse_with(
+                "machine-runaway",
+                detail.clone(),
+                json!({"detail": detail}),
+                &[],
+                out,
+            );
+        }
+
         // The route axis of the quota wall: the SAME call the gate makes, so
         // the probe and the gate cannot disagree about what refuses (the gate
         // runs it ahead of every machine axis).
@@ -1599,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_mirrors_fleet_incident_verdict_before_capacity_and_keeps_lanes() {
+    fn probe_mirrors_fleet_incident_and_machine_brake_before_capacity_and_keeps_lanes() {
         let _g = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1676,6 +1695,41 @@ mod tests {
         let clear = probe::answer(&json!({}));
         assert_eq!(clear["verdict"], "accepted");
         assert_ne!(clear["reason"], "fleet-stop");
+
+        // The machine admission door: an armed brake refuses an agent-origin
+        // caller the way the gate does, and a human's own probe still admits.
+        let brake = dir.join("brake.json");
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            &brake,
+            json!({"until_epoch": until, "reason": "machine runaway: load hot"}).to_string(),
+        )
+        .unwrap();
+        let prior_brake = std::env::var_os("FNO_MACHINE_BRAKE");
+        let prior_self = std::env::var_os("FNO_AGENT_SELF");
+        std::env::set_var("FNO_MACHINE_BRAKE", &brake);
+        std::env::set_var("FNO_AGENT_SELF", "probe-brake-worker");
+        let braked = probe::answer(&json!({}));
+        assert_eq!(braked["verdict"], "refused", "{braked}");
+        assert_eq!(braked["reason"], "machine-runaway");
+        assert!(braked["message"]
+            .as_str()
+            .unwrap()
+            .contains("machine runaway brake holds"));
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert_eq!(probe::answer(&json!({}))["verdict"], "accepted");
+        match prior_self {
+            Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
+            None => std::env::remove_var("FNO_AGENT_SELF"),
+        }
+        match prior_brake {
+            Some(value) => std::env::set_var("FNO_MACHINE_BRAKE", value),
+            None => std::env::remove_var("FNO_MACHINE_BRAKE"),
+        }
 
         match prior_home {
             Some(value) => std::env::set_var(crate::paths::HOME_ENV, value),

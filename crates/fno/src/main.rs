@@ -380,6 +380,7 @@ fn parse_share_args(rest: &[OsString]) -> Option<fno::share::ShareArgs> {
         steer: false,
         tunnel: false,
         port: fno::share::DEFAULT_SHARE_PORT,
+        managed: false,
     };
     let mut it = rest.iter();
     while let Some(a) = it.next() {
@@ -387,6 +388,7 @@ fn parse_share_args(rest: &[OsString]) -> Option<fno::share::ShareArgs> {
             "--share" => share = true,
             "--steer" => args.steer = true,
             "--tunnel" => args.tunnel = true,
+            "--managed" => args.managed = true,
             "--pane" => pane = Some(it.next()?.to_str()?.parse().ok()?),
             tok @ ("--server" | "--session") => {
                 mux_cli::note_server_flag(tok);
@@ -830,7 +832,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                 match parse_share_args(&t.tail) {
                     Some(s) => Role::MuxShare(s),
                     None => Role::MuxUsage(
-                        "fno mux serve --share: needs --pane <id>; optional --steer, --tunnel, --port <n>, --server <name>"
+                        "fno mux serve --share: needs --pane <id>; optional --steer, --tunnel, --managed, --port <n>, --server <name>"
                             .into(),
                     ),
                 }
@@ -2168,6 +2170,10 @@ mod tests {
             (share.pane, share.steer, share.tunnel, share.port),
             (3, true, false, 9100)
         );
+        assert!(!share.managed);
+        let managed = parse_share_args(&os(&["--share", "--managed", "--tunnel", "--pane", "3"]))
+            .expect("--managed parses");
+        assert!(managed.managed && managed.tunnel);
         assert!(parse_share_args(&os(&["--share"])).is_none(), "no --pane");
         assert!(parse_share_args(&os(&["--share", "--pane", "x"])).is_none());
         assert!(parse_share_args(&os(&["--share", "--pane", "3", "--web"])).is_none());

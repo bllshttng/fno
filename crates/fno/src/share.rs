@@ -68,6 +68,10 @@ pub struct ShareArgs {
     pub steer: bool,
     pub tunnel: bool,
     pub port: u16,
+    /// Run for a parent process, not a person: no terminal is needed and
+    /// stdout carries `link`, `knock`, `gone` and `end` lines the parent
+    /// parses, while the parent's stdin lines take the driver's commands.
+    pub managed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +145,10 @@ pub(crate) enum Effect {
     Close(u64, &'static str),
     /// Send history and the live grid to a viewer just admitted.
     Admit(u64),
+    /// A viewer began waiting (managed mode tells the parent).
+    Knock { id: u64, name: String },
+    /// A viewer stopped waiting: admitted, denied, or gone.
+    Gone(u64),
     /// Mail an approved steer to the shared pane's agent.
     Mail {
         viewer: u64,
@@ -261,6 +269,10 @@ impl Viewers {
             "[{id}] {name} asks to watch pane {}. Type: a {id} to admit, d {id} to deny",
             self.pane
         );
+        let knock = Effect::Knock {
+            id,
+            name: name.clone(),
+        };
         self.viewers.insert(
             id,
             Viewer {
@@ -271,6 +283,7 @@ impl Viewers {
         let effects = vec![
             Effect::Send(id, share_line(json!({ "state": "waiting" }))),
             Effect::Print(line),
+            knock,
         ];
         (Knock::Waiting(id), self.panel(effects))
     }
@@ -293,6 +306,7 @@ impl Viewers {
         let effects = vec![
             Effect::Send(id, admitted),
             Effect::Admit(id),
+            Effect::Gone(id),
             Effect::Print(line),
         ];
         self.panel(effects)
@@ -305,6 +319,7 @@ impl Viewers {
         self.steers.retain(|_, s| s.viewer != id);
         let effects = vec![
             Effect::Close(id, "the driver declined"),
+            Effect::Gone(id),
             Effect::Print(format!("declined {}", v.name)),
         ];
         self.panel(effects)
@@ -315,7 +330,10 @@ impl Viewers {
             return Vec::new();
         };
         self.steers.retain(|_, s| s.viewer != id);
-        self.panel(vec![Effect::Print(format!("{} stopped watching", v.name))])
+        self.panel(vec![
+            Effect::Gone(id),
+            Effect::Print(format!("{} stopped watching", v.name)),
+        ])
     }
 
     fn admitted_by_token(&self, token: &str) -> Option<(u64, &str)> {
@@ -454,16 +472,21 @@ struct Ctx {
     session: Arc<str>,
     pane: u64,
     page: Arc<str>,
+    managed: bool,
 }
 
 fn run_effects(ctx: &Ctx, hub: &mut Hub, effects: Vec<Effect>) {
     for effect in effects {
         match effect {
-            Effect::Print(line) => println!("{line}"),
-            Effect::Title(title) => {
+            Effect::Print(line) if !ctx.managed => println!("{line}"),
+            Effect::Title(title) if !ctx.managed => {
                 print!("\x1b]2;{title}\x07");
                 let _ = std::io::stdout().flush();
             }
+            Effect::Print(_) | Effect::Title(_) => {}
+            Effect::Knock { id, name } if ctx.managed => println!("knock {id} {name}"),
+            Effect::Gone(id) if ctx.managed => println!("gone {id}"),
+            Effect::Knock { .. } | Effect::Gone(_) => {}
             Effect::Send(id, text) => {
                 if let Some(out) = hub.conns.get(&id) {
                     let _ = out.send(Out::Text(text));
@@ -978,7 +1001,13 @@ fn tunnel_url(line: &str) -> Option<String> {
 
 /// Entry point for the `mux serve --share` role; returns the exit code.
 pub fn serve(args: ShareArgs) -> i32 {
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    if !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_PANE_SHARE) {
+        eprintln!(
+            "fno mux serve --share is experimental and off: turn on \"pane share\" in the mux sideline menu, under experimental"
+        );
+        return 2;
+    }
+    if !args.managed && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal()) {
         eprintln!(
             "fno mux serve --share needs a terminal: the driver admits viewers and approves steers by typing here"
         );
@@ -1038,6 +1067,7 @@ async fn run(args: ShareArgs, socket: PathBuf, identity: String) -> i32 {
         session: args.session.clone().into(),
         pane: args.pane,
         page: page.into(),
+        managed: args.managed,
     };
 
     let (end_tx, mut end_rx) = mpsc::unbounded_channel::<(i32, String)>();
@@ -1073,25 +1103,34 @@ async fn run(args: ShareArgs, socket: PathBuf, identity: String) -> i32 {
         }
     });
 
-    if args.tunnel {
+    let link = if args.tunnel {
         match start_tunnel(port, end_tx.clone()).await {
-            Ok(url) => println!("join link: {url}/#k={secret}"),
+            Ok(url) => format!("{url}/#k={secret}"),
             Err((code, msg)) => {
                 eprintln!("fno mux serve --share: {msg}");
                 return code;
             }
         }
     } else {
-        println!("join link (this machine only): http://127.0.0.1:{port}/#k={secret}");
+        format!("http://127.0.0.1:{port}/#k={secret}")
+    };
+    if args.managed {
+        println!("link {link}");
+    } else if args.tunnel {
+        println!("join link: {link}");
+    } else {
+        println!("join link (this machine only): {link}");
         println!(
             "  for a viewer on another network, add --tunnel (needs cloudflared), or forward port {port} with ssh -R"
         );
     }
-    println!(
-        "sharing pane {} only, masked{}. {COMMANDS}",
-        args.pane,
-        if args.steer { "; steering on" } else { "" }
-    );
+    if !args.managed {
+        println!(
+            "sharing pane {} only, masked{}. {COMMANDS}",
+            args.pane,
+            if args.steer { "; steering on" } else { "" }
+        );
+    }
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
     spawn_stdin(cmd_tx);
@@ -1117,7 +1156,11 @@ async fn run(args: ShareArgs, socket: PathBuf, identity: String) -> i32 {
             }
         }
     }
-    println!("{reason}");
+    if args.managed {
+        println!("end {reason}");
+    } else {
+        println!("{reason}");
+    }
     // Let the close frames reach the viewers before the runtime stops.
     tokio::time::sleep(Duration::from_millis(200)).await;
     code
@@ -1250,6 +1293,10 @@ mod tests {
             let (k, fx) = m.knock(true, "Ms. Lee`", now);
             assert_eq!(k, Knock::Waiting(n));
             assert_eq!(sends_to(&fx, n), vec![r#"{"_share":{"state":"waiting"}}"#]);
+            assert!(fx.contains(&Effect::Knock {
+                id: n,
+                name: "Ms. Lee".into()
+            }));
             assert!(!fx.iter().any(|e| matches!(e, Effect::Admit(_))));
         }
         assert_eq!(
@@ -1264,8 +1311,16 @@ mod tests {
         // Deny closes the socket; admit hands out a token and starts admission.
         let fx = m.deny(2);
         assert!(fx.contains(&Effect::Close(2, "the driver declined")));
+        assert!(
+            fx.contains(&Effect::Gone(2)),
+            "a denied knock stops waiting"
+        );
         let fx = m.admit(1, "tok-1".into());
         assert!(fx.contains(&Effect::Admit(1)));
+        assert!(
+            fx.contains(&Effect::Gone(1)),
+            "an admitted knock stops waiting"
+        );
         assert!(sends_to(&fx, 1)[0].contains(r#""viewer":"tok-1""#));
         assert!(fx.contains(&Effect::Print("admitted Ms. Lee".into())));
 
@@ -1342,6 +1397,7 @@ mod tests {
             session: Arc::from("t"),
             pane: 3,
             page: Arc::from("page"),
+            managed: false,
         };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

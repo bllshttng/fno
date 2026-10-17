@@ -1,0 +1,1 @@
+not-injectable: the registry row for 'nosid-row' carries no harness_session_id, so the control.sock lane has no session to address; re-register it with `fno agents register`

@@ -501,6 +501,31 @@ pub(crate) fn node_owners(
     (owners, failures)
 }
 
+/// The owner read the org fold, the check-in's blueprint starts, and the
+/// lead board's `unplanned` queue all answer from: node id -> owning scope,
+/// plus the set of live scopes. A registry fault, or a live team whose scope
+/// does not compile, is an `Err` naming why - never a map that silently
+/// omits that team's nodes.
+pub(crate) fn owner_read(
+    registry_path: &Path,
+    entries: &[Value],
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<(HashMap<String, String>, HashSet<String>), String> {
+    let live = live_teams(registry_path).map_err(|e| e.0)?;
+    let (map, failed) = node_owners(&live, entries, projects);
+    if !failed.is_empty() {
+        return Err(format!(
+            "a live team's scope does not compile: {}",
+            failed
+                .iter()
+                .map(|(s, e)| format!("{s}: {e}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    Ok((map, live.into_iter().map(|c| c.scope).collect()))
+}
+
 /// The workspace project map: canonical project name -> normalized absolute
 /// path, the one map `backlog maintain` re-scopes against. Best-effort: a
 /// missing map contributes nothing, and the drain assembly

@@ -367,6 +367,9 @@ event_types:
         review_round:
           type: integer
           description: "The declared round this verdict is, as a running max across the PR's life. A round is one reviewed HEAD, so two verdicts at one unchanged head are one round; CI failures, lint failures and rebases are not rounds. A row carrying this field bypasses the head collapse, because the declared number is already the round's identity. The round budget (config.review.max_rounds) counts these. OPTIONAL."
+        level:
+          type: string
+          description: "The invocation's review level (low | medium | high | xhigh | max | unset), mirrored from the sibling review_invocation started row's own `level` field at emit time. Read by publish_round (crates/fno-agents/src/publish_review.rs) to name the level in the GitHub review summary it posts. OPTIONAL: an attestation emitted before this field, or one whose started row resolved no level, carries neither key nor the literal 'unset' - a reader treats both the same way."
         dispositions:
           type: array
           description: "The author's recorded disposition per finding_key for THIS round: `fixed`, `declined` (with a non-empty reason), or `nonblocking`. A declined finding with a non-empty reason is terminal whoever declined it, and `nonblocking` over a finding the gate re-derives as blocking stays non-terminal - see docs/architecture/review-coverage-termination.md. OPTIONAL."
@@ -6869,6 +6872,31 @@ event_types:
         last_message:
           type: string
           description: "The flattened text of the worker's last turn, as the truth layer capped it."
+
+  - name: main_ci_changed
+    description: "The default branch's CI verdict flipped between red and green. One row per transition, never per probe: the writer compares each live reading with the newest stored row and appends only when the state differs. A pending reading writes nothing. The row is durable, and the activity feed projects it as a ci-area row."
+    sources: [agents]
+    data:
+      required: [repo, sha, state, previous_state, failing_checks]
+      properties:
+        repo:
+          type: string
+          description: "The repository slug the reading judged. The store is machine-wide, so the comparison with the newest earlier row is per repo."
+        sha:
+          type: string
+          description: "The head sha of main the reading judged."
+        state:
+          type: string
+          enum: [red, green]
+          description: "The verdict after the flip."
+        previous_state:
+          type: string
+          enum: [red, green, unknown]
+          description: "The state of the newest earlier row; unknown when the store holds none."
+        failing_checks:
+          type: array
+          description: "The workflow names that read red; empty on a green row."
+    consumers: [fno agents feed]
 
   - name: failover_exhausted
     description: "Every link of a node's fallback chain has been tried or is itself known exhausted, so nothing was spawned. The terminal of the re-dispatch walk: a chain that ends is a bounded stop, a chain that loops is a worse failure."
