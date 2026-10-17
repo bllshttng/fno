@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use super::node_ref;
 use super::patch;
+use super::update_ops;
 use crate::backlog::settings;
 use crate::graph_store::{
     self, entry_id, recompute_statuses_with_plan_rungs, MutateInput, StoreError,
@@ -80,6 +81,23 @@ struct UpdateArgs {
     add_pr_note: Option<String>,
     remove_pr: Option<String>,
     door: Vec<String>,
+    /// Lowered operator tokens (`field=value`, `field+=value`,
+    /// `field-=value`), in argument order; the relay refusal quotes them as
+    /// typed.
+    ops: Vec<update_ops::FieldOp>,
+    /// `details+=` values, folded through `update_ops::append_text` inside
+    /// the write attempt.
+    details_append: Vec<String>,
+    /// `dispatch_brief+=` values, merged into the brief before the override
+    /// write so the 8 KB warning measures the merged text.
+    brief_append: Vec<String>,
+    /// `tags=v` list tokens; the writer normalizes and refuses malformed
+    /// tags before any write.
+    tags_replace: Option<Vec<String>>,
+    /// `related+=` / `related-=` list tokens, resolved against the store
+    /// inside the write attempt.
+    related_add: Vec<String>,
+    related_remove: Vec<String>,
 }
 
 impl UpdateArgs {
@@ -132,6 +150,12 @@ impl UpdateArgs {
             add_pr_note: None,
             remove_pr: None,
             door: Vec::new(),
+            ops: Vec::new(),
+            details_append: Vec::new(),
+            brief_append: Vec::new(),
+            tags_replace: None,
+            related_add: Vec::new(),
+            related_remove: Vec::new(),
         };
         let mut i = 0;
         let mut id: Option<String> = None;
@@ -324,7 +348,17 @@ impl UpdateArgs {
                     }
                 }
                 other => {
-                    if !other.starts_with('-') && id.is_none() {
+                    if let Some(op) = update_ops::parse_op_token(raw) {
+                        match update_ops::check(&op) {
+                            Ok(kind) => {
+                                lower_op(&mut a, op, kind);
+                                i += 1;
+                            }
+                            Err(message) => {
+                                return ParsedUpdate::Refusal { message, exit: 2 };
+                            }
+                        }
+                    } else if !other.starts_with('-') && id.is_none() {
                         id = Some(other.to_string());
                         i += 1;
                     } else if other.starts_with('-') {
@@ -383,6 +417,36 @@ fn parse_click_bool(v: &str) -> Option<bool> {
     }
 }
 
+/// Lower one validated operator onto its flag slot, in argument order, so
+/// the writers and validators behind the legacy flags run unchanged:
+/// `blocked_by+=x` lands in the same vec `--add-blocker` fills, `tags+=x`
+/// in the same vec `--tag` fills. List replace tokens keep their commas; the
+/// writer splits them with `parse_list`.
+fn lower_op(a: &mut UpdateArgs, op: update_ops::FieldOp, _kind: update_ops::FieldKind) {
+    a.ops.push(op.clone());
+    let value = op.value;
+    match (op.field.as_str(), op.op) {
+        ("details", update_ops::Op::Set) => a.details = Some(value),
+        ("details", update_ops::Op::Add) => a.details_append.push(value),
+        ("dispatch_brief", update_ops::Op::Set) => a.dispatch_brief = Some(value),
+        ("dispatch_brief", update_ops::Op::Add) => a.brief_append.push(value),
+        ("tags", update_ops::Op::Set) => {
+            a.tags_replace = Some(parse_list(std::slice::from_ref(&value)))
+        }
+        ("tags", update_ops::Op::Add) => a.tag.push(value),
+        ("tags", update_ops::Op::Remove) => a.untag.push(value),
+        ("blocked_by", update_ops::Op::Set) => {
+            a.blocked_by.get_or_insert_with(Vec::new).push(value)
+        }
+        ("blocked_by", update_ops::Op::Add) => a.add_blocker.push(value),
+        ("blocked_by", update_ops::Op::Remove) => a.remove_blocker.push(value),
+        ("related", update_ops::Op::Set) => a.related.push(value),
+        ("related", update_ops::Op::Add) => a.related_add.push(value),
+        ("related", update_ops::Op::Remove) => a.related_remove.push(value),
+        _ => {} // check() refused every field outside OP_FIELDS at parse
+    }
+}
+
 /// A validation refusal: one stderr line, then the exit.
 struct Refusal {
     message: String,
@@ -436,6 +500,15 @@ pub fn run(tail: &[String]) -> i32 {
 /// The door relay: refuse the mixed legacy+door call, then hand the door
 /// flags to the patch door in-process, receipts and exit verbatim.
 fn run_door_relay(args: &UpdateArgs) -> i32 {
+    if !args.ops.is_empty() {
+        let tokens: Vec<String> = args.ops.iter().map(|op| op.token.clone()).collect();
+        eprintln!(
+            "Error: --status/--leave/--set cannot be combined with field operators \
+             ({}) in one call. Run two calls.",
+            tokens.join(", ")
+        );
+        return 2;
+    }
     let mut legacy: Vec<&str> = Vec::new();
     let note = |flag: &'static str, set: bool, legacy: &mut Vec<&str>| {
         if set {
@@ -636,6 +709,13 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
         && (!parse_list(&args.add_blocker).is_empty()
             || !parse_list(&args.remove_blocker).is_empty())
     {
+        if args.ops.iter().any(|op| op.field == "blocked_by") {
+            return Err(refused(
+                "Error: blocked_by= replaces the list. It cannot be combined with \
+                 blocked_by+= or blocked_by-= in one call.",
+                2,
+            ));
+        }
         return Err(refused(
             "Error: --blocked-by is mutually exclusive with --add-blocker/--remove-blocker",
             2,
@@ -1270,12 +1350,26 @@ fn apply_mutators(
     // -- U6: topology arms, in cmd_update's order: related first (its
     // symmetric writes touch peer rows too), then source-node, then the
     // blocker ladder, then the lock stamps.
-    if !args.related.is_empty() {
-        let tokens = parse_list(&args.related);
-        let desired: Vec<String> = if tokens.len() == 1 && tokens[0] == "null" {
+    let replace_tokens = parse_list(&args.related);
+    let has_related_edit = !replace_tokens.is_empty()
+        || !args.related_add.is_empty()
+        || !args.related_remove.is_empty();
+    if has_related_edit {
+        let mut desired: Vec<String> = if replace_tokens.len() == 1 && replace_tokens[0] == "null" {
             Vec::new()
+        } else if replace_tokens.is_empty() {
+            rows[idx]
+                .get("related")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
         } else {
-            tokens
+            replace_tokens
                 .iter()
                 .map(|t| {
                     node_ref::resolve_asserted_id(t, rows, "--related", Some(&node_id))
@@ -1283,6 +1377,21 @@ fn apply_mutators(
                 })
                 .collect::<Result<Vec<_>, _>>()?
         };
+        for t in parse_list(&args.related_add) {
+            let resolved = node_ref::resolve_asserted_id(&t, rows, "related", Some(&node_id))
+                .map_err(|(m, e)| refused(m, e))?;
+            if !desired.contains(&resolved) {
+                desired.push(resolved);
+            }
+        }
+        let removes: Vec<String> = parse_list(&args.related_remove)
+            .iter()
+            .map(|t| {
+                node_ref::resolve_asserted_id(t, rows, "related", Some(&node_id))
+                    .map_err(|(m, e)| refused(m, e))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        desired.retain(|r| !removes.contains(r));
         crate::graph_keeper::set_related(rows, &node_id, &desired)
             .map_err(|e| refused(format!("{e}"), 1))?;
     }
@@ -1556,10 +1665,22 @@ fn apply_mutators(
                 obj.insert("orphan_ok".into(), json!(v));
             }
         }
+        // `dispatch_brief+=`: merge the appends into the replace value (if
+        // any) or the stored brief, so the override write below stores one
+        // merged text and its 8 KB warning measures the merged bytes.
+        let mut brief = args.dispatch_brief.clone();
+        for add in &args.brief_append {
+            let base = brief.take().or_else(|| {
+                obj.get("dispatch_brief")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+            brief = update_ops::append_text(base.as_deref(), add).or(base);
+        }
         let dispatch_warnings: Vec<String> = super::fields::apply_dispatch_overrides(
             obj,
             args.dispatch_verb.as_deref(),
-            args.dispatch_brief.as_deref(),
+            brief.as_deref(),
         )
         .map_err(|refusal| refused(refusal, 2))?;
         warnings.extend(dispatch_warnings);
@@ -1615,6 +1736,14 @@ fn apply_mutators(
                 "details".into(),
                 if cleared { Value::Null } else { json!(details) },
             );
+        }
+        for add in &args.details_append {
+            // Reads the CURRENT row, so a replace in the same call joins the
+            // replaced text and plan_mutation re-runs per attempt on retry.
+            let merged = update_ops::append_text(obj.get("details").and_then(Value::as_str), add);
+            if let Some(text) = merged {
+                obj.insert("details".into(), json!(text));
+            }
         }
         if let Some(domain) = &args.domain {
             obj.insert("domain".into(), json!(domain));
@@ -1787,10 +1916,12 @@ fn apply_mutators(
         if let Some(reverted) = args.reverted {
             obj.insert("reverted".into(), Value::Bool(reverted));
         }
-        if !args.tag.is_empty() || !args.untag.is_empty() {
+        if !args.tag.is_empty() || !args.untag.is_empty() || args.tags_replace.is_some() {
             // Idempotent set semantics, order-preserving: adds skip dupes,
             // removes are no-ops if absent. Normalization refuses before the
-            // write lands, so a malformed tag never mutates.
+            // write lands, so a malformed tag never mutates. `tags=` starts
+            // `current` from the normalized replace list in place of the
+            // stored list; add and remove then apply as today.
             let mut normalized_tag = Vec::new();
             for t in &args.tag {
                 normalized_tag.push(
@@ -1805,16 +1936,28 @@ fn apply_mutators(
                         .map_err(|e| refused(format!("Error: {e}"), 1))?,
                 );
             }
-            let mut current: Vec<String> = obj
-                .get("tags")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            let mut current: Vec<String> = match &args.tags_replace {
+                Some(replace) => {
+                    let mut replaced = Vec::new();
+                    for t in replace {
+                        replaced.push(
+                            super::fields::normalize_tag(t)
+                                .map_err(|e| refused(format!("Error: {e}"), 1))?,
+                        );
+                    }
+                    replaced
+                }
+                None => obj
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
             for t in normalized_tag {
                 if !current.contains(&t) {
                     current.push(t);
@@ -2271,6 +2414,96 @@ mod tests {
                 assert_eq!(exit, 2);
             }
         }
+        let unknown_field: Vec<String> = ["x-aaaa1111", "nope=1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match UpdateArgs::parse(&unknown_field) {
+            ParsedUpdate::Args(_) => panic!("unknown operator field must refuse"),
+            ParsedUpdate::Refusal { message, exit } => {
+                assert_eq!(exit, 2);
+                assert!(
+                    message.starts_with("Error: unknown field 'nope'."),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("details, dispatch_brief, tags, blocked_by, related"),
+                    "{message}"
+                );
+            }
+        }
+        let text_remove: Vec<String> = ["x-aaaa1111", "details-=x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match UpdateArgs::parse(&text_remove) {
+            ParsedUpdate::Args(_) => panic!("a remove on text must refuse"),
+            ParsedUpdate::Refusal { message, exit } => {
+                assert_eq!(exit, 2);
+                assert_eq!(message, "Error: details is text. It takes = and += only.");
+            }
+        }
+    }
+
+    #[test]
+    fn operator_tokens_parse_and_lower_onto_slots() {
+        let argv: Vec<String> = [
+            "x-aaaa1111",
+            "details+=first",
+            "tags=Big-Idea,other",
+            "blocked_by+=x-bbbb2222",
+            "related-=beta",
+            "details=a=b",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        match UpdateArgs::parse(&argv) {
+            ParsedUpdate::Refusal { message, .. } => panic!("operators must parse: {message}"),
+            ParsedUpdate::Args(a) => {
+                assert_eq!(a.task_id, "x-aaaa1111");
+                assert_eq!(a.details_append, ["first"]);
+                assert_eq!(a.details, Some("a=b".to_string()));
+                assert_eq!(
+                    a.tags_replace,
+                    Some(vec!["Big-Idea".to_string(), "other".to_string()])
+                );
+                assert_eq!(a.add_blocker, ["x-bbbb2222"]);
+                assert_eq!(a.related_remove, ["beta"]);
+                assert_eq!(a.ops.len(), 5);
+            }
+        }
+        // An operator before the id parses the same way: the id is never
+        // read as an operator because a node id never contains `=`.
+        let id_last: Vec<String> = ["tags+=t", "x-aaaa1111"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        match UpdateArgs::parse(&id_last) {
+            ParsedUpdate::Refusal { message, .. } => panic!("id after operator parses: {message}"),
+            ParsedUpdate::Args(a) => {
+                assert_eq!(a.task_id, "x-aaaa1111");
+                assert_eq!(a.tag, ["t"]);
+            }
+        }
+    }
+
+    #[test]
+    fn append_text_joins_skips_the_tail_noop_and_starts_empty() {
+        assert_eq!(
+            update_ops::append_text(Some("A"), "B"),
+            Some("A\n\nB".to_string())
+        );
+        assert_eq!(update_ops::append_text(Some("A\n\nB"), "B"), None);
+        assert_eq!(
+            update_ops::append_text(Some("A  "), "B"),
+            Some("A\n\nB".to_string())
+        );
+        assert_eq!(update_ops::append_text(None, "B"), Some("B".to_string()));
+        assert_eq!(
+            update_ops::append_text(Some(""), "B"),
+            Some("B".to_string())
+        );
     }
 
     #[test]
