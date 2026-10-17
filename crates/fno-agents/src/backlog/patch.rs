@@ -467,7 +467,7 @@ fn holding_fact(entry: &Value, id: &str) -> Option<String> {
     }
     if truthy("pr_number") {
         return Some(format!(
-            "pr_number holds. Supply it with: fno backlog update {id} --pr-number null"
+            "pr_number holds. Supply it with: fno backlog update {id} pr_number=null"
         ));
     }
     if truthy("locked_by") {

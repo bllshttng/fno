@@ -110,7 +110,7 @@ mod tests {
         let post = vec![closed_row("ab-evd0001")];
         let error = enforce(&pre, &post).unwrap_err();
         assert!(error.contains("refused: ab-evd0001"), "{error}");
-        for flag in ["--pr-number", "--note", "--link", "--completion-note"] {
+        for flag in ["--pr-number", "--note", "--link", "completion_note+="] {
             assert!(error.contains(flag), "{flag} must appear: {error}");
         }
         // The remedy must name the door every caller can run: the typer
