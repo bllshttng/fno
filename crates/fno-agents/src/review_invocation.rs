@@ -102,7 +102,7 @@ fn run_join(tail: &[String]) -> i32 {
 }
 
 fn run_reserve(tail: &[String]) -> i32 {
-    let json_out = tail.iter().any(|a| a == "--json");
+    let json_out = tail.iter().any(|a| crate::json_output::is_flag(a));
     let Some(session) = session_value(tail) else {
         eprintln!("{USAGE} (reserve emits --session S [--json])");
         return 2;
@@ -365,7 +365,7 @@ fn verb_reviewer(data: &serde_json::Value) -> String {
 }
 
 fn run_settle(tail: &[String]) -> i32 {
-    let json_out = tail.iter().any(|a| a == "--json");
+    let json_out = tail.iter().any(|a| crate::json_output::is_flag(a));
     let cwd = std::env::current_dir().ok();
     let journal = events_journal(cwd.as_deref().unwrap_or(Path::new(".")));
     let ttl = invocation_ttl_minutes(cwd.as_deref().unwrap_or(Path::new(".")));
