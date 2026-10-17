@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn the_marks_shellout_fails_open_on_a_missing_binary() {
-        std::env::set_var("FNO_AGENTS_BIN", "/nonexistent/fno-agents-x-73c4");
+        std::env::set_var("FNO_AGENTS_BIN", "/nonexistent/fno-agents-board-stale");
         let marks = stale_marks(&["x-1"]);
         std::env::remove_var("FNO_AGENTS_BIN");
         assert!(marks.is_none());

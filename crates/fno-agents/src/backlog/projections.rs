@@ -1992,7 +1992,7 @@ mod tests {
             Err("boom".into()),
             now,
             None,
-            Path::new("/nonexistent-repo-for-x-73c4"),
+            Path::new("/nonexistent-repo-for-board-stale"),
         );
         assert_eq!(
             board["in_progress"]["unknown"],
