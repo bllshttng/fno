@@ -1237,7 +1237,7 @@ fn compute_board(
         None,
     );
 
-    // The stale mark rides the rows a king actually sees: the displayed
+    // The stale mark rides the rows a lead actually sees: the displayed
     // In progress and On deck rows off one shared git read. Just finished
     // rows are status done, their verdict can only ever read shipped, and
     // the section itself already says the work merged, so they stay
