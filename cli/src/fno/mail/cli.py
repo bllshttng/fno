@@ -50,7 +50,7 @@ from fno.mail.receipts import _escalate_to_human, _recipient_is_attended
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, NoReturn, Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 import typer
 
