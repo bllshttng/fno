@@ -663,6 +663,14 @@ fn ordinary_verdict<P: Probes>(
             .unwrap_or(0);
         rounds = rounds.max(row_rounds);
     }
+    // The row's pin: evidence of WHAT was judged, rendered in the note
+    // bracket of every refused verdict whose row could name it. Python
+    // rendered the same bracket on the check line and the op door alike.
+    let pin_note = row_value
+        .get("coverage_pin")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let join_notes = |extra: Option<&str>| -> String {
         let mut parts: Vec<&str> = Vec::new();
         if !recompute_note.is_empty() {
@@ -670,6 +678,9 @@ fn ordinary_verdict<P: Probes>(
         }
         if !unread_note.is_empty() {
             parts.push(&unread_note);
+        }
+        if !pin_note.is_empty() {
+            parts.push(&pin_note);
         }
         if let Some(e) = extra {
             parts.push(e);
