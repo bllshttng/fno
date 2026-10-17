@@ -349,7 +349,7 @@ fn probe_reports_spawn_trouble_not_absent_for_a_non_executable_file() {
 #[cfg(target_os = "linux")]
 #[test]
 fn probe_reports_spawn_trouble_for_a_busy_text_file() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
     let gh = write_exec(tmp.path(), "gh", "#!/bin/sh\nexit 0\n");
     let _held = std::fs::OpenOptions::new().write(true).open(&gh).unwrap();
     let outcome = probe_gh_bin(gh.as_os_str(), tmp.path());
@@ -360,4 +360,24 @@ fn probe_reports_spawn_trouble_for_a_busy_text_file() {
             kind: std::io::ErrorKind::ExecutableFileBusy
         }
     );
+}
+
+#[test]
+fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
+    // A stood-down transport lets the consulting child refuse: exit 75 with
+    // the ledger's `gh budget:` line on stderr. bounded_read maps that to
+    // the same BudgetRefused kind the transport's own refusal produced, so
+    // the outcome word and waited_on() classify unchanged. The in-process
+    // consult is disarmed under cfg(test), so no ledger is touched.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let adapter = write_exec(
+        tmp.path(),
+        "fno-gh-loopcheck",
+        "#!/bin/sh\necho 'gh budget: fleet GitHub rate limit held locally' 1>&2\nexit 75\n",
+    );
+    let cwd = std::env::temp_dir();
+    let err = bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
+        .expect_err("a child budget refusal is a BudgetRefused");
+    assert_eq!(err.outcome(), "budget_refused");
+    assert_eq!(err.waited_on(), "budget_lock");
 }
