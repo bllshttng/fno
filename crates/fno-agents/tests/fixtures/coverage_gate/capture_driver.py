@@ -212,7 +212,10 @@ main()
 STUB_GH = r"""#!/usr/bin/python3
 # Stand-in for the gh CLI. Maps each argv shape to a named shape, journals
 # it with the argv, then answers from answers/gh-<shape>-<n>.json falling
-# back to answers/gh-<shape>.json. Unmapped argv fails loud.
+# back to answers/gh-<shape>.json. Shapes: view, view-jq (a `pr view` whose
+# --jq filter real gh would evaluate server-side; the minted answer carries
+# the jq result), pr-info (the exact real-slug pulls path), api-jq, api.
+# Unmapped argv fails loud.
 import json
 import os
 import re
@@ -225,6 +228,12 @@ def root():
 
 def shape_of(argv):
     if len(argv) >= 2 and argv[0] == "pr" and argv[1] == "view":
+        # The native override valve reads the label with a server-side
+        # filter (`pr view --json labels --jq ...`); real gh prints the jq
+        # result, so that call takes its own shape and a minted "true"
+        # answer, while the capture's plain labels reads keep view.
+        if "--jq" in argv:
+            return "view-jq"
         return "view"
     if argv and argv[0] == "api":
         # The native gate's PR facts read (`gh api repos/<slug>/pulls/<n>`)

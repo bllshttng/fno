@@ -28,6 +28,7 @@
     ],
     "gh": {
       "view-1": {"json": {"labels": [{"name": "coverage-override"}]}},
+      "view-jq-1": {"stdout": "true\n"},
       "api-jq-1": {"stdout": "maintainer\n"},
       "api-1": {"json": {"number": 7, "user": {"login": "pr-author"}, "head": {"sha": "__HEAD_SHA__", "ref": "feature/x"}, "base": {"ref": "main"}, "state": "open"}}
     }
@@ -43,6 +44,7 @@
     ],
     "gh": {
       "view-1": {"json": {"labels": [{"name": "coverage-override"}]}},
+      "view-jq-1": {"stdout": "true\n"},
       "view-2": {"json": {"baseRefName": "main", "headRefName": "feature/x"}},
       "api-jq-1": {"stdout": "pr-author\n"},
       "api-1": {"json": {"number": 7, "user": {"login": "pr-author"}, "head": {"sha": "__HEAD_SHA__", "ref": "feature/x"}, "base": {"ref": "main"}, "state": "open"}},
@@ -60,6 +62,7 @@
     ],
     "gh": {
       "view-1": {"json": {"labels": [{"name": "coverage-override"}]}},
+      "view-jq-1": {"stdout": "true\n"},
       "view-2": {"json": {"baseRefName": "main", "headRefName": "feature/x"}},
       "api-jq-1": {"stdout": ""},
       "api-1": {"json": []}
@@ -273,6 +276,7 @@
     ],
     "gh": {
       "view-1": {"json": {"labels": [{"name": "coverage-override"}]}},
+      "view-jq-1": {"stdout": "true\n"},
       "api-jq-1": {"stdout": "maintainer\n"},
       "api-1": {"json": {"number": 7, "user": {"login": "maintainer"}, "head": {"sha": "__HEAD_SHA__", "ref": "feature/x"}, "base": {"ref": "main"}, "state": "open"}}
     }
@@ -288,6 +292,7 @@
     ],
     "gh": {
       "view-1": {"json": {"labels": [{"name": "coverage-override"}]}},
+      "view-jq-1": {"stdout": "true\n"},
       "view-2": {"json": {"baseRefName": "main", "headRefName": "feature/x"}},
       "api-jq-1": {"stdout": "pr-author\n"},
       "api-1": {"json": {"number": 7, "user": {"login": "pr-author"}, "head": {"sha": "__HEAD_SHA__", "ref": "feature/x"}, "base": {"ref": "main"}, "state": "open"}},
