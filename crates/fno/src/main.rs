@@ -151,6 +151,10 @@ enum Role {
     /// one pane, masked, to admitted viewers on its own loopback listener. Needs
     /// a TTY: the driver admits viewers and approves steers by typing.
     MuxShare(fno::share::ShareArgs),
+    /// `mux serve --observe --pane <id> [--name <label>]`: watch one masked
+    /// pane read-only in this terminal (run over `ssh -t`); the driver sees the
+    /// watcher on the pane border and the sideline.
+    MuxObserve(fno::observe::ObserveArgs),
     /// `mux serve --snapshot ...`: compose one frame (a staged demo fleet, or
     /// a live server through the observer attach) and write it as
     /// html, svg or png. Carries the serve tail; `client::snapshot::parse`
@@ -406,6 +410,34 @@ fn parse_share_args(rest: &[OsString]) -> Option<fno::share::ShareArgs> {
     }
     args.pane = pane?;
     share.then_some(args)
+}
+
+/// Parse `serve --observe` flags into [`fno::observe::ObserveArgs`]. `--pane`
+/// is required and numeric with no default (fail closed); a missing value, an
+/// unknown flag or a bad number is `None`, which the caller maps to usage.
+fn parse_observe_args(rest: &[OsString]) -> Option<fno::observe::ObserveArgs> {
+    let mut observe = false;
+    let mut pane = None;
+    let mut args = fno::observe::ObserveArgs {
+        session: proto::DEFAULT_SESSION.to_string(),
+        pane: 0,
+        name: None,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--observe" => observe = true,
+            "--pane" => pane = Some(it.next()?.to_str()?.parse().ok()?),
+            "--name" => args.name = Some(it.next()?.to_str()?.to_string()),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = it.next()?.to_str()?.to_string()
+            }
+            _ => return None,
+        }
+    }
+    args.pane = pane?;
+    observe.then_some(args)
 }
 
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
@@ -848,6 +880,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     ),
                 }
             }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--observe") => {
+                match parse_observe_args(&t.tail) {
+                    Some(o) => Role::MuxObserve(o),
+                    None => Role::MuxUsage(
+                        "fno mux serve --observe: needs --pane <id>; optional --name <label>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
             cli_args::MuxCmd::Serve(t) => match parse_web_args(&t.tail) {
                 Some(w) => Role::MuxWeb(w),
                 None => Role::MuxUsage(
@@ -1175,6 +1216,7 @@ fn main() {
             exit_mux(fno::web::serve(web_args))
         }
         Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
+        Role::MuxObserve(observe_args) => exit_mux(fno::observe::serve(observe_args)),
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
             exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))
@@ -2193,5 +2235,16 @@ mod tests {
         assert!(parse_share_args(&os(&["--share"])).is_none(), "no --pane");
         assert!(parse_share_args(&os(&["--share", "--pane", "x"])).is_none());
         assert!(parse_share_args(&os(&["--share", "--pane", "3", "--web"])).is_none());
+        // `--observe` also needs `--pane`, and takes an optional label.
+        let observe = parse_observe_args(&os(&["--observe", "--pane", "3", "--name", "teacher"]))
+            .expect("--observe parses");
+        assert_eq!(
+            (observe.pane, observe.name.as_deref()),
+            (3, Some("teacher"))
+        );
+        assert!(
+            parse_observe_args(&os(&["--observe"])).is_none(),
+            "no --pane"
+        );
     }
 }
