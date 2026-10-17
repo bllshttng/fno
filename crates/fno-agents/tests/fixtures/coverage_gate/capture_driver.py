@@ -230,11 +230,15 @@ def shape_of(argv):
         # The native gate's PR facts read (`gh api repos/<slug>/pulls/<n>`)
         # gets its own shape and counter so it never consumes a per-call
         # `api` answer minted for the capture's other REST calls. The match
-        # is the exact pulls path: the floor's diff read
+        # is the exact pulls path with a REAL slug: the floor's diff read
         # (repos/<slug>/pulls/<n>/files) shares the prefix and must keep the
-        # plain api shape and its answers.
+        # plain api shape, and the override valve's author read rides gh's
+        # `:owner/:repo` placeholders onto the same api counter as the
+        # capture's call did.
         if any(
-            a.startswith("repos/") and re.fullmatch(r"repos/[^/]+/[^/]+/pulls/\d+", a)
+            a.startswith("repos/")
+            and ":" not in a
+            and re.fullmatch(r"repos/[^/]+/[^/]+/pulls/\d+", a)
             for a in argv[1:3]
         ):
             return "pr-info"
