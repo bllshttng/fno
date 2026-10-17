@@ -18,6 +18,7 @@ pub enum Kind {
     Page,
     Lock,
     Park,
+    Dir,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -86,6 +87,7 @@ impl Kind {
             "page" => Self::Page,
             "lock" => Self::Lock,
             "park" => Self::Park,
+            "dir" => Self::Dir,
             _ => return None,
         })
     }
@@ -150,6 +152,74 @@ pub fn place(root: &Path, legacy_name: &str) -> PathBuf {
             }
         }
     }
+}
+
+/// Where a ruled folder lives after its fold: the `dir` row's destination,
+/// always, and nothing is created. `None` refuses a name the table does not
+/// carry as a folder, so a caller never silently lands a new top-level
+/// entry. The group slices route their writers through this.
+pub fn place_dir(root: &Path, name: &str) -> Option<PathBuf> {
+    let row = find(name)?;
+    if row.kind != Kind::Dir {
+        return None;
+    }
+    Some(root.join(&row.new))
+}
+
+/// The one-level-down read: `file` at the new dir when it exists, else at
+/// the legacy dir when that differs and exists, else the new path (fresh
+/// write lands new). The same ladder `place` runs, one level down, so a
+/// straggler a stale writer left at the legacy spelling stays readable
+/// until the next daemon-start pass folds it.
+pub fn place_in(root: &Path, name: &str, file: &str) -> PathBuf {
+    let new = place_dir(root, name).unwrap_or_else(|| root.join(name));
+    let new_file = new.join(file);
+    if new_file.exists() {
+        return new_file;
+    }
+    if let Some(row) = find(name) {
+        if row.kind == Kind::Dir && row.legacy != row.new {
+            let legacy_file = root.join(&row.legacy).join(file);
+            if legacy_file.exists() {
+                return legacy_file;
+            }
+        }
+    }
+    new_file
+}
+
+/// The folder read for listers (cursors, latches, tickets): the children of
+/// the new dir, then the legacy dir's children whose names the new side is
+/// missing, new wins a clash. Skips both dirs when neither exists.
+pub fn list_dir_children(root: &Path, name: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let new_dir = place_dir(root, name).unwrap_or_else(|| root.join(name));
+    let mut seen: Vec<String> = Vec::new();
+    for dir in [Some(new_dir), legacy_dir_of(root, name)] {
+        let Some(dir) = dir else { continue };
+        let Ok(children) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let Some(file_name) = child.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if seen.contains(&file_name) {
+                continue;
+            }
+            seen.push(file_name);
+            out.push(child.path());
+        }
+    }
+    out
+}
+
+fn legacy_dir_of(root: &Path, name: &str) -> Option<PathBuf> {
+    let row = find(name)?;
+    if row.kind != Kind::Dir || row.legacy == row.new {
+        return None;
+    }
+    Some(root.join(&row.legacy))
 }
 
 /// The mux server moves its `owner = mux` rows at its own start, before it
