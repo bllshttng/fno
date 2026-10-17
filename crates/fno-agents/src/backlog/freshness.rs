@@ -996,7 +996,8 @@ mod tests {
                        "title": "keep", "details": "the defect sits in src/keep.rs"}),
                 json!({"id": "x-3", "status": "done"}),
             ],
-        );
+        )
+        .unwrap();
         let marks = premise_marks(
             &graph,
             repo_dir.path(),
