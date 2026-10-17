@@ -436,7 +436,7 @@ fn target_owner(word: &str, id: &str) -> Option<String> {
     let owned = match word {
         "superseded" => format!("fno backlog supersede <new-id> --replaces {id} --cause --surface"),
         "done" => format!("fno backlog done {id}"),
-        "in_review" => format!("fno backlog update {id} --pr-number <n>"),
+        "in_review" => format!("fno backlog update {id} pr_number=<n>"),
         "in_progress" => format!("fno do target start {id}"),
         "blocked" => {
             "derived on read from blocked_by; supply it with --add-blocker <id>".to_string()
