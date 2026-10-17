@@ -277,20 +277,35 @@ fn keep_unkeep(home: &AgentsHome, handle: &str) -> i32 {
         Ok(found) => found,
         Err(code) => return code,
     };
-    match clear(home, &sid) {
-        Ok(true) => {
-            println!("unkept {name}; the row stands or retires on its own gates");
-            0
-        }
-        Ok(false) => {
-            eprintln!("{handle} carries no keep mark");
-            2
-        }
-        Err(e) => {
-            eprintln!("fno-agents: reap --unkeep refused: {e}");
-            2
+    // The row's own marker first; an inherited mark clears at its source,
+    // the same lineage for_row reads, so one command lifts the row's keep.
+    let mut targets = vec![sid.clone()];
+    if let Some(row) = crate::reap_release::load_registry_row(home, &sid) {
+        targets.extend(row.predecessor_session_ids.iter().cloned());
+        if let Some(fork) = row.forked_from_session_id.clone() {
+            targets.push(fork);
         }
     }
+    let mut cleared = Vec::new();
+    for target in &targets {
+        match clear(home, target) {
+            Ok(true) => cleared.push(target.clone()),
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("fno-agents: reap --unkeep refused: {e}");
+                return 2;
+            }
+        }
+    }
+    if cleared.is_empty() {
+        eprintln!("{handle} carries no keep mark");
+        return 2;
+    }
+    println!(
+        "unkept {name}; cleared the mark on {}; the row stands or retires on its own gates",
+        cleared.join(", ")
+    );
+    0
 }
 
 fn kept_list(home: &AgentsHome) -> i32 {
@@ -484,6 +499,23 @@ mod tests {
             from_args(&["--keep".to_string(), "bare".to_string()]),
             Some(2)
         );
+
+        // An inherited mark clears at its source: the row's own id carries
+        // no marker, the predecessor does, and --unkeep <row> lifts it.
+        let mut child = RegistryEntry::new(
+            Some("ffff2222-3333-4444".to_string()),
+            crate::state::Lineage::unproven("test"),
+        );
+        child.name = "w2".into();
+        child.harness_session_id = Some("ffff2222-3333-4444".into());
+        child.predecessor_session_ids = vec!["eeee8888-9999-0000".into()];
+        crate::state::update_registry(&reg, |r| r.entries.push(child)).unwrap();
+        set(&home, "eeee8888-9999-0000", "eeee8888-9999-0000").unwrap();
+        assert_eq!(
+            from_args(&["--unkeep".to_string(), "w2".to_string()]),
+            Some(0)
+        );
+        assert!(!home.keep_dir().join("eeee8888-9999-0000.json").exists());
         let _ = std::env::remove_var("FNO_AGENTS_HOME");
         let _ = std::fs::remove_dir_all(&dir);
     }

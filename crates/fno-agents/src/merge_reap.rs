@@ -769,6 +769,23 @@ fn run_request(
         );
         return (report.retired_names.len() as u64, true);
     }
+    // A kept-marked row is the user's exception: the tree it lives in waits
+    // with it, dirty or not, until the mark lifts or the request expires.
+    let marked: Vec<String> = kept
+        .iter()
+        .filter(|k| k.ends_with(":kept_marked"))
+        .map(|k| k.trim_end_matches(":kept_marked").to_string())
+        .collect();
+    if !marked.is_empty() {
+        emit_hold_once_per_hour(
+            home,
+            emitter,
+            request,
+            &format!("tree-held:keep-mark:{}", marked.join(",")),
+            now,
+        );
+        return (report.retired_names.len() as u64, true);
+    }
     let removed_rows: Vec<String> = report.retired_names.iter().cloned().collect();
     // 6. The tree, after the rows: whatever its git status, a done and
     // merged node's tree goes. A live process cwd is the remaining hold.
@@ -946,10 +963,15 @@ pub(crate) fn consume_merge_cleanup_requests(
             }
             let mut rows = Vec::new();
             for entry in merge_cleanup_rows(home, request) {
-                if entry.role_level.is_some()
-                    || entry.origin.as_deref() == Some("operator")
-                    || crate::keep_mark::for_row(home, &entry).is_some()
-                {
+                if entry.role_level.is_some() || entry.origin.as_deref() == Some("operator") {
+                    continue;
+                }
+                // A marked row is a candidate run_request must NAME
+                // (kept_marked), but it needs no age probe: the mark keeps
+                // it ahead of every age gate. It rides precomputed, never
+                // the probe batch.
+                if crate::keep_mark::for_row(home, &entry).is_some() {
+                    rows.push(entry);
                     continue;
                 }
                 batch_entries.push(entry.clone());
@@ -1774,10 +1796,8 @@ mod tests {
             &[
                 claude_row("target-x-1-worker", false),
                 claude_row("lead-x-1", true),
-                claude_row("marked-x-1", false),
             ],
         );
-        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
         let request = settled_request("/repo/wt");
         let seams = RequestSeams {
             finished: &|_entry| true,
@@ -1815,10 +1835,67 @@ mod tests {
                 .any(|k| k.as_str().starts_with("lead-x-1:kept_promoted")),
             "the teamed row must be named under kept_promoted: {kept:?}"
         );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+
+        // AC4-HP + the tree hold, the daemon shape: the marked row rides
+        // precomputed (no age probe), is named kept_marked, and the tree
+        // waits with it - no completion while the mark stands.
+        let home = temp_home("marked");
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        write_registry(
+            &home,
+            &[
+                claude_row("target-x-1-worker", false),
+                claude_row("marked-x-1", false),
+            ],
+        );
+        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
+        let request = settled_request("/repo/wt");
+        let mut precomputed: HashMap<String, Vec<state::RegistryEntry>> = HashMap::new();
+        precomputed.insert(
+            request.request_id.clone(),
+            merge_cleanup_rows(&home, &request)
+                .into_iter()
+                .filter(|e| e.role_level.is_none() && e.origin.as_deref() != Some("operator"))
+                .collect(),
+        );
+        let tree_calls = std::cell::RefCell::new(Vec::new());
+        let seams = RequestSeams {
+            finished: &|_entry| true,
+            stop: &|_entry| Ok("abc123".to_string()),
+            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
+            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
+            take_tree: &|_wt, _root| {
+                tree_calls.borrow_mut().push("take_tree".to_string());
+                true
+            },
+            tree_busy: &|_wt| Ok(false),
+        };
+        let (acted, held) = run_request(
+            &home,
+            &emitter,
+            &request,
+            "/repo",
+            merged_states().as_ref(),
+            None,
+            1_000_000,
+            &seams,
+            Some(&precomputed),
+        );
+        assert!(held, "the marked row holds the request: acted={acted}");
         assert!(
-            kept.iter()
-                .any(|k| k.as_str().starts_with("marked-x-1:kept_marked")),
-            "the marked row must be named under kept_marked: {kept:?}"
+            tree_calls.borrow().is_empty(),
+            "the tree waits with the marked row: {:?}",
+            tree_calls.borrow()
+        );
+        let events = crate::events::committed_journal_text(&home.events_jsonl());
+        assert!(
+            !events.contains("merge_cleanup_completed"),
+            "no completion while the mark stands: {events}"
+        );
+        assert!(
+            events.contains("tree-held:keep-mark:marked-x-1"),
+            "the hold names the marked row: {events}"
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
