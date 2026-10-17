@@ -1,0 +1,4 @@
+refused: you addressed this session. For a plain self-note the envelope is fine:
+    fno agents mail send <own-id> "text"
+To fire a verb at your own prompt line (no envelope, so the slash parses):
+    fno agents mail send '<payload>' --to-self --raw

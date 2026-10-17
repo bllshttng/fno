@@ -696,28 +696,11 @@ pub fn org_fold(
     // scope does not compile, nulls the owned fields of every fold with the
     // reason named - a quiet zero is the one answer it must never be.
     let owners: Result<(HashMap<String, String>, HashSet<String>), String> =
-        match crate::territory::live_teams(registry_path) {
-            Err(e) => Err(e.0),
-            Ok(live) => {
-                let (map, failed) = crate::territory::node_owners(
-                    &live,
-                    &entries,
-                    &Ok(projects.clone().unwrap_or_default()),
-                );
-                if failed.is_empty() {
-                    Ok((map, live.into_iter().map(|c| c.scope).collect()))
-                } else {
-                    Err(format!(
-                        "a live team's scope does not compile: {}",
-                        failed
-                            .iter()
-                            .map(|(s, e)| format!("{s}: {e}"))
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    ))
-                }
-            }
-        };
+        crate::territory::owner_read(
+            registry_path,
+            &entries,
+            &Ok(projects.clone().unwrap_or_default()),
+        );
     // Pass 1: fold with no workers named, collecting the node ids the worker
     // sweep will ask after.
     let mut want: BTreeSet<String> = BTreeSet::new();

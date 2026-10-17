@@ -114,7 +114,7 @@ fi
 
 Load [create.md](create.md) and execute it in this same context. The flow is draft-first: it composes the title and body from local history before any step that can fail. It then owns validation, push, PR creation, node binding, and its result contract. On a blocked step, print the step, the reason, the title and the full body from `.fno/pr-body.md`. Say no PR was created, and end `RESULT: BLOCKED step=<step> reason=<one line> draft=.fno/pr-body.md`. Do not spawn or dispatch a worker, route create mode through a model lane, or hand off the work to another agent.
 
-### 2c. Mirror the local verdict and post held findings after create
+### 2c. Mirror the local verdict and post the round's review after create
 
 The inline review ran before the PR existed, so it did not auto-post to GitHub. After creating the PR, run one verb that does both halves:
 
@@ -122,7 +122,7 @@ The inline review ran before the PR existed, so it did not auto-post to GitHub. 
 fno do pr publish-review --pr-number <N>
 ```
 
-The verdict leg defaults to the newest head-pinned attestation for HEAD. It refuses on a collision or a stale pin. It can only re-post a verdict the local gate already accepted. On an unconfigured lane it prints one `bot-review: skipped` receipt and nothing else happens. The held-findings leg is independent of that lane. It reads the newest attestation for the PR's branch (any head). When it carries findings and the marker comment is absent, it posts them as ONE PR comment. The post rides the caller's own gh auth. The JSON answer reads `held: posted` or `already-posted` on a re-run. When the reviewed head is behind the PR head, it reads `stale-posted`, and the comment names both shas. `fno-agents finalize` re-runs that leg as a backstop at every terminal decision. Report the receipt lines verbatim. A `refused` or `failed` receipt is a finding to surface. It is never a reason to stop the pipeline.
+The verdict leg defaults to the newest head-pinned attestation for HEAD. It refuses on a collision or a stale pin. It can only re-post a verdict the local gate already accepted. On an unconfigured lane it prints one `bot-review: skipped` receipt and nothing else happens. The round leg, `publish_round`, is independent of that lane. It runs regardless of `review.bot_identity`. That is what makes it work under this project's own default posture, `self_review`, with no bot identity configured. It reads the newest attestation for the PR's branch, at any head. It posts a formal `pulls/{n}/reviews` review under the caller's own gh auth. The review summarizes level, round, finding count, verdict, and head, even on a clean zero-finding pass, not just a round that found something. The JSON answer reads `round: posted` or `already-posted` on a re-run. When the reviewed head is behind the PR head, it reads `stale-posted`, and the review names both shas. A best-effort pass then anchors each finding as its own inline comment. `inline_posted` on the answer counts how many landed. `fno-agents finalize` re-runs the round leg as a backstop at every terminal decision. Report the receipt lines verbatim. A `refused` or `failed` receipt is a finding to surface. It is never a reason to stop the pipeline. If the round still has not posted by merge time, `fno do pr status` carries `review_not_posted` in `ready_blockers` and the merge door holds on it. Re-running this verb clears it.
 
 ## Step 3: check mode (poll for external review)
 

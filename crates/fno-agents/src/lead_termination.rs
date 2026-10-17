@@ -394,6 +394,9 @@ impl GateProbe {
             Some("max_live" | "lead_share") => {
                 "live workers exiting (`fno agents gate-status` slot_rows)".into()
             }
+            Some("machine-runaway") => {
+                "machine runaway brake (`fno agents gate-status`); it expires on its own".into()
+            }
             Some("provider_cap" | "provider_quota_lock") => {
                 "provider lanes (`fno-agents provider-cap status`)".into()
             }

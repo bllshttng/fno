@@ -37,9 +37,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-// ---------------------------------------------------------------------------
-// Python-default json.dumps formatter (separators `, ` and `: `).
-// ---------------------------------------------------------------------------
+// --- Python-default json.dumps formatter (separators `, ` and `: `). ---
 
 /// A serde_json [`Formatter`](serde_json::ser::Formatter) that mirrors Python's
 /// default `json.dumps` spacing: `", "` between items and `": "` after a key.
@@ -110,9 +108,7 @@ pub(crate) fn expand_eq(rest: &[String]) -> Vec<String> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// ping
-// ---------------------------------------------------------------------------
+// --- ping ------------------------------------------------------------------
 
 /// `fno-agents ping` -- verbatim port of the Python phase-1 stub.
 ///
@@ -1155,9 +1151,10 @@ fn one_or_ambiguous<'a>(hits: Vec<&'a Value>, token: &str) -> Result<&'a Value, 
     Ok(distinct[0])
 }
 
-/// Resolve a name, full session id, transport short id, canonical handle, or
-/// legacy prefix to one row. A full id is explicit and resolves first; every
-/// shorter address category is unioned before uniqueness is decided.
+/// Resolve a name, alias, full session id, transport short id, canonical
+/// handle, or legacy prefix to one row. A full id is explicit and resolves
+/// first; every shorter address category is unioned before uniqueness is
+/// decided.
 pub(crate) fn find_agent_entry<'a>(
     rows: &'a [Value],
     token: &str,
@@ -1178,6 +1175,20 @@ pub(crate) fn find_agent_entry<'a>(
         .iter()
         .filter(|e| e.get("name").and_then(Value::as_str) == Some(token))
         .collect();
+    // A row's prior labels (`aliases`, Python AgentEntry mirror) stay in the
+    // shared address namespace: rename_agent appends the old name and a raw
+    // send by it must still resolve.
+    short_namespace.extend(rows.iter().filter(|e| {
+        e.get("aliases")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|s| s == token))
+    }));
+    // Python's resolver unions an exact fno_id hit with no shape gate; the
+    // id is a primary key, so equality alone cannot over-match.
+    short_namespace.extend(
+        rows.iter()
+            .filter(|e| e.get("fno_id").and_then(Value::as_str) == Some(token)),
+    );
     short_namespace.extend(rows
         .iter()
         .filter(|e| matches!(e.get("short_id").and_then(Value::as_str), Some(s) if !s.is_empty() && s == token))
@@ -3253,13 +3264,8 @@ mod tests {
             e["harness_session_id"],
             "08054b1d-2222-3333-4444-555555555555"
         );
-
         // a predecessor's 8-hex short retired with it and never
         // re-enters the successor's short-address namespace.
-        let mut row = claude_row("worker", "08054b1d", "08054b1d-2222-3333-4444-555555555555");
-        row["predecessor_session_ids"] = json!(["e6f78b98-1111-2222-3333-444444444444"]);
-        let rows = vec![row];
-
         assert!(matches!(
             find_agent_entry(&rows, "e6f78b98"),
             Err(ResolveError::NotFound(_))

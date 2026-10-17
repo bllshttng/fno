@@ -11,6 +11,10 @@ struct Fake {
     dispatch_hold: Option<ProbeOutcome>,
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
+    review_posted: Option<ProbeOutcome>,
+    /// The `reviewed_head` argument review_posted_gate last passed in, so a
+    /// test can prove it threaded the attestation's own head, not a guess.
+    review_posted_head_seen: RefCell<Option<String>>,
     review_hold: Option<ProbeOutcome>,
     lineage: Option<ProbeOutcome>,
     merge_result: Option<ProbeOutcome>,
@@ -173,6 +177,95 @@ fn take_slot_refuses_a_live_legacy_lockfile_without_creating_a_second_slot() {
     });
 }
 
+/// code+class for each scenario: no attestation (stays silent, the gap
+/// belongs to review_coverage_uncovered), an attestation with GitHub
+/// lacking the post (Held, self-clearing), posted (clear), an unreadable
+/// probe (Unknown, never a silent pass), and a round carried forward to a
+/// new head with no fresh attestation event of its own (still found,
+/// branch-wide, never silenced by an exact-head miss).
+#[test]
+fn review_posted_gate_covers_its_five_cases() {
+    let temp = tempfile::TempDir::new().unwrap();
+    with_claims_root(temp.path(), || {
+        let spaces = temp.path().join("spaces");
+        std::fs::create_dir_all(&spaces).unwrap();
+        let saved = std::env::var("FNO_SPACES_DIR").ok();
+        std::env::set_var("FNO_SPACES_DIR", &spaces);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let facts = PrFacts {
+            number: 931,
+            head_sha: "h1sha".to_string(),
+            head_ref: "feature/x".to_string(),
+            base_ref: "main".to_string(),
+            url: "https://github.com/o/r/pull/931".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            armed: false,
+        };
+        let gate = |outcome: ProbeOutcome| {
+            crate::merge_gates::review_posted_gate(
+                &Fake {
+                    review_posted: Some(outcome),
+                    ..Default::default()
+                },
+                &repo,
+                &facts,
+            )
+        };
+
+        assert_eq!(
+            gate(ProbeOutcome::Refused("must not be asked".into())),
+            None
+        );
+
+        let journal = crate::paths::events_path(&repo);
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        std::fs::write(
+            &journal,
+            "{\"type\":\"review_attestation\",\"ts\":\"2026-10-16T10:00:00Z\",\"data\":{\"branch\":\"feature/x\",\"head_sha\":\"h1sha\",\"verdict\":\"pass\",\"reviewer\":\"code-review\"}}\n",
+        )
+        .unwrap();
+
+        let blocker = gate(ProbeOutcome::Refused("not yet posted".into())).unwrap();
+        assert_eq!(blocker.code, "review_not_posted");
+        assert_eq!(blocker.class, BlockerClass::Held);
+
+        assert_eq!(gate(ProbeOutcome::Clear), None);
+
+        let blocker = gate(ProbeOutcome::Inconclusive("gh timed out".into())).unwrap();
+        assert_eq!(blocker.code, "review_posted_unknown");
+        assert_eq!(blocker.class, BlockerClass::Unknown);
+
+        // A round carried forward under law d-608344c1 (rebase, interdiff
+        // under the cap) never gets a fresh attestation EVENT at the new
+        // head - only the original head carries one. The gate must still
+        // find it (branch-wide, not exact-head) and probe for THAT head's
+        // marker, never facts.head_sha.
+        std::fs::write(
+            &journal,
+            "{\"type\":\"review_attestation\",\"ts\":\"2026-10-16T11:00:00Z\",\"data\":{\"branch\":\"feature/x\",\"head_sha\":\"h0sha-pre-rebase\",\"verdict\":\"pass\",\"reviewer\":\"code-review\"}}\n",
+        )
+        .unwrap();
+        let fake = Fake {
+            review_posted: Some(ProbeOutcome::Refused("not yet posted".into())),
+            ..Default::default()
+        };
+        let blocker = crate::merge_gates::review_posted_gate(&fake, &repo, &facts)
+            .expect("a carried-forward round with no posted review must still block");
+        assert_eq!(blocker.code, "review_not_posted");
+        assert_eq!(
+            fake.review_posted_head_seen.borrow().as_deref(),
+            Some("h0sha-pre-rebase")
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+    });
+}
+
 impl Probes for Fake {
     fn pr_facts(&self, _cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
         if let Some(error) = &self.facts_error {
@@ -203,6 +296,10 @@ impl Probes for Fake {
     }
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.pr_hold.clone().unwrap_or(ProbeOutcome::Clear)
+    }
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
+        self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn review_hold(&self, _cwd: &Path, _pr: u64) -> ProbeOutcome {
         self.review_hold.clone().unwrap_or(ProbeOutcome::Clear)
@@ -1168,6 +1265,43 @@ fn an_unknown_authority_read_refuses_rather_than_arming() {
     req.approved = None;
     req.auto_merge_source = None;
     assert_eq!(run(&fake, &req).word(), "refused");
+}
+
+#[test]
+fn a_default_off_stamp_folds_like_an_unset_field() {
+    // The `default-off` stamp is init's failed config read, not a decision:
+    // it must fold exactly like an absent field, so a stamped worker merges
+    // when the live switch is on and the standing switch still refuses when
+    // it is off. An explicit per-run refusal never carries this source.
+    assert!(super::posture_is_default_off(
+        Some(false),
+        Some("default-off")
+    ));
+    assert!(!super::posture_is_default_off(
+        Some(false),
+        Some("flag-no-merge")
+    ));
+    assert!(!super::posture_is_default_off(
+        Some(true),
+        Some("default-off")
+    ));
+    assert!(!super::posture_is_default_off(Some(false), None));
+    let on = clean();
+    let mut arm_req = request(Effect::Arm);
+    arm_req.approved = Some(false);
+    arm_req.auto_merge_source = Some("default-off".to_string());
+    assert_eq!(run(&on, &arm_req).word(), "armed");
+    let mut merge_req = request(Effect::Merge);
+    merge_req.approved = Some(false);
+    merge_req.auto_merge_source = Some("default-off".to_string());
+    assert_eq!(run(&on, &merge_req).word(), "merged");
+    let off = Fake {
+        enabled: false,
+        ..clean()
+    };
+    let outcome = run(&off, &merge_req);
+    assert_eq!(outcome.word(), "refused");
+    assert!(outcome.detail().contains("auto_merge.enabled"));
 }
 
 #[test]

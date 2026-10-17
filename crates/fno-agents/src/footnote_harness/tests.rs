@@ -299,7 +299,9 @@ fn a_running_child_carries_a_start_token_and_a_stop_ends_it() {
 }
 
 /// The pane spec is the launch spec in a file only its owner reads, because
-/// it carries the endpoint key. A missing model refuses before any write.
+/// it carries the endpoint key. A missing model refuses before any write. A
+/// caller-assigned id names the TUI's first session, so the spec carries it and
+/// the session dir ends in it; a malformed id refuses before any write.
 #[test]
 fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
     use std::os::unix::fs::PermissionsExt;
@@ -309,21 +311,107 @@ fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
     ]);
-    let refused = write_pane_spec(tmp.path(), "", None, None);
-    let path = write_pane_spec(tmp.path(), "glm-test", Some("x-1"), Some("plan"));
+    let id = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
+    let named = write_pane_spec(tmp.path(), "glm-test", None, None, Some(id));
+    let malformed: Vec<_> = ["../x", "0B73A1C0-6BD0-4BF7-A30F-9B1FDDAC1E58", ""]
+        .into_iter()
+        .map(|bad| write_pane_spec(tmp.path(), "glm-test", None, None, Some(bad)))
+        .collect();
+    let root = transcript::sessions_root();
+    let files = std::fs::read_dir(&root).unwrap().count();
+    let refused = write_pane_spec(tmp.path(), "", None, None, None);
+    let written = write_pane_spec(tmp.path(), "glm-test", Some("x-1"), Some("plan"), None);
     restore_env(saved);
+    let (named_path, named_sid) = named.unwrap();
+    assert_eq!(named_sid, id);
+    let named_spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&named_path).unwrap()).unwrap();
+    assert_eq!(named_spec["fno_id"], id);
+    assert!(named_spec["session_dir"].as_str().unwrap().ends_with(id));
+    for bad in malformed {
+        assert!(bad.unwrap_err().contains("malformed fno_id"));
+    }
+    assert_eq!(files, 1);
     assert!(refused.unwrap_err().contains("needs -m"));
-    let path = path.unwrap();
+    let (path, sid) = written.unwrap();
+    assert!(crate::resume_wake::is_uuid_shaped(&sid));
     assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
     let spec: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(spec["v"], 2);
+    assert_eq!(spec["fno_id"], sid.as_str());
     assert_eq!(spec["model"], "glm-test");
     assert_eq!(spec["node"], "x-1");
     assert_eq!(spec["permission_mode"], "plan");
     assert!(spec["endpoint"]["key"]
         .as_str()
         .is_some_and(|k| !k.is_empty()));
+}
+
+/// A pane row binds the TUI's session as `harness_session_id`, and its birth
+/// `fno_id` names no transcript, so an ask resumes the bound session. A
+/// headless row sets both ids to one value and resumes as before.
+#[test]
+fn an_ask_resumes_the_session_the_harness_id_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _home = crate::AgentsHomeEnvGuard::set(&tmp.path().join("agents-home"));
+    let home = AgentsHome::from_env();
+    let birth = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
+    let bound = "5a1c0f2e-9d34-4c7b-8e21-3f6a7b9c0d12";
+    let plain = "c4e8d2a6-1f37-4a90-b5d3-72e0a9f14c68";
+    for id in [bound, plain] {
+        let dir = transcript::session_dir(&transcript::sessions_root(), tmp.path(), id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(transcript::transcript_file(&dir, id), "").unwrap();
+    }
+    let rows = [("fx-pane", birth, bound), ("fx-headless", plain, plain)];
+    for (name, fno_id, harness_id) in rows {
+        let mut row = RegistryEntry {
+            name: name.to_string(),
+            harness: Some("footnote".into()),
+            harness_session_id: Some(harness_id.into()),
+            requested_model: Some("glm-test".into()),
+            cwd: tmp.path().to_string_lossy().to_string(),
+            ..RegistryEntry::new(
+                Some(harness_id.into()),
+                crate::spawn_lineage::ambient_lineage(),
+            )
+        };
+        row.fno_id = Some(fno_id.into());
+        update_registry(&home.registry_json(), |reg| {
+            reg.entries.push(row.clone());
+            true
+        })
+        .unwrap();
+    }
+    let seen = tmp.path().join("spec.json");
+    let bin = crate::write_exec_stub(
+        tmp.path(),
+        "footnote",
+        &format!("#!/bin/sh\ncat > '{}'\nexit 2\n", seen.display()),
+    );
+    let saved = set_env(&[
+        ("FNO_FOOTNOTE_BIN", bin.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+    ]);
+    let specs: Vec<_> = rows
+        .into_iter()
+        .map(|(name, _, want)| {
+            let _ = std::fs::remove_file(&seen);
+            let code = maybe_run_ask(&home, &serde_json::json!({"message": "hi"}), name);
+            let body = std::fs::read_to_string(&seen).unwrap_or_default();
+            (code, serde_json::from_str::<serde_json::Value>(&body), want)
+        })
+        .collect();
+    restore_env(saved);
+    for (code, spec, want) in specs {
+        let spec = spec.expect("the stand-in binary never read a spec");
+        assert_eq!(code, Some(2));
+        assert_eq!(spec["mode"], "resume");
+        assert_eq!(spec["fno_id"], want);
+        assert!(spec["session_dir"].as_str().unwrap().ends_with(want));
+    }
 }
 
 fn set_env(vars: &[(&'static str, &str)]) -> Vec<(&'static str, Option<std::ffi::OsString>)> {

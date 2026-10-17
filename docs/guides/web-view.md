@@ -77,7 +77,13 @@ CAUTION: Do not use `--bind 0.0.0.0`. It opens the port on every interface, incl
 
 ## Share one pane with someone on another network
 
-A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. Run the share in a terminal you can see, for example a mux pane beside the agent:
+A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. The share is experimental, so it is off until you turn it on. Open the mux sideline menu and switch on `pane share` under `experimental`.
+
+The quick way: focus the pane and press `prefix X`, or pick `share focused pane` in the menu. The mux starts a tunnelled share, copies the join link, and keeps running it until you pick `stop sharing` or close the mux. Press `prefix X` again to copy the link again. This path needs `cloudflared`.
+
+When a viewer knocks, a popup appears on whatever pane you are on. The cursor starts on deny, so a stray Enter while you type never lets anyone in. Press Up, then Enter, to admit. If you dismiss the popup, the menu shows how many knocks wait.
+
+To run the share by hand, use a terminal you can see, for example a mux pane beside the agent:
 
 ```bash
 fno mux pane ls                       # find the pane id
@@ -88,7 +94,8 @@ The share prints a join link. Send the whole link to the viewer. The secret is i
 
 The flags:
 
-- `--share` starts a share instead of the web view. It needs a terminal, because you admit viewers by typing in it.
+- `--share` starts a share instead of the web view. It needs a terminal, because you admit viewers by typing in it, unless you pass `--managed`.
+- `--managed` is for a parent process, such as the mux. It needs no terminal. It prints `link`, `knock`, `gone` and `end` lines on stdout, and it reads `a <n>` and `d <n>` on stdin.
 - `--pane <id>` names the one pane to show. It has no default.
 - `--tunnel` starts a Cloudflare quick tunnel and prints a public `https://<name>.trycloudflare.com` link. Install `cloudflared` first (macOS: `brew install cloudflared`). Without `--tunnel`, the link works on this machine only. Forward the port with `ssh -R` or your own tunnel to reach another network.
 - `--steer` lets viewers send notes to the agent. It is off by default.
