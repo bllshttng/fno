@@ -46,19 +46,35 @@ fn scrubbed() -> Command {
     cmd
 }
 
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    for (k, _) in std::env::vars_os() {
+        let text = k.to_string_lossy().to_string();
+        if SCRUB_PREFIXES.iter().any(|p| text.starts_with(p)) {
+            cmd.env_remove(&k);
+        }
+    }
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
+    cmd
+}
+
 fn git(repo: &Path, args: &[&str]) {
-    let ok = scrubbed()
-        .args(git_args(args))
+    let out = git_command()
+        .args(args)
         .current_dir(repo)
         .output()
-        .expect("git spawns")
-        .status
-        .success();
-    assert!(ok, "git {args:?} failed in {}", repo.display());
+        .expect("git spawns");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {}: {}",
+        repo.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn repo_head9(repo: &Path) -> String {
-    let out = std::process::Command::new("git")
+    let out = git_command()
         .args(["rev-parse", "HEAD"])
         .current_dir(repo)
         .output()
@@ -68,13 +84,6 @@ fn repo_head9(repo: &Path) -> String {
         .trim()
         .chars()
         .take(9)
-        .collect()
-}
-
-fn git_args(args: &[&str]) -> Vec<String> {
-    ["git".to_string()]
-        .into_iter()
-        .chain(args.iter().map(|s| s.to_string()))
         .collect()
 }
 
