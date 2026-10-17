@@ -699,10 +699,16 @@ mod tests {
         assert!(!v.viewer_focused(), "and hands the keyboard back");
         assert!(mouse(&mut v, press(5, 100)) && v.viewer_focused());
         assert!(!mouse(&mut v, press(5, 2)));
-        assert_eq!(super::super::esc_close::tap_chip(&mut v).await, 1);
+        // A panel's close sends the new content area, so the chip tap that
+        // `tap_chip` asserts silent is called directly here.
+        let (mut scanner, mut sock) = (Scanner::default(), Vec::new());
+        super::super::esc_close::tap(&mut v, &mut scanner, &mut sock)
+            .await
+            .unwrap();
         assert!(
             v.viewer.open.is_none(),
             "the chip closes an unfocused panel"
         );
+        assert!(!sock.is_empty(), "and the panes get their columns back");
     }
 }
