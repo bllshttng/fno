@@ -79,19 +79,8 @@ HEAD_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c"
 DEFAULT_ANSWERS = {
     # The PR head read (verb_call authorized-merge op=pr-head). The value
     # rides the __HEAD_SHA__ placeholder so substitute_placeholders aligns it
-    # with the seeded commit the planted rows name. The facts fields ride the
-    # same answer: the native head probe shells `fno do pr info` against this
-    # stub and parses pr/head_sha/head_ref, so the corpus serves either door.
-    # Every coverage-gate case is PR 7 on feature/x against main.
-    "pr-head": {
-        "json": {
-            "head": "__HEAD_SHA__",
-            "pr": 7,
-            "head_sha": "__HEAD_SHA__",
-            "head_ref": "feature/x",
-            "base_ref": "main",
-        }
-    },
+    # with the seeded commit the planted rows name.
+    "pr-head": {"json": {"head": "__HEAD_SHA__"}},
     # The sized self-review invocation render (verb_call review-level).
     "review-level": {"json": {"invocation": "fno do review --level medium --reviewer code-review"}},
 }
@@ -355,6 +344,22 @@ def main():
             sys.exit(3)
         with open(path) as fh:
             emit(json.load(fh))
+    if door == "do-pr":
+        # The native gate's PR facts read (`fno do pr info <n>`): answered
+        # from answers/front-pr-info.json. The port moved the head hop from
+        # the agents door to the front door, so the call journals under the
+        # agents fold with the hop's original name and the fold vocabulary
+        # survives the transport move.
+        pr = argv[2] if len(argv) > 2 else ""
+        with open(os.path.join(journals, "fno-agents.jsonl"), "a") as fh:
+            fh.write(json.dumps({"op": "pr-head", "pr": pr}, sort_keys=True) + "\n")
+        path = os.path.join(answers_dir, "front-pr-info.json")
+        if not os.path.exists(path):
+            sys.stderr.write("stub fno: no answers/front-pr-info.json\n")
+            sys.exit(3)
+        with open(path) as fh:
+            emit(json.load(fh))
+        return
     sys.stderr.write("stub fno: unhandled argv: %s\n" % " ".join(argv))
     sys.exit(3)
 
@@ -513,6 +518,19 @@ def build_case(root_path, case, index):
     front["decide"] = (case.get("front") or {}).get("decide") or front["decide"]
     (answers_dir / "front-decide.json").write_text(
         json.dumps(front["decide"], sort_keys=True) + "\n"
+    )
+    # The native gate's PR facts read (`fno do pr info <n>`) lands on the
+    # front door. Served from the pr-head facts payload, per-case overridable
+    # through front.pr_info; the __HEAD_SHA__ placeholder keeps it aligned
+    # with the seeded commit the planted rows name.
+    front["pr_info"] = ((case.get("front") or {}).get("pr_info")) or {
+        "pr": case.get("pr", 7),
+        "head_sha": "__HEAD_SHA__",
+        "head_ref": "feature/x",
+        "base_ref": "main",
+    }
+    (answers_dir / "front-pr-info.json").write_text(
+        json.dumps(front["pr_info"], sort_keys=True) + "\n"
     )
     (case_dir / "journals").mkdir()
     (case_dir / "home" / "agents-home").mkdir(parents=True)

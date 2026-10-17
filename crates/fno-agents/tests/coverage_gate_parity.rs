@@ -170,6 +170,10 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     cmd.env("FNO_COVERAGE_CASE_DIR", case_dir);
     cmd.env("FNO_AGENTS_BIN", stubbin.join("fno-agents"));
     cmd.env("FNO_LOOPCHECK_FNO_BIN", stubbin.join("fno"));
+    // The head probe resolves its front binary through FNO_BIN (scrape), not
+    // through the loopcheck seam above: unpinned it finds the operator's
+    // deployed fno and the case world never sees the read.
+    cmd.env("FNO_BIN", stubbin.join("fno"));
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
