@@ -9,7 +9,7 @@
 //! that), its own parent must be a real process (not a detached shared host,
 //! ppid 0 or 1), and no ancestor above that may itself be a harness.
 
-use crate::census::ProcRow;
+use crate::census::{descendants, ProcRow};
 use crate::spawn_context;
 use std::collections::BTreeMap;
 
