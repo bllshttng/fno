@@ -2579,7 +2579,17 @@ const reversed = nestChildren([
 ]);
 eq(reversed.map((r) => r.card.id), ["par", "kid"], "a child listed first still follows its parent");
 eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
-console.log("snapshot page helpers: 36 cases ok");
+// The board-request links: the request opens a prefilled issue on the
+// repo's issues/new, and the upvote names the card id only.
+const reqUrl = requestIssueUrl("o/r", "fno-request");
+eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
+eq(reqUrl.searchParams.get("label"), "fno-request", "the request label param");
+eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
+const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
+eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
+eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
+eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
+console.log("snapshot page helpers: 38 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
 const M = { meta: false, ctrl: false };
@@ -2687,6 +2697,8 @@ console.log("recent searches: 12 cases ok");
                 "copiedToast",
                 "pushRecent",
                 "loadRecent",
+                "requestIssueUrl",
+                "upvoteIssueUrl",
             ]
             .iter()
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))
@@ -2716,7 +2728,7 @@ console.log("recent searches: 12 cases ok");
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 assert!(
-                    stdout.contains("snapshot page helpers: 36 cases ok"),
+                    stdout.contains("snapshot page helpers: 38 cases ok"),
                     "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
                 );
                 assert!(

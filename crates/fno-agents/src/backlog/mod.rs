@@ -78,6 +78,7 @@ pub(crate) mod reconcile_cli;
 pub mod relatedness;
 pub mod relations;
 pub mod render;
+pub mod requests;
 pub mod schema_v4;
 pub mod search;
 pub mod session_cli;

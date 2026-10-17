@@ -438,6 +438,7 @@ mod tests {
             session_ids: vec![],
             encounters: 0,
             encounters_operator: 0,
+            encounters_external: 0,
         }
     }
 }
