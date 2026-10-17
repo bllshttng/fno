@@ -1327,6 +1327,18 @@ pub fn deliver_via_keeper_socket_in(
                     Some(file) => confirm_content_after(&file, &marker, 0).unwrap_or(false),
                     None => false,
                 },
+                "footnote" => match crate::footnote_harness::transcript::find_session_dir(
+                    &crate::footnote_harness::transcript::sessions_root(),
+                    session,
+                ) {
+                    Some(dir) => confirm_content_after(
+                        &crate::footnote_harness::transcript::transcript_file(&dir, session),
+                        &marker,
+                        0,
+                    )
+                    .unwrap_or(false),
+                    None => false,
+                },
                 _ => match crate::grok_store::lookup_session(grok_root, session) {
                     crate::pi::SessionLookup::One { file } => {
                         confirm_content_after(&file, &marker, 0).unwrap_or(false)
