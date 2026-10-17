@@ -56,7 +56,7 @@ fn cursor_thread_row(
 /// parent, because a reaped-then-dead pid would otherwise answer kill(0)
 /// as a zombie and read as a survivor.
 fn spawn_worker_server(pre_exec: &str) -> u32 {
-    let child = std::process::Command::new("/bin/bash")
+    let mut child = std::process::Command::new("/bin/bash")
         .arg("-c")
         .arg(format!(
             "{pre_exec}; exec -a 'cursor-agent worker-server fake' /bin/sleep 30"
