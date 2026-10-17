@@ -63,3 +63,20 @@ fix-forward rounds are expected.
 - The diff budget reads large (+7350/-1301) because a port adds the Rust
   leg before the ledger can see the deletions net out; the Python side of
   the ledger is the deleted body plus the job modules.
+
+## CI round one (d6e6705d) and the fix commit
+
+The first compile raised 91 errors and 7 warnings, fixed in `c27d56d1d7`
+from the CI log alone (the freeze still held). The bulk was field
+visibility after the module split; the real finds underneath: the
+switchboard exchange spoke invented RPC params the daemon refuses (the
+real contract is to/from/mirror/recipient_identity plus a delivered and
+identity_verified verdict), and the graph reads named readers that do not
+exist.
+
+Two gaps stay open on purpose, both filed for a follow-up wave:
+the harness-store probe leg (store_fallback's claude/codex/opencode
+scans) reads clean and empty, so a session that only lives in a harness
+store resolves as unknown; and the a2a autonomous relay kickoff stays
+Python-side, with the Rust send verb gating to the observed single hop.
+The node filing retried after the graph's version conflicts clear.

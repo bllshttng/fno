@@ -1380,7 +1380,7 @@ pub(super) fn dispatch_send_locked(
         "agent_send_started",
         json!({"name": name, "provider": str_field(&existing, "harness"), "msg_id": msg_id}),
     );
-    let mut write_durable = |live_attempted: bool| -> Result<(), (String, i32)> {
+    let write_durable = |live_attempted: bool| -> Result<(), (String, i32)> {
         let queued = queue_durable_fallback(
             &existing,
             message,
@@ -1526,11 +1526,12 @@ pub(super) fn dispatch_send_locked(
         eprintln!("{notice}");
     }
     stamp_after_delivery(name, &delivery, canonical_identity);
+    let durable_queued = delivery == "durable";
     Ok(DispatchSendResult {
         msg_id,
         delivery,
         reason: live_miss_reason,
-        durable_owner: if delivery == "durable" {
+        durable_owner: if durable_queued {
             Some(durable_owner.to_string())
         } else {
             None

@@ -218,7 +218,12 @@ const PLAIN_ARM: &str = concat!(
     "   # drive it yourself (claude)\n    fno agents mail withdraw <id>      # none of the above? retract it",
 );
 
-pub(crate) fn warn_deferred(target: &str, arm: &str, reason: Option<&str>, head: Option<&str>) -> String {
+pub(crate) fn warn_deferred(
+    target: &str,
+    arm: &str,
+    reason: Option<&str>,
+    head: Option<&str>,
+) -> String {
     let arm_text = match arm {
         "project" => PROJECT_ARM,
         "lock" => LOCK_ARM,

@@ -373,7 +373,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         sender_harness.as_deref(),
         args.reply_to,
         sender_session.as_deref(),
-        sender_model.as_deref(),
+        Some(sender_model.as_str()),
         Some(authored_words as i64),
         args.subject,
     );
@@ -1077,23 +1077,53 @@ pub(super) fn kind_lane_send(
         "ref_node": args.ref_node,
         "ref_gate": args.ref_gate,
     });
-    let write = write_durable_thread(
-        &recipient,
-        &sender,
-        kind,
-        content,
-        &msg_id,
-        None,
-        None,
-        None,
-        None,
-        None,
-        "inbox-drain",
-        Some(crate::backlog::style_check::word_count(content) as i64),
-        mail_origin,
-        subject,
-        args.reply_to.as_deref(),
-    );
+    let write = match args.reply_to.as_deref() {
+        Some(reply_to) => match find_thread_by_msg_id(&recipient, reply_to) {
+            Some(thread_path) => append_to_kind_thread(
+                &thread_path,
+                &sender,
+                kind,
+                content,
+                &msg_id,
+                Some(crate::backlog::style_check::word_count(content) as i64),
+                mail_origin,
+            ),
+            None => write_durable_thread(
+                &recipient,
+                &sender,
+                kind,
+                content,
+                &msg_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "inbox-drain",
+                Some(crate::backlog::style_check::word_count(content) as i64),
+                mail_origin,
+                subject,
+                Some(reply_to),
+            ),
+        },
+        None => write_durable_thread(
+            &recipient,
+            &sender,
+            kind,
+            content,
+            &msg_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "inbox-drain",
+            Some(crate::backlog::style_check::word_count(content) as i64),
+            mail_origin,
+            subject,
+            None,
+        ),
+    };
     let thread_id = match write {
         Ok(_) => msg_id,
         Err(exc) => {
@@ -1117,7 +1147,7 @@ pub(super) fn kind_lane_send(
                 if resolved.agent == "claude" {
                     let cwd = resolved.cwd.clone().map(PathBuf::from);
                     let (woke, short) = match cwd {
-                        Some(dir) => wake_and_deliver(&resolved.session_id, "", Some(dir.to_str())),
+                        Some(dir) => wake_and_deliver(&resolved.session_id, "", dir.to_str()),
                         None => wake_and_deliver(&resolved.session_id, "", None),
                     };
                     if woke {
@@ -1128,7 +1158,7 @@ pub(super) fn kind_lane_send(
         }
     }
     if args.json_out {
-        let inbox = inbox_dir_for(&recipient);
+        let inbox = inbox_dir_for(&recipient).unwrap_or_default();
         println!(
             "{}",
             json!({
@@ -1230,14 +1260,20 @@ pub(super) fn resolve_node_holder(node_id: &str) -> JobHolder {
         crate::claims::ClaimState::Free => "free",
         _ => "stale",
     };
-    let session_id = record.as_ref().and_then(|rec| {
-        rec.holder
-            .strip_prefix("target-session:")
-            .map(str::to_string)
-    });
-    // The claim record carries no harness axis; the lane floors to claude
-    // exactly as the Python read of an absent key did.
-    let harness: Option<String> = None;
+    // The record's own session identity is authoritative ("the holder string
+    // is a published credential and is never parsed for identity"); the
+    // holder-prefix parse is the legacy fallback for pre-change records.
+    let session_id = record
+        .as_ref()
+        .and_then(|rec| rec.session_id.clone())
+        .or_else(|| {
+            record.as_ref().and_then(|rec| {
+                rec.holder
+                    .strip_prefix("target-session:")
+                    .map(str::to_string)
+            })
+        });
+    let harness = record.as_ref().and_then(|rec| rec.harness.clone());
     JobHolder {
         address: key,
         state: state_text.to_string(),
@@ -1289,7 +1325,7 @@ pub(super) fn job_lane_send(
     payload: &str,
     token: &str,
     from_name: Option<&str>,
-    style_exception: Option<&str>,
+    _style_exception: Option<&str>,
     origin: Option<&str>,
     subject: Option<&str>,
 ) -> Result<(), i32> {
