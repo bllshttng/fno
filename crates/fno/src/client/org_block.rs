@@ -11,7 +11,7 @@ impl View {
     /// The width an org line may fill: the paint width less the divider
     /// column the painter never writes into. Fitting to the full paint width
     /// lets a line that just fits lose its last character to the clip.
-    pub(super) fn org_text_w(&self) -> usize {
+    fn org_text_w(&self) -> usize {
         self.sideline_paint_w().saturating_sub(1)
     }
 
@@ -75,7 +75,7 @@ impl View {
             self.org
                 .minimized_lines(&self.layout.agents, self.org_text_w())
         };
-        lines.extend(self.observer_lines());
+        lines.extend(self.observer_lines(self.org_text_w()));
         let available = term_rows
             .saturating_sub(1)
             .saturating_sub(self.bottom_row_is_chrome() as usize);

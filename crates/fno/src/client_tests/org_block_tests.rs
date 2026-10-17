@@ -117,10 +117,11 @@ impl View {
 
 // `draw_sideline` paints at `panel_w - 1` (the divider column is not text). An
 // org line fitted to the full panel width lost its last character to that
-// clip: `team 0/3 live · 1 observed` painted as `· 1 observe`.
+// clip: `team 0/3 live · 1 observed` painted as `· 1 observe`. Sweep the
+// panel width so some width lands a fitted line exactly on the boundary.
 #[test]
-fn org_lines_fit_the_width_the_sideline_paints_at() {
-    let view = View::new(
+fn a_fitted_org_line_paints_whole_at_every_panel_width() {
+    let mut view = View::new(
         (24, 100),
         "main".into(),
         LayoutView {
@@ -133,5 +134,33 @@ fn org_lines_fit_the_width_the_sideline_paints_at() {
             focus_node: None,
         },
     );
-    assert_eq!(view.org_text_w(), view.panel_w() as usize - 1);
+    view.org.apply(crate::org_overlay::FoldPart::Gate(Ok(
+        crate::org_overlay::GateReading {
+            slots: Some(0),
+            max_live: Some(3),
+            ..Default::default()
+        },
+    )));
+    for width in 20..=70u16 {
+        view.sideline_width = width;
+        let panel_w = view.panel_w() as usize;
+        let (_, lines) = view.org_block_layout(24);
+        let want = lines
+            .iter()
+            .find(|l| l.starts_with("  team"))
+            .expect("the minimized glance carries a team line");
+        let (rows, cols) = (24usize, 100usize);
+        let mut cells = vec![crate::proto::Cell::default(); rows * cols];
+        view.draw_sideline(&mut cells, rows, cols, panel_w);
+        let painted = (0..rows)
+            .map(|r| {
+                cells[r * cols..r * cols + panel_w]
+                    .iter()
+                    .map(|c| c.c)
+                    .collect::<String>()
+            })
+            .find(|row| row.starts_with("  team"))
+            .expect("the team line painted");
+        assert_eq!(painted.trim_end(), want.trim_end(), "panel width {width}");
+    }
 }
