@@ -360,7 +360,7 @@ mod tests {
         let lines = receipt_lines(&r, "ab-new", &entries);
         assert_eq!(
             lines[0],
-            "rollup: auto-linked ab-new -> x-e0aa0001 \"Deployment pipeline hardening\" (score 0.70); undo: fno backlog update ab-new --parent null"
+            "rollup: auto-linked ab-new -> x-e0aa0001 \"Deployment pipeline hardening\" (score 0.70); undo: fno backlog update ab-new parent=null"
         );
     }
 
