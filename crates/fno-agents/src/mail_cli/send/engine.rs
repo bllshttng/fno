@@ -517,7 +517,7 @@ pub(super) fn daemon_rpc(method: &str, params: Value) -> Option<Value> {
         .block_on(crate::client::call_if_running(&home, &request))
         .ok()?;
     match response.payload {
-        crate::protocol::ResponsePayload::Result(value) => Some(value),
+        crate::protocol::ResponsePayload::Ok(value) => Some(value),
         _ => None,
     }
 }
@@ -549,23 +549,27 @@ pub(super) fn switchboard_exchange(
     to_name: &str,
     from_name: &str,
     wrapped: &str,
-    relay_ctxs: Option<Value>,
+    _relay_ctxs: Option<Value>,
     to_identity: Value,
     from_identity: Option<Value>,
 ) -> Option<bool> {
     let mut params = json!({
-        "name": to_name,
-        "from_name": from_name,
+        "to": to_name,
+        "from": from_name,
         "body": wrapped,
-        "to_identity": to_identity,
+        "mirror": from_identity.is_some(),
+        "recipient_identity": to_identity,
     });
-    if let Some(relay_ctxs) = relay_ctxs {
-        params["relay_ctxs"] = relay_ctxs;
-    }
     if let Some(from_identity) = from_identity {
         params["from_identity"] = from_identity;
     }
-    daemon_rpc("agent.switchboard_v2", params)
+    let sb = daemon_rpc("agent.switchboard_v2", params)?;
+    if sb.get("delivered").and_then(Value::as_bool) != Some(true)
+        || sb.get("identity_verified").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    Some(true)
 }
 
 /// One registry row: the dispatch engine's view. Row shapes are the registry
@@ -759,7 +763,7 @@ pub(super) fn deliver_live(
     from_name: &str,
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
-    family1_state: &str,
+    _family1_state: &str,
 ) -> bool {
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
@@ -1038,13 +1042,13 @@ pub(super) fn stamp_after_delivery(name: &str, delivery: &str, expected_identity
 // ---------------------------------------------------------------------------
 
 pub(super) struct DispatchSendResult {
-    msg_id: String,
-    delivery: String,
-    reason: Option<String>,
-    durable_owner: Option<String>,
-    to: Option<String>,
-    to_harness: Option<String>,
-    to_session: Option<String>,
+    pub(super) msg_id: String,
+    pub(super) delivery: String,
+    pub(super) reason: Option<String>,
+    pub(super) durable_owner: Option<String>,
+    pub(super) to: Option<String>,
+    pub(super) to_harness: Option<String>,
+    pub(super) to_session: Option<String>,
 }
 
 /// Python `_recipient_identity_key`: every field that can select or replace a
@@ -1386,7 +1390,7 @@ pub(super) fn dispatch_send_locked(
             subject,
         );
         if queued.is_err() && !live_attempted {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
         }
         queued.map(|_| ())
     };
@@ -1682,7 +1686,7 @@ pub(super) fn dispatch_send_lock_timeout_locked(
     let (msg_id, durable_to) = match queued {
         Ok(pair) => pair,
         Err((msg, code)) => {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
             return Err((msg, code));
         }
     };

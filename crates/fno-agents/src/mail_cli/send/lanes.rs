@@ -94,8 +94,7 @@ pub(super) fn durable_leg_story_or_none(
         return None;
     }
     let suffix = recipient.map(live_miss_age_suffix);
-    let story = crate::mail_receipt::durable_leg_story(reason, suffix.as_deref(), recipient);
-    Some(story)
+    crate::mail_receipt::durable_leg_story(reason, suffix.as_deref(), recipient)
 }
 
 /// Python `_warn_deferred`: the stderr recovery ladder by arm.
@@ -334,7 +333,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
 
     if args.force {
         if self_send {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
             eprintln!(
                 "error: --force cannot type into this session's own prompt. Use --to-self --raw to self-inject a verb, or send without --force to leave yourself a durable note."
             );
@@ -342,7 +341,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         }
         let entry = resolve_pane_entry(args.resolved.as_ref(), Some(&recipient), args.token);
         let Some(entry) = entry else {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
             eprintln!(
                 "error: --force needs a registry row naming the recipient's pane, and none resolves for {}. Send without --force to reach the durable bus.",
                 py_repr(&recipient)
@@ -361,7 +360,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             sender_session: sender_session.as_deref(),
             sender_model: &sender_model,
             authored_words,
-            reservation: Some(reservation),
+            reservation,
             subject: args.subject,
         });
     }
@@ -374,7 +373,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         sender_harness.as_deref(),
         args.reply_to,
         sender_session.as_deref(),
-        &sender_model,
+        sender_model.as_deref(),
         Some(authored_words as i64),
         args.subject,
     );
@@ -458,7 +457,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
                     if let Some(lane) = &token_lane {
                         lanes.push(lane.clone());
                     } else {
-                        release_budget(&Some(reservation));
+                        release_budget(&reservation);
                         return Ok(NameLane::UnreachableToken);
                     }
                 } else if let Some(lane) = &token_lane {
@@ -613,7 +612,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         Ok(_path) => msg_id.clone(),
         Err(exc) => {
             if !injected {
-                release_budget(&Some(reservation));
+                release_budget(&reservation);
             }
             eprintln!(
                 "durable envelope write failed for {}: {exc}",
@@ -697,6 +696,7 @@ pub(super) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         if !report_landing(
             &msg_id,
             &recipient,
+            Some(recipient.as_str()),
             to_harness.as_deref().or(provider.as_deref()),
             to_session.as_deref(),
         ) {
@@ -865,7 +865,7 @@ pub(super) fn dispatch_send_to_project(
     let thread_id = match write {
         Ok(_) => msg_id,
         Err(exc) => {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
             emit_event(
                 "agent_send_failed",
                 json!({"stage": "durable-write", "name": project}),
@@ -938,7 +938,7 @@ pub(super) fn print_project_demotion(
         return;
     }
     warn_deferred(resolved, false, result.reason.as_deref());
-    let age_target = resolved.as_str();
+    let age_target = resolved;
     let suffix = live_miss_age_suffix(age_target);
     let ttl = owner_ttl_hours(result.durable_owner.as_deref().unwrap_or("wake-daemon"));
     let mut door: Vec<String> = vec![
@@ -953,7 +953,7 @@ pub(super) fn print_project_demotion(
     door.push("--ttl-hours".to_string());
     door.push(format!("{ttl:?}"));
     door.push("--target".to_string());
-    door.push(resolved.clone());
+    door.push(resolved.to_string());
     door.push("--project".to_string());
     door.push(to_project.to_string());
     door.push("--age-of".to_string());
@@ -1097,7 +1097,9 @@ pub(super) fn kind_lane_send(
     let thread_id = match write {
         Ok(_) => msg_id,
         Err(exc) => {
-            release_budget(&Some(reservation));
+            if let Ok(res) = &reservation {
+                release_budget(res);
+            }
             eprintln!("error: {exc}");
             return Err(2);
         }
@@ -1252,11 +1254,8 @@ pub(super) fn node_ids_for_pr(pr: &str) -> Vec<String> {
         Ok(n) => n,
         Err(_) => return Vec::new(),
     };
-    let store_path = crate::paths::graph_json();
-    let store = match crate::backlog::api::Store::new(&store_path) {
-        Ok(store) => store,
-        Err(_) => return Vec::new(),
-    };
+    let store_path = crate::org_board::scope::graph_json_path(Path::new("."));
+    let store = crate::backlog::api::Store::new(&store_path);
     let rows = match crate::backlog::api::rows(&store) {
         Ok(rows) => rows,
         Err(_) => return Vec::new(),
@@ -1343,7 +1342,7 @@ pub(super) fn job_lane_send(
         )
         .unwrap_or_else(|_| payload.to_string())
     };
-    let wrapped = envelope(session_id.as_str());
+    let wrapped = envelope(Some(session_id.as_str()));
     let provider = job.harness.clone().unwrap_or_else(|| "claude".to_string());
     let mut reasons: Vec<String> = Vec::new();
     let injected = if provider == "codex" {
@@ -1411,7 +1410,7 @@ pub(super) fn job_lane_send(
     let thread_id = match write {
         Ok(_) => msg_id,
         Err(exc) => {
-            release_budget(&Some(reservation));
+            release_budget(&reservation);
             eprintln!("durable envelope write failed for {recipient:?}: {exc}");
             return Err(12);
         }

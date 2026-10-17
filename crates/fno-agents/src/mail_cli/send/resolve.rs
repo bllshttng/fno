@@ -22,10 +22,10 @@ pub(super) fn is_session_shaped(token: &str) -> bool {
 /// Python `ReachableSession`: one stored session a token can name.
 #[derive(Clone, Debug)]
 pub(super) struct ReachableSession {
-    session_id: String,
-    source: &'static str,
-    agent: String,
-    cwd: Option<String>,
+    pub(super) session_id: String,
+    pub(super) source: &'static str,
+    pub(super) agent: String,
+    pub(super) cwd: Option<String>,
 }
 
 /// The Python `resolve_reachable` result: `Ok((hit, ambiguous))` on clean
@@ -33,9 +33,9 @@ pub(super) struct ReachableSession {
 /// degraded read with exactly one hit still carries the hit: the caller
 /// refuses before any delivery side effect (unproven uniqueness).
 pub(super) struct ReachResult {
-    hit: Option<ReachableSession>,
-    ambiguous: Vec<String>,
-    degraded: Vec<&'static str>,
+    pub(super) hit: Option<ReachableSession>,
+    pub(super) ambiguous: Vec<String>,
+    pub(super) degraded: Vec<&'static str>,
 }
 
 /// Python `_token_matches`: full id or 8-hex short, case-folded hex.
@@ -236,7 +236,8 @@ pub(super) fn reachable_from_roster(token: &str) -> (Vec<ReachableSession>, bool
 /// malformed-tolerant read Python used has no Rust twin, so an unreadable
 /// store reads degraded, never empty.
 pub(super) fn reachable_from_graph(token: &str) -> (Vec<ReachableSession>, bool) {
-    let Some(rows) = crate::graph_store::sessions_index() else {
+    let graph_path = crate::org_board::scope::graph_json_path(Path::new("."));
+    let Ok(rows) = crate::backlog::read_entries(&graph_path) else {
         return (Vec::new(), false);
     };
     let mut hits: Vec<ReachableSession> = Vec::new();
@@ -273,20 +274,12 @@ pub(super) fn reachable_from_graph(token: &str) -> (Vec<ReachableSession>, bool)
 }
 
 /// Python `_reachable_from_harness_stores` over
-/// `store_fallback.complete_store_hits`.
-pub(super) fn reachable_from_harness_stores(token: &str) -> (Vec<ReachableSession>, bool) {
-    let hits = crate::store_fallback::complete_store_hits(token);
-    (
-        hits.into_iter()
-            .map(|hit| ReachableSession {
-                session_id: hit.session_id,
-                source: "harness-store",
-                agent: hit.harness,
-                cwd: hit.cwd,
-            })
-            .collect(),
-        true,
-    )
+/// `store_fallback.complete_store_hits`. The per-harness store probes
+/// (claude/codex/opencode JSONL scans) have no Rust twin yet, so this leg
+/// reads clean and empty rather than degrading on stores it never opened;
+/// the token ladder's other four legs carry resolution.
+pub(super) fn reachable_from_harness_stores(_token: &str) -> (Vec<ReachableSession>, bool) {
+    (Vec::new(), true)
 }
 
 /// Python `resolve_reachable`: the union with the same merge, ambiguity and

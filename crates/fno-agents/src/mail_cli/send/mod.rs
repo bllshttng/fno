@@ -30,7 +30,6 @@ use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 // The send surface split by question: resolution (who is reachable),
 // engine (the dispatch machinery and live transports), lanes (the
@@ -40,10 +39,8 @@ mod lanes;
 mod resolve;
 mod verify;
 
-use engine::*;
 use lanes::*;
 use resolve::*;
-use verify::*;
 
 const BUS_ONLY_POLICY: &str = "bus-only";
 
@@ -870,9 +867,9 @@ fn budget_reserve(
         Err(e) => return BudgetOutcome::Unavailable(pair, e),
     };
     let result = (|| -> Result<BudgetOutcome, String> {
+        let pair = pair.clone();
         let mut entries = budget_load(&path, &pair)?;
         entries.retain(|e| e.get("ts").and_then(Value::as_f64).unwrap_or(0.0) >= floor);
-        let mut reset_by: Option<String> = None;
         let mut inbound_id: Option<String> = None;
         if let Some((reset_id, reset_ts)) =
             budget_last_inbound(display_sender, display_recipient, floor)
@@ -888,9 +885,6 @@ fn budget_reserve(
                 })
                 .cloned()
                 .collect();
-            if kept.len() != entries.len() {
-                reset_by = Some(reset_id.clone());
-            }
             entries = kept;
             inbound_id = Some(reset_id);
         }
@@ -942,7 +936,7 @@ fn reserve_send_budget(
         recipient,
         sender,
         recipient,
-        words,
+        words as i64,
         msg_id,
         BUDGET_CONTROL_CAP,
     ) {
@@ -1167,34 +1161,31 @@ fn write_durable_thread(
     let date_part: String = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let slug = slug_for(body, msg_id);
     let base = format!("{date_part}-{slug}");
-    let mut target: Option<PathBuf> = None;
-    let mut suffix = String::new();
-    let mut n = 0u32;
-    loop {
-        let candidate = inbox.join(format!("{base}{suffix}.md"));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => {
-                target = Some(candidate);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                n += 1;
-                suffix = format!("-{n}");
-                if n > 1000 {
-                    return Err(format!(
-                        "could not allocate a thread filename under {} (tried {n} suffixes)",
-                        inbox.display()
-                    ));
+    let target = 'alloc: {
+        let mut suffix = String::new();
+        let mut n = 0u32;
+        loop {
+            let candidate = inbox.join(format!("{base}{suffix}.md"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(_) => break 'alloc candidate,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    n += 1;
+                    suffix = format!("-{n}");
+                    if n > 1000 {
+                        return Err(format!(
+                            "could not allocate a thread filename under {} (tried {n} suffixes)",
+                            inbox.display()
+                        ));
+                    }
                 }
+                Err(e) => return Err(format!("thread create failed: {e}")),
             }
-            Err(e) => return Err(format!("thread create failed: {e}")),
         }
-    }
-    let target = target.expect("filename claimed above");
+    };
     let ttl_hours = owner_ttl_hours(owner);
     let ttl_at: Option<String> = if ttl_hours > 0.0 {
         Some(format_dt(now + ttl_hours * 3600.0))
@@ -1513,7 +1504,7 @@ pub fn run(args: &[String]) -> i32 {
     let mail_origin: Option<&str> = if classified_origin == "unknown" {
         None
     } else {
-        Some(classified_origin)
+        Some(classified_origin.as_str())
     };
 
     if args.to_self {
