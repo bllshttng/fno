@@ -1447,7 +1447,7 @@ mod tests {
         let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
         let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
         let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
-        let ledger = seed_backoff_ledger(&tmp.path().join("state"));
+        seed_backoff_ledger(&tmp.path().join("state"));
         let args = &["api".to_string(), "user".to_string()];
         let gh = std::ffi::OsStr::new("gh");
 
