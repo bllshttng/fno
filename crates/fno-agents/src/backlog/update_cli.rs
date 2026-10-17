@@ -98,6 +98,9 @@ struct UpdateArgs {
     /// inside the write attempt.
     related_add: Vec<String>,
     related_remove: Vec<String>,
+    /// The replace slot was filled by `blocked_by=`, not `--blocked-by`: the
+    /// mutual-exclusion refusal names the form that wrote the slot.
+    blocked_by_replace_from_op: bool,
 }
 
 impl UpdateArgs {
@@ -156,6 +159,7 @@ impl UpdateArgs {
             tags_replace: None,
             related_add: Vec::new(),
             related_remove: Vec::new(),
+            blocked_by_replace_from_op: false,
         };
         let mut i = 0;
         let mut id: Option<String> = None;
@@ -436,6 +440,7 @@ fn lower_op(a: &mut UpdateArgs, op: update_ops::FieldOp, _kind: update_ops::Fiel
         ("tags", update_ops::Op::Add) => a.tag.push(value),
         ("tags", update_ops::Op::Remove) => a.untag.push(value),
         ("blocked_by", update_ops::Op::Set) => {
+            a.blocked_by_replace_from_op = true;
             a.blocked_by.get_or_insert_with(Vec::new).push(value)
         }
         ("blocked_by", update_ops::Op::Add) => a.add_blocker.push(value),
@@ -709,7 +714,7 @@ fn run_native(args: &UpdateArgs) -> Result<(), Refusal> {
         && (!parse_list(&args.add_blocker).is_empty()
             || !parse_list(&args.remove_blocker).is_empty())
     {
-        if args.ops.iter().any(|op| op.field == "blocked_by") {
+        if args.blocked_by_replace_from_op {
             return Err(refused(
                 "Error: blocked_by= replaces the list. It cannot be combined with \
                  blocked_by+= or blocked_by-= in one call.",
