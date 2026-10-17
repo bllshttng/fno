@@ -52,8 +52,10 @@ fn cursor_thread_row(
 /// runs BEFORE the exec (a trap set after it would never fire, and SIG_IGN
 /// for TERM survives the exec into the sleep image). The start delay makes
 /// the census deterministic: `ps` must list the child before stop's capture
-/// runs.
-fn spawn_worker_server(pre_exec: &str) -> std::process::Child {
+/// runs. Returns the pid only: a reaper thread waits the child like a real
+/// parent, because a reaped-then-dead pid would otherwise answer kill(0)
+/// as a zombie and read as a survivor.
+fn spawn_worker_server(pre_exec: &str) -> u32 {
     let child = std::process::Command::new("/bin/bash")
         .arg("-c")
         .arg(format!(
@@ -61,6 +63,10 @@ fn spawn_worker_server(pre_exec: &str) -> std::process::Child {
         ))
         .spawn()
         .expect("spawn worker-server fake");
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let listed = loop {
         let output = std::process::Command::new("ps")
@@ -74,7 +80,7 @@ fn spawn_worker_server(pre_exec: &str) -> std::process::Child {
         std::thread::sleep(std::time::Duration::from_millis(25));
     };
     assert!(listed, "the marker child never appeared in ps");
-    child
+    pid
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -96,8 +102,7 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
         .join("cur-stop.sock");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
-    let mut worker = spawn_worker_server(":");
-    let worker_pid = worker.id();
+    let worker_pid = spawn_worker_server(":");
     state::update_registry(&home.registry_json(), |r| {
         r.entries.push(cursor_thread_row(
             "cur-stop",
@@ -140,7 +145,6 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
                 .and_then(|data| data["worker_servers_reaped"].as_i64())
                 == Some(1)
     }));
-    worker.wait().ok();
     std::env::remove_var("FNO_SPACES_DIR");
     std::env::remove_var("FNO_CLAIMS_ROOT");
     std::fs::remove_dir_all(home.root()).ok();
@@ -159,8 +163,7 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
         .join("cur-hard.sock");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
-    let mut worker = spawn_worker_server("trap \"\" TERM");
-    let worker_pid = worker.id();
+    let worker_pid = spawn_worker_server("trap \"\" TERM");
     state::update_registry(&home.registry_json(), |r| {
         r.entries.push(cursor_thread_row(
             "cur-hard",
@@ -198,9 +201,9 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
         "the stubborn server is the reason the reap failed"
     );
 
-    // SAFETY: teardown of a test-spawned child that ignores SIGTERM.
+    // SAFETY: teardown of a test-spawned child that ignores SIGTERM. The
+    // spawn-time reaper thread collects it.
     unsafe { libc::kill(worker_pid as libc::pid_t, libc::SIGKILL) };
-    worker.wait().ok();
     stop.store(true, std::sync::atomic::Ordering::SeqCst);
     keeper.join().unwrap();
     std::fs::remove_dir_all(home.root()).ok();
