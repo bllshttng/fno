@@ -349,6 +349,11 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_remote::run(&args[1..]);
     }
 
+    // The cross-machine hand-off relay; binary-direct like `mail-remote`. Contract: org_remote's module docs.
+    if matches!(verb, "org-remote") {
+        return fno_agents::org_remote::run(&args[1..]);
+    }
+
     // Binary-direct mail transport for the events/note Python adapters; not routable.
     if matches!(verb, "machine-mail-send") {
         return fno_agents::machine_mail::run(&args[1..]).await;
