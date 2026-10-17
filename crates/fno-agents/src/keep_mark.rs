@@ -416,6 +416,10 @@ mod tests {
         assert!(for_row(&home, &own).is_none());
         assert!(!clear(&home, "aaaa1111-2222-3333").unwrap());
 
+        // A second live marker stands beside the unreadable one for the
+        // list-order assertions below: parsed first, unreadable last.
+        set(&home, "eeee8888-9999-0000", "eeee8888-9999-0000").unwrap();
+
         // An unreadable marker still keeps and still lists, by file name.
         std::fs::write(
             home.keep_dir().join("bbbb2222-3333-4444.json"),
