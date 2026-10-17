@@ -358,17 +358,24 @@ fn an_ask_resumes_the_session_the_harness_id_names() {
     let home = AgentsHome::from_env();
     let birth = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
     let bound = "5a1c0f2e-9d34-4c7b-8e21-3f6a7b9c0d12";
-    let dir = transcript::session_dir(&transcript::sessions_root(), tmp.path(), bound);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(transcript::transcript_file(&dir, bound), "").unwrap();
-    for (name, fno_id) in [("fx-pane", birth), ("fx-headless", bound)] {
+    let plain = "c4e8d2a6-1f37-4a90-b5d3-72e0a9f14c68";
+    for id in [bound, plain] {
+        let dir = transcript::session_dir(&transcript::sessions_root(), tmp.path(), id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(transcript::transcript_file(&dir, id), "").unwrap();
+    }
+    let rows = [("fx-pane", birth, bound), ("fx-headless", plain, plain)];
+    for (name, fno_id, harness_id) in rows {
         let mut row = RegistryEntry {
             name: name.to_string(),
             harness: Some("footnote".into()),
-            harness_session_id: Some(bound.into()),
+            harness_session_id: Some(harness_id.into()),
             requested_model: Some("glm-test".into()),
             cwd: tmp.path().to_string_lossy().to_string(),
-            ..RegistryEntry::new(Some(bound.into()), crate::spawn_lineage::ambient_lineage())
+            ..RegistryEntry::new(
+                Some(harness_id.into()),
+                crate::spawn_lineage::ambient_lineage(),
+            )
         };
         row.fno_id = Some(fno_id.into());
         update_registry(&home.registry_json(), |reg| {
@@ -388,22 +395,22 @@ fn an_ask_resumes_the_session_the_harness_id_names() {
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
     ]);
-    let specs: Vec<_> = ["fx-pane", "fx-headless"]
+    let specs: Vec<_> = rows
         .into_iter()
-        .map(|name| {
+        .map(|(name, _, want)| {
             let _ = std::fs::remove_file(&seen);
             let code = maybe_run_ask(&home, &serde_json::json!({"message": "hi"}), name);
             let body = std::fs::read_to_string(&seen).unwrap_or_default();
-            (code, serde_json::from_str::<serde_json::Value>(&body))
+            (code, serde_json::from_str::<serde_json::Value>(&body), want)
         })
         .collect();
     restore_env(saved);
-    for (code, spec) in specs {
+    for (code, spec, want) in specs {
         let spec = spec.expect("the stand-in binary never read a spec");
         assert_eq!(code, Some(2));
         assert_eq!(spec["mode"], "resume");
-        assert_eq!(spec["fno_id"], bound);
-        assert!(spec["session_dir"].as_str().unwrap().ends_with(bound));
+        assert_eq!(spec["fno_id"], want);
+        assert!(spec["session_dir"].as_str().unwrap().ends_with(want));
     }
 }
 
