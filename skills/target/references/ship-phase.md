@@ -118,7 +118,7 @@ if [[ -n "$NODE_ID" && "$NODE_ID" != "-" && -n "${PR_NUMBER:-}" ]]; then
       # The verify+retry below reports a real failure as a promise blocker, so
       # this swallow is bounded and visible.
       # lint-ok: fno-mutation-swallowed
-      fno backlog update "$NODE_ID" --pr-number "$PR_NUMBER" --pr-url "$PR_URL" 2>/dev/null || true
+      fno backlog update "$NODE_ID" "pr_number=$PR_NUMBER" "pr_url=$PR_URL" 2>/dev/null || true
       # `|| true`: a failing get (lock contention) must fall through to the retry
       # and ultimately the promise blocker, never abort the shell under set -e.
       got=$(fno backlog get "$NODE_ID" --field pr_number 2>/dev/null | tr -d '[:space:]' || true)
