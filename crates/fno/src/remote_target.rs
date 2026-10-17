@@ -200,7 +200,7 @@ mod tests {
             "--from-name",
             "fno/quiet-recovery",
             "--to-lead",
-            "x-29a8",
+            "scope-a",
             "body",
         ]))
         .is_none());
