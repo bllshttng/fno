@@ -530,7 +530,7 @@ fn mask_value(v: &Value, fixture: &Path) -> Value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, val)| {
-                    if k == "ts" || k == "started_at" || k == "created_at" {
+                    if k == "ts" || k == "started_at" || k == "ended_at" || k == "created_at" {
                         (k.clone(), Value::String("<TS>".into()))
                     } else {
                         (k.clone(), mask_value(val, fixture))

@@ -2843,6 +2843,7 @@ fn registry_schema_fields() {
         transcript_path: Some("value".into()),
         start_source: Some("value".into()),
         node: Some("value".into()),
+        node_basis: Some("value".into()),
         node_reason: Some("value".into()),
         pending_session_row: Some(serde_json::json!({})),
         requested_model: Some("value".into()),

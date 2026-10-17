@@ -1078,7 +1078,12 @@ def test_us2_schema_version_is_three() -> None:
     # guard exempts the machine's own slash-command turn.
     # v42: additive `last_report_at` - the capacity reader's freshness
     # source for pid-less rows no probe reaches.
-    assert SCHEMA_VERSION == 42
+    # v43: additive `node_basis` - where the row's node came from when the
+    # first-prompt hook bound it, so a refresh never downgrades the bind.
+    # v43 exists because main's v42 shipped without it: a writer built from
+    # that v42 shares the version but not the field and would erase
+    # node_basis on its next read-modify-write.
+    assert SCHEMA_VERSION == 43
 
 
 def test_session_lineage_fields_round_trip(tmp_path: Path, monkeypatch) -> None:

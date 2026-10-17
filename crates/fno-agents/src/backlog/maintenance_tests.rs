@@ -258,6 +258,9 @@ fn stale_ideas_read_the_curation_touch_strictly_and_spare_movement() {
 fn stale_ready_exempts_undesigned_contained_blocked_and_moved_work() {
     let dir = tempfile::tempdir().unwrap();
     let old = iso_days_ago(80);
+    // Read after the stamps, the lesson the 40-day test above records: a
+    // clock read before them makes an 80-day stamp a millisecond short, and
+    // the age floors to 79.
     let design = dir.path().join("d.md");
     std::fs::write(&design, "---\nstatus: design\n---\n").unwrap();
     std::fs::File::options()
