@@ -1790,9 +1790,8 @@ design_gate_date="2026-10-16"
 check_design_file() {
     local file="$1"
     local label="$2"
-    local status created
-    status=$(awk '/^---/ { c++; if (c==2) exit; next } c==1 && /^status:/ { sub(/^status:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; exit }' "$file")
-    if [[ "$status" == "design" ]]; then
+    local created
+    if [[ "$(_plan_rung "$file")" == "design" ]]; then
         return 0
     fi
     if grep -qx '## Design' "$file"; then
