@@ -2104,6 +2104,10 @@ mod tests {
             (share.pane, share.steer, share.tunnel, share.port),
             (3, true, false, 9100)
         );
+        assert!(!share.managed);
+        let managed = parse_share_args(&os(&["--share", "--managed", "--tunnel", "--pane", "3"]))
+            .expect("--managed parses");
+        assert!(managed.managed && managed.tunnel);
         assert!(parse_share_args(&os(&["--share"])).is_none(), "no --pane");
         assert!(parse_share_args(&os(&["--share", "--pane", "x"])).is_none());
         assert!(parse_share_args(&os(&["--share", "--pane", "3", "--web"])).is_none());
