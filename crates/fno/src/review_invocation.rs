@@ -153,8 +153,10 @@ fn append_review_invocation_at(
 /// Wall-clock RFC3339 UTC timestamp, seconds precision, no chrono in the
 /// dependency surface. Shared with the invocations door's appends.
 
+// Distinct from the spliced core's `tests`: the include! pastes that module
+// into this one, and two `tests` in one namespace is E0428 under cfg(test).
 #[cfg(test)]
-mod tests {
+mod review_transport_tests {
     use super::*;
 
     fn stored_event(path: &std::path::Path) -> serde_json::Value {
