@@ -1,13 +1,13 @@
 # Backlog current state, bounded prose, and the note history journal
 
-Every node carries ONE `current_state` object next to its `details`: `{body, revision, updated_at, source_session_id, source_harness}`. A note REPLACES it. The exact pre-image of every replacement lands in a permanent journal before the replacement publishes. The hot row stays bounded and no history is lost.
+Every node carries ONE `current_state` object next to its `details`: `{body, revision, updated_at, source_session_id, source_harness}`, plus a thread of note rows. `fno backlog note <id> <text>` APPENDS a comment row to the thread (one feed, oldest first, stamped with the writer's session identity) and leaves `current_state` alone. The thread is the live reading: `fno backlog note comment <id> --list` renders it oldest first. The journal keeps every pre-image, and the first append rides the node's journal into the thread. The hot row stays bounded and no history is lost.
 
 Owner: `crates/fno-agents/src/backlog/node_state.rs` (policy), `note_history.rs` (journal), `note_migrate.rs` (inventory, migration, readback). The public writer is `fno backlog note`. The public reader is `fno backlog notes history <id>`. Their bridges and the shipped recipient walk live in `cli/src/fno/graph/note_cli.py` and `cli/src/fno/backlog/note_notify.py`.
 
 ## The rules
 
 - Combined `details` + `current_state.body` prose is budgeted at 5,000 Unicode scalars. Count after outer-whitespace and CRLF normalization. The seam refuses any writer that grows a row past the limit. An oversized legacy row can be edited DOWN but never UP.
-- Optimistic concurrency: a replacement submits the revision it read. A stale submission refuses with `state conflict: current revision N != submitted M` and writes nothing.
+- Optimistic concurrency guards the direct state writers only: a replacement or `note --clear` submits the revision it read, and a stale submission refuses with `state conflict: current revision N != submitted M` and writes nothing. A plain note appends and cannot conflict; `--replace` is retired, and `--if-revision` guards `--clear` alone.
 - The journal lives at `<graph>.history/notes.jsonl` (see `docs/state-root-inventory.md`). Records are deduped by node, reason, prior revision, source position, and content hash. Every write is hash-verified. A history failure refuses the state write.
 - Machine `task_done` and `run_summary` records and structured wave additions go to history only. A wave sets a `state_needs_refresh` marker. They never overwrite a human or lead's current state.
 - A row that carries `current_state` has no empty `progress_notes` key. A non-empty one is real pre-cutover prose and is kept.
