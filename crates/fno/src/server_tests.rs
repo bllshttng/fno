@@ -5,6 +5,9 @@ use crate::proto::{AgentRow, TemplateName};
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};
 use crate::server::mouse_route::{bounded_scroll_target, MOUSE_WHEEL_LINES};
+// The tab-label tests resolved this through server.rs's re-import until the
+// tab builder moved to pane_meta under the budget ratchet.
+use crate::server::pane_meta::tab_label;
 
 #[path = "server/server_thread_viewer_tests.rs"]
 mod thread_viewer_tests;
