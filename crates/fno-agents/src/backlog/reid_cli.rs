@@ -80,7 +80,12 @@ const SIBLING_SCALARS: &[&str] = &[
     "caused_by",
     "source_node_id",
 ];
-const SIBLING_ARRAYS: &[&str] = &["blocked_by", "related", "collisions_acknowledged"];
+const SIBLING_ARRAYS: &[&str] = &[
+    "blocked_by",
+    "related",
+    "collisions_acknowledged",
+    "supersedes",
+];
 
 /// The frontmatter keys a plan file names node ids in. Only these lines pay
 /// the token rewrite; body text is history and keeps the old spelling.
@@ -110,19 +115,8 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
         .and_then(Value::as_str)
         .unwrap_or(old)
         .to_string();
-    let prior_aliases: Vec<String> = old_row
-        .get("aliases")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
     let taken = snapshot.iter().any(|e| {
-        e.get("id").and_then(Value::as_str) == Some(new.as_str())
-            || entry_aliases(e).contains(&new.as_str())
+        e.get("id").and_then(Value::as_str) == Some(new) || entry_aliases(e).contains(&new)
     });
     if taken {
         eprintln!("Error: {new} is already taken (a row id or a retired alias)");
@@ -181,8 +175,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
                 return Ok(false);
             };
             let taken = working.iter().any(|e| {
-                e.get("id").and_then(Value::as_str) == Some(new.as_str())
-                    || entry_aliases(e).contains(&new.as_str())
+                e.get("id").and_then(Value::as_str) == Some(new) || entry_aliases(e).contains(&new)
             });
             if taken {
                 exit_code.replace(2);
@@ -224,6 +217,18 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
                     .unwrap_or_default();
                 aliases.push(Value::String(old_canon.clone()));
                 obj.insert("aliases".to_string(), Value::Array(apply_dedup(aliases)));
+                // A plan_path naming the renamed file follows the rename, or
+                // the row points at a pathname that no longer exists.
+                if let Some(pp) = obj.get("plan_path").and_then(Value::as_str) {
+                    let old_suffix = format!("-{old_canon}.md");
+                    if let Some(stem) = pp.strip_suffix(old_suffix.as_str()) {
+                        obj.insert(
+                            "plan_path".to_string(),
+                            Value::String(format!("{stem}-{new}.md")),
+                        );
+                        siblings += 1;
+                    }
+                }
             }
             receipt
                 .borrow_mut()
@@ -312,7 +317,7 @@ fn rewrite_plan_files(graph: &Path, old: &str, new: &str, receipt: &RefCell<Vec<
     // Every plan dir the row's plan_path points at; one node, one dir in
     // practice.
     if let Some(dir) = plan_dirs(graph, old).into_iter().next() {
-        if let Ok(entries) = std::fs::read_dir(dir) {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) != Some("md") {
