@@ -33,7 +33,10 @@ impl View {
             return RegionOwner::Board;
         }
         match self.region_owner {
-            RegionOwner::Feed if self.feed.is_some() => RegionOwner::Feed,
+            // A viewer panel hides the feed, and a hidden panel takes no keys.
+            RegionOwner::Feed if self.feed.is_some() && self.viewer_panel_w() == 0 => {
+                RegionOwner::Feed
+            }
             RegionOwner::Board
                 if (self.backlog_board.is_some()
                     && self.sideline_view == crate::view_store::SidelineView::Backlog)
@@ -139,6 +142,9 @@ pub(super) async fn mouse_pre_pass(
         // The questions view paints next and owns every cell it covers: off
         // the chip, a click reaches no pane and no sideline row under it.
         if view.question_detail.is_some() {
+            continue;
+        }
+        if super::file_viewer::mouse(view, rep) {
             continue;
         }
         if view.bell.open {

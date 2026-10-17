@@ -99,6 +99,9 @@ pub(super) async fn route(
     if view.yard.is_some() {
         return Some(yard_keys(view, bytes, sock_w).await);
     }
+    if view.viewer_focused() {
+        return Some(super::file_viewer::keys(view, bytes, sock_w).await);
+    }
     // The feed panel is chrome and consumes no keys UNTIL the operator
     // focuses it (`E`, or a click inside the panel). Esc and e close the
     // panel outright from the focused mode, and a pane click moves the
