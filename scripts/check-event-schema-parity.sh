@@ -473,6 +473,12 @@ dual_owner_kinds = {
     # Python mail-notify verb to the Rust mail-notify-self verb; both
     # emitters run until the Python leg retires.
     "agent_mail_drained",
+    # review_invocation + review_attestation: the review send/verdict family.
+    # The Rust invocations door writes both; the Python hook and
+    # emit-attestation.sh write the same kinds at the same boundary, one
+    # schema.yaml entry documenting the shared payload.
+    "review_invocation",
+    "review_attestation",
 }
 collisions -= dual_owner_kinds
 if collisions:

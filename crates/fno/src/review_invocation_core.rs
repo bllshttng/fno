@@ -335,11 +335,13 @@ mod tests {
         assert!(fallback.flags.is_empty());
 
         // A bare `fix` and the one-em-dash spelling are the same flag; an
-        // unknown `--` token records verbatim and still hides the target.
+        // unknown `--` token records verbatim, and the first bare token after
+        // the skipped flags is still the target (the Python leg's rule the
+        // goldens pin).
         assert_eq!(p("/review fix").flags, vec!["--fix".to_string()]);
         let novel = p("/review high --novel 55");
         assert_eq!(novel.flags, vec!["--novel".to_string()]);
-        assert_eq!(novel.target, None);
+        assert_eq!(novel.target.as_deref(), Some("55"));
 
         assert_eq!(
             p("/review https://github.com/o/r/pull/77/").pr_number,
