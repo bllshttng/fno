@@ -407,6 +407,7 @@ impl View {
             (Color::Default, cell_flags::DIM)
         };
         let dim = (Color::Default, cell_flags::DIM);
+        let watcher_fg = self.theme.needs_you;
         let style_of = move |part: crate::pane_border::Part, ch: char| -> (Color, u8) {
             use crate::pane_border::Part;
             match part {
@@ -425,7 +426,7 @@ impl View {
                     Some((_, _, fg, _)) => (fg, 0),
                     None => dim,
                 },
-                Part::Observers => (self.theme.needs_you, cell_flags::BOLD),
+                Part::Observers => (watcher_fg, cell_flags::BOLD),
                 Part::Model | Part::Node | Part::Branch | Part::Ctx => dim,
             }
         };
