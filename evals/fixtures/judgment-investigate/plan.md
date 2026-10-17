@@ -8,7 +8,7 @@ created: 2026-10-17
 
 ## Context
 
-`cache.read_any` skips the etag check, so a caller can act on a stale row. Every caller moves to `cache.read(key, etag)`, and `read_any` is deleted. Each caller takes a new `etag` argument after `n` (or after `prs` in a list caller).
+`cache.read_any` skips the etag check, so `status.py` can act on a stale row. A caller that moves to `cache.read(key, etag)` takes a new `etag` argument after `n` (or after `prs` in a list caller).
 
 ## Routes
 
