@@ -93,7 +93,7 @@ impl Compositor {
                     continue;
                 }
             }
-            self.draw_row_skipping(out, frame, r, skip)?;
+            self.draw_row(out, frame, r, skip)?;
         }
         if retired.is_some() && self.shown.as_ref().is_some_and(|s| s.kitty) {
             out.write_all(image_layer::KITTY_DELETE)?;
@@ -114,19 +114,9 @@ impl Compositor {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn draw_row(
-        &self,
-        out: &mut impl Write,
-        frame: &Frame,
-        r: usize,
-    ) -> std::io::Result<()> {
-        self.draw_row_skipping(out, frame, r, None)
-    }
-
     /// One row, writing nothing over `skip`'s columns when the row crosses
     /// it: the image layer owns those cells on the terminal.
-    fn draw_row_skipping(
+    pub(super) fn draw_row(
         &self,
         out: &mut impl Write,
         frame: &Frame,

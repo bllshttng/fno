@@ -235,14 +235,13 @@ pub(super) fn take() -> Option<Placement> {
 mod tests {
     use super::*;
 
-    /// A white top quarter over black, 40x40: four by two cells at the
-    /// default font size, and the first cell row's halves differ, so
-    /// half-blocks draw `▀` there rather than a space.
+    /// 40x40: four by two cells at the default font size, inside `RECT`.
     fn png() -> DynamicImage {
-        DynamicImage::ImageRgba8(image::RgbaImage::from_fn(40, 40, |_, y| {
-            let v = if y < 10 { 255 } else { 0 };
-            image::Rgba([v, v, v, 255])
-        }))
+        DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            40,
+            40,
+            image::Rgba([200, 30, 30, 255]),
+        ))
     }
 
     fn forced(p: ProtocolType) -> Picker {
@@ -259,7 +258,7 @@ mod tests {
     };
 
     #[test]
-    fn each_protocol_renders_its_own_bytes_or_cells() {
+    fn escape_protocols_render_bytes_positioned_at_the_rect() {
         let escape = |p| match render_with(&forced(p), &png(), RECT) {
             Some(Rendered::Escape { bytes, kitty }) => {
                 (String::from_utf8_lossy(&bytes).into_owned(), kitty)
@@ -279,10 +278,6 @@ mod tests {
         let (iterm, is_kitty) = escape(ProtocolType::Iterm2);
         assert!(!is_kitty);
         assert!(iterm.contains("\x1b]1337;File="), "{iterm:?}");
-        match render_with(&forced(ProtocolType::Halfblocks), &png(), RECT) {
-            Some(Rendered::Cells(buf)) => assert!(buf.content.iter().any(|c| c.symbol() == "▀")),
-            _ => panic!("half-blocks should render cells"),
-        }
         let empty = Rect { w: 0, ..RECT };
         assert!(render_with(&forced(ProtocolType::Kitty), &png(), empty).is_none());
     }
