@@ -32,6 +32,7 @@ pub struct HandoffPlan {
 /// join key). `holder` is the live scope holder as `(name, session)`.
 pub fn plan_handoff(
     args: &[String],
+    scope: &str,
     holder: (String, Option<String>),
     ts: &str,
 ) -> Result<HandoffPlan, String> {
@@ -40,28 +41,7 @@ pub fn plan_handoff(
     };
     let (successor, host) = crate::mail_remote::split_target(target)
         .map_err(|_| format!("the target is <name>@<host>: {target:?} has no @host split"))?;
-    let mut scope = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--scope" => {
-                i += 1;
-                scope = Some(
-                    args.get(i)
-                        .ok_or("--scope needs a value")?
-                        .trim()
-                        .to_string(),
-                );
-                i += 1;
-            }
-            other => {
-                return Err(format!(
-                    "unexpected argument {other:?}; the form is org promote <name>@<host> --scope <scope>"
-                ));
-            }
-        }
-    }
-    let scope = scope.ok_or_else(usage)?;
+    let scope = scope.trim().to_string();
     if holder.1.is_none() {
         return Err(
             "the predecessor row carries no harness_session_id, so the retro join has no key; re-register the row (`fno agents register`), or move the lead with the remote machine's own `fno agents org promote` and file the retro by hand (`fno-agents intel --write`)"
@@ -229,7 +209,7 @@ fn cmd_promote(args: &[String]) -> i32 {
     };
     caller_check(&holder);
     let ts = crate::daemon::now_rfc3339_like();
-    let plan = match plan_handoff(args, holder, &ts) {
+    let plan = match plan_handoff(args, scope, holder, &ts) {
         Ok(plan) => plan,
         Err(e) => {
             eprintln!("org-remote: {e}");
@@ -353,13 +333,7 @@ mod tests {
             "t"
         )
         .is_err());
-        assert!(plan_handoff(&["Quinlan@imac2d2".into()], holder(), "t").is_err());
-        assert!(plan_handoff(
-            &["Q@h".into(), "--scope".into(), "fno".into(), "extra".into()],
-            holder(),
-            "t"
-        )
-        .is_err());
+        assert!(plan_handoff(&["Quinlan@imac2d2".into()], "fno", holder(), "t").is_err());
         assert!(plan_handoff(
             &["Q@h".into(), "--scope".into(), "fno".into()],
             ("E".into(), None),
@@ -368,12 +342,7 @@ mod tests {
         .is_err());
         // The happy plan: the pending record carries the join keys, and the
         // ssh argv names the remote leg with every argument spelled.
-        let plan = plan_handoff(
-            &["Quinlan@imac2d2".into(), "--scope".into(), "fno".into()],
-            holder(),
-            "t9",
-        )
-        .expect("plans");
+        let plan = plan_handoff(&["Quinlan@imac2d2".into()], "fno", holder(), "t9").expect("plans");
         assert_eq!(plan.host, "imac2d2");
         assert_eq!(plan.pending.successor_name, "Quinlan");
         assert_eq!(plan.pending.predecessor_name, "Ellery");
@@ -381,8 +350,7 @@ mod tests {
             plan.pending.predecessor_session.as_deref(),
             Some("sess-123")
         );
-        let quoted: Vec<String> = plan.ssh_argv.clone();
-        let line = quoted.join(" ");
+        let line = plan.ssh_argv.join(" ");
         assert!(line.contains("record-succession"));
         assert!(line.contains("'--scope'"));
         assert!(line.contains("'fno'"));
