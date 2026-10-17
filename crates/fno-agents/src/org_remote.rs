@@ -373,13 +373,13 @@ mod tests {
         };
         attach_pending_succession(&store, "fno", pending).expect("attaches to a fresh record");
         let raw = std::fs::read_to_string(&store).expect("store written");
-        assert!(raw.contains("pending_succession"));
-        assert!(raw.contains("sess-123"));
-        // The record keeps the successor's existing name (no rename leg).
         let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid store json");
+        // The record keeps the successor's existing name (no rename leg) and
+        // carries the predecessor join keys the beat and the retro read.
         let rec = &doc["teams"]["fno"];
         assert_eq!(rec["name"], "Quinlan");
         assert_eq!(rec["pending_succession"]["predecessor_name"], "Ellery");
+        assert_eq!(rec["pending_succession"]["predecessor_session"], "sess-123");
         // Overwrite-on-retry: a second attach replaces the record cleanly.
         let again = crate::team_names::PendingSuccession {
             successor_name: "Quinlan".into(),
