@@ -3094,8 +3094,7 @@ def _resolve_registry_entry(name: str, *, registry_path: Optional[Path] = None) 
     Args:
         name: agent name to look up.
         registry_path: optional override forwarded to ``load_registry``.
-            Used by ``with_agent_lock_and_entry`` so a non-default
-            registry override locks AND reads against the same file
+            A non-default override locks AND reads against the same file
             (Codex P2 on PR #317: previously the override only reached
             the lock path and the entry read silently fell through to
             the default registry).
