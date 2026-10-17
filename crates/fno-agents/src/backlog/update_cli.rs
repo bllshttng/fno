@@ -1351,9 +1351,11 @@ fn apply_mutators(
     // symmetric writes touch peer rows too), then source-node, then the
     // blocker ladder, then the lock stamps.
     let replace_tokens = parse_list(&args.related);
-    let has_related_edit = !replace_tokens.is_empty()
-        || !args.related_add.is_empty()
-        || !args.related_remove.is_empty();
+    // Keyed on the raw slot, not the parsed tokens: `--related ' '` parsed
+    // to an empty list and cleared the field before the operators landed,
+    // and that legacy shape stays byte-identical here.
+    let has_related_edit =
+        !args.related.is_empty() || !args.related_add.is_empty() || !args.related_remove.is_empty();
     if has_related_edit {
         let mut desired: Vec<String> = if replace_tokens.len() == 1 && replace_tokens[0] == "null" {
             Vec::new()
