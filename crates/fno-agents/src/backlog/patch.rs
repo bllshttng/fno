@@ -1656,7 +1656,7 @@ mod tests {
         for (word, owner) in [
             ("superseded", "fno backlog supersede"),
             ("done", "fno backlog done"),
-            ("in_review", "--pr-number"),
+            ("in_review", "pr_number=<n>"),
             ("in_progress", "fno do target start"),
             ("blocked", "--add-blocker"),
         ] {
