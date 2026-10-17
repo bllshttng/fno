@@ -1414,7 +1414,7 @@ fn append_to_kind_thread(
         body,
         &ts,
         Some(thread_id.as_str()),
-        Value::Object(meta),
+        meta,
         None,
         None,
         None,

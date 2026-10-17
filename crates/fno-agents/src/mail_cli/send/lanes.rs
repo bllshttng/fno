@@ -1082,7 +1082,6 @@ pub(super) fn kind_lane_send(
             Some(thread_path) => append_to_kind_thread(
                 &thread_path,
                 &sender,
-                kind,
                 content,
                 &msg_id,
                 Some(crate::backlog::style_check::word_count(content) as i64),
