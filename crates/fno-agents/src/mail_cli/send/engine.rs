@@ -710,7 +710,7 @@ pub(super) fn a2a_first_use_gate() {
     if !auto {
         return;
     }
-    let marker = state_dir().join("a2a-confirmed");
+    let marker = a2a_marker();
     if marker.exists() {
         return;
     }
@@ -729,8 +729,23 @@ pub(super) fn a2a_first_use_gate() {
     let _ = std::io::stdin().read_line(&mut answer);
     let keep = !matches!(answer.trim(), "n" | "N");
     if keep {
+        if let Some(parent) = marker.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = std::fs::write(&marker, "answered\n");
     }
+}
+
+/// paths.state_runtime_file: the state/ subfolder is the runtime home and
+/// the legacy root spelling reads while it exists, so the marker moves with
+/// the same resolver Python used and no root-level write lands here.
+fn a2a_marker() -> PathBuf {
+    let root = state_dir();
+    let legacy = root.join(".a2a-confirmed");
+    if legacy.exists() {
+        return legacy;
+    }
+    root.join("state").join("a2a-confirmed")
 }
 
 // ---------------------------------------------------------------------------
