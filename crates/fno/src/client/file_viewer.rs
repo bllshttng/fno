@@ -8,6 +8,7 @@
 //! takes its columns from the content area (the server resizes the panes), and
 //! the feed panel yields the right edge while the viewer holds it.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use super::backlog_style::{to_body_line, BLine};
@@ -145,6 +146,10 @@ struct FileViewer {
     target: Option<usize>,
     /// Whether the viewer takes keys. A click on a pane takes them back.
     focused: bool,
+    /// The markdown body rendered at the last paint width. Paint paths hold
+    /// `&View`, so the cache sits in a `RefCell`; nothing re-enters it while
+    /// a borrow is out, and a resize re-renders once.
+    md: RefCell<Option<(usize, Vec<BLine>)>>,
     esc: Vec<u8>,
 }
 
@@ -324,12 +329,19 @@ struct Window {
     started: usize,
 }
 
-/// The markdown body rendered at the paint width; none for other bodies.
-fn rendered(v: &FileViewer, plan: &Plan) -> Option<Vec<BLine>> {
-    match &v.body {
-        Body::Markdown { src, .. } => Some(md_lines(src, plan.text_w)),
-        _ => None,
+/// The markdown body rendered at the paint width, cached per width; none for
+/// other bodies.
+fn rendered(v: &FileViewer, plan: &Plan) -> Option<std::cell::Ref<'_, [BLine]>> {
+    let Body::Markdown { src, .. } = &v.body else {
+        return None;
+    };
+    let mut cache = v.md.borrow_mut();
+    if cache.as_ref().is_none_or(|(w, _)| *w != plan.text_w) {
+        *cache = Some((plan.text_w, md_lines(src, plan.text_w)));
     }
+    let slot = std::cell::Ref::filter_map(cache.downgrade(), Option::as_ref);
+    slot.map(|c| std::cell::Ref::map(c, |p| p.1.as_slice()))
+        .ok()
 }
 
 fn window(v: &FileViewer, plan: &Plan, md: Option<&[BLine]>) -> Window {
@@ -477,6 +489,7 @@ pub(super) async fn open(
         scroll: 0,
         target,
         focused: true,
+        md: RefCell::new(None),
         esc: Vec::new(),
     });
     view.region_owner = region_focus::RegionOwner::Pane;
