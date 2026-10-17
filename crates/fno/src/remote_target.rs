@@ -20,6 +20,11 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
     }
+    // The relay's own same-host forward: claiming it again recursed every
+    // send until the machine ran out of processes.
+    if std::env::var_os("FNO_MAIL_LOCAL_FORWARD").is_some() {
+        return None;
+    }
     let tail: Vec<OsString>;
     match args.get(1)?.to_str()? {
         "mail" => {
@@ -62,6 +67,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 /// claim toward the safe direction.
 pub fn is_plain_name_target(token: &str) -> bool {
     if token.len() < 2
+        || token.starts_with('-')
         || token.contains('/')
         || token.contains(':')
         || token
@@ -185,5 +191,18 @@ mod tests {
         assert!(!is_plain_name_target("a/b"));
         assert!(!is_plain_name_target("a:b"));
         assert!(!is_plain_name_target("n"));
+        // A flag-led send names no target in slot 3.
+        assert!(!is_plain_name_target("--from-name"));
+        assert!(classify(&os(&[
+            "agents",
+            "mail",
+            "send",
+            "--from-name",
+            "fno/quiet-recovery",
+            "--to-lead",
+            "x-29a8",
+            "body",
+        ]))
+        .is_none());
     }
 }
