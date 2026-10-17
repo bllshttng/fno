@@ -341,22 +341,23 @@ fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Vec<String> {
         .collect()
 }
 
-/// Reviews on `pr` via one REST read; None when the read fails (no-answer,
-/// never "no new review"). per_page=100 is load-bearing: gh api fetches ONE
-/// page, so at the default 30 the count saturates and a 31st review can
-/// never wake the wait.
+/// Reviews on `pr` via one conditional REST read; None when the read fails
+/// (no-answer, never "no new review"). per_page=100 is load-bearing: gh api
+/// fetches ONE page, so at the default 30 the count saturates and a 31st
+/// review can never wake the wait. No `--jq`: the conditional door refuses
+/// jq'd shapes, so the plain array read rides gh_etag and a 304 serves the
+/// stored body at no core cost on every unchanged tick.
 fn review_count<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Option<i64> {
     let args = vec![
         "api".to_string(),
         format!("repos/{slug}/pulls/{pr}/reviews?per_page=100"),
-        "--jq".to_string(),
-        "length".to_string(),
     ];
     let (ok, stdout, _) = probe.run_gh(cwd, &args).ok()?;
     if !ok {
         return None;
     }
-    stdout.trim().parse::<i64>().ok()
+    let body: Value = serde_json::from_str(&stdout).ok()?;
+    body.as_array().map(|a| a.len() as i64)
 }
 
 #[cfg(test)]
@@ -585,6 +586,52 @@ mod tests {
         assert!(
             stderr.contains("still no new review after 60s; last count 4"),
             "{stderr}"
+        );
+    }
+
+    struct RecordingProbe {
+        args_seen: std::sync::Mutex<Option<Vec<String>>>,
+        body: String,
+    }
+
+    impl GhProbe for RecordingProbe {
+        fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+            *self.args_seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(args.to_vec());
+            Ok((true, self.body.clone(), String::new()))
+        }
+    }
+
+    #[test]
+    fn review_count_reads_the_array_conditionally() {
+        // AC4-HP: the exact conditional shape (no --jq) returns the array's
+        // length. AC4-EDGE: a non-array body is None, never a wake.
+        let probe = RecordingProbe {
+            args_seen: None.into(),
+            body: r#"[{"id":1},{"id":2}]"#.to_string(),
+        };
+        let n = review_count(&probe, Path::new("."), "o/r", 7);
+        assert_eq!(n, Some(2));
+        assert_eq!(
+            probe
+                .args_seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .expect("the probe saw the read"),
+            &vec![
+                "api".to_string(),
+                "repos/o/r/pulls/7/reviews?per_page=100".to_string(),
+            ],
+            "no --jq: the conditional door refuses jq'd shapes"
+        );
+        let not_found = RecordingProbe {
+            args_seen: None.into(),
+            body: r#"{"message":"Not Found"}"#.to_string(),
+        };
+        assert_eq!(
+            review_count(&not_found, Path::new("."), "o/r", 7),
+            None,
+            "a non-array body is a no-answer, never a wake"
         );
     }
 }

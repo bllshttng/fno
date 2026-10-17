@@ -304,6 +304,9 @@ pub fn run(args: &[String]) -> i32 {
         // dir, uploader command, GitHub Pages) are the verb's own. The
         // catalog row sits in the board group.
         "publish" => super::publish::run(resolved.tail),
+        // The owner-run import beside the publish verb it serves: approved
+        // issues in, quarantined intake rows out, dry run by default.
+        "import-requests" => super::requests::run(resolved.tail),
         // The wave-4 cutover arms: catalog commands whose Python bodies were
         // thin clients of native machinery, served with no compat forward.
         // The full list of dispositions lives on the cutover module doc.

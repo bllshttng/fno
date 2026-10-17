@@ -52,7 +52,7 @@ Every session file carries the session id. Under `~/.fno/sessions/<project-slug>
 | `turn_context` | `turn`, `model`, `cwd`, `spent_usd`, `wall_secs`, `cost_cap_usd`, `wall_cap_secs`, `permission_mode` |
 | `user_input` | `text`, `origin` (`operator`, `hook`, `skill`, `agent`, `footnotes`, `mail`). Origin `mail` also carries `sender_session_id`, `message_id` and `reply_to`. |
 | `model_request` | `turn`, `provider_id`, `endpoint_host`, `wire`, `route`, `requested_model`, `message_count`, `estimated_input_tokens`, `body_sha256`. Never the body, key or headers. |
-| `model_attempt` | ignorable. `attempt`, `status`, `error_class`, `detail`, `latency_ms`, `usage` |
+| `model_attempt` | ignorable. `attempt`, `status`, `error_class`, `detail`, `latency_ms`, `usage`, `cost_usd`. `cost_usd` appears only when the attempt carries `usage`. Null means the price is unknown. |
 | `model_response` | `turn`, `provider_response_id`, `reported_model`, `content` (Anthropic blocks), `stop_reason`, `latency_ms`, `attempts` |
 | `usage` | `turn`, `provider_response_id`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd` |
 | `tool_call` | `turn`, `tool_call_uid` (the harness's), `provider_tool_call_id` (the wire's), `name`, `raw_input`, `input`, `parse_error` |
