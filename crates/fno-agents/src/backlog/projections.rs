@@ -1457,7 +1457,14 @@ const PUBLIC_COLUMNS: [(&str, &str); 4] = [
 ];
 
 fn is_public_in(e: &Value, project: &str) -> bool {
-    is_dict(e) && e.get("public") != Some(&Value::Bool(false)) && project_key(e) == project
+    is_dict(e)
+        && e.get("public") != Some(&Value::Bool(false))
+        && project_key(e) == project
+        // The quarantine default-deny: an imported request row publishes
+        // only when the owner flipped it public. backlog_snapshot.rs
+        // select_public_rows holds the fno-side twin of this rule.
+        && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
+            || e.get("public") == Some(&Value::Bool(true)))
 }
 
 fn public_columns<'a>(
@@ -1974,13 +1981,19 @@ mod tests {
                    "public": false}),
             json!({"id": "x-4", "title": "Waiting", "status": "ready", "project": "p",
                    "queued_at": "2026-01-01"}),
+            json!({"id": "x-ext-null", "title": "Visitor ask", "status": "ready",
+                   "project": "p", "source_kind": "external_request"}),
+            json!({"id": "x-ext-pub", "title": "Visitor ask published",
+                   "status": "ready", "project": "p",
+                   "source_kind": "external_request", "public": true,
+                   "queued_at": "2026-01-01"}),
         ];
         let kept = omit_leaky_rows(entries, "p");
-        assert_eq!(kept.len(), 3);
+        assert_eq!(kept.len(), 5);
         let md = render_public_roadmap_md(&kept, "p");
         assert_eq!(
             md,
-            "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n"
+            "# p roadmap\n\n## Now\n\n- Ship it _(p1 · M)_\n\n## Later\n\n- Waiting\n- Visitor ask published\n"
         );
     }
 
