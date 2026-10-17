@@ -108,7 +108,6 @@ fn rfc3339_ms(ms: i64) -> String {
 }
 
 struct Runtime {
-    dir: PathBuf,
     repo: PathBuf,
     journal: PathBuf,
     home: PathBuf,
@@ -135,7 +134,6 @@ fn build_runtime(base: &Path, key: &str, detached: bool) -> Runtime {
         home: dir.join("home"),
         repo,
         journal: fno_dir.join("events.jsonl"),
-        dir,
     }
 }
 
