@@ -43,6 +43,7 @@ pub const GROUPS: &[Group] = &[
             ("idea", "idea"),
             ("scoped", "new"),
             ("plan", "intake"),
+            ("requests", "import-requests"),
         ],
     },
     Group {
