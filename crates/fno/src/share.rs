@@ -39,7 +39,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::mux_cli::control_roundtrip;
-use crate::proto::{self, ControlVerb, ObserverHello, ObserverVia, PaneInfo, ServerMsg};
+use crate::proto::{self, ControlVerb, Frame, ObserverHello, ObserverVia, PaneInfo, ServerMsg};
 use crate::server::agent_actions::{run_mail_send, sanitize_mail_text};
 use crate::server::observers::clean_label;
 use crate::{redact, web};
@@ -79,6 +79,18 @@ pub struct ShareArgs {
 /// Every other message, `Layout` included, is dropped: nothing about the rest
 /// of the session leaves the machine.
 pub(crate) fn share_frame(msg: ServerMsg, pane: u64) -> Option<String> {
+    let frame = masked_pane_frame(msg, pane)?;
+    serde_json::to_string(&ServerMsg::Frame {
+        pane_id: pane,
+        frame,
+    })
+    .ok()
+}
+
+/// The masked frame when `msg` is a good frame of pane `pane`, else `None`.
+/// The one place a pane's cells are made safe to leave the machine, shared by
+/// the browser share and the ssh observer.
+pub(crate) fn masked_pane_frame(msg: ServerMsg, pane: u64) -> Option<Frame> {
     let ServerMsg::Frame { pane_id, mut frame } = msg else {
         return None;
     };
@@ -87,13 +99,13 @@ pub(crate) fn share_frame(msg: ServerMsg, pane: u64) -> Option<String> {
     }
     frame.cells.iter_mut().for_each(crate::band_remap::remap);
     redact::redact_frame(&mut frame);
-    serde_json::to_string(&ServerMsg::Frame { pane_id, frame }).ok()
+    Some(frame)
 }
 
 /// What makes a pane the same pane across a server restart, where pane ids
 /// start over. The child pid comes first because it is set at spawn and never
 /// changes; a harness session id can appear later, when the agent registers.
-fn pane_identity(p: &PaneInfo) -> String {
+pub(crate) fn pane_identity(p: &PaneInfo) -> String {
     p.child_pid
         .map(|pid| format!("pid:{pid}"))
         .or_else(|| p.fno_id.clone())
@@ -482,7 +494,7 @@ fn run_effects(ctx: &Ctx, hub: &mut Hub, effects: Vec<Effect>) {
     }
 }
 
-fn list_panes(socket: &Path, session: &str) -> Result<Vec<PaneInfo>, String> {
+pub(crate) fn list_panes(socket: &Path, session: &str) -> Result<Vec<PaneInfo>, String> {
     match control_roundtrip(socket, session, ControlVerb::PaneLs) {
         Ok(ServerMsg::PaneList { panes }) => Ok(panes),
         Ok(ServerMsg::Err { msg, .. }) => Err(msg),
