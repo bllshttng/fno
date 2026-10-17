@@ -547,7 +547,8 @@ mod tests {
         assert_eq!(cols[6], "partly_shipped");
         let unmarked = mk(None);
         assert!(unmarked.json_row()["stale"].is_null());
-        let tsv_un: Vec<&str> = unmarked.tsv_row().split('\t').collect();
+        let tsv_un_row = unmarked.tsv_row();
+        let tsv_un: Vec<&str> = tsv_un_row.split('\t').collect();
         assert_eq!(tsv_un[6], "-");
     }
 
