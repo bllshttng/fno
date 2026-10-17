@@ -177,7 +177,9 @@ pub fn classify_with_basis_and_exclusivity(
     }
     if is_expired(rec, now) {
         // A review hold is a lease on the review; the holder's session answers another question.
-        if rec.key.starts_with("review:branch:") {
+        // The merge slot is a lease on the queue: a holder whose CI sits queued
+        // stays live for hours, and its session must not keep the slot past the TTL.
+        if rec.key.starts_with("review:branch:") || rec.key.starts_with("merge-slot:") {
             return (ClaimState::Stale, basis::TTL_EXPIRED);
         }
         // A lease whose holder is ONE SHORT-LIVED PROCESS reads its recorded
