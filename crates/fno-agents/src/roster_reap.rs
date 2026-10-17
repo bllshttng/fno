@@ -2260,4 +2260,56 @@ mod tests {
         assert_eq!(summary.retired[0].class, "fleet");
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    // AC15: a first-turn bind is not an ownership marker. The door minted a
+    // synthesized registry row beside the bind, so the roster row reads as
+    // owned: kept at every scope through the owned gate, the fleet gates
+    // never consulted, never retired as fleet work.
+    #[test]
+    fn first_turn_bind_reads_as_a_plain_session_to_the_reaper() {
+        for scope in [RosterScope::Provenanced, RosterScope::All] {
+            let dir = tmpdir("first-turn-bind");
+            let transcript = quiet_transcript(&dir, "sid-1");
+            let mut bound = RegistryEntry::default();
+            bound.name = "w-bound".into();
+            bound.harness_session_id = Some("sid-1".into());
+            bound.node = Some("x-bbbb".into());
+            bound.node_basis = Some("first-turn".into());
+            let summary = run(
+                &no_home(),
+                900,
+                scope,
+                true,
+                &roster(vec![row("ab12cd34", Some("sid-1"), Some("hand-typed"))]),
+                &[bound],
+                &|| {
+                    Some(GraphRead {
+                        statuses: [("x-bbbb".to_string(), "ready".to_string())].into(),
+                        ..Default::default()
+                    })
+                },
+                &|_| Some(vec![transcript.clone()]),
+                &|entries| {
+                    entries
+                        .iter()
+                        .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                        .collect::<HashMap<_, _>>()
+                },
+                crate::daemon::now_epoch_secs(),
+                &|_| CascadeOutcome::NotApplicable,
+            );
+            assert!(
+                summary.retired.is_empty(),
+                "scope {scope:?} retired a first-turn-bound row: {summary:?}"
+            );
+            assert_eq!(summary.kept_owned, 1, "scope {scope:?}: {summary:?}");
+            let kept = summary.kept.first().expect("the bound row was judged");
+            assert_eq!(kept.class, "owned", "scope {scope:?}: {summary:?}");
+            assert_eq!(
+                kept.reason, "owned by an fno row",
+                "scope {scope:?}: {summary:?}"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
 }

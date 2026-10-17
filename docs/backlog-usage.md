@@ -80,7 +80,14 @@ fno backlog update <id> --plan-path path/to/plan.md
 fno backlog update <id> --no-public            # exclude from public projections
 fno backlog update <id> --source-node x-aaaa   # origin edge (see "Node-to-node edges")
 fno backlog update <id> --related x-bbbb       # affinity edge, symmetric
+fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
+fno backlog update <id> blocked_by+=<id>       # add one blocker
+fno backlog update <id> blocked_by-=<id>       # remove one blocker
+fno backlog update <id> tags+=<tag>            # add one tag (lowercase-kebab)
 ```
+
+The operator form (`field=value`, `field+=value`, `field-=value`) covers five fields: `details` and `dispatch_brief` (text), `tags`, `blocked_by`, `related` (lists). It is the new spelling. The flags stay until every field has one.
+
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
@@ -185,7 +192,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 | Action | Command | Effect |
 |--------|---------|--------|
-| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other |
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
 | Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
 | Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
 | Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |
@@ -336,6 +343,8 @@ fno backlog provenance <id> --spawned    # invert the origin edge: what did this
 A node carries `origin_evidence`, the producing-event reference the birth had: a capture fu-id and its substrate ref, a plan's sources, or a causal node id.
 
 Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
+
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the verb exits 2 and names `--started-at` as the by-hand door.
 
 On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
 

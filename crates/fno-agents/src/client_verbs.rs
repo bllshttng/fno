@@ -1426,6 +1426,9 @@ pub(crate) fn upsert_synthesized_row(
                 // keeps whatever a spawn/register path stamped.
                 if merged.node.is_none() {
                     merged.node = old.node.clone();
+                    // The basis travels with the node it explains; a refresh
+                    // never downgrades a first-turn bind to claimed work.
+                    merged.node_basis = old.node_basis.clone();
                 }
                 crate::adopt_carry::carry_adopted_team(&mut merged, old);
                 reg.entries[i] = merged;

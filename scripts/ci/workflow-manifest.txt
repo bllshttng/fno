@@ -12,6 +12,7 @@ crates-publish.yml
 deferred-census.yml
 executor-routing.yml
 guards.yml
+harness-launch-docs.yml
 install-script-portability.yml
 internal-refs.yml
 main-binaries.yml

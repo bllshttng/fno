@@ -260,6 +260,7 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                 // the node, so replacing the row must not erase one a spawn
                 // or register path stamped.
                 let node = reg.entries[i].node.clone();
+                let node_basis = reg.entries[i].node_basis.clone();
                 // The birth context is what adoption must
                 // PRESERVE, not rewrite. Origin, the parent edge, the door's
                 // structured provenance, the requested axes, and the
@@ -275,6 +276,9 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                 reg.entries[i].name = prev.name.clone();
                 if reg.entries[i].node.is_none() {
                     reg.entries[i].node = node;
+                    // The basis travels with the node it explains; a refresh
+                    // never downgrades a first-turn bind to claimed work.
+                    reg.entries[i].node_basis = node_basis;
                 }
                 // An agent adopt keeps the row's prior origin (the adopt
                 // observed nothing about the birth); a user-typed adopt

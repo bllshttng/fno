@@ -4055,23 +4055,16 @@ where
                 // Return the full row shape matching Python's serialize_entry. The
                 // key set is pinned by schemas/agents-list-row.json, asserted here
                 // and by the Python test; edit that file before adding a key.
-                // Fields present in RegistryEntry are mapped directly; fields absent from
-                // the Rust registry are emitted as null with a NOTE citing the carveout.
                 //
                 // live_status remains null because the daemon does not duplicate the
                 // harness supervisor view. `status`, however, is the family-1
                 // transcript verdict attached above; stored registry status is only
                 // lifecycle metadata and cannot prove read-side liveness or death.
                 //
-                // session_id: Python uses the provider-specific resume id (short_id
-                // for claude since v9, codex_session_id for codex, gemini_session_id
-                // for gemini). The Rust registry stores these in separate optional
-                // fields; we replicate the Python resolution logic here.
-                // Provider-specific resume id, falling back to the generic
-                // `session_id` when the provider field is None (matches Python's
-                // resolution + the resolve_session_id helper below; gemini-code-assist
-                // medium on PR #361 — without the fallback a row with only the generic
-                // session_id set would report null here).
+                // session_id is the provider-specific resume id (short_id for
+                // claude, codex_session_id for codex, gemini_session_id for
+                // gemini), falling back to the generic `session_id` so a row with
+                // only the generic id set still reports a resume key.
                 let resume_id: Option<String> = match e.harness_name() {
                     "claude" => e
                         .transport_short()
@@ -4153,8 +4146,12 @@ where
                     "current_session_id": e.harness_session_id,
                     // `node_reason` beside `node` is the sibling receipt:
                     // why a mint could not bind the node the seed named.
+                    // `node_basis` beside it names the non-mint writer that
+                    // did bind one (the first-turn hook); absence reads as
+                    // spawn/target work.
                     "node": e.node,
                     "node_reason": e.node_reason,
+                    "node_basis": e.node_basis,
                     "pr": pr,
                     "pr_basis": pr_basis,
                     "predecessor_session_ids": e.predecessor_session_ids,

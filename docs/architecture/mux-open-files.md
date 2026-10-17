@@ -20,24 +20,26 @@ The viewer is a client surface. The server never sees it, and it never becomes a
 
 `mux.viewer` picks the shape: `panel` (the default) or `modal`.
 
-- `panel` docks at the right edge and copies the feed panel. The width is in columns, and the border drags. The width persists through `view_store`. See `feed_panel_w` and the drag functions (`crates/fno/src/client/feed_view.rs:724` to `:797`). The viewer and the feed share the right edge. The one opened last owns it. If the feed was open, closing the viewer gives the edge back to the feed.
-- `modal` is a centered family-B overlay (`OverlayAnchor::Center`, `crates/fno/src/client/overlay_paint.rs`).
+- `panel` docks at the right edge and takes its columns from the panes, as the feed panel does. The width is a percent of the terminal (40 by default). `View::viewer_panel_w` in `crates/fno/src/client/file_viewer.rs` reads it, and `content_dims` subtracts it, so the server resizes the panes to fit. The width lasts for the client session and is not saved. The viewer and the feed share the right edge. While the viewer holds it, `feed_panel_w` reads 0. Closing the viewer gives the edge back to the feed with its state intact. A terminal too narrow for a 24-column panel shows the viewer as a modal.
+- `modal` is a centered box, 80% of the content area in each direction. Both shapes paint one framed block through `chrome::frame`. The esc chip, the footer's `esc close` words and the scroll bar come from that shared chrome.
 
-The viewer opens focused, because a click asked for it. While it has focus it takes these keys, with no prefix:
+The viewer opens focused, because a click asked for it. A modal always holds the keyboard. A click on a pane takes the keyboard from a panel. A click inside the panel gives it back. While it has focus it takes these keys, with no prefix:
 
 | Key | Action |
 |---|---|
 | Esc, `q` | close |
-| `-`, `+` (or `=`) | narrow or widen the panel by 5% of the terminal width |
-| arrows, PgUp, PgDn | scroll |
-| `o` | hand the file to the outside opener (section 6) |
+| `-`, `+` (or `=`) | narrow or widen the panel by 5% of the terminal width, between 20% and 80% |
+| `j`, `k`, arrows, mouse wheel | scroll |
+| space, `b`, PgDn, PgUp | scroll a page |
+| `g`, `G` | jump to the top or the end |
+| `o` | hand the file to the platform opener |
 | `n`, `p` | next or previous page (PDF only, section 4) |
 
-Prefix+`<` and prefix+`>` were the first pick for resize. Those keys already move a tab (`move-tab-left` and `move-tab-right`, `crates/fno/src/keys.rs:1207` and `:1214`). Keys local to a focused viewer avoid the clash and need no new prefix action. The close chip works with no extra code: the painter records it, and `esc_close::tap` (`crates/fno/src/client/esc_close.rs`) presses Esc through the normal key chain.
+Prefix+`<` and prefix+`>` were the first pick for resize. Those keys already move a tab (`move-tab-left` and `move-tab-right`, `crates/fno/src/keys.rs:1207` and `:1214`). Keys local to a focused viewer avoid the clash and need no new prefix action. The close chip works with no extra code: the painter records it, and `esc_close::tap` (`crates/fno/src/client/esc_close.rs`) presses Esc through the normal key chain. An unfocused panel takes no keys, so a tap on its chip closes it directly.
 
-The first viewer slice shows text only. It reads the file off the UI loop, the way `open_link::start` already uses `spawn_blocking`. It caps the read at 1 MiB. If the URI carries a `:line`, the viewer scrolls to that line. For a binary file it shows "no preview" with the `o` hint.
+The first viewer slice shows text only. It reads the file off the UI loop, the way `open_link::start` already uses `spawn_blocking`. It caps the read at 1 MiB and says so in the header. It numbers each line and wraps a long line without losing its indent. If the URI carries a `:line`, the viewer scrolls to that line and marks it. It replaces every control character with a dot, so file bytes never reach the terminal as an escape sequence. For a binary file it shows "no preview" with the `o` hint.
 
-The viewer code goes in a new `crates/fno/src/client/file_viewer.rs`. `crates/fno/src/client.rs` is 10,489 lines and shrink-only under `scripts/ci/check-file-budget.sh`, so each line the viewer adds there must move another line out in the same PR.
+The viewer code is in `crates/fno/src/client/file_viewer.rs`. `crates/fno/src/client.rs` is shrink-only under `scripts/ci/check-file-budget.sh`. The `link_rx` arm that used to build the notice inline now calls `open_link::land`, which paid for the few lines the viewer adds there.
 
 ## 3. Images
 
@@ -74,19 +76,19 @@ The slice will be small. `md_lines` (`crates/fno/src/client/backlog_md.rs:7`) al
 
 `mux.open_with` picks where a clicked file goes: `inmux` (the default), `obsidian`, or `system`.
 
-- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Until the viewer ships, `inmux` acts as `system`, so the default changes nothing on the day the router lands.
+- `inmux` sends text, markdown, images and PDFs to the viewer. Other types go to `system`. Today the viewer shows text and source files. Images, PDFs, archives, audio, video and office documents, and any directory, still go to `system` (`OUTSIDE_EXTS` and `viewable` in `crates/fno/src/open_router.rs`). Each of those joins the viewer with its own slice. A file with no telling extension goes to the viewer, which says "no preview" for a binary.
 - `obsidian` covers files under the vault root. For such a file the router builds an `obsidian://open` URI. It uses the existing builder `obsidian_open_uri` (`crates/fno/src/link.rs:690`) and the root that `resolve_vault_root` gives (`crates/fno/src/link.rs:681`). Move the vault-relative step out of `plan_link` (`crates/fno/src/link.rs:625`) into one shared function. Then `plan_link` and the router call the same code. The URI opens through `open_fno_uri` (`crates/fno/src/link.rs:719`). A file outside the vault, or `obsidian.enabled = false` (`ObsidianCfg`, `crates/fno/src/digest_overlay.rs:1202`), falls back to `system`.
 - `system` calls `open_fno_path` (`crates/fno/src/link.rs:739`), the behavior today.
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
-Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. The user granted both edits, so the router ships with the keys that `fno config set` can set. The router lives in `crates/fno/src/open_router.rs`, and `link::vault_file_uri` is the shared vault-relative step. The client reads `mux.open_with` on each click. Nothing reads `mux.viewer` until the viewer ships.
+Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. The user granted both edits, so the router ships with the keys that `fno config set` can set. The router lives in `crates/fno/src/open_router.rs`, and `link::vault_file_uri` is the shared vault-relative step. The client reads `mux.open_with` and `mux.viewer` on each click, on the blocking thread that loads the file.
 
 ## 7. Slices, in order
 
 1. Clickable file paths in pane text. Shipped (section 1).
 2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. Shipped.
-3. The viewer surface: panel or modal, the keys, and the text preview (section 2).
+3. The viewer surface: panel or modal, the keys, and the text preview (section 2). Shipped.
 4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). It starts with the spike.
 5. PDF pages through `hayro` and the image path (section 4).
 6. Markdown in the viewer through `md_lines` (section 5). It can start once slice 3 lands, and it does not wait for slices 4 or 5.
