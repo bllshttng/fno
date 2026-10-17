@@ -627,9 +627,15 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
             Status::Absent
         };
     }
-    if LOCK_BEARING_FOLDERS.contains(&row.legacy.as_str()) && !dir_children_lockable(&legacy) {
+    let mut held_locks: Vec<std::fs::File> = Vec::new();
+    if LOCK_BEARING_FOLDERS.contains(&row.legacy.as_str())
+        && !dir_children_lockable(&legacy, &mut held_locks)
+    {
         return Status::Pending("a child lock is held".to_string());
     }
+    // The probe fds stay open through the fold: a lock another writer takes
+    // between the probe and a rename cannot split a child from its holder.
+    // The vec drops when the fold ends and releases them.
     if !apply {
         return Status::Pending("fold (dry run)".to_string());
     }
@@ -662,11 +668,12 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     }
 }
 
-/// Every regular-file child of `dir` takes a non-blocking exclusive flock.
-/// Subdirs and sockets are neither probes nor locks: their writers fold by
-/// rename together with the folder, and an fd that cannot open refuses the
-/// fold for this pass rather than guessing.
-fn dir_children_lockable(dir: &Path) -> bool {
+/// Every regular-file child of `dir` takes a non-blocking exclusive flock,
+/// and each taken `File` lands in `held` so the caller keeps the locks
+/// until its fold ends. Subdirs and sockets are neither probes nor locks:
+/// their writers fold by rename together with the folder, and an fd that
+/// cannot open refuses the fold for this pass rather than guessing.
+fn dir_children_lockable(dir: &Path, held: &mut Vec<std::fs::File>) -> bool {
     let Ok(children) = std::fs::read_dir(dir) else {
         return false;
     };
@@ -686,6 +693,7 @@ fn dir_children_lockable(dir: &Path) -> bool {
                 if rc != 0 {
                     return false;
                 }
+                held.push(f);
             }
             Err(_) => return false,
         }
@@ -693,14 +701,13 @@ fn dir_children_lockable(dir: &Path) -> bool {
     true
 }
 
-/// The dead and duplicate entries the table's root-level park rows cannot
-/// reach: the pre-dedup `graph.db.*` rotation copies inside `backups/` (the
-/// one home is `db/backups`) and the `agents/migrations` twin of the
-/// role-migration markers (the one home is `migrations/`). Root scan only
-/// sees the root's own children, so this runs beside it. Dry run reports
-/// pending; apply parks the rotation copies and folds the twin into the
-/// home - a marker the home already holds parks, one it lacks moves, so an
-/// install's done-state survives.
+/// The dead duplicate the table's root-level park rows cannot reach: the
+/// pre-dedup `graph.db.*` rotation copies inside `backups/` (the one home
+/// is `db/backups`). Root scan only sees the root's own children, so this
+/// runs beside it. `agents/migrations` is deliberately absent: the role
+/// migration writes that folder live (its receipt path derives from the
+/// agents home's parent), so folding it into `migrations/` fights the
+/// writer and re-fills every pass.
 fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str) -> Vec<Entry> {
     let mut out = Vec::new();
     let backups = root.join("backups");
@@ -716,49 +723,6 @@ fn park_nested_duplicates(root: &Path, apply: bool, stamp: &str) -> Vec<Entry> {
                 legacy: format!("backups/{name}"),
                 status,
             });
-        }
-    }
-    let twin = root.join("agents").join("migrations");
-    if twin.is_dir() {
-        let home = root.join("migrations");
-        let mut owed = false;
-        if let Ok(children) = std::fs::read_dir(&twin) {
-            for child in children.flatten() {
-                owed = true;
-                let name = child.file_name().to_string_lossy().into_owned();
-                if !apply {
-                    out.push(Entry {
-                        legacy: format!("agents/migrations/{name}"),
-                        status: Status::Pending("fold twin marker (dry run)".to_string()),
-                    });
-                    continue;
-                }
-                if let Err(e) = std::fs::create_dir_all(&home) {
-                    out.push(Entry {
-                        legacy: "agents/migrations".to_string(),
-                        status: Status::Refused(format!("refused: {e}")),
-                    });
-                    return out;
-                }
-                let target = home.join(child.file_name());
-                let status = if target.exists() {
-                    park_file(root, stamp, &child.path())
-                } else if std::fs::rename(child.path(), &target).is_ok() {
-                    Status::Merged
-                } else {
-                    Status::Pending("twin marker move failed; the next pass retries".to_string())
-                };
-                out.push(Entry {
-                    legacy: format!("agents/migrations/{name}"),
-                    status,
-                });
-            }
-        }
-        let emptied = std::fs::read_dir(&twin)
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(false);
-        if apply && owed && emptied {
-            std::fs::remove_dir(&twin).ok();
         }
     }
     out
@@ -1238,30 +1202,19 @@ mod tests {
     }
 
     #[test]
-    fn nested_duplicates_park_and_the_marker_twin_folds() {
+    fn nested_duplicates_park_backups_rotations_only() {
         let root = tmp_root("nested");
         std::fs::create_dir_all(root.join("backups")).unwrap();
         std::fs::write(root.join("backups").join("graph.db.20261003"), b"old").unwrap();
+        // The live marker root stays untouched: the pass owns no home for it.
         std::fs::create_dir_all(root.join("agents").join("migrations")).unwrap();
         std::fs::write(root.join("agents/migrations/role-vocabulary-v2.done"), b"1").unwrap();
-        std::fs::write(root.join("migrations/role-vocabulary-v2.done"), b"new").unwrap();
-        std::fs::write(
-            root.join("agents/migrations/role-registry-table-v1.done"),
-            b"1",
-        )
-        .unwrap();
         let dry = migrate(&root, false);
         assert!(
             dry.entries
                 .iter()
                 .any(|e| e.legacy.starts_with("backups/graph.db.") && e.status.is_pending()),
             "the dry run lists the rotation copy as pending"
-        );
-        assert!(
-            dry.entries
-                .iter()
-                .any(|e| e.legacy.starts_with("agents/migrations/") && e.status.is_pending()),
-            "the dry run lists the twin markers as pending"
         );
         assert!(
             root.join("backups").join("graph.db.20261003").exists(),
@@ -1272,26 +1225,17 @@ mod tests {
             !root.join("backups").join("graph.db.20261003").exists(),
             "the rotation copy parked"
         );
-        assert_eq!(
-            std::fs::read(root.join("migrations").join("role-vocabulary-v2.done")).unwrap(),
-            b"new",
-            "the home marker wins the clash"
-        );
-        assert_eq!(
-            std::fs::read(root.join("migrations").join("role-registry-table-v1.done")).unwrap(),
-            b"1",
-            "the unmatched twin marker moved home"
-        );
         assert!(
-            !root.join("agents").join("migrations").exists(),
-            "the emptied twin folder is removed"
+            root.join("agents/migrations/role-vocabulary-v2.done")
+                .exists(),
+            "the live marker root is untouched"
         );
         assert!(
             receipt
                 .entries
                 .iter()
                 .any(|e| matches!(e.status, Status::Parked)),
-            "the receipt names the parked copies: {receipt:?}"
+            "the receipt names the parked copy: {receipt:?}"
         );
         clean(&root);
     }
