@@ -114,7 +114,7 @@ fn vacate_scope_holder(
                 vacated.push(row.name.clone());
             }
         }
-        Ok(vacated)
+        Ok::<Vec<String>, String>(vacated)
     })
     .map_err(|e| e.to_string())??;
     Ok(vacated)
