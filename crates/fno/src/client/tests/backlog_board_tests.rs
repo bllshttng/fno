@@ -346,7 +346,7 @@ fn board_wide_rows() {
 fn sideline_toggle_rows() {
     let mut v = key_view(board_with(board_inputs()));
     v.backlog_board = None;
-    v.experimental_backlog = true;
+    v.experimental_org_board = true;
     let rt = tokio::runtime::Runtime::new().unwrap();
     assert!(v.backlog_board.is_none(), "agents view starts closed");
     rt.block_on(async {
@@ -623,7 +623,6 @@ fn sideline_toggle_rows() {
     let inputs = board_inputs();
     let node = backlog_model::node(&inputs, "x-1").unwrap();
     v.org_board.as_mut().unwrap().inputs = Some(inputs);
-    v.experimental_backlog = false;
     rt.block_on(async {
         crate::client::org_board::dispatch(
             &mut v,
@@ -776,7 +775,6 @@ fn chord_rows() {
 #[tokio::test]
 async fn compose_rows() {
     let mut v = key_view(board_with(board_inputs()));
-    v.experimental_backlog = true;
     v.sideline_view = crate::view_store::SidelineView::Backlog;
     let text = crate::vt::frame_text(&v.compose());
     assert!(text.contains("Search:"), "filter bar: {text}");
@@ -784,7 +782,6 @@ async fn compose_rows() {
     assert!(text.contains("mux card"), "card row: {text}");
 
     let mut v = key_view(board_with(board_inputs()));
-    v.experimental_backlog = true;
     v.sideline_view = crate::view_store::SidelineView::Backlog;
     v.board_full = true;
     let text = crate::vt::frame_text(&v.compose());
@@ -833,7 +830,6 @@ async fn compose_rows() {
         r["id"] = json!("x-24c8");
     }
     let mut v = key_view(board_with(inp));
-    v.experimental_backlog = true;
     v.sideline_view = crate::view_store::SidelineView::Backlog;
     v.board_full = true;
     v.compose();
@@ -1015,7 +1011,6 @@ fn sideline_backlog_view() -> View {
             focus_node: None,
         },
     );
-    view.experimental_backlog = true;
     view.sideline_view = crate::view_store::SidelineView::Backlog;
     view.backlog_board = Some(board_with(board_inputs()));
     view

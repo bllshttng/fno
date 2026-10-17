@@ -447,10 +447,7 @@ pub enum Event {
     /// time. Overlay-mode keys (`n`/`N` pick, `q`/Esc close) are interpreted
     /// by the client's view layer, not here (like OpenAnswers).
     OpenYard,
-    /// Open the experimental backlog board (prefix+O). Whether the board
-    /// actually opens is the client's call: the sideline menu's
-    /// `experimental: backlog view` pref gates it, and the chord degrades to
-    /// a notice while the pref is off.
+    /// Open the backlog board (prefix+O).
     OpenBacklogBoard,
     CycleSidelineView,
     /// (redefined by) Toggle the org block on the left
@@ -1349,7 +1346,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "open-backlog-board",
             OpenBacklogBoard,
             Global,
-            "open the backlog board (experimental pref)",
+            "open the backlog board",
         ),
         b(
             b'V',
@@ -2150,7 +2147,7 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02b"]), vec![Event::TogglePanel]);
         assert_eq!(scan_all(&[b"\x02i"]), vec![Event::ToggleComposer]);
-        // prefix+O opens the experimental backlog board (pref-gated client-side).
+        // prefix+O opens the backlog board.
         assert_eq!(scan_all(&[b"\x02O"]), vec![Event::OpenBacklogBoard]);
         assert_eq!(scan_all(&[b"\x02F"]), vec![Event::ToggleFullSideline]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);

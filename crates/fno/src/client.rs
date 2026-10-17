@@ -1036,7 +1036,7 @@ pub(crate) struct View {
     /// commands the announcement predates are refused client-side rather
     /// than sent into an unknown-variant read failure.
     server_proto: Option<u32>,
-    /// The experimental backlog board overlay, when open (one at a time).
+    /// The backlog board overlay, when open (one at a time).
     backlog_board: Option<backlog_board::BoardView>,
     messages_board: Option<messages_view::MessagesBoard>,
     bell: bell::Panel,
@@ -1045,8 +1045,9 @@ pub(crate) struct View {
     sideline_view: crate::view_store::SidelineView,
     /// The board's full-screen toggle (persisted in the view store).
     board_full: bool,
-    /// The persisted experimental toggle for the backlog board view.
-    experimental_backlog: bool,
+    /// The persisted experimental toggles (see `experimental`).
+    experimental_org_board: bool,
+    experimental_pane_share: bool,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
     /// Whether the which-key modal was opened FROM the settings modal (tab or
@@ -1766,10 +1767,8 @@ pub(crate) enum AuxAction {
     SweepSquads,
     Detach,
     ToggleHoverFocus,
-    /// The experimental backlog board: flip the persisted pref, then
-    /// rebuild the open sidebar menu so its rows track it.
-    ToggleBacklogView,
-    /// Open the backlog board overlay (off unless the pref is on).
+    /// Flip one experimental toggle, then rebuild the open sidebar menu.
+    ToggleExperimental(experimental::Flag),
     OpenBacklogView,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then
@@ -1809,6 +1808,7 @@ mod backlog_board;
 mod backlog_style;
 mod chrome_hit;
 mod config_set;
+mod experimental;
 mod lane_entry;
 mod node_detail;
 pub(crate) use node_detail::wrap_line;
@@ -2056,7 +2056,8 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_backlog: view_store::load_experimental_backlog_view(),
+            experimental_org_board: view_store::load_experimental(experimental::ORG_BOARD),
+            experimental_pane_share: view_store::load_experimental(experimental::PANE_SHARE),
             settings_tab: SettingsTab::General,
             keys_modal_return: false,
             split_opens: SplitOpens::Pane,
@@ -2885,7 +2886,7 @@ impl View {
         self.aux = Some(build_sideline_menu(
             anchor,
             self.update_outcome.as_ref(),
-            self.experimental_backlog,
+            experimental::flags(self),
         ));
         self.aux_esc.clear();
         self.update_probe_want = true;
@@ -2909,7 +2910,7 @@ impl View {
         let mut menu = build_sideline_menu(
             anchor,
             self.update_outcome.as_ref(),
-            self.experimental_backlog,
+            experimental::flags(self),
         );
         let n = menu.popup.targets().len();
         menu.popup.sel = if n > 0 { sel.min(n - 1) } else { 0 };
@@ -8999,11 +9000,7 @@ async fn dispatch_event(
         Event::ShowKeys => {
             view.open_keys_modal();
         }
-        Event::OpenBacklogBoard => {
-            // The chord rides the same gate as the menu row: the pref
-            // decides, and the off case notices instead of opening.
-            backlog_board::open_pref_gated(view);
-        }
+        Event::OpenBacklogBoard => View::open(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
         Event::OpenOrgView => backlog_board::toggle_org_view(view),
         Event::OpenSettings => {
@@ -9196,12 +9193,7 @@ async fn apply_hit(
                 backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
             }
             crate::view_store::SidelineView::Messages => messages_view::open(view),
-            crate::view_store::SidelineView::Backlog if view.experimental_backlog => {
-                backlog_board::open_pref_gated(view)
-            }
-            crate::view_store::SidelineView::Backlog => {
-                view.set_notice("the backlog view is off (menu toggle)".into())
-            }
+            crate::view_store::SidelineView::Backlog => View::open(view),
             crate::view_store::SidelineView::Org => org_board::open(view),
         },
         ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
@@ -9406,7 +9398,7 @@ async fn execute_aux_action(
             view.aux = None;
             return Ok(DispatchFlow::Detach);
         }
-        AuxAction::ToggleBacklogView => View::toggle_enabled(view),
+        AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
         AuxAction::OpenBacklogView => {
             view.aux = None;
             View::open(view);

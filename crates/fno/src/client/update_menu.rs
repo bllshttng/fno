@@ -182,7 +182,7 @@ pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
 pub(crate) fn build_sideline_menu(
     anchor: Anchor,
     probe: Option<&UpdateProbe>,
-    backlog_on: bool,
+    flags: experimental::Flags,
 ) -> AuxPopup {
     let update = probe.map(|p| &p.readiness);
     let release = probe.map(|p| &p.release);
@@ -248,25 +248,20 @@ pub(crate) fn build_sideline_menu(
     }
     rows.push(entry("♺", "sweep threads"));
     rows.push(entry("＋", "new agent"));
-    // The experimental backlog board: a toggle row always, the open
-    // row only when on. Off by default (the pref's own default), so the
-    // menu of an operator who never opted in is unchanged. The open row's
-    // hint names the prefix chord that opens the board from anywhere the
-    // menu is not (the pref gates it; the keybinds table documents it).
+    // The open row's hint names the prefix chord that opens the board from
+    // anywhere the menu is not.
     let open_hint = crate::keys::key_for("open-backlog-board")
         .map(|k| format!("prefix {k}"))
         .unwrap_or_default();
-    rows.push(entry(
-        if backlog_on { "☑" } else { "☐" },
-        "experimental: backlog view",
-    ));
-    if backlog_on {
-        rows.push(PopupRow::Entry {
-            glyph: "▦".into(),
-            label: "backlog".into(),
-            hint: open_hint,
-            enabled: true,
-        });
+    rows.push(PopupRow::Entry {
+        glyph: "▦".into(),
+        label: "backlog".into(),
+        hint: open_hint,
+        enabled: true,
+    });
+    rows.push(PopupRow::Header("experimental".into()));
+    for flag in experimental::Flag::ALL {
+        rows.push(entry(if flag.on(flags) { "☑" } else { "☐" }, flag.label()));
     }
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
@@ -274,11 +269,11 @@ pub(crate) fn build_sideline_menu(
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
-    // Rows and actions pair by index: these two answer the backlog rows
-    // pushed above, in the same order.
-    actions.push(AuxAction::ToggleBacklogView);
-    if backlog_on {
-        actions.push(AuxAction::OpenBacklogView);
+    // Rows and actions pair by index: these answer the backlog row and the
+    // experimental toggles pushed above, in the same order.
+    actions.push(AuxAction::OpenBacklogView);
+    for flag in experimental::Flag::ALL {
+        actions.push(AuxAction::ToggleExperimental(flag));
     }
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);
