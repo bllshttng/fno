@@ -163,7 +163,7 @@ fn reid_write(graph: &Path, old: &str, new: &str) -> i32 {
                     .map_err(graph_store::StoreError::Invalid)?;
                 receipt.borrow_mut().push(satellite_line);
                 rewrite_claims(&old_canon_for_hook, &new_owned, &receipt);
-                rewrite_plan_files(&old_canon_for_hook, &new_owned, &receipt);
+                rewrite_plan_files(graph, &old_canon_for_hook, &new_owned, &receipt);
                 rewrite_brief(&old_canon_for_hook, &new_owned, &receipt);
                 Ok(())
             },
@@ -306,12 +306,12 @@ fn rewrite_claims(old: &str, new: &str, receipt: &RefCell<Vec<String>>) {
 /// Plan files: frontmatter id lines rewritten token-exact, a filename ending
 /// `-{old}.md` renamed. Body text keeps the old spelling; the alias resolves
 /// it on read.
-fn rewrite_plan_files(old: &str, new: &str, receipt: &RefCell<Vec<String>>) {
+fn rewrite_plan_files(graph: &Path, old: &str, new: &str, receipt: &RefCell<Vec<String>>) {
     let mut rewritten = 0usize;
     let mut renamed = 0usize;
     // Every plan dir the row's plan_path points at; one node, one dir in
     // practice.
-    if let Some(dir) = plan_dirs(old).first() {
+    if let Some(dir) = plan_dirs(graph, old).into_iter().next() {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -346,9 +346,8 @@ fn rewrite_plan_files(old: &str, new: &str, receipt: &RefCell<Vec<String>>) {
 
 /// The plans dir the old row pointed at, read from the graph as it stood
 /// before the rename.
-fn plan_dirs(old: &str) -> Vec<PathBuf> {
-    let graph = settings::graph_path();
-    let Ok(rows) = graph_store::read_rows(&graph) else {
+fn plan_dirs(graph: &Path, old: &str) -> Vec<PathBuf> {
+    let Ok(rows) = graph_store::read_rows(graph) else {
         return Vec::new();
     };
     rows.iter()
