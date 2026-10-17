@@ -619,7 +619,7 @@ fn pr_activity_op<P: GhProbe>(probes: &P, payload: &Value) -> Value {
         // The review list through the shared paged reader; its Option loses
         // the stderr the direct reads carry, so the error names the path
         // alone.
-        let reviews = match reviews::fetch_reviews(probes, &cwd, &slug, pr) {
+        let reviews = match crate::pr_status::reviews::fetch_reviews(probes, &cwd, &slug, pr) {
             Some(rows) => rows,
             None => {
                 return json!({"error": format!(
