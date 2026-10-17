@@ -163,7 +163,7 @@ check_degrade() {  # name + argv: must exit !=0 with the plugin message, no 127/
     miss "degrade:$name" "rc=$RC non-zero but no plugin guidance: $(printf '%s' "$OUT" | head -1)"
   fi
 }
-check_degrade target-init "$FNO" target init --input smoke
+check_degrade target-init "$FNO" do target init --input smoke
 check_degrade bundle "$FNO" bundle check
 
 echo "---"

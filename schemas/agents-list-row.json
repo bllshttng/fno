@@ -137,6 +137,7 @@
       "keeper_child_pid",
       "launch_account",
       "launch_account_source",
+      "last_report_at",
       "lineage_reason",
       "mcp_channel_id",
       "messaging_socket_path",

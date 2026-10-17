@@ -140,7 +140,10 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 AST_CONTROLS = {"agents spawn": 2, "backlog done": 1}
 # `backlog next` replaces the retired `backlog update` as the third
 # internal-text control: a live backlog leaf whose python leg still sweeps.
-INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog next": 10}
+# Re-pinned 10 -> 6 when the batch wheel leg left: its peek/ship shellouts live
+# in crates/fno-agents/src/backlog/batch.rs now, and this signal sweeps only
+# cli/src Python. The next wheel departure re-pins again.
+INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog next": 6}
 
 # Verbs reachable ONLY through shell command substitution, where the binary
 # name is glued to a variable assignment and is not a bare token:

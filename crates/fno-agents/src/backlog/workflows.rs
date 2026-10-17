@@ -1375,10 +1375,10 @@ pub(crate) fn rollup_from_ledger(node: &Value) -> Rollup {
         return empty;
     };
     let target = normalize_plan_path(plan_path);
-    let Some(state_dir) = settings::state_dir() else {
-        return empty;
-    };
-    let Ok(text) = std::fs::read_to_string(state_dir.join("ledger.json")) else {
+    // The resolver every ledger writer uses, so a paths.ledger_json override
+    // reads back the rows it wrote.
+    let cwd = std::path::Path::new(text_at(node, "cwd").unwrap_or("."));
+    let Ok(text) = std::fs::read_to_string(crate::paths_cli::ledger_json(cwd)) else {
         return empty;
     };
     let Ok(data) = serde_json::from_str::<Value>(&text) else {

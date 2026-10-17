@@ -1,0 +1,171 @@
+[
+  {
+    "label": "owned_row",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "type": "execution",
+        "completed": "2026-10-01T12:00:00Z",
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": ["s1", "s1", "s2"]
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "url_case_forms",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "HTTPS://GitHub.Com/O/R/Pull/507/?q=1#frag",
+        "sessions": ["u1"]
+      }
+    ],
+    "pr": 507,
+    "slug": "O/R"
+  },
+  {
+    "label": "url_less_row",
+    "subject": "pr-sessions",
+    "ledger": [
+      {"sessions": ["sp"]},
+      {"pr_url": "https://github.com/o/r/pull/507", "sessions": ["ok1"]}
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "stray_string_sessions",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": "not-a-list"
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "unresolved_sentinel_only",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "sessions": ["unresolved:no-harness-session"]
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "missing_ledger",
+    "subject": "pr-sessions",
+    "ledger_kind": "missing",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "corrupt_ledger",
+    "subject": "pr-sessions",
+    "ledger_kind": "corrupt",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "dict_without_entries",
+    "subject": "pr-sessions",
+    "ledger_kind": "dict-no-entries",
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "no_slug",
+    "subject": "pr-sessions",
+    "ledger_kind": "missing",
+    "pr": 507,
+    "slug": null
+  },
+  {
+    "label": "singular_session_id_key",
+    "subject": "pr-sessions",
+    "ledger": [
+      {
+        "pr_url": "https://github.com/o/r/pull/507",
+        "session_id": "sid-only"
+      }
+    ],
+    "pr": 507,
+    "slug": "o/r"
+  },
+  {
+    "label": "mint_bound_ids",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "node_ids": ["x-b", "x-a"],
+      "session_id": "sess-1",
+      "harness": "claude",
+      "merged_at": "2026-09-07T15:00:00Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:00Z"
+  },
+  {
+    "label": "mint_empty_ids_no_store",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": [],
+      "repo_slug": "o/r",
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "session_id": null,
+      "harness": null,
+      "merged_at": "2026-09-07T15:00:00Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:00Z"
+  },
+  {
+    "label": "mint_candidates_passed",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": ["x-1"],
+      "candidate_row_names": ["target-x-1-worker"],
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": "/repo/wt",
+      "session_id": null,
+      "harness": null,
+      "merged_at": "2026-09-07T15:00:01Z"
+    },
+    "agents_home": true,
+    "merged_at": "2026-09-07T15:00:01Z"
+  },
+  {
+    "label": "mint_merged_at_missing",
+    "subject": "mint",
+    "payload": {
+      "repo": "/repo",
+      "node_ids": ["x-1"],
+      "project": "proj",
+      "pr": 42,
+      "branch": "feature/x",
+      "worktree": null,
+      "session_id": null,
+      "harness": null
+    },
+    "agents_home": true,
+    "merged_at_volatile": true
+  }
+]

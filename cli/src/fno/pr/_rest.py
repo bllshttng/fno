@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional, Tuple
 
 from fno.pr import _quota
 from fno.pr._proc import run
-from fno.pr._ritual import _parse_origin_slug
+from fno.graph._reconcile import _slug_from_remote
 
 # The fno gh-proxy shim execve's the real gh inside its own process, so the
 # shim's own startup lines (config deprecation warnings, proxy refusals) ride
@@ -231,7 +231,7 @@ def _repo_slug_reason(
         )
         return None, _redact_userinfo(first) or "no origin remote"
     url = r.stdout.strip()
-    slug = _parse_origin_slug(url)
+    slug = (_slug_from_remote(url) or "").lower() or None
     if not slug:
         return None, (
             f"origin is not a github remote: {_redact_userinfo(url) or '(empty)'}"
