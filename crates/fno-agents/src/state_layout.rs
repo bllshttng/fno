@@ -275,7 +275,7 @@ pub fn list_dir_children(root: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let new_dir = place_dir(root, name).unwrap_or_else(|| root.join(name));
     let mut seen: Vec<String> = Vec::new();
-    for dir in [new_dir, legacy_dir_of(root, name)] {
+    for dir in [Some(new_dir), legacy_dir_of(root, name)] {
         let Some(dir) = dir else { continue };
         let Ok(children) = std::fs::read_dir(&dir) else {
             continue;
