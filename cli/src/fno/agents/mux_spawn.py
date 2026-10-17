@@ -1258,7 +1258,7 @@ def build_pane_argv(
         # resolves the endpoint and writes the 0600 file.
         from fno.agents.spawn_axes_client import footnote_pane_spec
 
-        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode)]
+        return [*identity, footnote_pane_spec(str(cwd), model, permission_mode, session_uuid)]
     if provider == "grok":
         # grok's pane hosts the plain TUI; the declared form carries only the
         # caller-assigned `--session-id`. The bypass, model and effort axes
@@ -3649,7 +3649,7 @@ def dispatch_spawn_pane(
     # row id-less AND hand pi the id, which is both halves of the hazard at
     # once. The `happy` monitor caveat is claude's alone: it strips a pinned
     # `--session-id` out of the argv it forwards, and it never wraps pi.
-    pin_session = pin_session or provider == "pi"
+    pin_session = pin_session or provider in ("pi", "footnote")
     session_uuid = str(_uuid.uuid4()) if pin_session else None
     # One pairs computation feeds both the codex splice and the wrapper.
     seed_prov = _seed_provenance_env(message, provenance)
