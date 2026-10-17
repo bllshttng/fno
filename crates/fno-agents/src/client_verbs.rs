@@ -37,9 +37,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-// ---------------------------------------------------------------------------
-// Python-default json.dumps formatter (separators `, ` and `: `).
-// ---------------------------------------------------------------------------
+// --- Python-default json.dumps formatter (separators `, ` and `: `). ---
 
 /// A serde_json [`Formatter`](serde_json::ser::Formatter) that mirrors Python's
 /// default `json.dumps` spacing: `", "` between items and `": "` after a key.
@@ -110,9 +108,7 @@ pub(crate) fn expand_eq(rest: &[String]) -> Vec<String> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// ping
-// ---------------------------------------------------------------------------
+// --- ping ------------------------------------------------------------------
 
 /// `fno-agents ping` -- verbatim port of the Python phase-1 stub.
 ///
@@ -3265,13 +3261,8 @@ mod tests {
             e["harness_session_id"],
             "08054b1d-2222-3333-4444-555555555555"
         );
-
         // a predecessor's 8-hex short retired with it and never
         // re-enters the successor's short-address namespace.
-        let mut row = claude_row("worker", "08054b1d", "08054b1d-2222-3333-4444-555555555555");
-        row["predecessor_session_ids"] = json!(["e6f78b98-1111-2222-3333-444444444444"]);
-        let rows = vec![row];
-
         assert!(matches!(
             find_agent_entry(&rows, "e6f78b98"),
             Err(ResolveError::NotFound(_))
