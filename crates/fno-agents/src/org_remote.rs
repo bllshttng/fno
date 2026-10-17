@@ -27,9 +27,9 @@ pub struct HandoffPlan {
 }
 
 /// Parse and plan the hand-off: pure, so tests cover the shapes without a
-/// network. Refuses the cases the plan declares: no `@host` target, a
-/// missing --scope, and a predecessor row with no session id (the retro's
-/// join key). `holder` is the live scope holder as `(name, session)`.
+/// network. Refuses the cases the plan declares: no `@host` target and a
+/// predecessor row with no session id (the retro's join key). `holder` is
+/// the live scope holder as `(name, session)`.
 pub fn plan_handoff(
     args: &[String],
     scope: &str,
@@ -326,14 +326,9 @@ mod tests {
         // The plan refuses what it declares: no target, no @ split, no
         // scope, an unexpected argument, and a holder with no session id
         // (the retro's join key).
-        assert!(plan_handoff(&[], holder(), "t0").is_err());
-        assert!(plan_handoff(
-            &["Quinlan".into(), "--scope".into(), "fno".into()],
-            holder(),
-            "t"
-        )
-        .is_err());
-        assert!(plan_handoff(&["Quinlan@imac2d2".into()], "fno", holder(), "t").is_err());
+        assert!(plan_handoff(&[], "fno", holder(), "t0").is_err());
+        // No @ split in the target.
+        assert!(plan_handoff(&["Quinlan".into()], "fno", holder(), "t").is_err());
         assert!(plan_handoff(
             &["Q@h".into(), "--scope".into(), "fno".into()],
             ("E".into(), None),
