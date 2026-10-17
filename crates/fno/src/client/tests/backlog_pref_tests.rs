@@ -50,6 +50,7 @@ fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
         experimental::Flags {
             org_board: true,
             pane_share: true,
+            share: None,
         },
     );
     assert!(on.popup.rows.iter().any(|row| matches!(

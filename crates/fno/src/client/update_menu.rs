@@ -263,6 +263,8 @@ pub(crate) fn build_sideline_menu(
     for flag in experimental::Flag::ALL {
         rows.push(entry(if flag.on(flags) { "☑" } else { "☐" }, flag.label()));
     }
+    let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
+    rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
     rows.push(entry("⇄", "connections"));
@@ -275,6 +277,7 @@ pub(crate) fn build_sideline_menu(
     for flag in experimental::Flag::ALL {
         actions.push(AuxAction::ToggleExperimental(flag));
     }
+    actions.extend(share_actions);
     actions.push(AuxAction::OpenKeybinds);
     actions.push(AuxAction::OpenSettings);
     actions.push(AuxAction::OpenConnections);

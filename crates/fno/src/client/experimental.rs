@@ -4,9 +4,6 @@
 
 use super::*;
 
-pub(crate) const ORG_BOARD: &str = "org_board";
-pub(crate) const PANE_SHARE: &str = "pane_share";
-
 /// One experimental feature the menu can toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flag {
@@ -19,6 +16,8 @@ pub(crate) enum Flag {
 pub(crate) struct Flags {
     pub(crate) org_board: bool,
     pub(crate) pane_share: bool,
+    /// Knocks waiting on the running share; `None` while no share runs.
+    pub(crate) share: Option<usize>,
 }
 
 impl Flag {
@@ -33,8 +32,8 @@ impl Flag {
 
     fn name(self) -> &'static str {
         match self {
-            Flag::OrgBoard => ORG_BOARD,
-            Flag::PaneShare => PANE_SHARE,
+            Flag::OrgBoard => crate::view_store::EXPERIMENTAL_ORG_BOARD,
+            Flag::PaneShare => crate::view_store::EXPERIMENTAL_PANE_SHARE,
         }
     }
 
@@ -50,6 +49,7 @@ pub(crate) fn flags(view: &View) -> Flags {
     Flags {
         org_board: view.experimental_org_board,
         pane_share: view.experimental_pane_share,
+        share: view.share.as_ref().map(|s| s.waiting()),
     }
 }
 

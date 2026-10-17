@@ -541,6 +541,10 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Share the focused pane and copy the join link (prefix+X); pressed
+    /// again while sharing, it copies the link again. The experimental
+    /// `pane share` toggle gates it client-side.
+    ShareFocusedPane,
     /// Open the rename-tab name overlay for the active tab (prefix+,, tmux
     /// `rename-window` convention). The client owns the typing mode
     /// and resolves the active tab's stable id; the chord only opens it.
@@ -1420,6 +1424,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             "sweep threads (close, reap)",
         ),
         b(
+            b'X',
+            "share-focused-pane",
+            ShareFocusedPane,
+            Global,
+            "share the focused pane (experimental)",
+        ),
+        b(
             b'\\',
             "show-pane-ids",
             ShowPaneIds,
@@ -2184,6 +2195,7 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02S"]), vec![Event::OpenSettings]);
         assert_eq!(scan_all(&[b"\x02A"]), vec![Event::OpenConnections]);
         assert_eq!(scan_all(&[b"\x02T"]), vec![Event::OpenSweepThreads]);
+        assert_eq!(scan_all(&[b"\x02X"]), vec![Event::ShareFocusedPane]);
         // ... and the lowercase halves still mean what they meant.
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);

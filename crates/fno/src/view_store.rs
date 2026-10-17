@@ -523,6 +523,9 @@ pub fn save_open_target(pick: &str) {
     });
 }
 
+pub const EXPERIMENTAL_ORG_BOARD: &str = "org_board";
+pub const EXPERIMENTAL_PANE_SHARE: &str = "pane_share";
+
 /// Read one experimental toggle. Absent, corrupt, or non-bool reads as
 /// `false`: a feature stays off until the operator turns it on.
 pub fn load_experimental(name: &str) -> bool {

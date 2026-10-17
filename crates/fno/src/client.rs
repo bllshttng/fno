@@ -1048,6 +1048,8 @@ pub(crate) struct View {
     /// The persisted experimental toggles (see `experimental`).
     experimental_org_board: bool,
     experimental_pane_share: bool,
+    share: Option<share_flow::Share>,
+    share_tx: Option<share_flow::ShareTx>,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
     /// Whether the which-key modal was opened FROM the settings modal (tab or
@@ -1769,6 +1771,7 @@ pub(crate) enum AuxAction {
     ToggleHoverFocus,
     /// Flip one experimental toggle, then rebuild the open sidebar menu.
     ToggleExperimental(experimental::Flag),
+    Share(share_flow::Act),
     OpenBacklogView,
     /// Flip the sideline's row shape (list <-> card) live: swap the view's
     /// in-memory layout, persist `sideline.layout` through the CLI, then
@@ -1809,6 +1812,7 @@ mod backlog_style;
 mod chrome_hit;
 mod config_set;
 mod experimental;
+mod share_flow;
 mod lane_entry;
 mod node_detail;
 pub(crate) use node_detail::wrap_line;
@@ -2056,8 +2060,14 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_org_board: view_store::load_experimental(experimental::ORG_BOARD),
-            experimental_pane_share: view_store::load_experimental(experimental::PANE_SHARE),
+            experimental_org_board: view_store::load_experimental(
+                view_store::EXPERIMENTAL_ORG_BOARD,
+            ),
+            experimental_pane_share: view_store::load_experimental(
+                view_store::EXPERIMENTAL_PANE_SHARE,
+            ),
+            share: None,
+            share_tx: None,
             settings_tab: SettingsTab::General,
             keys_modal_return: false,
             split_opens: SplitOpens::Pane,
@@ -7376,6 +7386,9 @@ async fn attach_and_run(
     let (board_tx, mut board_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, backlog_board::BoardMsg)>();
     let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_detail::OrgMsg)>();
+    let (share_tx, mut share_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
+    view.share_tx = Some(share_tx);
     let (messages_tx, mut messages_rx) = tokio::sync::mpsc::unbounded_channel::<(
         u64,
         Result<serde_json::Value, String>,
@@ -8127,6 +8140,12 @@ async fn attach_and_run(
             }
             Some((gen, msg)) = org_rx.recv() => {
                 org_detail::apply(&mut view, gen, msg);
+                if let Err(e) = compositor.draw(&view.compose()) {
+                    break Err(format!("draw: {e}"));
+                }
+            }
+            Some((gen, msg)) = share_rx.recv() => {
+                share_flow::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -9001,6 +9020,7 @@ async fn dispatch_event(
             view.open_keys_modal();
         }
         Event::OpenBacklogBoard => View::open(view),
+        Event::ShareFocusedPane => share_flow::chord(view),
         Event::CycleSidelineView => backlog_board::cycle_sideline_view(view),
         Event::OpenOrgView => backlog_board::toggle_org_view(view),
         Event::OpenSettings => {
@@ -9399,6 +9419,7 @@ async fn execute_aux_action(
             return Ok(DispatchFlow::Detach);
         }
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
+        AuxAction::Share(act) => share_flow::act(view, act).await,
         AuxAction::OpenBacklogView => {
             view.aux = None;
             View::open(view);
