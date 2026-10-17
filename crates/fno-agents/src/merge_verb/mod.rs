@@ -1079,13 +1079,32 @@ fn do_merge(
     }
 
     // Server-visible receipt of the verdict the gate acted on, posted to the
-    // head GitHub names for the PR (the same hop the staged version made, in
-    // process). Best-effort: the durable verdict is the event row, and a
-    // failed POST leaves the status absent, which the ruleset reads as
-    // not-passing.
-    let (posted, note) = match u64::try_from(pr) {
-        Ok(pr_u64) => crate::loopcheck::coverage_gate::publish::publish(repo, pr_u64, None),
-        Err(_) => (false, format!("pr number {pr} is not a u64")),
+    // head GitHub names for the PR. The head resolution stays the staged verb
+    // hop the captured goldens record - the fold parity reads it - and the
+    // POST rides the in-process publisher. Best-effort: the durable verdict
+    // is the event row, and a failed POST leaves the status absent, which the
+    // ruleset reads as not-passing.
+    let publish_head = match verb_call(
+        "authorized-merge",
+        &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
+        VERB_TIMEOUT,
+    ) {
+        Ok(v) => v
+            .get("head")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        Err(_) => String::new(),
+    };
+    let (posted, note) = if publish_head.is_empty() {
+        (false, "no PR head to publish a status on".to_string())
+    } else {
+        match u64::try_from(pr) {
+            Ok(pr_u64) => {
+                crate::loopcheck::coverage_gate::publish::publish(repo, pr_u64, Some(&publish_head))
+            }
+            Err(_) => (false, format!("pr number {pr} is not a u64")),
+        }
     };
     if !posted {
         flow.lines.push((

@@ -79,8 +79,19 @@ HEAD_SHA = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c"
 DEFAULT_ANSWERS = {
     # The PR head read (verb_call authorized-merge op=pr-head). The value
     # rides the __HEAD_SHA__ placeholder so substitute_placeholders aligns it
-    # with the seeded commit the planted rows name.
-    "pr-head": {"json": {"head": "__HEAD_SHA__"}},
+    # with the seeded commit the planted rows name. The facts fields ride the
+    # same answer: the native head probe shells `fno do pr info` against this
+    # stub and parses pr/head_sha/head_ref, so the corpus serves either door.
+    # Every coverage-gate case is PR 7 on feature/x against main.
+    "pr-head": {
+        "json": {
+            "head": "__HEAD_SHA__",
+            "pr": 7,
+            "head_sha": "__HEAD_SHA__",
+            "head_ref": "feature/x",
+            "base_ref": "main",
+        }
+    },
     # The sized self-review invocation render (verb_call review-level).
     "review-level": {"json": {"invocation": "fno do review --level medium --reviewer code-review"}},
 }
