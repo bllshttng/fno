@@ -40,10 +40,18 @@ fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
         .map(|k| format!("prefix {k}"))
         .unwrap_or_default();
     assert_eq!(backlog_hint, want, "the row hint is the live chord");
-    assert!(menu.actions.contains(&AuxAction::OpenBacklogView));
-    for flag in experimental::Flag::ALL {
-        assert!(menu.actions.contains(&AuxAction::ToggleExperimental(flag)));
-    }
+    // Rows and actions pair by entry index; a swapped pair would toggle the
+    // wrong feature.
+    let at = |label: &str| labels.iter().position(|(_, l)| *l == label).expect(label);
+    assert_eq!(menu.actions[at("backlog")], AuxAction::OpenBacklogView);
+    assert_eq!(
+        menu.actions[at("fleet org board")],
+        AuxAction::ToggleExperimental(experimental::Flag::OrgBoard)
+    );
+    assert_eq!(
+        menu.actions[at("pane share")],
+        AuxAction::ToggleExperimental(experimental::Flag::PaneShare)
+    );
     let on = build_sideline_menu(
         Anchor::Center,
         None,
