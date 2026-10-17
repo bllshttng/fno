@@ -75,6 +75,37 @@ To reach the view from a phone, use one of these three methods.
 
 CAUTION: Do not use `--bind 0.0.0.0`. It opens the port on every interface, including your LAN, where no private network authenticates the caller. The token is the only guard, and the URL carries it. A wide bind also puts the backlog page back into read-only mode: the write routes refuse everything that does not arrive on loopback.
 
+## Share one pane with someone on another network
+
+A teacher can watch a learner's agent from another network with no tailscale and no SSH setup. Run the share in a terminal you can see, for example a mux pane beside the agent:
+
+```bash
+fno mux pane ls                       # find the pane id
+fno mux serve --share --pane 3 --tunnel
+```
+
+The share prints a join link. Send the whole link to the viewer. The secret is in the part after `#`, so it never goes into a request line or a proxy log. A link without that part opens nothing. The page removes the secret from the address bar once it reads it, so a viewer who reloads the tab opens the join link again.
+
+The flags:
+
+- `--share` starts a share instead of the web view. It needs a terminal, because you admit viewers by typing in it.
+- `--pane <id>` names the one pane to show. It has no default.
+- `--tunnel` starts a Cloudflare quick tunnel and prints a public `https://<name>.trycloudflare.com` link. Install `cloudflared` first (macOS: `brew install cloudflared`). Without `--tunnel`, the link works on this machine only. Forward the port with `ssh -R` or your own tunnel to reach another network.
+- `--steer` lets viewers send notes to the agent. It is off by default.
+- `--port <n>` sets the loopback port. The default is 8723.
+- `--server <name>` names the mux session.
+
+The viewer opens the link and types a name. The share prints the knock in your terminal. Type `a <n>` to admit the viewer or `d <n>` to decline. The name is a label you read, not a proof of identity. Your admission is the only check. Type `q`, or close the terminal, to end the share for every viewer.
+
+An admitted viewer can send two kinds of note:
+
+- **Coach** goes to you, the person at the keyboard. It prints in the share terminal. It never reaches the agent and uses no model time.
+- **Steer** goes to the agent. It needs a share started with `--steer`. Each steer waits in your terminal until you type `y <n>` to send it or `n <n>` to drop it. A sent steer arrives as mail from `observer:<name>`. Your agent reads it, so it bills your account.
+
+Only two things leave the machine. The first is the cells of the one shared pane, masked. The second is up to 500 lines of that pane's earlier output, masked, sent once to each viewer you admit. Nothing else leaves. The viewer gets no other pane, no agent list, no backlog, and no fleet page.
+
+CAUTION: Masking is best effort. It hides known token shapes: API keys, GitHub and AWS tokens, JWTs and `password=` values. It also hides any run of 40 or more token characters, and the user name in a home path. A secret of an unknown shape, or one that wraps across two rows, can leak. With `--tunnel`, Cloudflare carries the stream and can read the masked text. Quick tunnels are for testing: they have no uptime promise.
+
 ## What you see
 
 The page shows one pane at a time. You choose the pane from a picker at the top. The picker gives each pane its agent name where there is one. It also shows a colored dot for the state of the agent.

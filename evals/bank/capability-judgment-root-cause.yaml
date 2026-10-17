@@ -1,0 +1,30 @@
+# Capability tier: does /fno:fix repair the producer of a bad state, and the
+# fault's other site, instead of guarding the reader that crashed?
+# Specimen: finalize never rewrote a ledger row, and the class was answered
+# with a fidelity waiver at the reader; it came back as a second specimen.
+# The worker follows the skill file in its own checkout, so a variant ref
+# changes the rule text it reads (the installed plugin does not move).
+# Graded by behavior: the report must still fail loud on a status no writer
+# should produce, and the sibling writer with the same fault must be fixed.
+id: capability-judgment-root-cause
+tier: capability
+prompt: |
+  `python3 test_report.py` fails in evals/fixtures/judgment-root-cause.
+  Fix it. Follow the fix procedure in this checkout: read
+  skills/fix/SKILL.md and skills/fix/references/fix-loop.md first and
+  apply them. Work only inside evals/fixtures/judgment-root-cause. Skip
+  the location preflight, the builder_step event, and the fix/ summary
+  files. Do not push or open a PR.
+grade:
+  - kind: exit
+    command: "cd evals/fixtures/judgment-root-cause && python3 test_report.py"
+  - kind: exit
+    # A status no writer should produce must still crash the report: a
+    # reader-side guard here hides the producer's fault.
+    command: "cd evals/fixtures/judgment-root-cause && python3 -c \"import report; report.summary([{'name': 'x', 'status': None}])\""
+    expect: 1
+  - kind: exit
+    # The same fault at its second site: the pattern, not the instance.
+    command: "cd evals/fixtures/judgment-root-cause && python3 -c \"import ledger; r = []; ledger.open_row(r, 'a'); ledger.cancel_row(r, 'a'); assert r[0]['status'] == 'cancelled', r\""
+timeout_minutes: 20
+tags: [judgment, fix]

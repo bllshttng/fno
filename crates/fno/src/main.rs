@@ -147,6 +147,10 @@ enum Role {
     /// recorded start token, then SIGINTs (the bridge's graceful exit) with a
     /// SIGKILL escalation for a wedged one.
     MuxWeb(fno::web::WebArgs),
+    /// `mux serve --share --pane <id> [--steer] [--tunnel] [--port <n>]`: show
+    /// one pane, masked, to admitted viewers on its own loopback listener. Needs
+    /// a TTY: the driver admits viewers and approves steers by typing.
+    MuxShare(fno::share::ShareArgs),
     /// `mux serve --snapshot ...`: compose one frame (a staged demo fleet, or
     /// a live server through the observer attach) and write it as
     /// html, svg or png. Carries the serve tail; `client::snapshot::parse`
@@ -350,6 +354,38 @@ fn parse_web_args(rest: &[OsString]) -> Option<fno::web::WebArgs> {
         }
     }
     (web || args.stop || args.status || args.attention_api).then_some(args)
+}
+
+/// Parse `serve --share` flags into [`fno::share::ShareArgs`]. `--pane` is
+/// required and numeric with no default (fail closed); a missing value, an
+/// unknown flag or a bad number is `None`, which the caller maps to usage.
+fn parse_share_args(rest: &[OsString]) -> Option<fno::share::ShareArgs> {
+    let mut share = false;
+    let mut pane = None;
+    let mut args = fno::share::ShareArgs {
+        session: proto::DEFAULT_SESSION.to_string(),
+        pane: 0,
+        steer: false,
+        tunnel: false,
+        port: fno::share::DEFAULT_SHARE_PORT,
+    };
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.to_str()? {
+            "--share" => share = true,
+            "--steer" => args.steer = true,
+            "--tunnel" => args.tunnel = true,
+            "--pane" => pane = Some(it.next()?.to_str()?.parse().ok()?),
+            tok @ ("--server" | "--session") => {
+                mux_cli::note_server_flag(tok);
+                args.session = it.next()?.to_str()?.to_string()
+            }
+            "--port" => args.port = it.next()?.to_str()?.parse().ok()?,
+            _ => return None,
+        }
+    }
+    args.pane = pane?;
+    share.then_some(args)
 }
 
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
@@ -764,6 +800,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Serve(t) if fno::client::snapshot::wants_snapshot(&t.tail) => {
                 Role::MuxSnapshot(t.tail)
             }
+            cli_args::MuxCmd::Serve(t) if t.tail.iter().any(|a| a == "--share") => {
+                match parse_share_args(&t.tail) {
+                    Some(s) => Role::MuxShare(s),
+                    None => Role::MuxUsage(
+                        "fno mux serve --share: needs --pane <id>; optional --steer, --tunnel, --port <n>, --server <name>"
+                            .into(),
+                    ),
+                }
+            }
             cli_args::MuxCmd::Serve(t) => match parse_web_args(&t.tail) {
                 Some(w) => Role::MuxWeb(w),
                 None => Role::MuxUsage(
@@ -1067,6 +1112,7 @@ fn main() {
             }
             exit_mux(fno::web::serve(web_args))
         }
+        Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
             exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))
@@ -2046,5 +2092,18 @@ mod tests {
         assert!(parsed.status);
         assert_eq!(parsed.port, 9001);
         assert!(parse_web_args(&os(&["--server", "main"])).is_none());
+
+        // `--share` takes its own flags; `--pane` is required and numeric.
+        let share = parse_share_args(&os(&[
+            "--share", "--pane", "3", "--steer", "--port", "9100",
+        ]))
+        .expect("--share parses");
+        assert_eq!(
+            (share.pane, share.steer, share.tunnel, share.port),
+            (3, true, false, 9100)
+        );
+        assert!(parse_share_args(&os(&["--share"])).is_none(), "no --pane");
+        assert!(parse_share_args(&os(&["--share", "--pane", "x"])).is_none());
+        assert!(parse_share_args(&os(&["--share", "--pane", "3", "--web"])).is_none());
     }
 }

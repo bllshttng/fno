@@ -40,7 +40,7 @@ use tokio::sync::{broadcast, oneshot};
 use crate::proto::{self, ClientMsg, ServerMsg, BUILD_VERSION, PROTO_VERSION};
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
-const PAGE: &str = include_str!("web_page.html");
+pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// The backlog board page, vendored like PAGE. It draws the read model
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
@@ -69,6 +69,33 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// backoff. An accept-then-EOF flap stays below it, so the backoff keeps growing
 /// (and each quick drop logs) instead of spinning a silent 250ms reconnect loop.
 const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
+
+/// Reconnect pacing for an observer attach, shared by every bridge that
+/// attaches: doubling from `BACKOFF_START` to `BACKOFF_MAX`, and reset only by
+/// a connection that stayed up `MIN_HEALTHY_UPTIME`.
+pub(crate) struct Backoff(Duration);
+
+impl Backoff {
+    pub(crate) fn new() -> Self {
+        Backoff(BACKOFF_START)
+    }
+
+    /// Note a dropped connection. True for a quick accept-then-EOF flap,
+    /// which keeps the delay growing and is worth a log line.
+    pub(crate) fn dropped(&mut self, uptime: Duration) -> bool {
+        if uptime >= MIN_HEALTHY_UPTIME {
+            self.0 = BACKOFF_START;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(crate) async fn wait(&mut self) {
+        tokio::time::sleep(self.0).await;
+        self.0 = (self.0 * 2).min(BACKOFF_MAX);
+    }
+}
 
 /// Parsed `fno mux serve --web` arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -802,7 +829,7 @@ async fn upstream_loop(
     ready_tx: oneshot::Sender<Result<(), String>>,
 ) {
     let mut ready_tx = Some(ready_tx);
-    let mut backoff = BACKOFF_START;
+    let mut backoff = Backoff::new();
     loop {
         match connect_attach(&socket).await {
             Ok((reader, preamble)) => {
@@ -821,9 +848,7 @@ async fn upstream_loop(
                 // Only a session that stayed up a while resets the backoff; a
                 // quick accept-then-EOF flap keeps growing it and logs, so a
                 // misbehaving server never spins a silent tight reconnect loop.
-                if started.elapsed() >= MIN_HEALTHY_UPTIME {
-                    backoff = BACKOFF_START;
-                } else {
+                if backoff.dropped(started.elapsed()) {
                     eprintln!(
                         "fno mux serve --web: upstream dropped after {:?}; backing off",
                         started.elapsed()
@@ -841,15 +866,14 @@ async fn upstream_loop(
                 eprintln!("fno mux serve --web: upstream reconnect failed: {e}");
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(BACKOFF_MAX);
+        backoff.wait().await;
     }
 }
 
 /// Connect, send the observer `Attach`, relinquish the write half, and read the
 /// first reply. A `Bye` here is a refused/skewed attach (`Err`); anything else
 /// means the attach took, and the message is returned as preamble to forward.
-async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
+pub(crate) async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
     let stream = tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, UnixStream::connect(socket))
         .await
         .map_err(|_| {
@@ -968,13 +992,13 @@ fn forward(mut msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<
 
 /// A bridge-injected control line (not a `ServerMsg`) the browser reads to drive
 /// its connection banner.
-fn bridge_status(state: &str) -> String {
+pub(crate) fn bridge_status(state: &str) -> String {
     format!("{{\"_bridge\":{{\"state\":\"{state}\"}}}}")
 }
 
 /// `host:port`, bracketing an IPv6 literal so `[::1]:8722` parses - a bare
 /// `::1:8722` does not (the colons are ambiguous).
-fn bind_addr(bind: &str, port: u16) -> String {
+pub(crate) fn bind_addr(bind: &str, port: u16) -> String {
     if bind.contains(':') {
         format!("[{bind}]:{port}")
     } else {
@@ -1744,7 +1768,7 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
 
 /// 32 random bytes from `/dev/urandom` as hex. `None` if the device is
 /// unreadable (fail closed - never mint a guessable token).
-fn mint_token() -> Option<String> {
+pub(crate) fn mint_token() -> Option<String> {
     use std::io::Read;
     let mut buf = [0u8; 32];
     std::fs::File::open("/dev/urandom")
@@ -1756,7 +1780,7 @@ fn mint_token() -> Option<String> {
 /// Constant-time equality over the compared bytes. The token length is not
 /// secret (always 64 hex chars), so an early length mismatch is fine; the byte
 /// comparison itself never short-circuits.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -1873,16 +1897,13 @@ mod tests {
     }
 
     #[test]
-    fn constant_time_eq_matches_only_identical_bytes() {
+    fn auth_helpers_hold() {
         assert!(constant_time_eq(b"abc123", b"abc123"));
         assert!(!constant_time_eq(b"abc123", b"abc124"));
         assert!(!constant_time_eq(b"abc123", b"abc12")); // length mismatch
         assert!(!constant_time_eq(b"", b"x"));
         assert!(constant_time_eq(b"", b""));
-    }
 
-    #[test]
-    fn mint_token_is_64_hex_chars_and_fresh() {
         let a = mint_token().expect("/dev/urandom readable in test env");
         let b = mint_token().expect("/dev/urandom readable in test env");
         assert_eq!(a.len(), 64, "32 bytes -> 64 hex chars");
@@ -2026,9 +2047,13 @@ mod tests {
             PAGE.contains("new WebSocket("),
             "the page still opens the read-only socket"
         );
+        // The one send is the share knock, and only in share mode. The mux
+        // view sends nothing upstream (Locked Decision 5), and the share
+        // bridge never writes to the mux socket either.
+        let sends: Vec<&str> = PAGE.lines().filter(|l| l.contains(".send(")).collect();
         assert!(
-            !PAGE.contains(".send("),
-            "the page sends nothing upstream at all (Locked Decision 5)"
+            sends.len() == 1 && sends[0].contains("if (SHARE) ws.send(JSON.stringify({ knock:"),
+            "only the share knock is sent: {sends:?}"
         );
         assert!(
             !PAGE.contains(r#""Resize""#),
@@ -3148,15 +3173,13 @@ console.log("recent searches: 12 cases ok");
     }
 
     #[test]
-    fn status_web_exits_one_with_no_state_file() {
+    fn status_web_rows() {
+        // No state file: no bridge.
         let dir = temp_state_dir("status-none");
-        let socket = dir.join("t.sock");
-        assert_eq!(status_web("t", &socket), 1);
+        assert_eq!(status_web("t", &dir.join("t.sock")), 1);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_exits_zero_for_a_live_own_pid_record() {
+        // A live record under this process's own pid and start token: up.
         let dir = temp_state_dir("status-live");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
@@ -3174,15 +3197,12 @@ console.log("recent searches: 12 cases ok");
         .unwrap();
         assert_eq!(status_web("t", &socket), 0);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_refuses_a_recycled_pid_record() {
+        // This live test process under a WRONG start token: the record reads
+        // stale, so status reports no bridge instead of a stranger's pid.
         let dir = temp_state_dir("status-recycled");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
-        // This live test process under a WRONG start token: the record reads
-        // stale, so status reports no bridge instead of a stranger's pid.
         std::fs::write(
             &state,
             serde_json::json!({

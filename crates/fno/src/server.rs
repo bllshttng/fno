@@ -66,7 +66,7 @@ use crate::tree::{self, Axis, Dir, Node, Rect, Tab, TabId};
 use crate::vt::BlockJumpOutcome;
 use crate::vt::{self, frame_text, Modes};
 
-mod agent_actions;
+pub(crate) mod agent_actions;
 pub(crate) mod agent_launch;
 mod agent_rows_apply;
 mod agent_rows_join;
@@ -111,7 +111,7 @@ mod workspace_origin;
 mod workspace_restore;
 use self::session_guard::{ConnAlive, SocketGuard};
 
-use self::agent_actions::{run_mail_send, run_reap, run_reentry_plan};
+use self::agent_actions::{run_mail_send, run_reap, run_reentry_plan, sanitize_mail_text};
 use self::keeper_adopt::{keeper_worker_bin, AdoptedKeeper};
 use self::resume_argv::{
     declared_resume_form, resume_argv_for, resume_target_from_argv, ResumeReplay,
@@ -2032,22 +2032,6 @@ pub(crate) fn fno_bin() -> PathBuf {
         return PathBuf::from(v);
     }
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"))
-}
-
-/// Sanitize peek-overlay free-text mail: strip control chars, trim,
-/// refuse blank-after-sanitize and over-`MAX_MAIL_TEXT` (never truncate - a
-/// silently cut instruction to a worker is worse than a visible refusal, Locked
-/// Decision 7). The count is chars, matching the client's printable-ASCII cap.
-fn sanitize_mail_text(text: &str) -> Result<String, String> {
-    let clean: String = text.chars().filter(|c| !c.is_control()).collect();
-    let clean = clean.trim();
-    if clean.is_empty() {
-        return Err("message is empty".to_string());
-    }
-    if clean.chars().count() > crate::proto::MAX_MAIL_TEXT {
-        return Err("message too long".to_string());
-    }
-    Ok(clean.to_string())
 }
 
 /// First non-empty line of `s` with control chars stripped, else
@@ -7465,7 +7449,7 @@ impl Core {
     fn mail_agent(&self, id: u64, name: String, text: String) {
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
-            let notice = run_mail_send(&name, &text).await;
+            let notice = run_mail_send(&name, "mux-peek", &text).await;
             let _ = core_tx.send(CoreMsg::DispatchResult { id, notice }).await;
         });
     }
