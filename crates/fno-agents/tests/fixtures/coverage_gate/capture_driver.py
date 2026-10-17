@@ -17,9 +17,10 @@ never a silent success. Stubs locate the case tree through
 `FNO_COVERAGE_CASE_DIR`, so cwd does not matter.
 
 The `fno` front stub serves the doors the legs walk: `inbox law match`
-(payload on stdin, per-subject answers from a map), `inbox decide` (argv,
-exit and stderr from one answer), and `do pr info` (the native probe's
-no-slug head fallback). The resolve_front_binary seam is monkeypatched in
+(payload on stdin, per-subject answers from a map), `backlog decisions`
+(the native waiver probe's transport for the same map), `inbox decide`
+(argv, exit and stderr from one answer), and `do pr info` (the native
+probe's no-slug head fallback). The resolve_front_binary seam is monkeypatched in
 the child to point at this stub, because that resolver probes
 crates/fno/target before PATH and a CI workspace that built the fno crate
 would otherwise answer the law reads with a real binary. The native head
@@ -214,6 +215,7 @@ STUB_GH = r"""#!/usr/bin/python3
 # back to answers/gh-<shape>.json. Unmapped argv fails loud.
 import json
 import os
+import re
 import sys
 
 
@@ -227,8 +229,14 @@ def shape_of(argv):
     if argv and argv[0] == "api":
         # The native gate's PR facts read (`gh api repos/<slug>/pulls/<n>`)
         # gets its own shape and counter so it never consumes a per-call
-        # `api` answer minted for the capture's other REST calls.
-        if any(a.startswith("repos/") and "/pulls/" in a for a in argv[1:3]):
+        # `api` answer minted for the capture's other REST calls. The match
+        # is the exact pulls path: the floor's diff read
+        # (repos/<slug>/pulls/<n>/files) shares the prefix and must keep the
+        # plain api shape and its answers.
+        if any(
+            a.startswith("repos/") and re.fullmatch(r"repos/[^/]+/[^/]+/pulls/\d+", a)
+            for a in argv[1:3]
+        ):
             return "pr-info"
         if "--jq" in argv:
             return "api-jq"
@@ -288,10 +296,12 @@ main()
 """
 
 STUB_FRONT = r"""#!/usr/bin/python3
-# Stand-in for the fno front binary. Three doors:
+# Stand-in for the fno front binary. Four doors:
 #   `inbox law match`    payload on stdin; the payload's argv[0] is the law
 #                        subject; answered from answers/front-law.json, a map
 #                        keyed by subject with a "default" fallback.
+#   `backlog decisions`  argv only; the native waiver probe's transport for
+#                        the same law map (journals as inbox-law).
 #   `inbox decide ...`   argv only; answered from answers/front-decide.json.
 #   `do pr info <n>`     the head probe's no-slug fallback (a case world
 #                        whose origin does not resolve to a slug); answered
@@ -356,6 +366,26 @@ def main():
             sys.exit(3)
         with open(path) as fh:
             emit(json.load(fh))
+    if door == "backlog-decisions":
+        # The waiver probe's law read (`fno backlog decisions <subject>
+        # --lane law --state live --json`). The capture drove the same probe
+        # through `inbox law match`, so the call journals under the inbox-law
+        # door with its subject and the fold vocabulary survives the
+        # transport move.
+        subject = argv[2] if len(argv) > 2 else ""
+        with open(os.path.join(journals, "front.jsonl"), "a") as fh:
+            fh.write(json.dumps({"op": "inbox-law", "subject": subject}, sort_keys=True) + "\n")
+        path = os.path.join(answers_dir, "front-law.json")
+        if not os.path.exists(path):
+            sys.stderr.write("stub fno: no answers/front-law.json\n")
+            sys.exit(3)
+        with open(path) as fh:
+            mapping = json.load(fh)
+        answer = mapping.get(subject, mapping.get("default"))
+        if answer is None:
+            sys.stderr.write("stub fno: no law answer for subject %s\n" % subject)
+            sys.exit(3)
+        emit(answer)
     if door == "do-pr":
         # The head probe's no-slug fallback (`fno do pr info <n>`): the
         # primary door is the gh stub's pr-info shape once the case world's
