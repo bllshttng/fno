@@ -2019,8 +2019,9 @@ mod tests {
             cmd.output().unwrap()
         };
         run(&["init", "-q"], None);
-        std::fs::write(repo.path().join("src_b.rs"), "one\n").unwrap();
-        std::fs::write(repo.path().join("src_fresh.rs"), "one\n").unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/b.rs"), "one\n").unwrap();
+        std::fs::write(repo.path().join("src/fresh.rs"), "one\n").unwrap();
         run(&["add", "."], None);
         run(&["config", "user.email", "t@example.com"], None);
         run(&["config", "user.name", "t"], None);
@@ -2029,19 +2030,19 @@ mod tests {
             Some("2026-01-01T00:00:00Z"),
         );
         run(&["branch", "origin/main"], None);
-        std::fs::write(repo.path().join("src_b.rs"), "two\n").unwrap();
+        std::fs::write(repo.path().join("src/b.rs"), "two\n").unwrap();
         run(&["add", "."], None);
         run(
-            &["commit", "-q", "-m", "touch src_b.rs (#12)"],
+            &["commit", "-q", "-m", "touch src/b.rs (#12)"],
             Some("2026-02-01T00:00:00Z"),
         );
         run(&["branch", "-f", "origin/main", "HEAD"], None);
 
         let entries = vec![
             json!({"id": "x-stale", "title": "fix b", "status": "ready", "priority": "p2",
-                   "created_at": "2026-01-15T00:00:00Z", "details": "defect in src_b.rs"}),
+                   "created_at": "2026-01-15T00:00:00Z", "details": "defect in src/b.rs"}),
             json!({"id": "x-fresh", "title": "fresh", "status": "ready", "priority": "p3",
-                   "created_at": "2026-02-02T00:00:00Z", "details": "defect in src_fresh.rs"}),
+                   "created_at": "2026-02-02T00:00:00Z", "details": "defect in src/fresh.rs"}),
         ];
         let now = parse_iso_str("2026-02-03T00:00:00Z").unwrap();
         let board = compute_board(&entries, None, Ok(BTreeSet::new()), now, None, repo.path());
@@ -2052,7 +2053,7 @@ mod tests {
         assert!(stale_row["stale_evidence"]
             .as_str()
             .unwrap()
-            .contains("src_b.rs"));
+            .contains("src/b.rs"));
         let fresh_row = deck.iter().find(|r| r["id"] == json!("x-fresh")).unwrap();
         assert!(fresh_row.get("stale").is_none());
     }
