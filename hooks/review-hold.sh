@@ -166,9 +166,12 @@ holder="review-session:${session:-unknown}"
 # sent row and this started row then carry ONE id), and only mint-plus-write
 # a fresh sidecar on a miss, so a second review never re-adopts the first
 # one's consumed id.
-invocation_id="$(python3 -c 'import sys; from fno import rust_binary
-err, row = rust_binary.call_binary_json("review-level", ["invocations", "join", "--session", sys.argv[1]])
-print(row) if err is None and isinstance(row, str) else print("")' "$session" 2>/dev/null || true)"
+invocation_id="$(python3 -c 'import subprocess, sys; from fno import rust_binary
+binary = rust_binary.resolve_binary()
+if binary is None:
+    raise SystemExit(1)
+proc = subprocess.run([str(binary), "review-level", "invocations", "join", "--session", sys.argv[1]], capture_output=True, text=True)
+print(proc.stdout.strip() if proc.returncode == 0 else "")' "$session" 2>/dev/null || true)"
 case "$invocation_id" in
   ri-*) ;;
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
