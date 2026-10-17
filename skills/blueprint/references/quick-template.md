@@ -178,8 +178,8 @@ no index is present, the first line says so.]
 
 [Step 2e, written before any task. Two or three candidates; do not pick one. `/target` appends `chosen: <n> - <why>` after it measures.]
 
-1. [Candidate route] - ruled out if: [the measured fact that kills it]
-2. [Candidate route] - ruled out if: [...]
+1. [Candidate route] - ruled out by: [the measured fact that kills it]
+2. [Candidate route] - ruled out by: [...]
 
 ## Unknowns
 

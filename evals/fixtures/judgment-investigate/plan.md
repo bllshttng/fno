@@ -12,8 +12,8 @@ created: 2026-10-17
 
 ## Routes
 
-1. Move `status.py` only and keep `read_any` for the rest - ruled out if any other module calls `read_any`.
-2. Move every caller and delete `read_any` - ruled out if a caller needs the unchecked read.
+1. Move `status.py` only and keep `read_any` for the rest - ruled out by: any other module that calls `read_any`.
+2. Move every caller and delete `read_any` - ruled out by: a caller that needs the unchecked read.
 
 ## Unknowns
 

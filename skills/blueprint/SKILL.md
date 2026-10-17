@@ -211,11 +211,11 @@ fi
 
    Silence is not an outcome. A plan that ignores its sibling is the failure this gate exists to prevent. Do not build a second consolidator here: `fno backlog groom` already owns the daily levers-only pass and its allowlist already carries `supersede`. This gate is the pre-write half only.
 
-2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape: a plan said to forward a call to Python and the code went through the front door, and a plan guessed which callers read a cache and missed two of them. Each plan settled a fact it never measured. Write three sections:
+2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape. One plan said to forward a call to Python, and the code went through the front door. Another plan guessed which callers read a cache and missed two. Each plan settled a fact it never measured. Write three sections:
 
-   - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. A route that lets code write an illegal state, or gives one fact two writers, is ruled out on sight; say so. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
-   - **`## Unknowns`.** One `- [ ] <question> - measure: <command or read that settles it>` line per fact the plan depends on but did not measure: the callers of a symbol, the path the code really takes, a count, a cause. A fact you measured in discovery or 2b-bis is not an unknown; cite it in Context with its source. Write `none: <why every fact is measured>` only when that is true. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open.
-   - **`## Done`.** The deliverable as a measured number (a count, an exit code, a latency) and the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
+   - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
+   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open.
+   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
 
    Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it.
 
@@ -452,8 +452,8 @@ kill_criteria:
 [Problem, root cause, what we found]
 
 ## Routes
-1. [Candidate route] - ruled out if: [the measured fact that kills it]
-2. [Candidate route] - ruled out if: [...]
+1. [Candidate route] - ruled out by: [the measured fact that kills it]
+2. [Candidate route] - ruled out by: [...]
 
 ## Unknowns
 - [ ] [Question the plan depends on] - measure: [command or read that settles it]
