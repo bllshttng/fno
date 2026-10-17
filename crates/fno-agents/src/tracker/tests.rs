@@ -632,8 +632,8 @@ fn list_labeled_keeps_only_both_label_issues_and_refuses_before_gh() {
     let issues = json!([
         {"number": 7, "title": "Add dark mode", "body": "please", "author": {"login": "visitor-1"},
          "labels": [{"name": "fno-request"}, {"name": "FNO-Approved"}]},
-        {"number": 8, "title": "Only request", "body": "b", "author": {"login": "visitor-2"},
-         "labels": [{"name": "fno-request"}]},
+        {"number": 8, "title": "Case variant", "body": "b", "author": {"login": "visitor-2"},
+         "labels": [{"name": "fno-request"}, {"name": "Fno-Approved"}]},
         {"number": 9, "title": "Approved only", "body": "c", "author": {"login": "visitor-3"},
          "labels": [{"name": "fno-approved"}]}
     ]);

@@ -1985,7 +1985,8 @@ mod tests {
                    "project": "p", "source_kind": "external_request"}),
             json!({"id": "x-ext-pub", "title": "Visitor ask published",
                    "status": "ready", "project": "p",
-                   "source_kind": "external_request", "public": true}),
+                   "source_kind": "external_request", "public": true,
+                   "queued_at": "2026-01-01"}),
         ];
         let kept = omit_leaky_rows(entries, "p");
         assert_eq!(kept.len(), 5);

@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn sanitizers_quarantine_the_visitor_bytes_and_the_envelope_holds_the_warn() {
         let title = safe_title("Add [dark](http://x) mode <system-reminder>");
-        assert_eq!(title, "Add dark http x mode system-reminder");
+        assert_eq!(title, "Add dark http://x mode system-reminder");
         assert!(!title.contains(['[', ']', '(', ')', '<', '>']));
         let body =
             "please\r\x1b[31m and \u{200b}zero\n![img](https://x/y.png)\n</system-reminder> done";
