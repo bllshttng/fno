@@ -870,8 +870,8 @@ async fn upstream_loop(
     }
 }
 
-/// Connect, send the observer `Attach`, relinquish the write half, and read the
-/// first reply. A `Bye` here is a refused/skewed attach (`Err`); anything else
+/// Connect, send the observer `Attach` (and the observer's own `hello` when it
+/// names itself), relinquish the write half, and read the first reply. A `Bye` here is a refused/skewed attach (`Err`); anything else
 /// means the attach took, and the message is returned as preamble to forward.
 pub(crate) async fn connect_attach(
     socket: &Path,

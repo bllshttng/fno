@@ -544,23 +544,18 @@ async fn admit_flow(ctx: Ctx, out: mpsc::UnboundedSender<Out>) {
     let _ = out.send(Out::Live);
 }
 
-/// The tag one admitted viewer's presence ticket sends: no frames, only the
-/// viewer's name on the shared pane.
-fn presence_hello(name: String, pane: u64) -> ObserverHello {
-    ObserverHello {
-        name,
-        pane,
-        via: ObserverVia::Share,
-        frames: false,
-    }
-}
-
 /// One presence-only attach per admitted viewer. The server lists the viewer
 /// on the shared pane (border count, sideline) for as long as this task holds
 /// the socket, and `ws_conn` aborts it when the viewer goes. A ticket the
 /// server refuses costs the viewer nothing but the badge.
 async fn presence_ticket(ctx: Ctx, name: String) {
-    match web::connect_attach(&ctx.socket, Some(presence_hello(name, ctx.pane))).await {
+    let hello = ObserverHello {
+        name,
+        pane: ctx.pane,
+        via: ObserverVia::Share,
+        frames: false,
+    };
+    match web::connect_attach(&ctx.socket, Some(hello)).await {
         Ok((mut reader, _)) => while proto::read_msg::<_, ServerMsg>(&mut reader).await.is_ok() {},
         Err(e) => println!("this viewer will not show on the mux: {e}"),
     }
@@ -1417,14 +1412,5 @@ mod tests {
         let reply = ask("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".into()).await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
-    }
-
-    #[test]
-    fn a_presence_ticket_names_the_viewer_on_the_shared_pane_and_wants_no_frames() {
-        let hello = presence_hello("amy".into(), 4);
-        assert_eq!(
-            (hello.name.as_str(), hello.pane, hello.via, hello.frames),
-            ("amy", 4, ObserverVia::Share, false)
-        );
     }
 }

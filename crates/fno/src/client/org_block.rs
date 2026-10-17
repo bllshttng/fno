@@ -34,7 +34,7 @@ impl View {
         } else {
             crate::org_overlay::MINIMIZED_ROWS
         };
-        let block = block + self.observer_lines().len();
+        let block = block + self.observer_line_count();
         let available = (self.term.0 as usize)
             .saturating_sub(1)
             .saturating_sub(self.bottom_row_is_chrome() as usize);

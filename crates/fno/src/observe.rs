@@ -190,23 +190,14 @@ async fn watch(args: ObserveArgs, socket: PathBuf, identity: String) -> (i32, St
     let mut term = size();
     let mut latest: Option<Frame> = None;
     let mut next = Some(first);
+    let mut recheck = false;
     loop {
         if let Some(msg) = next.take() {
             match msg {
                 ServerMsg::Bye { reason } => {
                     return (1, format!("the mux server ended the watch: {reason}"))
                 }
-                ServerMsg::Layout { .. } => {
-                    let (sock, session) = (socket.clone(), args.session.clone());
-                    let panes =
-                        tokio::task::spawn_blocking(move || share::list_panes(&sock, &session))
-                            .await;
-                    if let Ok(Ok(panes)) = panes {
-                        if !share::pane_still_shared(&panes, args.pane, &identity) {
-                            return (1, format!("pane {} closed", args.pane));
-                        }
-                    }
-                }
+                ServerMsg::Layout { .. } => recheck = true,
                 other => {
                     if let Some(frame) = share::masked_pane_frame(other, args.pane) {
                         redraw(&frame, &header(args.pane, &name, &frame), term, false);
@@ -226,6 +217,15 @@ async fn watch(args: ObserveArgs, socket: PathBuf, identity: String) -> (i32, St
                 None => return (0, "terminal closed".to_string()),
             },
             _ = tick.tick() => {
+                if std::mem::take(&mut recheck) {
+                    let (sock, session) = (socket.clone(), args.session.clone());
+                    let panes = tokio::task::spawn_blocking(move || share::list_panes(&sock, &session)).await;
+                    if let Ok(Ok(panes)) = panes {
+                        if !share::pane_still_shared(&panes, args.pane, &identity) {
+                            return (1, format!("pane {} closed", args.pane));
+                        }
+                    }
+                }
                 let now = size();
                 if now != term {
                     term = now;

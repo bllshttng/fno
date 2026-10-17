@@ -45,6 +45,13 @@ impl View {
         self.observers = observers;
     }
 
+    /// How many lines [`View::observer_lines`] returns, without building them:
+    /// the block-height math runs on every hit test.
+    pub(in crate::client) fn observer_line_count(&self) -> usize {
+        let n = self.observers.len();
+        n.min(MAX_LINES) + usize::from(n > MAX_LINES)
+    }
+
     /// The sideline lines for the current observers; empty when nobody watches.
     pub(in crate::client) fn observer_lines(&self) -> Vec<String> {
         lines(&self.observers, |pane| {

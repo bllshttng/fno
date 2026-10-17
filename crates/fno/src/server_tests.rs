@@ -5057,7 +5057,7 @@ fn open_here_refuses_conflicting_placement_before_spawn() {
     }
 }
 
-// (x-d545) The thread viewport's tab outlives its viewer: a recorded
+// The thread viewport's tab outlives its viewer: a recorded
 // viewer dying in a lone-leaf tab swaps in an idle shell instead of
 // deleting the one tab every reach shares, and the next reach repoints
 // the stand-in in the SAME tab.
