@@ -80,7 +80,14 @@ fno backlog update <id> --plan-path path/to/plan.md
 fno backlog update <id> --no-public            # exclude from public projections
 fno backlog update <id> --source-node x-aaaa   # origin edge (see "Node-to-node edges")
 fno backlog update <id> --related x-bbbb       # affinity edge, symmetric
+fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
+fno backlog update <id> blocked_by+=<id>       # add one blocker
+fno backlog update <id> blocked_by-=<id>       # remove one blocker
+fno backlog update <id> tags+=<tag>            # add one tag (lowercase-kebab)
 ```
+
+The operator form (`field=value`, `field+=value`, `field-=value`) covers five fields: `details` and `dispatch_brief` (text), `tags`, `blocked_by`, `related` (lists). It is the new spelling. The flags stay until every field has one.
+
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
@@ -185,7 +192,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 | Action | Command | Effect |
 |--------|---------|--------|
-| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other |
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
 | Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
 | Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
 | Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |

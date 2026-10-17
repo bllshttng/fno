@@ -284,9 +284,10 @@ Never edit `~/.fno/graph.json`.
 **3a. Wire the strata first, before anything becomes dispatchable.**
 
 ```bash
-fno backlog update <id> --add-blocker <upstream>     # serialize a chain
-fno backlog update <id> --blocked-by <a,b>           # replace the whole list
+fno backlog update <id> blocked_by+=<upstream>       # serialize a chain
+fno backlog update <id> blocked_by=<a,b>             # replace the whole list
 fno backlog update <id> --priority p1                # what should run first
+fno backlog update <id> 'details+=<paragraph>'       # append; no re-read, no re-write
 ```
 
 Order within a wave comes from blockers and priority. Rank is not yours (see [the check-in body](../SKILL.md#the-check-in-body)).
