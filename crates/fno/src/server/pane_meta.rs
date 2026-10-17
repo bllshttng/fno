@@ -3,7 +3,10 @@
 //! existing callers and tests resolve unchanged.
 
 use super::sanitize_tab_name;
-use crate::proto::PaneMeta;
+use crate::agents_view::RegistryAgent;
+use crate::proto::{PaneMeta, TabMeta};
+use crate::tree::{self, Tab};
+use std::collections::HashMap;
 
 /// A pane's display label for the session navigator (v22). Unlike
 /// `tab_label` (which prefers a dir name so a tab reads as its worktree), a
@@ -140,6 +143,73 @@ pub(crate) fn pane_registry_name(
         .find(|a| hosts(a) && !a.exited)
         .or_else(|| agents.iter().find(hosts))
         .map(|a| a.name.clone())
+}
+
+/// One tab's `TabMeta` for the client `Layout` (moved out of server.rs under
+/// the file-budget ratchet): the derived tab label from the focused pane
+/// (registry name first, gated on the pane's child pid so a recycled pane id
+/// cannot inherit a dead row's name), plus every leaf pane labelled from its
+/// own entry so the navigator can goto a pane in any tab/squad.
+pub(crate) fn tab_meta(
+    t: &Tab,
+    squad_cwd: &str,
+    index: usize,
+    agents: &[RegistryAgent],
+    session_name: &str,
+    panes: &HashMap<u64, super::PaneEntry>,
+    ctx_by_session: &HashMap<String, String>,
+    branch_by_cwd: &HashMap<String, String>,
+) -> TabMeta {
+    // The registry row hosting the focus pane carries the LIVE name (a
+    // rename rewrites the row, never the pane's spawn-captured env), so it
+    // leads the derived chain ahead of `FNO_AGENT_SELF`.
+    let focus_entry = panes.get(&t.focus);
+    let focus_reg = pane_registry_name(
+        agents,
+        session_name,
+        t.focus,
+        focus_entry.and_then(|e| e.pty.child_pid()),
+    );
+    TabMeta {
+        id: t.id,
+        // An explicit rename is the ONLY chosen name; a pane-derived or
+        // ordinal label is not. The client renders a chosen name without a
+        // forced ordinal.
+        named: t.name.is_some(),
+        name: tab_label(
+            t.name.as_deref(),
+            focus_entry.map(|e| {
+                (
+                    focus_reg.as_deref().or(e.name.as_deref()),
+                    e.node.as_deref(),
+                    e.cwd.as_str(),
+                    e.cmd.as_deref(),
+                )
+            }),
+            squad_cwd,
+            index,
+        ),
+        panes: tree::leaves(&t.root)
+            .iter()
+            .map(|pid| {
+                let e = panes.get(pid);
+                let pane_pid = e.and_then(|e| e.pty.child_pid());
+                let ctx = pane_ctx(agents, session_name, ctx_by_session, *pid, pane_pid);
+                let reg = pane_registry_name(agents, session_name, *pid, pane_pid);
+                let name = reg.as_deref().or_else(|| e.and_then(|e| e.name.as_deref()));
+                pane_meta(
+                    *pid,
+                    name,
+                    e.and_then(|e| e.node.as_deref()),
+                    e.map(|e| e.cwd.as_str()).unwrap_or(""),
+                    e.and_then(|e| e.cmd.as_deref()),
+                    e.and_then(|e| branch_by_cwd.get(&e.cwd))
+                        .map(String::as_str),
+                    ctx.as_deref(),
+                )
+            })
+            .collect(),
+    }
 }
 
 /// The context reading for one pane, joined through the registry row that
