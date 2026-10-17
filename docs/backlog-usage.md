@@ -86,7 +86,7 @@ fno backlog update <id> blocked_by-=<id>       # remove one blocker
 fno backlog update <id> tags+=<tag>            # add one tag (lowercase-kebab)
 ```
 
-The operator form (`field=value`, `field+=value`, `field-=value`) is the new spelling and covers five fields: `details` and `dispatch_brief` (text append), `tags`, `blocked_by`, `related` (list add, remove, and replace). The flags above stay until every field has an operator spelling.
+The operator form (`field=value`, `field+=value`, `field-=value`) covers five fields: `details` and `dispatch_brief` (text), `tags`, `blocked_by`, `related` (lists). It is the new spelling; the flags stay until every field has one.
 
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
