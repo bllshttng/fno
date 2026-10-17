@@ -479,6 +479,11 @@ dual_owner_kinds = {
     # schema.yaml entry documenting the shared payload.
     "review_invocation",
     "review_attestation",
+    # style_refusal: the mail style gate's refusal record. The raw-send
+    # lane emits it from Rust while the Python front still runs the same
+    # gate on the non-raw sends; both emitters run until the Python leg
+    # retires.
+    "style_refusal",
 }
 collisions -= dual_owner_kinds
 if collisions:

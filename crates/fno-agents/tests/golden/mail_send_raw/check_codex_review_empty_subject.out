@@ -1,0 +1,1 @@
+not-injectable: 'codework-git' review/start would read an empty diff: the recipient session's checkout at ROOT/codework-git (HEAD HEX8) has 0 changed files against main; the review would read an empty diff, complete cleanly, and attest nothing. Run the review inline in the PR worktree session: `fno do target request-self-review`, or `$fno:review <level>` there.
