@@ -1017,22 +1017,19 @@ mod tests {
             let row = freshness_report(&graph, repo_dir.path(), id, None).unwrap();
             assert_eq!(marks["marks"][id]["verdict"], row["premise"]["verdict"]);
             assert_eq!(marks["marks"][id]["evidence"], row["premise"]["evidence"]);
-            let fetched = crate::graph_get::find_entry(
-                &crate::graph_store::read_rows_where(
-                    &graph,
-                    &crate::backlog::RowQuery {
-                        filter: crate::backlog::api::NodeFilter {
-                            id_in: Some(vec![id.to_string()]),
-                            ..Default::default()
-                        },
-                        with_blockers: true,
+            let rows = crate::graph_store::read_rows_where(
+                &graph,
+                &crate::backlog::RowQuery {
+                    filter: crate::backlog::api::NodeFilter {
+                        id_in: Some(vec![id.to_string()]),
                         ..Default::default()
                     },
-                )
-                .unwrap_or_default(),
-                id,
+                    with_blockers: true,
+                    ..Default::default()
+                },
             )
-            .unwrap();
+            .unwrap_or_default();
+            let fetched = crate::graph_get::find_entry(&rows, id).unwrap();
             assert_eq!(
                 premise_verdict_in(&ctx, id, &fetched),
                 premise_verdict(repo_dir.path(), id, &fetched)
