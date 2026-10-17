@@ -18,7 +18,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1353,9 +1353,11 @@ mod bell;
 mod feed_detail;
 pub(crate) mod feed_view;
 mod file_viewer;
+mod image_layer;
 mod keys_modal;
 mod needs_view;
 mod questions;
+mod stdin_reader;
 // The per-section view defaults (Expanded/LiveOnly/Collapsed), moved out of
 // this file (file budget); the elsewhere section now takes the Expanded-tier
 // default with the active squad.
@@ -7268,25 +7270,7 @@ async fn attach_and_run(
     // A spare sender for the launch splash: it re-queues the chunk that
     // ended it, so typed-ahead input is never lost.
     let splash_tx = stdin_tx.clone();
-    std::thread::Builder::new()
-        .name("fno-mux-stdin".into())
-        .spawn(move || {
-            let mut stdin = std::io::stdin().lock();
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdin.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if stdin_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                }
-            }
-        })
-        .map_err(|e| format!("stdin thread: {e}"))?;
+    stdin_reader::spawn(stdin_tx)?;
 
     let mut winch = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
         .map_err(|e| format!("signal setup: {e}"))?;
