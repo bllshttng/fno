@@ -7,7 +7,7 @@ Owner: `crates/fno-agents/src/backlog/node_state.rs` (policy), `note_history.rs`
 ## The rules
 
 - Combined `details` + `current_state.body` prose is budgeted at 5,000 Unicode scalars. Count after outer-whitespace and CRLF normalization. The seam refuses any writer that grows a row past the limit. An oversized legacy row can be edited DOWN but never UP.
-- Optimistic concurrency guards the direct state writers only: a replacement or `note --clear` submits the revision it read, and a stale submission refuses with `state conflict: current revision N != submitted M` and writes nothing. A plain note appends and cannot conflict; `--replace` is retired, and `--if-revision` guards `--clear` alone.
+- Optimistic concurrency guards the direct state writers only. A replacement or `note --clear` submits the revision it read. A stale submission refuses with `state conflict: current revision N != submitted M` and writes nothing. A plain note appends and cannot conflict. `--replace` is retired. `--if-revision` guards `--clear` alone.
 - The journal lives at `<graph>.history/notes.jsonl` (see `docs/state-root-inventory.md`). Records are deduped by node, reason, prior revision, source position, and content hash. Every write is hash-verified. A history failure refuses the state write.
 - Machine `task_done` and `run_summary` records and structured wave additions go to history only. A wave sets a `state_needs_refresh` marker. They never overwrite a human or lead's current state.
 - A row that carries `current_state` has no empty `progress_notes` key. A non-empty one is real pre-cutover prose and is kept.
