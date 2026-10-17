@@ -303,6 +303,7 @@ pub mod mail_teach;
 pub mod mail_threads;
 pub mod main_ci;
 pub mod main_ci_proof;
+pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
 pub mod merge_close;
