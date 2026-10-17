@@ -962,7 +962,7 @@ fn mux_rows(table: &[ProcRow]) -> Vec<Value> {
     out
 }
 
-fn resolve_fno() -> Option<PathBuf> {
+pub(crate) fn resolve_fno() -> Option<PathBuf> {
     let cargo_home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".cargo"));
