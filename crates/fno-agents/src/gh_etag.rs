@@ -221,6 +221,72 @@ pub(crate) fn conditional_api_get_at(
     }
 }
 
+/// Like [`conditional_api_get`], but the resource is a caller-assembled
+/// multi-page read (check-runs, annotations, an open-pulls listing): the
+/// probe conditions on page 1's ETag, and a 304 there means the WHOLE
+/// assembly is unchanged (GitHub mints a fresh ETag whenever the
+/// underlying collection changes at all), so the row caches `fetch_all`'s
+/// full assembled body, not just page 1's. A non-304 answer re-runs
+/// `fetch_all` (the caller's real paginated fetch) and re-caches its
+/// result under the fresh ETag; `fetch_all` never runs on a 304.
+pub(crate) fn conditional_paginated_get(
+    cwd: &Path,
+    path: &str,
+    fetch_all: impl Fn() -> Result<String, String>,
+    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
+) -> Result<(bool, String, String), String> {
+    match crate::gh_cache::rows_root(cwd) {
+        Some(root) => conditional_paginated_get_at(&root, path, &NOT_MODIFIED, fetch_all, spawn),
+        None => Ok((true, fetch_all()?, String::new())),
+    }
+}
+
+/// The row-store-and-counter-pinned form of [`conditional_paginated_get`],
+/// for tests - the same split [`conditional_api_get_at`] has.
+pub(crate) fn conditional_paginated_get_at(
+    root: &Path,
+    path: &str,
+    served_304: &AtomicUsize,
+    fetch_all: impl Fn() -> Result<String, String>,
+    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
+) -> Result<(bool, String, String), String> {
+    let row = read_row_at(root, path, crate::gh_cache::now_secs());
+    let mut args: Vec<&str> = vec!["api", "-i", path];
+    let cond;
+    if let Some(row) = &row {
+        cond = format!("If-None-Match: {}", row.etag);
+        args.push("-H");
+        args.push(&cond);
+    }
+    let (ok, stdout_bytes, stderr) = spawn(&args)?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let Some((status, headers, _probe_body)) = split_http(&stdout) else {
+        // An unparseable probe answers nothing about change; the real
+        // fetch_all is the only thing that can still answer truthfully.
+        return Ok((ok, fetch_all()?, stderr));
+    };
+    record_core_from_headers(&headers);
+    if status == 304 {
+        if let Some(row) = row {
+            served_304.fetch_add(1, Ordering::SeqCst);
+            return Ok((true, row.body, String::new()));
+        }
+        // Unreachable in practice: GitHub only answers 304 to a request
+        // that carried an If-None-Match, which this probe only sends when
+        // `row` is `Some`. Falls through rather than inventing a body.
+    }
+    if !ok {
+        // The probe itself already reports a failed transfer; a failure
+        // never caches and never pays a second read to confirm it.
+        return Ok((false, String::new(), stderr));
+    }
+    let body = fetch_all()?;
+    if let Some(etag) = header_value(&headers, "etag") {
+        write_row_at(root, path, &etag, &body);
+    }
+    Ok((true, body, stderr))
+}
+
 /// The spend-note suffix: `, {n} served 304` once the process has served a
 /// 304, empty before, so callers that parse the note never see a new shape
 /// on the plain path.
@@ -363,5 +429,89 @@ mod tests {
         assert_eq!(eligible(&placeholder), None);
         let not_repos = vec![api, "graphql".to_string()];
         assert_eq!(eligible(&not_repos), None);
+    }
+
+    #[test]
+    fn paginated_304_replays_the_full_cached_assembly_and_never_calls_fetch_all() {
+        let root = tempfile::tempdir().unwrap();
+        write_row_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            "W/\"abc\"",
+            "[{\"a\":1},{\"a\":2}]",
+        );
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of(
+            "HTTP/2.0 304 Not Modified\r\netag: W/\"abc\"\r\n\r\n",
+            false,
+        );
+        let fetch_all = || -> Result<String, String> { panic!("fetch_all must not run on a 304") };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"a\":1},{\"a\":2}]");
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn paginated_200_refetches_everything_and_recaches_under_the_fresh_etag() {
+        let root = tempfile::tempdir().unwrap();
+        write_row_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            "W/\"old\"",
+            "[{\"a\":1}]",
+        );
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of(
+            "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\n\r\n{\"check_runs\":[]}",
+            true,
+        );
+        let fetch_all =
+            || -> Result<String, String> { Ok("[{\"a\":1},{\"a\":2},{\"a\":3}]".to_string()) };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"a\":1},{\"a\":2},{\"a\":3}]");
+        let now = crate::gh_cache::now_secs();
+        let row = read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now)
+            .expect("row recached");
+        assert_eq!(row.etag, "W/\"new\"");
+        assert_eq!(row.body, "[{\"a\":1},{\"a\":2},{\"a\":3}]");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn paginated_failed_probe_never_calls_fetch_all_and_caches_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of("HTTP/2.0 200 OK\r\netag: W/\"zz\"\r\n\r\n{\"trunc", false);
+        let fetch_all = || -> Result<String, String> {
+            panic!("fetch_all must not run after a failed transfer")
+        };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(!ok);
+        assert_eq!(body, "");
+        let now = crate::gh_cache::now_secs();
+        assert!(read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now).is_none());
     }
 }
