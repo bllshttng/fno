@@ -1,0 +1,147 @@
+name: harness-launch-docs
+
+# Keeps the launch pages under skills/agent/references/ true to each
+# harness's own --help. The pages' flag tables render from the snapshots in
+# docs/harnesses/help/. This job recaptures the snapshots from the latest
+# published CLIs, re-renders the pages, and opens a PR when anything moved.
+#
+# agy has no public install, so its snapshot is recaptured by hand. A harness
+# whose install or --help fails keeps its committed snapshot, with a warning.
+#
+# Opening the PR needs one of two things. Either enable the repo setting
+# "Allow GitHub Actions to create and approve pull requests", or add a
+# HARNESS_DOCS_TOKEN secret with contents and pull-requests write. Only the
+# secret starts CI on the bot PR: a push made with GITHUB_TOKEN triggers no
+# workflow.
+#
+# Two jobs, so third-party code never holds a write token. render installs
+# the published CLIs, captures and renders under a read-only token with no
+# persisted credentials, and uploads the change as a patch. publish runs no
+# npm code: it applies the patch and opens the PR.
+#
+# On a pull_request only render runs. It prints the diff and opens nothing.
+
+on:
+  schedule:
+    # Mondays 08:00 UTC.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/harness-launch-docs.yml
+      - crates/fno-agents/src/launch_flags.rs
+      - docs/harnesses/help/**
+      - docs/harnesses/launch/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-launch-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install harness CLIs
+        timeout-minutes: 10
+        run: |
+          for pkg in @anthropic-ai/claude-code @openai/codex @opencode/cli @earendil-works/pi-coding-agent; do
+            npm install -g "$pkg" || echo "::warning::$pkg did not install; its snapshot stays as committed"
+          done
+      - name: Capture --help snapshots
+        timeout-minutes: 5
+        run: |
+          capture() {
+            local file="docs/harnesses/help/$1.txt"
+            shift
+            if ! command -v "$1" >/dev/null; then
+              echo "::warning::$1 is not on PATH; $file stays as committed"
+              return 0
+            fi
+            local version help
+            version="$("$1" --version 2>&1 | head -n 1)" || true
+            if ! help="$("$@" --help 2>&1)"; then
+              echo "::warning::$* --help failed; $file stays as committed"
+              return 0
+            fi
+            printf '$ %s --help\nversion: %s\n\n%s\n' "$*" "$version" "$help" > "$file"
+            echo "captured $* ($version)"
+          }
+          capture claude claude
+          capture codex codex
+          capture opencode opencode
+          capture opencode-run opencode run
+          capture pi pi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno-agents/target
+          key: ${{ runner.os }}-launch-docs-${{ hashFiles('crates/fno-agents/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-launch-docs-
+      - name: Render the launch pages
+        run: |
+          cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
+          crates/fno-agents/target/debug/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          # Intent-to-add, so a first capture (a new snapshot file) enters the patch.
+          git add -N docs/harnesses/help skills/agent/references
+          git diff --binary -- docs/harnesses/help skills/agent/references > "$RUNNER_TEMP/launch-docs.patch"
+          git diff --stat -- docs/harnesses/help skills/agent/references
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: launch-docs-patch
+          path: ${{ runner.temp }}/launch-docs.patch
+          retention-days: 7
+
+  publish:
+    needs: render
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.HARNESS_DOCS_TOKEN || github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: launch-docs-patch
+          path: ${{ runner.temp }}
+      - name: Open a PR when a page changed
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_DOCS_TOKEN || github.token }}
+        run: |
+          patch="$RUNNER_TEMP/launch-docs.patch"
+          if [ ! -s "$patch" ]; then
+            echo "no harness --help changed"
+            exit 0
+          fi
+          branch=bot/harness-launch-docs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git apply --index "$patch"
+          git commit -m "docs(agents): recapture harness --help and re-render the launch pages"
+          git push --force origin "HEAD:refs/heads/$branch"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "PR for $branch is open; the push updated it"
+            exit 0
+          fi
+          gh pr create --base main --head "$branch" \
+            --title "docs(agents): harness --help changed; launch pages re-rendered" \
+            --body "The weekly harness-launch-docs run recaptured each harness's --help. The launch pages under skills/agent/references/ were re-rendered from the new snapshots. Check whether a flag named in a page's prose (docs/harnesses/launch/) changed."

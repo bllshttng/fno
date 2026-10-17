@@ -315,7 +315,9 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         .get("substrate")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if harness != "claude" || substrate != "thread" {
+    // The spawn door canonicalizes `thread` to its internal `bg` spelling
+    // before it asks, so both name the claude --bg lane here.
+    if harness != "claude" || !matches!(substrate, "thread" | "bg") {
         return Err(format!(
             "--print renders claude --bg lines; harness {harness:?} substrate \
              {substrate:?} has no native line yet."
@@ -1363,12 +1365,12 @@ mod tests {
 
     /// A routed lane with no model or effort still renders a legal argv: the
     /// optional pairs drop, and a required hole with no value refuses by
-    /// name.
+    /// name. The ask carries `bg`, the spelling the spawn door actually sends.
     #[test]
     fn print_drops_empty_optional_pairs() {
         let (guard, dir, saved) = print_world(None);
         let out = resolve(json!({
-            "kind": "print", "harness": "claude", "substrate": "thread",
+            "kind": "print", "harness": "claude", "substrate": "bg",
             "name": "w", "payload": "/fno:target x-aaaa",
             "cwd": dir.path(),
             "route_env": {
