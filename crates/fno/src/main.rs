@@ -18,7 +18,7 @@
 //! other value is the attach.
 
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -603,7 +603,7 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // is the local verb's); every other send is the local verb's.
             // The target is the tail's first word, which reads the same in
             // the `mail send` and `agents mail send` spellings.
-            let target = tail.first().and_then(OsString::to_str);
+            let target = tail.first().and_then(OsStr::to_str);
             match target {
                 Some(target) if !target.starts_with('-') => {
                     if target.contains('@') || fno::remote_target::is_plain_name_target(target) {
