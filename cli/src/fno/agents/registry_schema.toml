@@ -88,11 +88,16 @@
 #
 # v42: additive `last_report_at` - the last session report's arrival stamp,
 # the capacity reader's freshness source for pid-less rows no probe reaches
-# (d-d0c63de7: the user's own session counts toward the live cap). Bumped
-# with `min_writer` under the same writer-protection rationale as v22 through
-# v41: a pre-v42 writer accepts the unknown key and erases it on its next
-# read-modify-write, aging a live occupant out of the cap. Rationale lives
-# beside the column in state.rs / registry.py.
+# (d-d0c63de7: the user's own session counts toward the live cap).
+# v43: additive `node_basis` - where the row's `node` came from when fno did
+# not mint it that way: "first-turn" when the claude first-prompt hook bound
+# the node the session's first user turn named. Set only by the `node-bind`
+# door beside a node it just stamped, so spawn, target-init and adopt rows
+# read as claimed work by absence alone. A writer built from main's v42
+# shares the version but not the field and erases node_basis on its next
+# read-modify-write; the bump turns that erasure into a loud refusal, the
+# writer-protection rationale v22 through v42 all carry. Rationale lives
+# beside the columns in state.rs / registry.py.
 #
 # `fields` pins the sorted serde (wire) names of every RegistryEntry field at
 # this version. The equal-version trap this closes: PR 2090 minted v33 for
@@ -105,6 +110,7 @@
 # any field-set change without a monotonic version bump is refused at test
 # time and at PR time. Add the field, add its name here, bump `version` - in
 # that order, in one PR.
-fields = ["account_record_id", "adopted_by_session", "aliases", "cc_session_id", "claude_session_uuid", "claude_short_id", "codex_session_id", "context_measured_at", "context_used_pct", "context_used_tokens", "context_window_tokens", "created_at", "role_grantor", "role_level", "role_scope", "cwd", "delivery_policy", "effort", "exited_at", "fno_id", "forked_from_session_id", "gemini_session_id", "git_grant", "granted_writable_roots", "harness", "harness_args", "harness_session_id", "harness_title", "host_mode", "inside_leg", "keeper_child_pid", "last_message_at", "last_reconciled_at", "last_report_at", "launch_account", "launch_account_source", "legacy_provider", "lineage_kind", "lineage_reason", "liveness", "liveness_measured_at", "log_path", "mail_unread", "mcp_channel_id", "messaging_socket_path", "model", "model_basis", "model_name", "mux", "name", "node", "node_reason", "origin", "pending_session_row", "pid", "pid_start_time", "predecessor_session_ids", "project_root", "provider", "related_session_id", "requested_effort", "requested_model", "requested_permission_mode", "requested_provider", "resolved_sandbox", "route_provider_id", "route_settings_path", "sandbox_posture", "screen_state", "session_id", "short_id", "spawn_id", "spawn_payload", "spawn_provenance", "spawn_trigger", "spawned_by_cwd", "spawned_by_harness", "spawned_by_session", "start_source", "status", "stop", "substrate", "tool_calls", "tool_errors", "transcript_path", "turn_policy_source"]
-version = 42
-min_writer = 42
+fields = ["account_record_id", "adopted_by_session", "aliases", "cc_session_id", "claude_session_uuid", "claude_short_id", "codex_session_id", "context_measured_at", "context_used_pct", "context_used_tokens", "context_window_tokens", "created_at", "role_grantor", "role_level", "role_scope", "cwd", "delivery_policy", "effort", "exited_at", "fno_id", "forked_from_session_id", "gemini_session_id", "git_grant", "granted_writable_roots", "harness", "harness_args", "harness_session_id", "harness_title", "host_mode", "inside_leg", "keeper_child_pid", "last_message_at", "last_reconciled_at", "last_report_at", "launch_account", "launch_account_source", "legacy_provider", "lineage_kind", "lineage_reason", "liveness", "liveness_measured_at", "log_path", "mail_unread", "mcp_channel_id", "messaging_socket_path", "model", "model_basis", "model_name", "mux", "name", "node", "node_basis", "node_reason", "origin", "pending_session_row", "pid", "pid_start_time", "predecessor_session_ids", "project_root", "provider", "related_session_id", "requested_effort", "requested_model", "requested_permission_mode", "requested_provider", "resolved_sandbox", "route_provider_id", "route_settings_path", "sandbox_posture", "screen_state", "session_id", "short_id", "spawn_id", "spawn_payload", "spawn_provenance", "spawn_trigger", "spawned_by_cwd", "spawned_by_harness", "spawned_by_session", "start_source", "status", "stop", "substrate", "tool_calls", "tool_errors", "transcript_path", "turn_policy_source"]
+
+min_writer = 43
+version = 43
