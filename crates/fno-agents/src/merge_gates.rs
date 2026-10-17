@@ -4,7 +4,9 @@
 //! halves take their facts as arguments so unit tests need no filesystem or
 //! network; the fetching halves ride the caller's `Probes` handle.
 
-use crate::authorized_merge::{node_carries_tag, pr_bound_entry, Blocker, Probes, MAIN_REPAIR_TAG};
+use crate::authorized_merge::{
+    node_carries_tag, pr_bound_entry, Blocker, PrFacts, ProbeOutcome, Probes, MAIN_REPAIR_TAG,
+};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -109,6 +111,34 @@ pub(crate) fn coverage_gate<P: Probes>(
             )),
             None,
         ),
+    }
+}
+
+/// The posted-review gate. Fires only when an attestation already exists at
+/// `facts.head_sha` (the no-attestation gap is `coverage_gate`'s job, via
+/// `review_coverage_uncovered` - the two blockers never name the same gap)
+/// but no GitHub review yet carries that round's marker. `Held`, never
+/// `Refused`: `fno do pr publish-review` already runs automatically at
+/// ship-create time and at every `finalize` terminal decision
+/// (`crates/fno-agents/src/finalize.rs`), so this normally self-clears with
+/// no operator action - it never re-derives what counts as "reviewed" (law
+/// d-608344c1 owns that), it only checks that a round the ledger already
+/// counted got PUBLISHED.
+pub(crate) fn review_posted_gate<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    facts: &PrFacts,
+) -> Option<Blocker> {
+    let journals = [crate::paths::events_path(cwd)];
+    if crate::publish_review::newest_head_attestation(&journals, &facts.head_sha).is_none() {
+        return None;
+    }
+    match probes.review_posted(cwd, facts) {
+        ProbeOutcome::Clear => None,
+        ProbeOutcome::Refused(reason) => Some(Blocker::held("review_not_posted", reason)),
+        ProbeOutcome::Inconclusive(reason) => {
+            Some(Blocker::unknown("review_posted_unknown", reason))
+        }
     }
 }
 

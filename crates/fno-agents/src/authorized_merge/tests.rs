@@ -11,6 +11,7 @@ struct Fake {
     dispatch_hold: Option<ProbeOutcome>,
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
+    review_posted: Option<ProbeOutcome>,
     review_hold: Option<ProbeOutcome>,
     lineage: Option<ProbeOutcome>,
     merge_result: Option<ProbeOutcome>,
@@ -173,6 +174,71 @@ fn take_slot_refuses_a_live_legacy_lockfile_without_creating_a_second_slot() {
     });
 }
 
+/// code+class for each scenario: no attestation (stays silent, the gap
+/// belongs to review_coverage_uncovered), an attestation with GitHub
+/// lacking the post (Held, self-clearing), posted (clear), and an
+/// unreadable probe (Unknown, never a silent pass).
+#[test]
+fn review_posted_gate_covers_its_four_cases() {
+    let temp = tempfile::TempDir::new().unwrap();
+    with_claims_root(temp.path(), || {
+        let spaces = temp.path().join("spaces");
+        std::fs::create_dir_all(&spaces).unwrap();
+        let saved = std::env::var("FNO_SPACES_DIR").ok();
+        std::env::set_var("FNO_SPACES_DIR", &spaces);
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let facts = PrFacts {
+            number: 931,
+            head_sha: "h1sha".to_string(),
+            head_ref: "feature/x".to_string(),
+            base_ref: "main".to_string(),
+            url: "https://github.com/o/r/pull/931".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            armed: false,
+        };
+        let gate = |outcome: ProbeOutcome| {
+            crate::merge_gates::review_posted_gate(
+                &Fake {
+                    review_posted: Some(outcome),
+                    ..Default::default()
+                },
+                &repo,
+                &facts,
+            )
+        };
+
+        assert_eq!(
+            gate(ProbeOutcome::Refused("must not be asked".into())),
+            None
+        );
+
+        let journal = crate::paths::events_path(&repo);
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        std::fs::write(
+            &journal,
+            "{\"type\":\"review_attestation\",\"ts\":\"2026-10-16T10:00:00Z\",\"data\":{\"branch\":\"feature/x\",\"head_sha\":\"h1sha\",\"verdict\":\"pass\",\"reviewer\":\"code-review\"}}\n",
+        )
+        .unwrap();
+
+        let blocker = gate(ProbeOutcome::Refused("not yet posted".into())).unwrap();
+        assert_eq!(blocker.code, "review_not_posted");
+        assert_eq!(blocker.class, BlockerClass::Held);
+
+        assert_eq!(gate(ProbeOutcome::Clear), None);
+
+        let blocker = gate(ProbeOutcome::Inconclusive("gh timed out".into())).unwrap();
+        assert_eq!(blocker.code, "review_posted_unknown");
+        assert_eq!(blocker.class, BlockerClass::Unknown);
+
+        match saved {
+            Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
+            None => std::env::remove_var("FNO_SPACES_DIR"),
+        }
+    });
+}
+
 impl Probes for Fake {
     fn pr_facts(&self, _cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
         if let Some(error) = &self.facts_error {
@@ -203,6 +269,9 @@ impl Probes for Fake {
     }
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.pr_hold.clone().unwrap_or(ProbeOutcome::Clear)
+    }
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn review_hold(&self, _cwd: &Path, _pr: u64) -> ProbeOutcome {
         self.review_hold.clone().unwrap_or(ProbeOutcome::Clear)

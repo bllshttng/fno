@@ -433,6 +433,14 @@ pub trait Probes {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// Has the round attested at `facts.head_sha` landed as a GitHub review
+    /// on `facts.number` yet? `Refused` (not yet - held, self-clears once
+    /// `publish-review` runs) vs `Inconclusive` (the `gh` read itself
+    /// failed) vs `Clear` (found). Default `Clear` keeps an impl that does
+    /// not read GitHub reviews inert.
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
 }
 
 /// A cleared decision: the effect may run, pinned to this head.
@@ -615,6 +623,11 @@ fn decide_observed<P: Probes>(
         let (coverage_blocker, _waiver) =
             crate::merge_gates::coverage_gate(probes, cwd, facts.number);
         if let Some(blocker) = coverage_blocker {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+            });
+        }
+        if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, &facts) {
             return Err(Outcome::Held {
                 reason: blocker.detail,
             });
@@ -1013,6 +1026,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     let repo_root_path = repo_root(cwd);
     let (coverage_blocker, waiver) = crate::merge_gates::coverage_gate(probes, cwd, facts.number);
     if let Some(blocker) = coverage_blocker {
+        blockers.push(blocker);
+    }
+    if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, facts) {
         blockers.push(blocker);
     }
     if let Some(entry_slice) = entries.as_deref() {
@@ -1589,6 +1605,42 @@ impl Probes for RealProbes {
 
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn review_posted(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let marker = crate::publish_review::round_marker(&facts.head_ref, &facts.head_sha);
+        let args = vec![
+            "api".to_string(),
+            "--paginate".to_string(),
+            format!(
+                "/repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
+                facts.number
+            ),
+        ];
+        match self.run_gh(cwd, &args) {
+            Ok((true, output)) => {
+                if output.contains(&marker) {
+                    ProbeOutcome::Clear
+                } else {
+                    ProbeOutcome::Refused(format!(
+                        "the attested review round at {} has not landed as a GitHub review on #{}; \
+                         run `fno do pr publish-review --pr-number {}` (finalize/ship already do this \
+                         automatically on every terminal decision, so this normally self-clears)",
+                        &facts.head_sha[..facts.head_sha.len().min(8)],
+                        facts.number,
+                        facts.number
+                    ))
+                }
+            }
+            Ok((false, output)) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {}",
+                facts.number, output
+            )),
+            Err(error) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {error}",
+                facts.number
+            )),
+        }
     }
 
     fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
