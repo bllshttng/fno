@@ -20,7 +20,7 @@ fn the_ground_fills_default_background_cells() {
     };
     let mut out = Vec::new();
     compositor
-        .draw_row(&mut out, &frame, 0)
+        .draw_row(&mut out, &frame, 0, None)
         .expect("draw_row into memory");
     let s = String::from_utf8(out).unwrap();
     assert!(
@@ -45,7 +45,7 @@ fn no_ground_leaves_default_backgrounds_untouched() {
     };
     let mut out = Vec::new();
     compositor
-        .draw_row(&mut out, &frame, 0)
+        .draw_row(&mut out, &frame, 0, None)
         .expect("draw_row into memory");
     let s = String::from_utf8(out).unwrap();
     assert!(
@@ -78,7 +78,7 @@ fn explicit_backgrounds_survive_the_ground_fill() {
     };
     let mut out = Vec::new();
     compositor
-        .draw_row(&mut out, &frame, 0)
+        .draw_row(&mut out, &frame, 0, None)
         .expect("draw_row into memory");
     let s = String::from_utf8(out).unwrap();
     assert!(s.contains("48;2;1;2;3"), "explicit bg survives: {s}");
