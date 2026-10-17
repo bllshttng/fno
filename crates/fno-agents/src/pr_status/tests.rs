@@ -43,6 +43,13 @@ impl GhProbe for FakeGh {
         let cmd = args.join(" ");
         self.calls.lock().unwrap().push(args.to_vec());
         let serve = |v: &Value| (true, v.to_string(), String::new());
+        // A forced failure wins over serving: the reviews path also contains
+        // "/pulls/", so this arm is checked first.
+        if let Some(stderr) = &self.pulls_fail {
+            if cmd.contains("/pulls/") {
+                return Ok((false, String::new(), stderr.clone()));
+            }
+        }
         if cmd.contains("/reviews?per_page=") {
             let page: usize = cmd
                 .rsplit("page=")
@@ -57,11 +64,6 @@ impl GhProbe for FakeGh {
                 .unwrap_or_default();
             let body = pages.get(page - 1).cloned().unwrap_or_else(|| json!([]));
             return Ok(serve(&body));
-        }
-        if let Some(stderr) = &self.pulls_fail {
-            if cmd.contains("/pulls/") {
-                return Ok((false, String::new(), stderr.clone()));
-            }
         }
         if cmd.contains("/pulls/") {
             return Ok(serve(&self.raw["pulls"]));
