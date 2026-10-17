@@ -29,11 +29,27 @@ const READ_CAP: usize = 1 << 20;
 const SNIFF_BYTES: usize = 8192;
 const WHEEL_ROWS: isize = 3;
 
+/// The largest image file the viewer decodes, and the longest edge kept after
+/// decoding: encode cost then stays bounded whatever the source size.
+const IMAGE_CAP: u64 = 32 << 20;
+const IMAGE_EDGE: u32 = 2048;
+const DECODE_EDGE: u32 = 8192;
+
 /// What the viewer shows for one file.
 pub(crate) enum Body {
     Text { lines: Vec<String>, truncated: bool },
+    Image(Picture),
     Binary,
     Failed(String),
+}
+
+/// A decoded image, and its encoding for the last body rect it was drawn at
+/// (`draw` takes `&View`, so the cache needs a `RefCell`).
+pub(crate) struct Picture {
+    img: image::DynamicImage,
+    /// The source size in pixels, before the edge cap.
+    px: (u32, u32),
+    cache: std::cell::RefCell<Option<(image_layer::Rect, Option<image_layer::Rendered>)>>,
 }
 
 /// A file read off the UI loop, ready to open.
@@ -61,6 +77,9 @@ fn read_body(path: &Path) -> Body {
     if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
         return Body::Failed("not a regular file".to_string());
     }
+    if let Some(format) = sniff_image(path) {
+        return read_image(path, format);
+    }
     let mut buf = Vec::new();
     let read =
         std::fs::File::open(path).and_then(|f| f.take(READ_CAP as u64 + 1).read_to_end(&mut buf));
@@ -76,6 +95,50 @@ fn read_body(path: &Path) -> Body {
     Body::Text {
         lines: text.lines().map(clean).collect(),
         truncated,
+    }
+}
+
+/// The image format the first bytes name, among the four the viewer decodes.
+fn sniff_image(path: &Path) -> Option<image::ImageFormat> {
+    use image::ImageFormat as F;
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .ok()?;
+    image::guess_format(&head[..n])
+        .ok()
+        .filter(|f| matches!(f, F::Png | F::Jpeg | F::Gif | F::WebP))
+}
+
+fn read_image(path: &Path, format: image::ImageFormat) -> Body {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > IMAGE_CAP) {
+        return Body::Failed("image over 32 MiB".to_string());
+    }
+    let mut reader = match image::ImageReader::open(path) {
+        Ok(r) => r,
+        Err(e) => return Body::Failed(e.to_string()),
+    };
+    reader.set_format(format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(DECODE_EDGE);
+    limits.max_image_height = Some(DECODE_EDGE);
+    reader.limits(limits);
+    match reader.decode() {
+        Ok(img) => {
+            let px = (img.width(), img.height());
+            let img = if px.0.max(px.1) > IMAGE_EDGE {
+                img.thumbnail(IMAGE_EDGE, IMAGE_EDGE)
+            } else {
+                img
+            };
+            Body::Image(Picture {
+                img,
+                px,
+                cache: std::cell::RefCell::new(None),
+            })
+        }
+        Err(e) => Body::Failed(e.to_string()),
     }
 }
 
@@ -142,6 +205,8 @@ impl FileViewer {
     fn notes(&self) -> Vec<String> {
         match &self.body {
             Body::Text { .. } => vec!["(empty file)".into()],
+            // The image paints over a blank body.
+            Body::Image(_) => Vec::new(),
             Body::Binary => vec![
                 "no preview: this is a binary file".into(),
                 String::new(),
@@ -247,17 +312,20 @@ fn chrome_for(v: &FileViewer, w: usize, panel: bool) -> chrome::Chrome {
         }
     );
     let first = if cut { "first 1 MiB · " } else { "" };
-    let keys = if panel {
-        "-/+ size · o open"
-    } else {
-        "space page · o open outside"
+    let footer = match (&v.body, panel) {
+        (Body::Image(p), true) => {
+            format!("{}x{} px · -/+ size · o open · esc close", p.px.0, p.px.1)
+        }
+        (Body::Image(p), false) => format!("{}x{} px · o open outside · esc close", p.px.0, p.px.1),
+        (_, true) => format!("{first}j/k scroll · -/+ size · o open · esc close"),
+        (_, false) => format!("{first}j/k scroll · space page · o open outside · esc close"),
     };
     chrome::Chrome::new(
         chrome::fit_ellipsis(name.unwrap_or("file"), room.saturating_sub(9)),
         Anchor::Center,
     )
     .flat()
-    .footer(format!("{first}j/k scroll · {keys} · esc close"))
+    .footer(footer)
     .fit_to(room.max(1))
 }
 
@@ -365,11 +433,47 @@ fn layout(plan: &Plan, v: &FileViewer) -> OverlayLayout {
 
 /// Paint the viewer into the frame: after the panes, before the modals.
 pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
+    image_layer::clear();
     let Some(v) = &view.viewer.open else {
         return;
     };
-    let layout = layout(&plan(view, v), v);
+    let plan = plan(view, v);
+    let layout = layout(&plan, v);
     draw_overlay_layout(cells, rows, cols, &layout, &view.theme);
+    if let Body::Image(pic) = &v.body {
+        if let Some(rect) = image_rect(&plan, rows, cols) {
+            paint_image(pic, rect, cells, cols);
+        }
+    }
+}
+
+/// The body inside the frame: past the border and the two-cell side pad on
+/// each side, below the chrome rows, clipped to the terminal.
+fn image_rect(plan: &Plan, rows: usize, cols: usize) -> Option<image_layer::Rect> {
+    let row = plan.origin.0 + plan.chrome.rows_above();
+    let col = plan.origin.1 + 1 + 2;
+    let w = plan
+        .w
+        .saturating_sub(chrome::Chrome::FRAME_COLS + 4)
+        .min(cols.saturating_sub(col));
+    let h = plan.budget.min(rows.saturating_sub(row));
+    (w > 0 && h > 0).then(|| image_layer::Rect {
+        row: row as u16,
+        col: col as u16,
+        w: w as u16,
+        h: h as u16,
+    })
+}
+
+/// Encode once per rect, then paint the cached encoding.
+fn paint_image(pic: &Picture, rect: image_layer::Rect, cells: &mut [Cell], cols: usize) {
+    let mut cache = pic.cache.borrow_mut();
+    if cache.as_ref().is_none_or(|(at, _)| *at != rect) {
+        *cache = Some((rect, image_layer::render(&pic.img, rect)));
+    }
+    if let Some((_, Some(rendered))) = cache.as_ref() {
+        image_layer::paint(rendered, rect, cells, cols);
+    }
 }
 
 fn max_for(view: &View) -> usize {
@@ -616,6 +720,18 @@ mod tests {
             _ => panic!("text"),
         }
         assert!(matches!(read("b.bin", b"MZ\0\0\x01"), Body::Binary));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 32))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        match read("shot.png", &png) {
+            Body::Image(p) => assert_eq!(p.px, (64, 32)),
+            _ => panic!("png"),
+        }
+        // A PNG signature over junk names the decode error, not "binary".
+        let mut junk = png[..16].to_vec();
+        junk.extend_from_slice(&[7; 64]);
+        assert!(matches!(read("bad.png", &junk), Body::Failed(_)));
         match read("big.txt", &vec![b'x'; READ_CAP + 10]) {
             Body::Text { truncated, .. } => assert!(truncated),
             _ => panic!("big"),
@@ -681,6 +797,29 @@ mod tests {
             l.body = body;
             assert!(screen(&opened(l).await.0).contains(shown));
         }
+    }
+
+    #[tokio::test]
+    async fn an_image_body_paints_half_blocks_and_names_its_size() {
+        let mut l = file(1);
+        l.path = PathBuf::from("/work/shot.png");
+        // A white top quarter: the first cell row's halves differ, so
+        // half-blocks draw `▀` there.
+        let img = image::RgbaImage::from_fn(40, 40, |_, y| {
+            let v = if y < 10 { 255 } else { 0 };
+            image::Rgba([v, v, v, 255])
+        });
+        l.body = Body::Image(Picture {
+            img: image::DynamicImage::ImageRgba8(img),
+            px: (40, 40),
+            cache: std::cell::RefCell::new(None),
+        });
+        let (v, _) = opened(l).await;
+        let frame = v.compose();
+        assert!(frame.cells.iter().any(|c| c.c == '▀'), "half-blocks paint");
+        assert!(!frame.cells.contains(&image_layer::HOLE));
+        assert!(image_layer::take().is_none(), "half-blocks stage no layer");
+        assert!(crate::vt::frame_text(&frame).contains("40x40 px"));
     }
 
     #[tokio::test]

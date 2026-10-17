@@ -1,10 +1,11 @@
 //! The single bounded node-state owner (wave 1).
 //!
 //! A node carries ONE `current_state` object in its extras: `{body, revision,
-//! updated_at, source_session_id, source_harness}`. A note REPLACES it under
-//! revision-checked optimistic concurrency; the exact pre-image is journaled
-//! first (see `note_history`), so the hot node holds one current state and
-//! every prior stays readable.
+//! updated_at, source_session_id, source_harness}`. The public note verb
+//! appends to the node's thread and leaves this object alone. The direct
+//! writers here (replacement, clear) submit the revision they read, and the
+//! exact pre-image is journaled first (see `note_history`), so the hot node
+//! holds one current state and every prior stays readable.
 use crate::backlog::note_history;
 use crate::graph_store::{self, StoreError};
 use serde_json::{json, Value};
