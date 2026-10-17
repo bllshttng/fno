@@ -335,11 +335,15 @@ fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [BL
     let Body::Markdown { src, .. } = &v.body else {
         return None;
     };
-    let mut cache = v.md.borrow_mut();
-    if cache.as_ref().is_none_or(|(w, _)| *w != plan.text_w) {
-        *cache = Some((plan.text_w, md_lines(src, plan.text_w)));
+    // Refresh the cache in a scoped mutable borrow so the returned read
+    // borrow starts after it ends (RefMut::downgrade is nightly-only).
+    {
+        let mut cache = v.md.borrow_mut();
+        if cache.as_ref().is_none_or(|(w, _)| *w != plan.text_w) {
+            *cache = Some((plan.text_w, md_lines(src, plan.text_w)));
+        }
     }
-    let slot = std::cell::Ref::filter_map(std::cell::RefMut::downgrade(cache), Option::as_ref);
+    let slot = std::cell::Ref::filter_map(v.md.borrow(), Option::as_ref);
     slot.map(|c| std::cell::Ref::map(c, |p| p.1.as_slice()))
         .ok()
 }
