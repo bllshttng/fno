@@ -503,10 +503,7 @@ mod tests {
             Some(2),
             "a row with no mark refuses"
         );
-        let mut bare = RegistryEntry::new(
-            Some("sid-bare".to_string()),
-            crate::state::Lineage::unproven("test"),
-        );
+        let mut bare = RegistryEntry::new(None, crate::state::Lineage::unproven("test"));
         bare.name = "bare".into();
         // A row that predates its first turn still carries a resolvable
         // handle (the pid pair); the refusal under test is the missing
