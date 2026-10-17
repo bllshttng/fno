@@ -3723,7 +3723,7 @@ class MuxBlock(BaseModel):
     paint_background: bool = True
     # The card's graph slot: activity ramp (default) or the context fill bar.
     card_graph: Literal["activity", "context"] = "activity"
-    # Where a clicked file opens: inmux (acts as system until the viewer ships) | obsidian (vault files) | system.
+    # Where a clicked file opens: inmux (the mux viewer for text files) | obsidian (vault files) | system.
     open_with: Literal["inmux", "obsidian", "system"] = "inmux"
     # The in-mux file viewer's shape: docked panel or centered modal.
     viewer: Literal["panel", "modal"] = "panel"
