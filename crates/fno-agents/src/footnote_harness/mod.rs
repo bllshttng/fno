@@ -253,7 +253,7 @@ pub fn write_pane_spec(
     }
     let (provider, model) = endpoint::split_model(cwd, &|k| std::env::var(k).ok(), model);
     let sid = match fno_id {
-        Some(id) if is_session_uuid(id) => id.to_string(),
+        Some(id) if crate::resume_wake::is_uuid_shaped(id) => id.to_string(),
         Some(id) => return Err(format!("footnote pane spec: malformed fno_id {id}")),
         None => crate::identity::mint_fno_id()?,
     };
@@ -293,14 +293,6 @@ pub fn write_pane_spec(
         .and_then(|mut f| f.write_all(&body))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok((path, sid))
-}
-
-/// A lowercase 8-4-4-4-12 hex id: the only shape safe as a path component
-/// under the sessions root.
-fn is_session_uuid(id: &str) -> bool {
-    let lens: Vec<usize> = id.split('-').map(str::len).collect();
-    let hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
-    lens == [8, 4, 4, 4, 12] && id.chars().all(|c| c == '-' || hex(c))
 }
 
 /// End a headless footnote child: SIGINT its process group so the loop

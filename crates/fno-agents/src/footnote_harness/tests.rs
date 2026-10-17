@@ -334,7 +334,7 @@ fn the_pane_spec_is_a_private_file_holding_the_launch_spec() {
     assert_eq!(files, 1);
     assert!(refused.unwrap_err().contains("needs -m"));
     let (path, sid) = written.unwrap();
-    assert!(is_session_uuid(&sid));
+    assert!(crate::resume_wake::is_uuid_shaped(&sid));
     assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
     let spec: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
