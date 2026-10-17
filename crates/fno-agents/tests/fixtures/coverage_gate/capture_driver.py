@@ -16,12 +16,16 @@ the same calls in the same order. A stub with no answer for a call fails loud
 never a silent success. Stubs locate the case tree through
 `FNO_COVERAGE_CASE_DIR`, so cwd does not matter.
 
-The `fno` front stub serves the two doors the Python legs walk:
-`inbox law match` (payload on stdin, per-subject answers from a map) and
-`inbox decide` (argv, exit and stderr from one answer). The resolve_front_binary
-seam is monkeypatched in the child to point at this stub, because that resolver
-probes crates/fno/target before PATH and a CI workspace that built the fno
-crate would otherwise answer the law reads with a real binary.
+The `fno` front stub serves the doors the legs walk: `inbox law match`
+(payload on stdin, per-subject answers from a map), `inbox decide` (argv,
+exit and stderr from one answer), and `do pr info` (the native probe's
+no-slug head fallback). The resolve_front_binary seam is monkeypatched in
+the child to point at this stub, because that resolver probes
+crates/fno/target before PATH and a CI workspace that built the fno crate
+would otherwise answer the law reads with a real binary. The native head
+probe's primary read (`gh api repos/<slug>/pulls/<n>`) lands on the gh
+stub, which maps it to its own `pr-info` shape answered from the same head
+the capture's pr-hop answer froze.
 
 The goldens freeze the Python legs while they live. After the legs retire the
 frozen files are the contract, and a rewritten oracle cannot re-derive them: a
@@ -221,6 +225,11 @@ def shape_of(argv):
     if len(argv) >= 2 and argv[0] == "pr" and argv[1] == "view":
         return "view"
     if argv and argv[0] == "api":
+        # The native gate's PR facts read (`gh api repos/<slug>/pulls/<n>`)
+        # gets its own shape and counter so it never consumes a per-call
+        # `api` answer minted for the capture's other REST calls.
+        if any(a.startswith("repos/") and "/pulls/" in a for a in argv[1:3]):
+            return "pr-info"
         if "--jq" in argv:
             return "api-jq"
         return "api"
@@ -279,11 +288,14 @@ main()
 """
 
 STUB_FRONT = r"""#!/usr/bin/python3
-# Stand-in for the fno front binary. Two doors:
+# Stand-in for the fno front binary. Three doors:
 #   `inbox law match`    payload on stdin; the payload's argv[0] is the law
 #                        subject; answered from answers/front-law.json, a map
 #                        keyed by subject with a "default" fallback.
 #   `inbox decide ...`   argv only; answered from answers/front-decide.json.
+#   `do pr info <n>`     the head probe's no-slug fallback (a case world
+#                        whose origin does not resolve to a slug); answered
+#                        from answers/front-pr-info.json.
 # Every call is journaled with its door and subject.
 import json
 import os
@@ -345,11 +357,11 @@ def main():
         with open(path) as fh:
             emit(json.load(fh))
     if door == "do-pr":
-        # The native gate's PR facts read (`fno do pr info <n>`): answered
-        # from answers/front-pr-info.json. The port moved the head hop from
-        # the agents door to the front door, so the call journals under the
-        # agents fold with the hop's original name and the fold vocabulary
-        # survives the transport move.
+        # The head probe's no-slug fallback (`fno do pr info <n>`): the
+        # primary door is the gh stub's pr-info shape once the case world's
+        # origin resolves to a slug. The call journals under the agents fold
+        # with the hop's original name so the fold vocabulary survives the
+        # transport move.
         pr = argv[3] if len(argv) > 3 else ""
         with open(os.path.join(journals, "fno-agents.jsonl"), "a") as fh:
             fh.write(json.dumps({"op": "pr-head", "pr": pr}, sort_keys=True) + "\n")
@@ -508,6 +520,24 @@ def build_case(root_path, case, index):
         )
     gh_map = dict(DEFAULT_GH_ANSWERS)
     gh_map.update(case.get("gh") or {})
+    # The native probe's pulls read (`gh api repos/<slug>/pulls/<n>`) is
+    # answered pulls-shaped from the same head the capture's pr-hop answer
+    # froze: answers.pr-head is the single source of truth for the head, so
+    # the cases whose goldens read a failed fetch keep no answer here and
+    # the stub's missing-answer exit 3 IS the fetch failure.
+    pr_head = dict(DEFAULT_ANSWERS, **(case.get("answers") or {})).get("pr-head") or {}
+    head = (pr_head.get("json") or {}).get("head")
+    if head:
+        gh_map.setdefault("pr-info", {
+            "json": {
+                "number": case.get("pr", 7),
+                "head": {"sha": head, "ref": "feature/x"},
+                "base": {"ref": "main"},
+                "html_url": "https://github.com/acme/widget/pull/7",
+                "state": "open",
+                "auto_merge": None,
+            }
+        })
     for shape, answer in gh_map.items():
         (answers_dir / ("gh-%s.json" % shape)).write_text(
             json.dumps(answer, sort_keys=True) + "\n"
