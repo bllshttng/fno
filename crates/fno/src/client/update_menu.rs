@@ -173,6 +173,48 @@ pub(crate) async fn probe_update_readiness() -> UpdateOutcome {
     }
 }
 
+impl View {
+    /// Open the sideline MENU popup anchored at `anchor` (US4). Also
+    /// re-arms the update-readiness probe so a menu opened long
+    /// after the last probe is never showing a stale answer; the menu itself
+    /// still renders instantly from whatever outcome is already in hand.
+    pub(super) fn open_sideline_menu(&mut self, anchor: Anchor) {
+        self.clear_peek();
+        self.aux = Some(build_sideline_menu(
+            anchor,
+            self.update_outcome.as_ref(),
+            experimental::flags(self),
+        ));
+        self.aux_esc.clear();
+        self.update_probe_want = true;
+    }
+
+    /// Rebuild an already-open sideline MENU so a landing update probe shows
+    /// up (or clears a stale row) without the operator closing and reopening
+    /// it (P2, codex on PR #881). A no-op when the open aux is some other
+    /// popup (settings, kanban, the update overlay itself): `OpenKeybinds` is
+    /// pushed only by `build_sideline_menu`, so its presence is the marker.
+    /// Preserves selection the same way `reopen_settings_keeping_sel` does.
+    pub(super) fn refresh_open_sideline_menu(&mut self) {
+        let Some(aux) = self.aux.as_ref() else {
+            return;
+        };
+        if !aux.actions.contains(&AuxAction::OpenKeybinds) {
+            return;
+        }
+        let anchor = aux.popup.anchor;
+        let sel = aux.popup.sel;
+        let mut menu = build_sideline_menu(
+            anchor,
+            self.update_outcome.as_ref(),
+            experimental::flags(self),
+        );
+        let n = menu.popup.targets().len();
+        menu.popup.sel = if n > 0 { sel.min(n - 1) } else { 0 };
+        self.aux = Some(menu);
+    }
+}
+
 /// Build the sideline MENU popup (US4), anchored at the footer's menu cell:
 /// an update row (only when the last probe has landed and is ready or
 /// degraded), then keybinds / settings / detach. `reload config` is
