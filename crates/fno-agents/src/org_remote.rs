@@ -24,10 +24,6 @@ pub struct HandoffPlan {
     pub host: String,
     pub ssh_argv: Vec<String>,
     pub pending: PendingSuccession,
-    pub scope: String,
-    pub successor: String,
-    pub predecessor: String,
-    pub predecessor_session: Option<String>,
 }
 
 /// Parse and plan the hand-off: pure, so tests cover the shapes without a
@@ -96,10 +92,6 @@ pub fn plan_handoff(
         host,
         ssh_argv: crate::mail_remote::ssh_argv(&host, &ssh_words),
         pending,
-        scope,
-        successor,
-        predecessor: holder.0.clone(),
-        predecessor_session: holder.1.clone(),
     })
 }
 
@@ -137,16 +129,12 @@ fn vacate_scope_holder(
             if holds {
                 row.role_scope = None;
                 row.role_level = None;
-                role_grantor_reset(row);
+                row.role_grantor = None;
                 vacated.push(row.name.clone());
             }
         }
         Ok(vacated)
     })
-}
-
-fn role_grantor_reset(row: &mut crate::state::RegistryEntry) {
-    row.role_grantor = None;
 }
 
 /// The remote leg, run ON the target host by the ssh hop: grant through the
@@ -274,13 +262,13 @@ fn cmd_promote(args: &[String]) -> i32 {
             return 1;
         }
     }
-    crate::succession_txn::announce(&plan.scope, &plan.pending);
-    crate::succession_txn::transferred(&plan.scope, &plan.pending);
-    file_retro(&plan);
+    crate::succession_txn::announce(scope, &plan.pending);
+    crate::succession_txn::transferred(scope, &plan.pending);
+    file_retro(scope, &plan.pending);
     println!(
         "hand-off over {scope}: {pred} -> {succ}@{host}; the successor's next beat verifies and releases",
-        pred = plan.predecessor,
-        succ = plan.successor,
+        pred = plan.pending.predecessor_name,
+        succ = plan.pending.successor_name,
         host = plan.host,
     );
     0
@@ -289,15 +277,15 @@ fn cmd_promote(args: &[String]) -> i32 {
 /// The retro step of the hand-off, filed where the predecessor's transcript
 /// lives: the same detached intel writer the successor's beat would launch,
 /// named by the same succession id.
-fn file_retro(plan: &HandoffPlan) {
+fn file_retro(scope: &str, pending: &PendingSuccession) {
     let Some(cwd) = std::env::current_dir().ok().filter(|p| p.is_dir()) else {
         return;
     };
     crate::succession_txn::retro(
-        &plan.scope,
+        scope,
         &cwd,
-        &plan.pending,
-        &crate::succession_txn::succession_id(&plan.pending, &plan.scope),
+        pending,
+        &crate::succession_txn::succession_id(pending, scope),
     );
 }
 
