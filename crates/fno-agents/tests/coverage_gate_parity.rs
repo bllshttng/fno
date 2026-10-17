@@ -25,20 +25,27 @@ use serde_json::{json, Value};
 
 mod common;
 
-/// The two cases whose goldens carry a sentence the native verdict answers
+/// The cases whose goldens carry a sentence the native verdict answers
 /// differently BY DESIGN (the driver's own *.divergence notes say why: the
-/// native verdict counts one shared head set per round, and names the stop
-/// gate's existing sentence for an unreadable decision store). Parity for
-/// them compares state and exit only, exactly as the notes promise.
-const DIVERGENCE_CASES: [&str; 2] = [
+/// native verdict counts one shared head set per round, names the stop
+/// gate's existing sentence for an unreadable decision store, and answers a
+/// missing row with the unknown sentinel instead of the searched-paths
+/// sentence). Parity for them compares state and exit only, exactly as the
+/// notes promise; the check-shaped member also pins the stderr refusal word.
+const DIVERGENCE_CASES: [&str; 4] = [
     "verdict_rounds_two_axes",
     "verdict_waiver_authority_unknown",
+    "verdict_no_row",
+    "check_no_row",
 ];
 
 /// Session identity stripped before the operand runs, mirroring STRIP_VARS
 /// in capture_driver.py: a cargo-test parent carries live-session pins that
-/// would otherwise reach into the hermetic fixture.
-const STRIP_VARS: [&str; 22] = [
+/// would otherwise reach into the hermetic fixture. FNO_SPACES_DIR is NOT
+/// mirrored: the driver resolves the case state off FNO_STATE_DIR and the
+/// native off the agents-home parent, so the test pins the spaces root to
+/// the case dir explicitly and a parent's live pin cannot leak either way.
+const STRIP_VARS: [&str; 21] = [
     "CLAUDE_CODE_SESSION_ID",
     "TARGET_SESSION_ID",
     "SESSION_ID",
@@ -54,7 +61,6 @@ const STRIP_VARS: [&str; 22] = [
     "FNO_TRACKER_BACKEND",
     "FNO_EVENTS_PATH",
     "FNO_STATE_DIR",
-    "FNO_SPACES_DIR",
     "FNO_CLAIMS_ROOT",
     "FNO_CONFIG",
     "FNO_AGENTS_HOME",
@@ -164,6 +170,11 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
     }
     cmd.env("FNO_CONFIG", case_dir.join("config.toml"));
     cmd.env("FNO_STATE_DIR", case_dir);
+    // The builder plants the events journal under <case>/spaces (the
+    // FNO_STATE_DIR convention); the native resolves the spaces root off the
+    // agents-home parent when no explicit pin exists. The pin is the one
+    // declared knob that points the native at the planted file.
+    cmd.env("FNO_SPACES_DIR", case_dir.join("spaces"));
     cmd.env("FNO_AGENTS_HOME", case_dir.join("home").join("agents-home"));
     cmd.env("HOME", case_dir.join("home"));
     cmd.env("FNO_CLAIMS_ROOT", case_dir.join("claims"));
@@ -223,12 +234,6 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
         let golden_out =
             fs::read_to_string(common::golden_dir("coverage_gate").join(format!("{key}.out")))
                 .unwrap_or_else(|e| panic!("[{label}] missing golden {key}.out: {e}"));
-        let golden: Value = serde_json::from_str(golden_out.trim()).expect("golden verdict parses");
-        let rust: Value = serde_json::from_str(masked_out.trim()).expect("rust verdict parses");
-        assert_eq!(
-            golden["state"], rust["state"],
-            "[{label}] divergent-case state differs"
-        );
         let golden_exit =
             fs::read_to_string(common::golden_dir("coverage_gate").join(format!("{key}.exit")))
                 .expect("golden exit");
@@ -242,6 +247,27 @@ fn run_case(case_dir: &Path, stubbin: &Path) {
             rust_exit,
             "[{label}] divergent-case exit differs"
         );
+        if golden_out.trim().is_empty() {
+            // The check-shaped divergence (check_no_row): the refusal word
+            // rides on stderr, stdout stays empty, and the searched-paths
+            // suffix is the state-root fingerprint the note absorbs.
+            assert!(
+                masked_out.trim().is_empty(),
+                "[{label}] divergent-case stdout carries bytes where the golden is empty"
+            );
+            assert!(
+                masked_err.starts_with("coverage unknown"),
+                "[{label}] divergent-case stderr does not carry the sentinel refusal word: {masked_err:?}"
+            );
+        } else {
+            let golden: Value =
+                serde_json::from_str(golden_out.trim()).expect("golden verdict parses");
+            let rust: Value = serde_json::from_str(masked_out.trim()).expect("rust verdict parses");
+            assert_eq!(
+                golden["state"], rust["state"],
+                "[{label}] divergent-case state differs"
+            );
+        }
         return;
     }
 
