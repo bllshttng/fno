@@ -101,6 +101,18 @@ flags="$(printf '%s' "$parsed" | jq -c '.flags // []' 2>/dev/null || echo '[]')"
 [[ -n "$level" ]] || level="unset"
 [[ -n "$level_source" ]] || level_source="fallback"
 [[ -n "$flags" ]] || flags='[]'
+if [[ -z "$parsed" ]]; then
+  # Degraded mode: the parse door is unreachable (stale or missing binary),
+  # so the telemetry dies with it. The round law's verify-fixes carveout
+  # must not: a cap refusal that eats the flag would defund the one
+  # review-shaped act the cap still funds. Scan the raw args for the three
+  # accepted spellings and fund the verify; nothing else is inferred here.
+  em="$(printf '—')"
+  case " $skill_raw " in
+    *" --verify-fixes "*|*" verify-fixes "*|*" ${em}verify-fixes "*)
+      flags='["--verify-fixes"]' ;;
+  esac
+fi
 pr_number="$(printf '%s' "$parsed" | jq -r '.pr_number // empty' 2>/dev/null || true)"
 target="$(printf '%s' "$parsed" | jq -r '.target // empty' 2>/dev/null || true)"
 
