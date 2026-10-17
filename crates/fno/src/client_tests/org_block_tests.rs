@@ -141,6 +141,7 @@ fn a_fitted_org_line_paints_whole_at_every_panel_width() {
             ..Default::default()
         },
     )));
+    // Text columns only: the last column of the panel is the divider glyph.
     for width in 20..=70u16 {
         view.sideline_width = width;
         let panel_w = view.panel_w() as usize;
@@ -154,7 +155,7 @@ fn a_fitted_org_line_paints_whole_at_every_panel_width() {
         view.draw_sideline(&mut cells, rows, cols, panel_w);
         let painted = (0..rows)
             .map(|r| {
-                cells[r * cols..r * cols + panel_w]
+                cells[r * cols..r * cols + panel_w - 1]
                     .iter()
                     .map(|c| c.c)
                     .collect::<String>()
