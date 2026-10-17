@@ -6441,7 +6441,7 @@ fn overlay_chrome_rows() {
     // Centered (Full): keys modal, sideline MENU, settings.
     assert_chrome(&build_keys_modal().popup, chrome::Level::Full);
     assert_chrome(
-        &build_sideline_menu(Anchor::Center, None, false).popup,
+        &build_sideline_menu(Anchor::Center, None, experimental::Flags::default()).popup,
         chrome::Level::Full,
     );
     let v = two_pane_view();

@@ -142,7 +142,8 @@ impl std::fmt::Display for FloorReceipt {
             if usize::try_from(self.new).map_or(false, |n| n > ceiling) {
                 write!(
                     f,
-                    "\nagents.max_live is {ceiling}, so the cap holds at {ceiling}. \
+                    "\nagents.max_live is {ceiling}, so the floor holds the cap at {ceiling}. \
+                     Past it, a spawn admits only while CPU and RAM read room. \
                      To raise it: fno config set agents.max_live N"
                 )?;
             }
@@ -589,7 +590,11 @@ mod tests {
         };
         let under = render(Some(6)).to_string();
         assert!(
-            under.contains("agents.max_live is 6, so the cap holds at 6"),
+            under.contains("agents.max_live is 6, so the floor holds the cap at 6"),
+            "{under}"
+        );
+        assert!(
+            under.contains("Past it, a spawn admits only while CPU and RAM read room"),
             "{under}"
         );
         assert!(

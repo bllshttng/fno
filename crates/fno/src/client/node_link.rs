@@ -50,17 +50,10 @@ pub(super) fn span_at(row: u16, col: u16) -> Option<String> {
     backlog_style::span_at(row as usize, col as usize)
 }
 
-/// The node in the backlog details pane. The pane lives on the
-/// experimental board: off, the notice says where the jump would land. A
-/// board already open keeps its gathered state - the tap opens the detail
-/// ON it, never a fresh board that reads back to empty.
+/// The node in the backlog details pane. A board already open keeps its
+/// gathered state - the tap opens the detail ON it, never a fresh board
+/// that reads back to empty.
 pub(super) fn open_detail(view: &mut View, id: String) {
-    if !view.experimental_backlog {
-        view.set_notice(format!(
-            "node {id}: the backlog view is off (sideline menu)"
-        ));
-        return;
-    }
     if view.backlog_board.is_none() {
         View::open(view);
     }
