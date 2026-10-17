@@ -10,7 +10,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 static NEXT_GEN: AtomicU64 = AtomicU64::new(1);
 
-/// What the child's output tells the run loop.
 pub(crate) enum ShareMsg {
     Link(String),
     Knock(u64, String),
@@ -155,7 +154,6 @@ fn copy_link(view: &mut View) {
     }
 }
 
-/// A message from the child landed.
 pub(crate) fn apply(view: &mut View, gen: u64, msg: ShareMsg) {
     if view.share.as_ref().map(|s| s.gen) != Some(gen) {
         return;
@@ -264,7 +262,6 @@ async fn answer(view: &mut View, id: u64, verb: char) {
     open_knocks(view);
 }
 
-/// A share row or popup row was chosen.
 pub(crate) async fn act(view: &mut View, act: Act) {
     match act {
         Act::Start => {

@@ -5,10 +5,6 @@ use super::*;
 
 #[test]
 fn sideline_menu_lists_backlog_and_the_experimental_toggles() {
-    // The backlog row is always there and its hint names the live chord (the
-    // open menu does not run prefix chords, so the chord is taught on the row
-    // that OPENS the board). The experimental header sits above one toggle
-    // per feature, each carrying its own action.
     let menu = build_sideline_menu(Anchor::Center, None, experimental::Flags::default());
     let labels: Vec<(&str, &str)> = menu
         .popup

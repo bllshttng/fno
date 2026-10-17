@@ -488,6 +488,7 @@ fn sideline_toggle_rows() {
         v.input_owner(),
         crate::client::region_focus::RegionOwner::Pane
     );
+    v.experimental_org_board = true;
     crate::client::org_board::open(&mut v);
     v.layout.agents[0].harness_session_id = Some("successor-full-session".into());
     sock.clear();
