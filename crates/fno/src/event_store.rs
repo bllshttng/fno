@@ -1773,6 +1773,32 @@ pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, Str
         .map_err(|e| e.to_string())
 }
 
+/// The event id and envelope line of the newest accepted row of one type for
+/// one repo, or `None` when the store is absent or holds none. A transition
+/// writer reads its own last row this way, so the cost stays one lookup
+/// however long the history grows. The store is machine-wide, so the repo
+/// scopes the answer: another project's row is never this repo's "previous".
+pub fn newest_of_type(
+    journal: &Path,
+    ty: &str,
+    repo: &str,
+) -> Result<Option<(String, String)>, String> {
+    let store = store_path(journal);
+    if !store.is_file() {
+        return Ok(None);
+    }
+    let conn = open_read(&store)?;
+    match conn.query_row(
+        "SELECT event_id, line FROM events WHERE type = ? AND repo = ? AND reject_reason IS NULL ORDER BY seq DESC LIMIT 1",
+        [ty, repo],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ) {
+        Ok(row) => Ok(Some(row)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// The newest committed seq, or 0 for an empty store: the high-water mark an
 /// incremental reader bounds one pass by and stores as its next cursor.
 pub fn max_seq(journal: &Path) -> Result<i64, String> {
@@ -2394,3 +2420,4 @@ fn gc_ephemeral_inner(store: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcR
 mod observation;
 
 pub mod validate;
+
