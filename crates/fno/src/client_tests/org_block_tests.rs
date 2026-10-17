@@ -33,7 +33,7 @@ fn the_org_block_shrinks_the_sideline_and_yields_when_too_short() {
     view.org.toggle();
     let expanded = view
         .org
-        .expanded_lines(&view.layout.agents, view.sideline_paint_w(), 40)
+        .expanded_lines(&view.layout.agents, view.sideline_paint_w() - 1, 40)
         .len();
     assert_eq!(view.org_block_rows(), expanded);
     assert_eq!(view.sideline_visible_rows(), full - expanded);
@@ -113,4 +113,25 @@ impl View {
         self.section_view
             .insert(SectionKey::Elsewhere, SectionView::Expanded);
     }
+}
+
+// `draw_sideline` paints at `panel_w - 1` (the divider column is not text). An
+// org line fitted to the full panel width lost its last character to that
+// clip: `team 0/3 live · 1 observed` painted as `· 1 observe`.
+#[test]
+fn org_lines_fit_the_width_the_sideline_paints_at() {
+    let view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    assert_eq!(view.org_text_w(), view.panel_w() as usize - 1);
 }
