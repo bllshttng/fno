@@ -337,6 +337,10 @@ code_index:
 |---|---|---|---|
 | the semantic validator exists | code | exists at scripts/validate-plan.sh:166 | `_semantic_validate` |
 
+## Design
+
+none: the validator only reads this plan; no type or owner moves
+
 ## Execution Strategy
 
 ```yaml
