@@ -601,7 +601,9 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // The cross-host relay claims @host and plain-name targets (a
             // leading flag in the target slot means a flag-led send, which
             // is the local verb's); every other send is the local verb's.
-            let target = args.get(3).and_then(OsString::to_str);
+            // The target is the tail's first word, which reads the same in
+            // the `mail send` and `agents mail send` spellings.
+            let target = tail.first().and_then(OsString::to_str);
             match target {
                 Some(target) if !target.starts_with('-') => {
                     if target.contains('@') || fno::remote_target::is_plain_name_target(target) {

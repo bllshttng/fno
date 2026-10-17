@@ -1420,6 +1420,12 @@ pub fn run(args: &[String]) -> i32 {
     if body_text.is_some() && message.is_none() {
         message = body_text.clone();
     }
+    if body_text.is_some() && args.message.is_some() {
+        eprintln!(
+            "error: provide the body once - as a positional argument, --body, or --body-file"
+        );
+        return 1;
+    }
     let mut name = args.name.clone();
 
     // --to-lead resolves the ROLE here and rides the ordinary name lane.
@@ -1744,11 +1750,12 @@ pub fn run(args: &[String]) -> i32 {
             return code;
         }
         if let Some(ruling) = args.ruling.as_deref() {
+            // The ruling is an annotation on top of the delivery, not a
+            // terminal lane: append, then fall through and send.
             match append_ruling(ruling, &body, None) {
                 Ok(()) => {}
                 Err(code) => return code,
             }
-            return 0;
         }
         if args.force {
             return run_name_lane_force(

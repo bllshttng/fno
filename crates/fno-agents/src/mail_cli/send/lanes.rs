@@ -1637,7 +1637,6 @@ pub(super) fn run_dispatch_then_name_lane(
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // The --force pane lane (cli.py _forced_pane_send twin)
 // ---------------------------------------------------------------------------
@@ -1710,9 +1709,7 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         .map(str::to_string);
     let pane_id = entry.pointer("/mux/pane_id").and_then(Value::as_i64);
     // Bus-only FIRST: a policy on the row, not an outcome of trying.
-    if crate::mail_hold::gate(recipient, Some(wrapped), chrono::Utc::now())
-        .deliver
-    {
+    if crate::mail_hold::gate(recipient, Some(wrapped), chrono::Utc::now()).deliver {
         // deliverable: fall through
     } else {
         release_budget(&reservation);
@@ -1785,11 +1782,8 @@ fn forced_pane_send(pane: ForcedPane) -> Result<NameLane, i32> {
         );
         return Err(1);
     }
-    if let Err(exc) = record_typed_delivery(
-        &record,
-        &pane_num.to_string(),
-        mux_session.as_deref(),
-    ) {
+    if let Err(exc) = record_typed_delivery(&record, &pane_num.to_string(), mux_session.as_deref())
+    {
         eprintln!(
             "typed; receipt row failed; the staged bus row holds the body; do not retry: {exc}"
         );

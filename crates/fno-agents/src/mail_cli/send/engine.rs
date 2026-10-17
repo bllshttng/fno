@@ -969,7 +969,11 @@ pub(super) fn queue_durable_fallback(
 /// Python `_stamp_after_delivery`: bump last_message_at (and status for a
 /// hosted send) after delivery. Best-effort: a failure here cannot make the
 /// send retryable, but it must stay visible on stderr.
-pub(super) fn stamp_after_delivery(name: &str, delivery: &str) {
+pub(super) fn stamp_after_delivery(name: &str, delivery: &str, expected_identity: &str) {
+    // The same verify-recipient-under-lock rule the queue path runs: an
+    // owner change between resolve and stamp must refuse the write rather
+    // than stamp a row that now names a different session.
+
     use std::io::Write as _;
     let registry = AgentsHome::shared_registry_json();
     let lock_dir = registry
@@ -991,9 +995,17 @@ pub(super) fn stamp_after_delivery(name: &str, delivery: &str) {
             .and_then(Value::as_array_mut)
             .ok_or("no agents array")?;
         let mut hit = false;
+        let mut identity_changed = false;
         for row in rows.iter_mut() {
             if str_field(row, "name") == name {
                 hit = true;
+                if recipient_identity(row) != expected_identity {
+                    identity_changed = true;
+                    eprintln!(
+                        "registry stamp failed after {delivery} delivery for {name:?}: recipient identity changed; delivery succeeded; do not retry"
+                    );
+                    continue;
+                }
                 if let Some(obj) = row.as_object_mut() {
                     obj.insert("last_message_at".to_string(), json!(utc_now_iso()));
                     if delivery == "hosted" {
@@ -1002,7 +1014,7 @@ pub(super) fn stamp_after_delivery(name: &str, delivery: &str) {
                 }
             }
         }
-        if !hit {
+        if !hit || identity_changed {
             return Ok(());
         }
         let rendered = doc.to_string();
@@ -1509,7 +1521,7 @@ pub(super) fn dispatch_send_locked(
     if let Some(notice) = demotion_notice {
         eprintln!("{notice}");
     }
-    stamp_after_delivery(name, &delivery);
+    stamp_after_delivery(name, &delivery, canonical_identity);
     Ok(DispatchSendResult {
         msg_id,
         delivery,
@@ -1678,7 +1690,7 @@ pub(super) fn dispatch_send_lock_timeout_locked(
         "agent_send_done",
         json!({"name": canonical_name, "provider": str_field(&timeout_entry, "harness"), "msg_id": msg_id, "delivery": "durable", "reason": queue_reason}),
     );
-    stamp_after_delivery(canonical_name, "durable");
+    stamp_after_delivery(canonical_name, "durable", canonical_identity);
     drop(grace_lock);
     if queue_reason == LOCK_TIMEOUT_REASON {
         eprintln!(
