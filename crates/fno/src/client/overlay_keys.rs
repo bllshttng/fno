@@ -158,7 +158,7 @@ pub(super) async fn route(
     if view.backlog_board.is_some()
         && (view.board_full || view.input_owner() == super::region_focus::RegionOwner::Board)
     {
-        // the experimental backlog board consumes keys while it OWNS the
+        // the backlog board consumes keys while it OWNS the
         // keyboard (open, or clicked); its inputs, pickers, and facets ride
         // inside it. A windowed board that lost the keyboard to a pane click
         // stays visible but takes nothing. Prefix chords still resolve first
