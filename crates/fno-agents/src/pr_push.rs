@@ -113,6 +113,16 @@ fn literalize(cwd: &Path, path: &str) -> String {
     }
 }
 
+/// The literalized path's door key, when it qualifies for `gh_etag`'s
+/// conditional-GET door - shared by [`gh_api`]'s single-page branch and
+/// [`gh_api_pages_conditional`], so a future change to what qualifies has
+/// one call site to update instead of two silently drifting apart.
+fn door_path(cwd: &Path, path: &str) -> Option<String> {
+    let literal = literalize(cwd, path);
+    let eligibility_args = ["api".to_string(), literal];
+    crate::gh_etag::eligible(&eligibility_args).map(str::to_string)
+}
+
 /// `gh api` against the current repo. `{owner}` unexpanded: gh resolves
 /// owner/repo from the checkout. `--allow-escape-sequences` with a retry
 /// without it covers an older gh, exactly as heal's twin did. A plain
@@ -127,10 +137,7 @@ pub(crate) fn gh_api(
     extra: &[&str],
 ) -> Result<String, String> {
     if extra.is_empty() {
-        let literal = literalize(cwd, path);
-        let eligibility_args = ["api".to_string(), literal];
-        if let Some(door_path) = crate::gh_etag::eligible(&eligibility_args) {
-            let door_path = door_path.to_string();
+        if let Some(door_path) = door_path(cwd, path) {
             let (ok, body, err) = crate::gh_etag::conditional_api_get(cwd, &door_path, |args| {
                 let (ok, out, err) = run_labeled("pr-push", gh_bin, args, cwd, READ_TIMEOUT)?;
                 Ok((ok, out.into_bytes(), err))
@@ -181,12 +188,9 @@ pub(crate) fn gh_api_pages_conditional(
     cwd: &Path,
     path: &str,
 ) -> Result<Vec<Value>, String> {
-    let literal = literalize(cwd, path);
-    let eligibility_args = ["api".to_string(), literal];
-    let Some(door_path) = crate::gh_etag::eligible(&eligibility_args) else {
+    let Some(door_path) = door_path(cwd, path) else {
         return gh_api_pages(gh_bin, cwd, path);
     };
-    let door_path = door_path.to_string();
     let fetch_all = || -> Result<String, String> {
         let pages = gh_api_pages(gh_bin, cwd, path)?;
         serde_json::to_string(&Value::Array(pages))

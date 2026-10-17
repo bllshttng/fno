@@ -6,7 +6,7 @@
 //! A missing, corrupt, or stale row is a miss, never an error: the plain
 //! network read stays the truth (the gh_cache.rs rule).
 
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -166,8 +166,39 @@ fn plain_get(
     path: &str,
     spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
 ) -> Result<(bool, String, String), String> {
-    let (ok, stdout, stderr) = spawn(&["api", path])?;
+    let (ok, stdout, stderr) = spawn_unescaped(&["api", path], &spawn)?;
     Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
+}
+
+/// Spawn `args` with `--allow-escape-sequences` inserted after `api`, so a
+/// response body carrying a literal escape sequence (an annotation message
+/// that embeds a CI tool's ANSI color codes, say) is not silently altered
+/// by gh's default sanitization before it is cached - a corrupted body
+/// cached once replays for the row's whole TTL. Retries once without the
+/// flag on an older `gh` that does not know it, exactly as
+/// `pr_push::gh_api`'s own unconditional path already falls back.
+fn spawn_unescaped(
+    args: &[&str],
+    spawn: &impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
+) -> Result<(bool, Vec<u8>, String), String> {
+    let mut with_flag: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    with_flag.push(args[0]);
+    with_flag.push("--allow-escape-sequences");
+    with_flag.extend_from_slice(&args[1..]);
+    let (ok, out, err) = spawn(&with_flag)?;
+    if !ok && err.to_lowercase().contains("unknown flag") {
+        return spawn(args);
+    }
+    Ok((ok, out, err))
+}
+
+/// True when GitHub's response named a further page
+/// (`Link: <...>; rel="next"`). Page 1 alone answers the whole resource
+/// only when this is false.
+fn has_next_link(headers: &str) -> bool {
+    header_value(headers, "link")
+        .map(|v| v.contains("rel=\"next\""))
+        .unwrap_or(false)
 }
 
 /// The door with the row store and the 304 counter pinned, so tests point
@@ -190,7 +221,7 @@ pub(crate) fn conditional_api_get_at(
         args.push("-H");
         args.push(&cond);
     }
-    let (ok, stdout_bytes, stderr) = spawn(&args)?;
+    let (ok, stdout_bytes, stderr) = spawn_unescaped(&args, &spawn)?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let Some((status, headers, body)) = split_http(&stdout) else {
         return Ok((ok, stdout, stderr));
@@ -225,10 +256,15 @@ pub(crate) fn conditional_api_get_at(
 /// multi-page read (check-runs, annotations, an open-pulls listing): the
 /// probe conditions on page 1's ETag, and a 304 there means the WHOLE
 /// assembly is unchanged (GitHub mints a fresh ETag whenever the
-/// underlying collection changes at all), so the row caches `fetch_all`'s
-/// full assembled body, not just page 1's. A non-304 answer re-runs
-/// `fetch_all` (the caller's real paginated fetch) and re-caches its
-/// result under the fresh ETag; `fetch_all` never runs on a 304.
+/// underlying collection changes at all), so the row caches the full
+/// assembled body, not just page 1's. A non-304 answer that still names no
+/// further page answers from the probe's own page-1 body - the common
+/// case for check-runs/annotations/open-pulls, which almost never exceed
+/// one page - so a resource that changes on nearly every poll never costs
+/// more than the single unconditional call this replaces. Only a genuinely
+/// multi-page answer pays `fetch_all` (the caller's real paginated fetch),
+/// which is re-cached under the fresh ETag; `fetch_all` never runs on a
+/// 304.
 pub(crate) fn conditional_paginated_get(
     cwd: &Path,
     path: &str,
@@ -258,9 +294,9 @@ pub(crate) fn conditional_paginated_get_at(
         args.push("-H");
         args.push(&cond);
     }
-    let (ok, stdout_bytes, stderr) = spawn(&args)?;
+    let (ok, stdout_bytes, stderr) = spawn_unescaped(&args, &spawn)?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    let Some((status, headers, _probe_body)) = split_http(&stdout) else {
+    let Some((status, headers, probe_body)) = split_http(&stdout) else {
         // An unparseable probe answers nothing about change; the real
         // fetch_all is the only thing that can still answer truthfully.
         return Ok((ok, fetch_all()?, stderr));
@@ -280,7 +316,18 @@ pub(crate) fn conditional_paginated_get_at(
         // never caches and never pays a second read to confirm it.
         return Ok((false, String::new(), stderr));
     }
-    let body = fetch_all()?;
+    let body = if has_next_link(&headers) {
+        fetch_all()?
+    } else {
+        match serde_json::from_str::<Value>(&probe_body) {
+            Ok(page1) => serde_json::to_string(&Value::Array(vec![page1]))
+                .map_err(|e| format!("gh api {path} page unserializable: {e}"))?,
+            // An unparseable 200 body is the same shape as a truncated
+            // transfer the `!ok` check above did not catch; fetch_all is
+            // the only thing left that can still answer truthfully.
+            Err(_) => fetch_all()?,
+        }
+    };
     if let Some(etag) = header_value(&headers, "etag") {
         write_row_at(root, path, &etag, &body);
     }
@@ -460,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn paginated_200_refetches_everything_and_recaches_under_the_fresh_etag() {
+    fn paginated_200_with_no_next_link_answers_from_page_1_alone_and_never_calls_fetch_all() {
         let root = tempfile::tempdir().unwrap();
         write_row_at(
             root.path(),
@@ -470,7 +517,41 @@ mod tests {
         );
         let counter = AtomicUsize::new(0);
         let spawn = spawn_of(
-            "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\n\r\n{\"check_runs\":[]}",
+            "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\n\r\n{\"check_runs\":[{\"a\":2}]}",
+            true,
+        );
+        let fetch_all =
+            || -> Result<String, String> { panic!("fetch_all must not run with no next link") };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"check_runs\":[{\"a\":2}]}]");
+        let now = crate::gh_cache::now_secs();
+        let row = read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now)
+            .expect("row recached");
+        assert_eq!(row.etag, "W/\"new\"");
+        assert_eq!(row.body, "[{\"check_runs\":[{\"a\":2}]}]");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn paginated_200_with_a_next_link_refetches_everything_and_recaches_under_the_fresh_etag() {
+        let root = tempfile::tempdir().unwrap();
+        write_row_at(
+            root.path(),
+            "repos/o/r/commits/sha/check-runs",
+            "W/\"old\"",
+            "[{\"a\":1}]",
+        );
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of(
+            "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\nLink: <https://api.github.com/x?page=2>; rel=\"next\"\r\n\r\n{\"check_runs\":[]}",
             true,
         );
         let fetch_all =
