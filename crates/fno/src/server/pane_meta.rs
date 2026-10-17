@@ -129,20 +129,33 @@ pub(crate) fn pane_registry_name(
     pane_id: u64,
     pane_pid: Option<u32>,
 ) -> Option<String> {
-    let hosts = |a: &&crate::agents_view::RegistryAgent| {
+    hosts_pane(agents, session_name, pane_id, pane_pid)
+        // A recycled pane id can leave an exited row on the same
+        // (session, pane); the live row is the one still hosting the pane.
+        .find(|a| !a.exited)
+        .or_else(|| hosts_pane(agents, session_name, pane_id, pane_pid).next())
+        .map(|a| a.name.clone())
+}
+
+/// The rows eligible to answer for one pane: the (session, pane) pair, and
+/// - when both the pane's child pid and the row's recorded pid are known -
+/// an equality check between them. A recycled pane id reuses the pair
+/// across server incarnations, so a pid mismatch is a dead row wearing the
+/// pair. A row that records no pid (legacy) cannot be falsified, and a
+/// caller that cannot know the child (`None`) keeps the unguarded read.
+fn hosts_pane<'a>(
+    agents: &'a [RegistryAgent],
+    session_name: &str,
+    pane_id: u64,
+    pane_pid: Option<u32>,
+) -> impl Iterator<Item = &'a RegistryAgent> + 'a {
+    agents.iter().filter(move |a| {
         matches!(&a.mux, Some((s, p)) if s == session_name && *p == pane_id)
             && match (pane_pid, a.pid) {
                 (Some(child), Some(row_pid)) => u64::from(child) == row_pid,
                 _ => true,
             }
-    };
-    // A recycled pane id can leave an exited row on the same (session, pane);
-    // the live row is the one still hosting the pane.
-    agents
-        .iter()
-        .find(|a| hosts(a) && !a.exited)
-        .or_else(|| agents.iter().find(hosts))
-        .map(|a| a.name.clone())
+    })
 }
 
 /// One tab's `TabMeta` for the client `Layout` (moved out of server.rs under
@@ -223,15 +236,8 @@ pub(crate) fn pane_ctx(
     pane_id: u64,
     pane_pid: Option<u32>,
 ) -> Option<String> {
-    agents
-        .iter()
-        .find(|a| {
-            matches!(&a.mux, Some((s, p)) if s == session_name && *p == pane_id)
-                && match (pane_pid, a.pid) {
-                    (Some(child), Some(row_pid)) => u64::from(child) == row_pid,
-                    _ => true,
-                }
-        })
+    hosts_pane(agents, session_name, pane_id, pane_pid)
+        .next()
         .and_then(|a| {
             a.claude_session_uuid
                 .clone()
