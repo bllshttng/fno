@@ -1353,13 +1353,15 @@ fn apply_mutators(
     let replace_tokens = parse_list(&args.related);
     // Keyed on the raw slot, not the parsed tokens: `--related ' '` parsed
     // to an empty list and cleared the field before the operators landed,
-    // and that legacy shape stays byte-identical here.
+    // and that legacy shape stays byte-identical here. The stored-list arm
+    // keys on the same raw slot, so an empty parse from a PRESENT replace
+    // token still clears; only a genuinely absent replace reads the row.
     let has_related_edit =
         !args.related.is_empty() || !args.related_add.is_empty() || !args.related_remove.is_empty();
     if has_related_edit {
         let mut desired: Vec<String> = if replace_tokens.len() == 1 && replace_tokens[0] == "null" {
             Vec::new()
-        } else if replace_tokens.is_empty() {
+        } else if args.related.is_empty() {
             rows[idx]
                 .get("related")
                 .and_then(Value::as_array)
@@ -1939,6 +1941,10 @@ fn apply_mutators(
                 );
             }
             let mut current: Vec<String> = match &args.tags_replace {
+                // The help's "('null' clears)" holds on = for every field it
+                // can store: a lone null replace token empties the list, the
+                // same shape --related null clears.
+                Some(replace) if replace.len() == 1 && replace[0] == "null" => Vec::new(),
                 Some(replace) => {
                     let mut replaced = Vec::new();
                     for t in replace {
@@ -2291,7 +2297,8 @@ fn repaint(graph: &Path, args: &UpdateArgs, node_id: &str, old_parent: Option<&s
     let has_blocker_edit = args.blocked_by.is_some()
         || !args.add_blocker.is_empty()
         || !args.remove_blocker.is_empty();
-    let has_tag_edit = !args.tag.is_empty() || !args.untag.is_empty();
+    let has_tag_edit =
+        !args.tag.is_empty() || !args.untag.is_empty() || args.tags_replace.is_some();
     let mirror_triggers = args.locked_by.is_some()
         || args.priority.is_some()
         || args.project.is_some()
