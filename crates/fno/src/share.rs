@@ -16,8 +16,10 @@
 //!   the driver to type `y <n>`. It then goes as mail from `observer:<name>`,
 //!   so the driver's agent processes it on the driver's account.
 //!
-//! No viewer byte reaches a pty: watch and coach never touch the mux socket,
-//! and steer reaches the agent only through the mail verb after consent.
+//! No viewer byte reaches a pty: watch and coach carry nothing from a viewer to
+//! the mux socket, and steer reaches the agent only through the mail verb after
+//! consent. Each admitted viewer also holds a presence-only attach whose one
+//! message is the viewer's cleaned name, so the mux can show who watches.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, IsTerminal, Write};
@@ -37,8 +39,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::mux_cli::control_roundtrip;
-use crate::proto::{self, ControlVerb, PaneInfo, ServerMsg};
+use crate::proto::{self, ControlVerb, ObserverHello, ObserverVia, PaneInfo, ServerMsg};
 use crate::server::agent_actions::{run_mail_send, sanitize_mail_text};
+use crate::server::observers::clean_label;
 use crate::{redact, web};
 
 /// Default share port: `serve --web` holds 8722 and its attention listener 8724.
@@ -49,8 +52,6 @@ const HISTORY_LINES: u16 = 500;
 const KNOCK_WINDOW: Duration = Duration::from_secs(30);
 /// Knocks that may wait for the driver at once.
 const MAX_WAITING: usize = 3;
-/// Longest display name, after filtering.
-const MAX_NAME: usize = 40;
 /// A wrong-link knock prints at most once per this gap, so a scan cannot
 /// flood the driver's panel.
 const REFUSAL_PRINT_GAP: Duration = Duration::from_secs(10);
@@ -111,17 +112,6 @@ pub(crate) fn pane_still_shared(panes: &[PaneInfo], pane: u64, identity: &str) -
 fn history_above_grid(text: &str, rows: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[..lines.len().saturating_sub(rows)].join("\n")
-}
-
-/// A display name reduced to `[A-Za-z0-9 ._-]`, trimmed, at most 40 chars.
-/// It is a label the driver reads, never an identity.
-fn clean_name(name: &str) -> String {
-    let kept: String = name
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'))
-        .take(MAX_NAME)
-        .collect();
-    kept.trim().to_string()
 }
 
 fn share_line(body: Value) -> String {
@@ -243,7 +233,7 @@ impl Viewers {
             }
             return (Knock::Refused("invalid link"), effects);
         }
-        let name = clean_name(name);
+        let name = clean_label(name);
         if name.is_empty() {
             return (Knock::Refused("a display name is needed"), Vec::new());
         }
@@ -542,6 +532,28 @@ async fn admit_flow(ctx: Ctx, out: mpsc::UnboundedSender<Out>) {
     let _ = out.send(Out::Live);
 }
 
+/// The tag one admitted viewer's presence ticket sends: no frames, only the
+/// viewer's name on the shared pane.
+fn presence_hello(name: String, pane: u64) -> ObserverHello {
+    ObserverHello {
+        name,
+        pane,
+        via: ObserverVia::Share,
+        frames: false,
+    }
+}
+
+/// One presence-only attach per admitted viewer. The server lists the viewer
+/// on the shared pane (border count, sideline) for as long as this task holds
+/// the socket, and `ws_conn` aborts it when the viewer goes. A ticket the
+/// server refuses costs the viewer nothing but the badge.
+async fn presence_ticket(ctx: Ctx, name: String) {
+    match web::connect_attach(&ctx.socket, Some(presence_hello(name, ctx.pane))).await {
+        Ok((mut reader, _)) => while proto::read_msg::<_, ServerMsg>(&mut reader).await.is_ok() {},
+        Err(e) => println!("this viewer will not show on the mux: {e}"),
+    }
+}
+
 /// An approved steer: resolve the pane's agent and mail it from the viewer.
 async fn steer_flow(
     ctx: Ctx,
@@ -607,7 +619,7 @@ async fn upstream(
     let mut ready = Some(ready);
     let mut backoff = web::Backoff::new();
     loop {
-        match web::connect_attach(&ctx.socket).await {
+        match web::connect_attach(&ctx.socket, None).await {
             Ok((mut reader, preamble)) => {
                 let started = Instant::now();
                 match list_panes_async(&ctx).await {
@@ -774,6 +786,7 @@ async fn ws_conn(mut socket: WebSocket, ctx: Ctx) {
     // A waiting socket never subscribes to the frame broadcast: it gets the
     // live stream only after `Out::Live`, which only admission sends.
     let mut live: Option<broadcast::Receiver<String>> = None;
+    let mut ticket: Option<tokio::task::JoinHandle<()>> = None;
     loop {
         tokio::select! {
             out = out_rx.recv() => match out {
@@ -786,6 +799,9 @@ async fn ws_conn(mut socket: WebSocket, ctx: Ctx) {
                     // Subscribe before reading the snapshot, so no frame falls
                     // in the gap between them.
                     live = Some(ctx.tx.subscribe());
+                    ticket.get_or_insert_with(|| {
+                        tokio::spawn(presence_ticket(ctx.clone(), name.clone()))
+                    });
                     let preamble = {
                         let s = ctx.snap.lock().unwrap();
                         let mut p = vec![web::bridge_status(if s.up { "connected" } else { "disconnected" })];
@@ -817,6 +833,9 @@ async fn ws_conn(mut socket: WebSocket, ctx: Ctx) {
                 Some(Ok(_)) => {}
             },
         }
+    }
+    if let Some(ticket) = ticket {
+        ticket.abort();
     }
     // A connection the hub still holds ended on the viewer's side. One the hub
     // already dropped was closed by the driver (deny) or by the share ending,
@@ -1386,5 +1405,14 @@ mod tests {
         let reply = ask("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".into()).await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         server.abort();
+    }
+
+    #[test]
+    fn a_presence_ticket_names_the_viewer_on_the_shared_pane_and_wants_no_frames() {
+        let hello = presence_hello("amy".into(), 4);
+        assert_eq!(
+            (hello.name.as_str(), hello.pane, hello.via, hello.frames),
+            ("amy", 4, ObserverVia::Share, false)
+        );
     }
 }
