@@ -113,7 +113,7 @@ pub fn run(args: &[String]) -> i32 {
                 }
             }
             "--apply" => parsed.apply = true,
-            "--json" => parsed.json = true,
+            a if crate::json_output::is_flag(a) => parsed.json = true,
             other => {
                 eprintln!("requests: unknown argument {other}; see --help");
                 return 2;
