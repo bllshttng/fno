@@ -420,11 +420,15 @@ pub(crate) fn bounded_read(
     }
     let out = bounded_read_unadmitted(bin, args, cwd, read_name, timeout)?;
     // With the transport stood down for a consulting child, the child is
-    // where a budget refusal surfaces: exit 75 with the ledger's `gh
-    // budget:` line on stderr, the same shape the transport's own refusal
-    // produced, so map it to the same kind and the outcome word and
-    // waited_on() read unchanged.
-    if out.status.code() == Some(75) && out.stderr_tail.contains("gh budget:") {
+    // where a budget refusal surfaces. The transport's own refusal exits 75;
+    // a child that refused on a caller's behalf can surface at its own exit
+    // code instead (the conditional-door path exits 1 with the same ledger
+    // line). Only footnote machinery prints `gh budget:`, so the marker on
+    // a nonzero exit is the contract, and the outcome word and waited_on()
+    // read unchanged.
+    if matches!(out.status.code(), Some(code) if code != 0)
+        && out.stderr_tail.contains("gh budget:")
+    {
         return Err(GhReadError::budget_refused_with_detail(
             read_name,
             out.stderr_tail,

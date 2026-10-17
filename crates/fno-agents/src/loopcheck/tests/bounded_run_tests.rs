@@ -364,20 +364,27 @@ fn probe_reports_spawn_trouble_for_a_busy_text_file() {
 
 #[test]
 fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
-    // A stood-down transport lets the consulting child refuse: exit 75 with
-    // the ledger's `gh budget:` line on stderr. bounded_read maps that to
-    // the same BudgetRefused kind the transport's own refusal produced, so
-    // the outcome word and waited_on() classify unchanged. The in-process
-    // consult is disarmed under cfg(test), so no ledger is touched.
+    // A stood-down transport lets the consulting child refuse. The
+    // transport's own refusal exits 75; a child refusing on a caller's
+    // behalf can surface at its own exit code too (the conditional-door
+    // path exits 1). Only footnote machinery prints `gh budget:`, so the
+    // marker on a nonzero exit maps to the same BudgetRefused kind the
+    // transport's own refusal produced. The in-process consult is disarmed
+    // under cfg(test), so no ledger is touched.
     let tmp = tempfile::tempdir().expect("tempdir");
-    let adapter = write_exec(
-        tmp.path(),
-        "fno-gh-loopcheck",
-        "#!/bin/sh\necho 'gh budget: fleet GitHub rate limit held locally' 1>&2\nexit 75\n",
-    );
     let cwd = std::env::temp_dir();
-    let err = bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
-        .expect_err("a child budget refusal is a BudgetRefused");
-    assert_eq!(err.outcome(), "budget_refused");
-    assert_eq!(err.waited_on(), "budget_lock");
+    for code in [75, 1] {
+        let adapter = write_exec(
+            tmp.path(),
+            "fno-gh-loopcheck",
+            format!(
+                "#!/bin/sh\necho 'gh budget: fleet GitHub rate limit held locally' 1>&2\nexit {code}\n"
+            )
+            .as_str(),
+        );
+        let err = bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
+            .expect_err("a child budget refusal is a BudgetRefused");
+        assert_eq!(err.outcome(), "budget_refused");
+        assert_eq!(err.waited_on(), "budget_lock");
+    }
 }
