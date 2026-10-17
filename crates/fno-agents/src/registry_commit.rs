@@ -312,7 +312,10 @@ mod tests {
             payload["agents"].as_array().unwrap(),
         )
         .unwrap();
-        assert_eq!(merged["schema_version"], 42);
+        assert_eq!(
+            merged["schema_version"],
+            u64::from(crate::state::REGISTRY_SCHEMA_VERSION)
+        );
         assert_eq!(merged["future_top"], "preserved");
         assert_eq!(merged["agents"][0]["future_row"], "preserved");
         assert_eq!(merged["agents"][0]["status"], "idle");
