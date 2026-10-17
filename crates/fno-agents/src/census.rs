@@ -365,6 +365,40 @@ pub(crate) fn process_argv(pid: u32) -> Option<Vec<String>> {
     argv_of(pid)
 }
 
+/// The parent pid of `pid`, for the spend journal's caller walk: the same
+/// `PROC_PIDTBSDINFO` read the table scan makes, one pid at a time.
+#[cfg(target_os = "macos")]
+pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
+    let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut bsd as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    (written == size).then_some(bsd.pbi_ppid)
+}
+
+/// The `ps` leg: the ppid column of the same one-pid probe.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
 /// The `ps` leg. It splits on whitespace, so an argument that CONTAINS a
 /// space comes back as two. Every flag the conversion carries takes a
 /// space-free value, and the caller drops what it does not recognise.

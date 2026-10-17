@@ -2247,6 +2247,16 @@ pub(crate) fn decide_with_payload(
                     let _ =
                         crate::gh_budget::record_refusal(&budget_ledger, now.timestamp_millis());
                 }
+                // A core-0 probe on a failed non-GraphQL read is the same
+                // exhaustion the classify probe sees: record it so the
+                // ledger refuses in process until the real reset instead
+                // of every fire re-attempting the refused read.
+                if !is_graphql_read && quota.as_ref().and_then(|q| q.core_remaining) == Some(0) {
+                    crate::gh_budget::record_core_observation(
+                        0,
+                        quota.as_ref().and_then(|q| q.core_reset_epoch).unwrap_or(0),
+                    );
+                }
                 emit(
                     "loop_check_gh_error",
                     serde_json::json!({

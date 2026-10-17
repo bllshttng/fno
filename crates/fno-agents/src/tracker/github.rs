@@ -49,6 +49,16 @@ impl GhRun for RealGh {
     }
 }
 
+/// One approved board request read for the owner-run import. The issue's
+/// labels are read only for the both-labels check inside `list_labeled` and
+/// never reach a row.
+pub struct RequestIssue {
+    pub number: i64,
+    pub title: String,
+    pub body: String,
+    pub login: String,
+}
+
 /// `owner/repo#N`.
 pub fn parse_github_id(id: &str) -> Result<(String, String, i64), TrackerError> {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -125,6 +135,115 @@ impl GitHubTracker {
         self.gh
             .run(&args)
             .map_err(|e| TrackerError::Backend(format!("gh failed for {label}: {e}")))
+    }
+
+    /// Open issues carrying both the request label and the approval label.
+    /// Not a `Tracker` method: Linear and the graph have no such read. The
+    /// `--label` filters only narrow what `gh` returns; the Rust-side
+    /// both-labels check below is the authority, because GitHub label names
+    /// ignore case and how `gh` combines two filters is not relied on here.
+    pub fn list_labeled(
+        &self,
+        repo: &str,
+        request_label: &str,
+        approved_label: &str,
+        limit: u32,
+    ) -> Result<Vec<RequestIssue>, TrackerError> {
+        static REPO_RE: OnceLock<regex::Regex> = OnceLock::new();
+        let repo_re = REPO_RE
+            .get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$").unwrap());
+        if !repo_re.is_match(repo) {
+            return Err(TrackerError::Backend(format!(
+                "not a GitHub repo: {repo:?} (expected owner/repo)"
+            )));
+        }
+        static LABEL_RE: OnceLock<regex::Regex> = OnceLock::new();
+        let label_re =
+            LABEL_RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._ -]{1,50}$").unwrap());
+        for label in [request_label, approved_label] {
+            if !label_re.is_match(label) {
+                return Err(TrackerError::Backend(format!(
+                    "not a usable label: {label:?} (expected 1-50 letters, digits, dots, underscores, spaces or dashes)"
+                )));
+            }
+        }
+        if request_label.eq_ignore_ascii_case(approved_label) {
+            return Err(TrackerError::Backend(format!(
+                "the approval label equals the request label ({request_label}); a visitor could approve their own issue"
+            )));
+        }
+        let (rc, out, err) = self.run_gh(
+            vec![
+                "issue".into(),
+                "list".into(),
+                "-R".into(),
+                repo.to_string(),
+                "--state".into(),
+                "open".into(),
+                "--label".into(),
+                request_label.to_string(),
+                "--label".into(),
+                approved_label.to_string(),
+                "--json".into(),
+                "number,title,body,author,labels".into(),
+                "--limit".into(),
+                limit.to_string(),
+            ],
+            repo,
+        )?;
+        if rc != 0 {
+            return Err(TrackerError::Backend(format!(
+                "gh issue list failed for {repo}: {}",
+                err.trim()
+            )));
+        }
+        let data = loads(&out, repo)?;
+        let items = match data {
+            Value::Array(items) => items,
+            _ => Vec::new(),
+        };
+        Ok(items
+            .iter()
+            .filter_map(|it| {
+                let number = it.get("number").and_then(Value::as_i64)?;
+                if number < 1 {
+                    return None;
+                }
+                let names: Vec<String> = it
+                    .get("labels")
+                    .and_then(Value::as_array)
+                    .map(|ls| {
+                        ls.iter()
+                            .filter_map(|l| l.get("name").and_then(Value::as_str))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let carries = |label: &str| names.iter().any(|n| n.eq_ignore_ascii_case(label));
+                if !carries(request_label) || !carries(approved_label) {
+                    return None;
+                }
+                Some(RequestIssue {
+                    number,
+                    title: it
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    body: it
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    login: it
+                        .get("author")
+                        .and_then(|a| a.get("login"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            })
+            .collect())
     }
 }
 

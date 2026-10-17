@@ -87,6 +87,42 @@ pub struct Request {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PublicRequest {
     pub project: String,
+    /// The board-request links the page renders when the publisher opted
+    /// in: the GitHub repo the prefilled issues file against, and the
+    /// request label the issue form applies. The approval label is never
+    /// carried here: the page never names it.
+    #[serde(default)]
+    pub requests: Option<PublicRequests>,
+}
+
+/// The board-request links block, validated before any page renders.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PublicRequests {
+    pub repo: String,
+    pub label: String,
+}
+
+impl PublicRequests {
+    fn validated(self) -> Result<Self, String> {
+        static REPO: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let repo_re =
+            REPO.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$").unwrap());
+        static LABEL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let label_re = LABEL.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9._ -]{1,50}$").unwrap());
+        if !repo_re.is_match(&self.repo) {
+            return Err(format!(
+                "requests.repo {:?} is not an owner/repo pair; the render refused",
+                self.repo
+            ));
+        }
+        if !label_re.is_match(&self.label) {
+            return Err(format!(
+                "requests.label {:?} is not a usable label; the render refused",
+                self.label
+            ));
+        }
+        Ok(self)
+    }
 }
 
 /// The receipt: one row per target under `written` or `failed`, so the
@@ -150,6 +186,12 @@ fn render_request_within(request: &Request, deadline: Duration) -> Result<Receip
         }
     };
     let public = request.public.is_some();
+    // The board-request links validate before any page renders, so a bad
+    // repo or label fails the run and writes nothing.
+    let requests = match request.public.as_ref().and_then(|p| p.requests.as_ref()) {
+        Some(r) => Some(r.clone().validated()?),
+        None => None,
+    };
     let mut inputs = match &request.public {
         Some(spec) => inputs_from_rows(&select_public_rows(&gathered.rows, &spec.project)?),
         None => gathered,
@@ -170,7 +212,14 @@ fn render_request_within(request: &Request, deadline: Duration) -> Result<Receip
             .scope
             .as_deref()
             .filter(|s| !s.is_empty() && *s != "all");
-        match render_one(&inputs, scope, request.vault.as_deref(), leads_at, public) {
+        match render_one(
+            &inputs,
+            scope,
+            request.vault.as_deref(),
+            leads_at,
+            public,
+            requests.as_ref(),
+        ) {
             Ok((page, cards)) => match atomic_write(Path::new(&target.path), &page) {
                 Ok(()) => receipt
                     .written
@@ -212,6 +261,7 @@ fn render_one(
     vault: Option<&str>,
     leads_at: Option<u64>,
     public: bool,
+    requests: Option<&PublicRequests>,
 ) -> Result<(String, usize), String> {
     if let Some(err) = &inputs.rows_error {
         return Err(err.clone());
@@ -297,6 +347,12 @@ fn render_one(
             .any(|e| e.contains("names unavailable")),
         "leads_at": leads_at,
     });
+    if let Some(reqs) = requests {
+        payload["requests"] = json!({
+            "repo": reqs.repo,
+            "label": reqs.label,
+        });
+    }
     if public {
         payload = to_public_payload(payload);
     }
@@ -334,6 +390,7 @@ fn agents_from_registry(raw: &str, now: u64) -> Vec<crate::proto::AgentRow> {
 /// bytes).
 const PUBLIC_PAYLOAD_FIELDS: &[&str] = &[
     "schema", "public", "backend", "scope", "flow", "facets", "columns", "cards", "nodes",
+    "requests",
 ];
 
 /// The card fields the public page may carry: the board facts only. `lead`
@@ -358,6 +415,7 @@ const PUBLIC_CARD_FIELDS: &[&str] = &[
     "completed_at",
     "encounters",
     "encounters_operator",
+    "encounters_external",
 ];
 
 /// The node view's fields the public page may carry. plan_path, cwd,
@@ -524,6 +582,13 @@ fn select_public_rows(rows: &[Value], project: &str) -> Result<Vec<Value>, Strin
         .filter(|r| r.get("public").and_then(Value::as_bool) != Some(false))
         .filter(|r| project_key(r) == project)
         .filter(|r| in_public_backlog_set(r))
+        // The quarantine default-deny: an imported request row publishes
+        // only when the owner flipped it public. projections.rs is_public_in
+        // holds the fno-agents twin of this rule.
+        .filter(|r| {
+            r.get("source_kind").and_then(Value::as_str) != Some("external_request")
+                || r.get("public").and_then(Value::as_bool) == Some(true)
+        })
         .collect();
     let mut out = Vec::new();
     let mut omitted = 0usize;
@@ -811,7 +876,7 @@ mod tests {
             read_at: 1790856000,
             ..Default::default()
         };
-        let (page, count) = render_one(&inputs, None, None, None, false).unwrap();
+        let (page, count) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert_eq!(count, 2);
         let marker = "id=\"fno-snapshot\">";
         let start = page.find(marker).unwrap() + marker.len();
@@ -953,20 +1018,26 @@ mod tests {
             json!({"id": "x-6", "title": "Stale open", "slug": "so",
                    "status": "in_progress", "project": "fno",
                    "superseded_by": "x-1", "completed_at": "2026-01-01"}),
+            json!({"id": "x-ext-null", "title": "Visitor request", "slug": "vr",
+                   "status": "ready", "project": "fno", "type": "feature",
+                   "source_kind": "external_request"}),
+            json!({"id": "x-ext-pub", "title": "Visitor request published", "slug": "vrp",
+                   "status": "ready", "project": "fno", "type": "feature",
+                   "source_kind": "external_request", "public": true}),
         ];
         let selected = select_public_rows(&rows, "fno").unwrap();
         let ids: Vec<&str> = selected.iter().map(|r| r["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, vec!["x-1"]);
+        assert_eq!(ids, vec!["x-1", "x-ext-pub"]);
 
         let inputs = inputs_from_rows(&selected);
-        let (private, _) = render_one(&inputs, None, None, None, false).unwrap();
+        let (private, _) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert!(
             private
                 .contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak --cross-project"),
             "the private page carries the recovery command"
         );
-        let (page, count) = render_one(&inputs, None, None, None, true).unwrap();
-        assert_eq!(count, 1);
+        let (page, count) = render_one(&inputs, None, None, None, true, None).unwrap();
+        assert_eq!(count, 2, "the published external row renders beside x-1");
         assert!(page.contains("Public thing"), "{page}");
         for secret in [
             "/Users/someone/secret",
@@ -1018,6 +1089,32 @@ mod tests {
         // A link to a non-public id drops.
         let view = &payload["nodes"]["x-1"];
         assert_eq!(view["blocked_by"].as_array().map(Vec::len), Some(0));
+
+        // The board-request links ride only when the render asked for them.
+        assert!(
+            payload.get("requests").is_none(),
+            "no --requests, no requests block"
+        );
+        let (page_with_requests, _) = render_one(
+            &inputs,
+            None,
+            None,
+            None,
+            true,
+            Some(&PublicRequests {
+                repo: "o/r".to_string(),
+                label: "fno-request".to_string(),
+            }),
+        )
+        .unwrap();
+        assert!(
+            page_with_requests.contains(r#""requests":{"repo":"o/r""#),
+            "the asked-for block lands in the payload: {}",
+            &page_with_requests[page_with_requests
+                .find(r#""requests""#)
+                .unwrap_or(0)
+                .min(page_with_requests.len() - 1)..]
+        );
 
         // The typo'd-project refusal: nothing public means nothing rendered.
         assert!(select_public_rows(&rows, "nope").is_err());

@@ -27,6 +27,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
         ],
         ..Default::default()
     };
+    view.experimental_org_board = true;
     open(view);
     let gen = view.org_generation;
     apply_fold(
@@ -205,6 +206,7 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     view.board_full = saved_full;
     let generation = view.org_generation;
     view.org_board = None;
+    view.experimental_org_board = true;
     open(view);
     assert!(view.org_generation > generation);
     let mut stale = crate::org_model::OrgInputs {
@@ -277,6 +279,7 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
         ],
         ..Default::default()
     };
+    view.experimental_org_board = true;
     open(&mut view);
     let gen = view.org_generation;
     apply_fold(
@@ -455,6 +458,7 @@ fn graph_renders_a_layered_flowchart() {
         );
         owned.insert(format!("x-{}", i + 1), json!(format!("t{i}")));
     }
+    view2.experimental_org_board = true;
     open(&mut view2);
     let gen = view2.org_generation;
     apply_fold(
@@ -541,6 +545,7 @@ fn org_board_for_graph() -> View {
         ..Default::default()
     };
 
+    view.experimental_org_board = true;
     open(&mut view);
     let gen = view.org_generation;
     apply_fold(

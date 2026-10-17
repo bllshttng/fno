@@ -444,6 +444,25 @@ mod probe {
             }
         }
 
+        // The machine admission door, the SAME call the gate makes one door
+        // after the incident stop. Without it a lead's saturation read sees
+        // `accepted` while every spawn is refused on the runaway brake.
+        if let Err(refusal) = crate::spawn_gate_admission::process_admission_gate() {
+            let detail = refusal
+                .event
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("machine runaway brake holds")
+                .to_string();
+            return refuse_with(
+                "machine-runaway",
+                detail.clone(),
+                json!({"detail": detail}),
+                &[],
+                out,
+            );
+        }
+
         // The route axis of the quota wall: the SAME call the gate makes, so
         // the probe and the gate cannot disagree about what refuses (the gate
         // runs it ahead of every machine axis).
@@ -561,14 +580,47 @@ mod probe {
             // user's max_live refuses here; the learned cap waits for the
             // machine gates below, and yields when they read room.
             if slots >= learned.ceiling {
-                let top = crate::spawn_gate_slots::at_ceiling(&learned);
-                return refuse_with(
-                    "max_live",
-                    format!("{slots} live worker slots >= {}", top.clause()),
-                    json!({"count": slots, "max_live": top.cap}),
-                    &[fleet_row(slots, top.cap, yours)],
-                    out,
+                // The burst may still apply past the ceiling: fall through to
+                // the machine rows when the memory axis is on and the fleet
+                // has settled. Refuse at the ceiling otherwise, naming the
+                // burst word that held it. The floor check comes first, so a
+                // floor-off refusal reads nothing it will not use.
+                if floor_gb <= 0.0 {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": "memory_off"}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
+                let newest = crate::spawn_gate_slots::newest_slot_age_s(
+                    &slot_row_entries,
+                    &slot_reservations,
+                    "",
+                    registry_path.parent(),
+                    chrono::Utc::now(),
                 );
+                let settled = matches!(
+                    newest,
+                    Some(s) if s >= crate::spawn_gate_slots::BURST_SETTLE.as_secs()
+                );
+                if !settled {
+                    let top = crate::spawn_gate_slots::at_ceiling(&learned);
+                    let word = if newest.is_none() {
+                        "settle_unread"
+                    } else {
+                        "settling"
+                    };
+                    return refuse_with(
+                        "max_live",
+                        format!("{slots} live worker slots >= {}", top.clause()),
+                        json!({"count": slots, "max_live": top.cap, "burst": word}),
+                        &[fleet_row(slots, top.cap, yours)],
+                        out,
+                    );
+                }
             }
             // The blueprint axis shows the same verdict a spawn would get
             //: gate-status never lies about a bp spawn's odds.
@@ -673,7 +725,58 @@ mod probe {
             }
             cpu = Some(admission.payload);
             if slots >= cap {
-                if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap) {
+                if slots >= learned.ceiling && learned.cap >= learned.ceiling {
+                    // The machine rows read room; only the settle window
+                    // decides. The read borrows; the fold applies on yields.
+                    let burst = crate::spawn_gate_slots::burst(
+                        slots,
+                        &learned,
+                        floor_gb,
+                        swap_cap,
+                        &slot_row_entries,
+                        &slot_reservations,
+                        "",
+                        registry_path.parent(),
+                    );
+                    match burst {
+                        Some(crate::spawn_gate_slots::Burst::Yields) => {
+                            let pre_clause = learned.clause();
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, slots);
+                            cap = learned.cap;
+                            out.insert("max_live".into(), json!(cap));
+                            out.insert(
+                                "cap_clause".into(),
+                                json!(format!(
+                                    "{pre_clause}{lead_note}; burst past agents.max_live {}: CPU and RAM have room",
+                                    learned.ceiling
+                                )),
+                            );
+                        }
+                        Some(b) => {
+                            return refuse_with(
+                                "max_live",
+                                format!(
+                                    "{slots} live worker slots >= {} ({})",
+                                    learned.clause(),
+                                    b.word()
+                                ),
+                                json!({"count": slots, "max_live": cap, "burst": b.word()}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                        None => {
+                            return refuse_with(
+                                "max_live",
+                                format!("{slots} live worker slots >= {}", learned.clause()),
+                                json!({"count": slots, "max_live": cap}),
+                                &[fleet_row(slots, cap, yours)],
+                                out,
+                            );
+                        }
+                    }
+                } else if !crate::spawn_gate_slots::cap_yields(&learned, slots, floor_gb, swap_cap)
+                {
                     return refuse_with(
                         "max_live",
                         format!("{slots} live worker slots >= {}", learned.clause()),
@@ -681,17 +784,18 @@ mod probe {
                         &[fleet_row(slots, cap, yours)],
                         out,
                     );
+                } else {
+                    out.insert(
+                        "cap_clause".into(),
+                        json!(format!(
+                            "{}{lead_note}; the learned cap yields: CPU and RAM have room",
+                            learned.clause()
+                        )),
+                    );
+                    learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                    cap = learned.cap;
+                    out.insert("max_live".into(), json!(cap));
                 }
-                out.insert(
-                    "cap_clause".into(),
-                    json!(format!(
-                        "{}{lead_note}; the learned cap yields: CPU and RAM have room",
-                        learned.clause()
-                    )),
-                );
-                learned = crate::spawn_gate_slots::at_ceiling(&learned);
-                cap = learned.cap;
-                out.insert("max_live".into(), json!(cap));
             }
         }
 
@@ -1514,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_mirrors_fleet_incident_verdict_before_capacity_and_keeps_lanes() {
+    fn probe_mirrors_fleet_incident_and_machine_brake_before_capacity_and_keeps_lanes() {
         let _g = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1591,6 +1695,41 @@ mod tests {
         let clear = probe::answer(&json!({}));
         assert_eq!(clear["verdict"], "accepted");
         assert_ne!(clear["reason"], "fleet-stop");
+
+        // The machine admission door: an armed brake refuses an agent-origin
+        // caller the way the gate does, and a human's own probe still admits.
+        let brake = dir.join("brake.json");
+        let until = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 600;
+        std::fs::write(
+            &brake,
+            json!({"until_epoch": until, "reason": "machine runaway: load hot"}).to_string(),
+        )
+        .unwrap();
+        let prior_brake = std::env::var_os("FNO_MACHINE_BRAKE");
+        let prior_self = std::env::var_os("FNO_AGENT_SELF");
+        std::env::set_var("FNO_MACHINE_BRAKE", &brake);
+        std::env::set_var("FNO_AGENT_SELF", "probe-brake-worker");
+        let braked = probe::answer(&json!({}));
+        assert_eq!(braked["verdict"], "refused", "{braked}");
+        assert_eq!(braked["reason"], "machine-runaway");
+        assert!(braked["message"]
+            .as_str()
+            .unwrap()
+            .contains("machine runaway brake holds"));
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert_eq!(probe::answer(&json!({}))["verdict"], "accepted");
+        match prior_self {
+            Some(value) => std::env::set_var("FNO_AGENT_SELF", value),
+            None => std::env::remove_var("FNO_AGENT_SELF"),
+        }
+        match prior_brake {
+            Some(value) => std::env::set_var("FNO_MACHINE_BRAKE", value),
+            None => std::env::remove_var("FNO_MACHINE_BRAKE"),
+        }
 
         match prior_home {
             Some(value) => std::env::set_var(crate::paths::HOME_ENV, value),
@@ -2366,5 +2505,76 @@ mod tests {
         assert!(
             crate::spawn_gate_reservations::RESERVATION_RULE.contains("expires within 15 minutes")
         );
+    }
+    #[test]
+    fn probe_reports_the_burst_cap_when_cpu_and_ram_have_room() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-verb-burst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        let claims_root = dir.join("claims-root");
+        std::fs::create_dir_all(claims_root.join(".fno/claims")).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &claims_root);
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 2\nmin_free_gb = 0.001\nmax_swap_pct = 0\n",
+        )
+        .unwrap();
+        let prior_config = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+
+        let me = std::process::id();
+        let good = crate::daemon::process_start_time(me).unwrap_or(0);
+        let row = |name: &str| {
+            format!(
+                r#"{{"name":"{name}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{good}}}"#
+            )
+        };
+        std::fs::write(
+            home.join("registry.json"),
+            format!(
+                r#"{{"schema_version":{},"entries":[{}, {}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row("p1"),
+                row("p2")
+            ),
+        )
+        .unwrap();
+
+        let answer = probe::answer(&json!({}));
+
+        assert_eq!(answer["verdict"], "accepted", "{answer}");
+        assert_eq!(answer["max_live"], 3);
+        assert!(
+            answer["cap_clause"]
+                .as_str()
+                .unwrap_or("")
+                .contains("burst past agents.max_live 2"),
+            "{}",
+            answer["cap_clause"]
+        );
+
+        std::env::remove_var(crate::paths::HOME_ENV);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_config {
+            Some(value) => std::env::set_var("FNO_CONFIG", value),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -32,6 +32,8 @@ pub fn run(args: &[String]) -> i32 {
     let mut out: Option<String> = None;
     let mut exec: Option<String> = None;
     let mut url: Option<String> = None;
+    let mut requests = false;
+    let mut label: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         let take = |i: &mut usize, name: &str| -> Option<String> {
@@ -60,6 +62,11 @@ pub fn run(args: &[String]) -> i32 {
             },
             "--url" => match take(&mut i, "--url") {
                 Some(v) => url = Some(v),
+                None => return 2,
+            },
+            "--requests" => requests = true,
+            "--label" => match take(&mut i, "--label") {
+                Some(v) => label = Some(v),
                 None => return 2,
             },
             other => {
@@ -95,7 +102,14 @@ pub fn run(args: &[String]) -> i32 {
             }
         }
     };
-    match publish(&project, out.as_deref(), exec.as_deref(), url.as_deref()) {
+    match publish(
+        &project,
+        out.as_deref(),
+        exec.as_deref(),
+        url.as_deref(),
+        requests,
+        label.as_deref(),
+    ) {
         Ok(line) => {
             println!("{line}");
             0
@@ -112,6 +126,7 @@ fn help_text() -> String {
      \n\
      USAGE:\n\
      \x20   fno backlog publish [--project <slug>] [--out <dir> | --exec <command>] [--url <url>]\n\
+     \x20       [--requests] [--label <name>]\n\
      \n\
      One command, three targets. --out writes <dir>/index.html for any static\n\
      host. --exec runs an uploader with {file} as the staged page (Cloudflare\n\
@@ -120,7 +135,10 @@ fn help_text() -> String {
      checkout never moves.\n\
      \n\
      The page is the public projection: open, public rows only, titles gated\n\
-     for home paths and session ids, no details, plans or sessions."
+     for home paths and session ids, no details, plans or sessions. With\n\
+     --requests the page links a prefilled GitHub issue on the project\n\
+     origin's repo (renamed with --label, default fno-request); the flag\n\
+     refuses on a non-GitHub origin."
         .to_string()
 }
 
@@ -129,8 +147,37 @@ fn publish(
     out: Option<&str>,
     exec: Option<&str>,
     url: Option<&str>,
+    requests: bool,
+    label: Option<&str>,
 ) -> Result<String, String> {
-    let staged = render_public(project)?;
+    // The board-request links are opt-in and name one GitHub repo: the
+    // project root's origin, resolved for all three targets. A non-GitHub
+    // host has no prefilled-issue path, so the flag refuses (the page shows
+    // no buttons without it).
+    let requests_config = if requests {
+        let root = super::settings::project_root(project).ok_or_else(|| {
+            format!("project {project:?} has no path in work.workspaces; cannot resolve the origin")
+        })?;
+        let remote = git(Path::new(&root), &["remote", "get-url", "origin"])
+            .map_err(|e| format!("cannot read the origin of {root}: {e}"))?;
+        let (owner, repo) = parse_origin(&remote).ok_or_else(|| {
+            format!(
+                "--requests needs a GitHub origin and {remote:?} is not one; \
+                 the page shows no board-request links on a non-GitHub host. \
+                 Publish without --requests"
+            )
+        })?;
+        Some(json!({
+            "repo": format!("{owner}/{repo}"),
+            "label": label.unwrap_or("fno-request"),
+        }))
+    } else {
+        if label.is_some() {
+            eprintln!("publish: --label matters only with --requests; ignoring it");
+        }
+        None
+    };
+    let staged = render_public(project, requests_config.as_ref())?;
     // The stage is scratch: every target consumes the staged page before it
     // returns (the gh-pages blob lands in git's object db, the uploader gets
     // its own path), so the dir goes away on the success and error paths
@@ -163,14 +210,18 @@ fn publish(
 /// Render the public projection into a fresh stage dir through the front
 /// binary. Stderr rides inherited, so board-render's own withheld-title
 /// warning reaches the operator.
-fn render_public(project: &str) -> Result<Staged, String> {
+fn render_public(project: &str, requests: Option<&Value>) -> Result<Staged, String> {
     let stage = std::env::temp_dir().join(format!("fno-publish-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| format!("stage dir: {e}"))?;
     let page = stage.join("index.html");
+    let mut public_obj = json!({"project": project});
+    if let Some(config) = requests {
+        public_obj["requests"] = config.clone();
+    }
     let request = json!({
         "targets": [{"path": page.display().to_string(), "scope": project}],
-        "public": {"project": project},
+        "public": public_obj,
     });
     let mut child = Command::new(crate::scrape::fno_bin())
         .arg("board-render")
@@ -431,7 +482,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// `owner` and `repo` out of a GitHub remote URL; anything else refuses,
 /// because the gh-pages target only knows GitHub's URL shape.
-fn parse_origin(url: &str) -> Option<(String, String)> {
+pub(crate) fn parse_origin(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches(".git");
     let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
         rest

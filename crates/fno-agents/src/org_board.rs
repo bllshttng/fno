@@ -58,8 +58,8 @@ pub(crate) use queues::{
     build_board, parse_lane, queue_json, read_blocked_rows, BoardInputs, Queue,
 };
 pub(crate) use scope::{
-    autonomous_merge_enabled, blocked_child_grace_minutes, graph_json_path, home_dot_fno,
-    operator_lane_path, parse_manifest, project_map,
+    autonomous_merge_enabled, blocked_child_grace_minutes, foreign_owned_read, graph_json_path,
+    home_dot_fno, operator_lane_path, parse_manifest, project_map,
 };
 pub(crate) use stranded::{read_stranded_trees, stranded_candidates, STRANDED_GRACE_MINUTES};
 
@@ -99,6 +99,9 @@ pub(crate) const SRC_CLAIMS: &str = "fno agents claim list -J --include-stale --
 /// The driver feed: registry rows that target a node. In-process,
 /// like SRC_READY; the label names the mechanism, not a command.
 pub(crate) const SRC_DRIVERS: &str = "registry::load_registry (rows with node)";
+/// The owner feed: nodes a deeper live team holds. In-process, like the
+/// driver feed it shares a registry with.
+pub(crate) const SRC_OWNERS: &str = "territory::owner_read (nodes of other live teams)";
 
 /// The roster feed's cap, mirroring MAX_CLAIMED_NODE_READS: a retained
 /// registry can outgrow what one board read may tax the probe with. The
@@ -1261,6 +1264,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // Scope.
     let mut scope_ids: Option<HashSet<String>> = None;
     let mut role_scope: Option<String> = None;
+    let mut foreign_owned = SourceRead::ok(Value::Array(Vec::new()));
     if let Some(state_path) = &opts.state_path {
         let manifest = parse_manifest(state_path);
         let scope = manifest.get("scope").cloned().unwrap_or_default();
@@ -1310,7 +1314,14 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             });
         };
         match compile_scope_ids(&scope, entries, &projects) {
-            Ok(ids) => scope_ids = Some(ids),
+            Ok(ids) => {
+                scope_ids = Some(ids);
+                // One registry file and an in-memory compile: no subprocess to
+                // bound, and a spent budget must not turn the unplanned queue
+                // blind for a read that costs milliseconds.
+                foreign_owned = foreign_owned_read(&scope, entries, &projects);
+                mark(&mut sources, "owners", &foreign_owned, false);
+            }
             Err(e) => {
                 return json!({
                     "actionable": 1,
@@ -1415,6 +1426,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         autonomous_merge: autonomous_merge_enabled(&cwd),
         scope_ids,
         role_scope,
+        foreign_owned,
     };
     let mut payload = build_board(&inputs);
     if let Some(obj) = payload.as_object_mut() {
@@ -1772,6 +1784,7 @@ mod tests {
             autonomous_merge: false,
             scope_ids: None,
             role_scope: None,
+            foreign_owned: ok_read(Value::Array(Vec::new())),
         }
     }
 
@@ -2742,6 +2755,61 @@ mod tests {
         );
         let stale = queues.iter().find(|q| q["name"] == "stale_claim").unwrap();
         assert_eq!(stale["rows"].as_array().unwrap().len(), 0, "{stale}");
+    }
+
+    #[test]
+    fn the_unplanned_queue_drops_a_node_a_deeper_team_owns() {
+        // The check-in skips a node another live team holds ("owned by
+        // team"); the gate counted it and refused the stop on a start the
+        // lead may not make. Both answer from the one owner read.
+        let mut inputs = inputs_with(
+            json!([
+                {"id": "x-mine", "priority": "p1", "title": "mine"},
+                {"id": "x-theirs", "priority": "p1", "title": "theirs"},
+            ]),
+            json!([]),
+            json!([]),
+        );
+        inputs.foreign_owned = ok_read(json!(["x-theirs"]));
+        let board = build_board(&inputs);
+        let unplanned = board["queues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["name"] == "unplanned")
+            .unwrap();
+        let ids: Vec<&str> = unplanned["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        assert_eq!(ids, vec!["x-mine"], "{unplanned}");
+    }
+
+    #[test]
+    fn an_unread_owner_read_makes_the_unplanned_queue_blind_not_clean() {
+        let mut inputs = inputs_with(
+            json!([{"id": "x-theirs", "priority": "p1", "title": "theirs"}]),
+            json!([]),
+            json!([]),
+        );
+        inputs.foreign_owned = SourceRead::err("territory: registry unreadable (boom)");
+        let board = build_board(&inputs);
+        let unplanned = board["queues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["name"] == "unplanned")
+            .unwrap();
+        assert_eq!(unplanned["status"], "unreadable", "{unplanned}");
+        assert!(
+            unplanned["error"]
+                .as_str()
+                .unwrap()
+                .contains("registry unreadable"),
+            "{unplanned}"
+        );
     }
 
     #[test]

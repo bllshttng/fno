@@ -1061,6 +1061,13 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     if st.rundown_republish && team_needs_republish(authorized, modified, SystemTime::now()) {
         start_team_republish(&st.rundown_html);
     }
+    // Option A (ruling recorded on the node): the daemon arm renders only
+    // after a viewer was served the page, so an authorized serve stamps
+    // the sibling marker the arm reads. Best effort: a failed stamp just
+    // means the arm's next render waits for another serve.
+    if authorized {
+        let _ = std::fs::write(served_marker(&st.rundown_html), b"");
+    }
     let notice = if st.rundown_republish {
         "fno agents org rundown (a render has started; reload in about a minute)"
     } else {
@@ -1492,6 +1499,14 @@ fn team_needs_republish(authorized: bool, modified: Option<SystemTime>, now: Sys
             .map(|age| age > TEAM_REPUBLISH_AFTER)
             .unwrap_or(false),
     }
+}
+
+/// The marker the /team route stamps on an authorized serve and the
+/// daemon's team_ledger arm reads: marker mtime newer than the page mtime
+/// means a viewer arrived since the last render (the option-A cadence, the
+/// ruling recorded on the node).
+fn served_marker(page: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.served", page.display()))
 }
 
 /// Single-flight background render. `--out` names the exact path the bridge
@@ -2588,7 +2603,17 @@ const reversed = nestChildren([
 ]);
 eq(reversed.map((r) => r.card.id), ["par", "kid"], "a child listed first still follows its parent");
 eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
-console.log("snapshot page helpers: 36 cases ok");
+// The board-request links: the request opens a prefilled issue on the
+// repo's issues/new, and the upvote names the card id only.
+const reqUrl = requestIssueUrl("o/r", "fno-request");
+eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
+eq(reqUrl.searchParams.get("label"), "fno-request", "the request label param");
+eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
+const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
+eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
+eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
+eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
+console.log("snapshot page helpers: 38 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
 const M = { meta: false, ctrl: false };
@@ -2696,6 +2721,8 @@ console.log("recent searches: 12 cases ok");
                 "copiedToast",
                 "pushRecent",
                 "loadRecent",
+                "requestIssueUrl",
+                "upvoteIssueUrl",
             ]
             .iter()
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))
@@ -2725,7 +2752,7 @@ console.log("recent searches: 12 cases ok");
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 assert!(
-                    stdout.contains("snapshot page helpers: 36 cases ok"),
+                    stdout.contains("snapshot page helpers: 38 cases ok"),
                     "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
                 );
                 assert!(
@@ -2863,6 +2890,17 @@ console.log("recent searches: 12 cases ok");
         // Exactly at the threshold is still fresh ("older than" is strict).
         let boundary = now.checked_sub(TEAM_REPUBLISH_AFTER).unwrap();
         assert!(!team_needs_republish(true, Some(boundary), now));
+        // The served marker names a page sibling by this exact shape, and
+        // the authorized serve stamps it: drift on either side stands the
+        // daemon arm down forever (the feature fails silent in production,
+        // every test green).
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        assert_eq!(served_marker(&page), dir.path().join("rundown.html.served"));
+        std::fs::write(&page, b"<html></html>").unwrap();
+        assert!(!served_marker(&page).exists());
+        let _ = std::fs::write(served_marker(&page), b"");
+        assert!(served_marker(&page).exists());
     }
 
     #[tokio::test]

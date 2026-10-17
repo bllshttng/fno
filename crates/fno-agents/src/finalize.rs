@@ -810,18 +810,18 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // deliberately not returned into `failed`.
     if !delivery_ship {
         stamp_node_pr(&cwd, m.graph_node_id.as_deref());
-        // ── held-findings backstop ────────────────────────────────────
+        // ── round-review backstop ─────────────────────────────────────
         // A create flow that died between `gh pr create` and its
-        // publish-review step still owes the PR its pre-PR review comment.
-        // Idempotent by marker inside publish_held; log-only, never fatal.
+        // publish-review step still owes the PR its pre-PR review.
+        // Idempotent by marker inside publish_round; log-only, never fatal.
         // Reads the caller-pinned journal: events_path() migrates the
         // checkout journal on read, and a backstop must not re-home the
         // session's rows mid-finalize.
-        let held = held_findings_backstop(&cwd, &project_events);
-        if held.status != "skipped" {
+        let round = round_review_backstop(&cwd, &project_events);
+        if round.status != "skipped" {
             eprintln!(
-                "finalize: held review findings: {} ({})",
-                held.status, held.reason
+                "finalize: review round: {} ({})",
+                round.status, round.reason
             );
         }
     }
@@ -3119,13 +3119,13 @@ fn append_corrections_pointer(home: Option<&Path>, postmortem: &Path, reason: &s
     }
 }
 
-/// The held-findings read for finalize: the caller-pinned journal only.
+/// The round-review read for finalize: the caller-pinned journal only.
 /// `events_path` would migrate the checkout journal on read and re-home
-/// the session's rows mid-finalize; a finalize backstop scans for held
-/// attestations without mutating path state as a side effect.
-fn held_findings_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::HeldAnswer {
+/// the session's rows mid-finalize; a finalize backstop scans for an
+/// unposted round without mutating path state as a side effect.
+fn round_review_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::RoundAnswer {
     let payload = serde_json::json!({ "cwd": cwd.to_string_lossy() });
-    crate::publish_review::publish_held(
+    crate::publish_review::publish_round(
         &payload,
         &crate::publish_review::GhReal,
         &[journal.to_path_buf()],
@@ -3161,7 +3161,7 @@ mod tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let answer = held_findings_backstop(&cwd, &pinned);
+        let answer = round_review_backstop(&cwd, &pinned);
         assert_eq!(answer.status, "skipped");
         // A read must not re-home the checkout journal into the space dir;
         // the pre-backstop regression moved it as a side effect of resolving

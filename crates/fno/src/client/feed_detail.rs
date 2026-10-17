@@ -550,11 +550,8 @@ pub(crate) async fn execute_selected(
         FeedAction::Session(hit) => apply_hit(view, hit.clone(), sock_w).await?,
         FeedAction::Node(id) => {
             let id = id.clone();
-            let on = view.experimental_backlog;
             node_link::open_detail(view, id);
-            if on {
-                view.feed_detail = None;
-            }
+            view.feed_detail = None;
         }
         FeedAction::Pr(url) => {
             let url = url.clone();
