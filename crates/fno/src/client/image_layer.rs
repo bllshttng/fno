@@ -10,7 +10,6 @@
 use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use crossterm::{cursor, queue, style};
 use image::DynamicImage;
@@ -18,18 +17,10 @@ use ratatui_core::buffer::{Buffer, CellDiffOption};
 use ratatui_core::layout::{Rect as RtRect, Size};
 use ratatui_core::style::Color as RtColor;
 use ratatui_core::widgets::Widget;
-use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::{Image, Resize};
 
 use crate::proto::{Cell, Color};
-
-/// Forces one protocol and skips the terminal query: kitty, iterm2, sixel or
-/// halfblocks.
-const PROTOCOL_ENV: &str = "FNO_MUX_IMAGE_PROTOCOL";
-/// The query ends on a status reply every terminal sends; the bound only
-/// matters for a terminal that answers nothing, and restarts on each read.
-const QUERY_WAIT: Duration = Duration::from_millis(300);
 
 /// A cell the viewer reserves for an escape-protocol image. U+FDD0 is a
 /// Unicode noncharacter, so pane text never holds it, and the compositor
@@ -89,7 +80,9 @@ thread_local! {
 /// Pick the protocol once, for this process's terminal. It must run before
 /// anything reads stdin: the terminal's reply would otherwise reach a pane.
 pub(super) fn detect() {
-    let forced = std::env::var(PROTOCOL_ENV).ok();
+    // Forces kitty, iterm2, sixel or halfblocks. Any but halfblocks still
+    // queries, for the font size.
+    let forced = std::env::var("FNO_MUX_IMAGE_PROTOCOL").ok();
     let _ = PICKER.set(pick(forced.as_deref()));
 }
 
@@ -100,12 +93,11 @@ fn pick(forced: Option<&str>) -> Picker {
     {
         return Picker::halfblocks();
     }
-    let options = QueryStdioOptions {
-        timeout: QUERY_WAIT,
-        ..QueryStdioOptions::default()
-    };
-    let mut picker =
-        Picker::from_query_stdio_with_options(options).unwrap_or_else(|_| Picker::halfblocks());
+    // The query ends on a status reply every terminal sends, so its crate
+    // default bound (2 s, restarted on each read) costs nothing. A shorter
+    // one is a trap: on a timeout the crate's query thread stays blocked on
+    // stdin, eats the next input, then restores cooked mode over our raw one.
+    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
     if let Some(p) = forced {
         picker.set_protocol_type(p);
     }
