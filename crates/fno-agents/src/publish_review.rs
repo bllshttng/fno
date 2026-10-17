@@ -241,7 +241,7 @@ fn review_config(cwd: &Path) -> (Option<String>, Option<String>) {
 /// The newest `review_attestation` whose head_sha equals `head`, last-wins on
 /// ts (a same-second re-emit is the newer verdict). Pure over the journal
 /// paths: missing or malformed rows read as absent, never an error.
-pub(crate) fn newest_head_attestation(journals: &[PathBuf], head: &str) -> Option<Value> {
+fn newest_head_attestation(journals: &[PathBuf], head: &str) -> Option<Value> {
     let mut newest: Option<(String, Value)> = None;
     for path in journals {
         // SQL authority: committed rows in commit order; the import pulls any
@@ -285,8 +285,12 @@ pub(crate) fn newest_head_attestation(journals: &[PathBuf], head: &str) -> Optio
 /// held-findings store IS this row: a no-PR review (`--comment` with no PR)
 /// already writes it keyed to branch and head, so the PR-open leg reads it
 /// back instead of a second store. Rows predating the `branch` field carry no
-/// branch and cannot be scoped to one PR, so they never match.
-fn newest_branch_attestation(journals: &[PathBuf], branch: &str) -> Option<Value> {
+/// branch and cannot be scoped to one PR, so they never match. Also read by
+/// `merge_gates::review_posted_gate`, which must ask about the SAME round
+/// this function would post, head-carried or not - an exact-head lookup
+/// would go silent on a round law d-608344c1 still carries forward after a
+/// rebase.
+pub(crate) fn newest_branch_attestation(journals: &[PathBuf], branch: &str) -> Option<Value> {
     let mut newest: Option<(String, Value)> = None;
     for path in journals {
         let Ok(text) =
@@ -609,6 +613,8 @@ pub fn publish_round(payload: &Value, gh: &dyn Gh, journals: &[PathBuf]) -> Roun
         &format!("/repos/{slug}/pulls/{number}/reviews"),
         "-f",
         "event=COMMENT",
+        "-f",
+        &format!("commit_id={reviewed_head}"),
         "-f",
         &format!("body={body}"),
     ]
@@ -1439,6 +1445,7 @@ mod tests {
         assert!(post_body.contains("[correctness] first bug"));
         assert!(post_body.contains("src/b.py:7"));
         assert!(post_body.contains(&marker));
+        assert!(calls[2].iter().any(|a| a == "commit_id=h1sha"));
         assert!(calls[3].iter().any(|a| a.contains("/pulls/931/comments")));
         assert!(calls[4].iter().any(|a| a.contains("/pulls/931/comments")));
         // Second run: the marker is already on a posted review, nothing posts.
@@ -1484,6 +1491,10 @@ mod tests {
         assert!(post_body.contains("reviewed at h1sha; PR head is h2sha"));
         assert!(post_body.contains("does not cover the newer commits"));
         assert!(post_body.contains(&round_marker("feature/x", "h1sha")));
+        // The review anchors to the reviewed commit, never the PR's current
+        // (unreviewed) head: this is the gap the commit_id field closes.
+        assert!(calls[2].iter().any(|a| a == "commit_id=h1sha"));
+        assert!(!calls[2].iter().any(|a| a == "commit_id=h2sha"));
 
         // A zero-finding clean pass now POSTS (this is the defect the gate
         // exists to close): no early return on an empty findings array.

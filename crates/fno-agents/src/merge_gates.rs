@@ -114,26 +114,38 @@ pub(crate) fn coverage_gate<P: Probes>(
     }
 }
 
-/// The posted-review gate. Fires only when an attestation already exists at
-/// `facts.head_sha` (the no-attestation gap is `coverage_gate`'s job, via
+/// The posted-review gate. Fires only when an attestation already exists on
+/// `facts.head_ref` (the no-attestation gap is `coverage_gate`'s job, via
 /// `review_coverage_uncovered` - the two blockers never name the same gap)
-/// but no GitHub review yet carries that round's marker. `Held`, never
-/// `Refused`: `fno do pr publish-review` already runs automatically at
-/// ship-create time and at every `finalize` terminal decision
-/// (`crates/fno-agents/src/finalize.rs`), so this normally self-clears with
-/// no operator action - it never re-derives what counts as "reviewed" (law
-/// d-608344c1 owns that), it only checks that a round the ledger already
-/// counted got PUBLISHED.
+/// but no GitHub review yet carries that round's marker. Reads the newest
+/// BRANCH attestation, not an exact-head one: a round law d-608344c1 still
+/// carries forward after a rebase (`review_freshness::Freshness::counts()`)
+/// never gets a fresh attestation event at the new head, so an exact-head
+/// lookup would go silent on exactly the rounds this gate exists to catch.
+/// `publish_review::publish_round` resolves the SAME newest-branch round
+/// when it posts, so the two stay pinned to one definition of "the round
+/// that needs posting". `Held`, never `Refused`: `fno do pr publish-review`
+/// already runs automatically at ship-create time and at every `finalize`
+/// terminal decision (`crates/fno-agents/src/finalize.rs`), so this normally
+/// self-clears with no operator action - it never re-derives what counts as
+/// "reviewed" (law d-608344c1 owns that), it only checks that a round the
+/// ledger already counted got PUBLISHED.
 pub(crate) fn review_posted_gate<P: Probes>(
     probes: &P,
     cwd: &Path,
     facts: &PrFacts,
 ) -> Option<Blocker> {
     let journals = [crate::paths::events_path(cwd)];
-    if crate::publish_review::newest_head_attestation(&journals, &facts.head_sha).is_none() {
+    let Some(attestation) =
+        crate::publish_review::newest_branch_attestation(&journals, &facts.head_ref)
+    else {
         return None;
-    }
-    match probes.review_posted(cwd, facts) {
+    };
+    let reviewed_head = attestation
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or(facts.head_sha.as_str());
+    match probes.review_posted(cwd, facts, reviewed_head) {
         ProbeOutcome::Clear => None,
         ProbeOutcome::Refused(reason) => Some(Blocker::held("review_not_posted", reason)),
         ProbeOutcome::Inconclusive(reason) => {

@@ -12,6 +12,9 @@ struct Fake {
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
     review_posted: Option<ProbeOutcome>,
+    /// The `reviewed_head` argument review_posted_gate last passed in, so a
+    /// test can prove it threaded the attestation's own head, not a guess.
+    review_posted_head_seen: RefCell<Option<String>>,
     review_hold: Option<ProbeOutcome>,
     lineage: Option<ProbeOutcome>,
     merge_result: Option<ProbeOutcome>,
@@ -176,10 +179,12 @@ fn take_slot_refuses_a_live_legacy_lockfile_without_creating_a_second_slot() {
 
 /// code+class for each scenario: no attestation (stays silent, the gap
 /// belongs to review_coverage_uncovered), an attestation with GitHub
-/// lacking the post (Held, self-clearing), posted (clear), and an
-/// unreadable probe (Unknown, never a silent pass).
+/// lacking the post (Held, self-clearing), posted (clear), an unreadable
+/// probe (Unknown, never a silent pass), and a round carried forward to a
+/// new head with no fresh attestation event of its own (still found,
+/// branch-wide, never silenced by an exact-head miss).
 #[test]
-fn review_posted_gate_covers_its_four_cases() {
+fn review_posted_gate_covers_its_five_cases() {
     let temp = tempfile::TempDir::new().unwrap();
     with_claims_root(temp.path(), || {
         let spaces = temp.path().join("spaces");
@@ -232,6 +237,28 @@ fn review_posted_gate_covers_its_four_cases() {
         assert_eq!(blocker.code, "review_posted_unknown");
         assert_eq!(blocker.class, BlockerClass::Unknown);
 
+        // A round carried forward under law d-608344c1 (rebase, interdiff
+        // under the cap) never gets a fresh attestation EVENT at the new
+        // head - only the original head carries one. The gate must still
+        // find it (branch-wide, not exact-head) and probe for THAT head's
+        // marker, never facts.head_sha.
+        std::fs::write(
+            &journal,
+            "{\"type\":\"review_attestation\",\"ts\":\"2026-10-16T11:00:00Z\",\"data\":{\"branch\":\"feature/x\",\"head_sha\":\"h0sha-pre-rebase\",\"verdict\":\"pass\",\"reviewer\":\"code-review\"}}\n",
+        )
+        .unwrap();
+        let fake = Fake {
+            review_posted: Some(ProbeOutcome::Refused("not yet posted".into())),
+            ..Default::default()
+        };
+        let blocker = crate::merge_gates::review_posted_gate(&fake, &repo, &facts)
+            .expect("a carried-forward round with no posted review must still block");
+        assert_eq!(blocker.code, "review_not_posted");
+        assert_eq!(
+            fake.review_posted_head_seen.borrow().as_deref(),
+            Some("h0sha-pre-rebase")
+        );
+
         match saved {
             Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
             None => std::env::remove_var("FNO_SPACES_DIR"),
@@ -270,7 +297,8 @@ impl Probes for Fake {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.pr_hold.clone().unwrap_or(ProbeOutcome::Clear)
     }
-    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
         self.review_posted.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn review_hold(&self, _cwd: &Path, _pr: u64) -> ProbeOutcome {

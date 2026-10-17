@@ -817,7 +817,7 @@ pub fn run_finalize(args: &[String]) -> i32 {
         // Reads the caller-pinned journal: events_path() migrates the
         // checkout journal on read, and a backstop must not re-home the
         // session's rows mid-finalize.
-        let round = held_findings_backstop(&cwd, &project_events);
+        let round = round_review_backstop(&cwd, &project_events);
         if round.status != "skipped" {
             eprintln!(
                 "finalize: review round: {} ({})",
@@ -3123,7 +3123,7 @@ fn append_corrections_pointer(home: Option<&Path>, postmortem: &Path, reason: &s
 /// `events_path` would migrate the checkout journal on read and re-home
 /// the session's rows mid-finalize; a finalize backstop scans for an
 /// unposted round without mutating path state as a side effect.
-fn held_findings_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::RoundAnswer {
+fn round_review_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::RoundAnswer {
     let payload = serde_json::json!({ "cwd": cwd.to_string_lossy() });
     crate::publish_review::publish_round(
         &payload,
@@ -3161,7 +3161,7 @@ mod tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let answer = held_findings_backstop(&cwd, &pinned);
+        let answer = round_review_backstop(&cwd, &pinned);
         assert_eq!(answer.status, "skipped");
         // A read must not re-home the checkout journal into the space dir;
         // the pre-backstop regression moved it as a side effect of resolving

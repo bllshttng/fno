@@ -433,12 +433,14 @@ pub trait Probes {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
-    /// Has the round attested at `facts.head_sha` landed as a GitHub review
-    /// on `facts.number` yet? `Refused` (not yet - held, self-clears once
-    /// `publish-review` runs) vs `Inconclusive` (the `gh` read itself
-    /// failed) vs `Clear` (found). Default `Clear` keeps an impl that does
-    /// not read GitHub reviews inert.
-    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+    /// Has the round attested at `reviewed_head` (the newest branch
+    /// attestation's own head, not necessarily `facts.head_sha` - a carried
+    /// round never gets a fresh attestation at the new head) landed as a
+    /// GitHub review on `facts.number` yet? `Refused` (not yet - held,
+    /// self-clears once `publish-review` runs) vs `Inconclusive` (the `gh`
+    /// read itself failed) vs `Clear` (found). Default `Clear` keeps an impl
+    /// that does not read GitHub reviews inert.
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
 }
@@ -1607,8 +1609,8 @@ impl Probes for RealProbes {
         crate::pr_admission::pr_hold(cwd, facts)
     }
 
-    fn review_posted(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
-        let marker = crate::publish_review::round_marker(&facts.head_ref, &facts.head_sha);
+    fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
         let args = vec![
             "api".to_string(),
             "--paginate".to_string(),
@@ -1626,7 +1628,7 @@ impl Probes for RealProbes {
                         "the attested review round at {} has not landed as a GitHub review on #{}; \
                          run `fno do pr publish-review --pr-number {}` (finalize/ship already do this \
                          automatically on every terminal decision, so this normally self-clears)",
-                        &facts.head_sha[..facts.head_sha.len().min(8)],
+                        &reviewed_head[..reviewed_head.len().min(8)],
                         facts.number,
                         facts.number
                     ))
