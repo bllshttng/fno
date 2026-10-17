@@ -431,8 +431,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const OLD: &str = "ab-aaaa1111";
-    const NEW: &str = "x-7f3e";
+    const OLD: &str = "ab-aaaaaaaa";
+    const NEW: &str = "x-7777";
 
     fn temp_state() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -459,7 +459,7 @@ mod tests {
                     "id": OLD, "title": "t", "type": "bug", "status": "idea", "priority": "p2",
                     "sessions": [{"phase": "blueprint", "harness": "claude", "session_id": "s1"}]
                 }),
-                json!({"id": "ab-bbbb2222", "title": "kid", "type": "bug", "status": "idea", "priority": "p2", "parent": OLD}),
+                json!({"id": "ab-bbbbbbbb", "title": "kid", "type": "bug", "status": "idea", "priority": "p2", "parent": OLD}),
             ],
         );
         // One edge endpoint naming the old id, written straight to the store.
@@ -467,7 +467,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         conn.execute(
             "INSERT INTO edges (seq, src_kind, src_id, dst_kind, dst_id, kind, valid_from)
-             VALUES (1, 'backlog', ?1, 'backlog', 'ab-bbbb2222', 'blocks', '2026-10-17T00:00:00Z')",
+             VALUES (1, 'backlog', ?1, 'backlog', 'ab-bbbbbbbb', 'blocks', '2026-10-17T00:00:00Z')",
             rusqlite::params![OLD],
         )
         .unwrap();
@@ -495,7 +495,7 @@ mod tests {
         );
         let kid = rows
             .iter()
-            .find(|e| e.get("id").and_then(Value::as_str) == Some("ab-bbbb2222"))
+            .find(|e| e.get("id").and_then(Value::as_str) == Some("ab-bbbbbbbb"))
             .unwrap();
         assert_eq!(
             kid.get("parent").and_then(Value::as_str),
@@ -558,7 +558,7 @@ mod tests {
         seed(
             &graph,
             &[json!({
-                "id": "x-cccc1111", "title": "t", "type": "bug", "status": "idea", "priority": "p2",
+                "id": "x-cccc", "title": "t", "type": "bug", "status": "idea", "priority": "p2",
                 "aliases": [OLD]
             })],
         );
