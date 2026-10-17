@@ -67,7 +67,6 @@ fi
 
 | Reviewer | Bot Login | Review State | Typical Wait |
 |----------|-----------|-------------|--------------|
-| gemini | `gemini-code-assist[bot]` | COMMENTED | 1-3 min |
 | coderabbit | `coderabbitai[bot]` | COMMENTED | 1-5 min |
 | claude | `claude[bot]` | COMMENTED or APPROVED | 1-2 min |
 | codex | `chatgpt-codex-connector[bot]` | COMMENTED | 3-5 min (can be longer) |

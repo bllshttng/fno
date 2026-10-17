@@ -31,19 +31,25 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
-# Seed graph.db through the anchor that the resolver passes to the keeper.
-cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/graph.json"
+# Seed the graph through the anchor the resolver reads back: the store
+# cutover moved paths.graph_json() to .fno/db/, so the legacy .fno/ anchor
+# would seed a file no reader opens.
+mkdir -p "$HOME/.fno/db"
+cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/db/graph.json"
 {"entries": [
   {"id": "ab-12345678", "title": "Test", "plan_path": "plans/test.md", "status": "ready"}
 ]}
 JSON
 
-# Case 1: roadmap-tasks.py intake --batch is rejected with a helpful redirect.
+# Case 1: intake's `--batch` redirect answers from the native door now. The
+# verb and its redirect moved into the Rust dispatcher, and the wheel keeps
+# only the route (the triage shape), so the shim's forward lands on the
+# native removal refusal - the redirect alive, one implementation.
 OUT=$(python3 "$REPO_ROOT/scripts/roadmap-tasks.py" intake --batch plans/foo 2>&1 || true)
-if echo "$OUT" | grep -qiE "removed|multi-path|shell glob"; then
-    pass "intake --batch emits redirect"
+if echo "$OUT" | grep -qiE "multi-path intake"; then
+    pass "intake --batch redirects at the native door"
 else
-    fail "intake --batch didn't redirect" "got: $OUT"
+    fail "intake --batch lost its redirect" "got: $OUT"
 fi
 
 # Case 2: resolver returns plan_path for a known ab- ID.

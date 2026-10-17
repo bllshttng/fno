@@ -33,7 +33,6 @@ def _clean(text: str) -> str:
 
 HELP_SURFACES: dict[str, list[str]] = {
     "review": ["review", "--help"],
-    "backlog-cost": ["backlog", "cost", "--help"],
     "retro-run": ["retro", "run", "--help"],
     "worker-review": ["worker", "review", "--help"],
     "worker-external": ["worker", "external", "--help"],
@@ -55,10 +54,9 @@ def test_surface_registers(argv: list[str]) -> None:
 @pytest.mark.parametrize(
     "argv,canonical,legacy",
     [
-        (["backlog", "cost", "--help"], "--session-id", "--session"),
         (["worker", "external", "--help"], "--pr-number", "--pr"),
     ],
-    ids=["backlog-cost", "worker-external"],
+    ids=["worker-external"],
 )
 def test_legacy_spelling_hidden_from_help(
     argv: list[str], canonical: str, legacy: str

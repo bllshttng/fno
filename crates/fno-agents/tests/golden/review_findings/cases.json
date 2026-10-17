@@ -1,0 +1,1148 @@
+[
+  {
+    "label": "record bare array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record object findings key",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record empty array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record no findings key",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record findings not array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record top level string",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record harmless no verdict",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record harmless confirmed",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record harmless padded confirmed",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record plausible harmless",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record unknown category",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record absent category",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record empty category",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record whitespace category",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record missing file",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record missing summary",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record missing failure scenario",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record non object element",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record unmappable object",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record category case typo",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record category nbsp padded",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record category unit separator padded",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line int",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line string",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line float whole",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line float frac",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line true",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line null",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line zero",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record line object",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record autofix known words",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record autofix upper case",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record autofix unknown",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record owner string and number",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record summary at cap",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record summary over cap",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record summary two byte over cap",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config unset",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config perf",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config empty list",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config padded entry",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config string malformed",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record config unloadable",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record histogram first seen order",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record dispositions valid",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record dispositions not array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition entry not object",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition missing key",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition whitespace key",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition unknown word",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition empty reason",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record declined without quote",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record declined with quote",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record disposition extra keys dropped",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record dispositions empty array",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round two",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round zero kept",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round negative refused",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round bool refused",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round float refused",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record round string refused",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record bounds 201 findings",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record bounds 200 max summaries",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "record bounds key blowup drops tail",
+    "action": "record",
+    "args": [],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post no dispositions",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post happy",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post pr-number flag",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr-number",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post resolves pr from branch",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post no pr for branch",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post detached head no pr",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": true
+  },
+  {
+    "label": "post already posted",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post marker other head",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post head mismatch refuses",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "2222222222222222222222222222222222222222",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post abbreviated head refuses",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post pr read fails",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "post-dispositions: PR read failed: "
+  },
+  {
+    "label": "post comments read fails",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post comment post fails",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post no origin remote",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "none",
+    "detached": false
+  },
+  {
+    "label": "post non github origin",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "gitlab",
+    "detached": false,
+    "err_prefix": "post-dispositions: could not resolve owner/repo: "
+  },
+  {
+    "label": "post round flag",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7",
+      "--review-round",
+      "2"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round env",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {
+      "FNO_REVIEW_ROUND": "3"
+    },
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round flag beats env",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7",
+      "--review-round",
+      "2"
+    ],
+    "env": {
+      "FNO_REVIEW_ROUND": "3"
+    },
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round env zero is round zero",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {
+      "FNO_REVIEW_ROUND": "0"
+    },
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round payload",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round payload zero is round one",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round default one",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post round env junk",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {
+      "FNO_REVIEW_ROUND": "x"
+    },
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post reviewer peer",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7",
+      "--reviewer",
+      "peer"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post unkeyed element",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post usage missing findings file",
+    "action": "post",
+    "args": [
+      "--head",
+      "1111111111111111111111111111111111111111"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post usage missing head",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post usage unknown flag",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--bogus"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify bare",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify emit record",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify emit record round flag",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "2"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round flag overrides payload",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "2"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round zero flag",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--emit-record",
+      "--review-round",
+      "0"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify missing file refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "absent.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "classify: cannot read absent.json: "
+  },
+  {
+    "label": "classify invalid json refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "classify: findings.json is not valid JSON: "
+  },
+  {
+    "label": "classify build refusal",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false,
+    "err_prefix": "classify: findings.json: "
+  },
+  {
+    "label": "classify round negative refused",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--review-round",
+      "-1"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify round not an integer",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--review-round",
+      "x"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "post page two marker",
+    "action": "post",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--head",
+      "1111111111111111111111111111111111111111",
+      "--pr",
+      "7"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify attest retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--attest",
+      "code-review"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify attest equals retired",
+    "action": "classify",
+    "args": [
+      "--findings-file=findings.json",
+      "--attest=code-review"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify reviewer context retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--reviewer-context",
+      "fork"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify execution context retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--execution-context",
+      "inline"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  },
+  {
+    "label": "classify output contract retired",
+    "action": "classify",
+    "args": [
+      "--findings-file",
+      "findings.json",
+      "--output-contract",
+      "json_block"
+    ],
+    "env": {},
+    "origin": "github",
+    "detached": false
+  }
+]

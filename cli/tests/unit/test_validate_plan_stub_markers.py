@@ -4,8 +4,9 @@ A `blueprint decompose` child is born `status: stub` with placeholder markers +
 an empty-why sentinel; linking its plan_path flips it `ready` and dispatchers
 launch against it. The validator is the gate: it must reject any plan still
 carrying a stub marker (naming it) and require a non-empty `## Why (from epic)`
-on group-child plans. Generating the scaffold from the real writer keeps the
-test and cli/src/fno/graph/_decompose.py from drifting.
+on group-child plans. The scaffold writer lives in the native verb now
+(crates/fno-agents/src/backlog/decompose.rs); the fixtures below carry the
+same markers by hand so the validator contract stays pinned.
 """
 from __future__ import annotations
 
@@ -14,8 +15,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-from fno.graph._decompose import scaffold_separate_plan, validate_groups
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR = REPO_ROOT / "skills" / "blueprint" / "scripts" / "validate-plan.sh"
@@ -31,10 +30,6 @@ def _run(
         cwd=str(REPO_ROOT),
         env=env,
     )
-
-
-def _grp():
-    return validate_groups([{"slug": "1", "title": "Group 1", "waves": "1-2"}], None)[0]
 
 
 _FILLED = """---
@@ -72,9 +67,50 @@ pytest cli/tests
 """
 
 
+_UNFILLED = """---
+title: "Group 1"
+status: idea
+kind: quick-plan
+created: 2026-10-15
+difficulty: low
+consolidation:
+  # <!-- Consolidation: run the step 2d gate against this child and
+  #      record one outcome with a reason per id considered. -->
+  outcome: proceed_alone
+  proceed_alone_against: []
+parent_epic: ab-epic0001
+source_doc: big.md
+---
+
+# Group 1
+
+## Why (from epic)
+
+<!-- Why (from epic): transcribe the epic's intent line + the Locked
+Decisions that bind this child (not a pointer). -->
+
+## Context
+
+Group child of epic `ab-epic0001` (see `big.md`). Covers wave(s) 1-2 of the
+epic's Execution Strategy.
+
+## Changes
+
+<!-- Seeded from epic waves 1-2. Fill in the concrete changes this group ships. -->
+
+## Files to Modify
+
+<!-- From the epic's File Ownership Map: the files this group owns. -->
+
+## Verification
+
+<!-- The checks that prove this group's slice works. -->
+"""
+
+
 def test_validator_rejects_unfilled_scaffold(tmp_path):
     plan = tmp_path / "big.group-1.md"
-    plan.write_text(scaffold_separate_plan(_grp(), "ab-epic0001", "big.md", why_digest=""))
+    plan.write_text(_UNFILLED)
     result = _run(plan)
     assert result.returncode == 1, result.stdout
     assert "unfilled stub marker" in result.stdout

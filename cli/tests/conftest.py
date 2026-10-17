@@ -685,87 +685,28 @@ def _hermetic_promise_carveout_gate(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_claim_reap(monkeypatch):
-    """Neutralise cmd_reconcile's claim-GC leg during tests.
-
-    ``reap_dead_claims()``'s default roots resolve through
-    ``resolve_canonical_repo_root()`` (cwd-based ``git worktree list``
-    discovery - the SAME channel hermetic.py documents as unclosable by any
-    env var, see its ``FNO_REPO_ROOT`` comment) and ``global_claims_root()``
-    (HOME, which IS sandboxed). A reconcile test run from inside a real
-    checkout would otherwise archive real dead claims on the host machine.
-    Closed at the reader, same pattern as ``_hermetic_promise_carveout_gate``
-    above. ``cmd_reconcile`` imports ``reap_dead_claims`` fresh inside the
-    function body, so patching the defining module's attribute reaches it;
-    a test module that imports the name directly (``test_claim_reap.py``)
-    binds its own reference at collection time and is unaffected.
-    """
-    import fno.claims.core as claims_core
-
-    def _noop_reap(*args, **kwargs):
-        # The verbs resolve core callables at call time, so this stub must
-        # absorb whatever signature the real reap_dead_claims grows (it
-        # already gained optout_sink after this fixture was written).
-        return {
-            "scanned": 0, "reaped": 0, "would_reap": 0, "kept_live": 0,
-            "kept_suspect": 0, "kept_offhost": 0, "corrupted": 0, "vanished": 0,
-            "contended": 0, "reap_failed": [],
-            "apply": kwargs.get("apply", False), "roots": [],
-        }
-
-    monkeypatch.setattr(claims_core, "reap_dead_claims", _noop_reap)
-
-
-@pytest.fixture(autouse=True)
 def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
     """Default every test to an empty fleet-incident home.
 
     The spawn gate reads the incident verdict through ``$HOME/.fno/agents`` on
     every admission, and the HOME sandbox is ONE shared tmpdir per pytest
     process, so one test that left a stopped record there refused every later
-    gate-touching test on that xdist worker. Same ambient-state-leak class as
-    ``_hermetic_merge_hold_gate`` above; closed at the reader, and a test that
-    exercises a real incident state pins ``FNO_AGENTS_HOME`` itself (monkeypatch
-    applies in order, so the test-local pin wins).
+    gate-touching test on that xdist worker. Closed at the reader, and a test
+    that exercises a real incident state pins ``FNO_AGENTS_HOME`` itself
+    (monkeypatch applies in order, so the test-local pin wins).
     """
     monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / ".fno" / "agents"))
-
-
-@pytest.fixture(autouse=True)
-def _hermetic_merge_hold_gate(monkeypatch):
-    """Default the plan-level merge hold gate to no hold.
-
-    ``hold_for_pr`` (consulted by every merge via ``merge_hold_reason``)
-    reads the graph first and pays a live PR-body fetch whenever the graph
-    carries any node. The HOME sandbox is ONE shared tmpdir per pytest
-    process, so an earlier test in this worker that wrote a node makes every
-    later merge test scope that fetch for real; the CI runner has no working
-    gh, the fetch fails closed, and the merge reads ``held`` for a reason no
-    test arranged.
-    Which tests fall to it moves with worker scheduling, which is what made
-    it look like a race. Closed at the reader, same pattern as
-    ``_hermetic_promise_carveout_gate`` above - the fifth channel of the
-    ambient-state-leak class (CI sees the leak in both directions, local
-    authenticated gh hides it). Tests that exercise the real reader override
-    it (``test_pr_hold.py`` restores the function for the whole module;
-    ``test_plan_dispatch_hold_refuses_sanctioned_merge`` patches
-    ``merge_hold_reason`` above this seam).
-    """
-    import fno.pr._hold as hold
-
-    monkeypatch.setattr(hold, "hold_for_pr", lambda pr_number, cwd: None)
 
 
 @pytest.fixture(autouse=True)
 def _hermetic_authorized_merge(monkeypatch):
     """Default the authorized-merge owner to "authorized, then merged".
 
-    Same ambient-state class as ``_hermetic_merge_hold_gate`` above. The owner
-    lives in the fno-agents binary, which is absent on a CI runner and answers
-    ``unknown`` there, so every merge test would read ``held``; and its probes
-    are live reads - the PR over REST, the review hold's worktree layer shelling
-    ``git`` against whatever checkout the suite runs in, which inside an active
-    /target worktree is legitimately dirty.
+    The owner lives in the fno-agents binary, which is absent on a CI runner
+    and answers ``unknown`` there, so every merge test would read ``held``; and
+    its probes are live reads - the PR over REST, the review hold's worktree
+    layer shelling ``git`` against whatever checkout the suite runs in, which
+    inside an active /target worktree is legitimately dirty.
 
     Cleared at the reader. The decision itself is under test in
     ``crates/fno-agents/src/authorized_merge.rs``; the tests that exercise this

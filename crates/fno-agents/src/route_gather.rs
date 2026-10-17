@@ -262,7 +262,7 @@ fn load_snapshot(cwd: &Path) -> Option<Value> {
 
 /// The two tier tables from the canonical `model_tiers.toml`: strongest-band
 /// names per band, and `name -> [harness, model]` reachability pairs.
-fn load_model_tiers() -> (Vec<(String, Vec<String>)>, Map<String, Value>) {
+pub(crate) fn load_model_tiers() -> (Vec<(String, Vec<String>)>, Map<String, Value>) {
     let raw: toml::Value = toml::from_str(MODEL_TIERS_TABLE).expect("model_tiers.toml must parse");
     let table_list = |key: &str| -> Vec<(String, Vec<String>)> {
         let mut out = Vec::new();
@@ -396,6 +396,7 @@ fn inventory(cwd: &Path) -> Value {
             "effort",
             "cost_per_mtok_in",
             "operator_view",
+            "launch",
         ] {
             let value = match row.get(key) {
                 Some(v) => v.clone(),
@@ -696,7 +697,110 @@ pub fn run_mode(payload: &Value, cwd: &Path) -> Value {
         }
         "policy" => policy(cwd),
         "dispatch_model" => dispatch_model(payload, cwd),
+        "lane" => lane(payload, cwd),
         _ => json!({}),
+    }
+}
+
+/// One declared lane row, matched by NAME or by the resolved (provider,
+/// model) pair - the one owner of the match rule, beside the fold that
+/// produced the rows. `match: "name"` reads `name`; `match: "axes"` reads
+/// provider/model and admits exactly one declared claude row. An ambiguous
+/// or missing match answers `{"found": false}`; the caller degrades, never
+/// guesses.
+fn lane(payload: &Value, cwd: &Path) -> Value {
+    let rows = inventory(cwd)["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let found = match payload.get("match").and_then(Value::as_str).unwrap_or("") {
+        "name" => {
+            let name = payload.get("name").and_then(Value::as_str).unwrap_or("");
+            rows.iter()
+                .find(|row| row.get("name").and_then(Value::as_str) == Some(name))
+        }
+        "axes" => {
+            let provider = payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let model = payload
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let matches: Vec<&Value> = rows
+                .iter()
+                .filter(|row| {
+                    row.get("harness").and_then(Value::as_str) == Some("claude")
+                        && row.get("model").and_then(Value::as_str).map(str::trim) == Some(model)
+                        && row
+                            .get("route")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .splitn(2, '/')
+                            .next()
+                            == Some(provider)
+                })
+                .collect();
+            if matches.len() == 1 {
+                Some(matches[0])
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    match found {
+        Some(row) => {
+            let mut answer = row.clone();
+            // The route's vendor half, split here so a caller never re-parses
+            // the route string to learn who bills.
+            let route = row.get("route").and_then(Value::as_str).unwrap_or("");
+            answer["vendor"] = json!(route.splitn(2, '/').next().unwrap_or(""));
+            // The row's launch argv joins here, read from the raw routing
+            // table: the inventory answer is Python-parity locked (the
+            // goldens carry no launch), so the door reads it beside the fold.
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            if let Some(launch) = raw_row_launch(cwd, name) {
+                answer["launch"] = launch;
+            }
+            answer["found"] = json!(true);
+            answer
+        }
+        None => json!({"found": false}),
+    }
+}
+
+/// The declared `launch` argv of the named `[[routing.models]]` row, read
+/// straight from the config. `None` when the row is absent or declares none.
+fn raw_row_launch(cwd: &Path, name: &str) -> Option<Value> {
+    let table = crate::agents_config::config_value_deep(cwd, &["routing", "models"])?;
+    let rows = table.as_array()?;
+    let row = rows
+        .iter()
+        .find(|row| toml_str_trim(row.get("name")) == name)?;
+    row.get("launch").map(|v| json!(v))
+}
+
+/// The one declared lane row for a resolved (provider, model) pair, for the
+/// in-crate doors; `None` when no exactly-one row matches and the caller
+/// degrades to the content-addressed file and the harness default. The
+/// spawn-side Python never projects a row into a door ask: the match rule
+/// lives here, beside the fold that produced the rows.
+pub(crate) fn lane_for_axes(provider: &str, model: &str, cwd: &Path) -> Option<Value> {
+    let answer = lane(
+        &json!({"match": "axes", "provider": provider, "model": model}),
+        cwd,
+    );
+    if answer
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Some(answer)
+    } else {
+        None
     }
 }
 
@@ -765,7 +869,7 @@ fn dispatch_model(payload: &Value, cwd: &Path) -> Value {
 
 /// The tier leg `dispatch_model` resolves through: one in-process call to
 /// the walk's own `mode: "tier"` answer over the filled inventory.
-fn tier_leg(tier: &str, payload: &Value, cwd: &Path) -> (Value, Vec<Value>) {
+pub(crate) fn tier_leg(tier: &str, payload: &Value, cwd: &Path) -> (Value, Vec<Value>) {
     let inv = inventory(cwd);
     let ask = json!({
         "mode": "tier",
@@ -895,6 +999,23 @@ mod tests {
         clear_sandbox_env(saved);
         assert_eq!(out["enforce_inventory"], json!(true));
         assert_eq!(out["operator_access"], "local");
+    }
+
+    #[test]
+    fn lane_axes_admit_exactly_one_declared_row() {
+        let (guard, tmp, saved) = pinned_sandbox(
+            "lane-axes",
+            "[[routing.models]]\nname = \"t-lane\"\nharness = \"claude\"\nmodel = \"tm-1\"\nroute = \"tp/tm-1\"\n",
+        );
+        let row = lane_for_axes("tp", "tm-1", &tmp).expect("the one row matches");
+        assert_eq!(row["name"], json!("t-lane"));
+        assert_eq!(row["vendor"], json!("tp"));
+        assert!(
+            lane_for_axes("tp", "absent-model", &tmp).is_none(),
+            "no exactly-one match answers None"
+        );
+        drop(guard);
+        clear_sandbox_env(saved);
     }
 
     #[test]

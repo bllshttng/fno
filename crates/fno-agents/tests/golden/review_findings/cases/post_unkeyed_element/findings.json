@@ -1,0 +1,1 @@
+{"findings": [7, {"category": "correctness", "file": "f1.py", "line": 1, "summary": "summary 1", "failure_scenario": "scenario 1"}], "dispositions": [{"finding_key": "f1.py:1:correctness", "disposition": "fixed", "reason": "absent: \"x\" does not hold"}]}

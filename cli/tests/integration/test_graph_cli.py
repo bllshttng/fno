@@ -150,6 +150,18 @@ def _native_verb(verb: str, *args: str) -> _NativeResult:
     return _NativeResult(code, out, err)
 
 
+def _native_verb_at(cwd, verb: str, *args: str) -> _NativeResult:
+    """The same door with a pinned child cwd (config candidates start at
+    cwd/.fno, so isolation from the runner's real config needs the pin)."""
+    from tests._native_door import run_native
+
+    argv = list(args)
+    if verb in ("add", "idea") and "--difficulty" not in argv:
+        argv.extend(["--difficulty", "medium"])
+    code, out, err = run_native("backlog", verb, *argv, cwd=cwd)
+    return _NativeResult(code, out, err)
+
+
 def _native_session(*args: str) -> _NativeResult:
     """The Rust-owned session lifecycle door, migrated out of the Python app."""
     from tests._native_door import run_native
@@ -342,22 +354,6 @@ def test_ac1_hp_graph_next_returns_highest_priority(tmp_graph):
 
 # --- ready ---
 
-def test_ac1_hp_graph_ready_returns_json_array(tmp_graph):
-    """AC1-HP: fno graph ready returns JSON array.
-
-    `graph add` creates plan-less idea-stage nodes; `--include-ideas`
-    surfaces them in the listing. The default exclusion behavior is
-    covered separately in test_graph_status.py.
-    """
-    _native_verb("add", "Feature 1")
-    r = _invoke("backlog", "ready", "--all", "--include-ideas")
-    assert r.exit_code == 0
-    data = json.loads(r.output)
-    assert isinstance(data, list)
-    assert len(data) == 1
-    assert data[0]["title"] == "Feature 1"
-
-
 def test_ac1_hp_undispatched_names_known_node_and_scans_entries(tmp_graph):
     _seed_graph_text(tmp_graph, json.dumps({
         "entries": [{
@@ -536,14 +532,6 @@ def test_done_no_audit_tag_when_not_driving(tmp_graph, monkeypatch):
 
 # --- status ---
 
-def test_ac1_hp_graph_status(tmp_graph):
-    """AC1-HP: fno graph status shows progress summary."""
-    _native_verb("add", "Feature A", "--project", "test-proj")
-    r = _invoke("backlog", "status", "--all")
-    assert r.exit_code == 0
-    assert "test-proj" in r.output
-
-
 class _SnapshotFakeTracker:
     """A NodeTracker fake carrying sentinels distinct from any graph value."""
 
@@ -581,73 +569,14 @@ class _SnapshotFakeTracker:
 
 # --- cost ---
 
-def test_ac1_hp_graph_cost(tmp_graph):
-    """AC1-HP: fno graph cost records session cost (#23).
-
-    Replaces the substring-on-stdout assertion with a state round-trip
-    through `graph get`. A CLI text-format regression should not mask
-    a missing or wrong-value cost write.
-    """
-    r = _native_verb("add", "Costly")
-    node_id = json.loads(r.output)["id"]
-
-    r = _invoke("backlog", "cost", node_id, "--session", "sess-001", "--amount", "1.50")
-    assert r.exit_code == 0
-
-    # State round-trip (#23): the cost write must be visible via
-    # `graph get`. The cost_usd field aggregates across sessions and
-    # cost_sessions records the individual session attribution.
-    data = json.loads(_native_get(node_id))
-    assert data["cost_usd"] == pytest.approx(1.50)
-    cost_sessions = data.get("cost_sessions") or []
-    assert any(s.get("session_id") == "sess-001" for s in cost_sessions), (
-        f"sess-001 should appear in cost_sessions, got {cost_sessions!r}"
-    )
-
-
-# --- briefs ---
-
-# --- remove ---
-
-def test_ac1_hp_graph_remove(tmp_graph):
-    """AC1-HP: fno graph remove deletes a node."""
-    r = _native_verb("add", "ToRemove")
-    node_id = json.loads(r.output)["id"]
-
-    r = _invoke("backlog", "remove", node_id, "--force")
-    assert r.exit_code == 0
-
-    code, _, _ = _native_get_raw(node_id)
-    assert code != 0
-
-
-# --- defer ---
-
 @pytest.mark.usefixtures("native_backlog_door")
-def test_ac1_hp_graph_defer(tmp_graph):
-    """AC1-HP: fno graph defer sets deferred_at + deferred_reason and derives status: deferred."""
-    r = _native_verb("add", "ToDefer")
-    node_id = json.loads(r.output)["id"]
-
-    r = _invoke("backlog", "defer", node_id, "--reason", "stale spec")
-    assert r.exit_code == 0
-
-    data = json.loads(_native_get(node_id))
-    assert data.get("deferred_at"), "deferred_at should be set to an ISO timestamp"
-    assert data.get("deferred_reason") == "stale spec"
-    assert data.get("status") == "deferred"
-    assert not data.get("completed_at"), "completed_at must remain clear when deferring"
-
-
-# --- reprioritize ---
-
 def test_ac1_hp_graph_reprioritize(tmp_graph):
-    """AC1-HP: fno graph reprioritize changes priority."""
+    """AC1-HP: fno backlog reprioritize changes priority (the native arm)."""
     r = _native_verb("add", "ToRepri")
     node_id = json.loads(r.output)["id"]
 
-    r = _invoke("backlog", "reprioritize", node_id, "p1")
-    assert r.exit_code == 0
+    r = _native_verb("reprioritize", node_id, "p1")
+    assert r.exit_code == 0, r.err
 
     data = json.loads(_native_get(node_id))
     assert data["priority"] == "p1"
@@ -942,15 +871,15 @@ def test_priority_p0_requires_breaking_acknowledgment(tmp_graph):
 
 def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     """Every CLI birth path applies the p0 acknowledgment before mutation."""
-    refused = _invoke("backlog", "new", "Not actually broken", "--priority", "p0")
+    refused = _native_verb("new", "Not actually broken", "--priority", "p0")
     assert refused.exit_code != 0
-    assert "p0 blocks everything else, usually a bug" in refused.output
+    assert "p0 blocks everything else, usually a bug" in refused.output + refused.stderr
     assert _read_graph(tmp_graph) == []
 
-    accepted = _invoke(
-        "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything"
+    accepted = _native_verb(
+        "new", "Broken service", "--priority", "p0", "--blocks-everything"
     )
-    assert accepted.exit_code == 0, accepted.output
+    assert accepted.exit_code == 0, accepted.output + accepted.stderr
     assert _read_graph(tmp_graph)[0]["blocks_everything"] is True
 
 
@@ -1075,98 +1004,6 @@ def test_priority_missing_key_backfill(tmp_graph):
     nokey = next(e for e in entries if e["id"] == "ab-nokey0001")
     assert nokey["priority"] == "p2"
 
-
-def test_model_pin_rides_in_ready_and_next_json(tmp_graph):
-    """x-571f US3: the model pin must ride in the `ready` and `next` JSON so the
-    lane-fill (`_ready_nodes`) and sequential-drain (`fno backlog next`)
-    dispatchers can thread it into the spawn they build (AC1-HP / AC2-HP)."""
-    plan = _write_plan(tmp_graph.parent, "pinned.md", "Pinned")
-    _seed_graph_text(tmp_graph, json.dumps({
-        "entries": [
-            {"id": "ab-pinned00", "title": "Pinned", "priority": "p1",
-             "plan_path": str(plan), "status": "ready", "model": "fable",
-             "created_at": _recent_iso(1)},
-        ]
-    }))
-
-    listing = json.loads(_invoke("backlog", "ready", "--all").stdout)
-    assert listing[0]["model"] == "fable"
-
-    nxt = json.loads(_door_graph(tmp_graph, "next", "--all").stdout)
-    assert nxt["model"] == "fable"
-
-
-def test_dispatch_hold_is_absent_from_ready_and_next_destinations(tmp_graph, tmp_path):
-    plan = tmp_path / "held.md"
-    plan.write_text(
-        "---\nstatus: ready\ndispatch_hold:\n"
-        "  reason: Blocking review finding is unresolved\n"
-        "  release_when: The finding is fixed and re-reviewed\n"
-        "  review_on: 2099-08-20\n"
-        "  set_by: lead:119e3c52\n---\n",
-        encoding="utf-8",
-    )
-    _seed_graph_text(tmp_graph, json.dumps({"entries": [
-        {"id": "ab-5a5c", "title": "Held", "status": "ready", "priority": "p0", "plan_path": str(plan), "created_at": _recent_iso(1)},
-        {"id": "ab-1a2b", "title": "Unheld", "status": "ready", "priority": "p1", "created_at": _recent_iso(1)},
-    ]}))
-    ready_ids = [e["id"] for e in json.loads(_invoke("backlog", "ready", "--all").stdout)]
-    assert ready_ids == ["ab-1a2b"]
-    assert json.loads(_door_graph(tmp_graph, "next", "--all").stdout)["id"] == "ab-1a2b"
-
-
-def test_dispatch_hold_on_owner_hides_parent_and_contained_descendants(tmp_graph, tmp_path):
-    plan = tmp_path / "owner-held.md"
-    plan.write_text(
-        "---\nstatus: ready\ndispatch_hold:\n"
-        "  reason: Owner is held\n  release_when: Review passes\n"
-        "  review_on: 2099-08-20\n  set_by: lead\n---\n",
-        encoding="utf-8",
-    )
-    entries = [
-        {"id": "ab-5a5c", "title": "Owner", "status": "ready", "plan_path": str(plan), "created_at": _recent_iso(1)},
-        {"id": "ab-1a2b", "title": "Parent child", "status": "ready", "parent": "ab-5a5c", "created_at": _recent_iso(1)},
-        {"id": "ab-3c4d", "title": "Contained", "status": "ready", "contained_in": "ab-5a5c", "created_at": _recent_iso(1)},
-    ]
-    _seed_graph_text(tmp_graph, json.dumps({"entries": entries}))
-    ready_ids = [e["id"] for e in json.loads(_invoke("backlog", "ready", "--all").stdout)]
-    assert ready_ids == []
-    next_result = _door_graph(tmp_graph, "next", "--all")
-    assert json.loads(next_result.stdout) is None
-    # The door splits the streams: starvation receipts answer on stderr.
-    assert "dispatch-hold:ab-5a5c" in next_result.stderr
-
-
-def test_priority_read_path_backfill(tmp_graph):
-    """Read-only commands (`backlog ready`/`next`) sort correctly even before
-    the first mutation triggers the on-disk backfill - `_apply_graph_defaults`
-    rewrites legacy values in memory.
-    """
-    plan = _write_plan(tmp_graph.parent, "priority.md", "Priority")
-    _seed_graph_text(tmp_graph, json.dumps({
-        "entries": [
-            {"id": "ab-mem00low", "title": "Was low", "priority": "low",
-             "plan_path": str(plan), "status": "ready",
-             "created_at": _recent_iso(2)},
-            {"id": "ab-mem00hi0", "title": "Was high", "priority": "high",
-             "plan_path": str(plan), "status": "ready",
-             "created_at": _recent_iso(1)},
-        ]
-    }))
-
-    r = _invoke("backlog", "ready", "--all")
-    assert r.exit_code == 0, r.output
-    listing = json.loads(r.stdout)
-    # Was-high (p1, rank 1) must come before was-low (p3, rank 3).
-    titles = [e["title"] for e in listing]
-    assert titles.index("Was high") < titles.index("Was low")
-    # And the in-memory rows reflect the migrated vocabulary.
-    priorities = {e["title"]: e["priority"] for e in listing}
-    assert priorities["Was high"] == "p1"
-    assert priorities["Was low"] == "p3"
-
-
-# --- additional_prs (--add-pr / --remove-pr) ---
 
 def test_legacy_entry_without_additional_prs_loads_with_default(tmp_graph):
     """Old graph.json entries (no additional_prs key) get [] on read."""
@@ -1421,29 +1258,6 @@ def test_graph_next_picks_epic_child_over_higher_priority_loose(tmp_graph):
     assert out["id"] == "ab-child"
 
 
-def test_graph_ready_orders_epic_children_before_loose(tmp_graph):
-    """C3: `fno graph ready` lists epic children ahead of loose nodes."""
-    plan = _write_plan(tmp_graph.parent, "epic-order.md", "Epic order")
-    _seed_graph_text(tmp_graph, json.dumps({"entries": _epics_first_entries(str(plan))}) + "\n")
-    r = _invoke("backlog", "ready", "--all")
-    ids = [e["id"] for e in json.loads(r.stdout)]
-    assert ids.index("ab-child") < ids.index("ab-loose")
-
-
-def test_graph_ready_excludes_epics(tmp_graph):
-    """x-33b2 (codex P2 on PR #69): `fno backlog ready` - which the
-    `dispatch-node.sh --all-ready` bulk path enumerates - must NOT list a
-    container, or that path would launch a /target worker against the box.
-    Shares the epic filter with `next` so the two surfaces agree."""
-    plan = _write_plan(tmp_graph.parent, "epic-ready.md", "Epic ready")
-    _seed_graph_text(tmp_graph, json.dumps({"entries": _epics_first_entries(str(plan))}) + "\n")
-    r = _invoke("backlog", "ready", "--all")
-    ids = [e["id"] for e in json.loads(r.stdout)]
-    assert "ab-epic" not in ids        # the container is excluded
-    assert "ab-child" in ids           # its buildable leaf is listed
-    assert "ab-loose" in ids
-
-
 def test_graph_next_skips_in_progress_epic_for_leaf(tmp_graph):
     """x-33b2: an IN-PROGRESS epic (one child done, one still pending) is the
     top-ranked ready node but must NOT be selected - `next` falls through to a
@@ -1677,22 +1491,19 @@ def _settings_yaml_for_project(settings_path: Path, project: str, root: str) -> 
 
 def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
     """AC2: new --project <mapped> --unscoped -> cwd derived from work-map despite --unscoped."""
-    from unittest.mock import patch
-
     work_root = str(tmp_path / "new-root")
     settings_path = tmp_graph.parent / "settings.yaml"
     _settings_yaml_for_project(settings_path, "fno", work_root)
 
-    with patch(
-        "fno.graph._intake._settings_candidate_paths",
-        return_value=[settings_path],
-    ):
-        r = _invoke(
-            "backlog", "new", "New unscoped with explicit project",
-            "--project", "fno",
-            "--unscoped",
-            "--force-domain",
-        )
+    # cwd pins the child into the tmp dir so its config walk (cwd/.fno first)
+    # cannot pick up a runner's real work-map ahead of the fixture's.
+    r = _native_verb_at(
+        tmp_path,
+        "new", "New unscoped with explicit project",
+        "--project", "fno",
+        "--unscoped",
+        "--force-domain",
+    )
 
     assert r.exit_code == 0, r.output
     entries = _read_graph(tmp_graph)
@@ -1703,24 +1514,22 @@ def test_ac2_new_explicit_project_unscoped_derives_cwd(tmp_graph, tmp_path):
 
 def test_ac2_new_no_project_unchanged(tmp_graph, tmp_path):
     """AC2: new without --project keeps existing behavior (cwd from git root or None)."""
-    from unittest.mock import patch
-
     settings_path = tmp_graph.parent / "settings.yaml"
     _settings_yaml_for_project(settings_path, "fno", "/some/mapped/root")
 
-    with patch(
-        "fno.graph._intake._settings_candidate_paths",
-        return_value=[settings_path],
-    ), patch("fno.graph._intake.resolve_git_roots", return_value=("myrepo", "/git/root")):
-        r = _invoke(
-            "backlog", "new", "New without project flag",
-            "--force-domain",
-        )
+    # git-less tmp: the git-root derivation falls back to the cwd itself, and
+    # no work-map entry names tmp, so project stays unset.
+    r = _native_verb_at(
+        tmp_path,
+        "new", "New without project flag",
+        "--force-domain",
+    )
 
     assert r.exit_code == 0, r.output
     entries = _read_graph(tmp_graph)
     assert len(entries) == 1
-    assert entries[0]["cwd"] == "/git/root"
+    assert entries[0]["cwd"] == str(tmp_path)
+    assert entries[0]["project"] is None
 
 
 # --- US3: per-node dispatch verb + brief -----------------------------------
@@ -1885,32 +1694,6 @@ def test_maintain_apply_skips_in_review_node(tmp_graph):
     node = next(e for e in entries if e["id"] == "ab-inrev")
     assert not node.get("deferred_at")  # never quarantined
 
-
-def test_ready_excludes_stale_and_dead_ancestor(tmp_graph):
-    # `ready` feeds lane-fill / the daemon / --all-ready dispatch, so it must
-    # apply the SAME guard as `next` (code-reviewer finding, x-3236).
-    import os
-    from datetime import datetime, timezone, timedelta
-
-    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    plan = _write_plan(tmp_graph.parent, "ready-guards.md", "Ready guards")
-    os.utime(plan, (0, 0))
-    _seed(tmp_graph, [
-        {"id": "ab-live0", "title": "live", "project": "fno", "status": "ready",
-         "plan_path": str(plan), "created_at": recent, "priority": "p2"},
-        {"id": "ab-stale0", "title": "stale", "project": "fno", "status": "ready",
-         "plan_path": str(plan), "created_at": "2026-01-01T00:00:00+00:00",
-         "priority": "p2"},
-        {"id": "ab-deadep", "title": "epic", "project": "fno",
-         "superseded_by": "ab-new"},
-        {"id": "ab-deadch", "title": "child", "project": "fno", "status": "ready",
-         "parent": "ab-deadep", "plan_path": str(plan), "created_at": recent,
-         "priority": "p2"},
-    ])
-    ids = [e["id"] for e in json.loads(_invoke("backlog", "ready", "--project", "fno").stdout)]
-    assert "ab-live0" in ids
-    assert "ab-stale0" not in ids      # stale-quarantined
-    assert "ab-deadch" not in ids      # dead-ancestor
 
 class _GetFakeTracker(_SnapshotFakeTracker):
     """Extends the snapshot fake: read() answers the open sentinels too."""

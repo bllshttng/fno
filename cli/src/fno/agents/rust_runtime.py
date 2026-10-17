@@ -232,6 +232,11 @@ RUST_CLIENT_VERBS = frozenset(
         # also satisfy it. Dispatched directly in client.rs before
         # build_request (no daemon RPC, no Python impl).
         "review-coverage",
+        # Review-attestation carrier between this machine's event journal and
+        # the shared primary. Dispatched directly in client.rs before
+        # build_request (no daemon RPC, no Python impl); this entry keeps the
+        # client.rs<->router parity test in sync.
+        "attest",
         # Pre-manifest <help> tag read: the stop hooks' visitor-allowed
         # exit calls this directly when no manifest names the session, so a
         # worker that dies before `target init` still gets its distress heard.
@@ -538,6 +543,7 @@ RUST_ONLY_VERB_HELP: dict[str, str] = {
     "adopt": "Register an orphaned session by its session id so it is addressable (peek/ask/resume/mail); resolves the registry, .fno/target-state.md, then harness stores.",
     "revival-check": "One JSON answer to whether a spawn --resume revives an existing row instead of forking: the row by name or by the resumed uuid, supervisor not live; consumed by the spawn path.",
     "review-coverage": "Emit the review_coverage event for a PR with the stop hook's own resolver/emitter: --cwd <dir> [--pr <n>] [--head <sha>]. No way to assert coverage without the reads.",
+    "attest": "Review-attestation carrier over the shared primary: push reads one envelope line on stdin, pull prints this repo's rows (unset store.remote_url is a no-op).",
     "distress-scan": "Read a transcript for a <help> tag and append a blocked row on a hit: --transcript <path> --run <id> [--node <id>] [--harness <name>] [--cwd <dir>]. Best-effort, always exits 0.",
     "recover": "Restore a recorded claude session under its account and route: <agent> [--session <id>] names the id when the row holds two; --print-command prints the inspection form and touches nothing.",
     "rename": "Rename a registry row's label: <worker> --name <new-label>; the old label keeps resolving as an alias.",
@@ -667,7 +673,10 @@ def _is_bounded_codex_code_spawn(args: Sequence[str]) -> bool:
         longs=("--yolo", "--dangerously-bypass-approvals-and-sandbox"),
     ):
         return False
-    if _has_flag(args, longs=("--once", "--headless")):
+    headless_spawn = _has_flag(args, longs=("--once",)) or (
+        (_spawn_flag_value(args, "--substrate") or "").strip().lower() == "headless"
+    )
+    if headless_spawn:
         # The codex headless one-shot lane hardcodes its own bypass, so no
         # bounded sandbox stands between the worker and .git; spawn_defaults
         # skips permission-mode mapping on this lane for the same reason.
@@ -960,11 +969,12 @@ def _is_pane_substrate_spawn(verb: str, args: Sequence[str]) -> bool:
     for a in it:
         if a == "--argv" or a == "--":
             break
-        if a in ("--once", "-o", "--headless", "-p"):
-            # The headless spellings (--once/-o and --headless/-p): a one-shot,
-            # never a pane. Must be honored here or a headless spawn would route
-            # to the pane back half. `-H` (harness) and `-P` (vendor) are NOT
-            # here: they are value flags that do not pick the lane.
+        if a in ("--once", "-o"):
+            # The headless spellings (--once/-o; `--substrate headless` is the
+            # long form): a one-shot, never a pane. Must be honored here or a
+            # headless spawn would route to the pane back half. `-H` (harness)
+            # and `-P` (vendor) are NOT here: they are value flags that do not
+            # pick the lane.
             return False
         if a == "--substrate":
             substrate = next(it, "")
@@ -995,7 +1005,7 @@ def _is_keeper_thread_spawn(verb: str, args: Sequence[str]) -> bool:
     it = iter(_args_before_argv(args))
     substrate = "pane"
     for a in it:
-        if a in ("--once", "-o", "--headless", "-p"):
+        if a in ("--once", "-o"):
             return False
         if a == "--substrate":
             substrate = next(it, "")

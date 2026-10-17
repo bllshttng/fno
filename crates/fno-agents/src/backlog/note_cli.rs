@@ -1345,11 +1345,11 @@ mod tests {
 
     /// The comment test reads the claims state through `notice_holder`'s
     /// holder probe; the hermetic guard demands a temp root, and the env is
-    /// process-global, so the tests serialize on one mutex.
+    /// process-global, so the tests serialize on the shared test-env lock.
+    /// A module-local mutex is not enough: a concurrent scenario elsewhere in
+    /// the binary (burn_watch pins FNO_CLAIMS_ROOT) must not see this flip.
     fn claims_root_pin() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let guard = LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
+        let guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = tempfile::tempdir().unwrap();

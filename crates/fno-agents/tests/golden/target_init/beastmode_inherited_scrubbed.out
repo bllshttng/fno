@@ -1,0 +1,15 @@
+FNO_TARGET_BINDING=
+FNO_TARGET_INIT_GATED=1
+TARGET_ADOPTED_PR=
+TARGET_BEASTMODE=
+TARGET_INPUT=fix the login redirect bug
+TARGET_SESSION_ID=00000000-0000-0000-0000-000000000000
+TARGET_START=1
+node:                fresh (no node bound)
+attended:            true (substrate: operator session)
+worktree:            on canonical main -- create with: fno do target start <node>
+tests:               unknown | resolve: set your repo's test command
+plan:                none (no plan bound)
+boundary-reconcile:  fresh (no node bound)
+manifest-live:       none (no manifest)
+done-when:           PR + CI green + reviewed by [none (PR + CI only)] (optional if present: [chatgpt-codex-connector]); self-review required for code (unknown): run `/fno:review <level> --comment` (the lane emits its own attestation; `bash skills/review/scripts/emit-attestation.sh code-review` is the recovery path when emission fails); on refusal, report the literal refusal and stop

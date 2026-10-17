@@ -90,32 +90,19 @@ pub(super) struct BotProfile {
 
 /// The shipped bot table. `chatgpt-codex-connector` is characterized from PR #618
 /// (mention-triggered, ~4-7m latency, 5/5 mentions answered) and PR #947 (the
-/// clean-pass comment); `gemini-code-assist` stays `nudgeable: false` with an
-/// empty `review_handle` until its trigger is characterized (Evidence Gaps),
-/// which is strictly more than the old lists knew.
-pub(super) const BOT_PROFILES: &[BotProfile] = &[
-    BotProfile {
-        login: "chatgpt-codex-connector",
-        review_handle: "@codex review",
-        reply_handle: "@chatgpt-codex-connector",
-        usage_markers: &["usage limits for code reviews", "codex usage limits"],
-        refusal_markers: &["authentication failed"],
-        clean_pass_markers: &[
-            "didn't find any major issues",
-            "didn\u{2019}t find any major issues",
-        ],
-        nudgeable: true,
-    },
-    BotProfile {
-        login: "gemini-code-assist",
-        review_handle: "",
-        reply_handle: "@gemini-code-assist",
-        usage_markers: &[],
-        refusal_markers: &[],
-        clean_pass_markers: &[],
-        nudgeable: false,
-    },
-];
+/// clean-pass comment).
+pub(super) const BOT_PROFILES: &[BotProfile] = &[BotProfile {
+    login: "chatgpt-codex-connector",
+    review_handle: "@codex review",
+    reply_handle: "@chatgpt-codex-connector",
+    usage_markers: &["usage limits for code reviews", "codex usage limits"],
+    refusal_markers: &["authentication failed"],
+    clean_pass_markers: &[
+        "didn't find any major issues",
+        "didn\u{2019}t find any major issues",
+    ],
+    nudgeable: true,
+}];
 
 /// The profile for an actual review/comment AUTHOR login (may carry gh's `[bot]`
 /// suffix or be the full login): the profile login is a substring of the author,
@@ -125,6 +112,14 @@ pub(super) fn profile_by_author(author: &str) -> Option<&'static BotProfile> {
     BOT_PROFILES
         .iter()
         .find(|p| login_matches_bot(author, p.login))
+}
+
+/// The recognized review-App logins: the shipped bot table's logins. This is
+/// now the set's ONE source - the Python capability resolver's copy deleted
+/// with its module, and check-review-app-parity.sh compares the configured
+/// defaults against this table directly.
+pub(crate) fn bot_profile_logins() -> impl Iterator<Item = &'static str> {
+    BOT_PROFILES.iter().map(|p| p.login)
 }
 
 /// Two login strings name the same bot when either is a case-insensitive

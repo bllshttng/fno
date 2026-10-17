@@ -595,15 +595,12 @@ TOML
     TRANSCRIPT="${TMP_DIR}/${UUID}.jsonl"
     printf '{"message":{"role":"user","content":"go"}}\n' > "$TRANSCRIPT"
 
-    # Write ledger with cost > cap for this session. Seed it where the hook's
-    # binary resolves the ledger (the space beside the resolved journal): the
-    # migration that once ferried a seeded checkout ledger there refuses
-    # foreign destinations by design, so a checkout-path seed goes unread
-    # whenever a spaces root pin is ambient.
-    PROJ_EVENTS="$(cd "$TMP_DIR" && HOME="$HOME_DIR" env -u FNO_EVENTS_PATH "$REAL_BIN" state path events)"
-    mkdir -p "$(dirname "$PROJ_EVENTS")"
-    cat > "${PROJ_EVENTS%events.jsonl}ledger.json" <<LEDGER
-[{"session_id":"${SESSION_ID}","cost_usd":0.05,"tokens":1000}]
+    # Write ledger with cost > cap for this session. The hook resolves the
+    # global ledger under the case's HOME; the FNO_STATE_DIR seal in the
+    # run_hook env keeps an ambient pin from moving the read.
+    mkdir -p "${HOME_DIR}/.fno"
+    cat > "${HOME_DIR}/.fno/ledger.json" <<LEDGER
+{"entries":[{"session_id":"${SESSION_ID}","cost_usd":0.05,"tokens":1000}]}
 LEDGER
 
     # Write a manifest with attended: false (so verb picks unattended cap 0.01)
@@ -653,6 +650,7 @@ STATE
     INPUT_JSON="{\"transcript_path\":\"${TRANSCRIPT}\"}"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
+        "FNO_STATE_DIR=${HOME_DIR}/.fno" \
         "FNO_AGENTS_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${STUB_BIN}/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${STUB_BIN}/git" \

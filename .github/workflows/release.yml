@@ -28,9 +28,9 @@ name: release
 #   stable   - dispatch only: promotes the newest v*rc* tag (or
 #              inputs.sha) in the approved job: PyPI, crates.io, the tag,
 #              the GitHub Release, the Homebrew tap, the `stable` branch
-#              the plugin marketplaces pin, and a one-patch version sync
-#              of main (nightly refuses while v<src> exists, so without
-#              the sync every promotion wedges the nightly).
+#              the plugin marketplaces pin. Main is not touched: a
+#              repository rule rejects the release job's push, and
+#              release-version.sh skips every released v<src> instead.
 #
 # The cadence is backed by a nudge, not a memory act: the remind job opens
 # one issue once a candidate has waited a day on the approval click, and
@@ -172,17 +172,36 @@ jobs:
             # against gh's pipe can SIGPIPE the producer, and pipefail would
             # turn that into a silent step failure. The client-side shape is
             # the rust pick's: the endpoint's server filters answer from the
-            # stale index.
+            # stale index. A cancelled run is a push the next push superseded,
+            # not a red shard. It still proves nothing alone, so it is skipped
+            # only when a NEWER run that contains its commit succeeded. The
+            # list is newest first, so every success seen before an
+            # at-or-before run is newer.
             if ! runs="$(BRANCH="$default_branch" gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cli-ci.yml/runs?per_page=100" \
               --jq '.workflow_runs[] | select(.head_branch == $ENV.BRANCH and .event == "push" and .conclusion != null and .conclusion != "") | "\(.head_sha) \(.conclusion)"')"; then
               echo "::error::the cli-ci run list failed (see the gh error above); cannot gate on cli-ci" >&2
               exit 1
             fi
             cli_run=""
+            newer_green=""
             while read -r run_sha run_conclusion; do
-              if [ -n "$run_sha" ] && git merge-base --is-ancestor "$run_sha" "$rust_sha" 2>/dev/null; then
+              [ -n "$run_sha" ] || continue
+              if git merge-base --is-ancestor "$run_sha" "$rust_sha" 2>/dev/null; then
+                if [ "$run_conclusion" = "cancelled" ]; then
+                  superseded=""
+                  for green_sha in $newer_green; do
+                    if git merge-base --is-ancestor "$run_sha" "$green_sha" 2>/dev/null; then
+                      superseded=1
+                      break
+                    fi
+                  done
+                  [ -n "$superseded" ] && continue
+                fi
                 cli_run="$run_conclusion"
                 break
+              fi
+              if [ "$run_conclusion" = "success" ]; then
+                newer_green="${newer_green} ${run_sha}"
               fi
             done <<< "$runs"
 
@@ -301,8 +320,7 @@ jobs:
           echo "source version at ${sha}: ${src}"
 
           # exit 3 (stable already shipped) reads as an idempotent no-op;
-          # exit 1 (v<src> released on another channel) is a real failure
-          # naming the sync-version bump. stderr is captured so a failure
+          # any other exit is a real failure. stderr is captured so a failure
           # re-emits as ::error annotations naming the cause, not a bare
           # exit 1 under set -e.
           rc=0
@@ -316,6 +334,21 @@ jobs:
             done <<< "$err"
             exit "$rc"
           fi
+
+      - name: Validate the selected plugin source before any publication
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          SOURCE_SHA: ${{ steps.pick.outputs.sha }}
+          VERSION: ${{ steps.math.outputs.version }}
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+          mkdir "$scratch/source"
+          git archive "$SOURCE_SHA" | tar -x -C "$scratch/source"
+          rustc --edition=2021 crates/fno-agents/ci/plugin_tree.rs -o "$scratch/plugin-tree"
+          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
+          "$scratch/plugin-tree" build "$scratch/source" "$scratch/tree" "$SOURCE_SHA" "$semver"
 
   binaries:
     name: build binary tarballs
@@ -400,6 +433,15 @@ jobs:
           git tag -f nightly "$stamped"
           git push -f origin refs/tags/nightly
           echo "stamped=${stamped}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the shared nightly plugin tree
+        if: inputs.dry_run != true
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.sha }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
+          bash scripts/release/publish-plugin.sh "$SOURCE_SHA" "$semver" plugin-nightly
 
       - name: Publish the nightly release
         run: |
@@ -508,6 +550,9 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
+          # Main's manifests can lag a shipped stable, so publish the version
+          # the resolve job printed: a workspace-only stamp, never committed.
+          bash scripts/release/sync-version.sh "$VERSION"
           # crates.io uploads are permanent: a version already there is an
           # idempotent skip, so a re-run after a partial publish never retries.
           for pair in "fno-agents:crates/fno-agents" "fno:crates/fno"; do
@@ -519,10 +564,10 @@ jobs:
               continue
             fi
             if [ "$DRY_RUN" = "true" ]; then
-              cargo publish --dry-run --manifest-path "${dir}/Cargo.toml"
+              cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml"
             else
               test -n "$CARGO_REGISTRY_TOKEN" || { echo "CARGO_REGISTRY_TOKEN not set; refusing to publish"; exit 1; }
-              cargo publish --manifest-path "${dir}/Cargo.toml"
+              cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml"
             fi
           done
 
@@ -559,19 +604,18 @@ jobs:
 
       - name: Stable plugin channel (stable only)
         if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
-        # Move the `stable` branch the plugin marketplaces pin, and add the
-        # plugin tag beside v<src>. Both live INSIDE the approved job: the
-        # plugin channel moves only on stable promotion.
+        # Both marketplaces consume one generated tree. Preserve the previous
+        # stable tip as its parent so installed clones can fast-forward.
+        id: stable-plugin
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git push -f origin "+${SHA}:refs/heads/stable"
-          echo "stable branch moved to ${SHA}"
+          bash scripts/release/publish-plugin.sh "$SHA" "$VERSION" stable
           if git rev-parse --verify -q "refs/tags/fno--v${VERSION}" >/dev/null; then
             echo "plugin tag fno--v${VERSION} already exists - skipping"
           else
-            git tag "fno--v${VERSION}" "$SHA"
+            git tag "fno--v${VERSION}" "$(git ls-remote origin refs/heads/stable | cut -f1)"
             git push origin "refs/tags/fno--v${VERSION}"
             echo "plugin tag fno--v${VERSION} pushed"
           fi
@@ -606,42 +650,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "fno ${VERSION}: bump url + sha256 (auto, x-0afe)"
           git push
-
-      - name: Sync main past the release (stable only)
-        if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
-        # Nightly refuses (exit 1, naming the sync-version bump) for as long
-        # as v<src> exists, so a shipped stable wedges every later nightly
-        # until main's version moves past it. On a weekly cadence that wedge
-        # would be permanent. Bump main one patch here, inside the same
-        # approved job: the click authorized the promotion, and this is its
-        # tail. Best effort: a rejected push (main moved mid-promotion)
-        # warns instead of failing a release that already shipped, and the
-        # next promotion or a manual sync-version heals it.
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          next="$(printf '%s' "$VERSION" | awk -F. -v OFS=. '{$NF += 1; print}')"
-          echo "bumping main to ${next} after v${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          bash scripts/release/sync-version.sh "$next"
-          git add cli/src/fno/__init__.py \
-            crates/fno/Cargo.toml crates/fno/Cargo.lock \
-            crates/fno-agents/Cargo.toml crates/fno-agents/Cargo.lock \
-            .claude-plugin/plugin.json .claude-plugin/marketplace.json \
-            gemini-extension.json .codex-plugin/plugin.json \
-            .opencode/package.json plugins/openclaw/promise-tag-reader/package.json
-          if git diff --cached --quiet; then
-            echo "main already carries ${next} - nothing to sync"
-            exit 0
-          fi
-          git commit -m "chore(release): sync main to ${next} after v${VERSION}"
-          if git push origin "HEAD:${DEFAULT_BRANCH}"; then
-            echo "main synced to ${next}; the nightly is unblocked"
-          else
-            echo "::warning::could not push the version sync to ${DEFAULT_BRANCH} (main moved mid-promotion?); nightly stays wedged until a manual scripts/release/sync-version.sh ${next} lands"
-          fi
 
   remind-stable:
     name: remind when a candidate waits on promotion

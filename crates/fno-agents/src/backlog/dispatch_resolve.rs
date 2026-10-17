@@ -2,8 +2,9 @@
 //!
 //! Ports `fno/agents/harness_map.py` - `resolve_dispatch` and the seams it
 //! owns (`normalize_command`, `dispatch_command`, `substrate_default`,
-//! `thread_seatable`, `spawn_state`, `footnote_verbs`, and the
-//! skill-presence probe `fno.review_capability.resolve_skill_presence`)
+//! `thread_seatable`, `spawn_state`, `footnote_verbs`, and the shared
+//! skill-presence probe, native in `skill_presence` here since the
+//! review-capability port folded the Python twin into it)
 //! over the native capability table (`HarnessContract::packaged`) and the
 //! shared merge-posture vocabulary. Refusal texts are byte-matched to the
 //! Python owner; the decision log rides the result so a receipt answers
@@ -207,34 +208,93 @@ fn claude_skill_roots() -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// The dispatch-verb registry's `requires == "skill"` gate: the shared
-/// probe's three outcomes, narrowed to the one the resolver refuses on.
-/// `unverifiable` degrades to admitted (the stop gate is the backstop);
-/// only a searched-and-absent answer refuses.
-fn skill_presence_refusal(name: &str, context: &str) -> Option<String> {
+/// The shared skill-presence probe, byte-matched to the Python resolver's
+/// three outcomes: found -> satisfiable, absent with one root readable ->
+/// unavailable, unanswerable -> unverifiable (degrades rather than bricking
+/// a run). The harness gate lives HERE, so a codex dispatch probing Claude's
+/// roots answers `unverifiable` instead of `unavailable` - the dual this
+/// port collapses (the Python resolver gated on harness; the Rust one
+/// probed every harness).
+pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'static str, String) {
+    skill_presence_in(name, harness, context, claude_skill_roots())
+}
+
+/// The roots are injected so the absent/unverifiable boundary is testable
+/// without mutating HOME (cargo runs unit tests in parallel).
+pub(crate) fn skill_presence_in(
+    name: &str,
+    harness: &str,
+    context: &str,
+    roots: Vec<std::path::PathBuf>,
+) -> (&'static str, String) {
+    let proceed = "Proceeding - if the gate does go unmet, run the skill by hand";
+    if harness != "claude" {
+        return (
+            "unverifiable",
+            format!(
+                "needs a resolvable skill; footnote only knows Claude's skill \
+                 roots and this is harness={harness}. {proceed}"
+            ),
+        );
+    }
     if name.contains(':') {
-        return None;
+        return (
+            "unverifiable",
+            format!(
+                "{} is a plugin-qualified skill; footnote does not read the \
+                 plugin cache layout, so availability cannot be verified. {proceed}",
+                py_repr(name)
+            ),
+        );
     }
     let mut searched: Vec<String> = Vec::new();
-    for root in claude_skill_roots() {
+    for root in &roots {
         if !root.is_dir() {
             continue;
         }
         searched.push(root.to_string_lossy().to_string());
         if root.join(name).join("SKILL.md").is_file() {
-            return None;
+            return (
+                "satisfiable",
+                format!("skill resolves at {}", root.join(name).display()),
+            );
         }
     }
     if searched.is_empty() {
-        return None;
+        let looked: Vec<String> = roots
+            .iter()
+            .map(|r| r.to_string_lossy().to_string())
+            .collect();
+        return (
+            "unverifiable",
+            format!(
+                "no skill root exists on this host (looked for {}), so \
+                 availability cannot be verified. {proceed}",
+                looked.join(", ")
+            ),
+        );
     }
-    Some(format!(
-        "skill {} resolves in none of the roots searched ({}); install it \
-         there or change {}",
-        py_repr(name),
-        searched.join(", "),
-        context
-    ))
+    (
+        "unavailable",
+        format!(
+            "skill {} resolves in none of the roots searched ({}); install \
+             it there or change {}",
+            py_repr(name),
+            searched.join(", "),
+            context
+        ),
+    )
+}
+
+/// The dispatch-verb registry's `requires == "skill"` gate: the shared
+/// probe's three outcomes, narrowed to the one the resolver refuses on.
+/// `unverifiable` degrades to admitted (the stop gate is the backstop);
+/// only a searched-and-absent answer refuses.
+fn skill_presence_refusal(name: &str, harness: &str, context: &str) -> Option<String> {
+    match skill_presence(name, harness, context) {
+        ("unavailable", reason) => Some(reason),
+        _ => None,
+    }
 }
 
 /// Translate a claude-syntax footnote slash command to the harness's
@@ -557,9 +617,11 @@ pub fn resolve_dispatch_with(
                     .rsplit(':')
                     .next()
                     .unwrap_or(head);
-                if let Some(reason) =
-                    skill_presence_refusal(skill_name, "config.dispatch.verb_registry")
-                {
+                if let Some(reason) = skill_presence_refusal(
+                    skill_name,
+                    &chosen_harness,
+                    "config.dispatch.verb_registry",
+                ) {
                     return Err(reason);
                 }
             }
@@ -791,24 +853,35 @@ fn verb_descriptor(row: &toml::Value) -> VerbDescriptor {
     }
 }
 
-/// The capacity-grid lane for an unpinned spawn: ``(harness, model, route,
-/// account, decline)``. One seam; a decline surfaces the walk's terminal
-/// chain line verbatim and never refuses (the caller owns the no-model
-/// refusal). The transport fault surfaces as `grid=unreadable (...)`.
+/// One capacity-grid lane pick: the resolved axes plus the lane's NAME, the
+/// dispatcher's spelling - it names the lane, never a flag vocabulary. One
+/// seam; a decline surfaces the walk's terminal chain line verbatim and
+/// never refuses (the caller owns the no-model refusal). The transport fault
+/// surfaces as `grid=unreadable (...)`.
+pub struct LanePick {
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub route: Option<String>,
+    pub account: Option<String>,
+    pub lane: Option<String>,
+    pub decline: Option<String>,
+}
+
 pub fn grid_lane_for(
     node: Option<&serde_json::Value>,
     model: Option<&str>,
     provider: Option<&str>,
     verb: Option<&str>,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+) -> LanePick {
     if provider.map(str::trim).unwrap_or("").len() > 0 || node.is_none() {
-        return (None, None, None, None, None);
+        return LanePick {
+            harness: None,
+            model: None,
+            route: None,
+            account: None,
+            lane: None,
+            decline: None,
+        };
     }
     let node = node.unwrap_or(&serde_json::Value::Null);
     let profile_verb = {
@@ -846,13 +919,14 @@ pub fn grid_lane_for(
         "capacity_refresh": true,
     });
     let Ok(exe) = std::env::current_exe() else {
-        return (
-            None,
-            None,
-            None,
-            None,
-            Some("grid=unreadable (no binary)".to_string()),
-        );
+        return LanePick {
+            harness: None,
+            model: None,
+            route: None,
+            account: None,
+            lane: None,
+            decline: Some("grid=unreadable (no binary)".to_string()),
+        };
     };
     let argv = vec![
         "route-slot".to_string(),
@@ -862,22 +936,24 @@ pub fn grid_lane_for(
         Ok(out) if out.code == 0 => out,
         Ok(out) => {
             let head: String = out.stderr.trim().chars().take(80).collect();
-            return (
-                None,
-                None,
-                None,
-                None,
-                Some(format!("grid=unreadable (exit {} {head})", out.code)),
-            );
+            return LanePick {
+                harness: None,
+                model: None,
+                route: None,
+                account: None,
+                lane: None,
+                decline: Some(format!("grid=unreadable (exit {} {head})", out.code)),
+            };
         }
         Err(e) => {
-            return (
-                None,
-                None,
-                None,
-                None,
-                Some(format!("grid=unreadable ({e})")),
-            );
+            return LanePick {
+                harness: None,
+                model: None,
+                route: None,
+                account: None,
+                lane: None,
+                decline: Some(format!("grid=unreadable ({e})")),
+            };
         }
     };
     let answer: serde_json::Value =
@@ -899,7 +975,14 @@ pub fn grid_lane_for(
         .cloned()
         .unwrap_or_else(|| "grid=no-reason-recorded".to_string());
     let Some(candidate) = answer.get("candidate").filter(|c| !c.is_null()) else {
-        return (None, None, None, None, Some(terminal));
+        return LanePick {
+            harness: None,
+            model: None,
+            route: None,
+            account: None,
+            lane: None,
+            decline: Some(terminal),
+        };
     };
     let pinned_undeclared = model.is_some()
         && !candidate
@@ -909,7 +992,14 @@ pub fn grid_lane_for(
         // A pinned model the rows do not declare dispatches on today's
         // default; the spawn's --node vendor refusal catches a mismatched
         // pairing there.
-        return (None, None, None, None, Some(terminal));
+        return LanePick {
+            harness: None,
+            model: None,
+            route: None,
+            account: None,
+            lane: None,
+            decline: Some(terminal),
+        };
     }
     let text_field = |key: &str| -> Option<String> {
         candidate
@@ -919,11 +1009,12 @@ pub fn grid_lane_for(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
     };
-    (
-        text_field("harness"),
-        text_field("model"),
-        text_field("route"),
-        text_field("account"),
-        None,
-    )
+    LanePick {
+        harness: text_field("harness"),
+        model: text_field("model"),
+        route: text_field("route"),
+        account: text_field("account"),
+        lane: text_field("lane"),
+        decline: None,
+    }
 }

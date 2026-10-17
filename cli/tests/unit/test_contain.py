@@ -13,8 +13,6 @@ Covers:
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +20,6 @@ import typer
 from typer.testing import CliRunner
 
 from fno.cli import app
-from tests.goldens._door import door_graph
 from fno.graph.store import commit_rows_via_store, read_graph_strict
 from tests.conftest import run_native_create
 
@@ -197,7 +194,16 @@ def test_contain_refuses_a_done_owner_and_stamps_nothing(tmp_graph):
 
 def test_contain_refuses_a_deferred_owner_and_stamps_nothing(tmp_graph):
     owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    _invoke("backlog", "defer", owner, "--reason", "parked")
+
+    def stamp(rows):
+        for e in rows:
+            if e["id"] == owner:
+                e["status"] = "deferred"
+                e["deferred_at"] = "2026-04-01T00:00:00+00:00"
+                e["deferred_reason"] = "parked"
+        return rows
+
+    commit_rows_via_store(tmp_graph, stamp)
     code, out = _native_contain(tmp_graph, owner, *kids)
     assert code == 2, out
     assert "is deferred" in out
@@ -301,14 +307,6 @@ def test_contain_withholds_containment_for_a_done_target_with_a_pr(tmp_graph):
 # ---------------------------------------------------------------------------
 # plan_base teaches the verb
 # ---------------------------------------------------------------------------
-
-
-def test_plan_base_refusal_names_the_contain_verb():
-    from fno.graph._decompose import DecomposeError, plan_base
-
-    with pytest.raises(DecomposeError) as exc:
-        plan_base(None)
-    assert "fno backlog contain <epic> <id>..." in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

@@ -142,11 +142,19 @@ pub(super) async fn mouse_pre_pass(
             continue;
         }
         if view.bell.open {
+            if bell::drag_mouse(view, rep.col, rep.kind) {
+                continue;
+            }
             if bell::button_at(view, rep.row, rep.col) {
                 if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
                     apply_hit(view, ChromeHit::Bell(bell::Hit::Toggle), sock_w).await?;
                 }
                 continue;
+            }
+            if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+                if bell::begin_drag(view, rep.col) {
+                    continue;
+                }
             }
             if let Some(hit) = bell::hit(view, rep.row, rep.col) {
                 if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
@@ -838,6 +846,7 @@ pub(super) async fn mouse_pre_pass(
                         row: prow,
                         col: pcol,
                         kind: rep.kind,
+                        alt: rep.alt,
                     },
                 },
             )

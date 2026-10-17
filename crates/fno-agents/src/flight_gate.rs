@@ -87,6 +87,76 @@ fn reset_held_requests(key: &str, root: Option<&Path>) {
     }
 }
 
+/// The outcome of one trip through the gate, in-process. `Unavailable`
+/// carries the gate-side error text the CLI verb prints; a caller with no
+/// face for it (the heal verb) folds it into the held answer, the way the
+/// Python shim's fail-open `None` reached its callers.
+pub(crate) enum FlightGate {
+    Acquired(String),
+    Held,
+    Unavailable(String),
+}
+
+/// The in-process core of `flight-acquire`: take the gate, reclaiming a dead
+/// holder on the pid probe. The CLI verb wraps this with the receipt
+/// printing; `pr-watch heal` calls it directly, so the reclaim protocol has
+/// one owner instead of a second copy in the heal leaf.
+pub(crate) fn acquire_flight(
+    key: &str,
+    holder: &str,
+    ttl_ms: i64,
+    scope: &str,
+    pid: Option<u32>,
+    root: Option<PathBuf>,
+    events_dir: Option<PathBuf>,
+) -> FlightGate {
+    let root_ref = root.as_deref();
+    let opts = claims::AcquireOpts {
+        pid,
+        ttl_ms: Some(ttl_ms),
+        reason: Some(format!("single-flight: {scope}")),
+        // An explicit pid names the calling process, which holds the lease
+        // for its whole run: stamp holder-process so the classifier reads the
+        // pid's verdict and a live writing session never heals an expired
+        // lease. Without it the pid is this short-lived binary and the
+        // stamp would lie.
+        pid_provenance: pid.map(|_| claims::HOLDER_PROCESS.to_string()),
+        root: root.clone(),
+        events_dir,
+        ..Default::default()
+    };
+    match claims::acquire(key, holder, opts.clone()) {
+        AcquireOutcome::Acquired(rec) => {
+            reset_held_requests(key, root_ref);
+            FlightGate::Acquired(rec.holder)
+        }
+        AcquireOutcome::HeldByOther { .. } => {
+            // A dead holder must not hold the scope shut for the TTL. The
+            // release is holder-bound: it re-reads and removes only while the
+            // holder still matches, so a second waiter that saw the same
+            // corpse cannot drop a live replacement's claim. A new acquirer
+            // racing in afterwards simply wins the fresh create and this
+            // invocation reports held against it.
+            let (_, Some(rec)) = claims::status(key, root_ref) else {
+                return FlightGate::Held;
+            };
+            let dead = rec
+                .pid
+                .map(|pid| matches!(claims::probe_pid(pid), PidProbe::Absent))
+                .unwrap_or(false);
+            if dead {
+                let _ = claims::release(key, &rec.holder, root_ref, opts.events_dir.as_deref());
+                if let AcquireOutcome::Acquired(rec) = claims::acquire(key, holder, opts) {
+                    reset_held_requests(key, root_ref);
+                    return FlightGate::Acquired(rec.holder);
+                }
+            }
+            FlightGate::Held
+        }
+        AcquireOutcome::Error(e) => FlightGate::Unavailable(e),
+    }
+}
+
 /// `flight-acquire <key> --scope <s> --ttl-ms <n> --holder <h> [--claims-root <dir>]`
 /// `            [--events-dir <dir>]`
 ///
@@ -107,57 +177,19 @@ pub fn run_flight_acquire(args: &[String]) -> i32 {
     let root = arg_value(args, "--claims-root").map(PathBuf::from);
     let events_dir = arg_value(args, "--events-dir").map(PathBuf::from);
     let scope = arg_value(args, "--scope").unwrap_or_else(|| "backlog single-flight".into());
-    let root_ref = root.as_deref();
+    let receipt_root = root.clone();
     // The claim is held in the name of the CALLING process (the Python verb
     // that will do the work), never this short-lived binary: the lock must
     // die with the work, not with the messenger.
     let pid = arg_value(args, "--pid").and_then(|v| v.parse::<u32>().ok());
 
-    let opts = claims::AcquireOpts {
-        pid,
-        ttl_ms: Some(ttl_ms),
-        reason: Some(format!("single-flight: {scope}")),
-        // An explicit --pid names the calling process, which holds the lease
-        // for its whole run: stamp holder-process so the classifier reads the
-        // pid's verdict and a live writing session never heals an expired
-        // lease. Without --pid the pid is this short-lived binary and the
-        // stamp would lie.
-        pid_provenance: pid.map(|_| claims::HOLDER_PROCESS.to_string()),
-        root: root.clone(),
-        events_dir,
-        ..Default::default()
-    };
-    match claims::acquire(&key, &holder, opts.clone()) {
-        AcquireOutcome::Acquired(rec) => {
-            reset_held_requests(&key, root_ref);
-            print_receipt(&json!({"acquired": true, "holder": rec.holder}));
-            return 0;
+    match acquire_flight(&key, &holder, ttl_ms, &scope, pid, root, events_dir) {
+        FlightGate::Acquired(holder) => {
+            print_receipt(&json!({"acquired": true, "holder": holder}));
+            0
         }
-        AcquireOutcome::HeldByOther { .. } => {
-            // A dead holder must not hold the scope shut for the TTL. The
-            // release is holder-bound: it re-reads and removes only while the
-            // holder still matches, so a second waiter that saw the same
-            // corpse cannot drop a live replacement's claim. A new acquirer
-            // racing in afterwards simply wins the fresh create and this
-            // invocation reports held against it.
-            let (_, Some(rec)) = claims::status(&key, root_ref) else {
-                return held_receipt(&key, root_ref);
-            };
-            let dead = rec
-                .pid
-                .map(|pid| matches!(claims::probe_pid(pid), PidProbe::Absent))
-                .unwrap_or(false);
-            if dead {
-                let _ = claims::release(&key, &rec.holder, root_ref, opts.events_dir.as_deref());
-                if let AcquireOutcome::Acquired(rec) = claims::acquire(&key, &holder, opts) {
-                    reset_held_requests(&key, root_ref);
-                    print_receipt(&json!({"acquired": true, "holder": rec.holder}));
-                    return 0;
-                }
-            }
-            held_receipt(&key, root_ref)
-        }
-        AcquireOutcome::Error(e) => {
+        FlightGate::Held => held_receipt(&key, receipt_root.as_deref()),
+        FlightGate::Unavailable(e) => {
             eprintln!("flight-acquire: {e}");
             3
         }

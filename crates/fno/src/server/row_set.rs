@@ -5,7 +5,8 @@
 //! helpers the walk reads (`compose_subline`, `truth_basis`, `portal_of`,
 //! ...) stay where they are.
 
-use crate::proto::{AgentRow, AgentRowReceipt};
+use crate::backlog_view::{BacklogJoin, GraphBinding};
+use crate::proto::{AgentRow, AgentRowReceipt, SessionBinding};
 
 use super::*;
 
@@ -124,6 +125,165 @@ pub(super) fn same_project(a: &str, b: &str) -> bool {
         || parent(a) == parent(b) && parent(a).is_some()
 }
 
+/// The session-node bindings one registry row carries, strongest source
+/// first: the graph's explicit `phase: bind` rows, the row's own spawn
+/// node, its cwd's branch clue, the claim holder, a node-shaped name, then
+/// the session's full graph history. Nodes dedupe first-wins, so the
+/// strongest source to name a node answers for it. A name binds when it
+/// parses to a served node or to a node the join carries a pr for (a bare
+/// hex run matches by unique suffix) - the pr join outlived the
+/// served-card filter and must not regress. History rows
+/// bind unfiltered: a session's merged past is real even when no card for
+/// it is served.
+fn graph_bindings_for(
+    join: &BacklogJoin,
+    known: &HashMap<String, ()>,
+    node_by_holder: &HashMap<String, String>,
+    branch_by_cwd: &HashMap<String, String>,
+    a: &RegistryAgent,
+) -> Vec<GraphBinding> {
+    let mut out: Vec<GraphBinding> = Vec::new();
+    let mut admit = |b: GraphBinding| {
+        if !out.iter().any(|bound| bound.node == b.node) {
+            out.push(b);
+        }
+    };
+    // Every accepted spelling of the row's session id; the graph keys
+    // history rows by the FULL id.
+    let sids = [
+        a.session_id.as_deref(),
+        a.harness_session_id.as_deref(),
+        a.claude_session_uuid.as_deref().filter(|s| !s.is_empty()),
+    ];
+    for sid in sids.iter().flatten() {
+        for b in join.by_session.get(*sid).into_iter().flatten() {
+            if b.explicit {
+                let mut bound = b.clone();
+                bound.source = "explicit".into();
+                admit(bound);
+            }
+        }
+    }
+    if let Some(node) = &a.node {
+        admit(GraphBinding {
+            node: node.clone(),
+            pr: join.pr.get(node).copied(),
+            state: "open".into(),
+            source: "spawn".into(),
+            ..Default::default()
+        });
+    }
+    if let Some(branch) = branch_by_cwd.get(&a.cwd) {
+        if let Some(node) = agents_view::resolve_node_id(branch, known) {
+            let pr = join.pr.get(&node).copied();
+            admit(GraphBinding {
+                node,
+                pr,
+                state: "open".into(),
+                source: "branch".into(),
+                ..Default::default()
+            });
+        }
+    }
+    if let Some(node) = node_by_holder.get(&a.name) {
+        admit(GraphBinding {
+            node: node.clone(),
+            pr: join.pr.get(node).copied(),
+            state: "open".into(),
+            source: "claim".into(),
+            ..Default::default()
+        });
+    }
+    if let Some(node) = agents_view::resolve_node_id(&a.name, known) {
+        let pr = join.pr.get(&node).copied();
+        admit(GraphBinding {
+            node,
+            pr,
+            state: "open".into(),
+            source: "name".into(),
+            ..Default::default()
+        });
+    }
+    for sid in sids.iter().flatten() {
+        for b in join.by_session.get(*sid).into_iter().flatten() {
+            if !b.explicit {
+                let mut bound = b.clone();
+                bound.source = "history".into();
+                admit(bound);
+            }
+        }
+    }
+    out
+}
+
+/// The row's current binding: an explicit open bind wins outright (the
+/// operator aimed the session), else live-session evidence (spawn, branch,
+/// claim, name) outranks history, and ts orders only inside a tier;
+/// equal timestamps keep the earlier listing. History rows are the only
+/// ones carrying a ts, so a bare ts comparison would let a stale past
+/// session outrank this row's live claim.
+fn pick_current(bindings: &[GraphBinding]) -> Option<&GraphBinding> {
+    let tier = |b: &GraphBinding| if b.source == "history" { 1u8 } else { 0 };
+    let mut current: Option<&GraphBinding> = None;
+    for b in bindings {
+        if b.state != "open" {
+            continue;
+        }
+        if b.explicit {
+            return Some(b);
+        }
+        let newer = match current {
+            None => true,
+            Some(c) => {
+                let (tb, tc) = (tier(b), tier(c));
+                tb < tc || (tb == tc && b.ts.as_deref() > c.ts.as_deref())
+            }
+        };
+        if newer {
+            current = Some(b);
+        }
+    }
+    current
+}
+
+/// The wire form (v111) of one row's bindings: `inferred` is false only
+/// for an explicit bind and a claim - the two assignments a human made.
+fn wire_bindings(bindings: Vec<GraphBinding>) -> Vec<SessionBinding> {
+    bindings
+        .into_iter()
+        .map(|b| SessionBinding {
+            inferred: !(b.explicit || b.source == "claim"),
+            node: b.node,
+            pr: b.pr,
+            source: b.source,
+            state: b.state,
+        })
+        .collect()
+}
+
+/// One lookup for every AgentRow constructor: the row's wire bindings plus
+/// the current binding's node, pr, and driver attach handle, so the
+/// precedence contract lives in exactly one place.
+fn row_binding_view(
+    join: &BacklogJoin,
+    known: &HashMap<String, ()>,
+    node_by_holder: &HashMap<String, String>,
+    branch_by_cwd: &HashMap<String, String>,
+    a: &RegistryAgent,
+) -> (
+    Vec<SessionBinding>,
+    Option<String>,
+    Option<u64>,
+    Option<String>,
+) {
+    let bound = graph_bindings_for(join, known, node_by_holder, branch_by_cwd, a);
+    let current = pick_current(&bound);
+    let node = current.map(|b| b.node.clone());
+    let pr = current.and_then(|b| b.pr);
+    let attach = current.and_then(|b| join.driver.get(&b.node).cloned());
+    (wire_bindings(bound), node, pr, attach)
+}
+
 impl Core {
     /// The served interval row for one agent: `None` when the row carries no
     /// counts (no readable transcript), an empty ring reads as waiting.
@@ -139,45 +299,23 @@ impl Core {
         // Which registry agents a pane row already claimed (so they don't
         // double-render as watch-only). Indexed like `self.agents`.
         let mut consumed = vec![false; self.agents.len()];
-        // Holder name -> pr_number, joining the live-claim holders map
-        // (node -> holder) with the graph's node -> pr map. The row-name join
-        // below is primary; this remains the fallback for harness-native claims
-        // whose holder equals the worker name.
-        // Holder name -> node id: the live-claim reverse of `backlog_holders`.
-        // A spawn row whose payload named a title, not a node id, still shows
-        // the node it holds (and the PR beside it) through its claim.
-        // Real node ids only: the name guess resolves against the served
-        // backlog, so a name that merely parses like a node paints nothing.
-        let backlog_ids: std::collections::HashSet<&str> =
-            self.backlog.iter().map(|c| c.id.as_str()).collect();
-        let node_by_holder: HashMap<&str, String> = self
+        // The session-node join inputs: the known node ids (served cards
+        // plus the pr join's keys, so a bare-hex worker name still
+        // suffix-resolves after its card leaves the served set) and the
+        // live-claim reverse (holder -> node). `graph_bindings_for` merges
+        // the graph's explicit rows, the spawn node, the cwd branch, the
+        // claim, a node-shaped name, and the session history into one
+        // binding list per row; the row takes its node, pr, and attach
+        // handle from the current binding.
+        let mut known: HashMap<String, ()> =
+            self.backlog.iter().map(|c| (c.id.clone(), ())).collect();
+        for id in self.backlog_join.pr.keys() {
+            known.entry(id.clone()).or_insert(());
+        }
+        let node_by_holder: HashMap<String, String> = self
             .backlog_holders
             .iter()
-            .map(|(node, holder)| (holder.as_str(), node.clone()))
-            .collect();
-        let pr_by_holder: HashMap<&str, u64> = self
-            .backlog_holders
-            .iter()
-            .filter_map(|(node, holder)| self.backlog_pr.get(node).map(|pr| (holder.as_str(), *pr)))
-            .collect();
-        let pr_from_name = |name: &str| -> Option<u64> {
-            let node_id = agents_view::resolve_node_id(name, &self.backlog_pr)?;
-            self.backlog_pr.get(&node_id).copied()
-        };
-        // The attach handle joins through the SAME node resolution the pr
-        // join uses: a row only shows an attach handle when it shows a pr.
-        let session_from_name = |name: &str| -> Option<String> {
-            let node_id = agents_view::resolve_node_id(name, &self.backlog_pr)?;
-            self.backlog_driver.get(&node_id).cloned()
-        };
-        let session_by_holder: HashMap<&str, String> = self
-            .backlog_holders
-            .iter()
-            .filter_map(|(node, holder)| {
-                self.backlog_driver
-                    .get(node)
-                    .map(|d| (holder.as_str(), d.clone()))
-            })
+            .map(|(node, holder)| (holder.clone(), node.clone()))
             .collect();
         // A squad-matched row's cwd_base is its FOREIGN-cwd
         // signal, so a row working in another checkout of its own squad's
@@ -230,6 +368,17 @@ impl Core {
                         Some(i) => {
                             consumed[i] = true;
                             let a = &self.agents[i];
+                            // A pane that only VIEWS the row (a portal seat, an
+                            // Open Here viewer) sits in the viewer's workspace,
+                            // but the row belongs to its own. Only a worker
+                            // spawned into this tab takes the hosting squad.
+                            let viewer = self.portal_of(Some(pid)).is_some()
+                                || self.attached.values().any(|held| *held == pid);
+                            let row_squad = if viewer {
+                                self.thread_workspace(a)
+                            } else {
+                                Some(squad.id)
+                            };
                             let exited = a.exited || pane_dead;
                             // A confirmed-gone pane is its own corroboration
                             // (fact beats badge) even when the registry row's
@@ -239,6 +388,13 @@ impl Core {
                             let unmeasured = exited
                                 && !pane_dead
                                 && a.liveness == agents_view::Liveness::Unmeasured;
+                            let (bindings, node, pr, pr_session_short) = row_binding_view(
+                                &self.backlog_join,
+                                &known,
+                                &node_by_holder,
+                                &self.branch_by_cwd,
+                                a,
+                            );
                             AgentRow {
                                 harness: a.harness.clone(),
                                 model: a.model.clone(),
@@ -248,7 +404,7 @@ impl Core {
                                 spawned_by_name: a.spawned_by_name.clone(),
                                 lineage_reason: a.lineage_reason.clone(),
                                 harness_session_id: a.harness_session_id.clone(),
-                                squad: Some(squad.id),
+                                squad: row_squad,
                                 name: a.name.clone(),
                                 pane_id: Some(pid),
                                 // Derived every build from the open portals; the row
@@ -266,15 +422,7 @@ impl Core {
                                 context_measured_at: a.context_measured_at,
                                 started_at: a.started_at,
                                 mail_unread: a.mail_unread,
-                                node: a
-                                    .node
-                                    .clone()
-                                    .or_else(|| node_by_holder.get(a.name.as_str()).cloned())
-                                    .or_else(|| {
-                                        agents_view::node_id_candidates(&a.name)
-                                            .into_iter()
-                                            .find(|n| backlog_ids.contains(n.as_str()))
-                                    }),
+                                node,
                                 harness_title: a.harness_title.clone(),
                                 answerable: if exited { None } else { a.answerable.clone() },
                                 // A pane-hosted row focuses its pane; the attach
@@ -285,7 +433,14 @@ impl Core {
                                 seen: self.seen.contains(&pid),
                                 // (US3) cwd basename on every row so the
                                 // sideline can flag a foreign-cwd join.
-                                cwd_base: foreign_cwd_base(&a.cwd, Some(squad.canonical_cwd())),
+                                cwd_base: foreign_cwd_base(
+                                    &a.cwd,
+                                    squad_cwd_of(row_squad).as_deref(),
+                                ),
+                                project_root: self
+                                    .project_by_cwd
+                                    .get(&a.cwd)
+                                    .map(|p| p.root.clone()),
                                 tombstone: false,
                                 subline: subline_with_title(a, self.compose_subline(&a.cwd)),
                                 // Structural roster-dir tag wins (Locked
@@ -295,10 +450,8 @@ impl Core {
                                     .clone()
                                     .or_else(|| pane_entry.and_then(|e| e.account.clone())),
                                 updated_at: a.updated_at,
-                                pr: pr_from_name(&a.name)
-                                    .or_else(|| pr_by_holder.get(a.name.as_str()).copied()),
-                                pr_session_short: session_from_name(&a.name)
-                                    .or_else(|| session_by_holder.get(a.name.as_str()).cloned()),
+                                pr,
+                                pr_session_short,
                                 tail: self.compose_tail(a),
                                 role_level: a.role_level,
                                 role_scope: a.role_scope.clone(),
@@ -325,6 +478,7 @@ impl Core {
                                     a.harness.as_deref(),
                                     a.attach_id.as_deref(),
                                 ),
+                                bindings,
                             }
                         }
                         None => {
@@ -405,6 +559,8 @@ impl Core {
                                 resumable: false,
                                 no_pane_reason: None,
                                 reach: Reach::Locate,
+                                bindings: Vec::new(),
+                                project_root: None,
                             }
                         }
                     };
@@ -446,6 +602,13 @@ impl Core {
                     // panel shows it where ResumeAgent will actually place
                     // the pane - the two lookups must agree.
                     let squad = self.thread_workspace(a);
+                    let (bindings, node, pr, pr_session_short) = row_binding_view(
+                        &self.backlog_join,
+                        &known,
+                        &node_by_holder,
+                        &self.branch_by_cwd,
+                        a,
+                    );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
                         model: a.model.clone(),
@@ -477,15 +640,7 @@ impl Core {
                         context_measured_at: a.context_measured_at,
                         started_at: a.started_at,
                         mail_unread: a.mail_unread,
-                        node: a
-                            .node
-                            .clone()
-                            .or_else(|| node_by_holder.get(a.name.as_str()).cloned())
-                            .or_else(|| {
-                                agents_view::node_id_candidates(&a.name)
-                                    .into_iter()
-                                    .find(|n| backlog_ids.contains(n.as_str()))
-                            }),
+                        node,
                         harness_title: a.harness_title.clone(),
                         answerable: None,
                         attach_id: None,
@@ -497,10 +652,8 @@ impl Core {
                         subline: subline_with_title(a, self.compose_subline(&a.cwd)),
                         account: a.account.clone(),
                         updated_at: a.updated_at,
-                        pr: pr_from_name(&a.name)
-                            .or_else(|| pr_by_holder.get(a.name.as_str()).copied()),
-                        pr_session_short: session_from_name(&a.name)
-                            .or_else(|| session_by_holder.get(a.name.as_str()).cloned()),
+                        pr,
+                        pr_session_short,
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -520,6 +673,8 @@ impl Core {
                         // Dangling dead: the pane is gone, so no vt reading.
                         pane_activity: None,
                         reach: Reach::Locate,
+                        bindings,
+                        project_root: self.project_by_cwd.get(&a.cwd).map(|p| p.root.clone()),
                     })
                 }
                 None => {
@@ -537,6 +692,13 @@ impl Core {
                     // (AC2-UI), a squad-matched row for the foreign-cwd
                     // exception subline.
                     let cwd_base = foreign_cwd_base(&a.cwd, squad_cwd_of(squad).as_deref());
+                    let (bindings, node, pr, pr_session_short) = row_binding_view(
+                        &self.backlog_join,
+                        &known,
+                        &node_by_holder,
+                        &self.branch_by_cwd,
+                        a,
+                    );
                     out.push(AgentRow {
                         harness: a.harness.clone(),
                         model: a.model.clone(),
@@ -565,15 +727,7 @@ impl Core {
                         context_measured_at: a.context_measured_at,
                         started_at: a.started_at,
                         mail_unread: a.mail_unread,
-                        node: a
-                            .node
-                            .clone()
-                            .or_else(|| node_by_holder.get(a.name.as_str()).cloned())
-                            .or_else(|| {
-                                agents_view::node_id_candidates(&a.name)
-                                    .into_iter()
-                                    .find(|n| backlog_ids.contains(n.as_str()))
-                            }),
+                        node,
                         harness_title: a.harness_title.clone(),
                         answerable: if a.exited { None } else { a.answerable.clone() },
                         attach_id: if a.exited { None } else { a.attach_id.clone() },
@@ -589,10 +743,8 @@ impl Core {
                         // foreign row carries its source account here (piece 3).
                         account: a.account.clone(),
                         updated_at: a.updated_at,
-                        pr: pr_from_name(&a.name)
-                            .or_else(|| pr_by_holder.get(a.name.as_str()).copied()),
-                        pr_session_short: session_from_name(&a.name)
-                            .or_else(|| session_by_holder.get(a.name.as_str()).cloned()),
+                        pr,
+                        pr_session_short,
                         tail: self.compose_tail(a),
                         role_level: a.role_level,
                         role_scope: a.role_scope.clone(),
@@ -617,6 +769,8 @@ impl Core {
                             a.harness.as_deref(),
                             a.attach_id.as_deref(),
                         ),
+                        bindings,
+                        project_root: self.project_by_cwd.get(&a.cwd).map(|p| p.root.clone()),
                     })
                 }
             }
@@ -774,6 +928,8 @@ impl Core {
                 // An external-lifecycle tombstone has no capability data here;
                 // a live external row renders through the watch-only arm above.
                 reach: Reach::Locate,
+                bindings: Vec::new(),
+                project_root: None,
             })
         }
         out
@@ -830,5 +986,221 @@ impl Core {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backlog_view::{BacklogJoin, GraphBinding};
+
+    fn g(
+        node: &str,
+        pr: Option<u64>,
+        state: &str,
+        explicit: bool,
+        ts: Option<&str>,
+    ) -> GraphBinding {
+        GraphBinding {
+            node: node.into(),
+            pr,
+            phase: String::new(),
+            ts: ts.map(Into::into),
+            state: state.into(),
+            explicit,
+            source: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_branch_clue_binds_its_node_and_pr() {
+        // AC1-HP: no node-shaped name, a feature branch naming the node,
+        // and the node's pr known to the board - one branch binding with
+        // the pr riding through join.pr.
+        let mut join = BacklogJoin::default();
+        join.pr.insert("x-2222".into(), 3159);
+        let ids: HashMap<String, ()> = ["x-2222"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
+        let a = RegistryAgent {
+            name: "deploy bot".into(),
+            cwd: "/tmp/repo".into(),
+            ..Default::default()
+        };
+        let branches: HashMap<String, String> =
+            [("/tmp/repo".to_string(), "feature/x-2222-foo".to_string())].into();
+        let got = graph_bindings_for(&join, &ids, &HashMap::new(), &branches, &a);
+        assert_eq!(got.len(), 1, "one branch clue, one binding");
+        assert_eq!(got[0].node, "x-2222");
+        assert_eq!(got[0].pr, Some(3159), "pr rides through join.pr");
+        assert_eq!(got[0].source, "branch");
+        assert_eq!(got[0].state, "open");
+        assert!(!got[0].explicit);
+    }
+
+    #[test]
+    fn current_picks_explicit_then_live_then_newest_history() {
+        // AC2-HP: one session's history spans a merged PR, another merged
+        // PR, and the open node - all three bind, and the only open one is
+        // the current. AC3-EDGE: an explicit bind wins outright; a live
+        // claim beats a ts-carrying history row; two inferred opens pick
+        // the newest.
+        let mut join = BacklogJoin::default();
+        join.by_session.insert(
+            "s1".into(),
+            vec![
+                g(
+                    "x-aaaa",
+                    Some(1),
+                    "merged",
+                    false,
+                    Some("2026-01-01T00:00:00Z"),
+                ),
+                g(
+                    "x-bbbb",
+                    Some(2),
+                    "merged",
+                    false,
+                    Some("2026-01-02T00:00:00Z"),
+                ),
+                g(
+                    "x-cccc",
+                    Some(3),
+                    "open",
+                    false,
+                    Some("2026-01-03T00:00:00Z"),
+                ),
+            ],
+        );
+        let ids: HashMap<String, ()> = ["x-cccc"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
+        let a = RegistryAgent {
+            name: "worker".into(),
+            harness_session_id: Some("s1".into()),
+            ..Default::default()
+        };
+        let got = graph_bindings_for(&join, &ids, &HashMap::new(), &HashMap::new(), &a);
+        assert_eq!(got.len(), 3, "every history row binds");
+        assert_eq!(got[0].source, "history");
+        assert_eq!(got[0].pr, Some(1));
+        assert_eq!(got[0].state, "merged");
+        assert_eq!(pick_current(&got).map(|b| b.node.as_str()), Some("x-cccc"));
+
+        let mut join = BacklogJoin::default();
+        join.by_session.insert(
+            "s1".into(),
+            vec![
+                g("x-1", Some(9), "open", true, Some("2026-01-01T00:00:00Z")),
+                g("x-2", Some(10), "open", false, Some("2026-01-02T00:00:00Z")),
+            ],
+        );
+        let a = RegistryAgent {
+            name: "worker".into(),
+            harness_session_id: Some("s1".into()),
+            ..Default::default()
+        };
+        let got = graph_bindings_for(&join, &ids_empty(), &HashMap::new(), &HashMap::new(), &a);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].node, "x-1", "the explicit row lists first");
+        assert_eq!(got[0].source, "explicit");
+        assert!(pick_current(&got).map(|b| b.node.as_str()) == Some("x-1"));
+        // Without the explicit row, the newer ts wins.
+        let mut join2 = BacklogJoin::default();
+        join2.by_session.insert(
+            "s1".into(),
+            vec![
+                g("x-1", Some(9), "open", false, Some("2026-01-01T00:00:00Z")),
+                g("x-2", Some(10), "open", false, Some("2026-01-02T00:00:00Z")),
+            ],
+        );
+        let got2 = graph_bindings_for(&join2, &ids_empty(), &HashMap::new(), &HashMap::new(), &a);
+        assert_eq!(
+            pick_current(&got2).map(|b| b.node.as_str()),
+            Some("x-2"),
+            "two inferred opens pick the last-touched node"
+        );
+        // A live claim (no ts) beats an open history row (any ts): the
+        // claim is this session's present, the history row its past.
+        let holders: HashMap<String, String> = [("worker".to_string(), "x-1".to_string())].into();
+        let got3 = graph_bindings_for(&join2, &ids_empty(), &holders, &HashMap::new(), &a);
+        assert_eq!(
+            got3.iter()
+                .find(|b| b.source == "claim")
+                .map(|b| b.node.as_str()),
+            Some("x-1"),
+            "the claim binding is admitted ts-less"
+        );
+        assert_eq!(
+            pick_current(&got3).map(|b| b.node.as_str()),
+            Some("x-1"),
+            "live claim outranks the ts-carrying history row"
+        );
+    }
+
+    #[test]
+    fn overlapping_sources_dedup_to_the_strongest() {
+        // spawn beats branch beats claim for the same node; the loser
+        // rows never duplicate the node.
+        let mut join = BacklogJoin::default();
+        join.pr.insert("x-1".into(), 100);
+        let ids: HashMap<String, ()> = ["x-1"].into_iter().map(|i| (i.to_string(), ())).collect();
+        let holders: HashMap<String, String> = [("deploy".to_string(), "x-1".to_string())].into();
+        let branches: HashMap<String, String> =
+            [("/tmp/repo".to_string(), "feature/x-1-feat".to_string())].into();
+        let a = RegistryAgent {
+            name: "deploy".into(),
+            cwd: "/tmp/repo".into(),
+            node: Some("x-1".into()),
+            ..Default::default()
+        };
+        let got = graph_bindings_for(&join, &ids, &holders, &branches, &a);
+        assert_eq!(got.len(), 1, "one node, one binding");
+        assert_eq!(got[0].source, "spawn");
+        assert_eq!(got[0].pr, Some(100));
+        // Claim alone still binds, and inferred is false for it.
+        let a2 = RegistryAgent {
+            name: "deploy".into(),
+            ..Default::default()
+        };
+        let got2 = graph_bindings_for(&join, &ids, &holders, &HashMap::new(), &a2);
+        assert_eq!(got2.len(), 1);
+        assert_eq!(got2[0].source, "claim");
+    }
+
+    #[test]
+    fn an_empty_join_keeps_the_name_fallback() {
+        // AC4-EDGE: a malformed/empty join binds nothing by itself, and
+        // today's name + claim fallbacks still resolve node and leave pr
+        // unset.
+        let join = BacklogJoin::default();
+        let ids: HashMap<String, ()> = ["x-2222"]
+            .into_iter()
+            .map(|i| (i.to_string(), ()))
+            .collect();
+        let holders: HashMap<String, String> = [("w1".to_string(), "x-2222".to_string())].into();
+        let claim_agent = RegistryAgent {
+            name: "w1".into(),
+            ..Default::default()
+        };
+        let got = graph_bindings_for(&join, &ids, &holders, &HashMap::new(), &claim_agent);
+        assert_eq!(got.len(), 1, "the claim fallback survives an empty join");
+        assert_eq!(got[0].source, "claim");
+        assert_eq!(got[0].node, "x-2222");
+        assert_eq!(got[0].pr, None);
+        let name_agent = RegistryAgent {
+            name: "x-2222-runner".into(),
+            ..Default::default()
+        };
+        let got2 = graph_bindings_for(&join, &ids, &HashMap::new(), &HashMap::new(), &name_agent);
+        assert_eq!(got2.len(), 1, "the name fallback survives an empty join");
+        assert_eq!(got2[0].source, "name");
+        assert_eq!(got2[0].node, "x-2222");
+    }
+
+    fn ids_empty() -> HashMap<String, ()> {
+        HashMap::new()
     }
 }

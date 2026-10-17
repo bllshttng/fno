@@ -1,9 +1,10 @@
 """Phase 01 + 02a + 03: backlog sub-app + verb aliases + triage nesting.
 
 `backlog` is the canonical graph sub-app (the deprecated `graph` top-level
-alias was removed as a true duplicate). Verifies the canonical `intake` verb
-is registered (and the deprecated `adopt` alias is gone), the `done` verb
-works, and the nested `triage` sub-app surface is present.
+alias was removed as a true duplicate). Verifies the `done` verb
+works and the nested `triage` sub-app surface is present (the `intake`
+verb answers at the native door; its adoption case lives in
+`test_backlog_intake_door.py`).
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -111,29 +112,6 @@ def test_ac2_hp_backlog_add_round_trips(tmp_graph):
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_hp_intake_adopts_plan(tmp_graph, tmp_path):
-    """`fno backlog intake <plan>` intakes the plan as a new node.
-
-    Asserts the user-visible verb AND the on-disk writer flip so a
-    regression that flips ``_build_intake_node`` back to ``"adopt"`` is
-    caught by the integration suite. This pairs with the unit test on
-    ``INTAKE_SOURCE_VALUES`` membership; the writer must emit the new
-    canonical value, not the legacy one.
-    """
-    plan = tmp_path / "fake-plan.md"
-    plan.write_text("---\ncreated: 2026-05-05\ntitle: My Plan\n---\n# Body\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n")
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-    assert "intake ab-" in r.output or "ab-" in r.output
-
-    graph = _read_store(tmp_graph)
-    entries = graph
-    assert len(entries) == 1, f"expected 1 entry, got {entries!r}"
-    assert entries[0]["source"] == "intake", (
-        f"writer must emit source: 'intake', got {entries[0].get('source')!r}"
-    )
-
-
 def test_adopt_alias_is_gone(tmp_graph, tmp_path):
     """`fno backlog adopt <plan>` exits non-zero (alias removed); `intake` is in --help."""
     plan = tmp_path / "fake-plan2.md"
@@ -156,11 +134,12 @@ def test_adopt_alias_is_gone(tmp_graph, tmp_path):
         f"expected Typer 'No such command' rejection, got: {r.output!r}"
     )
 
-    # The canonical verb must still be registered and invocable. `intake` is
-    # display-hidden under the x-71b6 In-N-Out tiering, so it no longer appears
-    # in `backlog --help`; its own --help still works (hiding != removal).
-    hi = _invoke("backlog", "intake", "--help")
-    assert hi.exit_code == 0, f"intake must stay invocable: {hi.output!r}"
+    # The canonical verb must still be invocable. `intake` is display-hidden
+    # under the x-71b6 In-N-Out tiering, and since the intake port its
+    # --help is answered by the native binary at the front door.
+    hi_code, hi_out, hi_err = _native_backlog("intake", "--help")
+    assert hi_code == 0, f"intake must stay invocable: {hi_err!r}"
+    assert "backlog intake" in hi_out, hi_out
     # adopt must not appear as a visible command row either
     h = _invoke("backlog", "--help")
     assert h.exit_code == 0
@@ -260,9 +239,10 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 
 _ADVERTISED_BACKLOG_VERBS = {
     # `update` moved with the update port, `add`/`idea` with the create
-    # port, and `view` with the projections port: the native binary
-    # advertises them, the python menu does not.
-    "get", "next", "done", "defer",
+    # port, `view` with the projections port, and `defer` with the
+    # lifecycle port: the native binary advertises them, the python menu
+    # does not.
+    "get", "next", "done",
     "triage", "note",
 }
 
@@ -289,20 +269,17 @@ def test_backlog_help_advertises_only_the_menu():
 
 @pytest.mark.parametrize(
     "verb",
-    ["decompose", "intake", "undefer", "supersede"],
+    ["supersede"],
 )
 def test_hidden_backlog_verbs_stay_invocable(verb):
-    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0)."""
+    """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0).
+
+    Undefer left the wheel registry with the lifecycle port; the native
+    binary answers its --help at the front door, outside this wheel-level
+    runner the way the menu test tracks the same drift. decompose followed
+    intake native; the decompose door test file pins its --help."""
     r = _invoke("backlog", verb, "--help")
     assert r.exit_code == 0, f"hidden verb {verb!r} --help failed: {r.output!r}"
-
-
-def test_advertised_verbs_point_at_hidden_siblings():
-    """AC3-UI: paired-verb pointers keep the hidden sibling discoverable."""
-    d = _invoke("backlog", "defer", "--help")
-    assert d.exit_code == 0 and "undefer" in d.output, d.output
-    dn = _invoke("backlog", "done", "--help")
-    assert dn.exit_code == 0 and "reconcile" in dn.output, dn.output
 
 
 @pytest.mark.usefixtures("native_backlog_door")
@@ -341,8 +318,10 @@ def test_intake_project_flag_overrides_frontmatter(tmp_graph, tmp_path):
     plan.write_text(
         "---\ncreated: 2026-05-05\nproject: from-frontmatter\n---\n# title\nbody\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n"
     )
-    r = _invoke("--json", "backlog", "intake", str(plan), "--project", "from-flag")
-    assert r.exit_code == 0, r.output
+    r_code, r_out, r_err = _native_backlog(
+        "intake", str(plan), "--project", "from-flag"
+    )
+    assert r_code == 0, r_err
     nodes = _read_store(tmp_graph)
     assert any(n.get("project") == "from-flag" for n in nodes), (
         f"expected node with project=from-flag, got: {[n.get('project') for n in nodes]}"
@@ -369,12 +348,11 @@ def test_intake_warns_when_project_not_in_settings(tmp_graph, tmp_path, monkeypa
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.chdir(tmp_path)
 
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-    # CliRunner captures combined output by default. Look for the warning text.
-    out = r.output
-    assert "brand-new-project" in out, out
-    assert "not declared in any settings.yaml workspace" in out, out
+    r_code, r_out, r_err = _native_backlog("intake", str(plan))
+    assert r_code == 0, r_err
+    combined = r_out + r_err
+    assert "brand-new-project" in combined, combined
+    assert "not declared in any settings.yaml workspace" in combined, combined
 
 
 def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
@@ -382,9 +360,9 @@ def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
     plan = tmp_path / "plan-C.md"
     plan.write_text("---\ncreated: 2026-05-05\nproject: foo\n---\n")
 
-    r = _invoke("backlog", "intake", str(plan), "--project", "")
-    assert r.exit_code == 1, r.output
-    assert "must be a non-empty string" in r.output, r.output
+    r_code, r_out, r_err = _native_backlog("intake", str(plan), "--project", "")
+    assert r_code == 1, r_out + r_err
+    assert "must be a non-empty string" in r_out + r_err, r_out + r_err
 
 
 # ---------------------------------------------------------------------------
@@ -529,9 +507,8 @@ def test_intake_routes_to_frontmatter_project_end_to_end(tmp_graph, tmp_path, mo
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
 
-    r = _invoke("backlog", "intake", str(plan))
-    assert r.exit_code == 0, r.output
-
+    r_code, r_out, r_err = _native_backlog("intake", str(plan))
+    assert r_code == 0, r_err
     nodes = _read_store(tmp_graph)
     assert len(nodes) == 1
     assert nodes[0]["project"] == "from-frontmatter", (

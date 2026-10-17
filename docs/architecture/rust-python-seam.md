@@ -178,7 +178,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 36 | scratch_cli | 71 | 1 | 3/- | 0 | 3 |
 | 37 | test_runner | 110 | 1 | 3/- | 0 | 2 |
 | 38 | lint_seam_crossings | 419 | 1 | 4/- | 0 | 1 |
-| 39 | review_level | 209 | 1 | 4/- | 0 | 4 |
+| 39 | review_level (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 209 | 1 | 4/- | 0 | 4 |
 | 40 | codemap_cli | 1545 | 1 | 5/- | 0 | 3 |
 | 41 | post_merge_route | 740 | 1 | 5/- | 0 | 10 |
 | 42 | doctor_bash_census | 33 | 1 | 6/- | 0 | 3 |
@@ -250,7 +250,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 108 | handoff | 153 | 8 | 1/- | 2 | 8 |
 | 109 | cost | 2774 | 8 | 16/1 | 58 | 15 |
 | 110 | harness_names | 76 | 8 | 18/- | 0 | 5 |
-| 111 | review | 2373 | 8 | 49/- | 31086 | 14 |
+| 111 | review (post-dispositions and the findings classifier ported to Rust and deleted 2026-10, gone on next regen) | 2373 | 8 | 49/- | 31086 | 14 |
 | 112 | roles | 2025 | 9 | 0/- | 7 | 6 |
 | 113 | state | 922 | 9 | 12/- | 3396 | 13 |
 | 114 | worktree_paths | 487 | 9 | 17/- | 0 | 11 |

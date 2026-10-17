@@ -1,0 +1,1 @@
+{"level": "xhigh", "level_source": "explicit", "band": "high", "effort": "max", "model": "opus", "provider": "unknown", "chain": ["slot family catalog unreadable (<TMP>/codex/models_cache.json: No such file or directory (os error 2)); codex model values pass through verbatim", "tier(high)", "inventory band(>=high) -> claude-opus"], "degraded_max": false}

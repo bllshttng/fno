@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # scripts/ci/check-review-app-parity.sh
 #
-# Cross-language review-App login + usage-marker parity check (node).
+# Cross-language review-App login + usage-marker parity check.
 #
-# The set of GitHub review Apps footnote recognizes is declared THREE times in
-# two languages:
+# The set of GitHub review Apps footnote recognizes is declared TWO times in
+# two languages (the third copy lived in the deleted review_capability module;
+# the Rust capability door reads BOT_PROFILES directly):
 #
 #   - Rust: BOT_PROFILES              in crates/fno-agents/src/loopcheck/bot_nudge.rs
-#             (the gate's review classifier, refusal detection, nudging)
+#             (the gate's review classifier, refusal detection, nudging, and
+#             the native capability door's recognized-login set)
 #   - Python: DEFAULT_OPTIONAL_APPS            in cli/src/fno/pr/_reviews.py
 #             (the optional-review signal on `fno do pr status`)
-#   - Python: _KNOWN_REVIEW_APP_LOGINS  in cli/src/fno/review_capability.py
-#             (the init capability refusal: an unknown configured app is a typo)
 #
-# Compared: the LOGIN set across all three (a login on only one side is an App
-# one path honors and another cannot explain), and that every Rust profile
+# Compared: the LOGIN set across both (a login on only one side is an App one
+# path honors and another cannot explain), and that every Rust profile
 # declares an explicit `usage_markers` field. A new App added to BOT_PROFILES
 # with no marker decision is the AC10 failure in waiting: an unrecognized
 # refusal then classifies as `absent` only if the markers were characterized,
@@ -29,14 +29,13 @@
 # crates CI legs. Mirrors scripts/ci/check-reviewer-descriptor-parity.sh.
 #
 # Exit codes:
-#   0  all three tables declare the same login set; every profile has markers
+#   0  both tables declare the same login set; every profile has markers
 #   1  drift, or a table could not be extracted / is empty
 #   2  usage error
 #
 # Flags:
 #   --rust-file PATH           override the Rust source    (default: canonical)
 #   --optional-file PATH       override DEFAULT_OPTIONAL_APPS src (default: canonical)
-#   --capability-file PATH     override _KNOWN_REVIEW_APP_LOGINS src
 #   --selftest                 run built-in fixtures proving the check detects
 #                              match / added-login / drifted-login / no-markers
 
@@ -47,14 +46,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 RUST_FILE="${REPO_ROOT}/crates/fno-agents/src/loopcheck/bot_nudge.rs"
 OPTIONAL_FILE="${REPO_ROOT}/cli/src/fno/config/__init__.py"
-CAPABILITY_FILE="${REPO_ROOT}/cli/src/fno/review_capability.py"
 SELFTEST=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --rust-file)       RUST_FILE="$2"; shift 2 ;;
         --optional-file)   OPTIONAL_FILE="$2"; shift 2 ;;
-        --capability-file) CAPABILITY_FILE="$2"; shift 2 ;;
         --selftest)        SELFTEST=1; shift ;;
         -h|--help)
             sed -n '2,40p' "${BASH_SOURCE[0]}"
@@ -64,12 +61,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 check_parity() {
-    python3 - "$1" "$2" "$3" <<'PY'
+    python3 - "$1" "$2" <<'PY'
 import ast
 import re
 import sys
 
-rust_path, optional_path, capability_path = sys.argv[1:4]
+rust_path, optional_path = sys.argv[1:3]
 
 
 def fail(msg):
@@ -143,15 +140,43 @@ def extract_rust(src, path):
     """{login: sorted[markers]} from BOT_PROFILES, plus a per-profile marker
     completeness check. A profile without an explicit `usage_markers:` field is
     a new App whose refusal shape was never decided (AC10)."""
-    m = re.search(
-        r"const\s+BOT_PROFILES\s*:\s*&\[BotProfile\]\s*=\s*&\[(.*?)\n\];",
-        src,
-        re.S,
-    )
+    m = re.search(r"const\s+BOT_PROFILES\s*:\s*&\[BotProfile\]\s*=\s*&\[", src)
     if not m:
         fail(f"BOT_PROFILES not found in {path}")
-    body = m.group(1)
-    blocks = re.findall(r"BotProfile\s*\{(.*?)\n\s*\},", body, re.S)
+    # Brace-scan to the matching close, then brace-scan each BotProfile
+    # literal: rustfmt collapses a single-entry table onto fewer lines, so a
+    # layout regex (`\n];`, entries ending `\n},`) misses real tables.
+    start = m.end()
+    depth = 1
+    end = start
+    while end < len(src) and depth:
+        if src[end] == "[":
+            depth += 1
+        elif src[end] == "]":
+            depth -= 1
+        end += 1
+    if depth:
+        fail(f"BOT_PROFILES in {path} is unterminated")
+    body = src[start:end - 1]
+    blocks = []
+    pos = 0
+    while True:
+        b = re.search(r"BotProfile\s*\{", body[pos:])
+        if not b:
+            break
+        open_at = pos + b.end() - 1
+        depth = 1
+        close_at = open_at + 1
+        while close_at < len(body) and depth:
+            if body[close_at] == "{":
+                depth += 1
+            elif body[close_at] == "}":
+                depth -= 1
+            close_at += 1
+        if depth:
+            fail(f"BOT_PROFILES in {path} has an unterminated BotProfile entry")
+        blocks.append(body[open_at + 1:close_at - 1])
+        pos = close_at
     if not blocks:
         fail(f"BOT_PROFILES in {path} had no BotProfile entries")
     out = {}
@@ -178,32 +203,27 @@ def extract_rust(src, path):
 
 rust_src = read(rust_path, "Rust")
 optional_src = read(optional_path, "DEFAULT_OPTIONAL_APPS")
-capability_src = read(capability_path, "_KNOWN_REVIEW_APP_LOGINS")
 
 rust = extract_rust(rust_src, rust_path)
 optional = extract_string_container(optional_src, optional_path, "DEFAULT_OPTIONAL_APPS", "DEFAULT_OPTIONAL_APPS")
-capability = extract_string_container(capability_src, capability_path, "_KNOWN_REVIEW_APP_LOGINS", "_KNOWN_REVIEW_APP_LOGINS")
 
 if not rust:
     fail(f"no review-App profiles extracted from {rust_path}")
 
 problems = []
-logins = sorted(set(rust) | set(optional) | set(capability))
+logins = sorted(set(rust) | set(optional))
 for login in logins:
     if login not in rust:
         problems.append(f"  {login}: in Python, missing from Rust BOT_PROFILES")
     if login not in optional:
         problems.append(f"  {login}: in Rust, missing from Python DEFAULT_OPTIONAL_APPS")
-    if login not in capability:
-        problems.append(f"  {login}: in Rust, missing from Python _KNOWN_REVIEW_APP_LOGINS")
 
 if problems:
-    print("ERROR: review-App login drift across the three tables.", file=sys.stderr)
+    print("ERROR: review-App login drift across the two tables.", file=sys.stderr)
     print("\n".join(problems), file=sys.stderr)
     print(
         f"  Rust  : BOT_PROFILES in {rust_path}\n"
         f"  Python: DEFAULT_OPTIONAL_APPS in {optional_path}\n"
-        f"  Python: _KNOWN_REVIEW_APP_LOGINS in {capability_path}\n"
         "  A login on only one side is an App one path honors and another cannot "
         "explain (a bot the gate sees but `fno do pr status` does not, or vice versa).",
         file=sys.stderr,
@@ -252,29 +272,26 @@ DEFAULT_OPTIONAL_APPS = ("gemini-code-assist", "chatgpt-codex-connector"$2)
 EOF
     }
 
-    _capability() { # file, members-yaml-ish
-        cat > "$1" <<EOF
-_KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset(
-    {"chatgpt-codex-connector", "gemini-code-assist"$2}
-)
-EOF
-    }
-
     _rust_nomarker() { # a profile missing usage_markers -> must fail
         cat > "$1" <<'EOF'
 const BOT_PROFILES: &[BotProfile] = &[
     BotProfile {
-        login: "chatgpt-codex-connector",
+        login: "chatgpt-fno-connector",
         review_handle: "@codex review",
         nudgeable: true,
+    },
+    BotProfile {
+        login: "gemini-code-assist",
+        review_handle: "",
+        usage_markers: &[],
+        nudgeable: false,
     },
 ];
 EOF
     }
 
-    _case() { # name expected_rc rust optional capability
-        "${BASH_SOURCE[0]}" --rust-file "$3" --optional-file "$4" \
-            --capability-file "$5" >/dev/null 2>&1
+    _case() { # name expected_rc rust optional
+        "${BASH_SOURCE[0]}" --rust-file "$3" --optional-file "$4" >/dev/null 2>&1
         rc=$?
         if [[ "$rc" == "$2" ]]; then
             echo "  ok: $1 (exit $rc)"
@@ -285,35 +302,37 @@ EOF
     }
 
     echo "check-review-app-parity selftest:"
-
-    # match
-    _rust "$tmp/r.rs"; _optional "$tmp/o.py" ""; _capability "$tmp/c.py" ""
-    _case "all three agree" 0 "$tmp/r.rs" "$tmp/o.py" "$tmp/c.py"
+    _rust "$tmp/r.rs"; _optional "$tmp/o.py" ""
+    _case "both agree" 0 "$tmp/r.rs" "$tmp/o.py"
 
     # extra login on python optional side
     _optional "$tmp/o2.py" ', "stray-bot"'
-    _case "extra login in DEFAULT_OPTIONAL_APPS" 1 "$tmp/r.rs" "$tmp/o2.py" "$tmp/c.py"
+    _case "extra login in DEFAULT_OPTIONAL_APPS" 1 "$tmp/r.rs" "$tmp/o2.py"
 
-    # extra login on rust side only
-    _rust "$tmp/r3.rs" 2>/dev/null || true
-    # reuse r.rs but a capability missing one login
-    _capability "$tmp/c3.py" ''  # full set; make optional missing gemini instead
-    _optional "$tmp/o3.py" ', "chatgpt-codex-connector"'
-    # build optional with only codex (drops gemini) -> rust has gemini, optional lacks
+    # extra login on rust side only (a profile missing markers also fails)
+    _rust_nomarker "$tmp/r3.rs"
+    _case "profile without usage_markers" 1 "$tmp/r3.rs" "$tmp/o.py"
+
+    # login missing from DEFAULT_OPTIONAL_APPS
     cat > "$tmp/o3.py" <<'EOF'
 DEFAULT_OPTIONAL_APPS = ("chatgpt-codex-connector",)
 EOF
-    _case "login missing from DEFAULT_OPTIONAL_APPS" 1 "$tmp/r.rs" "$tmp/o3.py" "$tmp/c.py"
+    _case "login missing from DEFAULT_OPTIONAL_APPS" 1 "$tmp/r.rs" "$tmp/o3.py"
 
-    # capability missing a login
-    cat > "$tmp/c4.py" <<'EOF'
-_KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset({"chatgpt-codex-connector"})
+    # rustfmt-collapsed single-entry table (the shape rustfmt gives a one-bot
+    # table) must parse like the expanded one
+    cat > "$tmp/r6.rs" <<'EOF'
+pub(super) const BOT_PROFILES: &[BotProfile] = &[BotProfile {
+    login: "chatgpt-codex-connector",
+    review_handle: "@codex review",
+    usage_markers: &["usage limits for code reviews", "codex usage limits"],
+    nudgeable: true,
+}];
 EOF
-    _case "login missing from _KNOWN_REVIEW_APP_LOGINS" 1 "$tmp/r.rs" "$tmp/o.py" "$tmp/c4.py"
-
-    # profile without usage_markers
-    _rust_nomarker "$tmp/r5.rs"
-    _case "profile without usage_markers" 1 "$tmp/r5.rs" "$tmp/o.py" "$tmp/c.py"
+    cat > "$tmp/o6.py" <<'EOF'
+DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("chatgpt-codex-connector",)
+EOF
+    _case "collapsed single-entry table parses" 0 "$tmp/r6.rs" "$tmp/o6.py"
 
     if [[ "$fails" == 0 ]]; then
         echo "selftest OK"
@@ -328,4 +347,4 @@ if [[ "$SELFTEST" == 1 ]]; then
     exit $?
 fi
 
-check_parity "$RUST_FILE" "$OPTIONAL_FILE" "$CAPABILITY_FILE"
+check_parity "$RUST_FILE" "$OPTIONAL_FILE"

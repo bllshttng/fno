@@ -1,9 +1,9 @@
-"""CLI-layer tests for `fno do pr merge` after the in-package port (ab-d4c98550).
+"""CLI-layer tests for `fno do pr merge`.
 
-The merge logic itself is characterized in test_pr_merge.py; here we only
-assert the Typer verb dispatches into the in-package _merge module and
-propagates its exit code (the old "forwards to pr-merge.sh" assertions are
-retired - the bash is gone).
+The merge logic itself is characterized in test_pr_merge.py and, on the
+Rust side, by the operand parity suite; here we only assert the Typer verb
+forwards its args through the authorized-merge operand door and propagates
+the child's exit code.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.pr import _merge, _quota
+from fno.pr import _quota
 
 runner = CliRunner()
 
@@ -208,17 +208,22 @@ def test_graphql_exec_rejects_public_coverage_purpose():
 
 
 def test_fno_process_routes_subprocesses_through_proxy(monkeypatch):
+    import subprocess
+
+    import fno.rust_binary
+
     monkeypatch.setenv("PATH", "/real/bin")
     monkeypatch.setattr(
         "fno.setup.github_cli.worker_environment",
         lambda base: {**base, "PATH": "/quota-proxy:/real/bin"},
     )
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
 
-    def _fake(argv, cwd=None):
+    def fake_run(argv, check):
         assert __import__("os").environ["PATH"] == "/quota-proxy:/real/bin"
-        return 2
+        return SimpleNamespace(returncode=2)
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "930"])
     assert result.exit_code == 2
     assert __import__("os").environ["PATH"] == "/real/bin"
@@ -236,7 +241,7 @@ def test_pr_merge_help_renders():
 
 
 _HOOK_SOURCE = (
-    Path(__file__).resolve().parents[3] / "hooks" / "git-protection.py"
+    Path(__file__).resolve().parents[3] / "hooks" / "git_protection_impl.py"
 )
 _ROUTE_RE = re.compile(r"fno do pr ([a-z][a-z0-9-]*)")
 
@@ -363,32 +368,69 @@ def test_flag_first_route_argv_is_refused_at_the_cli(tmp_path, monkeypatch):
     assert not rec.exists(), "no gh call may run for a refused argv"
 
 
-def test_pr_merge_dispatches_in_package(monkeypatch):
-    """The verb calls _merge.run_merge with the forwarded args and exits its rc."""
-    captured = {}
+def test_pr_merge_forwards_args_to_the_operand_door(monkeypatch):
+    """The verb forwards its args through the merge operand door and exits its rc."""
+    import subprocess
 
-    def _fake(argv, cwd=None):
-        captured["argv"] = list(argv)
-        return 2
+    import fno.rust_binary
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=2)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "999999"])
+    assert seen["argv"] == ["/fake/fno-agents", "authorized-merge", "merge", "999999"]
     assert result.exit_code == 2
-    assert captured["argv"] == ["999999"]
 
 
 def test_pr_merge_forwards_legacy_invoker_flag(monkeypatch):
-    """x-04ab: a legacy --invoker=... is forwarded verbatim (run_merge ignores it)."""
-    captured = {}
+    """A legacy --invoker=... rides the door verbatim (the operand ignores it)."""
+    import subprocess
 
-    def _fake(argv, cwd=None):
-        captured["argv"] = list(argv)
-        return 2
+    import fno.rust_binary
 
-    monkeypatch.setattr(_merge, "run_merge", _fake)
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=2)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
     result = runner.invoke(app, ["do", "pr", "merge", "--invoker=target", "42"])
+    assert seen["argv"] == [
+        "/fake/fno-agents", "authorized-merge", "merge", "--invoker=target", "42",
+    ]
     assert result.exit_code == 2
-    assert captured["argv"] == ["--invoker=target", "42"]
+
+
+def test_pr_hold_check_forwards_pr_and_repo_through_the_operand_door(monkeypatch):
+    """The plan-hold door: pr and --repo ride verbatim; the worktree
+    resolution and the hold read are the operand flow's own first hops."""
+    import subprocess
+
+    import fno.rust_binary
+
+    seen = []
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["do", "pr", "hold-check", "42", "--repo", str(Path("/srv/repo"))])
+    assert seen == [
+        ["/fake/fno-agents", "authorized-merge", "hold-check", "42", "--repo", "/srv/repo"],
+    ]
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["do", "pr", "hold-check", "7"])
+    assert seen[-1] == ["/fake/fno-agents", "authorized-merge", "hold-check", "7"]
+    assert result.exit_code == 0
 
 
 def test_closure_trailer_forwards_node_and_extra_to_the_binary(monkeypatch):

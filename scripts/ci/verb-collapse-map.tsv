@@ -105,6 +105,7 @@ agents restart	T1	agents restart	6
 agents resume	KEEP	agents resume	43	deliberate readability slack for a high-traffic distinct operation
 agents retask	T1	agents retask	2
 agents review-coverage	T1	agents review-coverage	34
+agents attest	T1	agents attest	0
 agents sandbox-probe	T1	agents sandbox-probe	0
 agents rm	KEEP	agents rm	56	deliberate readability slack for a high-traffic distinct operation
 agents roles context	T1	agents roles context	2
@@ -160,23 +161,7 @@ backlog annotate resolve	T1	backlog annotate resolve	5
 backlog archive	T1	backlog archive	2
 backlog bases	T1	backlog bases	0
 backlog backfill-deferred-kind	T1	backlog backfill-deferred-kind	1
-backlog batch join	T1	backlog batch join	1
-backlog batch metrics	T1	backlog batch metrics	0
-backlog batch open	T1	backlog batch open	1
-backlog batch prepare	T1	backlog batch prepare	1
-backlog batch ship	T1	backlog batch ship	3
-backlog batch ship-closeable	T1	backlog batch ship-closeable	1
-backlog batch status	T1	backlog batch status	1
 backlog board	T1	backlog board	0
-backlog capture add	T1	backlog capture add	6
-backlog capture archive	T1	backlog capture archive	1
-backlog capture capture-pass	T1	backlog capture capture-pass	1
-backlog capture dismiss	T1	backlog capture dismiss	1
-backlog capture empty-pass	T1	backlog capture empty-pass	2
-backlog capture list	T1	backlog capture list	3
-backlog capture promote	T1	backlog capture promote	1
-backlog capture scan	T1	backlog capture scan	1
-backlog capture tidy	T1	backlog capture tidy	3
 backlog carveout add	T1	backlog carveout add	22
 backlog carveout list	T1	backlog carveout list	2
 backlog carveout resolve	T1	backlog carveout resolve	1
@@ -186,25 +171,20 @@ backlog cost	T1	backlog cost	1
 backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
-backlog discover	T1	backlog discover	0
 backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog done	KEEP	backlog done	42	deliberate readability slack for a high-traffic distinct operation
 backlog encounter	T1	backlog encounter	0
-backlog epic status	T1	backlog epic status	7
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
 backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
 backlog intake	T1	backlog intake	32
 backlog lane-fill	T1	backlog lane-fill	2
-backlog lanes	T1	backlog lanes	2
 backlog maintain	T1	backlog maintain	7
 backlog migrate-difficulty	T1	backlog migrate-difficulty	0
 backlog migrate-priorities	T1	backlog migrate-priorities	0
 backlog migrate-updated-at	T1	backlog migrate-updated-at	0
-backlog new	T1	backlog new	38
 backlog next	KEEP	backlog next	54	deliberate readability slack for a high-traffic distinct operation
 backlog note	T1	backlog note	1
-backlog pick	T1	backlog pick	2
 backlog project-root	T1	backlog project-root	6
 backlog provenance	T1	backlog provenance	7
 backlog queue	T1	backlog queue	1
@@ -217,13 +197,11 @@ backlog relatedness get	T1	backlog relatedness get	0
 backlog remove	T1	backlog remove	7
 backlog render-views	T1	backlog render-views	5
 backlog reopen	T1	backlog reopen	3
-backlog reprioritize	T1	backlog reprioritize	1
 backlog retract	T1	backlog retract	3
 backlog retro drain-postmortems	T1	backlog retro drain-postmortems	1
 backlog retro run	T1	backlog retro run	16
 backlog retro sweep-carveouts	T1	backlog retro sweep-carveouts	7
 backlog roadmap	T1	backlog roadmap	1
-backlog stuck-epics	T1	backlog stuck-epics	1
 backlog session add	T1	backlog session add	4
 backlog session backfill	T1	backlog session backfill	1
 backlog session close	T1	backlog session close	3
@@ -231,12 +209,9 @@ backlog session open	T1	backlog session open	1
 backlog session reap-open	T1	backlog session reap-open	3
 backlog status	T1	backlog status	1
 backlog supersede	T1	backlog supersede	10
-backlog task list	T1	backlog task list	0
-backlog task update	T1	backlog task update	2
 backlog triage	T1	backlog triage	39	
 backlog unarchive	T1	backlog unarchive	2
 backlog unclaim	T1	backlog unclaim	8
-backlog requeue	T1	backlog requeue	3
 backlog undefer	T1	backlog undefer	14
 backlog undispatched	T1	backlog undispatched	0
 backlog unqueue	T1	backlog unqueue	0
@@ -349,12 +324,10 @@ do target check-contained	T1	do target check-contained	4
 do target check-dispatch-hold	T1	do target check-dispatch-hold	2
 do target check-review-gate	T1	do target check-review-gate	4
 do target denominator-ratio	T1	do target denominator-ratio	2
-do target init	T1	do target init	90
 do target request-self-review	T1	do target request-self-review	12
 do target resolve-model	T1	do target resolve-model	2
 do target resolve-owned-identity	T1	do target resolve-owned-identity	3
 do target review-invocation	T1	do target review-invocation	4
-do target start	T1	do target start	31
 do target status	T1	do target status	8
 do think dispatch	T1	do think dispatch	4
 do think inspect	T1	do think inspect	7
@@ -504,7 +477,6 @@ resume receipt write	T1	resume receipt write	2
 retro drain-postmortems	T1	retro drain-postmortems	2
 retro run	T1	retro run	23
 retro sweep-carveouts	T1	retro sweep-carveouts	3
-review	KEEP	review	27	single-leaf group
 roles context	T1	roles context	2
 roles ls	T1	roles ls	1
 roles resolve	T1	roles resolve	2
@@ -543,12 +515,10 @@ target check-contained	T1	target check-contained	4
 target check-dispatch-hold	T1	target check-dispatch-hold	2
 target check-review-gate	T1	target check-review-gate	4
 target denominator-ratio	T1	target denominator-ratio	2
-target init	KEEP	target init	90	deliberate readability slack for a high-traffic distinct operation
 target request-self-review	T1	target request-self-review	12
 target resolve-model	T1	target resolve-model	2
 target resolve-owned-identity	T1	target resolve-owned-identity	3
 target review-invocation	T1	target review-invocation	4
-target start	T1	target start	31
 target status	T1	target status	8
 test	KEEP	test	108	single-leaf group
 think dispatch	T1	think dispatch	4

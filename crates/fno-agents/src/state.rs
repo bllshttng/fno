@@ -827,6 +827,14 @@ pub struct RegistryEntry {
     pub liveness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub liveness_measured_at: Option<String>,
+    /// The LAST session report's arrival stamp, written by
+    /// `handle_session_report` on every stored report and on the native
+    /// mint. The capacity reader's freshness source for rows no probe can
+    /// reach: a pid-less row the claude roster cannot answer counts as an
+    /// occupant while this stamp is inside `cap_liveness::REPORT_FRESHNESS`
+    /// (d-d0c63de7). Unparseable fails closed (`InsideLegReport::is_live_at`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_report_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_used_pct: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3167,6 +3175,9 @@ pub(crate) fn account_for_removed_rows(
         .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "unknown".to_string());
     for entry in &removed {
+        // The drop stamp a later wake reads: the identity leaves the
+        // registry beside the receipt, before the row is announced gone.
+        crate::wake_name::stamp_from_row(&home, entry);
         crate::receipt::stage_removal_accounting(&home, entry, &remover, &emitter);
     }
     // One grouped `registry_rows_lost` beside the per-row events: the

@@ -20,6 +20,21 @@ Use `#rrggbb`, `indexed(n)`, or an ANSI-16 name for each role. Examples are `#1e
 
 `inherit` names a built-in theme. The built-in `terminal` theme follows the terminal's own colors. Other built-ins provide a palette for any role that the user theme does not set.
 
+## Matching Claude Code themes
+
+Each brand mux theme has a Claude Code theme with the same name. The plugin ships both in `themes/`. Run `/theme` in Claude Code and look for "Footnote Paper from fno" and "Footnote Superscript from fno".
+
+| Mux theme | Claude Code theme | Ground and text | Your message band |
+|---|---|---|---|
+| `footnote-superscript` | `custom:fno:footnote-superscript` | Dark ground, light text | White band, near-black text |
+| `footnote-paper` | `custom:fno:footnote-paper` | Light ground, dark text | `#373737` band, near-white text |
+
+A Claude Code pane that the mux starts picks the matching theme for you. It passes the theme with `--settings` for that session only, and it never edits your `settings.json`. A pane that already names a settings file keeps that file. A mux theme with no brand match (`terminal`, `catppuccin`, and so on) leaves Claude Code on its own theme.
+
+Claude Code 2.1.296 lets a theme set the band background, but not the band text. The text keeps the base theme color, so the band reads dark on dark (Paper) or white on white (Superscript). The mux fixes this. It repaints the text of cells whose background is exactly a shipped band color, and it leaves code blocks, diffs, and every other cell alone. The repaint reaches every pane, not only Claude Code panes. Another program that paints one of those exact backgrounds keeps readable text, but loses its own text colors on those cells. The browser viewer (`fno mux serve --web`) applies the same repaint. The `terminal` theme skips it in the terminal client. Outside the mux, neither band has readable text, so use these two themes inside the mux.
+
+A light ground needs a white terminal background. The mux does not paint pane bodies, so the terminal decides. On a light terminal the mux picks Paper and leaves the terminal background alone. In Ghostty, set `background = f7f7f7` and `foreground = 141414` to match Paper exactly. Set `mux.theme = "footnote-paper"` to have the mux paint that ground itself.
+
 ## Save a theme in config.toml
 
 Add a `[mux.themes.<name>]` table to a config file:

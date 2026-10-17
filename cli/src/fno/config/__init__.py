@@ -37,9 +37,7 @@ from fno.user import UserBlock
 from fno.config.build_block import BuildBlock as BuildBlock
 from fno.config.split_block import SplitBlock as SplitBlock
 
-# Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
-# here; the redundant `X as X` aliases are the explicit-reexport idiom mypy's
-# --no-implicit-reexport requires (these names used to be defined here).
+# Leaf modules re-exported here; `X as X` is the explicit-reexport idiom mypy requires.
 from fno.config import _watchdog
 from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
 from fno.config._auto_heal import AutoHealBlock
@@ -58,6 +56,8 @@ from fno.config._loader import _settings_key as _settings_key
 from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
 from fno.config._guards import GuardsBlock
 from fno.config._store import StoreBlock
+from fno.config._attention import AttentionBlock
+from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
@@ -71,7 +71,6 @@ from fno.config_io import read_config_flat as read_config_flat
 
 _LOG = logging.getLogger(__name__)
 
-# POSIX PATH_MAX
 _PATH_MAX = 4096
 
 # Shell glob characters to reject in path values
@@ -1196,7 +1195,7 @@ class ApprovalsBlock(BaseModel):
 #: measure different lanes on one PR, which is what a remedy printed by one and
 #: refused by the other looked like. Parity is pinned against the shared golden
 #: file cli/tests/config/optional_apps_default.json.
-DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("gemini-code-assist", "chatgpt-codex-connector")
+DEFAULT_OPTIONAL_APPS: tuple[str, ...] = ("chatgpt-codex-connector",)
 
 
 def resolved_optional_apps(review: "ReviewBlock") -> list[str]:
@@ -1879,7 +1878,7 @@ class TargetConfig(BaseModel):
         Mirrors ConfigBlock._coerce_cross_model so a scalar typo like
         `blast: true` cannot raise out of `load_settings`/`SettingsModel`
         construction (the disabled-by-default promise must hold for every
-        consumer, not only the local `_load_blast_cfg` catch). A dict passes
+        consumer, not only the native classifier's loader catch). A dict passes
         through so BlastConfig's own field coercion still runs.
         """
         if isinstance(v, (dict, BlastConfig)):
@@ -2167,9 +2166,10 @@ class ProviderBudget(BaseModel):
     `subagents` is that second dimension, and it is consumed by ROUTE
     RESOLUTION rather than by a guard: a native subagent is a harness-internal
     Task call fno never observes, so a spawn-path guard is decorative for
-    exactly the case that cost the account. `review_capability` reads this
-    budget and refuses to hand a panel reviewer to a provider that cannot
-    afford one - a worker cannot fan out a panel it was never handed.
+    exactly the case that cost the account. The capability resolver that once
+    read this budget to refuse a panel reviewer is gone (the native
+    `review-level capability` door replaced it); a worker cannot fan out a
+    panel it was never handed.
 
     `None` on either field means unbounded in that dimension, which is what an
     unlisted provider gets: today's behavior for every dedicated account.
@@ -2685,7 +2685,7 @@ class ThinkSpawnBlock(BaseModel):
     node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
-    verb, an armed lifecycle trigger (``on_work_start``/``on_retro``), or a
+    verb, an armed lifecycle trigger (``on_work_start``), or a
     consented decompose fan-out.
 
     Default ``False`` (Locked Decision 2): shipping this changes nothing until
@@ -2713,13 +2713,12 @@ class ThinkSpawnBlock(BaseModel):
     max_per_run: int = 5
     idle_threshold_s: int = 0
     # --- A2 lifecycle triggers ---
-    # Two non-birth dispatch moments, each behind its OWN sub-flag, default OFF
-    # even when ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
-    # /target claims a node to work it; ``on_retro`` fires when ``fno backlog
-    # done`` closes a node. ``daily_cap`` is the per-install per-day firehose
-    # ceiling the broad A2 triggers require (Locked Decision 3); 0 disables it.
+    # Non-birth dispatch moment behind its OWN sub-flag, default OFF even when
+    # ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
+    # /target claims a node to work it. ``daily_cap`` is the per-install
+    # per-day firehose ceiling the broad A2 triggers require (Locked
+    # Decision 3); 0 disables it.
     on_work_start: bool = False
-    on_retro: bool = False
     daily_cap: int = 20
     # a third trigger of the same shape - fire at `fno backlog
     # decompose` for the epic's WAVE-0 children (those with no intra-epic
@@ -2741,7 +2740,7 @@ class ThinkSpawnBlock(BaseModel):
     attended: str = "offer"
 
     @field_validator(
-        "enabled", "on_work_start", "on_retro", "on_decompose_wave0", mode="before"
+        "enabled", "on_work_start", "on_decompose_wave0", mode="before"
     )
     @classmethod
     def _coerce_enabled(cls, v: object) -> bool:
@@ -3922,6 +3921,8 @@ class ConfigBlock(BaseModel):
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
+    telemetry: TelemetryBlock = Field(default_factory=TelemetryBlock)
+    attention: AttentionBlock = Field(default_factory=AttentionBlock)
     research: ResearchBlock = Field(default_factory=ResearchBlock)
     review: ReviewBlock = Field(default_factory=ReviewBlock)
     style: StyleBlock = Field(default_factory=StyleBlock)
@@ -4354,9 +4355,6 @@ class SettingsModel(ConfigBlock):
 # config.local.toml is flat, so no `config.` prefix.
 WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
     {
-        # post_merge.parking_lot_path was removed: the ritual is a
-        # serial one-shot durable write, already safe on the shared canonical
-        # file; a per-lane redirect only orphaned the prose.
         "project.id",
     }
 )

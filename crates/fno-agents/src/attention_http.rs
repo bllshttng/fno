@@ -299,13 +299,16 @@ pub fn tick_sinks(
             if state.contains_key(&did) {
                 continue;
             }
-            let body = delivery_body(
-                Some(sink),
-                &did,
-                "item.opened",
-                None,
-                Some(&serde_json::to_value(item).unwrap_or(json!({}))),
-            );
+            let body = match sink.kind {
+                SinkKind::Ntfy => ntfy_body(item, sink, &did),
+                SinkKind::Webhook => delivery_body(
+                    Some(sink),
+                    &did,
+                    "item.opened",
+                    None,
+                    Some(&serde_json::to_value(item).unwrap_or(json!({}))),
+                ),
+            };
             let result = post.post(
                 &sink.url,
                 &sink_headers(Some(sink)).unwrap_or_default(),
@@ -454,6 +457,15 @@ fn delivery_body(
     }
 }
 
+/// ntfy's JSON publish takes an integer 1-5; a word is refused with 400.
+fn ntfy_priority(item: &AttentionItem) -> u8 {
+    if item.priority == "high" {
+        4
+    } else {
+        3
+    }
+}
+
 /// The ntfy notification for one item: at most three actions, the
 /// recommended option first as `http` actions, the view link in `click`
 /// (and a literal `view` button when a slot is free). A pin gets one
@@ -466,7 +478,7 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
             "topic": sink.topic.clone().unwrap_or_default(),
             "title": item.title,
             "message": if sink.full_body { full_message(item) } else { item.title.clone() },
-            "priority": if item.priority == "high" { "high" } else { "default" },
+            "priority": ntfy_priority(item),
         })
         .to_string();
     };
@@ -484,7 +496,7 @@ pub fn ntfy_body(item: &AttentionItem, sink: &Sink, did: &str) -> String {
         "topic": sink.topic.clone().unwrap_or_default(),
         "title": item.title,
         "message": message,
-        "priority": if item.priority == "high" { "high" } else { "default" },
+        "priority": ntfy_priority(item),
         "click": view_url,
         "actions": [],
     });
@@ -689,6 +701,7 @@ mod tests {
             body["click"],
             "https://reach.example/v1/attention/items/q-4"
         );
+        assert_eq!(body["priority"], 3, "default priority is the integer 3");
     }
 
     #[test]
@@ -702,6 +715,21 @@ mod tests {
         assert_eq!(actions.len(), 3, "two http + one view: {actions:?}");
         assert_eq!(actions[2]["action"], "view");
         assert_eq!(actions[0]["body"]["option"], 2, "recommended first");
+    }
+
+    #[test]
+    fn text_only_and_high_priority_bodies_send_integer_priority() {
+        let mut item = four_option_item();
+        let mut sink = sink_ntfy("phone", "https://reach.example");
+        sink.answer_base_url = None;
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 3);
+        item.priority = "high".to_string();
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 4);
+        sink.answer_base_url = Some("https://reach.example".to_string());
+        let body: Value = serde_json::from_str(&ntfy_body(&item, &sink, "d")).unwrap();
+        assert_eq!(body["priority"], 4);
     }
 
     struct ScriptedPost {
@@ -775,6 +803,23 @@ mod tests {
         let body2 = second.bodies.borrow()[0].clone();
         let id2: Value = serde_json::from_str(&body2).unwrap();
         assert_eq!(id2["delivery_id"].as_str(), Some(id1.as_str()));
+    }
+
+    #[test]
+    fn an_ntfy_item_opened_body_carries_the_item_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let items = ready_items();
+        let sinks = vec![sink_ntfy("phone", "https://reach.example")];
+        let mut post = ScriptedPost {
+            responses: RefCell::new(vec![]),
+            bodies: RefCell::new(vec![]),
+        };
+        let t = tick_sinks(&items, &sinks, dir.path(), future(), &mut post);
+        assert_eq!(t.delivered, 1);
+        let body: Value = serde_json::from_str(&post.bodies.borrow()[0]).unwrap();
+        assert_eq!(body["title"], items[0].title.as_str());
+        assert_ne!(body["title"], "Question closed");
+        assert_eq!(body["topic"], "fleet");
     }
 
     #[test]

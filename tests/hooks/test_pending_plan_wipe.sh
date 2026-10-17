@@ -37,7 +37,8 @@ export FNO_TARGET_INIT_GATED=1
 
 # Write a sidecar with a given session_id into <repo>/space/.pending-plan.md.
 # init resolves its state dir through `fno-agents state path`, so the stub
-# installed here pins that resolution to the scenario space dir.
+# installed here pins that resolution to the scenario space dir. The pin
+# rides FNO_AGENTS_BIN, which outranks PATH in the init script.
 write_sidecar() {
   local dir="$1" sid="$2"
   mkdir -p "$dir/.fno" "$dir/space" "$dir/bin"
@@ -65,7 +66,7 @@ run_init() {
     && TARGET_START=1 TARGET_INPUT="test" \
        TARGET_TRANSCRIPT_ID="$claude_sid" \
        PENDING_PLAN_TTL_SECONDS="$ttl" \
-       PATH="$dir/bin:$PATH" FNO_TEST_SPACE="$dir/space" \
+       PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" FNO_TEST_SPACE="$dir/space" \
        bash "$INIT" >/dev/null 2>&1 )
 }
 
@@ -108,7 +109,7 @@ write_sidecar "$T4" "sess-whatever"
 ( cd "$T4" \
   && unset TARGET_TRANSCRIPT_ID CLAUDE_CODE_SESSION_ID \
   && TARGET_START=1 TARGET_INPUT="test" PENDING_PLAN_TTL_SECONDS="14400" \
-     PATH="$T4/bin:$PATH" FNO_TEST_SPACE="$T4/space" \
+     PATH="$T4/bin:$PATH" FNO_AGENTS_BIN="$T4/bin/fno-agents" FNO_TEST_SPACE="$T4/space" \
      bash "$INIT" >/dev/null 2>&1 )   # session id genuinely unavailable -> TTL only
 [[ -f "$T4/space/.pending-plan.md" ]] \
   && pass "no-sid: fresh sidecar survives when session id unavailable (TTL only)" \

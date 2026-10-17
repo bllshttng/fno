@@ -627,6 +627,12 @@ fn fold_arm_row(
     let Some(arm) = data.get("arm").and_then(Value::as_str) else {
         return;
     };
+    // A row stored under retired role vocabulary has no producer in this
+    // binary: its successor arm carries the work, so it is not a second,
+    // dead arm reading STALE.
+    if crate::role_migration::contains_legacy_vocabulary(arm) {
+        return;
+    }
     let Some(ts_unix) = value
         .get("ts")
         .and_then(Value::as_str)

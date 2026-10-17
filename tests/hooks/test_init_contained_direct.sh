@@ -127,6 +127,7 @@ run_init() {
     "${_SCRUB_ENV[@]}" \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
+    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
     FNO_TEST_SPACE="${_dir}/space" \
     TARGET_START=1 \
     TARGET_INPUT="x-261c" \
@@ -314,6 +315,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_PLAN}/bin:${PATH}" \
   HOME="${TMP_PLAN}/home" \
+  FNO_AGENTS_BIN="${TMP_PLAN}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_PLAN}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \
@@ -394,6 +396,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_AMB}/bin:${PATH}" \
   HOME="${TMP_AMB}/home" \
+  FNO_AGENTS_BIN="${TMP_AMB}/bin/fno-agents" \
   FNO_TEST_SPACE="${TMP_AMB}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \

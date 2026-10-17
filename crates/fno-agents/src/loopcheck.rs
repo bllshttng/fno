@@ -137,6 +137,7 @@ pub use range_tiling::{compute_range_tiling, RangeTiling};
 mod review_count;
 mod review_state;
 use attestation_journal::missing_global_attestations;
+use attestation_journal::missing_primary_attestations;
 pub use attestation_journal::unattested_reviewers_scan_text;
 mod args;
 mod block_reason;
@@ -159,8 +160,8 @@ mod pr_read;
 mod review_coverage_verb;
 mod review_findings;
 mod review_inputs;
-mod self_review_floor;
-mod settings;
+pub(crate) mod self_review_floor;
+pub(crate) mod settings;
 pub(crate) mod watch_lease;
 pub(crate) use args::{parse_args, try_flag_value, LoopCheckArgs};
 use async_wait::{arm_watch_hint, async_wait_class, conflicting_reason, merge_slot_reason};
@@ -169,6 +170,7 @@ pub use authorship::AttestationOrigin;
 use authorship::{classify_attestation_origin, default_attestation_origin};
 pub(crate) use awaiting_merge::main_head_failing_checks;
 use block_reason::{build_block_reason, sized_self_review_hint};
+pub(crate) use bot_nudge::bot_profile_logins;
 use bot_nudge::{
     classify_bot_nudge, logins_correspond, nudge_class_idlable, nudge_config_for,
     nudge_giveup_message, post_nudge_comment, profile_by_author, resolved_nudge_configs,
@@ -180,8 +182,8 @@ use bot_verdict::{clean_pass_review, usage_limit_comment_by};
 #[cfg(test)]
 use bounded_run::BOUNDED_STDERR_TAIL_CAP;
 pub(crate) use bounded_run::{
-    bounded_read, bounded_read_diagnostic, git_bounded, log_bounded_read_error, BoundedOutput,
-    GhReadError,
+    bounded_read, bounded_read_diagnostic, bounded_read_unadmitted, git_bounded,
+    log_bounded_read_error, BoundedOutput, GhReadError,
 };
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, BudgetTrip};
@@ -220,11 +222,10 @@ pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_tran
 use gh_read::is_no_pr_stderr;
 use gh_read::{
     attestation_in_scope, git_head_branch, git_head_sha, graphql_exhausted_reason, head_is_shipped,
-    internal_gh_adapter, pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view,
-    refusal_is_secondary, stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail,
-    GraphqlQuota,
+    pr_head_oid, probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
+    stderr_is_unauthenticated, stderr_smells_rate_limit, stderr_tail, GraphqlQuota,
 };
-pub(crate) use gh_read::{coverage_adapter, is_graphql_read};
+pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use intent::read_tail_lines;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
@@ -259,6 +260,7 @@ pub(crate) use review_findings::{event_lines, event_lines_of};
 pub use review_findings::{unattested_reviewers_scan, UnattestedReviewer};
 pub(crate) use review_inputs::{resolve_review_inputs, ReviewInputs};
 pub(crate) use self_review_floor::is_documentation_path;
+pub(crate) use self_review_floor::reviewer_entry;
 pub(crate) use self_review_floor::self_review_floor_applies;
 use self_review_floor::{
     classify_payload_for_floor, floor_self_review, reviewer_invocation_for, REVIEW_ORDER,
@@ -267,11 +269,13 @@ use settings::{
     fail_closed_settings, normalize_reviewer, parse_manifest, parse_settings_result, Manifest,
     PeerEntry,
 };
+pub(crate) use settings::{
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+};
 #[cfg(test)]
 pub(crate) use settings::{parse_settings, value_as_probe_list};
 #[cfg(test)]
 use settings::{scalar_as_singleton, MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
-pub(crate) use settings::{scan_manifest_field, session_cost_from_ledger, Settings};
 use watch_lease::{harness_can_idle, watch_target, watch_window_ms, CONTINUE_WORKING};
 use watch_lease::{CODEX_UNROUTABLE_REFUSAL, EMIT_FAILED_REFUSAL};
 
@@ -559,7 +563,7 @@ pub(crate) fn decide_with_payload(
     let ledger_path = parsed
         .ledger_path
         .clone()
-        .unwrap_or_else(|| crate::paths::ledger_path(&cwd));
+        .unwrap_or_else(|| crate::paths_cli::ledger_json(&cwd));
 
     // Now timestamp
     let now: DateTime<Utc> = if let Some(ref s) = parsed.now_override {
@@ -747,6 +751,7 @@ pub(crate) fn decide_with_payload(
             &cwd,
             &session_id,
             node_id.as_deref().unwrap_or(""),
+            &|id| holds::node_is_done(&cwd, id),
             &emit,
         ) {
             holds::QuestionGateStop::None => {}
@@ -1694,9 +1699,10 @@ pub(crate) fn decide_with_payload(
                             &pr_info.head_oid,
                             pr_info.range_tiling.hard_blocker,
                         );
-                        // The hint renders the exact sized invocation (Python
-                        // single source) so an unreviewed-green termination
-                        // names what to run, not just that something must be.
+                        // The hint renders the exact sized invocation (the
+                        // native capability builder) so an unreviewed-green
+                        // termination names what to run, not just that
+                        // something must be.
                         // Past the round cap that hint becomes the loop: the
                         // receipt then carries the spent budget and names the
                         // terminal act instead. The max here is the same
@@ -1704,12 +1710,7 @@ pub(crate) fn decide_with_payload(
                         if waiver.is_none() {
                             let mut cov_line = coverage_receipt_line(
                                 &pr_info.coverage,
-                                sized_self_review_hint(
-                                    &parsed.fno_bin,
-                                    &cwd,
-                                    author_harness.as_deref(),
-                                )
-                                .as_deref(),
+                                sized_self_review_hint(&cwd, author_harness.as_deref()).as_deref(),
                                 pr_info.range_tiling.rounds_exhausted.then(|| {
                                     (
                                         pr_info.range_tiling.rounds_used,

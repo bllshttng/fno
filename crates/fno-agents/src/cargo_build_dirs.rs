@@ -284,7 +284,7 @@ pub fn restart_wedged_sccache(server_pid: u32) {
     });
 }
 
-fn expand_home(path: &Path) -> PathBuf {
+pub(crate) fn expand_home(path: &Path) -> PathBuf {
     if let Ok(rest) = path.strip_prefix("~") {
         if let Some(home) = home() {
             return home.join(rest);
@@ -422,8 +422,14 @@ fn registered_trees(root: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// The root `Cargo.toml` (a single-crate or root-workspace repo) plus every
+/// `crates/*/Cargo.toml` member.
 pub(crate) fn workspace_manifests(tree: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
+    let root_manifest = tree.join("Cargo.toml");
+    if root_manifest.is_file() {
+        found.push(root_manifest);
+    }
     if let Ok(entries) = std::fs::read_dir(tree.join("crates")) {
         for entry in entries.flatten() {
             let manifest = entry.path().join("Cargo.toml");
@@ -1045,9 +1051,34 @@ fn row_line(verb: &str, lane: &str, row: &Row, holders: &HolderView) -> String {
 /// by contract: `apply=false` only reports. Prints one line per row plus the
 /// `cargo-build-dirs` summary line.
 pub fn sweep(root: &Path, apply: bool, now: SystemTime) -> SweepReport {
+    sweep_roots(&[root.to_path_buf()], apply, now)
+}
+
+/// One sweep over every repo that shares one fno build base (the caller
+/// groups roots by `fno_build_base`; the first root names the base and the
+/// cap). The base holds every repo's rows, so membership, ownership, and the
+/// live-cargo fence must read the union of all their trees: a per-repo sweep
+/// cannot see another repo's live cargo, and its cap would reap that row.
+pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepReport {
     let mut rep = SweepReport::default();
-    let trees = registered_trees(root);
-    let bases = managed_bases(root, &trees);
+    let Some(root) = roots.first() else {
+        return rep;
+    };
+    let mut trees: Vec<PathBuf> = Vec::new();
+    let mut bases: Vec<PathBuf> = Vec::new();
+    for r in roots {
+        let own = registered_trees(r);
+        for base in managed_bases(r, &own) {
+            if !bases.iter().any(|b| phys(b) == phys(&base)) {
+                bases.push(base);
+            }
+        }
+        for tree in own {
+            if !trees.iter().any(|t| phys(t) == phys(&tree)) {
+                trees.push(tree);
+            }
+        }
+    }
     rep.bases = bases.len();
     let fno_base = fno_build_base(root);
     rep.effective_cap_bytes = effective_cap_bytes(root);
@@ -2646,6 +2677,49 @@ mod tests {
         let summary = rep.lines.last().unwrap();
         assert!(summary.contains("cap_exceeded=true"), "{summary}");
         assert!(summary.contains("cap_held=cargo-live:1"), "{summary}");
+    }
+
+    /// Two repos share one base, the second a single-crate repo with only a
+    /// root `Cargo.toml`. One sweep over both must count the second repo's
+    /// tree and keep the row its live cargo owns; a sweep of the first repo
+    /// alone would read that row as idle and reap it, the oldest, first.
+    #[test]
+    fn a_shared_base_sweep_fences_every_roots_live_cargo() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = setup("sharedbase", "never-broken");
+        let other_repo = temp_root("sharedbase-rootb");
+        std::fs::write(
+            other_repo.join("Cargo.toml"),
+            "[package]\nname = 'otherpkg'\nversion = '0.1.0'\n",
+        )
+        .unwrap();
+        crate::write_exec_stub(
+            &env.root.join("bin"),
+            "cargo",
+            "#!/bin/sh\ncase \"$*\" in *rootb*) build=\"$CBD_B_ANSWER\" ;; \
+             *) build=\"$CBD_FNO_ANSWER\" ;; esac\n\
+             printf '{\"build_directory\":\"%s\",\"packages\":[{\"name\":\"fakepkg\"}]}\\n' \"$build\"\n",
+        );
+        let live = plant(&env.fno_base, "00", "bbbb33", 2 * 3600, false);
+        let other = plant(&env.fno_base, "00", "other01", 3600, false);
+        std::env::set_var("CBD_B_ANSWER", &live);
+        let unit = crate::reclaim::tree_bytes(&live);
+        std::env::set_var("FNO_CARGO_FREE_BYTES", (unit * 2).to_string());
+        std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", &other_repo);
+
+        let rep = sweep_roots(
+            &[env.root.clone(), other_repo.clone()],
+            true,
+            SystemTime::now(),
+        );
+        std::env::remove_var("CBD_B_ANSWER");
+        let _ = std::fs::remove_dir_all(&other_repo);
+
+        assert_eq!(rep.trees_resolved, 2, "{rep:?}");
+        assert!(live.exists(), "the second repo's live cargo keeps its row");
+        assert!(!other.exists(), "an idle row still goes under cap pressure");
+        assert_eq!(rep.reaped, 1, "{rep:?}");
+        assert!(rep.lines.iter().any(|l| l.contains("kept lane=cargo-live")));
     }
 
     /// AC-ERR: a live cargo cwd whose OWN tree cannot answer its manifests

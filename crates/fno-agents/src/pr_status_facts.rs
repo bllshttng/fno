@@ -35,12 +35,30 @@ pub(crate) struct RealGhProbe;
 /// not pace reads (the fleet budget ledger owns that).
 const GH_CALL_BOUND: std::time::Duration = std::time::Duration::from_secs(120);
 
-impl GhProbe for RealGhProbe {
-    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = crate::loopcheck::bounded_read(
+/// The transport for a caller that judged its own origin against the fleet
+/// budget before the read (`status-rest-get`): the spawn skips the
+/// origin-blind admission inside `bounded_read`, so an attended user is not
+/// held a second time.
+struct JudgedGhProbe;
+
+impl RealGhProbe {
+    /// The one bounded gh spawn both paths share. The fleet budget admission
+    /// inside `bounded_read` still runs on the conditional path, so a live
+    /// hold refuses before the spawn exactly as it does today. `admit` is
+    /// false only for a caller that already judged its origin.
+    fn bounded_gh(
+        refs: &[&str],
+        cwd: &Path,
+        admit: bool,
+    ) -> Result<(bool, Vec<u8>, String), String> {
+        let read = if admit {
+            crate::loopcheck::bounded_read
+        } else {
+            crate::loopcheck::bounded_read_unadmitted
+        };
+        let out = read(
             std::ffi::OsStr::new("gh"),
-            &refs,
+            refs,
             cwd,
             "pr-status gh",
             GH_CALL_BOUND,
@@ -48,9 +66,32 @@ impl GhProbe for RealGhProbe {
         .map_err(|error| crate::loopcheck::bounded_read_diagnostic("pr-status", &error))?;
         Ok((
             out.status.success(),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
+            out.stdout,
             String::from_utf8_lossy(&out.stderr_tail).into_owned(),
         ))
+    }
+
+    fn run(cwd: &Path, args: &[String], admit: bool) -> Result<(bool, String, String), String> {
+        if let Some(path) = crate::gh_etag::eligible(args) {
+            return crate::gh_etag::conditional_api_get(cwd, path, |spawn_args| {
+                Self::bounded_gh(spawn_args, cwd, admit)
+            });
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
+        Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
+    }
+}
+
+impl GhProbe for RealGhProbe {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        Self::run(cwd, args, true)
+    }
+}
+
+impl GhProbe for JudgedGhProbe {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        RealGhProbe::run(cwd, args, false)
     }
 }
 
@@ -62,6 +103,12 @@ pub fn run_op(op: &str, payload: &Value) -> String {
         "status-merge-blocker" => merge_blocker(&RealGhProbe, payload).to_string(),
         "status-failure-cause" => failure_cause(payload).to_string(),
         "status-zero-job-runs" => zero_job_runs_op(&RealGhProbe, payload).to_string(),
+        "status-rest-get" => rest_get_op(
+            &JudgedGhProbe,
+            crate::gh_budget::admit_spawn_for_origin,
+            payload,
+        )
+        .to_string(),
         "status-cache-key" => status_cache_key(payload).to_string(),
         "status-branch-history" => branch_history_op(&RealGhProbe, payload).to_string(),
         other => json!({"error": format!("unknown op {other}")}).to_string(),
@@ -81,7 +128,6 @@ pub fn run_op(op: &str, payload: &Value) -> String {
 /// shape, never to a wrong one.
 pub(crate) fn status_cache_key(payload: &Value) -> Value {
     use sha2::{Digest, Sha256};
-    use std::process::Command;
 
     let cwd = PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
     let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
@@ -103,23 +149,22 @@ pub(crate) fn status_cache_key(payload: &Value) -> Value {
     let mut material = format!("{head}|{state}|{enabled}|{dispatch}|");
 
     // The PR's dispatch-hold word. The status read supplies the probe it
-    // already ran (`hold_probe_word`); the op door keeps its own probe for
-    // callers that did not. Exit 0 clear, 3 held, anything else unreadable.
+    // already ran (`hold_probe_word`); the op door runs the same flow in
+    // process for callers that did not. Exit 0 clear, 3 held, anything else
+    // unreadable. The word shape (`Some(n):<stderr>`) is kept so a deploy
+    // does not rekey every status row.
     let hold_word = match payload.get("hold_probe_word").and_then(Value::as_str) {
         Some(word) => word.to_string(),
-        None => Command::new(crate::scrape::fno_bin())
-            .args(["do", "pr", "hold-check", &pr.to_string()])
-            .current_dir(&cwd)
-            .output()
-            .ok()
-            .map(|out| {
-                format!(
-                    "{:?}:{}",
-                    out.status.code(),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )
-            })
-            .unwrap_or_else(|| "spawn-failed".to_string()),
+        None => {
+            let mut flow = crate::merge_verb::hold_check_flow(pr as i64, &cwd);
+            let mut stderr = String::new();
+            for (err, line) in std::mem::take(&mut flow.lines) {
+                if err {
+                    stderr.push_str(&line);
+                }
+            }
+            format!("{:?}:{}", Some(flow.exit_code), stderr.trim())
+        }
     };
     material.push_str(&hold_word);
     material.push('|');
@@ -466,6 +511,40 @@ pub(crate) fn timeout_annotation(annotations: &Value) -> Option<String> {
             .find_map(timeout_message)
     } else {
         rows.iter().find_map(timeout_message)
+    }
+}
+
+/// The `status-rest-get` op: one plain `gh api <path>` read through the
+/// conditional door, for the Python loop-check adapter. `gh_etag::eligible`
+/// owns which paths qualify, so the adapter holds no copy of the rule: an
+/// ineligible path answers `eligible: false` and the adapter runs its own
+/// read. An eligible read answers gh's `ok`, body and stderr as the plain
+/// call would, a 304 already swapped for the stored body. The op judges the
+/// caller's origin against the fleet budget once (`admit`), so an attended
+/// user is never held and an agent is held exactly once. A refusal answers
+/// `ok: false` with the ledger's own line, which carries the `gh budget:`
+/// marker the adapter's classifier reads.
+fn rest_get_op<P: GhProbe>(
+    probes: &P,
+    admit: impl Fn(&[String]) -> Option<String>,
+    payload: &Value,
+) -> Value {
+    let Some(path) = payload.get("path").and_then(Value::as_str) else {
+        return json!({"error": "status-rest-get needs a path"});
+    };
+    let cwd = PathBuf::from(payload.get("cwd").and_then(Value::as_str).unwrap_or("."));
+    let args = vec!["api".to_string(), path.to_string()];
+    if crate::gh_etag::eligible(&args).is_none() {
+        return json!({"eligible": false});
+    }
+    if let Some(refusal) = admit(&args) {
+        return json!({"eligible": true, "ok": false, "stdout": "", "stderr": refusal});
+    }
+    match probes.run_gh(&cwd, &args) {
+        Ok((ok, stdout, stderr)) => {
+            json!({"eligible": true, "ok": ok, "stdout": stdout, "stderr": stderr})
+        }
+        Err(err) => json!({"eligible": true, "ok": false, "stdout": "", "stderr": err}),
     }
 }
 

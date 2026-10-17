@@ -102,6 +102,9 @@ fn type_message(v: &mut View, text: &str) {
 #[test]
 fn open_seeds_project_candidates_and_kicks_the_catalog_probe() {
     let mut v = plain_view();
+    let mut bare = named_meta(9, "bare", &["t"], 0);
+    bare.canonical_cwd = String::new();
+    v.layout.squads.push(bare);
     open(&mut v);
     assert!(v.launcher.is_some());
     assert!(v.catalog_want, "first open arms the catalog probe");
@@ -109,6 +112,10 @@ fn open_seeds_project_candidates_and_kicks_the_catalog_probe() {
     let own = std::env::current_dir().unwrap().display().to_string();
     let l = v.launcher.as_ref().unwrap();
     assert_eq!(l.draft.projects.first().map(String::as_str), Some(&own[..]));
+    assert!(
+        l.draft.projects.iter().all(|p| !p.is_empty()),
+        "a workspace with no folder offers no project, so the picker paints no blank row"
+    );
 }
 
 #[test]
@@ -702,6 +709,7 @@ fn click_rows() {
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x,
         shift: false,
+        alt: false,
     };
     let sock: Vec<u8> = Vec::new();
     let mut sock = sock;
@@ -774,6 +782,7 @@ fn click_rows() {
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x + 2,
         shift: false,
+        alt: false,
     };
     let sock: Vec<u8> = Vec::new();
     let mut sock = sock;
@@ -831,12 +840,14 @@ fn motion_over_the_project_chip_shows_the_cwd_line_and_a_press_outside_closes_th
         row: sl.origin.0 + 1 + r.y,
         col: sl.origin.1 + 1 + r.x,
         shift: false,
+        alt: false,
     };
     let away = crate::mouse::MouseReport {
         kind: crate::proto::MouseKind::Move,
         row: sl.origin.0,
         col: sl.origin.1,
         shift: false,
+        alt: false,
     };
     rt.block_on(async {
         super::agent_launcher::launcher_mouse(&mut v, over_chip, &mut sock)
@@ -870,6 +881,7 @@ fn motion_over_the_project_chip_shows_the_cwd_line_and_a_press_outside_closes_th
         row: sl.origin.0,
         col: sl.origin.1,
         shift: false,
+        alt: false,
     };
     rt.block_on(async {
         super::agent_launcher::launcher_mouse(&mut v, press_out, &mut sock)

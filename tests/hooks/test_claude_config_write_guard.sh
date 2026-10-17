@@ -14,6 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 GUARD="${REPO_ROOT}/hooks/write-gate.sh"
 
+# The smoke lanes build the front and expose it as FNO_AGENTS_FRONT; hand it
+# to the relay's own FNO_AGENTS_BIN door when nothing more specific is set,
+# so the suite exercises the real policy instead of the relay's no-binary
+# fallback.
+export FNO_AGENTS_BIN="${FNO_AGENTS_BIN:-${FNO_AGENTS_FRONT:-}}"
+
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf '[ccw] PASS: %s\n' "$*"; }
 fail() { FAIL=$((FAIL+1)); printf '[ccw] FAIL: %s\n' "$*" >&2; }
@@ -160,6 +166,7 @@ rm -rf "$CFGDIR"
 #    stays writable, subfolders stay allowed. Hermetic via FNO_STATE_DIR. ─────
 STATEDIR="$(mktemp -d)"
 touch "$STATEDIR/ledger.json"
+mkdir "$STATEDIR/spaces"
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > $STATEDIR/foo.out\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
   pass "AC13: new top-level entry in the state root is refused"
@@ -178,6 +185,44 @@ if [[ "$out" == "{}" ]]; then
 else
   fail "AC13: subfolder write blocked: $out"
 fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo x > $STATEDIR/newdir/x.out\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: a write under a missing top-level folder is refused"
+else
+  fail "AC13: nested newdir write approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/newdir\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir of a missing top-level folder is refused"
+else
+  fail "AC13: state-root mkdir approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep $STATEDIR/newdir2\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir refuses on any operand, not only the first"
+else
+  fail "AC13: second-operand state-root mkdir approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/x2; mkdir $STATEDIR/newdir3\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: a second mkdir clause is checked, not only the first"
+else
+  fail "AC13: second state-root mkdir clause approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir \$FNO_STATE_DIR/newdir4\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if printf '%s' "$out" | grep -q '"block"'; then
+  pass "AC13: mkdir through a spelled state-root variable is refused"
+else
+  fail "AC13: spelled-variable state-root mkdir approved: $out"
+fi
+out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $STATEDIR/spaces/deep\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
+if [[ "$out" == "{}" ]]; then
+  pass "AC13: mkdir under an existing folder stays allowed"
+else
+  fail "AC13: state-root mkdir under spaces blocked: $out"
+fi
+expect "AC13: mkdir in the Claude config dir stays lawful" approve \
+  "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir $HOME/.claude/projects/newbot\"},\"session_id\":\"$SID\"}"
 out=$(printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cp staged $STATEDIR/\"},\"session_id\":\"$SID\"}" | FNO_STATE_DIR="$STATEDIR" bash "$GUARD" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"block"'; then
   pass "AC13: cp into the state root itself is refused"

@@ -28,21 +28,43 @@ def _sandbox_bounce_receipts(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _hermetic_post_merge(monkeypatch):
-    """Keep tick tests hermetic after the verb-first cutover.
+    """Keep tick tests hermetic after the native cutover.
 
-    The default ``_default_dispatch_ritual`` now shells ``fno do pr ritual`` and
-    appends receipts to the global events log. Tests that exercise the real
-    default dispatch (those that do NOT inject ``dispatch_ritual_fn``) would
-    otherwise spawn a subprocess and pollute ~/.fno/events.jsonl. Redirect both
-    to no-ops; tests injecting ``dispatch_ritual_fn`` never reach them.
+    The default ``_default_dispatch_ritual`` now speaks to the native
+    ``pr-watch post-merge-dispatch`` arm through verb_call. The stub mirrors
+    the arm's own fail-closed auto_run read so the arming tests stay
+    meaningful; tests injecting ``dispatch_ritual_fn`` never reach it.
     """
-    import fno.post_merge_route as pmr
+    import tomllib
 
-    monkeypatch.setattr(
-        pmr, "_default_run_ritual_verb",
-        lambda pr, cwd, **_kw: pmr.ColdRitualResult(ok=True, tail="ok"),
-    )
-    monkeypatch.setattr(pmr, "emit_receipt", lambda *a, **k: True)
+    import fno.rust_binary as rb
+
+    def _stub(verb, payload, **_kw):
+        pr = payload.get("pr_number")
+        cwd = payload.get("node_cwd")
+        armed = False
+        if cwd:
+            cfg = Path(cwd) / ".fno" / "config.toml"
+            if cfg.is_file():
+                with open(cfg, "rb") as fh:
+                    armed = bool(
+                        tomllib.load(fh).get("post_merge", {}).get("auto_run", False)
+                    )
+        if not armed:
+            return {
+                "outcome": "disabled",
+                "pr_number": pr,
+                "short_id": "",
+                "detail": "auto-run-disabled",
+            }
+        return {
+            "outcome": "dispatched",
+            "pr_number": pr,
+            "short_id": "verb",
+            "detail": "cold: no-live-source-session",
+        }
+
+    monkeypatch.setattr(rb, "verb_call", _stub)
 
 
 @pytest.fixture(autouse=True)
@@ -1114,14 +1136,19 @@ class TestTickOrchestrator:
 
     def test_merge_fire_failure_is_receipted_before_terminal_eviction(self, tmp_path, monkeypatch):
         """A failed hand-off is explicit; terminal cache state still cannot linger."""
-        import fno.post_merge_route as pmr
+        import fno.rust_binary as rb
         from fno.pr_watch._dispatch import tick
         from fno.pr_watch._state import WatermarkStore
 
         # Override the autouse success verb so the dispatch returns 'failed'.
         monkeypatch.setattr(
-            pmr, "_default_run_ritual_verb",
-            lambda pr, cwd, **_kw: pmr.ColdRitualResult(ok=False, tail="fail"),
+            rb, "verb_call",
+            lambda verb, payload, **_kw: {
+                "outcome": "failed",
+                "pr_number": payload.get("pr_number"),
+                "short_id": "",
+                "detail": "fail",
+            },
         )
 
         store_path = tmp_path / "state.json"
@@ -1985,7 +2012,6 @@ class TestWarmMergeRouting:
     """The tick's merge branch routes through the shared post-merge dispatcher."""
 
     def _run_merge_tick(self, tmp_path, ritual_outcome, ritual_detail=None, *, ticks=1):
-        from fno.post_merge_route import PostMergeDispatchResult
         from fno.pr_watch._dispatch import tick
         from fno.pr_watch._state import WatermarkStore
 
@@ -2006,9 +2032,14 @@ class TestWarmMergeRouting:
         ritual_calls: list[tuple] = []
 
         def fake_ritual(cand, obs, fire):
+            from types import SimpleNamespace
+
             ritual_calls.append((cand.pr_number, getattr(obs, "merge_sha", None)))
-            return PostMergeDispatchResult(
-                ritual_outcome, cand.pr_number, short_id="abcd1234", detail=ritual_detail
+            return SimpleNamespace(
+                outcome=ritual_outcome,
+                pr_number=cand.pr_number,
+                short_id="abcd1234",
+                detail=ritual_detail,
             )
 
         for _ in range(ticks):
@@ -2588,8 +2619,6 @@ class TestTickRecordsAndDeadline:
         """AC3-HP: notify_watch, heal and stranded share the tick's one
         sidecar scan - three consumers, one call, the same list. The catchup
         leg is gone from the tick; its sync must never be called."""
-        from types import SimpleNamespace as _NS
-
         from fno.pr_watch import cli as prcli
 
         calls = []
@@ -2621,12 +2650,6 @@ class TestTickRecordsAndDeadline:
         )
         monkeypatch.setattr(
             "fno.branch_provenance_cache.write_cache", lambda root, rows: False,
-            raising=True,
-        )
-        monkeypatch.setattr(
-            "fno.pr._sync_canonical.run_sync_catchup",
-            lambda settings, canonical_root: catchup_seen.append(canonical_root)
-            or _NS(outcome="disabled", stale=False, detail=""),
             raising=True,
         )
         monkeypatch.setattr(
@@ -3878,18 +3901,18 @@ class TestDurableGrantExecution:
         merge_calls: list[dict] = []
         self._merge_calls = merge_calls
 
-        def _merge(argv, cwd=None, *, authority="manifest", timeout_s=300.0):
-            assert authority == "durable_grant"
-            merge_calls.append({"pr": int(argv[0]), "timeout_s": timeout_s})
+        def _merge(verb, payload, timeout=None):
+            assert verb == "authorized-merge"
+            assert payload.get("authority") == "durable_grant"
+            merge_calls.append({"pr": int(payload["argv"][0]), "timeout": timeout})
             if isinstance(rc, BaseException):
                 raise rc
+            receipt = {"pr": int(payload["argv"][0]), "exit": rc}
             if reason is not None:
-                from fno.pr import _merge as merge_mod
+                receipt.update(reason=reason, observed_head="headsha")
+            return receipt
 
-                merge_mod.LAST_RECEIPT.update(reason=reason, observed_head="headsha")
-            return rc
-
-        monkeypatch.setattr("fno.pr._merge.run_merge", _merge)
+        monkeypatch.setattr("fno.rust_binary.verb_call", _merge)
         monkeypatch.setattr("fno.pr._merge._pr_head_oid", lambda _pr, _repo: "headsha")
         return merge_calls
 
@@ -3975,13 +3998,16 @@ class TestDurableGrantExecution:
         self._seed_entries(tmp_path, [1])
         merge_calls = self._fake_merge(monkeypatch, 2, reason=reason)
         if missing_head:
-            from fno.pr import _merge
-            original = _merge.run_merge
-            def no_head(*args, **kwargs):
-                rc = original(*args, **kwargs)
-                _merge.LAST_RECEIPT.pop("observed_head", None)
-                return rc
-            monkeypatch.setattr(_merge, "run_merge", no_head)
+            import fno.rust_binary
+
+            original = fno.rust_binary.verb_call
+
+            def no_head(verb, payload, timeout=None):
+                receipt = original(verb, payload, timeout=timeout)
+                receipt.pop("observed_head", None)
+                return receipt
+
+            monkeypatch.setattr(fno.rust_binary, "verb_call", no_head)
         counts = self._drain(self._queue(tmp_path), deps, monkeypatch, tmp_path)
 
         assert counts == {"executed": 0, "held": 1, "failed": 0, "skipped": 0, "budget": 0}
@@ -3998,7 +4024,7 @@ class TestDurableGrantExecution:
         next_deps = _make_tick_deps(tmp_path, candidates=[])
         counts = self._drain(self._queue(tmp_path), next_deps, monkeypatch, tmp_path)
         assert counts["skipped"] == 1
-        assert merge_calls == [{"pr": 1, "timeout_s": 135.0}]
+        assert merge_calls == [{"pr": 1, "timeout": 900}]
         assert any(
             event["type"] == "pr_watch_skipped" and event["data"]["reason"] == "parked"
             for event in next_deps["events"]
@@ -4235,7 +4261,9 @@ class TestDurableGrantExecution:
         from fno.pr_watch._dispatch import tick
 
         deps = _make_tick_deps(tmp_path, candidates=[])
-        monkeypatch.setattr("fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0)
+        monkeypatch.setattr(
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
+        )
         tick(
             graph_path=tmp_path / "graph.json",
             store_path=tmp_path / "state.json",
@@ -4345,7 +4373,7 @@ class TestScanResumesLeastRecentlyPolled:
         # The merge phase drains a granted row for PR 45 straight from the
         # Rust queue (the sweep no longer queues).
         monkeypatch.setattr(
-            "fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
         )
         from fno.pr_watch._dispatch import run_execute_queue
 
@@ -4399,7 +4427,7 @@ class TestScanResumesLeastRecentlyPolled:
         # The merge phase drains a granted row for PR 11 straight from the
         # Rust queue (the sweep no longer queues).
         monkeypatch.setattr(
-            "fno.pr._merge.run_merge", lambda argv, cwd=None, **_kw: 0
+            "fno.rust_binary.verb_call", lambda verb, payload, timeout=None: {"exit": 0}
         )
         from fno.pr_watch._dispatch import run_execute_queue
 
@@ -4685,7 +4713,6 @@ class TestCandidateReadDiscipline:
     def test_handled_candidate_skips_the_rich_read(self, tmp_path):
         """A merged candidate whose ritual already ran is read once; the memo
         then silences it while the listing keeps saying NOT_OPEN."""
-        from fno.post_merge_route import PostMergeDispatchResult
         from fno.pr_watch._dispatch import _delivery_state_path
         from fno.pr_watch._state import WatermarkStore
 
@@ -4704,9 +4731,13 @@ class TestCandidateReadDiscipline:
         reads = self._counting_reads(deps, {"t": 0.0})
 
         def fake_ritual(cand, obs, fire):
-            return PostMergeDispatchResult(
-                "already-dispatched", cand.pr_number,
-                short_id="abcd1234", detail="marker-exists",
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                outcome="already-dispatched",
+                pr_number=cand.pr_number,
+                short_id="abcd1234",
+                detail="marker-exists",
             )
 
         listing = self._listing({"owner/repo#1"})

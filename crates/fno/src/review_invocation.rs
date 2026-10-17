@@ -30,7 +30,9 @@ fn review_invocation_id() -> String {
     format!("ri-{nanos:x}-{}", std::process::id())
 }
 
-fn review_events_path() -> PathBuf {
+/// One journal resolver for the crate: setup's per-run events ride the
+/// same path review invocations write, so no second implementation drifts.
+pub(crate) fn review_events_path() -> PathBuf {
     if let Ok(path) = std::env::var("FNO_EVENTS_PATH") {
         if !path.is_empty() {
             return PathBuf::from(path);

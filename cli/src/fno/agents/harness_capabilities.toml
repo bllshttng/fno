@@ -148,6 +148,16 @@ headless = "argv-add-dir"
 carries = ["model", "yolo", "permission_mode", "effort", "add_dir", "launch_role", "agent", "tools", "deny_tools"]
 passthrough = ["*"]
 
+# THE NATIVE BG LINE. The lane's launch argv, filled by spawn-overlay's
+# `print` kind and by the exec path - one renderer, two readers. A `{hole}`
+# token takes the spawn's value; an `optional` hole whose value is empty
+# drops its hole token AND the flag before it, so a lane with no route,
+# model or effort still renders a legal argv. A `[[routing.models]]` row may
+# override the argv with its own `launch` list, validated by the same rules.
+[harness.claude.launch]
+argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
+optional = ["settings", "model", "effort", "permission_mode"]
+
 [harness.claude.permission_response.allow_once]
 supported = true
 rule_ids = ["permission_prompt"]
@@ -990,14 +1000,15 @@ session_binding = { strategy = "caller-assigned-cwd-scoped", required = true, ti
 # thread is unsandboxed by that same reading, earned rather than borrowed: the
 # restart journey ran a real keeper-hosted pi child on this lane, and that
 # process is as ordinary and unsandboxed as a pane child. headless stays
-# `unmeasured` - nothing has run pi headless yet, so no claim write has ever
-# been observed there, and a lane nothing dispatches must not inherit a stance
-# from the lanes that do. The spawn arm shipped and enforces that
-# stance in code: `_check_spawn_harness` refuses the unmeasured substrate by
-# name, and the lane opens only when its own journey lands.
+# headless is measured the same way, by running it: on 2026-10-16 a headless
+# `pi --print --mode json --no-session --model openai-codex/gpt-6.1-sol`
+# turn, run from one directory, wrote a file in a sibling directory outside its
+# cwd and replied `done`. That is the lane `pi_ask.rs` builds. The lane stayed
+# `unmeasured` until that run, because a lane nothing dispatches must not
+# inherit a stance from the lanes that do.
 pane = "unsandboxed"
 thread = "unsandboxed"
-headless = "unmeasured"
+headless = "unsandboxed"
 
 # pi has no approval UI, so there is no keystroke answer to record and all
 # three actions are unsupported. This is an absence in pi, not an unmeasured
@@ -1680,9 +1691,9 @@ state = "native"
 measured_by = { reader = "session-id resume journey", version = "3.14.3", date = "2026-09-29" }
 
 # footnote: footnote's own turn loop (the fnh binary), a child binary the
-# client launches with one launch spec on stdin. Headless only:
-# no pane, no thread, no TUI. The id is footnote's own fno_id, minted before
-# the first record, so the binding is preassigned.
+# client launches with one launch spec on stdin. A pane hosts its TUI:
+# `footnote --spec <file>`, no thread lane. The id is footnote's own fno_id,
+# minted before the first record, so the binding is preassigned.
 [harness.footnote]
 mail_header_at = true
 permission_bypass = []
@@ -1722,10 +1733,12 @@ supported = false
 rule_ids = []
 keys = []
 
-# No TUI exists: the loop is a one-shot child process per input.
+# The TUI (a terminal stdin) takes no session flag: it opens its own
+# sessions from one launch spec file, `--spec <path>` (fnh src/tui/mod.rs).
+# The pane arm appends the path of the spec the Rust owner writes.
 [harness.footnote.resume_strategy.forms.interactive_create]
-kind = "unsupported"
-tokens = []
+kind = "flag"
+tokens = ["footnote", "--spec"]
 
 [harness.footnote.resume_strategy.forms.interactive_resume]
 kind = "unsupported"
@@ -1950,15 +1963,26 @@ blocked = "none"
 state = "supported"
 via = ["crates/fno-agents/src/footnote_harness/mod.rs"]
 
-# agy, opencode and pi push presence only: one `fno-agents report --kind
-# session` at session start, so the registry knows the session id and
-# transcript. No per-turn push reaches `fno-agents hook session-state`
-# (hook/adapter/ has claude and codex only), so these rows read their turn
-# state from the screen scrape and never observe model, effort or posture.
+# agy pushes per-turn state, not only the session-start presence report:
+# hook/adapter/agy.rs normalizes agy's payloads and the two event-pinned
+# shims (agy-session-state-pre-invocation.sh, agy-session-state-stop.sh)
+# feed the entry, so the row reads inside-leg state instead of the screen
+# scrape. agy exposes no permission-prompt event, so blocked stays "none"
+# and the screen backstop keeps the row. opencode and pi push presence
+# only: one `fno-agents report --kind session` at session start, so the
+# registry knows the session id and transcript, and their rows still read
+# their turn state from the screen scrape.
 [harness.agy.hooks.session_state]
 state = "supported"
-via = ["hooks/agy-session-report.sh", "crates/fno-agents/src/agy_hooks.rs"]
-reason = "presence only: a session-start report; no per-turn state, model, effort or posture"
+via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/agy_hooks.rs", "crates/fno-agents/src/hook/adapter/agy.rs", "crates/fno-agents/src/hook/session_state.rs"]
+
+# PreInvocation is agy's turn start (it fires before each model call), Stop
+# ends the execution loop. agy exposes no permission-prompt event, so
+# blocked stays "none"; the payload contract names no model or effort
+# field, so the row's served axes ride only when a payload carries them.
+[harness.agy.hooks.session_state.wiring]
+events = { PreInvocation = "working", Stop = "done" }
+blocked = "none"
 
 [harness.opencode.hooks.session_state]
 state = "supported"

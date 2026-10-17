@@ -1,0 +1,31 @@
+Pull an existing plan file in as a backlog node.
+
+A plan is one delivery unit: plan == PR == node. The verb refuses a plan
+already intaked, resolves claims (--claims strict, frontmatter lenient),
+enforces the difficulty gate, and mints or updates through the shared graph
+write pipeline.
+
+Usage: fno backlog intake [OPTIONS] [PLAN_PATHS]...
+
+Arguments:
+  [PLAN_PATHS]...  Plan paths; more than one runs the multi lane
+
+Options:
+  -t, --title <TITLE>         Override the derived title
+  -p, --priority <PRIORITY>   p0|p1|p2|p3
+      --deps <DEPS>           Comma-separated node IDs
+      --points <POINTS>       Story point estimate
+      --project <PROJECT>     Override the project field (beats frontmatter and cwd inference)
+      --roadmap-id <ID>       Target roadmap ID
+      --force-new-roadmap     Intake even when the roadmap does not exist yet
+      --claims <ID>           An existing node's ID, in any state, that this plan
+                              implements; updates the node in place rather than
+                              creating a new one. Beats any frontmatter 'claims:' value.
+      --allow-no-surface      Admit a plan whose '## Files to Modify' parses empty.
+                              Such a node cannot be collision-checked, so lane fill
+                              dispatches it fail-open.
+      --from <FILE>           Read paths from FILE or '-' for stdin
+  -N, --dry-run               Preview without writing
+  -h, --help                  Print help
+
+Paired verb: `fno backlog remove <id>` deletes the node this creates.

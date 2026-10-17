@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -40,6 +40,12 @@ pub enum ViewKind {
     /// The notifications bell panel, with one synchronous gather like the
     /// live panel's `maybe_kick`.
     Bell,
+    /// The bell panel wide (the `w` toggle), on the Questions tab with the
+    /// first question marked, so one shot shows width, marks and the
+    /// marked-count footer together.
+    BellWide,
+    /// The bell panel full screen (the `F` toggle), covering the panes.
+    BellFull,
     /// The activity feed panel, with one synchronous page fold like the
     /// live panel's run-loop kick.
     Feed,
@@ -62,11 +68,22 @@ pub enum ViewKind {
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
+    /// The expanded org fold block on the sideline (the prefix+C surface),
+    /// with one inline machine fold so the lines carry real readings.
+    OrgBlock,
+    /// The org board in Tree mode.
+    OrgTree,
+    /// The org board in Table mode.
+    OrgTable,
+    /// The org board in Graph mode: the node-link canvas.
+    OrgGraph,
 }
 
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
         "bell" => Some(ViewKind::Bell),
+        "bell-wide" => Some(ViewKind::BellWide),
+        "bell-full" => Some(ViewKind::BellFull),
         "feed" => Some(ViewKind::Feed),
         "row-menu" => Some(ViewKind::RowMenu),
         "tab-menu" => Some(ViewKind::TabMenu),
@@ -75,6 +92,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
         "keys" => Some(ViewKind::Keys),
+        "org-block" => Some(ViewKind::OrgBlock),
+        "org-tree" => Some(ViewKind::OrgTree),
+        "org-table" => Some(ViewKind::OrgTable),
+        "org-graph" => Some(ViewKind::OrgGraph),
         _ => None,
     }
 }
@@ -147,7 +168,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings or keys")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -477,7 +498,7 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
     match kind {
-        Some(ViewKind::Bell) => {
+        Some(ViewKind::Bell) | Some(ViewKind::BellWide) | Some(ViewKind::BellFull) => {
             let gen = crate::client::bell::open(&mut view);
             let projection = runtime.block_on(crate::messages_model::gather());
             // Same refusal as the messages board: an announcements-less
@@ -496,6 +517,25 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
                         .into(),
                 );
+            }
+            // The Questions tab reads the fold the live loop kicks, and the
+            // snapshot has no loop: without this gather the tab paints its
+            // loading skeleton and the wide shot has no row to mark.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            match kind {
+                Some(ViewKind::BellWide) => {
+                    view.bell.size = super::bell::Size::Wide;
+                    view.bell.tab = super::bell::Tab::Questions;
+                    view.bell.selected = 0;
+                    if let Some(id) = crate::client::bell::first_question_id(&view) {
+                        view.bell.marks.insert(id);
+                    }
+                }
+                Some(ViewKind::BellFull) => {
+                    view.bell.size = super::bell::Size::Full;
+                }
+                _ => {}
             }
         }
         Some(ViewKind::Feed) => {
@@ -549,6 +589,60 @@ shoot a root seeded with questions, mail or backlog activity \
             // shows the table exactly as the tab handoff paints it.
             view.keys_modal_return = true;
             view.open_keys_modal();
+        }
+        Some(ViewKind::OrgBlock) => {
+            // The prefix+C fold runs expanded-only in a reading: flip the
+            // same state the key flips, then run the fold and the gate
+            // inline where the live panel would spawn them. A fold with no
+            // reading paints unknown lines - nothing to judge.
+            view.org = crate::org_overlay::Panel::with_detail(true);
+            view.org.toggle();
+            let lanes = runtime.block_on(crate::org_overlay::fold_now());
+            let read = lanes.is_some();
+            view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
+            let gate = runtime.block_on(crate::org_overlay::gate_now());
+            view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
+            if !read {
+                return Err(
+                    "org block rendered without a reading: fno doctor lanes returned none; \
+shoot from a host where the lanes verb answers"
+                        .into(),
+                );
+            }
+        }
+        Some(ViewKind::OrgTree) | Some(ViewKind::OrgTable) | Some(ViewKind::OrgGraph) => {
+            // The prefix+V org board at one mode: open it the way the key
+            // does, run one synchronous org gather, then set the mode the
+            // shot names. A root with no leads, nodes or unowned workers
+            // paints the degenerate footer only.
+            super::backlog_board::toggle_org_view(&mut view);
+            view.board_full = true;
+            let inputs = runtime.block_on(crate::org_model::gather(
+                &crate::backlog_view::graph_path(),
+                view.layout.agents.clone(),
+            ));
+            let gen = view.org_generation;
+            super::org_board::apply_fold(&mut view, gen, inputs);
+            let mode = match kind {
+                Some(ViewKind::OrgTable) => crate::view_store::OrgMode::Table,
+                Some(ViewKind::OrgGraph) => crate::view_store::OrgMode::Graph,
+                _ => crate::view_store::OrgMode::Tree,
+            };
+            if let Some(b) = view.org_board.as_mut() {
+                b.mode = mode;
+            }
+            let populated = view
+                .org_board
+                .as_ref()
+                .is_some_and(|b| !b.mode_rows(0, 0).is_empty());
+            if !populated {
+                return Err(
+                    "org view rendered empty: this root has no leads, nodes or unowned workers; \
+shoot a root seeded with backlog nodes and leads \
+(scripts/ops/mux-demo-snapshot.sh seeds one)"
+                        .into(),
+                );
+            }
         }
         Some(ViewKind::TabMenu) => {
             let tid = view
@@ -683,6 +777,8 @@ mod tests {
     fn view_flag_names_every_kind_and_refuses_the_rest() {
         for (name, kind) in [
             ("bell", ViewKind::Bell),
+            ("bell-wide", ViewKind::BellWide),
+            ("bell-full", ViewKind::BellFull),
             ("feed", ViewKind::Feed),
             ("row-menu", ViewKind::RowMenu),
             ("tab-menu", ViewKind::TabMenu),
@@ -691,6 +787,10 @@ mod tests {
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
             ("keys", ViewKind::Keys),
+            ("org-block", ViewKind::OrgBlock),
+            ("org-tree", ViewKind::OrgTree),
+            ("org-table", ViewKind::OrgTable),
+            ("org-graph", ViewKind::OrgGraph),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -698,7 +798,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings or keys"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table or org-graph"
             ),
             "{e}"
         );

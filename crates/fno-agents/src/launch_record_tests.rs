@@ -22,16 +22,20 @@ fn a_claude_bg_launch_names_its_worker_and_node() {
 #[test]
 fn every_harness_launch_in_one_command_is_seen() {
     let got = parse_command(
-        r#"cd /w && codex exec "fix it"; opencode run "x" && pi -p "y" | agy -p "$fno:review x-cd34"; fno agents spawn --name t-x-ef56 -H codex --node x-ef56 '/fno:target x-ef56'"#,
+        r#"cd /w && codex exec "fix it"; opencode run --title t1 "x" && pi -p "y" | agy -p "$fno:review x-cd34"; fno agents spawn --name t-x-ef56 -H codex -c /wt --node x-ef56 '/fno:target x-ef56'"#,
         "/repo",
     );
     let harnesses: Vec<&str> = got.iter().map(|l| l.harness.as_str()).collect();
     assert_eq!(harnesses, ["codex", "opencode", "pi", "agy", "codex"]);
     assert_eq!(got[0].cwd, "/w");
     assert_eq!(got[3].node.as_deref(), Some("x-cd34"));
+    // The prompt-harness arm reads --title as the name (the opencode form).
+    assert_eq!(got[1].name.as_deref(), Some("t1"));
     // A spawn takes its name, harness and node from its own flags.
     assert_eq!(got[4].name.as_deref(), Some("t-x-ef56"));
     assert_eq!(got[4].node.as_deref(), Some("x-ef56"));
+    // `-c` is the spawn's short cwd flag; the child starts there and claims by it.
+    assert_eq!(got[4].cwd, "/wt");
 }
 
 #[test]
@@ -45,9 +49,80 @@ fn reads_and_help_are_not_launches() {
         "codex --help",
         "opencode",
         "echo pi",
+        // AC6: a resume is a rejoin, not a launch; the subcommand table too.
+        "codex resume 0197abcd-1234-7abc-9def-0123456789ab --remote unix://run.sock",
+        // The resume builder emits global options before the subcommand; the
+        // subcommand is still the first positional, past flags and values.
+        "codex --dangerously-bypass-hook-trust --cd /w resume 0197abcd-1234-7abc-9def-0123456789ab",
+        "codex app-server daemon start",
+        "codex thread list",
+        "codex login",
+        "codex",
     ] {
         assert!(parse_command(cmd, "/repo").is_empty(), "{cmd}");
     }
+}
+
+/// AC5: the keeper-hosted native launch rides the pane-run fence, and the
+/// argv after `--` is parsed as the command it is. The unfenced interactive
+/// codex line records the same way: the first non-flag word is the prompt,
+/// `--remote` value included.
+#[test]
+fn a_pane_run_unwraps_the_fenced_native_argv() {
+    let got = one(
+        r#"fno mux pane run -- codex --remote unix:// "$fno:target x-ab12""#,
+        "/repo",
+    );
+    assert_eq!(got.harness, "codex");
+    assert_eq!(got.node.as_deref(), Some("x-ab12"));
+    assert_eq!(got.cwd, "/repo");
+    let bare = one(
+        r#"codex --remote unix://run.sock "$fno:target x-ab12""#,
+        "/repo",
+    );
+    assert_eq!(bare.harness, "codex");
+    assert_eq!(bare.node.as_deref(), Some("x-ab12"));
+    // The fence's own cd stays inside the fence: the next outer launch keeps
+    // the caller's cwd.
+    let fenced_cd = parse_command(
+        r#"fno mux pane run -- cd /w && claude --bg -n w "/fno:target x-ab12""#,
+        "/repo",
+    );
+    let outer = fenced_cd.last().expect("outer launch parsed");
+    assert_eq!(outer.harness, "claude");
+    assert_eq!(outer.cwd, "/repo");
+}
+
+/// A dispatcher with no Bash hook writes the same record a hook would, slot
+/// included, and the child claims it.
+#[test]
+fn a_dispatcher_writes_a_record_the_child_claims() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = home.path().to_string_lossy().into_owned();
+    write_record(
+        home.path(),
+        Launch {
+            harness: "claude".into(),
+            name: Some("w9".into()),
+            node: Some("x-ab12".into()),
+            slot: Some("g2".into()),
+            provider: None,
+            cwd: cwd.clone(),
+        },
+        "lead-9",
+        Some("claude"),
+        &cwd,
+        1_000_000,
+    )
+    .unwrap();
+    let got = claim(
+        home.path(),
+        &child("c-9", "claude", &cwd, Some("w9"), 1_001_000),
+    )
+    .unwrap();
+    assert_eq!(got.launch.slot.as_deref(), Some("g2"));
+    assert_eq!(got.launch.node.as_deref(), Some("x-ab12"));
+    assert_eq!(got.launcher_session, "lead-9");
 }
 
 fn child(sid: &str, harness: &str, cwd: &str, name: Option<&str>, at: i64) -> Child {

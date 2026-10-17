@@ -151,9 +151,9 @@ def test_substrate_given_twice_exits_2():
     assert e.value.code == 2
 
 
-def test_headless_flag_plus_trailing_substrate_token_exits_2():
+def test_once_flag_plus_trailing_substrate_token_exits_2():
     with pytest.raises(SystemExit) as e:
-        _norm(["spawn", "--name", "foo", "--headless", "bg"])
+        _norm(["spawn", "--name", "foo", "--once", "bg"])
     assert e.value.code == 2
 
 
@@ -377,7 +377,7 @@ def test_claude_bg_carries_fenced_tokens():
     assert "no carrier" not in err.getvalue()
 
 
-@pytest.mark.parametrize("substrate_args", [["--headless"], ["-p"]])
+@pytest.mark.parametrize("substrate_args", [["--once"], ["-o"], ["--substrate", "headless"]])
 def test_headless_keeps_fenced_tokens(substrate_args):
     # The one-shot lanes carry fenced tokens (appended before the prompt).
     err = io.StringIO()

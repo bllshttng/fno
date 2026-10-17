@@ -10,6 +10,7 @@
 
 pub mod acquire;
 pub mod list;
+pub mod reap;
 pub mod refresh;
 pub mod release;
 pub mod session_pid;

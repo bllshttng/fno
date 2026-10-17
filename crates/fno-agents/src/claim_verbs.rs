@@ -124,7 +124,7 @@ pub fn run_claim(args: &[String]) -> i32 {
         return run_release_stopped(&args[1..]);
     }
     if op == "reap" {
-        return run_claim_reap(&args[1..]);
+        return crate::claim_cli::reap::run(&args[1..]);
     }
     if op == "long-holds" {
         return crate::claims::run_claim_long_holds(&args[1..]);
@@ -333,52 +333,6 @@ fn run_claim_root(args: &[String]) -> i32 {
     0
 }
 
-fn run_claim_reap(args: &[String]) -> i32 {
-    let mut dirs = Vec::new();
-    let mut apply = false;
-    let mut key = None;
-    let mut budget = REAP_BUDGET;
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--root" => match it.next() {
-                Some(v) => {
-                    dirs.extend(crate::claims::claims_dir_for(Some(std::path::Path::new(v))))
-                }
-                None => return 2,
-            },
-            "--claims-dir" => match it.next() {
-                Some(v) => dirs.push(PathBuf::from(v)),
-                None => return 2,
-            },
-            "--key" => match it.next() {
-                Some(v) => key = Some(v.as_str()),
-                None => return 2,
-            },
-            "--budget-secs" => match it.next().and_then(|v| v.parse::<u64>().ok()) {
-                Some(secs) => budget = std::time::Duration::from_secs(secs),
-                None => {
-                    eprintln!("fno-agents: claim reap: --budget-secs requires whole seconds");
-                    return 2;
-                }
-            },
-            "--apply" => apply = true,
-            "--json" | "-J" => {}
-            other => {
-                eprintln!("fno-agents: claim reap: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
-    let summary = reap_roots(dirs, apply, key, budget);
-    println!("{summary}");
-    i32::from(
-        summary["root_errors"]
-            .as_array()
-            .is_some_and(|e| !e.is_empty()),
-    )
-}
-
 /// Free the build and run-slot claims a dead cargo left behind. A worker's
 /// cargo holds a compile slot (`build:cargo`, `build:cargo:1`,
 /// `build:cargo:2`) and a `test:cargo-run:<i>` slot under its own pid
@@ -424,12 +378,6 @@ pub(crate) fn reap_dead_cargo_claims() -> u64 {
 
 /// The witness basis for a session the reap's deadline left unread.
 const REAP_DEADLINE_KEPT: &str = "reap-deadline-kept";
-
-/// How long one reap pass may run. The reconcile beat runs the reap inside
-/// its own bound, and a pass past that bound was killed before it printed,
-/// so nothing was ever reaped. Rows the bound leaves unread are `deferred`
-/// to a later pass.
-pub(crate) const REAP_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Reap every claims root in `dirs` (the global and repo-local roots when it
 /// is empty) under one shared deadline. A root that cannot be read is named

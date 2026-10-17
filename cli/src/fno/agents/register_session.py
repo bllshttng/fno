@@ -20,9 +20,7 @@ if TYPE_CHECKING:
     from fno.agents.reachability import Reachability
 
 from fno.agents import events
-from fno.agents.mux_server import mux_server_env
-from fno.agents.registry import heal_mux_ref, register_existing_session, restamp_harness_session_id
-from fno.agents.spawn_defaults import resolve_lane_vendor
+from fno.agents.registry import restamp_harness_session_id
 
 #: How long a spawned worker waits for its own row to appear before giving up.
 #: Covers the spawner's post-`mux pane run` tail with room to spare: child-pid
@@ -124,37 +122,6 @@ def _predecessor_observation(
     return recorded, _verdict_bool(reading)
 
 
-def _heal_own_mux_ref(agent_self: str, harness: str, session_id: str) -> None:
-    """x-aaaa W2: heal this worker's row to its pane. Pair from FNO_SERVER/FNO_SESSION
-    (FNO_SERVER first) with FNO_PANE (pane-only; non-numeric/negative
-    ignored). Failure emits session_pane_rebound_failed, success emits only on
-    a verified write. Silent resolver: a session-start hook never prints.
-    """
-    session = mux_server_env().strip()
-    pane_raw = (os.environ.get("FNO_PANE") or "").strip()
-    if not session or not pane_raw:
-        return
-    try:
-        pane = int(pane_raw)
-    except ValueError:
-        pane = -1
-    if pane < 0:
-        return
-    try:
-        moved = heal_mux_ref(
-            name=agent_self, harness=harness, mux_session=session, pane_id=pane,
-            session_id=session_id,
-        )
-    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
-        events.emit("session_pane_rebound_failed", provider=harness,
-                    name=agent_self, session=f"{session}:{pane}", error=str(exc))
-        print(f"register_session: warning: {exc}", file=sys.stderr)
-        return
-    if moved is not None:
-        events.emit("session_pane_rebound", provider=harness, name=agent_self,
-                    old=moved[0], new=moved[1])
-
-
 def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -> int:
     """Bind a SPAWNED worker's SessionStart id observation to its own row.
 
@@ -237,8 +204,6 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
                         outcome,
                         reading,
                     )
-                    # x-aaaa W2: heal post-observation so a branched session heals its own row.
-                    _heal_own_mux_ref(agent_self, harness, session_id)
                     return 0
             else:
                 expected_predecessor_session_id, predecessor_reachable = (
@@ -291,8 +256,6 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
             f"register_session: restamped {entry.name} -> {session_id}",
             file=sys.stderr,
         )
-    # x-aaaa W2: the non-claude lineage path heals after its restamp too.
-    _heal_own_mux_ref(agent_self, harness, session_id)
     return 0
 
 
@@ -602,13 +565,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="The harness SessionStart flavor (claude: startup | resume | clear), "
         "threaded into the observation events for observability.",
     )
-    parser.add_argument("--name", default=None)
-    parser.add_argument("--log-path", default="")
     parser.add_argument(
         "--agent-self",
         default=None,
-        help="This worker's own registry row name (FNO_AGENT_SELF). Set only for "
-        "a footnote-SPAWNED worker; switches this call from register to restamp.",
+        help="This worker's own registry row name (FNO_AGENT_SELF). Set for a "
+        "footnote-SPAWNED worker's pane restamp; the hand-started register "
+        "branch is gone (the daemon mints the row at the session report).",
     )
     args = parser.parse_args(argv)
 
@@ -628,41 +590,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _heal_row_cwd(agent_self=args.agent_self, harness=args.harness, cwd=args.cwd)
         return rc
 
-    try:
-        vendor = resolve_lane_vendor([args.harness], env=os.environ, harness=args.harness)
-        entry = register_existing_session(
-            session_id=args.session_id,
-            cwd=args.cwd,
-            harness=args.harness,
-            provider=vendor,
-            name=args.name or None,
-            log_path=args.log_path,
-            origin="operator",
-            # the row describes THIS session, so its own exported
-            # FNO_NODE (a node-driven pane carries one) is the right source.
-            node=(os.environ.get("FNO_NODE") or "").strip() or None,
-        )
-    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
-        events.emit(
-            "session_register_failed",
-            provider=args.harness,
-            session_id=args.session_id,
-            error=str(exc),
-        )
-        print(f"register_session: warning: {exc}", file=sys.stderr)
-        return 0
-
-    events.emit(
-        "session_registered",
-        provider=entry.provider,
-        harness=entry.harness,
-        name=entry.name,
-        session_id=args.session_id,
-        cwd=entry.cwd,
+    # A call without --agent-self used to register an operator row here. The
+    # Rust daemon mints that row at the session report now (decision D3
+    # revised), so this entry point is the pane-worker restamp only.
+    print(
+        "register_session: no --agent-self; the hand-started register branch "
+        "is gone (the daemon mints the row at the session report)",
+        file=sys.stderr,
     )
-    # The default legible alias is minted by the daemon sweep (see
-    # session_names_fold.rs), so every row gains one within a tick.
-    print(f"register_session: registered {entry.name} ({entry.harness})", file=sys.stderr)
     return 0
 
 

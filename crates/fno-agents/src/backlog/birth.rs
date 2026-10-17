@@ -35,6 +35,18 @@ fn truthy(value: &str) -> bool {
     )
 }
 
+/// The one cross-language affirmative table (config `_coerce_affirmative`):
+/// a bool is itself, the integer 1 is true, a string reads through
+/// [`truthy`], and every other value is false.
+pub(crate) fn truthy_value(value: &Value) -> bool {
+    match value {
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_i64() == Some(1),
+        Value::String(s) => truthy(s),
+        _ => false,
+    }
+}
+
 /// The config candidates walk for one nested key, first hit wins. Best-effort:
 /// a missing or unparseable file contributes nothing.
 fn config_flag(keys: &[&str]) -> Option<Value> {
@@ -92,7 +104,7 @@ fn max_per_run() -> usize {
 
 /// The configured user-facing name: config user.name, else the git identity
 /// at the repo root, else "you".
-fn display_name(root: &Path) -> String {
+pub(crate) fn display_name(root: &Path) -> String {
     if let Some(name) = config_flag(&["user", "name"]).and_then(|v| v.as_str().map(str::to_string))
     {
         if !name.trim().is_empty() {
@@ -142,7 +154,7 @@ fn owned_manifest_attended(root: &Path, session: &str) -> Option<bool> {
 }
 
 /// Whether the ambient env alone says no operator is at this session.
-fn env_marks_unattended(get: &impl Fn(&str) -> Option<String>) -> bool {
+pub(crate) fn env_marks_unattended(get: &impl Fn(&str) -> Option<String>) -> bool {
     if get("TARGET_UNATTENDED").is_some_and(|v| v.trim() == "1") {
         return true;
     }
@@ -281,7 +293,11 @@ fn newest_mtime(paths: &[PathBuf]) -> Option<PathBuf> {
 
 /// Resolve a provenance pointer to its on-disk transcript path. Never fails;
 /// an unresolved pointer degrades the seed to the stored triple.
-fn resolve_transcript(harness: &str, session_id: &str, cwd: &str) -> (Option<PathBuf>, bool) {
+pub(crate) fn resolve_transcript(
+    harness: &str,
+    session_id: &str,
+    cwd: &str,
+) -> (Option<PathBuf>, bool) {
     if session_id.is_empty() {
         return (None, false);
     }

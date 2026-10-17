@@ -376,7 +376,18 @@ fn default_true() -> bool {
 /// v109: `WorkspaceRestore.member_session` targets one exact native session.
 /// v110: `ControlVerb::Notify` + `ServerMsg::{DesktopNotice, NoticeSent}` -
 /// desktop notifications ride to attached clients as OSC 777; floor stays 58.
-pub const PROTO_VERSION: u32 = 110;
+/// v111: `AgentRow.bindings`, the node bindings a row drives, strongest
+/// first; missing on a pre-v111 row, off the wire when empty; floor stays 58.
+/// v112: `MouseEvent.alt` (serde default) - the client forwards the SGR alt bit
+/// so the server can claim a modifier-click pair on a mouse-reporting pane and
+/// open the link under it; floor stays 58.
+/// v113: `ControlVerb::WorkspaceOrigin`, the folder edit behind
+/// `fno mux workspace origin`; floor stays 58.
+/// v114: `Command::PinThread` (move a session into a workspace by hand),
+/// `Command::AddWorkspaceFolder`, and `AgentRow.project_root`; floor stays 58.
+/// v115: `PaneInfo.pane_cwd` (serde default), the pane's own directory beside
+/// the squad-root `cwd` in `pane ls`; floor stays 58.
+pub const PROTO_VERSION: u32 = 115;
 
 /// The oldest wire version this build can speak. Bumps that only add verbs or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -443,11 +454,17 @@ pub enum BlockDir {
 /// One mouse event forwarded from a client (v7, brief US1/US2/US3). Coordinates
 /// are 0-based and pane-rect-local; the server either SGR-encodes this onto the
 /// pane's PTY (the app has mouse reporting on) or interprets it mux-side.
+/// (v112) `alt` carries the SGR alt/meta modifier bit (8), the one modifier
+/// every mouse-reporting terminal reports and cmd never is (SGR has no cmd
+/// bit): an alt click on a mouse-owning pane is the mux's link-open gesture
+/// there. `#[serde(default)]` keeps a pre-v112 peer decoding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MouseEvent {
     pub row: u16,
     pub col: u16,
     pub kind: MouseKind,
+    #[serde(default)]
+    pub alt: bool,
 }
 
 /// The mouse gesture. Wheel carries its own intent (there is no separate scroll
@@ -816,6 +833,17 @@ pub enum ControlVerb {
     /// [`ServerMsg::SquadReloaded`]. The prune CLI sends this after an
     /// applied store pass, so `persist_squad` cannot write reaped members back.
     SquadReload,
+    /// (v113) Add or drop one folder (`path`, absolute) on the open workspace
+    /// named `workspace`. The folder decides which paneless rows (thread,
+    /// headless, daemon) the workspace owns. Persists before it replies.
+    /// -> [`ServerMsg::Ok`], or `Err`: `NOT_FOUND` when this server holds no
+    /// such workspace, `BAD_REQUEST` for a relative path.
+    WorkspaceOrigin {
+        workspace: String,
+        path: String,
+        #[serde(default)]
+        remove: bool,
+    },
     /// (v75) Retire every member whose (harness, full session id)
     /// matches, across every squad this server holds. Closes only the
     /// matching member's attached panes, tombstones through the store's own
@@ -998,6 +1026,19 @@ pub enum Reach {
     Follow,
     #[default]
     Locate,
+}
+
+/// (v111) One node binding on an [`AgentRow`]: the node the row's session
+/// drives, its pr when the board knows one, and how the binding was found.
+/// `inferred` is false only for an explicit bind and a live claim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionBinding {
+    pub node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    pub source: String,
+    pub state: String,
+    pub inferred: bool,
 }
 
 /// One sideline agent row inside [`ServerMsg::Layout`] (v5, brief US2). The
@@ -1325,6 +1366,15 @@ pub struct AgentRow {
     /// reach command - the server re-derives the real tier.
     #[serde(default)]
     pub reach: Reach,
+    /// (v111) The node bindings this row carries, strongest first. Empty
+    /// stays off the wire; a pre-v111 row decodes to an empty set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<SessionBinding>,
+    /// (v114) The canonical repo root of the row's cwd (the git common dir's
+    /// parent), which the new-workspace overlay offers as a folder. `None`
+    /// when the cwd sits in no git repo or the server has not resolved it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
@@ -1681,6 +1731,21 @@ pub enum Command {
     NewSquad {
         name: String,
         origin: Option<String>,
+    },
+    /// (v114) Move a session into workspace `squad` by hand. The server pins
+    /// `(harness, harness_session_id)` on that workspace's stored row, so the
+    /// move holds across taps, portals and restarts. A dead squad id, or one
+    /// with neither name nor key, is refused with a notice.
+    PinThread {
+        squad: u64,
+        harness: String,
+        harness_session_id: String,
+    },
+    /// (v114) Add one folder (`path`, absolute) to workspace `squad`'s
+    /// origins: the same edit as `fno mux workspace origin add`.
+    AddWorkspaceFolder {
+        squad: u64,
+        path: String,
     },
     /// (v17) Rename a tab. `tab` names a stable [`TabMeta::id`] from
     /// the last `Layout`'s catalog (a stale id is refused fail-closed with a
@@ -3562,6 +3627,7 @@ mod tests {
                     row: 4,
                     col: 9,
                     kind: MouseKind::Press(MouseButton::Left),
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3570,6 +3636,7 @@ mod tests {
                     row: 0,
                     col: 0,
                     kind: MouseKind::WheelUp,
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3578,6 +3645,7 @@ mod tests {
                     row: 1,
                     col: 6,
                     kind: MouseKind::Move,
+                    alt: false,
                 },
             },
             ClientMsg::Mouse {
@@ -3586,6 +3654,7 @@ mod tests {
                     row: 2,
                     col: 2,
                     kind: MouseKind::Drag(MouseButton::Left),
+                    alt: true,
                 },
             },
             ClientMsg::BlockJump {
@@ -3997,7 +4066,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 110);
+        assert_eq!(PROTO_VERSION, 115);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4049,6 +4118,35 @@ mod tests {
                 .contains("held_conversation"),
             "false stays absent from the wire"
         );
+        // v111: `AgentRow.bindings` rides the same way - a missing key on a
+        // pre-v111 row decodes to an empty set, and an empty set stays off
+        // the wire so the sideline's `+N PRs` marker is the only trace.
+        let pre = r#"{"squad":null,"name":"pre-v111","pane_id":null,
+                      "badge":null,"reason":null,"exited":false}"#;
+        let old_row: AgentRow = serde_json::from_str(pre).unwrap();
+        assert!(
+            old_row.bindings.is_empty(),
+            "a row without bindings decodes to an empty set"
+        );
+        assert!(
+            !serde_json::to_string(&old_row)
+                .unwrap()
+                .contains("bindings"),
+            "an empty binding set stays off the wire"
+        );
+        let bound_wire = r#"{"squad":null,"name":"z","pane_id":null,
+            "badge":null,"reason":null,"exited":false,
+            "bindings":[{"node":"x-2222","pr":3159,"source":"branch",
+                         "state":"open","inferred":true}]}"#;
+        let bound: AgentRow = serde_json::from_str(bound_wire).unwrap();
+        assert_eq!(bound.bindings.len(), 1);
+        assert_eq!(bound.bindings[0].node, "x-2222");
+        assert_eq!(bound.bindings[0].pr, Some(3159));
+        assert_eq!(bound.bindings[0].source, "branch");
+        assert_eq!(bound.bindings[0].state, "open");
+        assert!(bound.bindings[0].inferred);
+        let back: AgentRow = serde_json::from_str(&serde_json::to_string(&bound).unwrap()).unwrap();
+        assert_eq!(back, bound, "bindings round-trip losslessly");
         // A teamed row round-trips losslessly.
         let mut teamed = row.clone();
         teamed.role_level = Some(1);

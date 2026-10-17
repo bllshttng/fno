@@ -114,7 +114,7 @@ fn py_eval(code: &str) -> Option<String> {
     }
 }
 
-fn on_path(name: &str) -> bool {
+pub(crate) fn on_path(name: &str) -> bool {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path).any(|dir| {
         std::fs::metadata(dir.join(name))
@@ -451,12 +451,12 @@ fn agy_wire(agents: &Path, paths: Option<[String; 3]>, home: &Path, run: Run) ->
 
 // --- main -------------------------------------------------------------------
 
-struct Harness {
-    name: &'static str,
-    label: &'static str,
+pub(crate) struct Harness {
+    pub(crate) name: &'static str,
+    pub(crate) label: &'static str,
 }
 
-const HARNESS_LIST: [Harness; 6] = [
+pub(crate) const HARNESS_LIST: [Harness; 6] = [
     Harness {
         name: "claude",
         label: "Claude Code",

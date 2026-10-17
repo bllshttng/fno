@@ -72,7 +72,7 @@ fn text_field(node: &Value, key: &str) -> Option<String> {
 }
 
 /// The briefs dir: the config override, else the state root's `briefs/`.
-fn briefs_dir() -> Option<PathBuf> {
+pub(crate) fn briefs_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     if let Some(over) = crate::agents_config::config_lookup(&cwd, &["paths", "briefs_dir"])
         .and_then(|v| v.as_str().map(str::to_string))

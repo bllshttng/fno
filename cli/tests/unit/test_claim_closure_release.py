@@ -17,7 +17,7 @@ import socket
 from pathlib import Path
 
 from fno.claims.cli import RosterReading, _node_settlement
-from fno.claims.core import reap_dead_claims, sweep_verdict
+from fno.claims.core import sweep_verdict
 from fno.claims.types import Claim, now_ms
 from fno.graph.store import commit_rows_via_store, read_graph_strict, release_node_claim_at_closure
 from tests.fixtures.graph_seed import seed_graph
@@ -434,25 +434,6 @@ class TestNodeSettlement:
         claim = _expired_live_claim()
         assert settlement(claim, native_verdict=_native_verdict(claim)) is True
 
-    def test_settlement_true_reaps_through_the_sweep(self, tmp_path, monkeypatch):
-        """The settlement reaches reap_dead_claims, not just the predicate."""
-        # Pin the settlement's graph read away from the operator's real graph.
-        monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "not-a-graph.json")
-        _write_claim(
-            "node:x-gone",
-            holder=HOLDER,
-            pid=os.getpid(),
-            expires_at_ms=now_ms() - 3_600_000,
-            root=tmp_path,
-        )
-        summary = reap_dead_claims(
-            roots=[tmp_path],
-            apply=True,
-            node_settlement=_node_settlement(_reading({"x-other": [_row()]})),
-        )
-        assert summary["reaped"] == 1
-        assert summary["kept_live"] == 0
-
     def test_a_broken_settlement_keeps_the_claim(self, tmp_path):
         _write_claim(
             "node:x-gone",
@@ -493,62 +474,3 @@ class TestNodeSettlement:
 # The done-node exclusion moved with build_board into the Rust collector
 # (x-25b8): lead_board.rs stalled_holder_excludes_done_nodes /
 # stalled_holder_still_names_a_live_open_node cover them.
-
-
-# ---------------------------------------------------------------------------
-# Task 5: graph claim reads follow the active lockfile
-# ---------------------------------------------------------------------------
-
-
-class TestReapClaimProjection:
-    def _dead_claim_and_graph(self, tmp_path, monkeypatch):
-        claims_root = tmp_path / "claims-home"
-        monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
-        graph = _make_graph(
-            tmp_path,
-            [
-                {
-                    "id": "x-gone",
-                    "title": "reaped worker's node",
-                    "status": "in_progress",
-                    "locked_by": HOLDER,
-                    "claimed_at": "2026-08-20T00:00:00Z",
-                    "session_id": HOLDER,
-                }
-            ],
-        )
-        monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
-        _write_claim(
-            "node:x-gone",
-            holder=HOLDER,
-            pid=_dead_pid(),
-            expires_at_ms=now_ms() - 3_600_000,
-            root=claims_root,
-        )
-        return graph, claims_root
-
-    def test_apply_reap_removes_the_projected_holder(self, tmp_path, monkeypatch):
-        graph, _root = self._dead_claim_and_graph(tmp_path, monkeypatch)
-        summary = reap_dead_claims(apply=True)
-        assert summary["reaped"] == 1
-        out = read_graph_strict(graph)[0]
-        assert out["locked_by"] is None
-        assert out["locked_at"] is None
-
-    def test_explicit_root_reap_removes_the_projected_holder(self, tmp_path, monkeypatch):
-        graph, claims_root = self._dead_claim_and_graph(tmp_path, monkeypatch)
-        summary = reap_dead_claims(roots=[claims_root], apply=True)
-        assert summary["reaped"] == 1
-        out = read_graph_strict(graph)[0]
-        assert out["locked_by"] is None
-
-    def test_dry_run_never_touches_the_graph(self, tmp_path, monkeypatch):
-        graph, claims_root = self._dead_claim_and_graph(tmp_path, monkeypatch)
-        summary = reap_dead_claims(apply=False)
-        assert summary["would_reap"] == 1
-        # The dry run never archives the claim, and the lapsed claim projects
-        # no holder: the graph read shows the node unheld while the claim
-        # file waits for the applied sweep.
-        out = read_graph_strict(graph)[0]
-        assert out["locked_by"] is None
-        assert _held("node:x-gone", claims_root)

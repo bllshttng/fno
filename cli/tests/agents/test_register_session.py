@@ -86,33 +86,23 @@ def test_registry_registration_separates_harness_and_model_vendor(
     assert entry.effort == "low"
 
 
-def test_main_passes_harness_and_model_vendor_to_registry(
+def test_main_without_agent_self_is_the_daemon_mints_receipt(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """The hand-started register branch is gone: the Rust daemon mints the row
+    at the session report (decision D3 revised). A call with no --agent-self
+    is the retired-branch receipt: exit 0, no row, no event, one stderr line."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents import register_session
-    from fno.agents.registry import AgentEntry
+    from fno.agents.registry import load_registry
 
-    seen: dict[str, object] = {}
+    rc = register_session.main(
+        ["--provider", "codex", "--session-id", "sess-gone", "--cwd", "/proj"]
+    )
 
-    def fake_register(**kwargs):
-        seen.update(kwargs)
-        return AgentEntry(
-            name="session",
-            harness="claude",
-            provider="anthropic",
-            harness_session_id="session-id",
-            cwd="/project",
-            log_path="",
-        )
-
-    monkeypatch.setattr(register_session, "register_existing_session", fake_register)
-
-    assert register_session.main(
-        ["--harness", "claude", "--session-id", "session-id", "--cwd", "/project"]
-    ) == 0
-    assert seen["harness"] == "claude"
-    assert seen["provider"] == "anthropic"
+    assert rc == 0
+    assert load_registry() == []
+    assert _events(tmp_path) == []
 
 
 def test_ac7_hp_idempotent_on_resame_session(tmp_path: Path, monkeypatch) -> None:
@@ -289,39 +279,6 @@ def test_register_rejects_empty_session_id(tmp_path: Path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_err_main_failopen_emits_event(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-
-    def _boom(**_kwargs):
-        raise OSError("registry locked")
-
-    monkeypatch.setattr(register_session, "register_existing_session", _boom)
-
-    rc = register_session.main(
-        ["--harness", "claude", "--session-id", "sess-x", "--cwd", "/s"]
-    )
-
-    assert rc == 0  # session start is never blocked
-    kinds = [e["kind"] for e in _events(tmp_path)]
-    assert "session_register_failed" in kinds
-
-
-def test_main_success_emits_registered_event(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--harness", "claude", "--session-id", "sess-ok", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    assert len(load_registry()) == 1
-    kinds = [e["kind"] for e in _events(tmp_path)]
-    assert "session_registered" in kinds
-
-
 def test_main_empty_session_id_is_silent_noop(tmp_path: Path, monkeypatch) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents import register_session
@@ -334,24 +291,6 @@ def test_main_empty_session_id_is_silent_noop(tmp_path: Path, monkeypatch) -> No
     assert rc == 0
     assert load_registry() == []
     assert _events(tmp_path) == []  # no noise when there's nothing to register
-
-
-def test_main_accepts_provider_alias(tmp_path: Path, monkeypatch) -> None:
-    # --provider is the axis-rename alias for --harness (x-bab1); it must still
-    # register the same harness so the fail-soft SessionStart hook survives any
-    # cutover skew between hook and module.
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import register_session
-    from fno.agents.registry import load_registry
-
-    rc = register_session.main(
-        ["--provider", "codex", "--session-id", "sess-alias", "--cwd", "/proj"]
-    )
-
-    assert rc == 0
-    rows = load_registry()
-    assert len(rows) == 1
-    assert rows[0].harness == "codex"
 
 
 # ---------------------------------------------------------------------------
@@ -1240,112 +1179,6 @@ def _write_pane_row(name: str, harness: str, **overrides):
         setattr(row, key, value)
     write_registry([row])
     return row
-
-
-def test_heal_mux_ref_persists_pair_and_clears_short_id(tmp_path, monkeypatch):
-    """A stale pair is persisted with the new pair AND an empty short_id, in
-    one transaction - asserted on the row RE-READ FROM DISK. A row carrying a
-    non-empty short_id before the heal is persisted afterwards, proving the
-    clear happens in the same transaction instead of raising into the
-    hook's fail-open (mux XOR worker XOR bg)."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import heal_mux_ref, load_registry
-
-    _write_pane_row(
-        "x-f75e-mux-chrome",
-        "claude",
-        mux={"session": "main", "pane_id": 16},
-    )
-    moved = heal_mux_ref(name="x-f75e-mux-chrome", harness="claude", mux_session="main", pane_id=31)
-    assert moved == (
-        {"session": "main", "pane_id": 16},
-        {"session": "main", "pane_id": 31},
-    )
-    row = load_registry()[0]
-    assert row.mux == {"session": "main", "pane_id": 31}
-    assert row.short_id == ""
-
-
-def test_heal_mux_ref_adopts_a_pane_from_a_bg_row(tmp_path, monkeypatch):
-    """The recovery case at its worst: a bg row (worker transport, no pane)
-    whose session is re-hosted on a pane. mux is written and short_id is
-    cleared in the SAME transaction - setting mux alone would raise in
-    write_registry and the fail-open hook would swallow it into a no-op."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import heal_mux_ref, load_registry
-
-    _write_pane_row("t-bg-worker", "claude", short_id="deadbeef")
-    moved = heal_mux_ref(name="t-bg-worker", harness="claude", mux_session="main", pane_id=7)
-    assert moved == (None, {"session": "main", "pane_id": 7})
-    row = load_registry()[0]
-    assert row.mux == {"session": "main", "pane_id": 7}
-    assert row.short_id == ""
-
-
-def test_heal_mux_ref_idempotent_noop_writes_nothing(tmp_path, monkeypatch):
-    """A row already on the right pair performs no write and emits nothing."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents import events
-    from fno.agents.registry import heal_mux_ref
-
-    _write_pane_row("t-worker", "claude", mux={"session": "main", "pane_id": 31})
-    from fno.agents.registry import _registry_path
-
-    registry_path = _registry_path(None)
-    from fno.registry_door import read_registry_document
-
-    before = read_registry_document(registry_path)
-    emitted: list = []
-    monkeypatch.setattr(events, "emit", lambda *a, **k: emitted.append((a, k)))
-
-    moved = heal_mux_ref(name="t-worker", harness="claude", mux_session="main", pane_id=31)
-
-    assert moved is None
-    assert read_registry_document(registry_path) == before, "an idempotent heal rewrote the table"
-    assert emitted == []
-
-
-def test_heal_mux_ref_refuses_bad_pane_and_wrong_harness(tmp_path, monkeypatch):
-    """A non-numeric/negative pane id is ignored, never coerced; a harness
-    mismatch matches nothing. Neither writes."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import heal_mux_ref, load_registry
-
-    _write_pane_row("t-worker", "claude", mux={"session": "main", "pane_id": 16})
-    assert heal_mux_ref(name="t-worker", harness="claude", mux_session="main", pane_id=-1) is None
-    assert heal_mux_ref(name="t-worker", harness="codex", mux_session="main", pane_id=31) is None
-    row = load_registry()[0]
-    assert row.mux == {"session": "main", "pane_id": 16}, "a refused heal rewrote the row"
-
-
-def test_heal_own_mux_ref_env_contract(tmp_path, monkeypatch):
-    """FNO_PANE absent (not in a pane) leaves mux untouched - a bg/headless
-    worker must never gain a mux ref; non-numeric, empty, or negative is
-    ignored, not coerced; a valid pair heals the row."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import load_registry
-
-    for env in (
-        {},
-        {"FNO_SESSION": "main"},
-        {"FNO_PANE": "31"},
-        {"FNO_SESSION": "main", "FNO_PANE": ""},
-        {"FNO_SESSION": "main", "FNO_PANE": "pane-31"},
-        {"FNO_SESSION": "main", "FNO_PANE": "-3"},
-    ):
-        for key in ("FNO_SESSION", "FNO_PANE"):
-            monkeypatch.delenv(key, raising=False)
-        for key, value in env.items():
-            monkeypatch.setenv(key, value)
-        _write_pane_row("t-worker", "claude")
-        from fno.agents.register_session import _heal_own_mux_ref
-
-        _heal_own_mux_ref("t-worker", "claude", "11111111-2222-3333-4444-555555555555")
-        assert load_registry()[0].mux is None, f"env {env} gained a mux ref"
-    monkeypatch.setenv("FNO_SESSION", "main")
-    monkeypatch.setenv("FNO_PANE", " 31 ")
-    _heal_own_mux_ref("t-worker", "claude", "11111111-2222-3333-4444-555555555555")
-    assert load_registry()[0].mux == {"session": "main", "pane_id": 31}
 
 
 def test_register_verb_refuses_when_fno_agent_self_row_exists(tmp_path: Path, monkeypatch) -> None:

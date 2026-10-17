@@ -170,6 +170,26 @@ sync_stale_hours = 24
 # Model for post-merge ritual workers (default claude-opus-5). Routing wins when a secondary provider is keyed.
 model = "claude-opus-5"
 
+[telemetry]
+# Bind the daemon's local OTLP receiver for Claude Code usage (default on).
+claude_otel = true
+
+[telemetry.otlp]
+# Export feed events to an OTLP collector (default off).
+enabled = false
+# OTLP collector URL, http(s); `/v1/logs` is appended when absent.
+endpoint = ""
+# Env var holding the export auth headers as `name=value,...`.
+headers_env = "FNO_OTLP_HEADERS"
+# Export event titles as log text (default off: only the event kind).
+log_content = false
+
+[attention]
+# Kill switch for the attention arm (question pages and sinks; default on).
+enabled = true
+# Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full).
+sinks = []
+
 [research]
 # Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses).
 # output_dir = <unset>   # optional; no default
@@ -187,7 +207,7 @@ peers = []
 # peer_identity = <unset>   # optional; no default
 # Optional legacy carrier: env var holding the PAT for peer_identity used to post peer reviews to the PR.
 # peer_token_env = <unset>   # optional; no default
-# Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [gemini-code-assist, chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.
+# Reviewer logins honored-if-present but NOT required: the gate never waits for them (kills the App-bot usage-limit wedge), but a blocking finding from one still holds it. Also the escape for a required App you no longer want the gate to wait on: move its login here. UNSET resolves to the built-in default [chatgpt-codex-connector] on both readers (`fno do pr status` and the loop-check gate); an explicit [] is a real opt-out and wins over the default; a non-empty list EXTENDS the default (add a login) rather than replacing it, so a partial list never silently drops a built-in.
 # optional_apps = <unset>   # optional; no default
 # Per-App override for the bot-review nudge, as [review.nudge.<login>] tables with {review_handle, wait_minutes, ceiling, enabled}. A github_apps bot that reviews on MENTION not on push never reviews unless something posts its trigger; the loop-check stop gate posts review_handle (default from the built-in profile), waits wait_minutes (default 15), and after ceiling (default 3) unanswered nudges gives up rather than idling to the budget ceiling. enabled=false opts a repo back into plain block-and-wait. Ships populated for chatgpt-codex-connector, which wears three distinct names for one bot: match the review-author login chatgpt-codex-connector, trigger a fresh review with '@codex review', and address an in-thread reply to '@chatgpt-codex-connector'.
 nudge = {}
@@ -471,8 +491,6 @@ max_per_run = 5
 idle_threshold_s = 0
 # A2: dispatch a context /think when /target claims a node to work it (default OFF).
 on_work_start = false
-# A2: dispatch a context /think when `fno backlog done` closes a node (default OFF).
-on_retro = false
 # Per-install per-day ceiling on /think spawns (firehose guard; 0 = off).
 daily_cap = 20
 # Dispatch a /think for each WAVE-0 child at `fno backlog decompose` (default OFF; inherits max_per_run and daily_cap). Worth it only when the epic is large enough that inline-filling every child blows one session's context budget.

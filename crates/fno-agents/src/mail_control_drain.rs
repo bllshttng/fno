@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// The bus kinds that are bookkeeping about other messages, never inbox
 /// content (`bus.log.CONTROL_KINDS`).
-const WITHDRAW_KIND: &str = "withdraw";
+pub(crate) const WITHDRAW_KIND: &str = "withdraw";
 const LANDED_KIND: &str = "landed";
 /// Delivery states meaning the bytes already reached the recipient
 /// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand
@@ -113,22 +113,43 @@ pub(crate) fn unread_messages<'a>(bus_dir: &Path, msgs: &'a [Value], name: &str)
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
+    // Hosted-send parity with `bus.cursor.scan_unread`: a hosted receipt
+    // supersedes the staged twin sharing its id (the receipt proves the
+    // inject confirmed, so the transcript already carries the body), and
+    // rows dedupe one per id, first in log order wins, before the cursor
+    // walk. A typed receipt never supersedes: pane bytes are not proven
+    // consumed, so the staged row stays the recovery path.
+    let superseded: std::collections::HashSet<&str> = msgs
+        .iter()
+        .filter(|m| m.get("delivery").and_then(Value::as_str) == Some("hosted"))
+        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .collect();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let deduped: Vec<&Value> = msgs
+        .iter()
+        .filter(|m| {
+            let id = m.get("id").and_then(Value::as_str).unwrap_or("");
+            seen.insert(id)
+        })
+        .collect();
     let after = cursor.and_then(|id| {
-        msgs.iter()
+        deduped
+            .iter()
             .position(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
     });
     let withdrawn = withdrawn_ids(msgs);
-    msgs.iter()
+    deduped
+        .iter()
         .enumerate()
         .filter(|(i, m)| {
             after.is_none_or(|pos| *i > pos)
                 && m.get("to").and_then(Value::as_str) == Some(name)
                 && deliverable(m)
-                && m.get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.is_empty() && !withdrawn.contains(id))
+                && m.get("id").and_then(Value::as_str).is_some_and(|id| {
+                    !id.is_empty() && !withdrawn.contains(id) && !superseded.contains(id)
+                })
         })
-        .map(|(_, m)| m)
+        .map(|(_, m)| *m)
         .collect()
 }
 
@@ -148,7 +169,7 @@ fn write_cursor(bus_dir: &Path, form: &str, msg_id: &str) {
     }
 }
 
-fn is_control(body: &str) -> bool {
+pub(crate) fn is_control(body: &str) -> bool {
     body.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
