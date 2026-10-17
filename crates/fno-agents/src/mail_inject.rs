@@ -4352,9 +4352,9 @@ mod tests {
         .replace("__D__", scratch.to_str().unwrap())
         .replace("__R__", record.to_str().unwrap());
         let fake = crate::write_exec_stub(&scratch, "fno", &script);
-        let guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // _home holds the crate env lock for this whole scope (it set
+        // FNO_AGENTS_HOME under it); the FNO_BIN swap rides that same held
+        // lock, so no second acquisition here: the mutex is not reentrant.
         let prior_bin = std::env::var_os("FNO_BIN");
         std::env::set_var("FNO_BIN", &fake);
         let delivered = deliver_via_pane(session, "srv:3", Some("footnote"), "hello", 4, 5, 0);
@@ -4362,7 +4362,6 @@ mod tests {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
         }
-        drop(guard);
         assert!(delivered.is_ok(), "{delivered:?}");
         let sends = std::fs::read_to_string(scratch.join("sends.log")).unwrap();
         assert!(sends.contains("hello"), "{sends}");
