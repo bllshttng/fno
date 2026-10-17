@@ -474,9 +474,9 @@ fn a_traversal_server_name_stays_in_the_pin_dir() {
     let _ = std::fs::remove_dir_all(&rt);
 }
 
-/// x-ddd6, the fix itself: a second harness typed into the same pane after
-/// the first one exited is ALSO a host - the ancestry proof decides, not a
-/// pin the first harness happened to win. A harness nested under the pane's
+/// The fix itself: a second harness typed into the same pane after the
+/// first one exited is ALSO a host - the ancestry proof decides, not a pin
+/// the first harness happened to win. A harness nested under the pane's
 /// harness (a Bash tool running `claude -p` in the same pane) stays a guest.
 #[test]
 fn a_second_harness_in_the_same_pane_is_also_a_host() {
