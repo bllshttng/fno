@@ -382,8 +382,10 @@ fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
             )
             .as_str(),
         );
-        let err = bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
-            .expect_err("a child budget refusal is a BudgetRefused");
+        let err = match bounded_read(adapter.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT) {
+            Err(err) => err,
+            Ok(_) => panic!("a child budget refusal is a BudgetRefused"),
+        };
         assert_eq!(err.outcome(), "budget_refused");
         assert_eq!(err.waited_on(), "budget_lock");
     }
@@ -395,7 +397,9 @@ fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
         "fno-gh-loopcheck",
         "#!/bin/sh\necho 'gh budget: ledger unavailable, admitting: boom' 1>&2\nexit 1\n",
     );
-    let out = bounded_read(notice.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
-        .expect("an admit notice is not a refusal");
+    let out = match bounded_read(notice.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT) {
+        Ok(out) => out,
+        Err(e) => panic!("an admit notice is not a refusal: {}", e.render()),
+    };
     assert!(!out.status.success());
 }
