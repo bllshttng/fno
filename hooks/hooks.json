@@ -1,0 +1,412 @@
+{
+  "description": "Abilities plugin hooks for target loops, context monitoring, and project context injection. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide (target-stop-hook.sh, the PreToolUse guards, edit-integrity.sh, code-review-attest.sh, target-subagent-guard.sh, inject-control-drain-tool-boundary.sh) keep their own budgets; docs/hooks-fail-open.md owns the list.",
+  "modules": [
+    "./register.mjs"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-write-protect.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/join-partition-write-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-location-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/send-message-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/effect-guard-dispatch.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-worktree-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PreToolUse"
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-control-drain-tool-boundary.sh\"",
+            "timeout": 8
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/review-hold.sh\" acquire"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Notification"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude UserPromptSubmit"
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/frontdoor-nudge-prompt-submit.sh\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
+            "timeout": 8
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
+            "timeout": 4
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-nudge.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\"",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Stop"
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PostModelSwitch"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stopfailure.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/format-on-edit.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/edit-integrity.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "ReportFindings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-plan-mode.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "timeout": 4
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "timeout": 4
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/merge-capture.sh\"",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/diff-budget-commit.sh\"",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
+            "timeout": 4
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\""
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-setup.sh\"",
+            "timeout": 120000
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-remove.sh\""
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh\""
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "matcher": ".env|.env.local|.env.development|.env.development.local|.envrc",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-using-fno.sh\""
+          },
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh\" claude-session-start",
+            "timeout": 50
+          }
+        ]
+      }
+    ]
+  }
+}
