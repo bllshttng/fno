@@ -366,31 +366,26 @@ mod tests {
         assert!(from_pane_side(&panes, &table, "/w").is_some());
     }
 
-    /// The pane's recorded cwd must hold the report's cwd.
+    /// Each candidate-filter half refuses alone: the pane's recorded cwd
+    /// must hold the report's cwd, and the subtree must actually run an
+    /// opencode TUI (a claude pane in the same directory never wins).
     #[test]
-    fn pane_side_wrong_cwd_refuses() {
-        let table = rows(&[
+    fn pane_side_filter_halves_refuse() {
+        let tui_table = rows(&[
             (1, 0, "/sbin/launchd"),
             (100, 1, "fno-agents-worker --pane"),
             (110, 100, "/bin/zsh -il"),
             (200, 110, "opencode.exe"),
         ]);
         let panes = vec![pane("main", 3, 100, "/w")];
-        assert_eq!(from_pane_side(&panes, &table, "/other"), None);
-    }
-
-    /// A claude pane sitting in the same directory must never win: no
-    /// opencode TUI in the subtree refuses.
-    #[test]
-    fn pane_side_no_tui_in_subtree_refuses() {
-        let table = rows(&[
+        assert_eq!(from_pane_side(&panes, &tui_table, "/other"), None);
+        let claude_table = rows(&[
             (1, 0, "/sbin/launchd"),
             (100, 1, "fno-agents-worker --pane"),
             (110, 100, "/bin/zsh -il"),
             (210, 110, "claude"),
         ]);
-        let panes = vec![pane("main", 3, 100, "/w")];
-        assert_eq!(from_pane_side(&panes, &table, "/w"), None);
+        assert_eq!(from_pane_side(&panes, &claude_table, "/w"), None);
     }
 
     /// Two opencode TUIs in two panes at one cwd are ambiguous: refuse
@@ -410,25 +405,20 @@ mod tests {
         assert_eq!(from_pane_side(&panes, &table, "/w"), None);
     }
 
-    /// A keeper row naming a pid the census lacks is a dead tree: refuse.
+    /// Each subtree guard refuses alone: a keeper row naming a pid the
+    /// census lacks is a dead tree, and an `opencode serve` inside a pane
+    /// is a server, not a TUI.
     #[test]
-    fn pane_side_dead_child_pid_refuses() {
+    fn pane_side_subtree_guards_refuse() {
         let table = rows(&[(1, 0, "/sbin/launchd")]);
         let panes = vec![pane("main", 3, 999, "/w")];
         assert_eq!(from_pane_side(&panes, &table, "/w"), None);
-    }
-
-    /// `opencode serve` inside a pane is a server, not a TUI: the serve
-    /// name guard refuses it.
-    #[test]
-    fn pane_side_serve_process_is_not_a_tui() {
-        let table = rows(&[
+        let serve_table = rows(&[
             (1, 0, "/sbin/launchd"),
             (100, 1, "fno-agents-worker --pane"),
-            (110, 100, "/bin/zsh -il"),
-            (200, 110, "opencode.exe serve --service"),
+            (110, 100, "opencode.exe serve --service"),
         ]);
         let panes = vec![pane("main", 3, 100, "/w")];
-        assert_eq!(from_pane_side(&panes, &table, "/w"), None);
+        assert_eq!(from_pane_side(&panes, &serve_table, "/w"), None);
     }
 }
