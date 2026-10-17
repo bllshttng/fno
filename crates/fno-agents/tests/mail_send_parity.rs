@@ -1,11 +1,10 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.mail.cli.cmd_send
 //!
-//! Characterization harness for the `mail send` wrapped-verb port (x-ca41).
-//! The goldens were captured from the live Python leg (cmd_send) while it
-//! still owned the verb, through tests/capture/mail_send_capture.py; this
-//! test replays the same 26 cases against the Rust leg under the same env
-//! block. The hermetic root cannot offer a live recipient, so
+//! Characterization harness for the `mail send` wrapped-verb port.
+//! The goldens were captured from the Python leg (cmd_send) before its body
+//! was deleted, through tests/capture/mail_send_capture.py; the frozen bytes
+//! are the contract now that the front routes every send to this leaf. The hermetic root cannot offer a live recipient, so
 //! the deep live lanes surface as their designed misses: the inject probe
 //! misses, the durable floor writes, and the receipts name why. That IS the
 //! contract the goldens freeze.

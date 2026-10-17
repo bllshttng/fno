@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden capture driver for the `mail send` wrapped-verb port (x-ca41).
+"""Golden capture driver for the `mail send` wrapped-verb port.
 
 Plays the case tables against the live Python leg (`fno agents mail send`,
 the typer verb) and freezes `tests/golden/mail_send/` in the `assert_golden`
