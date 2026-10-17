@@ -83,11 +83,20 @@ fn spawn_worker_server(pre_exec: &str) -> u32 {
     pid
 }
 
+/// Serializes the two tests below around their fake worker-servers. Both
+/// markers share one command string by design, so a census running while the
+/// other test's TERM-immune child is alive would capture and reap it too and
+/// read the survivor as a failure. One test process, one census at a time.
+static WORKER_SERVER_CENSUS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[tokio::test(flavor = "current_thread")]
 async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
     // AC1-HP: the keeper confirms, the captured worker-server pid is gone,
     // the row reads exited, and the receipt names the reap.
     let home = keeper_sweep_home("kpcap");
+    let _census = WORKER_SERVER_CENSUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // The stop releases the stopped row's claims, which resolves the row-cwd
     // space dir; pin the state roots like keeper_sweep's stop test does.
     let _env = crate::claims::test_env_lock()
@@ -156,6 +165,9 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
     // fails the reap, the response is an error naming it, and the row stays
     // non-terminal so a retry can reach the leak.
     let home = keeper_sweep_home("kperr");
+    let _census = WORKER_SERVER_CENSUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let sock = home
         .root()
         .join("mux")
