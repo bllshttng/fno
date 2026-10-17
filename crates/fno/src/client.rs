@@ -1864,7 +1864,9 @@ use input_folds::{
 mod composer_draft;
 
 use messages_reply::peek_keys;
-use update_menu::{build_sideline_menu, build_update_modal, UpdateProbe};
+#[cfg(test)]
+use update_menu::build_sideline_menu;
+use update_menu::{build_update_modal, UpdateProbe};
 
 /// The operator tapped a choice: the modal named the counts, so the tap IS
 /// the confirmation. Queue the apply for the run loop (or say why not).

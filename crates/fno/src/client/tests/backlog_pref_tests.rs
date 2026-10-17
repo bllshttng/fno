@@ -98,7 +98,7 @@ fn settings_general_lists_the_sideline_card_layout_toggle() {
 
 #[test]
 fn sideline_menu_names_the_sweep_entry_off_dead() {
-    let menu = build_sideline_menu(Anchor::Center, None, false);
+    let menu = build_sideline_menu(Anchor::Center, None, experimental::Flags::default());
     let i = menu
         .popup
         .rows
