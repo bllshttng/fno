@@ -844,7 +844,17 @@ pub fn run_finalize(args: &[String]) -> i32 {
     // Last, so the plan stamp and both node<->PR stamps have already landed
     // before the merge is handed to GitHub. Same log-only fatality as the two
     // stamps above.
-    let approved = m.auto_merge_approved.unwrap_or(false);
+    let approved = if crate::authorized_merge::posture_is_default_off(
+        m.auto_merge_approved,
+        m.auto_merge_source.as_deref(),
+    ) {
+        // A `default-off` stamp is init's failed config read, not a refusal:
+        // resolve the posture from the live config, the same arm the merge
+        // gate folds, so a stamped worker still arms at the green terminal.
+        crate::agents_config::auto_merge_enabled(&cwd)
+    } else {
+        m.auto_merge_approved.unwrap_or(false)
+    };
     let should_arm = should_arm_auto_merge(&reason, approved);
     // The posture fold, the standing switch and the automerge floor all live in
     // `authorized_merge` now, so this arm and `fno do pr merge` cannot disagree

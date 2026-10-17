@@ -33,6 +33,11 @@ pub(super) async fn tap(
     match routed {
         Some(Ok(StdinFlow::Detach)) => return Ok(StdinFlow::Detach),
         Some(Err(e)) => return Err(e),
+        // The same holds for an open but unfocused file viewer panel.
+        None if view.viewer_open() => {
+            file_viewer::close(view, sock_w).await?;
+            return Ok(StdinFlow::Continue);
+        }
         // An open but UNFOCUSED feed panel owns no keys, so the pressed Esc
         // had no reader anywhere above. The tap is a gesture on the panel's
         // own chip: it closes the panel.

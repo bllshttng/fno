@@ -55,6 +55,8 @@ Every refusal outranks every grant, so `no-merge` wins whenever it appears. Rung
 
 At merge and arm time both gates resolve the same posture. The gates are `fno do pr merge` and `fno-agents finalize`. Granted means live `auto_merge.enabled` or the per-run env grant. A per-run refusal is manifest `auto_merge_approved: false`. The refusal outranks every grant. `enabled` is re-read live. A superuser disarm mid-flight withholds even a manifest that reads true. One exception exists. A run granted at spawn carries `auto_merge_source: env-target-auto-merge`. That run arms on its own. Every posture refusal names its sanctioned override in its own text.
 
+One stamp is never a refusal: `auto_merge_source: default-off` records a failed config read at init, not a decision. A yq-less worker cannot read dotted TOML keys, so it stamped this by accident. The merge gate, finalize's arming, and the fidelity park treat the stamp as unset and fold the live config. An explicit refusal (`flag-no-merge`, or config set false) still wins. Init stamps a config refusal as `source: config` with `approved: false`, which stays a refusal.
+
 ## External Review Is Mandatory Under Auto-Merge
 
 When `auto_merge_approved: true`, `no_external` is forced to `false`

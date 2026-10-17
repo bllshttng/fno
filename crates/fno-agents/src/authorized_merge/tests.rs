@@ -1283,6 +1283,43 @@ fn an_unknown_authority_read_refuses_rather_than_arming() {
 }
 
 #[test]
+fn a_default_off_stamp_folds_like_an_unset_field() {
+    // The `default-off` stamp is init's failed config read, not a decision:
+    // it must fold exactly like an absent field, so a stamped worker merges
+    // when the live switch is on and the standing switch still refuses when
+    // it is off. An explicit per-run refusal never carries this source.
+    assert!(super::posture_is_default_off(
+        Some(false),
+        Some("default-off")
+    ));
+    assert!(!super::posture_is_default_off(
+        Some(false),
+        Some("flag-no-merge")
+    ));
+    assert!(!super::posture_is_default_off(
+        Some(true),
+        Some("default-off")
+    ));
+    assert!(!super::posture_is_default_off(Some(false), None));
+    let on = clean();
+    let mut arm_req = request(Effect::Arm);
+    arm_req.approved = Some(false);
+    arm_req.auto_merge_source = Some("default-off".to_string());
+    assert_eq!(run(&on, &arm_req).word(), "armed");
+    let mut merge_req = request(Effect::Merge);
+    merge_req.approved = Some(false);
+    merge_req.auto_merge_source = Some("default-off".to_string());
+    assert_eq!(run(&on, &merge_req).word(), "merged");
+    let off = Fake {
+        enabled: false,
+        ..clean()
+    };
+    let outcome = run(&off, &merge_req);
+    assert_eq!(outcome.word(), "refused");
+    assert!(outcome.detail().contains("auto_merge.enabled"));
+}
+
+#[test]
 fn the_posture_floor_refuses_both_effects() {
     for effect in [Effect::Merge, Effect::Arm] {
         let fake = Fake {

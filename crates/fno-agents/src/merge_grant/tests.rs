@@ -533,6 +533,21 @@ fn queue_rows() {
         ManifestFold::Permit(b) => assert_eq!(b.approved, None),
         other => panic!("legacy manifest permits, got {other:?}"),
     }
+    // A default-off stamp folds as Permit: init's failed config read never
+    // refuses, so the receipt+config verdict stands and provenance rides.
+    // Rewrites wt2's manifest in place - one less real git spawn under the
+    // shared test env lock.
+    write_manifest(
+        &wt2,
+        "---\nauto_merge_approved: false\nauto_merge_source: default-off\nharness_session_id: w-defoff\n---\ngraph_node_id: ab-legacy\n",
+    );
+    match bound_fold(&repo, "ab-legacy") {
+        ManifestFold::Permit(b) => {
+            assert_eq!(b.approved, Some(false));
+            assert_eq!(b.source.as_deref(), Some("default-off"));
+        }
+        other => panic!("default-off folds as Permit, got {other:?}"),
+    }
     // Two binds of one node never grant.
     let wt3 = base.path().join("wt3");
     git_worktree(&repo, &wt3, "feature/z");

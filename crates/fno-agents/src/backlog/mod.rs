@@ -18,6 +18,8 @@ pub mod autolink;
 pub mod batch;
 pub(crate) mod binding;
 pub mod birth;
+pub mod calibration;
+pub mod calibration_cli;
 pub mod capture;
 pub mod cli;
 pub(crate) mod closures;
@@ -94,6 +96,7 @@ pub mod triage_cli;
 pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
+pub mod update_ops;
 pub mod worked;
 pub mod workflows;
 

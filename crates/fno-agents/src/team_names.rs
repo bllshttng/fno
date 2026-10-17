@@ -1123,6 +1123,45 @@ pub fn carry_succession(
     })
 }
 
+/// Attach a pending succession to the scope's team record WITHOUT renaming
+/// (the successor keeps the name it already has) and without clearing the
+/// holder (the remote grant just seated it). This is the remote leg's write:
+/// the record turns the successor's next beat into the verify step, so the
+/// cross-machine move runs the same journal the spawn `--hand-off` path runs.
+/// Overwrite-on-retry: a hand-off that half-landed (grant succeeded, record
+/// write failed) re-runs cleanly.
+pub fn attach_pending_succession(
+    store_path: &Path,
+    scope: &str,
+    pending: PendingSuccession,
+) -> Result<(), String> {
+    if !valid_person_name(&pending.successor_name) {
+        return Err(
+            "--hand-off requires a person name of 2-24 letters, never a dispatch slug".into(),
+        );
+    }
+    let canon = crate::territory::canonical_scope(scope);
+    update(store_path, |store| {
+        let rec = store
+            .teams
+            .entry(canon.clone())
+            .or_insert_with(|| TeamNameRecord {
+                name: pending.successor_name.clone(),
+                generation: 1,
+                holder_session: None,
+                nodes: Vec::new(),
+                updated_at: String::new(),
+                theme: None,
+                title: None,
+                pending_succession: None,
+                lead: None,
+            });
+        rec.pending_succession = Some(pending.clone());
+        rec.updated_at = now_stamp();
+        Ok(())
+    })
+}
+
 /// RFC3339 compare that survives `Z` and `+00:00` spellings; a string
 /// compare backstops an unparsable stamp.
 fn ts_earlier(a: &str, b: &str) -> String {
