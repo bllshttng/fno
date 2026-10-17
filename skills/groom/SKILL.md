@@ -79,7 +79,7 @@ fno backlog defer <id> --reason "question: <the one line you need answered>"
 Use `fno backlog idea` only for genuinely new work you noticed in passing; an idea-status node is NOT in the pile and will not surface in the triage view.
 The pile is the pressure-release valve that lets grooming stay unattended: an honest question costs a line, a wrong supersede costs real work.
 
-**Auto-convene:** when a track has several `ready` nodes but no encoded order (no `blocked_by` edges expressing the sequence a human clearly intended), you MAY encode that order yourself with `fno backlog update <id> blocked_by=<ids>`, one edge per node whose predecessor is unambiguous.
+When a track has several `ready` nodes but no encoded order, you MAY encode the order yourself. No encoded order means no `blocked_by` edges expressing the sequence a human clearly intended. Encode one edge per node whose predecessor is unambiguous with `fno backlog update <id> blocked_by=<ids>`. This move is auto-convene.
 Its entire output is `blocked_by` edges plus a line each in the report.
 Do this at most once per run, and only for a track where the ready depth is real and the intended order is evident from the plan - an order you would have to guess is a question for the pile, not an edge.
 

@@ -112,7 +112,7 @@ How you spell that depends on your provider, so take the requirement and not thi
 - **`--effort high`** is the portable half: it is validated against whichever provider is selected, and unset just takes that provider's default.
 - **`--model`** takes a provider-specific id, so name your own provider's current frontier model. Do not expect any list of those to stay true; the frontier turns over every few months and a model named in a doc is a doc with an expiry date.
 
-There is a rot-proof abstraction for this: set the node's work-difficulty band, `fno backlog update <id> difficulty=high`, and the dispatch grid resolves harness and model from live provider capacity rather than a hardcoded name.
+There is a rot-proof abstraction for this: set the node's work-difficulty band with `fno backlog update <id> difficulty=high`. The dispatch grid then resolves harness and model from live provider capacity rather than a hardcoded name.
 It is not a spawn-time flag; set it on the node before titling, and the grid fires at spawn when no model or provider is pinned.
 
 The band is an intrinsic property of the work (expected time, edge cases, unknowns), not a quality-tier hint about models.
@@ -330,7 +330,7 @@ Use `fno do plan path` for the canonical filename.
 
 One session takes up to **three** blueprints in sequence. A fourth blueprint starts a second dispatch. The number is the rule: a rule with no number is advice nobody applies.
 
-A blueprint can also run as a subagent of the org session: `/fno:blueprint subagent <id>` (Substrate in `skills/blueprint/SKILL.md`). It cannot orphan, because its completion IS the tool result, and it spends no spawn share, because the gate counts spawned workers; it still takes the node claim, writes the blueprint row and runs every blueprint gate. Never hand-type a planning prompt into the Agent tool. A node-specific constraint goes on the node with `fno backlog update <id> 'dispatch_brief=...'`, where the planner reads it.
+A blueprint can also run as a subagent of the org session: `/fno:blueprint subagent <id>` (Substrate in `skills/blueprint/SKILL.md`). It cannot orphan, because its completion IS the tool result. It spends no spawn share, because the gate counts spawned workers. It still takes the node claim, writes the blueprint row and runs every blueprint gate. Never hand-type a planning prompt into the Agent tool. A node-specific constraint goes on the node with `fno backlog update <id> 'dispatch_brief=...'`, where the planner reads it.
 
 Group the wave by shape before you count dispatches. When one plan can name the same files or fix the same defect from two sides, the two nodes are the same shape. Title words do not decide this. The file and the defect decide it, the same identity test the Consolidation Gate uses (`skills/blueprint/SKILL.md` step 2d).
 
