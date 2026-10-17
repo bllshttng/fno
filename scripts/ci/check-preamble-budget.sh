@@ -207,7 +207,10 @@ set -euo pipefail
 # own hook, not the CLI), so the installing-vs-failed states, the log path and
 # the locked fix have to live there. The ceiling follows the measurement up,
 # zero spare (the baseline sat 2 under the old ceiling, so 40298 + 510).
-CEILING_BYTES=41128
+# 2026-10: +128 for the native-launch pointer in using-fno. The pointer is
+# operator-mandated and the file survived prior compression passes, so no
+# tradeable restatement existed to fund it.
+CEILING_BYTES=41256
 # The working band under the ceiling. Spare above this fails the gate and names
 # the value to write, so a cut is banked in the same PR that makes it rather
 # than becoming headroom.

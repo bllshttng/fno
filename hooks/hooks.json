@@ -10,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh\""
           }
         ]
       },
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-write-protect.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-write-protect.sh\""
           }
         ]
       },
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/join-partition-write-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/join-partition-write-guard.sh\""
           }
         ]
       },
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/plan-location-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-location-guard.sh\""
           }
         ]
       },
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/lead-delegation-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\""
           }
         ]
       },
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/send-message-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/send-message-guard.sh\""
           }
         ]
       },
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\""
           }
         ]
       },
@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/effect-guard-dispatch.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/effect-guard-dispatch.sh\""
           }
         ]
       },
@@ -82,7 +82,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-worktree-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-worktree-guard.sh\""
           }
         ]
       },
@@ -91,11 +91,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh claude PreToolUse"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PreToolUse"
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/inject-control-drain-tool-boundary.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-control-drain-tool-boundary.sh\"",
             "timeout": 8
           }
         ]
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/review-hold.sh acquire"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/review-hold.sh\" acquire"
           }
         ]
       }
@@ -116,7 +116,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh claude Notification"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Notification"
           }
         ]
       }
@@ -127,41 +127,41 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh claude UserPromptSubmit"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude UserPromptSubmit"
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/frontdoor-nudge-prompt-submit.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/frontdoor-nudge-prompt-submit.sh\"",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
             "timeout": 8
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
             "timeout": 3
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/inject-mail-notify.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/inject-announce.sh prompt",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-outstanding.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
             "timeout": 4
           }
         ]
@@ -172,20 +172,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/target-stop-hook.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/context-nudge.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-nudge.sh\""
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh claude Stop"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Stop"
           }
         ]
       }
@@ -195,7 +195,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh claude PostModelSwitch"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PostModelSwitch"
           }
         ]
       }
@@ -205,7 +205,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/target-stopfailure.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stopfailure.sh\""
           }
         ]
       }
@@ -216,11 +216,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/format-on-edit.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/format-on-edit.sh\""
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/edit-integrity.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/edit-integrity.sh\"",
             "timeout": 10
           }
         ]
@@ -230,15 +230,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.js"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/claim-heartbeat.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
             "timeout": 3
           }
         ]
@@ -248,7 +248,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh\""
           }
         ]
       },
@@ -257,7 +257,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/capture-plan-mode.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-plan-mode.sh\""
           }
         ]
       },
@@ -266,7 +266,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
             "timeout": 4
           }
         ]
@@ -276,7 +276,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
             "timeout": 4
           }
         ]
@@ -286,17 +286,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/merge-capture.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/merge-capture.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/diff-budget-commit.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/diff-budget-commit.sh\"",
             "timeout": 4
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/refusal-streak-record.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/refusal-streak-record.sh\"",
             "timeout": 4
           }
         ]
@@ -307,7 +307,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
           }
         ]
       }
@@ -317,11 +317,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-subagent-guard.sh\""
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code-review-attest.sh\""
           }
         ]
       }
@@ -331,11 +331,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py"
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/precompact-canon-doc.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-canon-doc.sh\""
           }
         ]
       }
@@ -345,7 +345,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-setup.sh",
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-setup.sh\"",
             "timeout": 120000
           }
         ]
@@ -356,7 +356,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-remove.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-remove.sh\""
           }
         ]
       }
@@ -366,7 +366,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh\""
           }
         ]
       }
@@ -377,7 +377,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-env-reload.sh\""
           }
         ]
       }
@@ -387,7 +387,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py"
+            "command": "PYTHONDONTWRITEBYTECODE=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
           }
         ]
       }
@@ -398,11 +398,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-using-fno.sh"
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-using-fno.sh\""
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh claude-session-start",
+            "command": "PYTHONDONTWRITEBYTECODE=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh\" claude-session-start",
             "timeout": 50
           }
         ]

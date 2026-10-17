@@ -1,1 +1,0 @@
-event type claim_acquired null pid requires pid_unavailable=true and expires_at

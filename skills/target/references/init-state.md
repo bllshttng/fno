@@ -74,9 +74,11 @@ First, invoke the init helper with an explicit trigger so the state file is crea
 
 Pass `TARGET_INPUT` and (if the input is an existing plan path) `TARGET_PLAN_PATH` in the same invocation. The helper writes them into the initial state file so the stop hook's stub detector never mistakes a just-starting target for an abandoned empty state.
 
-Also pass `TARGET_SIZE` (the size resolved in Step 1c — `S`, `M`, or `L`) so the helper renders the live skip-flag block and the `skip_flags_initial` provenance snapshot from the same source. This is REQUIRED for the snapshot to match the resolved profile; without it, the snapshot freezes to the legacy `M`-shaped defaults and the drift detector will block any later phase-skip the size profile actually requires (the failure mode that produced the BLOCKED-reject loop in inbox msg-b5312b / PR #500).
+Also pass `TARGET_SIZE` (the size resolved in Step 1c - `S`, `M`, or `L`) so the helper renders the live skip-flag block and the `skip_flags_initial` provenance snapshot from the same source. This is REQUIRED for the snapshot to match the resolved profile; without it, the snapshot freezes to the legacy `M`-shaped defaults and the drift detector will block any later phase-skip the size profile actually requires (the failure mode that produced the BLOCKED-reject loop in inbox msg-b5312b / PR #500).
 
 Pass `--beastmode` / `--beast` (or `TARGET_BEASTMODE=1`) when the invocation carried the `beastmode` / `beast` modifier, so init stamps `authority: full`. Without it the field is absent and the session keeps the default stop-and-ask posture. See [SKILL.md §Authority](../SKILL.md#authority-the-beastmode-grant).
+
+Pass `--steps` to `fno do target init` when the invocation carried the `steps` / `ordinary` / `regular` modifier, or a trailing `--steps` token, so init stamps `turn_mode: steps`. Only the literal `steps` stamps; the other two are input synonyms. Without it the field is absent and the run keeps the looping stop-gate default. In steps mode the stop hook allows each stop without releasing the claim or finalizing, so an outer skill advances the run one instructed step at a time.
 
 Per-flag CLI overrides from Step 1c (e.g. `--no-docs`) can be layered on top via `TARGET_NO_EXTERNAL`, `TARGET_NO_DOCS`, `TARGET_NO_SHIP`, `TARGET_NO_BROWSER`, `TARGET_NO_CLEAN`, `TARGET_NO_HOW_TO`, `TARGET_NO_MEMORY` (any of `1` / `true` / `yes` to set the flag, empty / unset to keep the profile default).
 

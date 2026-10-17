@@ -1,2 +1,0 @@
-{"message": {"role": "user", "content": "go"}}
-{"message": {"role": "assistant", "content": [{"type": "text", "text": "<help class=\"question\" reason=\"which of two plans owns the shared module\" evidence=\"fixture\">routed</help>"}]}, "uuid": "fixture-question-1"}

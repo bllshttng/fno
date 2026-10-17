@@ -17,8 +17,8 @@
 # node" before it renders `free`, because `free` had two meanings and four
 # leads read the wrong one. Only the fleet roster can answer that, and
 # `fleet_rows` IS the roster, so like the two above it cannot move down. The
-# CORE stays clean: `reap_dead_claims` takes the probe as an injected
-# parameter and `fno.claims.core` imports nothing from the agents runtime.
+# CORE stays clean: the reap engine moved into the fno-agents Rust leaf
+# and `fno.claims.core` imports nothing from the agents runtime.
 # The edge lives only in the command surface that composes them. Flagged for
 # the operator: retiring this needs a ruling on whether a CLI command module
 # is core or a composition root. The second of the pair is the claim-holder
@@ -28,7 +28,8 @@
 # See docs/architecture/company-boundaries.md.
 cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.self_stamp import resolve_self_model
 cli/src/fno/events/cli.py: L0 platform -> L5 runtime / from fno.agents.registry import HARNESS_SESSION_ID_FIELDS, load_registry
-cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.watchdog import harness_for_session, tail_facts
+# Retired in the claims list port: the single-line watchdog import merged into
+# the parenthesized import still listed below, so the edge now rides that entry.
 cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.watchdog import (
 cli/src/fno/claims/cli.py: L1 core -> L5 runtime / from fno.agents.truth_status import _session_from_holder
 #

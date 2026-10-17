@@ -1,7 +1,0 @@
-{
-  "session_id": "lead-test-session-id",
-  "transcript_path": "tests/fixtures/lead-transcript.jsonl",
-  "cwd": "/repo",
-  "hook_event_name": "Stop",
-  "stop_hook_active": false
-}

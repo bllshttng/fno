@@ -284,7 +284,7 @@ Hooks provide lifecycle control for autonomous loops, context injection, and sig
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.js"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.sh"
           }
         ]
       }

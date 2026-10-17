@@ -1,2 +1,0 @@
-{"message": {"role": "user", "content": "go"}}
-{"message": {"role": "assistant", "content": [{"type": "text", "text": "<help class=\"env-denied\" reason=\"sandbox refused the write the plan requires\" evidence=\"fixture\">routed</help>"}]}, "uuid": "fixture-env-denied-1"}

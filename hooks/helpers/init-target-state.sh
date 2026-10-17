@@ -41,11 +41,13 @@ if [[ -z "$_git_toplevel" ]] \
 fi
 
 # Project state files resolve through the owning verb (the repo's space under
-# ~/.fno/spaces/, keyed on the canonical root). Degraded fallback for an fno
-# predating the verb: the legacy checkout path, spelled with its real filename.
+# ~/.fno/spaces/, keyed on the canonical root). FNO_AGENTS_BIN wins when set:
+# a parity or supervisor env pins the exact binary, and PATH may not carry
+# `fno-agents` at all. Degraded fallback for an fno predating the verb: the
+# legacy checkout path, spelled with its real filename.
 _space_state_path() {
   local p
-  p=$(fno-agents state path "$1" 2>/dev/null || true)
+  p=$("${FNO_AGENTS_BIN:-fno-agents}" state path "$1" 2>/dev/null || true)
   if [[ -z "$p" ]]; then
     case "$1" in
       target-state) p="$REPO_ROOT/.fno/target-state.md" ;;
@@ -1229,6 +1231,11 @@ if [[ ! -f "$STATE_FILE" ]]; then
   if [[ -n "${TARGET_DELIVERABLES:-}" ]]; then
     _deliverables_line="deliverables: ${TARGET_DELIVERABLES}"$'\n'
   fi
+  # Turn mode (`TARGET_TURN_MODE=steps`): a non-looping target run. Omitted
+  # unless set, so absence is the looping default the stop gate already serves;
+  # ordinary|regular are input synonyms for steps, never stamped values.
+  _turn_mode_line=""
+  [[ "${TARGET_TURN_MODE:-}" == "steps" ]] && _turn_mode_line="turn_mode: steps"$'\n' || true
   # Work-evidence baseline for the do-provenance stamp; `null` fails it closed.
   _initial_head=$(git -C "$REPO_ROOT" rev-parse --verify -q HEAD 2>/dev/null || echo null)
 
@@ -1285,7 +1292,7 @@ has_ui: $has_ui
 # Attended / advisory inputs (consumed by fno-agents loop-check)
 attended: $_attended
 advisory: $_advisory
-${_authority_line}${_budget_lines}# Auto-merge inputs
+${_authority_line}${_budget_lines}${_turn_mode_line}# Auto-merge inputs
 auto_merge_enabled: $AUTO_MERGE_ENABLED
 auto_merge_approved: $AUTO_MERGE_APPROVED
 auto_merge_source: $AUTO_MERGE_SOURCE
@@ -1311,17 +1318,12 @@ EOF
   if [[ -n "$_GUARD_NODE" ]]; then
     _NODE_ID="$_GUARD_NODE"
   elif [[ -n "$INITIAL_PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
-    # The typed import needs the CLI's own dependencies (pydantic et al), which
-    # a host python3 may lack. uv is how the plugin installs `fno`, so prefer
-    # the managed runtime of THIS plugin's own checkout (derived from the
-    # script location: the ambient REPO_ROOT is the caller's project, not the
-    # plugin); the bare python3 fallback keeps the same degrade-to-unclaimed
-    # shape on a host without uv.
+    # Resolve the installed interpreter without creating an environment inside
+    # the plugin. A host without fno's dependencies degrades to unclaimed.
     _PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    _RUNNER=(python3)
-    if command -v uv >/dev/null 2>&1; then
-      _RUNNER=(uv run --quiet --project "$_PLUGIN_ROOT/cli" python)
-    fi
+    source "$_PLUGIN_ROOT/scripts/lib/fno-python.sh"
+    fno_python_init "$_PLUGIN_ROOT"
+    _RUNNER=("$FNO_PYTHON" -B)
     # `2>&1 >` is NOT a typo and the order matters: it points the resolver's
     # stderr at THIS shell's stderr before stdout is captured, so a traceback
     # still stays quiet-ish but the deliberate ambiguity note reaches the

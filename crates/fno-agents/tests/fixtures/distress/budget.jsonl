@@ -1,2 +1,0 @@
-{"message": {"role": "user", "content": "go"}}
-{"message": {"role": "assistant", "content": [{"type": "text", "text": "<help class=\"budget\" reason=\"iteration budget spent before the verify step\" evidence=\"fixture\">routed</help>"}]}, "uuid": "fixture-budget-1"}

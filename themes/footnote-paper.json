@@ -1,8 +1,0 @@
-{
-  "name": "Footnote Paper",
-  "base": "light",
-  "overrides": {
-    "userMessageBackground": "#373737",
-    "userMessageBackgroundHover": "#444444"
-  }
-}

@@ -1,1 +1,0 @@
-decide: failed to record: supersession target d-ID is not recoverable from the decision index. Run `fno backlog decide-reindex` before retrying.

@@ -314,7 +314,7 @@ if [[ "$_HANDOVER_NODE" =~ ^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$ \
     _handover_status_json() {
       local status_json
       status_json="$(with_timeout "${FNO_CLAIM_HEARTBEAT_STATUS_TIMEOUT:-5}" \
-        "$AGENTS_BIN" claim status "node:$_HANDOVER_NODE" --json 2>/dev/null)"
+        "$AGENTS_BIN" claim status "node:$_HANDOVER_NODE" --json --no-roster 2>/dev/null)"
       printf '%s' "$status_json"
     }
     _HANDOVER_STATUS="$(_handover_status_json)"
@@ -479,16 +479,20 @@ write_stamp() {
 # Holder gate: refresh ONLY our own claim. A different holder (or no live claim)
 # stamps and returns so we do not re-probe on every tool call.
 #
-# The native `claim status` always prints the record JSON (free included) and
-# never runs a roster cross-check, so the old `--no-roster` flag and its
-# empty-output retry for a deployed binary that predated the flag are gone:
-# one call, one shape, no version-lag fallback to maintain.
+# The status read must be record-only: the native leaf is Python-parity and
+# cross-checks the fleet roster on free/stale keys by default, and that probe
+# can outrun this hook's 5 s bound - the read would die as status_unreadable
+# exactly when the heartbeat most needs to see a lost claim. `--no-roster`
+# restores the record-only instrument (same contract init-target-state.sh's
+# bounded readers already use); a deployed binary that predates the port
+# refuses the flag with empty stdout, which the shape check below reads as
+# unreadable for one window - no version-lag fallback to maintain.
 # BOUNDED, like the refresh below it. A bound that fires reads as no claim,
 # which only skips one heartbeat; the alternative is a hook that hangs.
 _STATUS_TIMEOUT="${FNO_CLAIM_HEARTBEAT_STATUS_TIMEOUT:-5}"
 _status_json() {
   with_timeout "$_STATUS_TIMEOUT" \
-    "$AGENTS_BIN" claim status "node:$NODE_ID" --json 2>/dev/null
+    "$AGENTS_BIN" claim status "node:$NODE_ID" --json --no-roster 2>/dev/null
 }
 _STATUS_ONCE="$(_status_json)"
 HOLDER="$(printf '%s' "$_STATUS_ONCE" | jq -r '.holder // empty' 2>/dev/null)"

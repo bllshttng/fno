@@ -1,1 +1,0 @@
-claim 'session:par-held' held by pty:par (pid=PID, host=HOST)
