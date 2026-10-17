@@ -112,7 +112,8 @@ fn start(view: &mut View) {
         return;
     };
     let pane = view.layout.focus;
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    let exe = std::env::current_exe().unwrap_or_else(|_| "fno".into());
+    let mut command = crate::process_admission::tokio_command(&exe);
     command
         .args(["mux", "serve", "--share", "--managed", "--tunnel", "--pane"])
         .arg(pane.to_string())
