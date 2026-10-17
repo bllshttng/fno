@@ -20,9 +20,12 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
     }
-    // The relay's own same-host forward: claiming it again recursed every
-    // send until the machine ran out of processes.
+    // The relay's own same-host forward (the twin const lives in
+    // mail_remote.rs): claiming it again recursed every send until the
+    // machine ran out of processes. Clear it so a daemon or session the
+    // local verb starts never inherits the bypass.
     if std::env::var_os("FNO_MAIL_LOCAL_FORWARD").is_some() {
+        std::env::remove_var("FNO_MAIL_LOCAL_FORWARD");
         return None;
     }
     let tail: Vec<OsString>;
