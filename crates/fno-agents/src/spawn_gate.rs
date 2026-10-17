@@ -33,6 +33,7 @@ use crate::spawn_gate_lanes::{
 };
 use crate::spawn_gate_queue::slot_refusal_line;
 use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
+use crate::spawn_gate_slots::{annotate_burst, burst_slot_reading, slot_tick_line};
 use crate::state::RegistryEntry;
 use crate::AgentStatus;
 use std::collections::HashSet;
@@ -1438,6 +1439,9 @@ fn decide_gate(
     let mut queue = crate::spawn_gate_queue::Queue::new(root.clone(), &holder, holder_pid);
     let mut announced = false;
     let mut last_slots: usize = 0;
+    // What the slot axis last read about a burst past the user's ceiling.
+    // Uninitialized: every queue pass resets it before any read.
+    let mut last_burst: Option<crate::spawn_gate_slots::Burst>;
     let mut last_succession_error: Option<&'static str>;
     // LD4: a fleet-over sample holds, and admission after a hold is
     // debounced to CPU_ADMIT_SAMPLES consecutive under-ceiling samples.
@@ -1459,6 +1463,7 @@ fn decide_gate(
         let mut learned = crate::capacity::effective_for(config_cwd);
         let mut cap = learned.cap;
         last_succession_error = None;
+        last_burst = None;
         let mut axes_read = serde_json::Map::new();
         let mut pause = QUEUE_POLL;
         // The footprint probe runs OUTSIDE the gate mutex (it costs seconds
@@ -1784,14 +1789,33 @@ fn decide_gate(
                             learned = crate::spawn_gate_slots::at_ceiling(&learned);
                             cap = learned.cap;
                         }
+                        // The user's max_live yields too: one spawn a minute while CPU and RAM read room.
+                        let burst = crate::spawn_gate_slots::burst(
+                            counted,
+                            &learned,
+                            floor_gb,
+                            swap_cap,
+                            &live,
+                            &reservations,
+                            name,
+                            registry_path.parent(),
+                        );
+                        if matches!(burst, Some(crate::spawn_gate_slots::Burst::Yields)) {
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, counted);
+                            cap = learned.cap;
+                        }
+                        last_burst = burst;
                         // A successor holds a worker slot until its role lands, so a
                         // succession may sit one row over the cap, never two.
                         if counted.saturating_sub(replaced) < cap {
-                            let slot_reading = match (&succession, yielded) {
-                                (Some(Ok(name)), _) => {
+                            let slot_reading = match (&succession, yielded, learned.burst) {
+                                (_, _, true) => {
+                                    burst_slot_reading(slots, cap, learned.ceiling)
+                                }
+                                (Some(Ok(name)), _, _) => {
                                     format!("{slots}/{cap} ok (succession replaces {name})")
                                 }
-                                (_, Some(was)) => format!(
+                                (_, Some(was), _) => format!(
                                     "{slots}/{cap} ok (learned cap {was} yields: CPU and RAM have room)"
                                 ),
                                 _ => format!("{slots}/{cap} ok"),
@@ -1934,12 +1958,13 @@ fn decide_gate(
                             });
                             learned.annotate(&mut receipt);
                             queue.annotate(&mut receipt, "max_live");
+                            annotate_burst(last_burst.as_ref(), &mut receipt);
                             if let Some(reason) = last_succession_error {
                                 receipt["succession"] = serde_json::json!(reason);
                             }
                             return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
                         }
-                        let place = queue.tick(&format!("the slot cap, {slots} live of {cap}"));
+                        let place = queue.tick(&slot_tick_line(slots, cap, last_burst.as_ref()));
                         if !announced && place.is_some() {
                             let row_refs: Vec<&RegistryEntry> = live.iter().collect();
                             let drained = warnings.len();
@@ -2035,6 +2060,7 @@ fn decide_gate(
             });
             learned.annotate(&mut receipt);
             queue.annotate(&mut receipt, held_on);
+            crate::spawn_gate_slots::annotate_burst(last_burst.as_ref(), &mut receipt);
             if let Some(reason) = last_succession_error {
                 receipt["succession"] = serde_json::json!(reason);
             }

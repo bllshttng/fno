@@ -1779,6 +1779,42 @@ elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
 fi
 
 # -------------------------------------------------------------------
+# Design section (step 2e gate)
+# -------------------------------------------------------------------
+# Step 2e shapes types and module owners before any task exists. Skill prose
+# alone does not hold it: the design-doc path runs mutate_doc.py straight to
+# an Execution Strategy, so a doc reached ready with no design at all. The
+# marker is the `## Design` heading, which may carry `none: <why>`. A doc
+# still at status: design has not been blueprinted yet, so the gate waits.
+design_gate_date="2026-10-16"
+check_design_file() {
+    local file="$1"
+    local label="$2"
+    local created
+    if [[ "$(_plan_rung "$file")" == "design" ]]; then
+        return 0
+    fi
+    if grep -qx '## Design' "$file"; then
+        ok "$label: ## Design present (step 2e gate)"
+        return 0
+    fi
+    # Only a plan dated after the gate is refused. An undated plan warns: this
+    # gate does not own the missing date, and the dating gates already report it.
+    created=$(_plan_created_date "$file")
+    if [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$created" > "$design_gate_date" ]]; then
+        error "$label: no ## Design section - step 2e writes types, one owner per fact, seams, and the module it extends before any task, or the single line none: <why> (see skills/blueprint/SKILL.md step 2e)"
+    else
+        warn "$label: no ## Design section (plan predates the step 2e gate or carries no date); backfill one when the plan is next amended"
+    fi
+}
+
+if [[ -f "$PLAN_DIR" ]]; then
+    check_design_file "$PLAN_DIR" "$(basename "$PLAN_DIR")"
+elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
+    check_design_file "$PLAN_DIR/00-INDEX.md" "$(basename "$PLAN_DIR")/00-INDEX.md"
+fi
+
+# -------------------------------------------------------------------
 # Check 6b-quinquies: no new Python in cli/src/fno
 # -------------------------------------------------------------------
 # New code lands in crates/. A row that writes cli/src/fno Python is a port

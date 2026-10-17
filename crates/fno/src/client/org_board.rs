@@ -647,6 +647,10 @@ fn session_segs(session: &OrgSession, now: u64) -> Vec<BSeg> {
     vec![seg(text, BRole::Meta)]
 }
 pub(crate) fn open(view: &mut View) {
+    if !view.experimental_org_board {
+        view.set_notice("fleet org board is off: sideline menu > experimental".into());
+        return;
+    }
     view.org_generation = view.org_generation.wrapping_add(1);
     view.org_board = Some(OrgBoard::new(view.org_generation));
     view.backlog_board = None;
@@ -655,11 +659,9 @@ pub(crate) fn open(view: &mut View) {
 }
 pub(crate) fn restore(view: &mut View) {
     match view.sideline_view {
-        SidelineView::Org => open(view),
-        SidelineView::Backlog if view.experimental_backlog => View::open(view),
-        SidelineView::Backlog => {
-            super::backlog_board::set_sideline_view(view, SidelineView::Agents)
-        }
+        SidelineView::Org if view.experimental_org_board => open(view),
+        SidelineView::Org => super::backlog_board::set_sideline_view(view, SidelineView::Agents),
+        SidelineView::Backlog => View::open(view),
         SidelineView::Agents => {}
         SidelineView::Messages => {} // restored by the caller's messages arm
     }

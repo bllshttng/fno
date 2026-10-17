@@ -433,6 +433,16 @@ pub trait Probes {
     fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// Has the round attested at `reviewed_head` (the newest branch
+    /// attestation's own head, not necessarily `facts.head_sha` - a carried
+    /// round never gets a fresh attestation at the new head) landed as a
+    /// GitHub review on `facts.number` yet? `Refused` (not yet - held,
+    /// self-clears once `publish-review` runs) vs `Inconclusive` (the `gh`
+    /// read itself failed) vs `Clear` (found). Default `Clear` keeps an impl
+    /// that does not read GitHub reviews inert.
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
 }
 
 /// A cleared decision: the effect may run, pinned to this head.
@@ -615,6 +625,11 @@ fn decide_observed<P: Probes>(
         let (coverage_blocker, _waiver) =
             crate::merge_gates::coverage_gate(probes, cwd, facts.number);
         if let Some(blocker) = coverage_blocker {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+            });
+        }
+        if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, &facts) {
             return Err(Outcome::Held {
                 reason: blocker.detail,
             });
@@ -1015,6 +1030,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     if let Some(blocker) = coverage_blocker {
         blockers.push(blocker);
     }
+    if let Some(blocker) = crate::merge_gates::review_posted_gate(probes, cwd, facts) {
+        blockers.push(blocker);
+    }
     if let Some(entry_slice) = entries.as_deref() {
         if let Some(blocker) =
             crate::merge_gates::stub_manifest_gate(&repo_root_path, entry_slice, facts.number)
@@ -1202,6 +1220,16 @@ fn repo_root(cwd: &Path) -> PathBuf {
     canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
+/// Is this manifest posture init's `default-off` stamp? Init stamps
+/// `default-off` when its config read found nothing (a yq-less dotted-key
+/// read fails on every tier), so the field records a FAILED LOOKUP, not a
+/// decision. Consumers must treat it as unset and fall through to the live
+/// config, where an explicit refusal (`flag-no-merge`, or config set false)
+/// still wins: `flag-no-merge` and a config refusal never carry this source.
+pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str>) -> bool {
+    approved == Some(false) && source.map(str::trim) == Some("default-off")
+}
+
 /// The authority fold, in the order init folds it. A per-run refusal outranks
 /// every grant - EXCEPT the head-scoped operator grant, the one sanctioned
 /// remedy for a per-run no-merge, recorded out-of-band by a person at a
@@ -1241,6 +1269,13 @@ fn authority_refusal<P: Probes>(
             }
             crate::merge_grant::BoundRead::None => {}
         }
+    }
+    // A `default-off` stamp is init's failed config read, never a refusal:
+    // normalize to unset so the live-config arm below decides, the same
+    // fall-through an absent field already gets.
+    if posture_is_default_off(approved, folded_source.as_deref()) {
+        approved = None;
+        folded_source = None;
     }
     let source = folded_source
         .as_deref()
@@ -1589,6 +1624,42 @@ impl Probes for RealProbes {
 
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
+        let args = vec![
+            "api".to_string(),
+            "--paginate".to_string(),
+            format!(
+                "/repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
+                facts.number
+            ),
+        ];
+        match self.run_gh(cwd, &args) {
+            Ok((true, output)) => {
+                if output.contains(&marker) {
+                    ProbeOutcome::Clear
+                } else {
+                    ProbeOutcome::Refused(format!(
+                        "the attested review round at {} has not landed as a GitHub review on #{}; \
+                         run `fno do pr publish-review --pr-number {}` (finalize/ship already do this \
+                         automatically on every terminal decision, so this normally self-clears)",
+                        &reviewed_head[..reviewed_head.len().min(8)],
+                        facts.number,
+                        facts.number
+                    ))
+                }
+            }
+            Ok((false, output)) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {}",
+                facts.number, output
+            )),
+            Err(error) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {error}",
+                facts.number
+            )),
+        }
     }
 
     fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {

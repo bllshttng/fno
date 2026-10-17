@@ -40,7 +40,7 @@ use tokio::sync::{broadcast, oneshot};
 use crate::proto::{self, ClientMsg, ServerMsg, BUILD_VERSION, PROTO_VERSION};
 
 /// The served page, vendored inline (no CDN) so the strict CSP holds offline.
-const PAGE: &str = include_str!("web_page.html");
+pub(crate) const PAGE: &str = include_str!("web_page.html");
 /// The backlog board page, vendored like PAGE. It draws the read model
 /// ([`crate::backlog_model`]) through `/backlog/model.json` and
 /// `/backlog/node.json` and computes nothing the model already answered.
@@ -69,6 +69,33 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// backoff. An accept-then-EOF flap stays below it, so the backoff keeps growing
 /// (and each quick drop logs) instead of spinning a silent 250ms reconnect loop.
 const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(2);
+
+/// Reconnect pacing for an observer attach, shared by every bridge that
+/// attaches: doubling from `BACKOFF_START` to `BACKOFF_MAX`, and reset only by
+/// a connection that stayed up `MIN_HEALTHY_UPTIME`.
+pub(crate) struct Backoff(Duration);
+
+impl Backoff {
+    pub(crate) fn new() -> Self {
+        Backoff(BACKOFF_START)
+    }
+
+    /// Note a dropped connection. True for a quick accept-then-EOF flap,
+    /// which keeps the delay growing and is worth a log line.
+    pub(crate) fn dropped(&mut self, uptime: Duration) -> bool {
+        if uptime >= MIN_HEALTHY_UPTIME {
+            self.0 = BACKOFF_START;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(crate) async fn wait(&mut self) {
+        tokio::time::sleep(self.0).await;
+        self.0 = (self.0 * 2).min(BACKOFF_MAX);
+    }
+}
 
 /// Parsed `fno mux serve --web` arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -802,7 +829,7 @@ async fn upstream_loop(
     ready_tx: oneshot::Sender<Result<(), String>>,
 ) {
     let mut ready_tx = Some(ready_tx);
-    let mut backoff = BACKOFF_START;
+    let mut backoff = Backoff::new();
     loop {
         match connect_attach(&socket).await {
             Ok((reader, preamble)) => {
@@ -821,9 +848,7 @@ async fn upstream_loop(
                 // Only a session that stayed up a while resets the backoff; a
                 // quick accept-then-EOF flap keeps growing it and logs, so a
                 // misbehaving server never spins a silent tight reconnect loop.
-                if started.elapsed() >= MIN_HEALTHY_UPTIME {
-                    backoff = BACKOFF_START;
-                } else {
+                if backoff.dropped(started.elapsed()) {
                     eprintln!(
                         "fno mux serve --web: upstream dropped after {:?}; backing off",
                         started.elapsed()
@@ -841,15 +866,14 @@ async fn upstream_loop(
                 eprintln!("fno mux serve --web: upstream reconnect failed: {e}");
             }
         }
-        tokio::time::sleep(backoff).await;
-        backoff = (backoff * 2).min(BACKOFF_MAX);
+        backoff.wait().await;
     }
 }
 
 /// Connect, send the observer `Attach`, relinquish the write half, and read the
 /// first reply. A `Bye` here is a refused/skewed attach (`Err`); anything else
 /// means the attach took, and the message is returned as preamble to forward.
-async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
+pub(crate) async fn connect_attach(socket: &Path) -> Result<(OwnedReadHalf, ServerMsg), String> {
     let stream = tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, UnixStream::connect(socket))
         .await
         .map_err(|_| {
@@ -968,13 +992,13 @@ fn forward(mut msg: ServerMsg, tx: &broadcast::Sender<String>, snap: &Arc<Mutex<
 
 /// A bridge-injected control line (not a `ServerMsg`) the browser reads to drive
 /// its connection banner.
-fn bridge_status(state: &str) -> String {
+pub(crate) fn bridge_status(state: &str) -> String {
     format!("{{\"_bridge\":{{\"state\":\"{state}\"}}}}")
 }
 
 /// `host:port`, bracketing an IPv6 literal so `[::1]:8722` parses - a bare
 /// `::1:8722` does not (the colons are ambiguous).
-fn bind_addr(bind: &str, port: u16) -> String {
+pub(crate) fn bind_addr(bind: &str, port: u16) -> String {
     if bind.contains(':') {
         format!("[{bind}]:{port}")
     } else {
@@ -1027,6 +1051,13 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     // project's org data.
     if st.rundown_republish && team_needs_republish(authorized, modified, SystemTime::now()) {
         start_team_republish(&st.rundown_html);
+    }
+    // Option A (ruling recorded on the node): the daemon arm renders only
+    // after a viewer was served the page, so an authorized serve stamps
+    // the sibling marker the arm reads. Best effort: a failed stamp just
+    // means the arm's next render waits for another serve.
+    if authorized {
+        let _ = std::fs::write(served_marker(&st.rundown_html), b"");
     }
     let notice = if st.rundown_republish {
         "fno agents org rundown (a render has started; reload in about a minute)"
@@ -1461,6 +1492,14 @@ fn team_needs_republish(authorized: bool, modified: Option<SystemTime>, now: Sys
     }
 }
 
+/// The marker the /team route stamps on an authorized serve and the
+/// daemon's team_ledger arm reads: marker mtime newer than the page mtime
+/// means a viewer arrived since the last render (the option-A cadence, the
+/// ruling recorded on the node).
+fn served_marker(page: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.served", page.display()))
+}
+
 /// Single-flight background render. `--out` names the exact path the bridge
 /// reads, so writer and reader agree whatever the Python state root resolves
 /// to. Admission refusal, non-zero exit or timeout each log and clear the
@@ -1744,7 +1783,7 @@ async fn ws_conn(mut socket: WebSocket, st: AppState) {
 
 /// 32 random bytes from `/dev/urandom` as hex. `None` if the device is
 /// unreadable (fail closed - never mint a guessable token).
-fn mint_token() -> Option<String> {
+pub(crate) fn mint_token() -> Option<String> {
     use std::io::Read;
     let mut buf = [0u8; 32];
     std::fs::File::open("/dev/urandom")
@@ -1756,7 +1795,7 @@ fn mint_token() -> Option<String> {
 /// Constant-time equality over the compared bytes. The token length is not
 /// secret (always 64 hex chars), so an early length mismatch is fine; the byte
 /// comparison itself never short-circuits.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -1873,16 +1912,13 @@ mod tests {
     }
 
     #[test]
-    fn constant_time_eq_matches_only_identical_bytes() {
+    fn auth_helpers_hold() {
         assert!(constant_time_eq(b"abc123", b"abc123"));
         assert!(!constant_time_eq(b"abc123", b"abc124"));
         assert!(!constant_time_eq(b"abc123", b"abc12")); // length mismatch
         assert!(!constant_time_eq(b"", b"x"));
         assert!(constant_time_eq(b"", b""));
-    }
 
-    #[test]
-    fn mint_token_is_64_hex_chars_and_fresh() {
         let a = mint_token().expect("/dev/urandom readable in test env");
         let b = mint_token().expect("/dev/urandom readable in test env");
         assert_eq!(a.len(), 64, "32 bytes -> 64 hex chars");
@@ -2026,9 +2062,13 @@ mod tests {
             PAGE.contains("new WebSocket("),
             "the page still opens the read-only socket"
         );
+        // The one send is the share knock, and only in share mode. The mux
+        // view sends nothing upstream (Locked Decision 5), and the share
+        // bridge never writes to the mux socket either.
+        let sends: Vec<&str> = PAGE.lines().filter(|l| l.contains(".send(")).collect();
         assert!(
-            !PAGE.contains(".send("),
-            "the page sends nothing upstream at all (Locked Decision 5)"
+            sends.len() == 1 && sends[0].contains("if (SHARE) ws.send(JSON.stringify({ knock:"),
+            "only the share knock is sent: {sends:?}"
         );
         assert!(
             !PAGE.contains(r#""Resize""#),
@@ -2554,7 +2594,17 @@ const reversed = nestChildren([
 ]);
 eq(reversed.map((r) => r.card.id), ["par", "kid"], "a child listed first still follows its parent");
 eq(reversed.map((r) => r.depth), [0, 1], "and sits one step in");
-console.log("snapshot page helpers: 36 cases ok");
+// The board-request links: the request opens a prefilled issue on the
+// repo's issues/new, and the upvote names the card id only.
+const reqUrl = requestIssueUrl("o/r", "fno-request");
+eq(reqUrl.origin + reqUrl.pathname, "https://github.com/o/r/issues/new", "the request link base");
+eq(reqUrl.searchParams.get("label"), "fno-request", "the request label param");
+eq(reqUrl.searchParams.get("template"), "fno-request.yml", "the template param");
+const upUrl = upvoteIssueUrl("o/r", "fno-request", "c-ab12");
+eq(upUrl.origin + upUrl.pathname, "https://github.com/o/r/issues/new", "the upvote link base");
+eq(upUrl.searchParams.get("title"), "Upvote c-ab12", "the upvote sends the card id only");
+eq(upUrl.searchParams.get("labels"), "fno-request", "the upvote label param");
+console.log("snapshot page helpers: 38 cases ok");
 // The board shortcuts: every key the ? sheet advertises, the typing guard,
 // the Escape unwind order, and the copied-id toast line.
 const M = { meta: false, ctrl: false };
@@ -2662,6 +2712,8 @@ console.log("recent searches: 12 cases ok");
                 "copiedToast",
                 "pushRecent",
                 "loadRecent",
+                "requestIssueUrl",
+                "upvoteIssueUrl",
             ]
             .iter()
             .map(|name| lift_js_fn(BACKLOG_PAGE, name))
@@ -2691,7 +2743,7 @@ console.log("recent searches: 12 cases ok");
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 assert!(
-                    stdout.contains("snapshot page helpers: 36 cases ok"),
+                    stdout.contains("snapshot page helpers: 38 cases ok"),
                     "the shipped snapshot helpers did not clear every case:\n{stdout}{stderr}"
                 );
                 assert!(
@@ -2829,6 +2881,17 @@ console.log("recent searches: 12 cases ok");
         // Exactly at the threshold is still fresh ("older than" is strict).
         let boundary = now.checked_sub(TEAM_REPUBLISH_AFTER).unwrap();
         assert!(!team_needs_republish(true, Some(boundary), now));
+        // The served marker names a page sibling by this exact shape, and
+        // the authorized serve stamps it: drift on either side stands the
+        // daemon arm down forever (the feature fails silent in production,
+        // every test green).
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        assert_eq!(served_marker(&page), dir.path().join("rundown.html.served"));
+        std::fs::write(&page, b"<html></html>").unwrap();
+        assert!(!served_marker(&page).exists());
+        let _ = std::fs::write(served_marker(&page), b"");
+        assert!(served_marker(&page).exists());
     }
 
     #[tokio::test]
@@ -3136,15 +3199,13 @@ console.log("recent searches: 12 cases ok");
     }
 
     #[test]
-    fn status_web_exits_one_with_no_state_file() {
+    fn status_web_rows() {
+        // No state file: no bridge.
         let dir = temp_state_dir("status-none");
-        let socket = dir.join("t.sock");
-        assert_eq!(status_web("t", &socket), 1);
+        assert_eq!(status_web("t", &dir.join("t.sock")), 1);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_exits_zero_for_a_live_own_pid_record() {
+        // A live record under this process's own pid and start token: up.
         let dir = temp_state_dir("status-live");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
@@ -3162,15 +3223,12 @@ console.log("recent searches: 12 cases ok");
         .unwrap();
         assert_eq!(status_web("t", &socket), 0);
         let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn status_web_refuses_a_recycled_pid_record() {
+        // This live test process under a WRONG start token: the record reads
+        // stale, so status reports no bridge instead of a stranger's pid.
         let dir = temp_state_dir("status-recycled");
         let socket = dir.join("t.sock");
         let state = web_state_path(&socket).unwrap();
-        // This live test process under a WRONG start token: the record reads
-        // stale, so status reports no bridge instead of a stranger's pid.
         std::fs::write(
             &state,
             serde_json::json!({

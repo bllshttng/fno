@@ -34,6 +34,8 @@ Work every angle in this same context, in one pass - do not skip angles for lack
 
 Angle F (sibling answerer) runs at every level, low through max, on top of the sets above: it reads the plan's `surface:` block rather than more hunks, so it costs one grep, not a wider pass.
 
+Angle G (blast radius) also runs at every level. It is the one angle that reads past the diff and past this repo.
+
 ### The low pass
 
 One tool call: read the unified diff from Phase 0. No full-file reads. Flag runtime-correctness bugs visible from the hunk alone: inverted/wrong condition, off-by-one, null/undefined deref where adjacent lines show the value can be absent, removed guard, falsy-zero check, missing `await`, wrong-variable copy-paste, error swallowed in a catch that should propagate. Also flag, still from the hunk alone, new code that duplicates an existing helper visible in the diff context, and dead code the diff leaves behind. Do not flag style, naming, perf, missing tests, or anything outside the hunk.
@@ -61,6 +63,17 @@ When the PR adds or modifies a type that wraps another (cache, proxy, decorator,
 ### Angle F - sibling answerer
 
 For the one question this diff answers (take it from the plan's `surface:` block when the PR has one; phrase it yourself when it does not), find one answerer the diff did not touch: another read or write of the same field, a second timeout on the same read, a second id format for the same thing, a second constant for the same limit. Grep the symbol, not the word. Grep it in every language tree, not only the diff's own. If you find one the block does not list, that is a candidate: the plan undercounted, and the next PR on this feature is already visible. If the block lists it as `out-of-scope`, check that the reason still holds against the diff.
+
+### Angle G - blast radius beyond the diff
+
+The other angles ask whether the diff is right. This one asks who else relies on what the diff changed and never saw it change. A staff engineer reads the consumers before the code.
+
+1. Name the surfaces. List each changed thing that a reader outside the changed files can depend on. Kinds: verb, flag, output line, file format, config key, event type, exit code, public type, default, capability claim. One line each, in the shape `<surface>: <old> -> <new>`. A diff that changes no such surface writes `surfaces: none` and the angle ends.
+2. Cross-repo contracts first. Another repo breaks silently, and no check in this repo fails. List the sibling repos: `fno config get work.workspaces | python3 "${SKILL_DIR}/scripts/sibling-roots.py" .`. Exit 3 means no workspace lists this repo. Write `siblings: unconfigured` in the report, never `siblings: none`. Fetch each sibling, then grep its remote default branch: `git -C <path> grep -n -F -e <surface> <ref>`. Read `<ref>` from `git -C <path> symbolic-ref --short refs/remotes/origin/HEAD`. A local checkout can sit days behind. With no remote ref, grep `HEAD` and mark that sibling `local` in the report. Also search THIS repo for text that describes a sibling. Examples: a capability table, a vendored schema, a pinned version, a doc that names the sibling. Check each hit against the sibling's current `origin/main`. A claim the sibling no longer makes true is a candidate.
+3. Then the in-repo readers that no call graph shows. Look at docs, `--help` text, refusal and receipt strings, tests, config defaults and generated copies. Also look at the other language leg of a dual surface (`cli/src/fno` and `crates/` here). A reader that still teaches the old behavior is a candidate.
+4. Name the one fact the change is safe because of. Say how far you proved it. The levels: cited at a line, walked through the failure, or ran code that fails on a false fact. A fact you only stated is `unproven`.
+
+Each candidate names the consumer's `file:line`, quotes the stale line, and states the failure scenario as what that consumer now does wrong. The report carries one `Blast radius:` line. It names the surfaces, the siblings searched or `unconfigured`, the hit count, and the safety fact with its proof level. A pass with no `Blast radius:` line skipped this angle.
 
 ### Test value
 
@@ -170,7 +183,7 @@ The report opens with one scope line and ends with one verdict line. The scope l
 
 The resolved route line comes from the one seam: `fno do review resolve-level <level>` prints the full record (level, level_source, band, effort, model, provider, degraded_max). Its `model`/`effort`/`provider` name the POLICY pick for this level - never what ran, because this lane never dispatches. Since the lane always executes inline in the invoking session (Phase 0 above), report the resolved route's `model`/`effort`/`provider` as a `resolved (not dispatched):` line, and separately state `executed inline as: <this session's own harness and model>` so a reader never mistakes the policy target for an attribution of the finished work. A session unable to name its own model states so rather than guessing.
 
-Between them the report carries, in order: the resolved-route line and the executed-inline line above, the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
+Between them the report carries the resolved-route line, the executed-inline line, and the `Blast radius:` line from Angle G. Then come the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
 
 Each REFUTED entry is one line in the exact shape:
 
@@ -210,6 +223,6 @@ When earlier rounds on this branch raised blocking findings, the payload carries
 
 ## Flags
 
-`--comment`: on a GitHub PR target, post each finding as an inline PR comment, one call per finding (`gh api repos/{owner}/{repo}/pulls/<n>/comments`). Add a suggestion block only for a fix that resolves the finding whole. On any other target the findings are HELD, not dropped. The `review_attestation` row the attest step writes already carries the branch and HEAD. When the branch's PR opens, the create flow's `fno do pr publish-review` step posts the held findings as one PR comment. The post is idempotent by marker. A reviewed head behind the PR head posts with both shas named. Print `held for PR: branch <b> head <sha>, N findings`. If HEAD later moves, review the new head as owed.
+`--comment`: on a GitHub PR target, post each finding as an inline PR comment, one call per finding (`gh api repos/{owner}/{repo}/pulls/<n>/comments`). Add a suggestion block only for a fix that resolves the finding whole. This review often runs before the PR exists, and on any other target the round is HELD, not dropped. The `review_attestation` row the attest step writes already carries the branch and HEAD. When the branch's PR opens, the create flow's `fno do pr publish-review` step posts a formal GitHub review for that round. The code is `crates/fno-agents/src/publish_review.rs::publish_round`. It posts under the caller's own identity, with a summary naming level, round, finding count, verdict, and head. It adds one bullet per finding. It posts even on a clean zero-finding pass. Before this fix, an unconfigured `review.bot_identity` meant a clean round posted nothing at all. That gap is exactly what `publish_round` closes. The post is idempotent by marker. A reviewed head behind the PR head posts with both shas named. A best-effort second pass then anchors each finding as its own inline comment on `pulls/<n>/comments`, the same path the live-PR case above uses. One finding's anchor failing never undoes the review post. Print `round for PR: branch <b> head <sha>, N findings`. If HEAD later moves, review the new head as owed. If the posted round never lands before merge, `fno do pr status` surfaces `review_not_posted` and the merge door holds on it. That hold self-clears the moment the post above runs.
 
 `--fix`: apply the findings to the working tree after the report, gated by class. Apply `gated_auto` findings only. The lane is one context, so the finder and the verifier are a single witness. A single-witness blocking finding is auto-applied only with class `gated_auto` and a passing test. Print every `manual` and `advisory` finding as a row with its `owner` and a one-line reason it was not applied, for the author to decide. A skip you judge a false positive is noted the same way, never argued with. Then emit on the NEW head after the fix commit. A pass on a superseded commit is discarded, so the attestation must name the head the fixes landed on. Verify the fix delta first.

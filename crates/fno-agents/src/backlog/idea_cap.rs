@@ -28,6 +28,7 @@ fn capped_idea(row: &Value) -> bool {
             .map(|value| value.is_null() || value.as_str() == Some(""))
             .unwrap_or(true)
         && row.get("source_kind").and_then(Value::as_str) != Some("operator_request")
+        && row.get("source_kind").and_then(Value::as_str) != Some("external_request")
 }
 
 fn scope_for(row: &Value, rows_by_id: &std::collections::HashMap<&str, &Value>) -> String {
@@ -191,6 +192,7 @@ mod tests {
             json!({"id": "planned", "status": "idea", "project": "p", "plan_path": "plans/x.md"}),
             json!({"id": "epic", "status": "idea", "project": "p", "type": "epic"}),
             json!({"id": "grouped", "status": "idea", "project": "p", "group_slug": "split"}),
+            json!({"id": "external", "status": "idea", "project": "p", "source_kind": "external_request"}),
         ] {
             let mut post = pre.clone();
             post.push(extra);

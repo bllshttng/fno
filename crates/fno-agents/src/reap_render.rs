@@ -238,6 +238,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
                 "kept_active": active,
                 "kept_attended": pair(&summary.kept_attended),
                 "kept_user_typed": pair(&summary.kept_user_typed),
+                "kept_marked": pair(&summary.kept_marked),
                 "kept_probe_unread": probe_unread,
                 "kept_live_claim": live_claim,
                 "kept_transcript_unresolved": summary.kept_transcript_unresolved,
@@ -394,6 +395,9 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     }
     for (id, detail) in &summary.kept_user_typed {
         out.push_str(&format!("  kept {id} (user typed: {detail})\n"));
+    }
+    for (id, detail) in &summary.kept_marked {
+        out.push_str(&format!("  kept {id} ({detail})\n"));
     }
     for (id, detail) in &summary.kept_live_claim {
         out.push_str(&format!(

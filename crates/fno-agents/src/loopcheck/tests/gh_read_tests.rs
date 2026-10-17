@@ -159,6 +159,7 @@ fn graphql_exhausted_reason_names_reset_and_rest_lane() {
         remaining: 0,
         reset_epoch: Utc::now().timestamp() + 40 * 60 + 5,
         core_remaining: None,
+        core_reset_epoch: None,
     };
     let msg = graphql_exhausted_reason(&q);
     assert!(msg.contains("GraphQL quota exhausted"), "got: {msg}");
@@ -173,6 +174,7 @@ fn graphql_exhausted_reason_never_reports_a_past_reset() {
         remaining: 0,
         reset_epoch: Utc::now().timestamp() - 120,
         core_remaining: None,
+        core_reset_epoch: None,
     };
     assert!(graphql_exhausted_reason(&q).contains("~0m"));
 }
@@ -224,6 +226,7 @@ fn quota_with(graphql_remaining: i64, core_remaining: Option<i64>) -> GraphqlQuo
         remaining: graphql_remaining,
         reset_epoch: 1_750_000_000,
         core_remaining,
+        core_reset_epoch: None,
     }
 }
 

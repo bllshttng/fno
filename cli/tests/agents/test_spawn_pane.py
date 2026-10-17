@@ -771,11 +771,17 @@ def test_footnote_pane_launches_the_tui_on_the_launch_spec_the_rust_owner_wrote(
         return {"path": "/sessions/.pane-spec-f1.json"}
 
     monkeypatch.setattr(axes, "spawn_axes_call", answer)
+    sid = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58"
     argv = build_pane_argv(
-        "footnote", "", tmp_path, False, None, model="zai/glm-5.3", permission_mode="plan"
+        "footnote", "", tmp_path, False, sid, model="zai/glm-5.3", permission_mode="plan"
     )
     assert argv == ["footnote", "--spec", "/sessions/.pane-spec-f1.json"]
-    assert asked == [{"cwd": str(tmp_path), "model": "zai/glm-5.3", "permission_mode": "plan"}]
+    build_pane_argv("footnote", "", tmp_path, False, None, model="zai/glm-5.3")
+    ask = {"cwd": str(tmp_path), "model": "zai/glm-5.3", "permission_mode": "plan"}
+    assert asked == [
+        {**ask, "fno_id": sid},
+        {**ask, "permission_mode": "", "fno_id": ""},
+    ]
 
 
 def test_terminal_raise_keeps_meaning_for_a_declared_harness_with_no_arm(

@@ -7,7 +7,7 @@
 //! verdict into a refusal is a measured follow-up, never this verb.
 use crate::events::EventEmitter;
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -93,6 +93,17 @@ fn prs_in_subjects(subjects: &str) -> Vec<String> {
     out
 }
 
+/// Split a `--ids` value on commas, trimming empties, so a trailing comma or
+/// stray space costs nothing. Node ids are `<prefix>-<hex>`, so a comma
+/// never appears inside an id.
+fn split_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn tracked_at(repo: &Path, rev: &str) -> BTreeSet<String> {
     git_out(repo, &["ls-tree", "-r", "--name-only", rev])
         .map(|s| s.lines().map(str::to_string).collect())
@@ -155,71 +166,162 @@ fn cited_paths(row: &Value) -> String {
         .join(" ")
 }
 
-/// The premise verdict for one node, first match wins.
-fn premise_verdict(repo: &Path, node_id: &str, row: &Value) -> Value {
+/// One first-parent commit of main, newest first in the stream: the date, the
+/// subject, and the paths its diff against the first parent touched.
+struct CommitFact {
+    /// Commit date as unix seconds; 0 when unparsable (never matches since).
+    ts: i64,
+    subject: String,
+    paths: Vec<String>,
+}
+
+/// The shared git facts every premise verdict reads. Built once per process
+/// so a batch of rows pays three git reads total instead of three per row.
+pub(crate) struct PremiseCtx {
+    main: Option<String>,
+    tracked: BTreeSet<String>,
+    stream: Vec<CommitFact>,
+}
+
+/// Build the shared facts: resolve main, one `ls-tree -r`, and one
+/// name-only log. `--no-renames` keeps the old side of a rename in the path
+/// list, matching the pathspec semantics the per-node read used to answer
+/// with, so ambient `diff.renames` config cannot drift the verdict.
+pub(crate) fn premise_ctx(repo: &Path) -> PremiseCtx {
+    let main = resolve_main(repo);
+    let mut tracked = BTreeSet::new();
+    let mut stream: Vec<CommitFact> = Vec::new();
+    if let Some(m) = &main {
+        tracked = tracked_at(repo, m);
+        if let Some(raw) = git_out(
+            repo,
+            &[
+                "log",
+                "--first-parent",
+                "--no-renames",
+                "--name-only",
+                "--format=@%cI%x00%s",
+                m,
+            ],
+        ) {
+            let mut current: Option<CommitFact> = None;
+            for line in raw.lines() {
+                // A header carries the NUL separator the format wrote; a
+                // tracked path that merely starts with `@` does not, so it
+                // still reads as a path.
+                match line.strip_prefix('@').filter(|h| h.contains('\u{0}')) {
+                    Some(head) => {
+                        if let Some(c) = current.take() {
+                            stream.push(c);
+                        }
+                        let mut parts = head.splitn(2, '\u{0}');
+                        let date = parts.next().unwrap_or("");
+                        let subject = parts.next().unwrap_or("").to_string();
+                        let ts = chrono::DateTime::parse_from_rfc3339(date)
+                            .map(|d| d.timestamp())
+                            .unwrap_or(0);
+                        current = Some(CommitFact {
+                            ts,
+                            subject,
+                            paths: Vec::new(),
+                        });
+                    }
+                    None => {
+                        if let Some(c) = current.as_mut() {
+                            if !line.is_empty() {
+                                c.paths.push(line.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(c) = current.take() {
+                stream.push(c);
+            }
+        }
+    }
+    PremiseCtx {
+        main,
+        tracked,
+        stream,
+    }
+}
+
+/// The status legs that need no git at all, read first by every caller.
+fn status_shortcut(row: &Value) -> Option<Value> {
     let status = row.get("status").and_then(Value::as_str).unwrap_or("");
     if matches!(status, "done" | "superseded") {
-        return json!({"verdict": "shipped", "evidence": format!("node status {status}")});
+        return Some(json!({"verdict": "shipped", "evidence": format!("node status {status}")}));
     }
     if status == "in_review" {
-        return json!({"verdict": "partly_shipped", "evidence": "node status in_review"});
+        return Some(json!({"verdict": "partly_shipped", "evidence": "node status in_review"}));
     }
-    let Some(main) = resolve_main(repo) else {
+    None
+}
+
+/// The premise verdict for one node off a shared context, first match wins.
+pub(crate) fn premise_verdict_in(ctx: &PremiseCtx, node_id: &str, row: &Value) -> Value {
+    if let Some(v) = status_shortcut(row) {
+        return v;
+    }
+    let Some(_main) = &ctx.main else {
         return json!({"verdict": "unmeasured:no origin/main", "evidence": "git could not resolve origin/main"});
     };
-    let branch = git_out(
-        repo,
-        &[
-            "log",
-            "--first-parent",
-            "--grep",
-            &format!("/{node_id}-"),
-            "--format=%s",
-            &main,
-        ],
-    )
-    .unwrap_or_default();
-    if !branch.trim().is_empty() {
-        let prs = prs_in_subjects(&branch).join(",");
+    // git's --grep matched `/{node_id}-` against first-parent subjects; the
+    // ids are hex, so a plain substring read answers the same set.
+    let needle = format!("/{node_id}-");
+    let mut named: Vec<&str> = Vec::new();
+    for fact in &ctx.stream {
+        if fact.subject.contains(&needle) {
+            named.push(&fact.subject);
+        }
+    }
+    if !named.is_empty() {
+        let joined = named.join(" ");
+        let prs = prs_in_subjects(&joined).join(",");
         return json!({
             "verdict": "partly_shipped",
             "evidence": format!("a merge on main names {node_id}- ({prs})"),
         });
     }
-    let tracked = tracked_at(repo, &main);
     let mut cites: Vec<String> = path_tokens(&cited_paths(row))
         .into_iter()
-        .filter(|t| tracked.contains(t))
+        .filter(|t| ctx.tracked.contains(t))
         .collect();
     if cites.is_empty() {
         return json!({"verdict": "unmeasured:no cited repo path", "evidence": "no cited path exists on main"});
     }
-    let Some(since) = row
+    // git --since traversal stops at the first commit older than the cutoff
+    // (revision.c: `commitdate < since`), so the boundary instant counts as
+    // changed; the stream comparison keeps `>=`. The evidence names the
+    // normalized created_at the per-node read used to name.
+    let since = row
         .get("created_at")
         .and_then(Value::as_str)
-        .and_then(parse_ts)
-    else {
+        .and_then(parse_ts);
+    let Some(since) = since else {
         return json!({"verdict": "unmeasured:created_at unreadable", "evidence": "no comparable created_at"});
     };
+    let since_ts = chrono::DateTime::parse_from_rfc3339(&since)
+        .map(|d| d.timestamp())
+        .unwrap_or(i64::MAX);
     cites.sort();
     let mut changed: Vec<String> = Vec::new();
     for path in &cites {
-        let subjects = git_out(
-            repo,
-            &[
-                "log",
-                "--first-parent",
-                "--format=%s",
-                "--since",
-                &since,
-                &main,
-                "--",
-                path,
-            ],
-        )
-        .unwrap_or_default();
-        if !subjects.trim().is_empty() {
-            let prs = prs_in_subjects(&subjects).join(",");
+        let mut subjects: Vec<&str> = Vec::new();
+        for fact in &ctx.stream {
+            // The stream is newest first; once a commit predates the cutoff
+            // every later one does too.
+            if fact.ts < since_ts {
+                break;
+            }
+            if fact.paths.iter().any(|p| p == path) {
+                subjects.push(&fact.subject);
+            }
+        }
+        if !subjects.is_empty() {
+            let joined = subjects.join(" ");
+            let prs = prs_in_subjects(&joined).join(",");
             changed.push(if prs.is_empty() {
                 path.clone()
             } else {
@@ -237,6 +339,14 @@ fn premise_verdict(repo: &Path, node_id: &str, row: &Value) -> Value {
         "verdict": "changed",
         "evidence": format!("changed since {since}: {}", changed.join(", ")),
     })
+}
+
+/// The premise verdict for one node, first match wins.
+pub fn premise_verdict(repo: &Path, node_id: &str, row: &Value) -> Value {
+    if let Some(v) = status_shortcut(row) {
+        return v;
+    }
+    premise_verdict_in(&premise_ctx(repo), node_id, row)
 }
 
 fn resolve_main(repo: &Path) -> Option<String> {
@@ -376,6 +486,53 @@ pub fn freshness_report(
     }))
 }
 
+/// The premise marks for rows already in hand: the board's displayed rows.
+/// One shared git read for the whole slice, no events, no graph re-read.
+pub(crate) fn premise_marks_rows(repo: &Path, rows: &[&Value]) -> BTreeMap<String, Value> {
+    let ctx = premise_ctx(repo);
+    let mut marks = BTreeMap::new();
+    for row in rows {
+        if let Some(id) = crate::graph_store::entry_id(row) {
+            marks.insert(id.to_string(), premise_verdict_in(&ctx, id, row));
+        }
+    }
+    marks
+}
+
+/// The premise marks for many ids off one shared git read. The batch is a
+/// display read (the board and the list): it emits no verdict events, so a
+/// glance never floods the measurement stream the explicit verb feeds.
+pub fn premise_marks(graph: &Path, repo: &Path, ids: &[String]) -> Value {
+    let entries = crate::graph_store::read_rows_where(
+        graph,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids.to_vec()),
+                ..Default::default()
+            },
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    let ctx = premise_ctx(repo);
+    let mut marks = BTreeMap::new();
+    for token in ids {
+        let row = crate::graph_get::find_entry(&entries, token);
+        let node_id = row
+            .and_then(|r| crate::graph_store::entry_id(r))
+            .unwrap_or(token);
+        let verdict = match row {
+            Some(r) => premise_verdict_in(&ctx, node_id, r),
+            None => {
+                json!({"verdict": "unmeasured:node not found", "evidence": "no row in the graph"})
+            }
+        };
+        marks.insert(node_id, verdict);
+    }
+    json!({ "marks": marks })
+}
+
 /// Best-effort verdict event: the false-positive rate is measured from
 /// these rows, so every reading lands one (d-44800d59). Never raises.
 fn emit_verdict(events: Option<&Path>, report: &Value) {
@@ -444,11 +601,12 @@ pub fn run_report(
     }
 }
 
-const USAGE: &str = "usage: fno backlog freshness <node> [--plan <path>] [--json] [--graph <path>]";
+const USAGE: &str = "usage: fno backlog freshness --ids <comma-separated-node-ids> [--graph <path>]\n       fno backlog freshness <node> [--plan <path>] [--json] [--graph <path>]";
 
-/// Dispatch body for the `freshness` native aux verb.
+/// Dispatch body for the `fno backlog freshness` native aux verb.
 pub fn run(tail: &[String]) -> i32 {
     let mut node: Option<&String> = None;
+    let mut ids: Option<Vec<String>> = None;
     let mut plan: Option<String> = None;
     let mut graph: Option<String> = None;
     let mut json_out = false;
@@ -457,6 +615,13 @@ pub fn run(tail: &[String]) -> i32 {
         let mut value = || it.next().cloned();
         match arg.as_str() {
             "--json" | "-J" => json_out = true,
+            "--ids" => match value() {
+                Some(v) => ids = Some(split_ids(&v)),
+                None => {
+                    eprintln!("{USAGE}");
+                    return 2;
+                }
+            },
             "--plan" => match value() {
                 Some(v) => plan = Some(v),
                 None => {
@@ -477,6 +642,28 @@ pub fn run(tail: &[String]) -> i32 {
                 return 2;
             }
         }
+    }
+    if let Some(ids) = ids {
+        if plan.is_some() {
+            eprintln!("{USAGE}");
+            return 2;
+        }
+        // The batch arm is a display read: no verdict event is emitted.
+        if crate::graph_get::external_backend_selected() {
+            eprintln!(
+                "fno-agents backlog freshness: the graph store is not the authoritative \
+                 backend under the selected external tracker"
+            );
+            return 2;
+        }
+        let graph_path = match graph {
+            Some(g) => std::path::PathBuf::from(g),
+            None => crate::graph_get::default_graph_path(),
+        };
+        let repo = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let marks = premise_marks(&graph_path, &repo, &ids);
+        println!("{marks}");
+        return 0;
     }
     let Some(node) = node else {
         eprintln!("{USAGE}");
@@ -767,5 +954,113 @@ mod tests {
         );
         let report = freshness_report(&graph, repo_dir.path(), "x-4", None).unwrap();
         assert_eq!(report["premise"]["verdict"], "holds");
+    }
+
+    #[test]
+    fn batch_marks_match_the_single_verb_on_one_shared_read() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_repo(repo_dir.path());
+        commit(
+            repo_dir.path(),
+            "src/a.rs",
+            "one\n",
+            "base",
+            "2026-01-01T00:00:00Z",
+        );
+        commit(
+            repo_dir.path(),
+            "src/keep.rs",
+            "one\n",
+            "keep",
+            "2026-01-01T00:00:00Z",
+        );
+        git(repo_dir.path(), &["branch", "origin/main"], None);
+        commit(
+            repo_dir.path(),
+            "src/a.rs",
+            "two\n",
+            "touch src/a.rs (#12)",
+            "2026-02-01T00:00:00Z",
+        );
+        advance_main(repo_dir.path());
+
+        let store = tempfile::tempdir().unwrap();
+        crate::paths::pin_test_claims_root(store.path());
+        let graph = store.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[
+                json!({"id": "x-1", "status": "ready", "created_at": "2026-01-15T00:00:00Z",
+                       "title": "fix a", "details": "the defect sits in src/a.rs"}),
+                json!({"id": "x-2", "status": "ready", "created_at": "2026-01-15T00:00:00Z",
+                       "title": "keep", "details": "the defect sits in src/keep.rs"}),
+                json!({"id": "x-3", "status": "done"}),
+            ],
+        )
+        .unwrap();
+        let marks = premise_marks(
+            &graph,
+            repo_dir.path(),
+            &["x-1".into(), "x-2".into(), "x-3".into()],
+        );
+        assert_eq!(marks["marks"]["x-1"]["verdict"], "changed");
+        assert!(marks["marks"]["x-1"]["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("src/a.rs"));
+        assert_eq!(marks["marks"]["x-2"]["verdict"], "holds");
+        assert_eq!(marks["marks"]["x-3"]["verdict"], "shipped");
+
+        // One probe, two readers: the shared-context core answers exactly
+        // what the single-node wrapper answers on the same rows.
+        let ctx = premise_ctx(repo_dir.path());
+        for id in ["x-1", "x-2"] {
+            let row = freshness_report(&graph, repo_dir.path(), id, None).unwrap();
+            assert_eq!(marks["marks"][id]["verdict"], row["premise"]["verdict"]);
+            assert_eq!(marks["marks"][id]["evidence"], row["premise"]["evidence"]);
+            let rows = crate::graph_store::read_rows_where(
+                &graph,
+                &crate::backlog::RowQuery {
+                    filter: crate::backlog::api::NodeFilter {
+                        id_in: Some(vec![id.to_string()]),
+                        ..Default::default()
+                    },
+                    with_blockers: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_default();
+            let fetched = crate::graph_get::find_entry(&rows, id).unwrap();
+            assert_eq!(
+                premise_verdict_in(&ctx, id, &fetched),
+                premise_verdict(repo_dir.path(), id, &fetched)
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_absent_from_the_graph_reads_unmeasured_in_marks() {
+        let bare = tempfile::tempdir().unwrap();
+        let store = tempfile::tempdir().unwrap();
+        crate::paths::pin_test_claims_root(store.path());
+        let graph = graph_with(store.path(), json!({"id": "x-9", "status": "ready"}));
+        let marks = premise_marks(&graph, bare.path(), &["x-9".into(), "nope-1".into()]);
+        assert_eq!(
+            marks["marks"]["x-9"]["verdict"],
+            "unmeasured:no origin/main"
+        );
+        assert_eq!(
+            marks["marks"]["nope-1"]["verdict"],
+            "unmeasured:node not found"
+        );
+    }
+
+    #[test]
+    fn split_ids_takes_commas_and_drops_empties() {
+        assert_eq!(
+            split_ids(" x-1 ,x-2,,x-3"),
+            vec!["x-1".to_string(), "x-2".to_string(), "x-3".to_string()]
+        );
+        assert!(split_ids("").is_empty());
     }
 }

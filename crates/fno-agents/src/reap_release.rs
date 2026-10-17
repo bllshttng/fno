@@ -88,6 +88,36 @@ pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
     0
 }
 
+/// The `--release <row>` arm, parsed beside the sweep. Moved out of
+/// `bin/client.rs` byte for byte (file budget: client.rs is shrink-only):
+/// same refusals, same exit codes, `None` when no `--release` is present.
+pub fn from_args(rest: &[String]) -> Option<i32> {
+    let pos = rest.iter().position(|a| a == "--release")?;
+    let handle = rest.get(pos + 1).map(String::as_str).unwrap_or("");
+    if handle.is_empty() || handle.starts_with("--") {
+        eprintln!("fno-agents: reap --release needs a row handle (name, short id or session id)");
+        return Some(2);
+    }
+    // Everything except the flag pair and the handle is an error; only
+    // --json is legal beside a release.
+    let extras: Vec<String> = rest
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| *i != pos && *i != pos + 1 && !matches!(a.as_str(), "--json" | "-J"))
+        .map(|(_, a)| a.clone())
+        .collect();
+    if !extras.is_empty() {
+        eprintln!(
+            "fno-agents: reap --release takes only a handle and --json (got: {})",
+            extras.join(" ")
+        );
+        return Some(2);
+    }
+    let home = AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    Some(run(&home, &cwd, handle))
+}
+
 /// The fresh-hold refusal line: the age, the threshold, and what
 /// a release needs before it applies.
 pub(crate) fn fresh_hold_refusal(hold: &gc_sweep::Hold, threshold_s: u64) -> String {
@@ -129,7 +159,7 @@ pub(crate) fn witness_refusal(home: &AgentsHome, hold: &gc_sweep::Hold) -> Optio
 }
 
 /// The registry row a handle names: name, short id, or session id.
-fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
+pub(crate) fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
     let registry = state::load_registry(&home.registry_json()).ok()?;
     let handle_lc = handle.to_ascii_lowercase();
     registry.entries.into_iter().find(|e| {
