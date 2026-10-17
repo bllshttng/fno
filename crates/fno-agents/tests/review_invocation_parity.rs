@@ -186,7 +186,7 @@ fn fixture_envelope(row: &Value, now_ms: i64) -> String {
     .to_string()
 }
 
-fn compare_parse(bin_cmd: Command, case: &Value, problems: &mut Vec<String>) {
+fn compare_parse(mut bin_cmd: Command, case: &Value, problems: &mut Vec<String>) {
     let label = case["label"].as_str().unwrap();
     let key = common::slug(label);
     let mut bad = |msg: String| problems.push(format!("[{label}] {msg}"));
