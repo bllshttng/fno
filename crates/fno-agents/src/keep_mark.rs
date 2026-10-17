@@ -464,6 +464,7 @@ mod tests {
             );
             e.name = "w1".into();
             e.short_id = "dd112233".into();
+            e.harness = Some("claude".into());
             e.harness_session_id = Some("dddd5555-6666-7777".into());
             r.entries.push(e);
         })
@@ -507,6 +508,11 @@ mod tests {
             crate::state::Lineage::unproven("test"),
         );
         bare.name = "bare".into();
+        // A row that predates its first turn still carries a resolvable
+        // handle (the pid pair); the refusal under test is the missing
+        // harness session id, not an invalid row.
+        bare.pid = Some(4711);
+        bare.pid_start_time = Some(47114711);
         crate::state::update_registry(&reg, |r| r.entries.push(bare)).unwrap();
         assert_eq!(
             from_args(&["--keep".to_string(), "bare".to_string()]),
@@ -520,6 +526,7 @@ mod tests {
             crate::state::Lineage::unproven("test"),
         );
         child.name = "w2".into();
+        child.harness = Some("claude".into());
         child.harness_session_id = Some("ffff2222-3333-4444".into());
         child.predecessor_session_ids = vec!["eeee8888-9999-0000".into()];
         crate::state::update_registry(&reg, |r| r.entries.push(child)).unwrap();
