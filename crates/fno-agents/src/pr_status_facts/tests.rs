@@ -804,3 +804,33 @@ fn pr_activity_failed_read_answers_error() {
         "an error carries no activity fields: {out}"
     );
 }
+
+#[test]
+fn pr_activity_empty_reviewers_skip_the_activity_reads() {
+    let probes = ActivityGh {
+        answers: vec![(
+            "/pulls/7",
+            true,
+            json!({"created_at": "2026-10-01T10:00:00Z", "draft": true}).to_string(),
+            String::new(),
+        )],
+        calls: RefCell::new(Vec::new()),
+    };
+    let out = pr_activity_op(
+        &probes,
+        &json!({"cwd": "/repo", "slug": "o/r", "pr": 7, "reviewers": []}),
+    );
+    assert_eq!(out["opened_at"], json!("2026-10-01T10:00:00Z"));
+    assert_eq!(out["is_draft"], json!(true));
+    assert_eq!(
+        out["latest_review_ts"],
+        Value::Null,
+        "no configured reviewers: null without the reads"
+    );
+    let calls = probes.calls.borrow();
+    assert_eq!(
+        calls.len(),
+        1,
+        "the review and comment reads are skipped, not spent: {calls:?}"
+    );
+}

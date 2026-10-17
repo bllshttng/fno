@@ -550,7 +550,8 @@ fn rest_get_op<P: GhProbe>(
 }
 
 /// The `status-pr-activity` op: the pr-watch reviews leg, in Rust beside its
-/// REST twins. Three reads through the probe: the pulls row (created_at,
+/// REST twins. Three reads through the probe on a non-empty reviewers list
+/// (one pulls read when the list is empty): the pulls row (created_at,
 /// draft; the status door's own row key, so a quiet PR answers 304), the
 /// review pages through `reviews::fetch_reviews`, and the issue comments
 /// pages (the REST twin of the `comments` field the Python leg read). The
@@ -598,75 +599,86 @@ fn pr_activity_op<P: GhProbe>(probes: &P, payload: &Value) -> Value {
         Ok(v) => v,
         Err(e) => return json!({"error": e}),
     };
-    // The review list through the shared paged reader; its Option loses the
-    // stderr the direct reads carry, so the error names the path alone.
-    let reviews = match reviews::fetch_reviews(probes, &cwd, &slug, pr) {
-        Some(rows) => rows,
-        None => {
-            return json!({"error": format!(
-                "repos/{slug}/pulls/{pr}/reviews failed: the reviews read failed"
-            )})
-        }
-    };
-    let mut comments: Vec<Value> = Vec::new();
-    for page in 1..=20 {
-        let path = format!("repos/{slug}/issues/{pr}/comments?per_page=100&page={page}");
-        let rows = match read(&path) {
-            Ok(v) => v,
-            Err(e) => return json!({"error": e}),
+    let opened_at = pulls
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map(|s| json!(s))
+        .unwrap_or(Value::Null);
+    let is_draft = pulls
+        .get("draft")
+        .cloned()
+        .filter(Value::is_boolean)
+        .unwrap_or(Value::Null);
+    // An empty reviewers list can only answer null: the activity reads are
+    // skipped, not spent. The unfinished-work scan calls this per candidate
+    // with reviewers=[] and reads only state and opened_at, and a fleet-budget
+    // hold on those reads would surface there as a GitHub outage.
+    let latest_review_ts = if reviewers.is_empty() {
+        Value::Null
+    } else {
+        // The review list through the shared paged reader; its Option loses
+        // the stderr the direct reads carry, so the error names the path
+        // alone.
+        let reviews = match reviews::fetch_reviews(probes, &cwd, &slug, pr) {
+            Some(rows) => rows,
+            None => {
+                return json!({"error": format!(
+                    "repos/{slug}/pulls/{pr}/reviews failed: the reviews read failed"
+                )})
+            }
         };
-        let Some(rows) = rows.as_array() else {
-            return json!({"error": format!("{path} failed: the body is not a JSON array")});
-        };
-        let full = rows.len() >= 100;
-        comments.extend(rows.iter().cloned());
-        if !full {
-            break;
+        let mut comments: Vec<Value> = Vec::new();
+        for page in 1..=20 {
+            let path = format!("repos/{slug}/issues/{pr}/comments?per_page=100&page={page}");
+            let rows = match read(&path) {
+                Ok(v) => v,
+                Err(e) => return json!({"error": e}),
+            };
+            let Some(rows) = rows.as_array() else {
+                return json!({"error": format!("{path} failed: the body is not a JSON array")});
+            };
+            let full = rows.len() >= 100;
+            comments.extend(rows.iter().cloned());
+            if !full {
+                break;
+            }
         }
-    }
 
-    // A review contributes submitted_at (a PENDING review has none and is
-    // skipped); a comment contributes created_at. Only a configured reviewer
-    // counts; empty reviewers answers null but still reads, the Python leg
-    // always read them. The Rust matcher skips a blank entry (the Python
-    // `"" in s` rule that matched every login is retired with it).
-    let mut latest: Option<String> = None;
-    let mut counted = |ts: Option<&str>, login: &str| {
-        let Some(ts) = ts else { return };
-        if !crate::pr_status::reviews::reviewer_matches(login, &reviewers) {
-            return;
+        // A review contributes submitted_at (a PENDING review has none and is
+        // skipped); a comment contributes created_at. Only a configured
+        // reviewer counts. The Rust matcher skips a blank entry (the Python
+        // `"" in s` rule that matched every login is retired with it).
+        let mut latest: Option<String> = None;
+        let mut counted = |ts: Option<&str>, login: &str| {
+            let Some(ts) = ts else { return };
+            if !crate::pr_status::reviews::reviewer_matches(login, &reviewers) {
+                return;
+            }
+            if latest.as_deref().map_or(true, |cur| ts > cur) {
+                latest = Some(ts.to_string());
+            }
+        };
+        for row in &reviews {
+            let login = row
+                .pointer("/user/login")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            counted(row.get("submitted_at").and_then(Value::as_str), login);
         }
-        if latest.as_deref().map_or(true, |cur| ts > cur) {
-            latest = Some(ts.to_string());
+        for row in &comments {
+            let login = row
+                .pointer("/user/login")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            counted(row.get("created_at").and_then(Value::as_str), login);
         }
+        latest.map(|s| json!(s)).unwrap_or(Value::Null)
     };
-    for row in &reviews {
-        let login = row
-            .pointer("/user/login")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        counted(row.get("submitted_at").and_then(Value::as_str), login);
-    }
-    for row in &comments {
-        let login = row
-            .pointer("/user/login")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        counted(row.get("created_at").and_then(Value::as_str), login);
-    }
 
     json!({
-        "opened_at": pulls
-            .get("created_at")
-            .and_then(Value::as_str)
-            .map(|s| json!(s))
-            .unwrap_or(Value::Null),
-        "is_draft": pulls
-            .get("draft")
-            .cloned()
-            .filter(Value::is_boolean)
-            .unwrap_or(Value::Null),
-        "latest_review_ts": latest.map(|s| json!(s)).unwrap_or(Value::Null),
+        "opened_at": opened_at,
+        "is_draft": is_draft,
+        "latest_review_ts": latest_review_ts,
     })
 }
 
