@@ -132,6 +132,23 @@ fn header_value(headers: &str, name: &str) -> Option<String> {
     })
 }
 
+/// A core response's rate headers land in the fleet ledger: the
+/// account-wide remaining and reset ride every conditional response GitHub
+/// answers with, so one read keeps the gate current for the whole machine.
+/// Every failure is ignored - a missing or unparseable header is no
+/// observation, never an error.
+fn record_core_from_headers(headers: &str) {
+    if header_value(headers, "x-ratelimit-resource").as_deref() != Some("core") {
+        return;
+    }
+    let remaining =
+        header_value(headers, "x-ratelimit-remaining").and_then(|v| v.parse::<i64>().ok());
+    let reset = header_value(headers, "x-ratelimit-reset").and_then(|v| v.parse::<i64>().ok());
+    if let (Some(remaining), Some(reset)) = (remaining, reset) {
+        crate::gh_budget::record_core_observation(remaining, reset);
+    }
+}
+
 /// The one entry the status door calls. Eligible GETs run through
 /// `gh api -i` with the stored ETag; everything else is a plain read.
 pub(crate) fn conditional_api_get(
@@ -178,6 +195,7 @@ pub(crate) fn conditional_api_get_at(
     let Some((status, headers, body)) = split_http(&stdout) else {
         return Ok((ok, stdout, stderr));
     };
+    record_core_from_headers(&headers);
     match status {
         304 => match row {
             Some(row) => {

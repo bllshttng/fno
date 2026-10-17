@@ -131,6 +131,25 @@ def test_run_grade_only_task_appends_history_and_removes_worktree(tmp_path: Path
     assert _worktree_count(root) == before  # worktree removed after grading
 
 
+def test_sweep_spares_a_tree_whose_run_is_alive(tmp_path: Path) -> None:
+    # Two concurrent `evals run` streams: each run's sweep used to delete the
+    # other's live tree, and its worker died on a missing cwd.
+    import os
+    from fno.worktree_paths import worktree_base
+
+    root = _git_repo(tmp_path)
+    finished = subprocess.Popen(["true"])
+    finished.wait()
+    live = worktree_base() / "evals" / f"t-{os.getpid()}-1"
+    dead = worktree_base() / "evals" / f"t-{finished.pid}-2"
+    for tree in (live, dead):
+        subprocess.run(["git", "worktree", "add", "--detach", str(tree), "HEAD"],
+                       cwd=str(root), check=True, capture_output=True)
+
+    assert _runner.sweep_orphans(root) == 1
+    assert live.exists() and not dead.exists()
+
+
 def test_run_worker_task_invokes_spawn(tmp_path: Path) -> None:
     root = _git_repo(tmp_path)
     hp = tmp_path / "hist.jsonl"

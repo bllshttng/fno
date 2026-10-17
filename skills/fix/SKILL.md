@@ -83,3 +83,4 @@ Load [references/fix-loop.md](references/fix-loop.md) and execute it in full, in
 
 - Keep when `delta > 0` and the guard passes; revert when `delta <= 0`; revert immediately on regression and record the revert in the summary.
 - Regression prevention is part of the fix: a fix that silences a check (`@ts-ignore`, `# noqa`, deleted or skipped failing tests, empty catch) is discarded and re-queued, never kept.
+- Root cause before any defensive check. Name the producer of the bad state first. When the state a defensive check handles is legitimate, the check is a fix. Legitimate means the world can hand the code that state. Over a state the code made itself, fix the producer. The full test is in [references/fix-loop.md](references/fix-loop.md#name-the-root-cause-before-the-fix).
