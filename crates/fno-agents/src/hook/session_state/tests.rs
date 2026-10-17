@@ -425,6 +425,48 @@ fn a_malformed_payload_still_emits_markers() {
     let _ = std::fs::remove_dir_all(&rt);
 }
 
+// --- the stop gate's block report ---
+
+/// A blocked stop reports working for the session and marks the gate record,
+/// so the leg's first PreToolUse working fire collapses as the duplicate it
+/// is. A footnote-harness session stays out of the row's way (the shim's one
+/// policy line), and an empty id reports nothing.
+#[test]
+fn the_stop_gate_block_report_sends_working_and_marks_the_record() {
+    let _g = env_lock();
+    let rt = runtime_dir("stopgate-report");
+    let home = rt.join("agents-home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::env::set_var("XDG_RUNTIME_DIR", &rt);
+    // No daemon socket under this root: the send answers DaemonNotRunning,
+    // which the fire-and-forget contract treats as delivered and marks.
+    let saved_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::set_var("FNO_AGENTS_HOME", &home);
+    let saved_harness_name = std::env::var_os("FNO_HARNESS_NAME");
+    std::env::remove_var("FNO_HARNESS_NAME");
+    report_working("sess-blocked");
+    let record =
+        std::fs::read_to_string(runtime_pin_dir().unwrap().join("state-sess-blocked")).unwrap();
+    assert!(record.starts_with("working "), "{record}");
+    std::env::set_var("FNO_HARNESS_NAME", "footnote");
+    report_working("sess-footnote");
+    assert!(!runtime_pin_dir()
+        .unwrap()
+        .join("state-sess-footnote")
+        .exists());
+    report_working("");
+    match saved_agents_home {
+        Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
+    match saved_harness_name {
+        Some(v) => std::env::set_var("FNO_HARNESS_NAME", v),
+        None => std::env::remove_var("FNO_HARNESS_NAME"),
+    }
+    std::env::remove_var("XDG_RUNTIME_DIR");
+    let _ = std::fs::remove_dir_all(&rt);
+}
+
 // --- the codex fixtures (the captured payload shapes) ---
 
 fn fixture(name: &str) -> serde_json::Value {
