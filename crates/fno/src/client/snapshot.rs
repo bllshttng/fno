@@ -615,6 +615,7 @@ shoot from a host where the lanes verb answers"
             // does, run one synchronous org gather, then set the mode the
             // shot names. A root with no leads, nodes or unowned workers
             // paints the degenerate footer only.
+            view.experimental_org_board = true;
             super::backlog_board::toggle_org_view(&mut view);
             view.board_full = true;
             let inputs = runtime.block_on(crate::org_model::gather(
