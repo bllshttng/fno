@@ -241,6 +241,7 @@ pub mod intel_insights;
 pub mod intel_rollup;
 pub mod interrupt_classify;
 pub mod json_output;
+pub mod keep_mark;
 pub(crate) mod keeper_revival;
 pub mod kill_criteria;
 pub mod lane_heal;
