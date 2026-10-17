@@ -70,8 +70,12 @@ pub fn is_plain_name_target(token: &str) -> bool {
     {
         return false;
     }
-    let hexish = token.chars().all(|c| c.is_ascii_hexdigit());
-    if hexish && (token.len() == 8 || token.len() >= 32) {
+    // A dashed uuid strips to one hex run, so the hex test reads the
+    // dash-stripped token; the length bounds catch the bare 8-hex short id
+    // and the 32-hex full id, dashed or not.
+    let stripped: String = token.chars().filter(|c| *c != '-').collect();
+    let hexish = stripped.chars().all(|c| c.is_ascii_hexdigit());
+    if hexish && (stripped.len() == 8 || stripped.len() >= 32) {
         return false;
     }
     true
