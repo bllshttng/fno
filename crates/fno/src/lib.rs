@@ -61,6 +61,7 @@ pub mod needs_overlay;
 pub mod notify;
 #[path = "mux_cli/notify_verb.rs"]
 pub mod notify_verb;
+pub mod open_router;
 pub mod org_model;
 pub mod org_overlay;
 pub mod org_root;

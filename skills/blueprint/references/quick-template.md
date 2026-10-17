@@ -174,6 +174,15 @@ no index is present, the first line says so.]
 4. **Deletable**: what in this plan could be deleted and the goal would still ship? Name it, or name the last thing you considered cutting.
 5. **Duplication**: which existing module already implements this, or could be extended so the feature falls out? Name the module and relationship, or `none` after checking `rg` for the plan's key symbols and the dual-implementation inventory.
 
+## Design
+
+[Step 2e, written before any task. Four parts; a plan that changes no type and no module boundary writes the single line `none: <why>`.]
+
+- **Types:** each new or changed shape, its states, and which states are illegal. Prefer a shape that cannot hold an illegal state.
+- **Owners:** the one module that writes each fact. Every other module reads through it.
+- **Seams:** per touched module, what callers see and what stays hidden.
+- **Extends:** the existing module this grows, or why none fits.
+
 ## Changes
 
 ### 1. [Short descriptive name]
