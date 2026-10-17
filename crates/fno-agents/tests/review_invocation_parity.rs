@@ -346,7 +346,6 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         fno::event_store::append_envelope(&runtime.journal, envelope, None)
             .expect("the fixture envelope commits");
     }
-    let head9 = repo_head9(&runtime.repo);
     let run = |runtime: &Runtime| {
         scrubbed()
             .args(["review-level", "invocations", "settle", "--json"])
@@ -365,8 +364,17 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         ));
         return;
     }
-    let stdout = String::from_utf8_lossy(&out.stdout).replace(&head9, "<head9>");
-    let got: Value = serde_json::from_str(&stdout).expect("settle prints a JSON array");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut got: Value = serde_json::from_str(&stdout).expect("settle prints a JSON array");
+    // The volatile head leaves wholesale: a substring replace inside the full
+    // sha would leave a placeholder-prefixed tail the golden never had.
+    if let Some(rows) = got.as_array_mut() {
+        for row in rows {
+            if row.get("head").is_some() {
+                row["head"] = Value::String("<head9>".to_string());
+            }
+        }
+    }
     let want: Value = serde_json::from_str(
         &std::fs::read_to_string(golden.join(format!("{key}.rows.json")))
             .unwrap_or_else(|e| panic!("missing golden settle/{key}.rows.json: {e}")),
@@ -444,8 +452,10 @@ fn settled_rows(journal: &Path) -> Value {
         .filter(|event| event["data"]["session_id"] == "settle")
         .map(|event| event["data"].clone())
         .map(|mut data| {
-            if let Some(head) = data["head_sha"].as_str().map(str::to_string) {
-                data["head_sha"] = Value::String(head.chars().take(9).collect());
+            // Wholesale placeholder: the golden froze `<head>`, never a
+            // truncated sha.
+            if data.get("head_sha").is_some() {
+                data["head_sha"] = Value::String("<head>".to_string());
             }
             data
         })
