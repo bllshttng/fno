@@ -6,8 +6,9 @@
 //! touches the same changed files with an overlapping subject. The refusal
 //! names the PR, its branch and its author; an explicit `--not-duplicate <n>`
 //! passes it. On pass it execs `gh pr create --title --body-file`.
-//! `--check-only` runs the scan alone (exit 0 clean, exit 3 twin) for callers
-//! that create through another door, such as the worker and batch ship paths.
+//! `--check-only` runs the scan and the gates without creating (exit 0 clean,
+//! 3 twin, 5 or 6 a gate refusal) for callers that create through another
+//! door, such as the worker and batch ship paths.
 //!
 //! Exit codes:
 //! * `0` the PR was created (gh's output passes through), or the scan was
@@ -297,13 +298,14 @@ fn owners_gate_refusal(a: &Args) -> Option<i32> {
 }
 
 /// The open unknowns in a plan: each unchecked `- [ ]` line under its
-/// `## Unknowns` heading, up to the next heading. A plan with no such section
-/// has none, so plans written before the section existed pass.
+/// `## Unknowns` heading, up to the next `#` or `##` heading. A `###`
+/// subheading stays inside the section. A plan with no such section has none,
+/// so plans written before the section existed pass.
 fn open_unknowns(plan: &str) -> Vec<String> {
     let mut inside = false;
     let mut open = Vec::new();
     for line in plan.lines() {
-        if line.starts_with('#') {
+        if line.starts_with("# ") || line.starts_with("## ") {
             inside = line.trim_end() == "## Unknowns";
             continue;
         }
@@ -727,7 +729,7 @@ mod tests {
     fn only_unchecked_lines_under_the_unknowns_heading_stay_open() {
         let plan = "# P\n\n## Routes\n- [ ] not an unknown\n\n## Unknowns\n\
             - [x] which callers read the ETag - settled: three\n\
-            - [ ] does pr-heal reach the cache - measure: rg cache_get\n\n## Done\n- [ ] later\n";
+            ### cache\n- [ ] does pr-heal reach the cache - measure: rg cache_get\n\n## Done\n- [ ] later\n";
         assert_eq!(
             open_unknowns(plan),
             vec!["does pr-heal reach the cache - measure: rg cache_get"]
