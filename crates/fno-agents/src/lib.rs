@@ -1997,11 +1997,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",
-    // The review-invocation family (the invocations door): every review send
-    // and settle row, and the head-pinned verdict the loop gate reads. The
-    // Python emitters (the hook, emit-attestation.sh) write the same kinds,
-    // so both names are dual_owner_kinds in check-event-schema-parity.sh.
-    "review_invocation",
+    // The invocations door's attestation leg: the head-pinned verdict the
+    // loop gate reads, settled rows included. The Python hook and
+    // emit-attestation.sh write the same kind at the same boundary, so it is
+    // dual_owner_kinds in check-event-schema-parity.sh (review_invocation
+    // above is the door's other leg).
     "review_attestation",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
     // run_summary) are NOT registered here. They are Python-defined in
