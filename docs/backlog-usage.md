@@ -92,7 +92,7 @@ The operator form (`field=value`, `field+=value`, `field-=value`) covers every f
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
 
-When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> --pr-number <n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
+When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
 ## Demand signal: what the agents keep hitting
 
