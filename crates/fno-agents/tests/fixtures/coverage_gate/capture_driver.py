@@ -492,6 +492,21 @@ def build_git(case_dir):
     git_run(["config", "user.email", "fixture@example.com"], case_dir)
     git_run(["config", "user.name", "Fixture"], case_dir)
     git_run(["commit", "--allow-empty", "-q", "-m", "seed"], case_dir)
+    # The diff-sized hint branches (stale head, reviewer refused, the
+    # code-review no-pass line) size from merge-base(origin/main, HEAD).
+    # Plant the ref at the seed and commit a medium-tier diff on top (6
+    # files x 50 lines: over low's 3/150 cap, under medium's 10/600), so
+    # the level resolves inside every case world instead of degrading to
+    # the levelless line.
+    git_run(["update-ref", "refs/remotes/origin/main", "HEAD"], case_dir)
+    diff_dir = case_dir / "sized"
+    diff_dir.mkdir()
+    for n in range(6):
+        (diff_dir / ("sized-%d.txt" % n)).write_text(
+            "".join("line %d\n" % i for i in range(50))
+        )
+    git_run(["add", "sized"], case_dir)
+    git_run(["commit", "-q", "-m", "sized diff"], case_dir)
     return git_run(["rev-parse", "HEAD"], case_dir)
 
 

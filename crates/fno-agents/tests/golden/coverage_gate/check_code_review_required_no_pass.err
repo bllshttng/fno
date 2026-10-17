@@ -1,1 +1,1 @@
-required code-review has no head-pinned local pass attestation; run the harness review verb at HEAD - `fno do review --level medium --reviewer code-review`, then emit the code-review attestation
+required code-review has no head-pinned local pass attestation; run the harness review verb at HEAD - `<hint>`, then emit the code-review attestation

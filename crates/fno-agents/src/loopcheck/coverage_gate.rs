@@ -452,12 +452,19 @@ config.review)",
         .get("reviewed_count")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    sized(&format!(
+    // The hint SPLICES here, between "at HEAD" and the close-every-finding
+    // tail, exactly where the Python gate put it; the trailing sized()
+    // placement belongs to the sentences that END at the advice.
+    let hint_segment = match self_review_hint {
+        Some(h) => format!(" - `{h}`"),
+        None => String::new(),
+    };
+    format!(
         "{prefix}{reviewed} reviewed (no head-pinned pass attestation - run \
-the review verb at HEAD - close every finding, commit and push first, then \
-attest at the final head with `bash skills/review/scripts/emit-attestation.sh \
-<reviewer>`)"
-    ))
+the review verb at HEAD{hint_segment} - close every finding, commit and push \
+first, then attest at the final head with `bash \
+skills/review/scripts/emit-attestation.sh <reviewer>`)"
+    )
 }
 
 /// The sized self-review invocation for a refusal, or None when the render

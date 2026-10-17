@@ -406,6 +406,13 @@ fn mask_text(text: &str, case_dir: &Path) -> String {
             out = out.replace(&dashed, "<CASE>");
         }
     }
+    // The sized self-review hint: the port renders the harness-native
+    // spelling (`/fno:review <level> --comment`) where the Python leg froze
+    // the CLI spelling (`fno do review --level <level> --reviewer
+    // code-review`). Both name the same advice, so the segment masks to one
+    // placeholder on both sides of the compare; the goldens carry the
+    // masked form.
+    let out = replace_span(&out, " - `", '`', true, " - `<hint>`");
     replace_span(&out, "(pid=", ')', true, "(pid=<ERR>)")
 }
 
