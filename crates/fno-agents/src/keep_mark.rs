@@ -182,11 +182,20 @@ pub fn list(home: &AgentsHome) -> Vec<ListedMark> {
             }),
         });
     }
-    out.sort_by(|a, b| match (&a.mark, &b.mark) {
-        (Some(a), Some(b)) => a.set_at.cmp(&b.set_at).then_with(|| a.file.cmp(&b.file)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.file.cmp(&b.file),
+    // Parsed markers first, oldest by set_at; ties and the unreadable tail
+    // break by file name. One tuple keeps the four orderings in agreement.
+    out.sort_by(|a, b| {
+        let ka = (
+            a.mark.is_none(),
+            a.mark.as_ref().map(|m| m.set_at.as_str()).unwrap_or(""),
+            a.file.as_str(),
+        );
+        let kb = (
+            b.mark.is_none(),
+            b.mark.as_ref().map(|m| m.set_at.as_str()).unwrap_or(""),
+            b.file.as_str(),
+        );
+        ka.cmp(&kb)
     });
     out
 }

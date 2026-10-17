@@ -1251,11 +1251,24 @@ mod tests {
             &roster(rows),
             &[],
             &|| Some(GraphRead::default()),
-            &|_e| Some(vec![transcript.clone()]),
+            &|e| {
+                if crate::gc::row_handle(e) == "sid-2" {
+                    Some(vec![transcript2.clone()])
+                } else {
+                    Some(vec![transcript.clone()])
+                }
+            },
             &|entries| {
                 entries
                     .iter()
-                    .map(|e| (crate::gc::row_handle(e), mtime_age(&[transcript.clone()])))
+                    .map(|e| {
+                        let t = if crate::gc::row_handle(e) == "sid-2" {
+                            transcript2.clone()
+                        } else {
+                            transcript.clone()
+                        };
+                        (crate::gc::row_handle(e), mtime_age(&[t]))
+                    })
                     .collect::<HashMap<_, _>>()
             },
             crate::daemon::now_epoch_secs(),
