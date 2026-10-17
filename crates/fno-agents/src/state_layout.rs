@@ -1102,11 +1102,10 @@ mod tests {
             std::fs::read(root.join("state").join("flight").join("b.json")).unwrap(),
             b"B"
         );
-        assert_eq!(
-            place_in(&root, "flight", "a.json"),
-            root.join("state").join("flight").join("a.json"),
-            "the folded folder answers at the new path"
-        );
+        // Readers follow the SHIPPED row: flight is still self-mapped, so
+        // place_dir answers the old spelling until the slice retargets the
+        // row. The synthetic fold above must not leak into the reader.
+        assert_eq!(place_dir(&root, "flight"), Some(root.join("flight")));
         clean(&root);
 
         // The pre-fold read: the file resolves through the legacy dir until
