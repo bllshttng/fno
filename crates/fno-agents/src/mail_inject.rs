@@ -4300,7 +4300,7 @@ mod tests {
             Path::new("/nowhere"),
         );
         assert!(
-            matches!(target, LaneConfirm::PendingStore { harness } if harness == "footnote"),
+            matches!(target, LaneConfirm::PendingStore { ref harness } if harness == "footnote"),
             "{target:?}"
         );
         let dir = crate::footnote_harness::transcript::sessions_root()
