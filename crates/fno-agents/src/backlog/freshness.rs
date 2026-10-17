@@ -644,6 +644,10 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     if let Some(ids) = ids {
+        if plan.is_some() {
+            eprintln!("{USAGE}");
+            return 2;
+        }
         // The batch arm is a display read: no verdict event is emitted.
         if crate::graph_get::external_backend_selected() {
             eprintln!(
