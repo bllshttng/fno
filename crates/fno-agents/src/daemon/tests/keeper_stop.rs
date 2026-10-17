@@ -114,7 +114,10 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
         &Request::new(1, "agent.stop", json!({"name": "cur-stop"})),
     )
     .await;
-    let result = response.result().expect("stop errored");
+    let result = match response.result() {
+        Some(result) => result,
+        None => panic!("stop errored: {:?}", response.error()),
+    };
     assert_eq!(result["stopped"], true, "{result:?}");
     assert_eq!(result["backend"], "keeper-thread", "{result:?}");
     assert_eq!(result["worker_servers_reaped"], 1, "{result:?}");
