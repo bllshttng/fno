@@ -80,9 +80,8 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
             let url = url.to_string();
             tokio::task::spawn_blocking(move || {
                 let outcome = match r {
-                    Route::File(path, _line) => {
-                        crate::link::open_fno_path(&path).map(|()| crate::link::OpenOutcome::Opened)
-                    }
+                    Route::File(path, _line) => crate::open_router::open_file(&path)
+                        .map(|()| crate::link::OpenOutcome::Opened),
                     Route::Web => crate::link::open_url_for_session(&url),
                     _ => unreachable!("message, handle and sender routes return early"),
                 };

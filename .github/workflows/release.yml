@@ -172,17 +172,36 @@ jobs:
             # against gh's pipe can SIGPIPE the producer, and pipefail would
             # turn that into a silent step failure. The client-side shape is
             # the rust pick's: the endpoint's server filters answer from the
-            # stale index.
+            # stale index. A cancelled run is a push the next push superseded,
+            # not a red shard. It still proves nothing alone, so it is skipped
+            # only when a NEWER run that contains its commit succeeded. The
+            # list is newest first, so every success seen before an
+            # at-or-before run is newer.
             if ! runs="$(BRANCH="$default_branch" gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cli-ci.yml/runs?per_page=100" \
               --jq '.workflow_runs[] | select(.head_branch == $ENV.BRANCH and .event == "push" and .conclusion != null and .conclusion != "") | "\(.head_sha) \(.conclusion)"')"; then
               echo "::error::the cli-ci run list failed (see the gh error above); cannot gate on cli-ci" >&2
               exit 1
             fi
             cli_run=""
+            newer_green=""
             while read -r run_sha run_conclusion; do
-              if [ -n "$run_sha" ] && git merge-base --is-ancestor "$run_sha" "$rust_sha" 2>/dev/null; then
+              [ -n "$run_sha" ] || continue
+              if git merge-base --is-ancestor "$run_sha" "$rust_sha" 2>/dev/null; then
+                if [ "$run_conclusion" = "cancelled" ]; then
+                  superseded=""
+                  for green_sha in $newer_green; do
+                    if git merge-base --is-ancestor "$run_sha" "$green_sha" 2>/dev/null; then
+                      superseded=1
+                      break
+                    fi
+                  done
+                  [ -n "$superseded" ] && continue
+                fi
                 cli_run="$run_conclusion"
                 break
+              fi
+              if [ "$run_conclusion" = "success" ]; then
+                newer_green="${newer_green} ${run_sha}"
               fi
             done <<< "$runs"
 

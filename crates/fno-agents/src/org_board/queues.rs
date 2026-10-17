@@ -4,9 +4,9 @@ use super::prs::{derived_status, node_pr_refs, nodes_binding_pr};
 use super::scope::operator_lane_path;
 use super::{
     as_int, is_terminal, s_str, SourceRead, DEAD_CLAIM_STATES, LEAD_PRIORITIES,
-    LEGACY_DEFER_PREFIX, SRC_CLAIMS, SRC_DISTRESS, SRC_DRIVERS, SRC_NEEDS, SRC_PRS, SRC_PR_GATE,
-    SRC_PR_NODES, SRC_QUESTIONS, SRC_READY, SRC_UNDISPATCHED, SRC_WORKED, STRANDED_GRACE_MINUTES,
-    TERMINAL_RUNGS,
+    LEGACY_DEFER_PREFIX, SRC_CLAIMS, SRC_DISTRESS, SRC_DRIVERS, SRC_NEEDS, SRC_OWNERS, SRC_PRS,
+    SRC_PR_GATE, SRC_PR_NODES, SRC_QUESTIONS, SRC_READY, SRC_UNDISPATCHED, SRC_WORKED,
+    STRANDED_GRACE_MINUTES, TERMINAL_RUNGS,
 };
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
@@ -492,6 +492,11 @@ pub(crate) struct BoardInputs {
     pub(crate) autonomous_merge: bool,
     pub(crate) scope_ids: Option<HashSet<String>>,
     pub(crate) role_scope: Option<String>,
+    /// Node ids inside the scope that another live team owns (payload: an
+    /// array of ids). The unplanned queue drops them: the check-in's
+    /// blueprint starts skip the same nodes off the same owner read, so the
+    /// gate cannot demand a start the lead is forbidden to make.
+    pub(crate) foreign_owned: SourceRead,
 }
 
 /// True when any non-done descendant under `parent_id` is being driven: a
@@ -722,6 +727,12 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
     };
 
     // Unplanned: cold-dispatchable ideas off the ready list.
+    let foreign_owned: HashSet<String> = inputs
+        .foreign_owned
+        .rows()
+        .iter()
+        .filter_map(|id| id.as_str().map(str::to_string))
+        .collect();
     let unplanned_rows: Vec<Value> = inputs
         .ready
         .rows()
@@ -748,6 +759,7 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
             );
             state == "none" && claim.is_none()
         })
+        .filter(|node| !s_str(node, "id").is_some_and(|id| foreign_owned.contains(id)))
         .filter(|node| {
             in_scope(
                 "unplanned",
@@ -1440,11 +1452,12 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
         ),
         queue(
             "unplanned",
-            format!("{SRC_READY} + {SRC_CLAIMS} + {SRC_WORKED} + {SRC_DRIVERS} + holder_activity"),
+            format!("{SRC_READY} + {SRC_CLAIMS} + {SRC_WORKED} + {SRC_DRIVERS} + {SRC_OWNERS} + holder_activity"),
             &if inputs.ready.is_ok()
                 && inputs.claims.is_ok()
                 && inputs.worked.is_ok()
                 && inputs.drivers.is_ok()
+                && inputs.foreign_owned.is_ok()
                 && inputs.holder_activity_error.is_none()
             {
                 SourceRead::ok(Value::Null)
@@ -1454,6 +1467,7 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
                         && inputs.claims.not_evidence()
                         && inputs.worked.not_evidence()
                         && inputs.drivers.not_evidence()
+                        && inputs.foreign_owned.not_evidence()
                         && (inputs.holder_activity_error.is_none()
                             || inputs.holder_activity_starved),
                     inputs
@@ -1463,6 +1477,7 @@ pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
                         .or_else(|| inputs.claims.error.clone())
                         .or_else(|| inputs.worked.error.clone())
                         .or_else(|| inputs.drivers.error.clone())
+                        .or_else(|| inputs.foreign_owned.error.clone())
                         .or_else(|| inputs.holder_activity_error.clone())
                         .unwrap_or_default(),
                 )
@@ -1813,6 +1828,7 @@ mod tests {
             autonomous_merge: true,
             scope_ids: Some(HashSet::from(["x-in".to_string()])),
             role_scope: Some("x-in".to_string()),
+            foreign_owned: SourceRead::ok(json!([])),
         }
     }
 

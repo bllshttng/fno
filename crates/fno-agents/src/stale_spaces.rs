@@ -109,6 +109,37 @@ fn decode_slug(slug: &str) -> Decode {
     }
 }
 
+/// Every decode lands inside `state_root` (component-wise: `Path::starts_with`
+/// never matches across a boundary, so `.fnoobar` is safe).
+fn all_inside(paths: &[PathBuf], state_root: &Path) -> bool {
+    paths.iter().all(|p| p.starts_with(state_root))
+}
+
+/// The state root the debris rule compares against: `FNO_STATE_DIR` when
+/// pinned, else `$HOME/.fno`. Never the `FNO_SPACES_DIR` pin's parent: a
+/// test or sandbox that moves the spaces root must not move the state root
+/// with it, or every temp decode would read as debris.
+fn state_root_dir() -> PathBuf {
+    match std::env::var_os("FNO_STATE_DIR") {
+        Some(pinned) if !pinned.is_empty() => PathBuf::from(pinned),
+        _ => std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(".fno"))
+            .unwrap_or_else(|| PathBuf::from("/.fno")),
+    }
+}
+
+/// Dead for the pass's purposes: the decode proves no live source outside
+/// the state root. `Gone` is the proof by descent; every decode landing
+/// inside the state root is the debris ruling (the source was never a
+/// checkout). `Unproven` keeps the space.
+fn deceased_by_decode(slug: &str, state_root: &Path) -> bool {
+    match decode_slug(slug) {
+        Decode::Gone => true,
+        Decode::Live(repos) => all_inside(&repos, state_root),
+        Decode::Unproven => false,
+    }
+}
+
 /// One walk over a candidate tree: the age of its newest entry and its total
 /// bytes, or `None` when any stat failed. An unreadable probe is never
 /// evidence of quiet, and the bytes of an unreadable tree are never promised.
@@ -192,6 +223,7 @@ pub(crate) fn sweep(apply: bool, now: SystemTime) -> SpacesReport {
         note: String::new(),
     };
     let root = crate::paths::spaces_root();
+    let state_root = state_root_dir();
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(e) => {
@@ -228,18 +260,25 @@ pub(crate) fn sweep(apply: bool, now: SystemTime) -> SpacesReport {
             continue;
         }
         match decode_slug(&name) {
-            Decode::Live(repos) => {
+            Decode::Unproven => kept_unproven += 1,
+            // Live for git's purposes: at least one decode names a real
+            // checkout outside the state root.
+            Decode::Live(repos) if !all_inside(&repos, &state_root) => {
                 kept_live += 1;
                 live_spaces.push((path, repos));
             }
-            Decode::Gone => match probe_candidate(&path, now) {
+            // Gone by descent, or debris: a slug whose every decode lands
+            // inside the state root was minted by a session whose cwd was
+            // the state root itself (the 13 debris spaces of 2026-10-13).
+            // Its source can never be a checkout, so git's registry has
+            // nothing to say for it; the quiet window alone decides.
+            _ => match probe_candidate(&path, now) {
                 Some((age, bytes)) if age.as_secs() >= SPACE_GRACE_SECS => {
                     candidates.push((path, bytes));
                 }
                 Some(_) => kept_grace += 1,
                 None => kept_unproven += 1,
             },
-            Decode::Unproven => kept_unproven += 1,
         }
     }
     // Worktree slices of live spaces: the slice's source is the worktree dir,
@@ -285,7 +324,7 @@ pub(crate) fn sweep(apply: bool, now: SystemTime) -> SpacesReport {
                 let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if !matches!(decode_slug(name), Decode::Gone) {
+                if !deceased_by_decode(name, &state_root) {
                     continue;
                 }
             }
@@ -428,6 +467,40 @@ mod tests {
         let applied = sweep(true, now);
         assert!(!applied.reaped.contains(&space));
         assert!(space.exists(), "apply keeps the live space");
+    }
+
+    #[test]
+    fn space_whose_source_is_the_state_root_is_debris() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let spaces = temp_spaces_root("debris");
+        let state = temp_spaces_root("debris-state");
+        let _pin = SpacesPin::new(&spaces);
+        let old_state = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", &state);
+        let now = SystemTime::now();
+
+        // The shape of the 13 debris spaces: a slug whose every decode
+        // lands inside the state root, quiet past the grace window.
+        let src = state.join("db");
+        std::fs::create_dir_all(&src).unwrap();
+        let slug = slug_of(&src);
+        let space = spaces.join(&slug);
+        std::fs::create_dir_all(&space).unwrap();
+        std::fs::write(space.join("events.jsonl"), b"debris").unwrap();
+        age(&space.join("events.jsonl"), 25 * 60);
+        age(&space, 25 * 60);
+
+        let dry = sweep(false, now);
+        let listed = dry.reaped.contains(&space);
+        let applied = sweep(true, now);
+        let removed = applied.reaped.contains(&space);
+        match old_state {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert!(listed, "the debris space is listed in the dry run");
+        assert!(removed, "apply removes the debris space");
+        assert!(!space.exists());
     }
 
     #[test]

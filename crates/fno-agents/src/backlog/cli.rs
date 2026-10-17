@@ -206,6 +206,9 @@ pub fn run(args: &[String]) -> i32 {
         // The search ladder is native; the FTS cache and the external
         // backend reads forward from inside.
         "find" => super::find_cli::run(resolved.tail),
+        // The planned-vs-actual read is native end to end: no Python twin
+        // ever existed (new Python surface is barred, law d-450caaeb).
+        "calibration" => super::calibration_cli::run(resolved.tail),
         // The lane pin is native: id gate, operator fence, lane/epic scoping
         // and midpoint arithmetic over the single-row write seam.
         "rank" => super::rank_cli::run(resolved.tail),
@@ -304,6 +307,9 @@ pub fn run(args: &[String]) -> i32 {
         // dir, uploader command, GitHub Pages) are the verb's own. The
         // catalog row sits in the board group.
         "publish" => super::publish::run(resolved.tail),
+        // The owner-run import beside the publish verb it serves: approved
+        // issues in, quarantined intake rows out, dry run by default.
+        "import-requests" => super::requests::run(resolved.tail),
         // The wave-4 cutover arms: catalog commands whose Python bodies were
         // thin clients of native machinery, served with no compat forward.
         // The full list of dispositions lives on the cutover module doc.

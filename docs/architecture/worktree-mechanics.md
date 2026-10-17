@@ -66,6 +66,8 @@ The sanctioned escapes, in order. Read env with `printenv VAR` instead of `echo 
 
 A harness or Codex substrate with no native worktree transition degrades to the Footnote-owned `<state_dir>/worktrees` fallback, normally `~/.fno/worktrees`. That fallback is Footnote's own allocation. It does not inherit an external allocator configured by `worktrees_base`, so a repo that sets the base still lands there under `harness-native`. For that reason `fno agents workspace worktree ensure` requires `--harness` and never guesses the substrate.
 
+When the base is the state root itself, the ruled destination is `<state_dir>/spaces/worktrees/<repo>/<name>` (the state-root folder ruling, 2026-10-16). It is one of the eight ruled state-root categories, so the root stays closed at eight top-level names. New worktrees use it. Live checkouts never move. The allocation default flips in the worktrees-base relocation slice. Until that lands, allocations keep the spelling above and both bases stay readable.
+
 ## Removal
 
 ```bash
