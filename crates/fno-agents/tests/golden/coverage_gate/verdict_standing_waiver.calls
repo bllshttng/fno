@@ -1,1 +1,1 @@
-{"agents": ["pr-head", "review-level"], "events": [], "front": ["inbox-law*"], "gh": ["view*", "api"], "law_subjects": ["review-coverage-waiver:acme/widget#7@ef5fdb2516b45538f16f8b2e366c8275d137a2fc", "review-coverage-waiver"]}
+{"agents": ["pr-head", "review-level"], "events": [], "front": ["inbox-law*"], "gh": ["view*", "api"], "law_subjects": ["review-coverage-waiver:acme/widget#7@162e652e136af0ebc89cf97ebcc35099bf55878a", "review-coverage-waiver"]}
