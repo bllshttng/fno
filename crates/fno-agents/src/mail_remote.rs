@@ -61,6 +61,7 @@ pub fn split_target(target: &str) -> Result<(String, String), String> {
 /// address a human meant literally.
 pub fn is_plain_name_target(token: &str) -> bool {
     if token.len() < 2
+        || token.starts_with('-')
         || token.contains('/')
         || token.contains(':')
         || token
@@ -901,10 +902,16 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// The marker a same-host forward carries. The front door's intercept claims
+/// a plain-name `mail send`, so without it the forward re-enters this verb
+/// and every send recurses until the process table fills.
+pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
+
 /// Exec an argv, inherit stdio, return the exit code (same-host forwards).
 fn run_pass_through(argv: &[OsString]) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    cmd.env(LOCAL_FORWARD_ENV, "1");
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {

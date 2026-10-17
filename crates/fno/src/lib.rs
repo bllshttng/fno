@@ -43,6 +43,7 @@ pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
 pub mod footnote_transcript;
+pub mod frame_ansi;
 pub mod frame_html;
 pub mod git_paths;
 pub mod keys;
@@ -61,6 +62,7 @@ pub mod needs_overlay;
 pub mod notify;
 #[path = "mux_cli/notify_verb.rs"]
 pub mod notify_verb;
+pub mod observe;
 pub mod open_router;
 pub mod org_model;
 pub mod org_overlay;
