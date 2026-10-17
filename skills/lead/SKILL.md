@@ -156,7 +156,7 @@ To pause or redirect a running worker, use `fno agents ask <name> "<instruction>
 
 An epic stays small enough to finish. Its finish line is set at the start. So never parent new work into a running epic. A finding goes one of two ways. It starts a new small epic: `fno backlog idea "EPIC: <theme>" --type epic --difficulty <low|medium|high>`, then `fno backlog update <node> parent=<new-epic-id>`. The lead that leads the old epic takes the new one with `fno agents org promote <handle> --scope <old-epic-id> --scope <new-epic-id>`. A lead runs that for an epic its own session created, naming every epic it holds. Any other epic needs an attended shell or a role that contains both. Or the finding waits unparented for the lead's next epic. A titled `fno backlog idea` with no `--parent` is linked into your epic, and its `rollup: role-linked` receipt prints the undo. When the finding is new work, run it: `fno backlog update <node> parent=null`.
 
-Rank is not yours. It is the user's pin. `fno backlog rank` refuses agent sessions. To put a row next, set `--priority p0`. This is bounded and receipted. It appears as a split vote in `fno backlog demand`.
+Rank is not yours. It is the user's pin. `fno backlog rank` refuses agent sessions. To put a row next, set `priority=p0`. This is bounded and receipted. It appears as a split vote in `fno backlog demand`.
 
 Then read [the fleet FAQ](../../docs/fleet-faq.md) for one thing only: an entry whose `Graduates to:` line landed since your last check-in. Move it to Retired in a PR, naming the PR that closed it. Retirement normally rides the PR that closes the gap, so it needs no beat. This check is the backstop, for a gap somebody closed without reading that file.
 

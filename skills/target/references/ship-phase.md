@@ -128,7 +128,7 @@ if [[ -n "$NODE_ID" && "$NODE_ID" != "-" && -n "${PR_NUMBER:-}" ]]; then
       # AC2-ERR: the write did not stick after one retry. REFUSE TO PROMISE - an
       # unlinked node re-dispatches as duplicate work; blocking is cheaper than
       # the cleanup. Emit help and STOP; do NOT emit <promise>.
-      echo "<help reason=\"pr-node-link-failed\" evidence=\"node $NODE_ID pr_number=${got:-<none>} expected=$PR_NUMBER\">PR #$PR_NUMBER did not link to backlog node $NODE_ID after one retry; refusing to promise. Fix then re-ship: fno backlog update $NODE_ID --pr-number $PR_NUMBER --pr-url $PR_URL</help>"
+      echo "<help reason=\"pr-node-link-failed\" evidence=\"node $NODE_ID pr_number=${got:-<none>} expected=$PR_NUMBER\">PR #$PR_NUMBER did not link to backlog node $NODE_ID after one retry; refusing to promise. Fix then re-ship: fno backlog update $NODE_ID pr_number=$PR_NUMBER pr_url=$PR_URL</help>"
       exit 1
     fi
   fi

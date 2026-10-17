@@ -483,7 +483,7 @@ The order is close-blueprint, retask, target - never target-then-switch. A retas
 
 ```bash
 fno backlog update <node> 'dispatch_brief=<sibling facts that bear on this node, or none>'
-fno agents mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see --dispatch-brief on <node>. Next: /fno:blueprint <node>." --from-self
+fno agents mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see dispatch_brief on <node>. Next: /fno:blueprint <node>." --from-self
 ```
 
 **Write sibling facts once, into the brief; the mail points at them.** The ruling is per-teammate and cannot be shared, but cross-node facts are the same payload for everyone who touches the node, so restating them in every envelope costs you that context once per teammate and leaves the durable copy unwritten. The brief is already where a ruling has to land to outlive you (see *Reconcile on every report* below), so putting the facts there first is not an extra step - it is the encode step, done before the mail instead of after. Measured over three real tenures, outbound mail cost more context than inbound did, and this duplicated term is the part of it you can actually delete.

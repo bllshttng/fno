@@ -343,7 +343,7 @@ DIFFICULTY="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^difficulty:/{sub(/^d
 [[ -n "$DIFFICULTY" ]] && fno backlog update "$NODE_ID" "difficulty=$DIFFICULTY"
 ```
 
-`fno backlog update difficulty=<band>` validates the band (`high|medium|low`). An invalid value exits non-zero and leaves the node unchanged (surface it, do not fabricate a band). The retired `--model-tier` spelling exits 2 with a message naming `difficulty=<band>`.
+`fno backlog update difficulty=<band>` validates the band (`high|medium|low`). An invalid value exits non-zero and leaves the node unchanged (surface it, do not fabricate a band). The retired model-tier spelling exits 2 with a message naming `difficulty=<band>`.
 
 ## Blueprint Provenance Stamp
 
