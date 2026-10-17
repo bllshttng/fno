@@ -813,7 +813,7 @@ mod tests {
         assert!(out["message"]
             .as_str()
             .unwrap()
-            .contains("fno backlog update x-1 --dispatch-verb"));
+            .contains("fno backlog update x-1 dispatch_verb="));
     }
 
     #[test]
