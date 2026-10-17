@@ -133,6 +133,15 @@ pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
 /// on the Python side re-decides with real row facts. Pure over the payload.
 fn derive_from_seed(payload: &Value, seed: Option<String>, rows: &[Value]) -> Value {
     let pass = |reason: String| json!({"action": "pass", "derive_reason": reason});
+    // An explicit `--substrate headless` (or its `--once` spelling) names the
+    // one-shot lane the Rust client routes per harness - footnote's only arm
+    // is one of them. Composing `--node` here would pin the spawn to the
+    // Python lane, which seats no headless footnote and refuses it with the
+    // thread-lane text before any launch. The seed keeps naming the node; a
+    // /target worker claims it at its own init.
+    if explicit_headless(&argv_of(payload)) {
+        return pass("explicit headless spawn keeps its lane; the seed keeps the node".into());
+    }
     let Some(text) = seed.filter(|t| !t.trim().is_empty()) else {
         return pass("no seed".into());
     };
@@ -203,6 +212,41 @@ fn argv_of(payload: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether the argv pins the one-shot headless lane: the long spelling, the
+/// pre-substrate `--once`/-o the client maps to headless, or the trailing
+/// positional the seam normalizes into `--substrate headless`. A fence ends
+/// the scan: past `--`/`--argv` every token is seed or provider payload,
+/// never one of fno's flags (the same boundary the Python seam's substrate
+/// scan draws).
+fn explicit_headless(argv: &[String]) -> bool {
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--argv" | "--" => return false,
+            "--once" | "-o" => return true,
+            "--substrate" => {
+                if argv.get(i + 1).map(String::as_str) == Some("headless") {
+                    return true;
+                }
+                i += 2;
+                continue;
+            }
+            other => {
+                if other.strip_prefix("--substrate=") == Some("headless") {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    // The trailing-positional spelling: `... <seed> headless` normalizes to
+    // the flag form before any lane is chosen, so the raw argv names
+    // headless only in this last token. A non-verb one-token seed spelled
+    // `headless` derives no node either way, so a stray match there is
+    // harmless.
+    argv.last().map(String::as_str) == Some("headless")
 }
 
 pub fn decide(payload: &Value) -> Value {
@@ -919,6 +963,130 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("outside the target family"));
+    }
+
+    // --- the explicit headless lane ------------------------------------- //
+
+    /// The fnh-worker seat: an explicit `--substrate headless` spawn seeded
+    /// with a target-family verb. The derive must not compose `--node`, which
+    /// would pin the spawn to the Python lane that seats no headless footnote.
+    fn headless_derive(tail: &[&str]) -> Value {
+        let mut argv = vec![
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate",
+            "headless",
+            "-m",
+            "zai/glm-5.3-flash",
+            "--name",
+            "w",
+        ];
+        argv.extend_from_slice(tail);
+        // `seed_index` is the seed's position in the full argv (`argv.get`
+        // reads it back), so the trailing seed sits at len-1.
+        let seed_index = (argv.len() - 1) as u64;
+        json!({
+            "argv": argv,
+            "seed_index": seed_index,
+            "seed_form": "positional",
+            "family": ["/target", "/blueprint"],
+            "role": false, "resume": false,
+        })
+    }
+
+    #[test]
+    fn explicit_headless_seed_keeps_its_lane() {
+        let out = decide_map_rows(
+            headless_derive(&["/fno:target x-aaaa"]),
+            &rows_named(&["x-aaaa"]),
+        );
+        assert_eq!(out["action"], "pass");
+        assert!(out["derive_reason"].as_str().unwrap().contains("headless"));
+    }
+
+    #[test]
+    fn once_spelling_keeps_the_lane_too() {
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        let obj = p.as_object_mut().unwrap();
+        // Replace the long spelling with the pre-substrate one; drop the flag
+        // pair it stood for.
+        obj["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--once",
+            "-m",
+            "zai/glm-5.3-flash",
+            "/fno:target x-aaaa"
+        ]);
+        obj["seed_index"] = json!(6);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
+    }
+
+    #[test]
+    fn equals_spelling_of_headless_keeps_the_lane() {
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate=headless",
+            "/fno:target x-aaaa"
+        ]);
+        p["seed_index"] = json!(4);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
+    }
+
+    #[test]
+    fn thread_substrate_still_derives_the_node() {
+        // The control: the same seed on the thread lane composes `--node`
+        // exactly as before - only the headless ruling skips the rewrite.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "-H",
+            "footnote",
+            "--substrate",
+            "thread",
+            "/fno:target x-aaaa"
+        ]);
+        p["seed_index"] = json!(5);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "compose");
+        let argv = out["argv"].as_array().unwrap();
+        assert_eq!(argv[argv.len() - 2], "--node");
+        assert_eq!(argv[argv.len() - 1], "x-aaaa");
+    }
+
+    #[test]
+    fn a_fenced_headless_token_is_payload_text_not_a_flag() {
+        // Past the `--argv` boundary every token belongs to the provider
+        // payload; it must not flip fno's own lane ruling.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!([
+            "spawn",
+            "/fno:target x-aaaa",
+            "--argv",
+            "--substrate",
+            "headless"
+        ]);
+        p["seed_index"] = json!(1);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "compose");
+    }
+
+    #[test]
+    fn trailing_positional_headless_keeps_the_lane() {
+        // `... <seed> headless` normalizes into the flag form; the raw argv
+        // the derive sees names headless only as the last token.
+        let mut p = headless_derive(&["/fno:target x-aaaa"]);
+        p["argv"] = json!(["spawn", "-H", "footnote", "/fno:target x-aaaa", "headless"]);
+        p["seed_index"] = json!(3);
+        let out = decide_map_rows(p, &rows_named(&["x-aaaa"]));
+        assert_eq!(out["action"], "pass");
     }
 
     #[test]
