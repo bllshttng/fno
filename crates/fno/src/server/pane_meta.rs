@@ -145,7 +145,7 @@ pub(crate) fn pane_registry_name(
 /// caller that cannot know the child (`None`) keeps the unguarded read.
 fn hosts_pane<'a>(
     agents: &'a [RegistryAgent],
-    session_name: &str,
+    session_name: &'a str,
     pane_id: u64,
     pane_pid: Option<u32>,
 ) -> impl Iterator<Item = &'a RegistryAgent> + 'a {
