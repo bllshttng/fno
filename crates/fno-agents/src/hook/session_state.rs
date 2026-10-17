@@ -441,13 +441,14 @@ fn send_report(ev: &HookEvent, decision: &Decision, seq: u64) -> bool {
 /// The working report the stop gate sends when it BLOCKS a stop: a blocked
 /// Stop continues straight into the next leg with no UserPromptSubmit, so
 /// without this the row reads the Stop fire's `done` until the leg's first
-/// PreToolUse - a text-only leg reads done the whole leg. The report is
-/// stamped after the gate's full decide, so its seq postdates the parallel
-/// session-state `done` fire and the daemon's seq dedup lands the row on
-/// working whatever the arrival order. Forced past the transition gate (the
-/// state just changed) and marked after the send, so the leg's first
-/// PreToolUse working fire collapses as the duplicate it is. Stays out of a
-/// footnote session's way on the shim's one policy line.
+/// PreToolUse - a text-only leg reads done the whole leg. The Stop wiring
+/// orders this session-state producer BEFORE the stop gate (hooks.json,
+/// codex-hooks.json), so the gate's post-decide stamp carries the later seq
+/// and the daemon's seq dedup lands the row on working; on a terminal allow
+/// the gate reports nothing, so the producer's done stands. Forced past the
+/// transition gate (the state just changed) and marked after the send, so
+/// the leg's first PreToolUse working fire collapses as the duplicate it
+/// is. Stays out of a footnote session's way on the shim's one policy line.
 pub(crate) fn report_working(session_id: &str) {
     if session_id.is_empty() || std::env::var("FNO_HARNESS_NAME").as_deref() == Ok("footnote") {
         return;
