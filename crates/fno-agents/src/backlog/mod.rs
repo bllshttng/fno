@@ -96,6 +96,7 @@ pub mod triage_cli;
 pub mod triage_health;
 pub mod undispatched;
 pub mod update_cli;
+pub mod update_ops;
 pub mod worked;
 pub mod workflows;
 
