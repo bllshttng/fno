@@ -1100,6 +1100,7 @@ fn compute_board(
     claims: Result<BTreeSet<String>, String>,
     now_ms: i64,
     cache: Option<&Path>,
+    repo: &Path,
 ) -> Value {
     let all: Vec<&Value> = entries.iter().filter(|e| is_dict(e)).collect();
     let by_id: BTreeMap<&str, &Value> = all
@@ -1163,6 +1164,7 @@ fn compute_board(
     );
 
     let mut in_progress_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut inprog_entries: Vec<&Value> = Vec::new();
     let in_progress = match claims_reason {
         Some(reason) => section(Vec::new(), 0, None, Some(reason)),
         None => {
@@ -1179,11 +1181,14 @@ fn compute_board(
                 .collect();
             board.sort(&mut rows);
             in_progress_ids = rows.iter().filter_map(|e| id_of(e)).collect();
+            let shown: Vec<Value> = rows
+                .iter()
+                .take(MAX_ROWS_PER_SECTION)
+                .map(|e| board_row(e, in_progress_fact(e, now_ms, cache)))
+                .collect();
+            inprog_entries = rows.iter().take(MAX_ROWS_PER_SECTION).copied().collect();
             section(
-                rows.iter()
-                    .take(MAX_ROWS_PER_SECTION)
-                    .map(|e| board_row(e, in_progress_fact(e, now_ms, cache)))
-                    .collect(),
+                shown,
                 rows.len().saturating_sub(MAX_ROWS_PER_SECTION),
                 None,
                 None,
@@ -1220,16 +1225,65 @@ fn compute_board(
         }
         "ready".to_string()
     };
+    let deck_shown: Vec<Value> = deck
+        .iter()
+        .take(MAX_ROWS_PER_SECTION)
+        .map(|e| board_row(e, on_deck_fact(e)))
+        .collect();
     let on_deck = section(
-        deck.iter()
-            .take(MAX_ROWS_PER_SECTION)
-            .map(|e| board_row(e, on_deck_fact(e)))
-            .collect(),
+        deck_shown.clone(),
         deck.len().saturating_sub(MAX_ROWS_PER_SECTION),
         None,
         None,
     );
-    json!({"just_finished": just_finished, "in_progress": in_progress, "on_deck": on_deck})
+
+    // The stale mark rides the rows a lead actually sees: the displayed
+    // In progress and On deck rows off one shared git read. Just finished
+    // rows are status done, their verdict can only ever read shipped, and
+    // the section itself already says the work merged, so they stay
+    // unmarked. A failed mark read leaves the rows unmarked; the board
+    // never fails because the mark read failed.
+    let mut probe: Vec<&Value> = inprog_entries;
+    probe.extend(deck.iter().take(MAX_ROWS_PER_SECTION).copied());
+    let marks = if probe.is_empty() {
+        BTreeMap::new()
+    } else {
+        super::freshness::premise_marks_rows(repo, &probe)
+    };
+    let mut board_out =
+        json!({"just_finished": just_finished, "in_progress": in_progress, "on_deck": on_deck});
+    if let Some(rows) = board_out["on_deck"]["rows"].as_array_mut() {
+        for row in rows.iter_mut() {
+            mark_row_stale(row, &marks);
+        }
+    }
+    if let Some(rows) = board_out["in_progress"]["rows"].as_array_mut() {
+        for row in rows.iter_mut() {
+            mark_row_stale(row, &marks);
+        }
+    }
+    board_out
+}
+
+/// Stamp one built row with the stale fields when its verdict is one the
+/// node's work order names: changed, partly_shipped or shipped. holds and
+/// unmeasured carry no fields at all.
+fn mark_row_stale(row: &mut Value, marks: &BTreeMap<String, Value>) {
+    let Some(id) = row.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(v) = marks.get(id) else {
+        return;
+    };
+    let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("");
+    if matches!(verdict, "changed" | "partly_shipped" | "shipped") {
+        row["stale"] = json!(verdict);
+        if let Some(ev) = v.get("evidence").and_then(Value::as_str) {
+            if !ev.is_empty() {
+                row["stale_evidence"] = json!(ev);
+            }
+        }
+    }
 }
 
 fn print_board(board: &Value) {
@@ -1253,11 +1307,15 @@ fn print_board(board: &Value) {
             println!("  (none)");
         }
         for row in rows {
+            let mut fact = row.get("fact").map(py_str).unwrap_or_default();
+            if let Some(v) = row.get("stale").and_then(Value::as_str) {
+                fact = format!("{fact} - stale ({})", v.replace('_', " "));
+            }
             println!(
                 "  {}  {}   {}",
                 row.get("id").map(py_str).unwrap_or_default(),
                 row.get("title").map(py_str).unwrap_or_default(),
-                row.get("fact").map(py_str).unwrap_or_default()
+                fact
             );
         }
         if let Some(more) = sec.get("more").and_then(Value::as_u64).filter(|m| *m > 0) {
@@ -1289,8 +1347,8 @@ pub fn run_board(tail: &[String]) -> i32 {
     if wants_help(tail) {
         println!(
             "Usage: fno backlog board [--project P] [--json]\n\n  Just finished / In progress \
-             / On deck - the board in one glance.\n  Reads only the graph and the on-disk \
-             pr-status cache, never GitHub."
+             / On deck - the board in one glance.\n  Reads the graph, the on-disk pr-status \
+             cache and local git against origin/main - never GitHub."
         );
         return 0;
     }
@@ -1339,6 +1397,7 @@ pub fn run_board(tail: &[String]) -> i32 {
         node_claims(),
         chrono::Utc::now().timestamp_millis(),
         cache.as_deref(),
+        &cwd,
     );
     emit_board(&board, json_out);
     0
@@ -1934,7 +1993,14 @@ mod tests {
             json!({"id": "x-3", "title": "shipped", "status": "done", "project": "p",
                    "completed_at": "2026-01-10T11:00:00Z", "pr_number": 7}),
         ];
-        let board = compute_board(&entries, Some("p"), Err("boom".into()), now, None);
+        let board = compute_board(
+            &entries,
+            Some("p"),
+            Err("boom".into()),
+            now,
+            None,
+            Path::new("/nonexistent-repo-for-board-stale"),
+        );
         assert_eq!(
             board["in_progress"]["unknown"],
             json!("live claim state unavailable (boom)")
@@ -1948,6 +2014,56 @@ mod tests {
         assert_eq!(deck[0]["fact"], json!("blocked by x-1"));
     }
 
+    #[test]
+    fn on_deck_rows_carry_the_stale_mark_when_a_cited_path_changed() {
+        let repo = tempfile::tempdir().unwrap();
+        let run = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(repo.path()).args(args);
+            if let Some(d) = date {
+                cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
+            }
+            cmd.output().unwrap()
+        };
+        run(&["init", "-q"], None);
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("src/b.rs"), "one\n").unwrap();
+        std::fs::write(repo.path().join("src/fresh.rs"), "one\n").unwrap();
+        run(&["add", "."], None);
+        run(&["config", "user.email", "t@example.com"], None);
+        run(&["config", "user.name", "t"], None);
+        run(
+            &["commit", "-q", "-m", "base"],
+            Some("2026-01-01T00:00:00Z"),
+        );
+        run(&["branch", "origin/main"], None);
+        std::fs::write(repo.path().join("src/b.rs"), "two\n").unwrap();
+        run(&["add", "."], None);
+        run(
+            &["commit", "-q", "-m", "touch src/b.rs (#12)"],
+            Some("2026-02-01T00:00:00Z"),
+        );
+        run(&["branch", "-f", "origin/main", "HEAD"], None);
+
+        let entries = vec![
+            json!({"id": "x-stale", "title": "fix b", "status": "ready", "priority": "p2",
+                   "created_at": "2026-01-15T00:00:00Z", "details": "defect in src/b.rs"}),
+            json!({"id": "x-fresh", "title": "fresh", "status": "ready", "priority": "p3",
+                   "created_at": "2026-02-02T00:00:00Z", "details": "defect in src/fresh.rs"}),
+        ];
+        let now = parse_iso_str("2026-02-03T00:00:00Z").unwrap();
+        let board = compute_board(&entries, None, Ok(BTreeSet::new()), now, None, repo.path());
+        let deck = board["on_deck"]["rows"].as_array().unwrap();
+        assert_eq!(deck.len(), 2);
+        let stale_row = deck.iter().find(|r| r["id"] == json!("x-stale")).unwrap();
+        assert_eq!(stale_row["stale"], json!("changed"));
+        assert!(stale_row["stale_evidence"]
+            .as_str()
+            .unwrap()
+            .contains("src/b.rs"));
+        let fresh_row = deck.iter().find(|r| r["id"] == json!("x-fresh")).unwrap();
+        assert!(fresh_row.get("stale").is_none());
+    }
     #[test]
     fn ages_floor_at_a_minute_and_refuse_future_stamps() {
         assert_eq!(format_age(5.0), "1m ago");

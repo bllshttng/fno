@@ -1205,19 +1205,15 @@ def test_codex_review_collision_spells_both_ways(monkeypatch):
     assert harness_map.normalize_command("/fno:review", "codex") == "$fno:review"
 
 
-def test_native_and_review_verbs_come_from_the_capability_table():
+def test_native_verbs_come_from_the_capability_table():
     """The native-verb knowledge lives in ONE place: the codex row of the
-    capability table. The mail lane's review subset is read from the same
-    row, so no second hand-written enumeration can drift."""
+    capability table."""
     from fno.agents.harness_map import capabilities
-    from fno.mail.cli import _CODEX_REVIEW_VERBS
 
     caps = capabilities("codex")
     assert set(caps["native_verbs"]) == {
         "/review", "/code-review", "/model", "/status", "/compact", "/goal",
     }
-    assert _CODEX_REVIEW_VERBS == {"/review", "/code-review"}
-    assert _CODEX_REVIEW_VERBS <= set(caps["native_verbs"])
 
 
 def test_roster_is_read_from_the_shipped_plugin(monkeypatch):

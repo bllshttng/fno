@@ -381,6 +381,14 @@ impl AgentsHome {
         self.root.join("terminal-stop")
     }
 
+    /// Directory of per-session keep marks (one JSON file per harness
+    /// session id, written temp-plus-rename). The user sets and clears the
+    /// mark with `fno agents reap --keep` / `--unkeep`; every reaper reads
+    /// it as a named keep reason. `keep_mark.rs` owns the format.
+    pub fn keep_dir(&self) -> PathBuf {
+        self.root.join("keep")
+    }
+
     /// Directory of per-session nudge-ladder state (one JSON file per open-PR
     /// session: attempts, last_nudge_at, escalated). Beside the terminal-stop
     /// markers; the daemon's retire arm owns it.
