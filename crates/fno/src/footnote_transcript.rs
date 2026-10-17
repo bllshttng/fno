@@ -32,6 +32,51 @@ pub const KNOWN_TYPES: &[&str] = &[
     "terminal",
 ];
 
+/// The ignorable types the spec names: resume never needs them, so an older
+/// reader may skip them.
+pub const LOG_TYPES: &[&str] = &[
+    "heartbeat",
+    "hook_run",
+    "footnotes",
+    "footnotes_post",
+    "mcp_servers",
+    "child_session",
+];
+
+/// A writer appends a `heartbeat` this often for as long as it lives. A
+/// reader counts the session alive while the newest is under the stale bound.
+pub const HEARTBEAT_EVERY_SECS: u64 = 30;
+pub const HEARTBEAT_STALE_SECS: u64 = 90;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Heartbeat {
+    /// `working`, `waiting_permission` or `idle`.
+    pub state: String,
+    pub turn: u64,
+    pub spent_usd: f64,
+    pub wall_secs: u64,
+    pub pid: u32,
+}
+
+/// The end of one run. Its totals cover the whole session record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Terminal {
+    /// `done`, `budget`, `refused`, `interrupted` or `error`.
+    pub state: String,
+    pub reason: String,
+    pub turns: u64,
+    pub tool_calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// The newest record of `ty`.
+pub fn last_of<'a>(records: &'a [Value], ty: &str) -> Option<&'a Value> {
+    records.iter().rev().find(|r| r["type"] == ty)
+}
+
 /// The launch spec's version. The binary refuses any other, so a stale
 /// `footnote` beside a newer supervisor fails loudly instead of misreading.
 /// v2 adds `permission_mode`: a v1 binary must never run plan as default.

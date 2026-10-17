@@ -181,8 +181,6 @@ class TestSweepBoundedByPhaseClock:
     def test_cold_ritual_fires_with_a_full_slice(self, tmp_path, monkeypatch):
         """AC3-HP: 150s of phase left holds the cold ritual; the merge
         dispatch runs once."""
-        from fno.post_merge_route import PostMergeDispatchResult
-
         deps = _make_tick_deps(
             tmp_path,
             candidates=[_make_candidate(pr_number=7, repo_dir=tmp_path)],
@@ -196,8 +194,8 @@ class TestSweepBoundedByPhaseClock:
 
         def fake_ritual(cand, obs, fire):
             ritual_calls.append(cand.pr_number)
-            return PostMergeDispatchResult(
-                "dispatched", cand.pr_number, short_id="abcd1234", detail="cold",
+            return SimpleNamespace(
+                outcome="dispatched", pr_number=cand.pr_number, short_id="abcd1234", detail="cold",
             )
 
         res = self._tick(

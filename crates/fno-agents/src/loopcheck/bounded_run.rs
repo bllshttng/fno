@@ -418,6 +418,18 @@ pub(crate) fn bounded_read(
     if let Some(line) = crate::gh_budget::admit_spawn(bin, args) {
         return Err(GhReadError::budget_refused_with_detail(read_name, line));
     }
+    bounded_read_unadmitted(bin, args, cwd, read_name, timeout)
+}
+
+/// `bounded_read` without the budget admission, for a caller that already
+/// judged the request against the budget itself (the origin-aware door).
+pub(crate) fn bounded_read_unadmitted(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
     match run_bounded(bin, args, cwd, timeout) {
         BoundedRun::Completed(out) => Ok(out),
         BoundedRun::TimedOut(elapsed, tail) => Err(GhReadError::timed_out(

@@ -648,3 +648,43 @@ fn annot_rows() {
         assert!(out["check_runs"][0].get("timeout").is_none());
     }
 }
+
+#[test]
+fn rest_get_op_reads_eligible_paths_and_leaves_the_rest_to_the_caller() {
+    let probes = FakeGh {
+        ok: true,
+        output: r#"{"state":"open"}"#.to_string(),
+        review_decision: String::new(),
+        calls: RefCell::new(Vec::new()),
+    };
+    let admit = |_: &[String]| None;
+    let out = rest_get_op(
+        &probes,
+        admit,
+        &json!({"cwd": "/repo", "path": "repos/o/r/pulls/1"}),
+    );
+    assert_eq!(out["eligible"], true);
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["stdout"], r#"{"state":"open"}"#);
+    assert_eq!(probes.calls.borrow().len(), 1);
+
+    for path in ["rate_limit", "repos/o/r/pulls?per_page=100&page=2"] {
+        let out = rest_get_op(&probes, admit, &json!({"cwd": "/repo", "path": path}));
+        assert_eq!(out["eligible"], false, "{path}");
+    }
+    assert_eq!(
+        probes.calls.borrow().len(),
+        1,
+        "an ineligible path spawns nothing"
+    );
+
+    let hold = |_: &[String]| Some("gh budget: held by the test".to_string());
+    let out = rest_get_op(
+        &probes,
+        hold,
+        &json!({"cwd": "/repo", "path": "repos/o/r/pulls/1"}),
+    );
+    assert_eq!(out["ok"], false);
+    assert!(out["stderr"].as_str().unwrap().contains("gh budget:"));
+    assert_eq!(probes.calls.borrow().len(), 1, "a held read spawns nothing");
+}

@@ -34,11 +34,11 @@ runner = CliRunner()
 # --------------------------------------------------------------------------- #
 
 PHASE2_HELP_SURFACES: dict[str, list[str]] = {
-    "backlog-intake": ["backlog", "intake", "--help"],
-    # backlog-update moved with the update port: the native binary answers
-    # --help now (pinned below, next to native-find).
+    # backlog-intake moved with the intake port: the native binary answers
+    # --help now (same contract as backlog-update / backlog-capture-add).
     "backlog-next": ["backlog", "next", "--help"],
-    "backlog-capture-add": ["backlog", "capture", "add", "--help"],
+    # backlog-capture-add moved with the capture port: the native binary
+    # answers --help now (same contract as backlog-update above).
     "mail-send": ["mail", "send", "--help"],
     "config-accounts-add": ["config", "accounts", "add", "--help"],
     # gate-verify / gate-check removed: the `fno gate` sub-app was deleted by

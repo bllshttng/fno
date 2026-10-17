@@ -117,24 +117,49 @@ def _default_create(
 def _default_inbox(repo_root: Path, candidate: Candidate) -> None:
     """Append a low/nit finding through the canonical locked inbox writer.
 
-    Routing through ``backlog.inbox.add_item`` (not a raw append) is required so
-    the line is emitted in the ``fu-XXXXXX — title`` shape the inbox reader and
+    Routing through ``backlog capture add`` (not a raw append) is required so
+    the line is emitted in the fu- shape the inbox reader and
     ``fno backlog capture list`` expect, honors the configured inbox path, and is
-    serialized by the same flock as every other inbox writer.
+    serialized by the same lock as every other inbox writer. The writer is the
+    native capture lane; the Python side shells out so exactly one writer owns
+    the inbox.
     """
-    from fno.backlog.capture import MAX_WHY_LEN, add_item
-    from fno.paths import inbox_path
+    import subprocess
 
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise RuntimeError(
+            "no fno-agents binary: the native capture writer is unavailable"
+        )
     why = (candidate.finding_text or candidate.body or candidate.title).strip().replace("\n", " ")
-    if len(why) > MAX_WHY_LEN:
-        why = why[: MAX_WHY_LEN - 1].rstrip() + "…"
-    add_item(
-        inbox_path(repo_root),
-        title=candidate.title,
-        source=f"PR #{candidate.source_pr}" if candidate.source_pr is not None else "retro-triage",
-        why=why,
-        priority=candidate.priority,
+    if len(why) > 120:
+        why = why[:119].rstrip() + "…"
+    args = [
+        str(binary),
+        "backlog",
+        "capture",
+        "add",
+        candidate.title,
+        "--source",
+        f"PR #{candidate.source_pr}" if candidate.source_pr is not None else "retro-triage",
+        "--why",
+        why,
+        "--priority",
+        candidate.priority,
+    ]
+    proc = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=str(repo_root),
     )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"backlog capture add failed: {proc.stderr.strip() or proc.returncode}"
+        )
 
 
 def land_candidates(

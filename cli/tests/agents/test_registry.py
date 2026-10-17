@@ -1076,7 +1076,9 @@ def test_us2_schema_version_is_three() -> None:
     # v40 migrates the authority vocabulary and fences older writers.
     # v41: additive `spawn_payload` - the delivered seed, so the attended
     # guard exempts the machine's own slash-command turn.
-    assert SCHEMA_VERSION == 41
+    # v42: additive `last_report_at` - the capacity reader's freshness
+    # source for pid-less rows no probe reaches.
+    assert SCHEMA_VERSION == 42
 
 
 def test_session_lineage_fields_round_trip(tmp_path: Path, monkeypatch) -> None:

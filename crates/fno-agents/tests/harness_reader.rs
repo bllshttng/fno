@@ -264,9 +264,9 @@ fn the_watch_lease_answers_the_wait_for_ci_journey() {
 #[test]
 fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
     let contract = HarnessContract::packaged().expect("the shipped table parses");
-    // footnote declares interactive_create unsupported and headless_create
+    // zcode declares interactive_create unsupported and headless_create
     // supported, so a pane spawn refuses it at birth.
-    assert_eq!(probe_substrate(&contract, "footnote"), Some("headless"));
+    assert_eq!(probe_substrate(&contract, "zcode"), Some("headless"));
     // A harness with an interactive create form keeps the spawn default.
     assert_eq!(probe_substrate(&contract, "claude"), None);
     // The provider flag is a claude route. Any other harness takes the

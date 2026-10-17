@@ -22,7 +22,7 @@ import loadlog
 from paths import RUNS
 
 LOAD = loadlog.samples()
-ARMS = ["claude-code", "opencode", "pi", "terminus-2", "zcode"]
+ARMS = ["claude-code", "opencode", "pi", "terminus-2", "zcode", "footnote"]
 REF = "terminus-2"
 P = {"input_per_m": 0.15, "output_per_m": 0.5, "cache_read_per_m": 0.03}
 # z.ai's 1302 error carries this message in every harness's log format. A bare
