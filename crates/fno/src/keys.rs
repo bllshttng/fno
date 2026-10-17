@@ -447,10 +447,7 @@ pub enum Event {
     /// time. Overlay-mode keys (`n`/`N` pick, `q`/Esc close) are interpreted
     /// by the client's view layer, not here (like OpenAnswers).
     OpenYard,
-    /// Open the experimental backlog board (prefix+O). Whether the board
-    /// actually opens is the client's call: the sideline menu's
-    /// `experimental: backlog view` pref gates it, and the chord degrades to
-    /// a notice while the pref is off.
+    /// Open the backlog board (prefix+O).
     OpenBacklogBoard,
     CycleSidelineView,
     /// (redefined by) Toggle the org block on the left
@@ -544,6 +541,10 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Share the focused pane and copy the join link (prefix+X); pressed
+    /// again while sharing, it copies the link again. The experimental
+    /// `pane share` toggle gates it client-side.
+    ShareFocusedPane,
     /// Open the rename-tab name overlay for the active tab (prefix+,, tmux
     /// `rename-window` convention). The client owns the typing mode
     /// and resolves the active tab's stable id; the chord only opens it.
@@ -1349,7 +1350,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "open-backlog-board",
             OpenBacklogBoard,
             Global,
-            "open the backlog board (experimental pref)",
+            "open the backlog board",
         ),
         b(
             b'V',
@@ -1421,6 +1422,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             OpenSweepThreads,
             Global,
             "sweep threads (close, reap)",
+        ),
+        b(
+            b'X',
+            "share-focused-pane",
+            ShareFocusedPane,
+            Global,
+            "share the focused pane (experimental)",
         ),
         b(
             b'\\',
@@ -2150,7 +2158,7 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02b"]), vec![Event::TogglePanel]);
         assert_eq!(scan_all(&[b"\x02i"]), vec![Event::ToggleComposer]);
-        // prefix+O opens the experimental backlog board (pref-gated client-side).
+        // prefix+O opens the backlog board.
         assert_eq!(scan_all(&[b"\x02O"]), vec![Event::OpenBacklogBoard]);
         assert_eq!(scan_all(&[b"\x02F"]), vec![Event::ToggleFullSideline]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);
@@ -2187,6 +2195,7 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02S"]), vec![Event::OpenSettings]);
         assert_eq!(scan_all(&[b"\x02A"]), vec![Event::OpenConnections]);
         assert_eq!(scan_all(&[b"\x02T"]), vec![Event::OpenSweepThreads]);
+        assert_eq!(scan_all(&[b"\x02X"]), vec![Event::ShareFocusedPane]);
         // ... and the lowercase halves still mean what they meant.
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);

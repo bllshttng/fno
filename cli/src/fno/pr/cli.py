@@ -800,7 +800,11 @@ def sync_canonical(
         "Post a review verdict to GitHub as config.review.bot_identity "
         "(--pr-number N; --verdict defaults to the newest head-pinned "
         "attestation for HEAD). One bot-review: receipt line; exit 0 posted,"
-        " 1 skipped|refused|failed, 2 no attestation to default from."
+        " 1 skipped|refused|failed, 2 no attestation to default from. The "
+        "identity-independent review-round leg also runs on this call "
+        "(crates/fno-agents/src/publish_review.rs::publish_round) but this "
+        "Python door prints only the bot-review receipt; read the verb's "
+        "raw JSON (or the Rust-side caller) for the round leg's own status."
     ),
 )
 def publish_review_cmd(

@@ -683,7 +683,7 @@ fn caller_is_recipient(sid: &str) -> bool {
 /// A header counts only when the store backs its sender
 /// ([`crate::mail_header::verified_sender`]); an unbacked header line is
 /// prose, never a directive.
-fn body_is_control(body: &str) -> bool {
+pub(crate) fn body_is_control(body: &str) -> bool {
     let mut lines = body.lines().map(str::trim).filter(|l| !l.is_empty());
     let Some(first) = lines.next() else {
         return false;
@@ -809,7 +809,11 @@ fn gate_json(verdict: &GateVerdict) -> String {
 /// the raw door parks too, because typed text carries no control envelope
 /// for anything downstream to honor. An empty body or a failed park answers
 /// None and the caller prints the plain verdict instead.
-fn gate_parked_line(verdict: &GateVerdict, session_id: &str, body: &str) -> Option<String> {
+pub(crate) fn gate_parked_line(
+    verdict: &GateVerdict,
+    session_id: &str,
+    body: &str,
+) -> Option<String> {
     let typable =
         verdict.pass.as_deref() == Some("own") || (verdict.deliver && verdict.pass.is_none());
     if body.trim().is_empty() || typable {

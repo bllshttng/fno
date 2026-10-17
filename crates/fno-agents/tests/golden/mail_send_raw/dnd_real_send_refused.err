@@ -1,0 +1,1 @@
+refused: 'dnd-row-1' is DND (delivery-policy bus-only): prompt-line injection is forbidden for this recipient. Send wrapped mail instead - it queues durable and surfaces at their turn boundary

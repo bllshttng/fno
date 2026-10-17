@@ -1,0 +1,1 @@
+mail-inject: not-injectable means no roster entry, or no control socket to write into. It is NOT a liveness verdict: the session may be alive and mid-turn. Ask `fno agents truth <handle>` for reachability. A session with no injection path can still act: its operator can type the command at its prompt.

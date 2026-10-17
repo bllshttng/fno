@@ -1996,6 +1996,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",
+    // The mail style gate's refusal record: one event per refusal so the
+    // retry rate is a query over events.jsonl. The raw-send lane emits it
+    // from Rust; the Python front still runs the same gate on the non-raw
+    // sends, so the parity script carries it as dual-owned.
+    "style_refusal",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
     // run_summary) are NOT registered here. They are Python-defined in
     // cli/src/fno/events/schema.yaml; the parity gate partitions names (a kind
