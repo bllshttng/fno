@@ -487,7 +487,7 @@ pub(crate) fn handle_session_report(
 /// binary, a downed mux, or unparseable output returns None, and the row
 /// still registers through the report arms unbound.
 fn pane_side_lookup(report_cwd: &str) -> Option<crate::pane_claim::PaneClaim> {
-    let fno = crate::census::resolve_fno()?;
+    let fno = crate::loopcheck::loopcheck_fno_bin();
     let panes_out = std::process::Command::new(&fno)
         .args(["mux", "pane", "ls", "--json"])
         .output()
@@ -1553,18 +1553,17 @@ mod tests {
         assert_eq!(ok["wait_row"], true);
     }
 
-    /// AC2-ERR, fail-soft leg: with no fno binary resolvable, the pane-side
-    /// lookup reads None and the report path proceeds unbound - a missing
-    /// mux never blocks a session report.
+    /// AC2-ERR, fail-soft leg: with no fno binary on the resolver seam, the
+    /// pane-side lookup reads None and the report path proceeds unbound - a
+    /// missing mux never blocks a session report.
     #[test]
     fn pane_side_lookup_fails_soft_without_fno() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let saved = std::env::var("CARGO_HOME").ok();
-        std::env::set_var("CARGO_HOME", dir.path());
+        let saved = std::env::var("FNO_LOOPCHECK_FNO_BIN").ok();
+        std::env::set_var("FNO_LOOPCHECK_FNO_BIN", "/nonexistent/fno-under-test");
         let claim = pane_side_lookup("/w");
         match saved {
-            Some(v) => std::env::set_var("CARGO_HOME", v),
-            None => std::env::remove_var("CARGO_HOME"),
+            Some(v) => std::env::set_var("FNO_LOOPCHECK_FNO_BIN", v),
+            None => std::env::remove_var("FNO_LOOPCHECK_FNO_BIN"),
         }
         assert_eq!(claim, None);
     }
