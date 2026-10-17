@@ -218,6 +218,13 @@ enum Role {
     /// door. The tail passes through byte-verbatim, --help included: the
     /// findings door prints the usage.
     ReviewClassify(Vec<OsString>),
+    /// `fno do review invocations <tail>`: the invocations leaf (parse,
+    /// join, reserve, emit, settle), exec'd through the sibling fno-agents
+    /// door. The tail passes through byte-verbatim, help included.
+    ReviewInvocations(Vec<OsString>),
+    /// `fno do review --help` (and the alias's): the native usage, printed
+    /// here because no Python leg remains to list the four leaves.
+    ReviewHelp,
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
     /// through the sibling fno-agents `review-policy assess` door. The
     /// leaves keep their role: invocations stays Python
@@ -572,12 +579,26 @@ fn classify_review_classify(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do review invocations <tail>`: the invocations leaf, claimed by the
+/// same literal three-token prefix as its siblings. The Python leaf is gone,
+/// so the tail (help included) rides to the door's usage.
+fn classify_review_invocations(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "review"
+        || args[2].to_str()? != "invocations"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
-/// assurance root claims native when the tail names no leaf and no help
-/// request. Only the FIRST tail token names a leaf (a leaf spelled later is
-/// a flag value, exactly as typer reads it); --help/-h anywhere forwards so
-/// typer keeps rendering the leaf listing.
-fn classify_review_root(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
+/// assurance root claims native when the tail names no leaf. Only the FIRST
+/// tail token names a leaf (a leaf spelled later is a flag value, exactly as
+/// typer reads it); --help/-h anywhere claims the native usage, because no
+/// Python leg remains to render the leaf listing.
+fn classify_review_root(args: &[OsString]) -> Option<(bool, bool, Vec<OsString>)> {
     if args.is_empty() {
         return None;
     }
@@ -593,13 +614,10 @@ fn classify_review_root(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
     ) {
         return None;
     }
-    if tail
+    let help = tail
         .iter()
-        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")))
-    {
-        return None;
-    }
-    Some((alias, tail.to_vec()))
+        .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")));
+    Some((alias, help, tail.to_vec()))
 }
 
 fn classify_mail_show(args: &[OsString]) -> Option<Role> {
@@ -715,7 +733,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_review_classify(args) {
         return Role::ReviewClassify(rest);
     }
-    if let Some((alias, rest)) = classify_review_root(args) {
+    if let Some(rest) = classify_review_invocations(args) {
+        return Role::ReviewInvocations(rest);
+    }
+    if let Some((alias, help, rest)) = classify_review_root(args) {
+        if help {
+            return Role::ReviewHelp;
+        }
         return if alias {
             Role::ReviewPolicyAlias(rest)
         } else {
@@ -1157,6 +1181,23 @@ fn main() {
             &["review-level", "findings", "classify"],
             &rest,
         )),
+        Role::ReviewInvocations(rest) => std::process::exit(fno_agents_exec(
+            "fno do review invocations",
+            &["review-level", "invocations"],
+            &rest,
+        )),
+        Role::ReviewHelp => {
+            println!(
+                "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
+            );
+            println!();
+            println!("leaves:");
+            println!("  resolve-level [<level>]           the sizing leaf");
+            println!("  post-dispositions <args>          the per-round disposition comment");
+            println!("  classify <args>                   the findings classifier");
+            println!("  invocations <action>              parse, join, reserve, emit, settle");
+            std::process::exit(0)
+        }
         Role::ReviewPolicyAssess(rest) => std::process::exit(fno_agents_exec(
             "fno do review",
             &["review-policy", "assess"],
@@ -1543,9 +1584,22 @@ mod tests {
             decide_role(&os(&["do", "review", "classify", "--attest"]), false),
             Role::ReviewClassify(os(&["--attest"]))
         );
+        // --help is native now: no Python leg remains to list the leaves.
         assert_eq!(
             decide_role(&os(&["do", "review", "--help"]), false),
-            Role::Forward
+            Role::ReviewHelp
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "invocations"]), false),
+            Role::ReviewInvocations(os(&[]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "review", "invocations", "--help"]), false),
+            Role::ReviewInvocations(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["review", "--help"]), false),
+            Role::ReviewHelp
         );
         // A leaf spelled later is a flag value, not a subcommand: claimed.
         assert_eq!(
