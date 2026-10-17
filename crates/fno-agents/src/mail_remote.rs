@@ -422,7 +422,7 @@ fn cmd_send(args: &[String]) -> i32 {
                 }
             };
             let relay_words =
-                relay_words_with_sender(name, &tail.rest, &from_name, &os_user(), &local_host);
+                relay_words_with_sender(&name, &tail.rest, &from_name, &os_user(), &local_host);
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
             relay(&host, &relay_words)

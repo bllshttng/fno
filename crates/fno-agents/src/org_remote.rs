@@ -68,9 +68,10 @@ pub fn plan_handoff(
         "--predecessor-session".into(),
         holder.1.clone().unwrap_or_default(),
     ];
+    let ssh_argv = crate::mail_remote::ssh_argv(&host, &ssh_words);
     Ok(HandoffPlan {
         host,
-        ssh_argv: crate::mail_remote::ssh_argv(&host, &ssh_words),
+        ssh_argv,
         pending,
     })
 }
@@ -97,7 +98,7 @@ fn vacate_scope_holder(
     scope: &str,
 ) -> Result<Vec<String>, String> {
     let canon = crate::territory::canonical_scope(scope);
-    crate::state::update_registry(registry_path, |doc| {
+    let vacated = crate::state::update_registry(registry_path, |doc| {
         let mut vacated = Vec::new();
         for row in doc.entries.iter_mut() {
             let holds = row
@@ -115,6 +116,8 @@ fn vacate_scope_holder(
         }
         Ok(vacated)
     })
+    .map_err(|e| e.to_string())??;
+    Ok(vacated)
 }
 
 /// The remote leg, run ON the target host by the ssh hop: grant through the
@@ -143,17 +146,14 @@ fn cmd_record_succession(args: &mut dyn Iterator<Item = String>) -> i32 {
         eprintln!("{}", usage());
         return 2;
     };
-    let grant_argv: Vec<OsString> = [
+    let grant_argv = [
         "agents".to_string(),
         "org".to_string(),
         "promote".to_string(),
         successor.clone(),
         "--scope".to_string(),
         scope.clone(),
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
+    ];
     let granted = std::process::Command::new(crate::mail_remote::fno_binary())
         .args(&grant_argv)
         .status()
@@ -329,12 +329,7 @@ mod tests {
         assert!(plan_handoff(&[], "fno", holder(), "t0").is_err());
         // No @ split in the target.
         assert!(plan_handoff(&["Quinlan".into()], "fno", holder(), "t").is_err());
-        assert!(plan_handoff(
-            &["Q@h".into(), "--scope".into(), "fno".into()],
-            ("E".into(), None),
-            "t"
-        )
-        .is_err());
+        assert!(plan_handoff(&["Q@h".into()], "fno", ("E".into(), None), "t").is_err());
         // The happy plan: the pending record carries the join keys, and the
         // ssh argv names the remote leg with every argument spelled.
         let plan = plan_handoff(&["Quinlan@imac2d2".into()], "fno", holder(), "t9").expect("plans");
