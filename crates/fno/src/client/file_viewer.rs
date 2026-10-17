@@ -331,7 +331,7 @@ struct Window {
 
 /// The markdown body rendered at the paint width, cached per width; none for
 /// other bodies.
-fn rendered(v: &FileViewer, plan: &Plan) -> Option<std::cell::Ref<'_, [BLine]>> {
+fn rendered<'a>(v: &'a FileViewer, plan: &Plan) -> Option<std::cell::Ref<'a, [BLine]>> {
     let Body::Markdown { src, .. } = &v.body else {
         return None;
     };
@@ -339,7 +339,7 @@ fn rendered(v: &FileViewer, plan: &Plan) -> Option<std::cell::Ref<'_, [BLine]>> 
     if cache.as_ref().is_none_or(|(w, _)| *w != plan.text_w) {
         *cache = Some((plan.text_w, md_lines(src, plan.text_w)));
     }
-    let slot = std::cell::Ref::filter_map(cache.downgrade(), Option::as_ref);
+    let slot = std::cell::Ref::filter_map(std::cell::RefMut::downgrade(cache), Option::as_ref);
     slot.map(|c| std::cell::Ref::map(c, |p| p.1.as_slice()))
         .ok()
 }
