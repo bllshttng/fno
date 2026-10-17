@@ -686,7 +686,9 @@ pub(crate) fn admit_spawn<S: AsRef<OsStr>>(program: &OsStr, args: &[S]) -> Optio
     if !admission_armed() {
         return None;
     }
-    if !child_charges(program) {
+    // The transport stands down only where the child consults; a user or
+    // daemon spawn, and every unresolvable shape, keeps the stamp here.
+    if child_charges(program) {
         return None;
     }
     let argv: Vec<String> = args
@@ -750,7 +752,9 @@ pub(crate) fn admit_command(cmd: &std::process::Command) -> Option<String> {
     if !admission_armed() || !is_github_program(cmd.get_program()) {
         return None;
     }
-    if !child_charges(cmd.get_program()) {
+    // The same stand-down rule as admit_spawn: only a spawn whose child
+    // consults skips this layer; user and daemon reads keep the stamp.
+    if child_charges(cmd.get_program()) {
         return None;
     }
     let args: Vec<String> = cmd
@@ -1380,6 +1384,150 @@ mod tests {
             Some(&proxy_path)
         ));
         assert!(!child_charges_at(gh, true, Some(&proxy_dir), None));
+    }
+
+    /// Sets one env var for a door test and restores the previous value on
+    /// drop, so a failing assert cannot poison the process env for sibling
+    /// tests. Caller-kind tests must hold the shared env lock first.
+    struct DoorEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl DoorEnvGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let guard = DoorEnvGuard(vec![(key, std::env::var_os(key))]);
+            std::env::set_var(key, value);
+            guard
+        }
+    }
+    impl Drop for DoorEnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// Seeds a hermetic ledger (FNO_STATE_DIR) with a live backoff, so any
+    /// consult refuses: Some from a door proves the consult happened, None
+    /// under the same ledger proves the stand-down, and a foreign consult
+    /// from a sibling test thread cannot flip either observable.
+    fn seed_backoff_ledger(state: &std::path::Path) -> std::path::PathBuf {
+        let locks = state.join("locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let path = locks.join("github-request-budget.json");
+        let now_ms = now_ms();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"stamps":[],"backoff_until_ms":{},"backoff_step":0,"last_refusal_ms":{},"last_half_open_ms":0}}"#,
+                now_ms + 120_000,
+                now_ms - 1_000
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn admit_spawn_charges_by_caller_kind() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy = tmp.path().join("proxy");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&proxy).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for stub in [proxy.join("gh"), other.join("gh")] {
+            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
+        let ledger = seed_backoff_ledger(&tmp.path().join("state"));
+        let args = &["api".to_string(), "user".to_string()];
+        let gh = std::ffi::OsStr::new("gh");
+
+        // User origin: the transport charges regardless of where gh sits.
+        let _attended =
+            DoorEnvGuard::set("CLAUDE_CODE_SESSION_ATTENDED", std::ffi::OsStr::new("1"));
+        let _path = DoorEnvGuard::set("PATH", proxy.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_some(),
+            "a user-origin spawn keeps the transport consult"
+        );
+        drop(_path);
+
+        // Agent origin, bare gh first hit inside the proxy: the child
+        // consults, so the transport stands down under a live backoff.
+        let _agent = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let _path = DoorEnvGuard::set("PATH", proxy.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_none(),
+            "a consulting child stands the transport down"
+        );
+        // An adapter name is a consulting child at any PATH.
+        let adapter = std::ffi::OsStr::new("fno-gh-coverage");
+        assert!(
+            admit_spawn(adapter, args).is_none(),
+            "an adapter spawn stands the transport down"
+        );
+        drop(_path);
+
+        // Agent origin, gh resolving outside the proxy: unknown means the
+        // transport charges, and the seeded backoff refuses it.
+        let _path = DoorEnvGuard::set("PATH", other.as_os_str());
+        assert!(
+            admit_spawn(gh, args).is_some(),
+            "an unresolvable-as-child spawn keeps the consult"
+        );
+    }
+
+    #[test]
+    fn admit_command_charges_by_caller_kind() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let proxy = tmp.path().join("proxy");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&proxy).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for stub in [proxy.join("gh"), other.join("gh")] {
+            std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().join("state").as_os_str());
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        let _proxy = DoorEnvGuard::set("FNO_GH_PROXY_DIR", proxy.as_os_str());
+        seed_backoff_ledger(&tmp.path().join("state"));
+
+        // User origin: an absolute gh outside the proxy keeps the consult.
+        let _attended =
+            DoorEnvGuard::set("CLAUDE_CODE_SESSION_ATTENDED", std::ffi::OsStr::new("1"));
+        let cmd = std::process::Command::new(other.join("gh"));
+        assert!(
+            admit_command(&cmd).is_some(),
+            "a user-origin Command keeps the transport consult"
+        );
+
+        // Agent origin: an absolute gh inside the proxy stands down; the
+        // same shape outside it consults and refuses.
+        let _agent = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let inside = std::process::Command::new(proxy.join("gh"));
+        assert!(
+            admit_command(&inside).is_none(),
+            "a proxy-shim Command stands the transport down"
+        );
+        let outside = std::process::Command::new(other.join("gh"));
+        assert!(
+            admit_command(&outside).is_some(),
+            "a gh outside the proxy keeps the consult"
+        );
     }
 
     #[test]

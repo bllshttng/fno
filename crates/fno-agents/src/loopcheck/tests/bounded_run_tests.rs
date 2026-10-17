@@ -367,10 +367,10 @@ fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
     // A stood-down transport lets the consulting child refuse. The
     // transport's own refusal exits 75; a child refusing on a caller's
     // behalf can surface at its own exit code too (the conditional-door
-    // path exits 1). Only footnote machinery prints `gh budget:`, so the
-    // marker on a nonzero exit maps to the same BudgetRefused kind the
-    // transport's own refusal produced. The in-process consult is disarmed
-    // under cfg(test), so no ledger is touched.
+    // path exits 1). Every refusal line says "held locally", or "refusing
+    // while" in the reader-killed form; the same `gh budget:` prefix also
+    // carries admit notices, which are not refusals. The in-process
+    // consult is disarmed under cfg(test), so no ledger is touched.
     let tmp = tempfile::tempdir().expect("tempdir");
     let cwd = std::env::temp_dir();
     for code in [75, 1] {
@@ -387,4 +387,15 @@ fn bounded_read_maps_a_child_exit_75_budget_line_to_budget_refused() {
         assert_eq!(err.outcome(), "budget_refused");
         assert_eq!(err.waited_on(), "budget_lock");
     }
+
+    // An admit notice on a genuinely failed read stays a failed read: the
+    // notice's "admitting" vocabulary is not refusal vocabulary.
+    let notice = write_exec(
+        tmp.path(),
+        "fno-gh-loopcheck",
+        "#!/bin/sh\necho 'gh budget: ledger unavailable, admitting: boom' 1>&2\nexit 1\n",
+    );
+    let out = bounded_read(notice.as_os_str(), &[], &cwd, "coverage", PROBE_TIMEOUT)
+        .expect("an admit notice is not a refusal");
+    assert!(!out.status.success());
 }

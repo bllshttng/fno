@@ -428,7 +428,12 @@ pub(crate) fn bounded_read(
     // read unchanged. The drain keeps stderr as bytes; the marker check and
     // the error row both read it as UTF-8 with lossy replacement.
     let tail = String::from_utf8_lossy(&out.stderr_tail).into_owned();
-    if matches!(out.status.code(), Some(code) if code != 0) && tail.contains("gh budget:") {
+    // The `gh budget:` prefix also carries admit notices ("ledger
+    // unavailable, admitting", "refusal not recorded"), which are not
+    // refusals. Every refusal line says "held locally", or "refusing while"
+    // in the reader-killed form; those two phrases are the marker.
+    let refused_line = tail.contains("held locally") || tail.contains("refusing while");
+    if matches!(out.status.code(), Some(code) if code != 0) && refused_line {
         return Err(GhReadError::budget_refused_with_detail(read_name, tail));
     }
     Ok(out)
