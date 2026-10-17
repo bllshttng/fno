@@ -7,6 +7,7 @@
 
 use std::ffi::OsString;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
@@ -21,6 +22,10 @@ const SAVED_SET_ACTIONS: &[&str] = &[
     "undispatched",
     "stuck-epics",
 ];
+
+/// The marks shell-out budget: a slow fno-agents yields no marks, never a
+/// slow list (the digest_overlay fail-open posture).
+const MARKS_BUDGET_SECS: u64 = 10;
 
 /// Claim the bare `fno backlog list [<query>] [flags]` spelling. Returns the
 /// tail after `list`, or `None` to leave the argv with the sibling
@@ -48,6 +53,10 @@ const LIST_HELP: &str = "Query the node board in the shared search grammar\n\nUs
 struct Hit<'a> {
     card: crate::backlog_model::Card,
     row: Option<&'a Value>,
+    /// The premise mark off the freshness verb's batch arm, when the verb
+    /// answered and the verdict is one the node names (changed,
+    /// partly_shipped, shipped). holds and unmeasured carry None.
+    stale: Option<(String, String)>,
 }
 
 impl Hit<'_> {
@@ -59,6 +68,10 @@ impl Hit<'_> {
     }
 
     fn json_row(&self) -> Value {
+        let (stale, evidence) = match &self.stale {
+            Some((v, e)) => (json!(v), json!(e)),
+            None => (Value::Null, Value::Null),
+        };
         json!({
             "id": self.card.id,
             "slug": self.card.slug,
@@ -75,18 +88,22 @@ impl Hit<'_> {
             "claimed": self.card.claimed,
             "created_at": self.card.created_at,
             "updated_at": self.card.updated_at,
+            "stale": stale,
+            "stale_evidence": evidence,
         })
     }
 
     fn tsv_row(&self) -> String {
+        let stale = self.stale.as_ref().map(|(v, _e)| v.as_str()).unwrap_or("-");
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.card.id,
             self.card.status.as_deref().unwrap_or("?"),
             self.card.priority.as_deref().unwrap_or("-"),
             self.card.column,
             self.card.parent.as_deref().unwrap_or("-"),
             self.card.title,
+            stale,
         )
     }
 }
@@ -168,6 +185,54 @@ impl SortValue {
             _ => std::cmp::Ordering::Equal,
         }
     }
+}
+
+/// The premise marks for the shown rows, read from the freshness verb's
+/// batch arm. Fail-open: any spawn, timeout or parse failure returns None
+/// and the list answers exactly as before. Node ids are `<prefix>-<hex>`,
+/// so comma splitting is safe.
+fn stale_marks(ids: &[&str]) -> Option<std::collections::HashMap<String, (String, String)>> {
+    if ids.is_empty() {
+        return None;
+    }
+    let mut child = Command::new(crate::digest_overlay::fno_agents_bin())
+        .args(["backlog", "freshness", "--ids", &ids.join(",")])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(MARKS_BUDGET_SECS);
+    let output = loop {
+        match child.try_wait().ok()? {
+            Some(_) => {
+                break child.wait_with_output().ok()?;
+            }
+            None => {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().ok()?;
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let v: Value = serde_json::from_str(text.trim()).ok()?;
+    let marks = v.get("marks")?.as_object()?;
+    let mut out = std::collections::HashMap::new();
+    for (id, m) in marks {
+        let verdict = m.get("verdict")?.as_str()?.to_string();
+        let evidence = m
+            .get("evidence")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        out.insert(id.clone(), (verdict, evidence));
+    }
+    Some(out)
 }
 
 /// The run entry: returns the process exit code.
@@ -278,7 +343,11 @@ pub fn run(tail: &[String]) -> i32 {
             }
         }
         let row = by_ref.get(card.id.as_str()).copied();
-        hits.push(Hit { card, row });
+        hits.push(Hit {
+            card,
+            row,
+            stale: None,
+        });
     }
     let total = hits.len();
     if let Some(sort) = &parsed.sort {
@@ -295,6 +364,19 @@ pub fn run(tail: &[String]) -> i32 {
     if count_only {
         println!("{total}");
         return 0;
+    }
+    // The premise marks attach once, before output: the ids go to the
+    // freshness verb's batch arm in one shell-out, and a failure leaves
+    // every row unmarked. --count returns above; it shows no rows.
+    if !hits.is_empty() {
+        let ids: Vec<&str> = hits.iter().map(|h| h.card.id.as_str()).collect();
+        if let Some(marks) = stale_marks(&ids) {
+            for h in hits.iter_mut() {
+                if let Some((v, e)) = marks.get(h.card.id.as_str()) {
+                    h.stale = Some((v.clone(), e.clone()));
+                }
+            }
+        }
     }
     let shown: Vec<&Hit> = match limit {
         Some(n) => hits.iter().take(n).collect(),
@@ -391,6 +473,7 @@ mod tests {
                 ..clone_card()
             },
             row: None,
+            stale: None,
         };
         let p0 = mk(Some("p0"), None);
         let p1 = mk(Some("p1"), None);
@@ -439,5 +522,40 @@ mod tests {
             encounters: 0,
             encounters_operator: 0,
         }
+    }
+
+    #[test]
+    fn a_marked_row_names_the_verdict_in_json_and_tsv() {
+        let mk = |stale: Option<(String, String)>| Hit {
+            card: clone_card(),
+            row: None,
+            stale,
+        };
+        let marked = mk(Some((
+            "partly_shipped".to_string(),
+            "a merge on main names x-1- (#9)".to_string(),
+        )));
+        let row = marked.json_row();
+        assert_eq!(row["stale"], json!("partly_shipped"));
+        assert_eq!(
+            row["stale_evidence"],
+            json!("a merge on main names x-1- (#9)")
+        );
+        let tsv = marked.tsv_row();
+        let cols: Vec<&str> = tsv.split('\t').collect();
+        assert_eq!(cols.len(), 7);
+        assert_eq!(cols[6], "partly_shipped");
+        let unmarked = mk(None);
+        assert!(unmarked.json_row()["stale"].is_null());
+        let tsv_un: Vec<&str> = unmarked.tsv_row().split('\t').collect();
+        assert_eq!(tsv_un[6], "-");
+    }
+
+    #[test]
+    fn the_marks_shellout_fails_open_on_a_missing_binary() {
+        std::env::set_var("FNO_AGENTS_BIN", "/nonexistent/fno-agents-x-73c4");
+        let marks = stale_marks(&["x-1"]);
+        std::env::remove_var("FNO_AGENTS_BIN");
+        assert!(marks.is_none());
     }
 }
