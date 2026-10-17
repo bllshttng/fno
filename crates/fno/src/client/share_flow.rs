@@ -310,3 +310,38 @@ pub(crate) fn menu_entries(
     }
     rows.into_iter().unzip()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn child_lines_parse_and_menu_rows_pair_with_actions() {
+        assert!(matches!(
+            parse_line("knock 3 Ms. Lee"),
+            Some(ShareMsg::Knock(3, n)) if n == "Ms. Lee"
+        ));
+        assert!(matches!(parse_line("gone 3"), Some(ShareMsg::Gone(3))));
+        assert!(matches!(
+            parse_line("link https://x.example/#k=1"),
+            Some(ShareMsg::Link(l)) if l == "https://x.example/#k=1"
+        ));
+        assert!(parse_line("sharing pane 3").is_none());
+        assert!(parse_line("knock x Ms. Lee").is_none());
+
+        let (rows, acts) = menu_entries(false, None);
+        assert!(rows.is_empty() && acts.is_empty(), "toggle off: no rows");
+        let (rows, acts) = menu_entries(true, None);
+        assert_eq!((rows.len(), acts), (1, vec![AuxAction::Share(Act::Start)]));
+        let (rows, acts) = menu_entries(true, Some(2));
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            acts,
+            vec![
+                AuxAction::Share(Act::Knocks),
+                AuxAction::Share(Act::Copy),
+                AuxAction::Share(Act::Stop),
+            ]
+        );
+    }
+}

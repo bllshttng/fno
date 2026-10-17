@@ -1293,6 +1293,10 @@ mod tests {
             let (k, fx) = m.knock(true, "Ms. Lee`", now);
             assert_eq!(k, Knock::Waiting(n));
             assert_eq!(sends_to(&fx, n), vec![r#"{"_share":{"state":"waiting"}}"#]);
+            assert!(fx.contains(&Effect::Knock {
+                id: n,
+                name: "Ms. Lee".into()
+            }));
             assert!(!fx.iter().any(|e| matches!(e, Effect::Admit(_))));
         }
         assert_eq!(
@@ -1307,8 +1311,16 @@ mod tests {
         // Deny closes the socket; admit hands out a token and starts admission.
         let fx = m.deny(2);
         assert!(fx.contains(&Effect::Close(2, "the driver declined")));
+        assert!(
+            fx.contains(&Effect::Gone(2)),
+            "a denied knock stops waiting"
+        );
         let fx = m.admit(1, "tok-1".into());
         assert!(fx.contains(&Effect::Admit(1)));
+        assert!(
+            fx.contains(&Effect::Gone(1)),
+            "an admitted knock stops waiting"
+        );
         assert!(sends_to(&fx, 1)[0].contains(r#""viewer":"tok-1""#));
         assert!(fx.contains(&Effect::Print("admitted Ms. Lee".into())));
 
