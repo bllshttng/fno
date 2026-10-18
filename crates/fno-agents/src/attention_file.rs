@@ -485,7 +485,8 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
 }
 
 /// Set the four close keys in the frontmatter, keep every other key, and
-/// append `Recorded: <receipt>` as the last line under `## Answer`.
+/// append the receipt (`Recorded: ...`, built by the caller) as the last
+/// line under `## Answer`.
 pub fn close_page(
     text: &str,
     status: &str,
@@ -508,7 +509,7 @@ pub fn close_page(
         out.push_str(&body);
         let out = out.trim_end().to_string();
         let mut out = out;
-        out.push_str("\n\nRecorded: ");
+        out.push_str("\n\n");
         out.push_str(receipt);
         out.push('\n');
         return out;
@@ -905,7 +906,7 @@ mod tests {
             "Stay strict",
             "2026-09-23T00:00:00Z",
             "file_edit",
-            "option 2 (file)",
+            "Recorded: option 2 (file)",
         );
         let (front, _) = parse_page(&closed).unwrap();
         assert_eq!(front.status, "answered");
@@ -916,7 +917,8 @@ mod tests {
             closed.contains("updated: 2026-09-22T09:05"),
             "the plugin stamp survives: {closed}"
         );
-        assert!(closed.trim_end().ends_with("Recorded: option 2 (file)"));
+        assert!(closed.trim_end().ends_with("\n\nRecorded: option 2 (file)"));
+        assert!(!closed.contains("Recorded: Recorded:"), "{closed}");
     }
 
     #[test]
