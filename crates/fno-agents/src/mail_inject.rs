@@ -2349,7 +2349,7 @@ pub async fn run_mail_inject(rest: &[String]) -> i32 {
     let result: Result<(), String> = match args.harness {
         MailInjectHarness::Claude => match cloud_row {
             // A cloud row delivers through the queued CLI follow-up; the exit
-            // code is the delivery answer (measured x-9e5b probe 7).
+            // code is the delivery answer (measured probe 7).
             Some(entry) => crate::claude_cloud::deliver_cloud_followup(&entry, &text),
             None => deliver_via_control_sock(
                 &args.session,

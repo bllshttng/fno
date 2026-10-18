@@ -1108,7 +1108,7 @@ fn maybe_emit_spawn_cap_escape() {
 /// Whether this substrate charges the machine's RAM floor. `cloud` does not:
 /// the create is a short pty call on this machine and the session runs on
 /// Anthropic-managed infrastructure, so there is nothing local to protect
-/// (x-9e5b investigate ruling, recorded on the node). Every other substrate
+/// (the cloud-substrate ruling, recorded on the node). Every other substrate
 /// runs on this machine.
 fn charges_local_memory(substrate: &str) -> bool {
     substrate != "cloud"
@@ -1433,7 +1433,7 @@ fn decide_gate(
         // The memory axis is hard: --force passes the soft limits only.
         // Cloud is exempt: the create is a short pty call on this machine and
         // the session runs remotely, so there is nothing local to protect
-        // (x-9e5b investigate ruling, recorded on the node).
+        // (the cloud-substrate ruling, recorded on the node).
         if charges_local_memory(substrate) {
             check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
         }
@@ -1615,7 +1615,7 @@ fn decide_gate(
             }
             if flags.force {
                 // The memory axis is hard: --force passes the soft limits only.
-                // Cloud is exempt (zero local footprint; x-9e5b ruling).
+                // Cloud is exempt (zero local footprint; the cloud-substrate ruling).
                 if charges_local_memory(substrate) {
                     check_ram_floor(floor_gb, swap_cap).inspect_err(|_| guard.release())?;
                 }
@@ -1846,7 +1846,7 @@ fn decide_gate(
                                 .inspect_err(|_| guard.release())?;
                             // Slot free. RAM recheck happens NOW (at dequeue too — a spawn
                             // that queued 5 minutes must not dispatch into a tight machine).
-                            // Cloud skips it: zero local footprint (x-9e5b ruling).
+                            // Cloud skips it: zero local footprint (the cloud-substrate ruling).
                             if charges_local_memory(substrate) {
                                 check_ram_floor(floor_gb, swap_cap)
                                     .inspect_err(|_| guard.release())?;

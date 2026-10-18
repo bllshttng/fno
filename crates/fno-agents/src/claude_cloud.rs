@@ -1,7 +1,7 @@
 //! The claude cloud lane: create a cloud session under a locally held pty,
 //! read the minted session id back, and record the registry row.
 //!
-//! Measured on the installed CLI (x-9e5b probes, 2026-10-18): `claude --cloud`
+//! Measured on the installed CLI (the 2026-10-18 probes): `claude --cloud`
 //! refuses a non-interactive invocation outright, so the create runs on a pty
 //! this process holds. The CLI prints the minted id (`Created cloud session:`
 //! / `Resume with: claude --teleport session_<id>`) and exits at once - the
@@ -497,7 +497,7 @@ fn run_bounded(argv: &[String], secs: u64) -> (i32, String, String) {
 }
 
 /// Deliver mail to a cloud row: render the contract row's follow-up argv with
-/// the envelope and run it bounded. Measured follow-up (x-9e5b probes): the
+/// the envelope and run it bounded. Measured follow-up (CLI probes): the
 /// CLI prints "Sent to cloud session." and exits 0; the reply never returns
 /// on stdout, so the exit code IS the delivery answer.
 pub fn deliver_cloud_followup(entry: &RegistryEntry, message: &str) -> Result<(), String> {
@@ -582,38 +582,44 @@ pub fn non_claude_cloud_refusal(provider: &str) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "Created cloud session: Repository commit and branch probe\n\
-View: https://claude.ai/code/session_01UWUSyDG4JvNYLaioWPq7i9?from=cli&m=0\n\
-Resume with: claude --teleport session_01UWUSyDG4JvNYLaioWPq7i9\n";
+    // The measured marker lines, with a SYNTHETIC id: the URL is assembled
+    // at runtime so no real session address ships in the repo.
+    fn view_url(id: &str) -> String {
+        format!("View: https://claude.ai/code/{id}?from=cli&m=0")
+    }
+
+    fn sample_for(id: &str) -> String {
+        format!(
+            "Created cloud session: probe title\n{}\nResume with: claude --teleport {id}\n",
+            view_url(id)
+        )
+    }
 
     #[test]
     fn parse_reads_id_title_and_url() {
-        let parsed = parse_create_output(SAMPLE, "session_").expect("parses");
-        assert_eq!(parsed.session_id, "session_01UWUSyDG4JvNYLaioWPq7i9");
-        assert_eq!(
-            parsed.title.as_deref(),
-            Some("Repository commit and branch probe")
-        );
-        assert_eq!(
-            parsed.view_url.as_deref(),
-            Some("https://claude.ai/code/session_01UWUSyDG4JvNYLaioWPq7i9?from=cli&m=0")
-        );
+        let id = "session_SYNTH0001";
+        let parsed = parse_create_output(&sample_for(id), "session_").expect("parses");
+        assert_eq!(parsed.session_id, id);
+        assert_eq!(parsed.title.as_deref(), Some("probe title"));
+        assert_eq!(parsed.view_url.as_deref(), Some(&view_url(id)));
     }
 
     #[test]
     fn parse_survives_ansi_dressing() {
-        let dressed = "\x1b[1mCreated cloud session:\x1b[0m probe title\n\x1b[38;2;9;9;9mResume with: claude --teleport session_abc123def\x1b[0m\n";
+        let dressed = "\x1b[1mCreated cloud session:\x1b[0m probe title\n\x1b[38;2;9;9;9mResume with: claude --teleport session_SYNTH0003\x1b[0m\n";
         let parsed = parse_create_output(dressed, "session_").expect("parses");
-        assert_eq!(parsed.session_id, "session_abc123def");
+        assert_eq!(parsed.session_id, "session_SYNTH0003");
         assert_eq!(parsed.title.as_deref(), Some("probe title"));
     }
 
     #[test]
     fn parse_falls_back_to_the_url_path() {
-        let url_only =
-            "Created cloud session: t\nView: https://claude.ai/code/session_01ABC?from=cli&m=0\n";
-        let parsed = parse_create_output(url_only, "session_").expect("parses");
-        assert_eq!(parsed.session_id, "session_01ABC");
+        let url_only = format!(
+            "Created cloud session: t\n{}\n",
+            view_url("session_SYNTH0002")
+        );
+        let parsed = parse_create_output(&url_only, "session_").expect("parses");
+        assert_eq!(parsed.session_id, "session_SYNTH0002");
     }
 
     #[test]

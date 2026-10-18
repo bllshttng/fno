@@ -162,7 +162,7 @@ passthrough = ["*"]
 argv = ["claude", "--bg", "--settings", "{settings}", "--model", "{model}", "--effort", "{effort}", "--permission-mode", "{permission_mode}", "--name", "{name}", "{payload}"]
 optional = ["settings", "model", "effort", "permission_mode"]
 
-# THE CLOUD LINE. Measured on the installed CLI 2026-10-18 (probes, x-9e5b):
+# THE CLOUD LINE. Measured on the installed CLI (the 2026-10-18 probes):
 # `claude --cloud` refuses a non-interactive invocation outright, so the
 # create runs under a locally held pty; it prints the minted session id
 # ("Created cloud session: <title>" / "Resume with: claude --teleport
