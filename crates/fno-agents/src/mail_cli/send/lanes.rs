@@ -184,7 +184,6 @@ pub(super) struct NameLaneArgs<'a> {
     provider: Option<&'a str>,
     reply_to: Option<&'a str>,
     token: Option<&'a str>,
-    style_exception: Option<&'a str>,
     force: bool,
     origin: Option<&'a str>,
     subject: Option<&'a str>,
@@ -1332,7 +1331,6 @@ pub(super) fn job_lane_send(
     payload: &str,
     token: &str,
     from_name: Option<&str>,
-    _style_exception: Option<&str>,
     origin: Option<&str>,
     subject: Option<&str>,
 ) -> Result<(), i32> {
@@ -1522,7 +1520,6 @@ pub(super) fn run_name_lane_force(
         } else {
             None
         },
-        style_exception: args.style_exception.as_deref(),
         force: true,
         origin,
         subject,
@@ -1661,7 +1658,6 @@ pub(super) fn run_dispatch_then_name_lane(
                 } else {
                     None
                 },
-                style_exception: args.style_exception.as_deref(),
                 force: false,
                 origin,
                 subject,

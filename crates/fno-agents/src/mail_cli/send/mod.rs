@@ -1969,7 +1969,6 @@ pub fn run(args: &[String]) -> i32 {
                 &payload,
                 token,
                 from_name.as_deref(),
-                args.style_exception.as_deref(),
                 mail_origin,
                 subject.as_deref(),
             ) {
