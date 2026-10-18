@@ -157,21 +157,6 @@
     "gh": {"view-2": {"json": {"baseRefName": "main", "headRefName": "feature/x"}}}
   },
   {
-    "label": "check posture unknown recompute",
-    "entry": "check",
-    "pr": 7,
-    "recompute": true,
-    "origin": true,
-    "review": {"required_bots": ["chatgpt-codex-connector"]},
-    "events": [],
-    "answers": {
-      "review-coverage": {"exit": 0, "json": {"pr": 7, "coverage": "covered", "reviewed_count": 1, "review_state": "reviewed", "head_sha": "__HEAD_SHA__", "stale_verdicts": [], "verdicts": [{"name": "chatgpt-codex-connector", "verdict": "reviewed", "producer": "github_app", "freshness": "fresh"}]}, "events_row": {"pr": 7, "coverage": "covered", "reviewed_count": 1, "review_state": "reviewed", "head_sha": "__HEAD_SHA__", "stale_verdicts": [], "verdicts": [{"name": "chatgpt-codex-connector", "verdict": "reviewed", "producer": "github_app", "freshness": "fresh"}], "ts": "2026-10-13T00:07:00Z"}},
-      "pr-head": {"json": {"head": "__HEAD_SHA__"}},
-      "review-level": {"json": {"invocation": "fno do review --level medium --reviewer code-review"}}
-    },
-    "gh": {"view-2": {"json": {"baseRefName": "main", "headRefName": "feature/x"}}}
-  },
-  {
     "label": "check stale verdict waiver guidance",
     "entry": "check",
     "pr": 7,
