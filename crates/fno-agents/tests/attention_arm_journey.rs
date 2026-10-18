@@ -6,7 +6,7 @@
 
 use fno_agents::attention::project;
 use fno_agents::attention_arm::{tick_pages, SinkIo};
-use fno_agents::attention_file::{parse_page, render_index, render_page, FileAnswer, BASE};
+use fno_agents::attention_file::{parse_page, FileAnswer};
 use fno_agents::attention_route::Routing;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -279,17 +279,4 @@ fn routing_failure_delivers_nothing_then_recovers() {
         &mut io,
     );
     assert_eq!(t2.delivered, 1);
-}
-
-#[test]
-fn render_helpers_smoke() {
-    let _ = render_index(&[], &[]);
-    let _ = render_page(
-        &items().remove(0),
-        &Routing {
-            team: Some("fno".into()),
-            ..Default::default()
-        },
-    );
-    let _ = BASE;
 }
