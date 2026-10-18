@@ -228,33 +228,6 @@ jobs:
           python3 scripts/ci/check_env_registry.py --selftest
           python3 scripts/ci/check_env_registry.py
 
-  # The workflow-contract script pins that every main head carries the full
-  # lane set (unfiltered guards + rust-ci pushes, full lanes on the non-PR
-  # selector) - the input the PR merge gate's CI-freshness read depends on -
-  # plus the release.yml publish routing. It guards no PR-only context, so it
-  # rides the push+PR group; unwired it rotted silently on main.
-  workflow-contract:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-
-      - name: Python + uv
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/guards-setup
-
-      - name: Workflow contract (main head + release routing)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          python3 -m pip install --quiet pyyaml
-          bash tests/ci/test_main_exact_head_correctness.sh
-
   # PR-only: every member here originally triggered on `pull_request` alone
   # (no `push`), several because they read PR-only context (PR_BODY,
   # BASE_REF, PR_TITLE, PR_BASE_SHA/PR_HEAD_SHA) that does not exist on a push
@@ -330,6 +303,53 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: bash scripts/ci/check-no-session-urls.sh
+
+  # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
+  # into one job sharing a single fno-agents build). PR-only: the gate reads
+  # PR_BODY, which does not exist on a push event. The job id stays
+  # check-pr-node-closure so the check-run name crates/fno-agents/src/heal.rs
+  # matches (closure-trailer signature) is unchanged.
+  check-pr-node-closure:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (closure scanner build)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/fno-agents
+
+      - name: Build fno-agents (closure scanner)
+        working-directory: crates/fno-agents
+        run: cargo build --bin fno-agents
+
+      - name: PR node closure
+        id: closure
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        # shell: bash sets pipefail, so the script's exit code fails the step
+        # while tee still captures the remedy text for the annotation step.
+        shell: bash
+        run: bash scripts/ci/check-pr-node-closure.sh 2>&1 | tee closure.log
+
+      - name: Annotate with the remedy
+        if: failure() && steps.closure.outcome == 'failure'
+        run: |
+          cat closure.log >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::PR node closure: the PR body needs the exact closure line (Fixes <id> [<id> ...]). Generate ONE line with: fno do pr closure-trailer <node-id> [--extra <id> ...], then EDIT the PR body: replace every closure line with that one line (the gate reads only the last). Do not rerun this failed run."
+
+      - name: Run self-test
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-pr-node-closure-selftest.sh
 
   # push (main) + pull_request: no member here reads PR-only context.
   # Sourced from: autonomy-registry.yml, codex-bootstrap-check.yml,
@@ -719,3 +739,33 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_uv_install_verify_wait.sh
+
+      # From internal-refs.yml. The check-no-internal-refs guard blocks four
+      # leak classes: internal/ vault-path literals in shipped prose,
+      # node IDs / session URLs in that prose and in the code tree, plus
+      # competitor product names ANYWHERE in the tree, code included. That
+      # last class is repo-wide, so the guard runs unconditionally here too.
+      - name: No internal refs or competitor names in the tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: bash scripts/ci/check-no-internal-refs.sh
+
+      # From internal-refs.yml. A gate a rule cites must be watched failing:
+      # the selftest plants one leak per class/scope and asserts each is
+      # rejected, and each sanctioned form is accepted.
+      - name: Gate selftest (positive and negative controls)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: bash scripts/tests/check-no-internal-refs-selftest.sh
+
+      # From workflow-contract.yml (workflow-contract job). Pins that every
+      # main head carries the full lane set (unfiltered guards + rust-ci
+      # pushes, full lanes on the non-PR selector) - the input the PR merge
+      # gate's CI-freshness read depends on - plus the release.yml publish
+      # routing.
+      - name: Workflow contract (main head + release routing)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          python3 -m pip install --quiet pyyaml
+          bash tests/ci/test_main_exact_head_correctness.sh
