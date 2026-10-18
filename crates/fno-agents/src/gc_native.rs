@@ -98,11 +98,16 @@ pub(crate) fn stop_outcome_effect(confirmed: bool, detail: Option<String>) -> Ef
 /// itself; only here does a stop run first - and since, `rm` runs that
 /// stop itself rather than asking a caller to compose one. A row with no
 /// substrate stamp counts: adopted claude rows carry none, and the claude
-/// roster lists background sessions only.
+/// roster lists background sessions only. A cloud row is not in the local
+/// roster at all (the session lives on claude.ai), so no stop precedes its
+/// removal - the registry row is the whole story.
 pub(crate) fn stop_precedes_removal(e: &RegistryEntry) -> bool {
     e.harness_name() == "claude"
         && e.mux.is_none()
-        && !matches!(e.substrate.as_deref(), Some("pane") | Some("headless"))
+        && !matches!(
+            e.substrate.as_deref(),
+            Some("pane") | Some("headless") | Some("cloud")
+        )
 }
 
 /// Apply the ACTIVE-SURFACE removal for one row through the production
@@ -462,6 +467,8 @@ mod tests {
             Some("headless"),
             None
         )));
+        // A cloud row lives on claude.ai; the local roster has nothing to stop.
+        assert!(!stop_precedes_removal(&row("claude", Some("cloud"), None)));
     }
 
     #[test]

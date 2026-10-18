@@ -1738,29 +1738,42 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(rfc3339_like_to_secs);
         let served_word = row.get("liveness").and_then(|v| v.as_str());
         let pid = row.get("pid").and_then(|v| v.as_u64());
-        let ladder = derive_liveness(
-            status,
-            pid,
-            row.get("short_id").and_then(|v| v.as_str()).unwrap_or(""),
-        );
-        let liveness = crate::served_liveness::served_liveness(served_word, measured_at, now_secs)
-            .unwrap_or_else(|| {
-                // A stale served "dead" on a TERMINAL, pid-less row still
-                // corroborates the terminal status: the daemon stamped it from an
-                // observed exit, and with no pid recorded there is no reused-pid
-                // contradiction to wait for - the stamp is the only evidence
-                // either side has, and age must not erase it. Any other stale
-                // reading keeps the ladder's verdict.
-                if exited
-                    && pid.is_none()
-                    && served_word == Some("dead")
-                    && ladder == Liveness::Unmeasured
-                {
-                    Liveness::Dead
-                } else {
-                    ladder
-                }
-            });
+        // A cloud row carries no local liveness surface: no pid, no roster
+        // row, no transcript. Nothing local can confirm or falsify the
+        // status word, so the honest render is the unmeasured `?` - never
+        // the alive a spawn-time status claims.
+        let is_cloud_row = row.get("substrate").and_then(|v| v.as_str()) == Some("cloud");
+        let ladder = if is_cloud_row {
+            Liveness::Unmeasured
+        } else {
+            derive_liveness(
+                status,
+                pid,
+                row.get("short_id").and_then(|v| v.as_str()).unwrap_or(""),
+            )
+        };
+        let liveness = if is_cloud_row {
+            Liveness::Unmeasured
+        } else {
+            crate::served_liveness::served_liveness(served_word, measured_at, now_secs)
+                .unwrap_or_else(|| {
+                    // A stale served "dead" on a TERMINAL, pid-less row still
+                    // corroborates the terminal status: the daemon stamped it from an
+                    // observed exit, and with no pid recorded there is no reused-pid
+                    // contradiction to wait for - the stamp is the only evidence
+                    // either side has, and age must not erase it. Any other stale
+                    // reading keeps the ladder's verdict.
+                    if exited
+                        && pid.is_none()
+                        && served_word == Some("dead")
+                        && ladder == Liveness::Unmeasured
+                    {
+                        Liveness::Dead
+                    } else {
+                        ladder
+                    }
+                })
+        };
         let harness_title = row
             .get("harness_title")
             .and_then(|v| v.as_str())
@@ -2772,6 +2785,29 @@ mod tests {
                               "received_at":"2020-01-01T00:00:00Z"}}"#);
         let rows = derive_rows(&raw, NOW).unwrap();
         assert_eq!(rows[0].badge, Some(AgentBadge::Done));
+    }
+
+    #[test]
+    fn a_cloud_row_renders_the_unmeasured_question() {
+        // No local surface can measure a cloud row (no pid, no roster row,
+        // no transcript), so the honest render is `?`, never the alive its
+        // spawn-time status word claims.
+        let raw = reg(
+            r#"{"name":"cloudy","cwd":"/w","status":"live","harness":"claude",
+                "substrate":"cloud","short_id":"session_abc123"}"#,
+        );
+        let rows = derive_rows(&raw, NOW).unwrap();
+        let cloudy = rows.iter().find(|r| r.name == "cloudy").unwrap();
+        assert_eq!(cloudy.liveness, Liveness::Unmeasured);
+    }
+
+    #[test]
+    fn a_local_row_keeps_the_ladder_the_cloud_override_skips() {
+        // The override keys on the substrate stamp, not on pid-absence:
+        // a pid-less local row still reads its status ladder.
+        let raw = reg(r#"{"name":"local","cwd":"/w","status":"live","harness":"claude"}"#);
+        let rows = derive_rows(&raw, NOW).unwrap();
+        assert_eq!(rows[0].liveness, Liveness::Alive);
     }
 
     #[test]

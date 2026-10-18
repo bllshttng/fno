@@ -47,8 +47,8 @@ Verdict = namedtuple(
 #: ``pid``/``pid_start_time``/``mux`` ride for the reachability falsifiers.
 Row = namedtuple(
     "Row",
-    "row_id name state node cwd agent pid pid_start_time mux stopped_at",
-    defaults=(None, "", "claude", None, None, None, None),
+    "row_id name state node cwd agent pid pid_start_time mux stopped_at substrate",
+    defaults=(None, "", "claude", None, None, None, None, None),
 )
 #: ``records`` is [(epoch_s_or_None, text)] newest-last; ``tail_text`` is the
 #: flattened join of those texts; ``last_role``/``last_text`` describe the LAST
@@ -875,6 +875,14 @@ def _verdict_one(
 ) -> Verdict:
 
     if facts is None and row.state in _GHOST_STATES:
+        # A cloud row is transcript-less BY DESIGN, not a ghost: the session
+        # lives on claude.ai and no local store resolves. Report-and-leave.
+        if getattr(row, "substrate", None) == "cloud":
+            return _verdict(
+                row, LEAVE,
+                "cloud session has no local transcript; it lives on claude.ai",
+                "report",
+            )
         basis = (
             f"no transcript for {row.row_id}"
             if row.agent in {"claude", "codex"}
@@ -1410,6 +1418,7 @@ def fleet_rows(*, timeout: Optional[float] = None) -> tuple[list[Row], list[str]
             pid=getattr(entry, "pid", None), pid_start_time=getattr(entry, "pid_start_time", None),
             mux=getattr(entry, "mux", None),
             stopped_at=(getattr(entry, "stop", None) or {}).get("at"),
+            substrate=getattr(entry, "substrate", None),
         ))
     from fno.agents.spawn_gate import LIVE_STATUSES
 
