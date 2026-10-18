@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::backlog_style::{to_body_line, BLine};
 use super::input_folds::{fold_modal_keys, ModalKey};
@@ -52,8 +53,22 @@ pub(crate) enum Body {
         truncated: bool,
     },
     Image(Picture),
+    /// A parsed PDF. The shown page rides the image path as a [`Picture`]
+    /// once its render lands; `None` until then (or when the render failed).
+    Pdf(PdfState),
     Binary,
     Failed(String),
+}
+
+/// A parsed PDF document, the page the viewer shows, and its rendered
+/// picture. The document stays parsed in memory so a page flip re-renders
+/// without re-reading the file; only the current page's bitmap is kept.
+pub(crate) struct PdfState {
+    doc: Arc<hayro::hayro_syntax::Pdf>,
+    /// The 0-based page the viewer shows.
+    page: usize,
+    pages: usize,
+    pic: Option<Picture>,
 }
 
 /// A decoded image, and its encoding for the last body rect it was drawn at
@@ -92,6 +107,9 @@ fn read_body(path: &Path) -> Body {
     }
     if let Some(format) = sniff_image(path) {
         return read_image(path, format);
+    }
+    if sniff_pdf(path) {
+        return read_pdf(path);
     }
     let mut buf = Vec::new();
     let read =
@@ -165,6 +183,81 @@ fn read_image(path: &Path, format: image::ImageFormat) -> Body {
     }
 }
 
+/// Whether the first KiB names a PDF: the header the spec puts in the first
+/// bytes, which hayro also scans for.
+fn sniff_pdf(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 1024];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    head[..n].windows(5).any(|w| w == b"%PDF-")
+}
+
+fn read_pdf(path: &Path) -> Body {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > IMAGE_CAP) {
+        return Body::Failed("pdf over 32 MiB".to_string());
+    }
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(e) => return Body::Failed(e.to_string()),
+    };
+    match hayro::hayro_syntax::Pdf::new(data) {
+        Ok(doc) => {
+            let pages = doc.pages().len();
+            if pages == 0 {
+                return Body::Failed("this pdf has no pages".to_string());
+            }
+            Body::Pdf(PdfState {
+                doc: Arc::new(doc),
+                page: 0,
+                pages,
+                pic: None,
+            })
+        }
+        Err(hayro::hayro_syntax::LoadPdfError::Decryption(_)) => {
+            Body::Failed("this pdf is encrypted".to_string())
+        }
+        Err(hayro::hayro_syntax::LoadPdfError::Invalid) => {
+            Body::Failed("cannot parse this pdf".to_string())
+        }
+    }
+}
+
+/// Render page `idx` of a parsed document at `px` device pixels: one RGBA
+/// picture for the image layer. Blocking: call it off the UI loop. `None`
+/// when the page does not exist or hayro refuses it.
+fn render_page(doc: &hayro::hayro_syntax::Pdf, idx: usize, px: (u32, u32)) -> Option<Picture> {
+    let page = doc.pages().get(idx)?;
+    let (pw, ph) = page.render_dimensions();
+    if px.0 == 0 || px.1 == 0 || pw <= 0.0 || ph <= 0.0 {
+        return None;
+    }
+    let scale = (px.0 as f32 / pw).min(px.1 as f32 / ph);
+    let cache = hayro::RenderCache::default();
+    let pixmap = hayro::render(
+        page,
+        &cache,
+        &hayro::hayro_interpret::InterpreterSettings::default(),
+        &hayro::RenderSettings::default(),
+        &hayro::PixmapSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: hayro::vello_cpu::color::palette::css::WHITE,
+        },
+    );
+    let (w, h) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let img = image::RgbaImage::from_raw(w, h, pixmap.data_as_u8_slice().to_vec())?;
+    Some(Picture {
+        img: image::DynamicImage::ImageRgba8(img),
+        px: (w, h),
+        cache: std::cell::RefCell::new(None),
+    })
+}
+
 /// One source line made safe to paint: a tab becomes four spaces and any
 /// other control character a dot, so file bytes can never reach the terminal
 /// as an escape sequence.
@@ -234,6 +327,14 @@ impl FileViewer {
             Body::Text { .. } | Body::Markdown { .. } => vec!["(empty file)".into()],
             // The image paints over a blank body.
             Body::Image(_) => Vec::new(),
+            Body::Pdf(s) => match s.pic {
+                Some(_) => Vec::new(),
+                None => vec![
+                    "cannot render this page".into(),
+                    String::new(),
+                    "press o to open it outside the mux".into(),
+                ],
+            },
             Body::Binary => vec![
                 "no preview: this is a binary file".into(),
                 String::new(),
@@ -342,7 +443,18 @@ fn chrome_for(v: &FileViewer, w: usize, panel: bool) -> chrome::Chrome {
         }
     );
     let first = if cut { "first 1 MiB · " } else { "" };
+    let title = match &v.body {
+        Body::Pdf(s) => format!(
+            "{} · page {}/{}",
+            name.unwrap_or("file"),
+            s.page + 1,
+            s.pages
+        ),
+        _ => name.unwrap_or("file").to_string(),
+    };
     let footer = match (&v.body, panel) {
+        (Body::Pdf(_), true) => "n/p page · -/+ size · o open · esc close".to_string(),
+        (Body::Pdf(_), false) => "n/p page · o open outside · esc close".to_string(),
         (Body::Image(p), true) => {
             format!("{}x{} px · -/+ size · o open · esc close", p.px.0, p.px.1)
         }
@@ -351,7 +463,7 @@ fn chrome_for(v: &FileViewer, w: usize, panel: bool) -> chrome::Chrome {
         (_, false) => format!("{first}j/k scroll · space page · o open outside · esc close"),
     };
     chrome::Chrome::new(
-        chrome::fit_ellipsis(name.unwrap_or("file"), room.saturating_sub(9)),
+        chrome::fit_ellipsis(&title, room.saturating_sub(9)),
         Anchor::Center,
     )
     .flat()
@@ -504,7 +616,12 @@ pub(super) fn draw(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {
     let md = rendered(v, &p);
     let layout = layout(&p, v, md.as_deref());
     draw_overlay_layout(cells, rows, cols, &layout, &view.theme);
-    if let Body::Image(pic) = &v.body {
+    let pic = match &v.body {
+        Body::Image(pic) => Some(pic),
+        Body::Pdf(s) => s.pic.as_ref(),
+        _ => None,
+    };
+    if let Some(pic) = pic {
         if let Some(rect) = image_rect(&p, rows, cols) {
             paint_image(pic, rect, cells, cols);
         }
@@ -612,6 +729,7 @@ pub(super) async fn open(
     if was_panel || view.viewer_panel_w() > 0 {
         send_resize(view, sock_w).await?;
     }
+    show_page(view, 0).await;
     Ok(())
 }
 
@@ -645,6 +763,74 @@ async fn resize(
     send_resize(view, sock_w).await
 }
 
+/// The panel's body in device pixels: the current image rect times the
+/// terminal's cell size. (0, 0) when there is no drawable body room.
+fn pdf_pixels(view: &View) -> (u32, u32) {
+    let Some(v) = &view.viewer.open else {
+        return (0, 0);
+    };
+    let plan = plan(view, v);
+    let Some(rect) = image_rect(&plan, usize::from(view.term.0), usize::from(view.term.1)) else {
+        return (0, 0);
+    };
+    let (fw, fh) = image_layer::font_px();
+    (
+        u32::from(rect.w) * u32::from(fw),
+        u32::from(rect.h) * u32::from(fh),
+    )
+}
+
+/// Whether the open viewer shows a PDF.
+fn pdf_body(view: &View) -> bool {
+    view.viewer
+        .open
+        .as_ref()
+        .is_some_and(|v| matches!(v.body, Body::Pdf(_)))
+}
+
+/// Render `page + delta` (delta 0 = the current page) off the UI loop and
+/// show it. A failed render keeps the previous page and names the page in a
+/// notice.
+async fn show_page(view: &mut View, delta: isize) {
+    let next = {
+        let Some(v) = view.viewer.open.as_ref() else {
+            return;
+        };
+        let Body::Pdf(s) = &v.body else {
+            return;
+        };
+        if delta == 0 && s.pic.is_some() {
+            return;
+        }
+        (s.page as isize + delta).clamp(0, s.pages.max(1) as isize - 1) as usize
+    };
+    let (doc, px) = {
+        let Some(v) = view.viewer.open.as_ref() else {
+            unreachable!()
+        };
+        let Body::Pdf(s) = &v.body else {
+            unreachable!()
+        };
+        (s.doc.clone(), pdf_pixels(view))
+    };
+    let rendered = tokio::task::spawn_blocking(move || render_page(&doc, next, px))
+        .await
+        .unwrap_or(None);
+    let mut landed = false;
+    if let Some(v) = view.viewer.open.as_mut() {
+        if let Body::Pdf(s) = &mut v.body {
+            if let Some(pic) = rendered {
+                s.page = next;
+                s.pic = Some(pic);
+                landed = true;
+            }
+        }
+    }
+    if !landed {
+        view.set_notice(format!("cannot render page {}", next + 1));
+    }
+}
+
 async fn open_outside(view: &mut View) {
     let Some(path) = view.viewer.open.as_ref().map(|v| v.path.clone()) else {
         return;
@@ -661,7 +847,8 @@ async fn open_outside(view: &mut View) {
 
 /// The focused viewer's keys. Esc and q close; j/k and the arrows scroll a
 /// line; space, b, PgDn and PgUp a page; g and G jump to the ends; - and +
-/// resize the panel; o hands the file to the platform opener.
+/// resize the panel; o hands the file to the platform opener; n and p (and
+/// PgDn and PgUp on a PDF) flip a PDF's pages.
 pub(super) async fn keys(
     view: &mut View,
     bytes: &[u8],
@@ -683,6 +870,10 @@ pub(super) async fn keys(
                 break;
             }
             ModalKey::Up | ModalKey::Byte(b'k') => scroll_by(view, -1),
+            ModalKey::Byte(b'n') => show_page(view, 1).await,
+            ModalKey::Byte(b'p') => show_page(view, -1).await,
+            ModalKey::PageUp if pdf_body(view) => show_page(view, -1).await,
+            ModalKey::PageDown if pdf_body(view) => show_page(view, 1).await,
             ModalKey::Down | ModalKey::Byte(b'j') => scroll_by(view, 1),
             ModalKey::PageUp | ModalKey::Byte(b'b') => scroll_by(view, -page(view)),
             ModalKey::PageDown | ModalKey::Byte(b' ') => scroll_by(view, page(view)),
@@ -964,5 +1155,102 @@ mod tests {
             "the chip closes an unfocused panel"
         );
         assert!(!sock.is_empty(), "and the panes get their columns back");
+    }
+
+    /// A minimal `pages`-page PDF with a runtime-computed xref, ASCII only,
+    /// no compression: enough for hayro to parse and render an empty page.
+    fn tiny_pdf(pages: usize) -> Vec<u8> {
+        let kids = (0..pages)
+            .map(|i| format!("{} 0 R", 3 + i))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut out: Vec<u8> = b"%PDF-1.4\n".to_vec();
+        let mut objs: Vec<Vec<u8>> = Vec::new();
+        objs.push(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec());
+        objs.push(
+            format!(
+                "2 0 obj\n<< /Type /Pages /Kids [{}] /Count {} >>\nendobj\n",
+                kids, pages
+            )
+            .into_bytes(),
+        );
+        for i in 0..pages {
+            objs.push(
+                format!(
+                    "{} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >>\nendobj\n",
+                    3 + i
+                )
+                .into_bytes(),
+            );
+        }
+        let mut offs: Vec<usize> = Vec::new();
+        for obj in &objs {
+            offs.push(out.len());
+            out.extend_from_slice(obj);
+        }
+        let xref_at = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n", objs.len() + 1).into_bytes());
+        out.extend_from_slice(b"0000000000 65535 f \n");
+        for at in &offs {
+            out.extend_from_slice(format!("{:010} 00000 n \n", at).into_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                objs.len() + 1,
+                xref_at
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    fn pdf_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fno-pdf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_sniffs_pdf_and_maps_hayro_errors_to_one_line() {
+        let dir = pdf_dir();
+        let bad = dir.join("bad.pdf");
+        std::fs::write(&bad, b"%PDF-1.4\nnonsense").unwrap();
+        match load(bad, None, ViewerShape::Panel).body {
+            Body::Failed(why) => assert_eq!(why, "cannot parse this pdf"),
+            _ => panic!("junk after the header must fail to parse"),
+        }
+        let ok = dir.join("ok.pdf");
+        std::fs::write(&ok, tiny_pdf(2)).unwrap();
+        match load(ok, None, ViewerShape::Panel).body {
+            Body::Pdf(s) => {
+                assert_eq!(s.pages, 2);
+                assert_eq!(s.page, 0);
+                assert!(s.pic.is_none(), "load must not render; open does");
+            }
+            _ => panic!("a valid pdf parses"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pdf_pages_flip_and_the_title_counts_them() {
+        let dir = pdf_dir();
+        let p = dir.join("book.pdf");
+        std::fs::write(&p, tiny_pdf(3)).unwrap();
+        let (mut v, mut sock) = opened(load(p, None, ViewerShape::Panel)).await;
+        let body = |v: &View| match &v.viewer.open.as_ref().unwrap().body {
+            Body::Pdf(s) => (s.page, s.pages, s.pic.is_some()),
+            _ => panic!("pdf body"),
+        };
+        assert_eq!(body(&v), (0, 3, true), "open renders the first page");
+        assert!(screen(&v).contains("page 1/3"), "{}", screen(&v));
+        keys(&mut v, b"n", &mut sock).await.unwrap();
+        assert_eq!(body(&v), (1, 3, true), "n flips to the second page");
+        assert!(screen(&v).contains("page 2/3"), "{}", screen(&v));
+        keys(&mut v, b"pp", &mut sock).await.unwrap();
+        assert_eq!(body(&v), (0, 3, true), "p clamps at the first page");
+        assert!(screen(&v).contains("page 1/3"), "{}", screen(&v));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
