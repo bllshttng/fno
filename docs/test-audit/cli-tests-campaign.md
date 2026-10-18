@@ -4,8 +4,8 @@ Base sha: 2a898fbb6e. Scope: every `cli/tests` file outside `cli/tests/unit` and
 
 | Measure | Before | After | Cut |
 |---|---:|---:|---:|
-| Declarations (README census pattern) | 2,792 | 1,180 | 58% |
-| Collected cases (`pytest --collect-only`) | 3,235 | 1,348 | 58% |
+| Declarations (README census pattern) | 2,792 | 1,181 | 58% |
+| Collected cases (`pytest --collect-only`) | 3,235 | 1,349 | 58% |
 | Files with tests | 221 | 212 | 9 deleted |
 
 ## Method
@@ -145,7 +145,7 @@ Twenty files with tests are unchanged and not listed.
 | `lint/test_check_pitfalls.py` | 25 | 12 |
 | `lint/test_check_preamble_budget.py` | 35 | 15 |
 | `lint/test_drafting_lenses_contract.py` | 5 | 3 |
-| `lint/test_execution_validation_wiring.py` | 8 | 4 |
+| `lint/test_execution_validation_wiring.py` | 8 | 5 |
 | `lint/test_review_skill_freshness.py` | 4 | 3 |
 | `lint/test_shellout_drift.py` | 18 | 8 |
 | `lint/test_smoke_wheel_env_scrub.py` | 9 | 5 |
