@@ -42,7 +42,7 @@ use crate::proto::{
     LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
     PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
     ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
-    TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
+    TabPaneOccupant, TabSel, TemplateName, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
 };
 use crate::pty::{shell_candidates, PaneChunk, PtyShell};
 use crate::restore_liveness::{
@@ -2750,6 +2750,7 @@ impl Core {
             tree::split_directional(tab, vp, dir, pid).is_ok()
         };
         if split_ok {
+            self.maybe_reflow(sid, tid);
             Ok((sid, tid, false))
         } else {
             // Split refused (tab min-size): fall back to a new tab rather than reaping and dead-ending.
@@ -2902,7 +2903,10 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => Ok((sid, tid, false)),
+            Ok(()) => {
+                self.maybe_reflow(sid, tid);
+                Ok((sid, tid, false))
+            }
             // Min-size refusal falls back to a fresh tab, never a dead-end -
             // mirroring place_spawned_pane. Strict placement never reaches here
             // (it routes through place_strict_at_anchor), but a Refuse policy on
@@ -3023,7 +3027,10 @@ impl Core {
             tree::split_at(tab, vp, anchor, dir, pid)
         };
         match res {
-            Ok(()) => Ok((sid, tid, false)),
+            Ok(()) => {
+                self.maybe_reflow(sid, tid);
+                Ok((sid, tid, false))
+            }
             Err(tree::SplitError::TooSmall { .. }) => {
                 self.reap_pane(pid);
                 Err((
@@ -3085,6 +3092,7 @@ impl Core {
         };
         match res {
             Ok(()) => {
+                self.maybe_reflow(sid, tid);
                 self.push_layout(true);
                 Ok(new_pid)
             }
@@ -3509,6 +3517,11 @@ impl Core {
             // otherwise push_layout would skip that client with a blank view.
             self.tab_areas.remove(&tid);
             self.reanchor_views();
+        } else {
+            // The source tab survived the break with one fewer leaf: reflow
+            // it to its new count. A `TabEmptied` source no longer exists,
+            // so there is nothing left to reflow.
+            self.maybe_reflow(sid, tid);
         }
         // The broken pane's hosting tab changed (it moved into a new
         // tab, and its old tab may be gone), so refresh the persisted member
@@ -3558,6 +3571,9 @@ impl Core {
             tree::graft_subtree(tab, vp, anchor_pane, dir, src_subtree)
                 .map_err(|e| (err_code::BAD_REQUEST, e.to_string()))?;
         }
+        // The destination tab absorbed every leaf of the source tab; reflow
+        // it to its new count.
+        self.maybe_reflow(sid, dst_tid);
         // Graft committed (all-or-nothing): remove the src tab. Its panes rode
         // into dst as a cloned subtree; remove_tab drops only the Tab, never a
         // PTY, so no pane is reaped. Clear the removed tab's cached area and
@@ -3629,6 +3645,8 @@ impl Core {
             tree::graft_subtree(dst_tab, dst_vp, target, dir, Node::Leaf(mover))?;
             dst_tab.focus = mover;
         }
+        // The destination tab gained a leaf; reflow it to the new count.
+        self.maybe_reflow(dst_sid, dst_tid);
         // Graft committed: remove the mover from the source. It was present at
         // resolution (find_pane, no intervening yield on the core loop), so
         // detach cannot fail on presence; a now-empty source tab is dropped and
@@ -3641,6 +3659,9 @@ impl Core {
             self.session.remove_tab(src_sid, src_ti);
             self.tab_areas.remove(&src_tid);
             self.reanchor_views();
+        } else {
+            // The source tab survived with one fewer leaf: reflow it too.
+            self.maybe_reflow(src_sid, src_tid);
         }
         // Reconcile the source workspace's persistence against what the move did:
         if self.session.squad(src_sid).is_none() {
@@ -4643,6 +4664,79 @@ impl Core {
 
         self.push_layout(true);
         Ok(results)
+    }
+
+    /// Auto-reflow one tab's EXISTING leaves (no spawn, no rebind) to `template`:
+    /// read the live leaves in tree order, realize `template`'s pure
+    /// topology for that count, and substitute the real pane ids back in via
+    /// [`substitute_leaves`] - the same slot-index-to-pane-id map [`Self::apply_spec`]
+    /// builds, but skipping `SlotBinding`/`resolve_local_pane` entirely since every
+    /// leaf here is already a live `PaneId`, never a name to look up. A caller
+    /// picks `template` with [`crate::templates::pick_template`] against the tab's
+    /// new leaf count; this method only realizes a template already chosen.
+    fn reflow_tab(&mut self, sid: u64, tid: TabId, template: TemplateName) -> Result<(), String> {
+        let ti = self.tab_index_by_id(sid, tid);
+        let leaf_ids = {
+            let tab = &self.session.squad(sid).expect("squad live").tabs[ti];
+            tree::leaves(&tab.root)
+        };
+        let shape = crate::templates::topology(template, leaf_ids.len())
+            .map_err(|e| format!("reflow template arity: {e}"))?;
+        let vp = self.tab_rect(tid);
+        let overflow = tree::layout(&shape, vp)
+            .into_iter()
+            .any(|(_, r)| r.rows < tree::MIN_ROWS || r.cols < tree::MIN_COLS);
+        if overflow {
+            // Too small to reflow: leave the tab's current shape alone rather
+            // than forcing an unfittable one (same posture as a `layout apply`
+            // that does not fit, but silent - this is an automatic background
+            // reshape, not an operator-requested one to report a refusal for).
+            return Ok(());
+        }
+        let map: std::collections::HashMap<u64, u64> = leaf_ids
+            .iter()
+            .enumerate()
+            .map(|(slot, pane)| (slot as u64, *pane))
+            .collect();
+        let new_root = substitute_leaves(&shape, &map);
+        let si = self
+            .session
+            .squads
+            .iter()
+            .position(|s| s.id == sid)
+            .expect("squad live");
+        {
+            let tab = &mut self.session.squads[si].tabs[ti];
+            tab.root = new_root;
+            if let Err(e) = tree::check_invariants(tab) {
+                e2e_log(format_args!("reflow_tab produced an invalid tree: {e}"));
+            }
+        }
+        self.push_layout(true);
+        Ok(())
+    }
+
+    /// The one call every tree-mutation site that adds or removes a tab leaf
+    /// makes after its own mutation lands: pick a template for the
+    /// tab's NEW leaf count and reflow to it. A count outside 2/3/4 - or a
+    /// viewport too small to fit the picked template - is a silent no-op by
+    /// construction ([`crate::templates::pick_template`] returns `None`;
+    /// [`Self::reflow_tab`] returns `Ok(())` on an unfittable shape), so a
+    /// caller never needs to branch on "was this tab reflow-eligible".
+    fn maybe_reflow(&mut self, sid: u64, tid: TabId) {
+        let leaf_count = {
+            let ti = self.tab_index_by_id(sid, tid);
+            let Some(sq) = self.session.squad(sid) else {
+                return;
+            };
+            tree::leaves(&sq.tabs[ti].root).len()
+        };
+        let vp = self.tab_rect(tid);
+        if let Some(template) = crate::templates::pick_template(leaf_count, vp) {
+            if let Err(e) = self.reflow_tab(sid, tid, template) {
+                e2e_log(format_args!("maybe_reflow({tid:?}) declined: {e}"));
+            }
+        }
     }
 
     /// The current index of the tab with id `tid` in squad `sid`. Callers hold a
@@ -9195,7 +9289,10 @@ impl Core {
                     return Flow::Continue;
                 };
                 match tree::split_directional(tab, vp, dir, pid) {
-                    Ok(()) => self.push_layout(true),
+                    Ok(()) => {
+                        self.maybe_reflow(view.0, view.1);
+                        self.push_layout(true);
+                    }
                     Err(e) => {
                         // AC1-EDGE: refused split reaps the pre-spawned
                         // shell; the tree was never touched.

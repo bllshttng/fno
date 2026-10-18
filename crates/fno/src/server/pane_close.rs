@@ -328,6 +328,9 @@ impl Core {
             .expect("find_pane returned a live squad id");
         let tab = &mut squad.tabs[ti];
         if !tree::close(tab, vp, pid) {
+            // The tab survived the close with one fewer leaf: reflow it to
+            // its new count before the layout push below.
+            self.maybe_reflow(sid, tid);
             self.push_layout(true);
             return Flow::Continue;
         }

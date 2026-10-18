@@ -63,7 +63,10 @@ impl Core {
                 tree::split_at(tab, vp, anchor, Dir::Down, pid)
             };
             match res {
-                Ok(()) => return Ok((sid, tid, false)),
+                Ok(()) => {
+                    self.maybe_reflow(sid, tid);
+                    return Ok((sid, tid, false));
+                }
                 Err(tree::SplitError::TooSmall { .. }) => {
                     refused_with_room = true;
                 }
