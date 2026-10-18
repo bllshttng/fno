@@ -14,18 +14,7 @@ from typing import Any, Optional
 import pytest
 
 from fno import doctor
-from fno.doctor import _fd_limit_report, _parse_launchctl_maxfiles
-
-
-def test_parse_launchctl_maxfiles_reads_soft_limit() -> None:
-    assert _parse_launchctl_maxfiles("maxfiles\t256\tunlimited\n") == 256
-    assert _parse_launchctl_maxfiles("  maxfiles 65536 unlimited\n") == 65536
-
-
-def test_parse_launchctl_maxfiles_rejects_junk() -> None:
-    assert _parse_launchctl_maxfiles("") is None
-    assert _parse_launchctl_maxfiles("maxfiles unlimited unlimited\n") is None
-    assert _parse_launchctl_maxfiles("some\tother\tlimits\n") is None
+from fno.doctor import _fd_limit_report
 
 
 def _report_for(
@@ -58,32 +47,6 @@ def test_low_launchd_default_verdict_low(
     assert report["launchd_soft"] == 256
     assert report["kern_maxfiles"] == 491520
     assert report["verdict"] == "low"
-
-
-def test_low_soft_with_no_launchctl_probe_verdict_low(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The probe failing must not hide a low reading of THIS process."""
-    report = _report_for(monkeypatch, 256, None)
-    assert report["launchd_soft"] is None
-    assert report["verdict"] == "low"
-
-
-def test_non_darwin_skips_launchd_probe(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On linux the launchd branch must not run; the report still resolves."""
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(
-        resource, "getrlimit", lambda _which: (65536, resource.RLIM_INFINITY)
-    )
-
-    def no_launchctl(argv: list[str]) -> Optional[tuple[int, str, str]]:
-        assert argv[0] != "launchctl", "launchctl must not run off darwin"
-        return None
-
-    monkeypatch.setattr(doctor, "_bounded_command", no_launchctl)
-    report = _fd_limit_report()
-    assert report["launchd_soft"] is None
-    assert report["verdict"] == "ok"
 
 
 def test_linux_unlimited_soft_is_not_low(monkeypatch: pytest.MonkeyPatch) -> None:

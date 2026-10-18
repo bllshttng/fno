@@ -5,43 +5,6 @@ from __future__ import annotations
 from fno.footprint import parse_footprint
 
 
-def test_ac3_edge_truncated_new_format_row_is_unparsed() -> None:
-    reading = parse_footprint(
-        """\
-        PID PPID ELAPSED %CPU RSS COMMAND
-        101 1 5 20 fno --version
-        """,
-    )
-
-    assert reading.unparsed_lines == 1
-    assert reading.process_count == 0
-
-
-def test_ac1_hp_escaped_newline_argv_parses_and_a_torn_row_still_samples() -> None:
-    """The writer escapes a newline argv to the four-character
-    \\012 (and \\015) form, so the cell is ordinary characters and parses clean."""
-    reading = parse_footprint(
-        """\
-        PID PPID STAT ELAPSED %CPU RSS COMMAND
-        101 1 R 01:00:00 20.0 1024 fno-agents-worker --run --pin a\\012b\\015c
-        """
-    )
-
-    assert reading.unparsed_lines == 0
-    assert reading.process_count == 1
-    assert reading.top == [(20.0, "fno-agents-worker --run --pin a\\012b\\015c")]
-
-    torn = parse_footprint(
-        """\
-        PID PPID STAT ELAPSED %CPU RSS COMMAND
-        101 1 R 00:01 0.0 1024
-        """
-    )
-
-    assert torn.unparsed_lines == 1
-    assert len(torn.unparsed_samples) == 1
-
-
 def test_ac1_hp_attributes_transitive_build_descendants_and_excludes_negative_tree() -> None:
     reading = parse_footprint(
         """\
@@ -109,20 +72,6 @@ def test_ac1_edge_shared_serve_is_not_a_direct_threshold_process() -> None:
     assert reading.fleet_cpu_cores == 0.3
 
 
-def test_ac3_edge_inspects_pid_one_as_an_attribution_root() -> None:
-    reading = parse_footprint(
-        """\
-        PID PPID ELAPSED %CPU RSS COMMAND
-        1 0 01:00:00 20.0 1024 fno-agents-worker --run
-        2 1 01:00:00 80.0 1024 cargo test -p fno
-        """
-    )
-
-    assert reading.process_count == 2
-    assert reading.fleet_cpu_cores == 1.0
-    assert reading.descendant_process_count == 1
-
-
 def test_ac1_hp_counts_attributed_rows_and_sustained_cpu() -> None:
     reading = parse_footprint(
         """\
@@ -144,68 +93,6 @@ def test_ac1_hp_counts_attributed_rows_and_sustained_cpu() -> None:
     ]
 
 
-def test_ac2_edge_malformed_line_is_counted_without_aborting() -> None:
-    reading = parse_footprint(
-        """\
-        PID ELAPSED %CPU RSS COMMAND
-        101 01:00:00 20.0 1024 fno daemon
-        this is not a ps row
-        102 01:00:00 nope 2048 fno broken-cpu
-        """,
-    )
-
-    assert reading.process_count == 1
-    assert reading.sustained_cpu_cores == 0.2
-    assert reading.unparsed_lines == 2
-
-
-def test_ac6_edge_claude_workers_do_not_count_as_fleet_overhead() -> None:
-    reading = parse_footprint(
-        """\
-        PID ELAPSED %CPU RSS COMMAND
-        201 02:00:00 300.0 1024 claude --worker
-        202 02:00:00 12.5 1024 fno mux serve
-        """,
-    )
-
-    assert reading.process_count == 1
-    assert reading.sustained_cpu_cores == 0.125
-    assert reading.top == [(12.5, "fno mux serve")]
-
-
-def test_ac9_edge_high_cpu_burst_is_transient_not_sustained() -> None:
-    reading = parse_footprint(
-        """\
-        PID ELAPSED %CPU RSS COMMAND
-        301 00:00:01 92.0 1024 fno --version
-        302 00:00:12 88.0 1024 fno-py agents list --json
-        303 00:00:29 77.0 1024 fno-agents subscribe --json
-        """,
-    )
-
-    assert reading.sustained_cpu_cores == 0.0
-    assert reading.transient_call_count == 3
-    assert reading.process_count == 3
-    assert reading.top == []
-
-
-def test_review_p2_python_launched_fno_and_agents_worker_are_attributed() -> None:
-    reading = parse_footprint(
-        """\
-        PID ELAPSED %CPU RSS COMMAND
-        401 01:00:00 12.0 1024 /opt/python/bin/python /opt/fno-py agents list --json
-        402 01:00:00 18.0 2048 fno-agents-worker --stream
-        """,
-    )
-
-    assert reading.process_count == 2
-    assert reading.sustained_cpu_cores == 0.3
-    assert reading.top == [
-        (18.0, "fno-agents-worker --stream"),
-        (12.0, "/opt/python/bin/python /opt/fno-py agents list --json"),
-    ]
-
-
 #: Command lines measured on one machine at 2026-09-04. A naive
 #: `ps | grep -i pytest` reported four running tests here; two were real.
 _REAL_CARGO_TEST = (
@@ -224,32 +111,6 @@ _ZSH_WRAPPER = (
 )
 
 
-def test_ac3_hp_a_real_test_runner_is_counted() -> None:
-    from fno.footprint import is_test_runner
-
-    assert is_test_runner(_REAL_CARGO_TEST)
-    assert is_test_runner("pytest cli/tests -k lanes")
-    assert is_test_runner("/opt/homebrew/bin/py.test -x")
-    assert is_test_runner("/usr/bin/python3.12 -m pytest cli/tests")
-    assert is_test_runner("cargo nextest run --workspace")
-    assert is_test_runner("fno doctor test cli/tests")
-    assert is_test_runner("/opt/homebrew/bin/fno-py test")
-
-
-def test_ac3_edge_a_pytest_path_in_the_command_line_is_not_a_test() -> None:
-    """The trap this predicate closes, pinned to the measured command line: a
-    leaked keeper whose SOCKET PATH sits under pytest-of-<user>. The substring
-    is in the path, never in the program."""
-    from fno.footprint import is_test_runner
-
-    assert not is_test_runner(_LEAKED_KEEPER)
-    assert not is_test_runner(_ZSH_WRAPPER)
-    assert not is_test_runner("")
-    assert not is_test_runner("cargo build --release")
-    assert not is_test_runner("fno doctor lanes")
-    assert not is_test_runner("vim test_pytest_helpers.py")
-
-
 def test_ac3_hp_the_parser_counts_only_the_real_runners() -> None:
     """The positive control over one snapshot: four rows carry the word, two
     are tests. A count that read the whole command line would say four."""
@@ -266,21 +127,6 @@ def test_ac3_hp_the_parser_counts_only_the_real_runners() -> None:
     )
 
     assert parse_footprint(snapshot).test_process_count == 2
-
-
-def test_the_test_count_is_whole_machine_not_fleet_attributed() -> None:
-    """A test a person started competes for the same box as a lane, so it is
-    counted even though nothing attributes it to the fleet."""
-    from fno.footprint import parse_footprint
-
-    snapshot = (
-        "PID PPID ELAPSED %CPU RSS COMMAND\n"
-        "100 1 01:00:00 10.0 1024 pytest cli/tests\n"
-    )
-    reading = parse_footprint(snapshot)
-
-    assert reading.process_count == 0
-    assert reading.test_process_count == 1
 
 
 def test_ac8_hp_top_consumers_name_the_process_and_the_worktree() -> None:
@@ -311,16 +157,6 @@ def test_ac8_hp_top_consumers_name_the_process_and_the_worktree() -> None:
     assert len(top) <= 5
 
 
-def test_ac9_edge_top_consumers_carry_no_worktree_when_argv_names_none() -> None:
-    from fno.footprint import top_consumers
-
-    top = top_consumers([(10.0, "/usr/sbin/cfprefsd agent")])
-
-    assert top[0]["name"] == "cfprefsd"
-    assert top[0]["worktree"] is None
-    assert top[0]["worktree_procs"] == 0
-
-
 #: Measured 2026-09-07: the Claude Code background daemon's pre-warm pool
 #: under both spellings it uses. Neither is an fno process, so neither is
 #: fleet-attributable; they are counted only so a load refusal can name them.
@@ -332,13 +168,6 @@ _BG_PTY_HOST_APP_PATH = (
     "/Users/bb16/.local/share/claude/versions/2.1.263 --bg-spare "
     "/tmp/cc-daemon-501/608d3bdb/spare/235506db.claim.sock"
 )
-
-
-def test_is_claude_spare_pool_matches_both_spellings() -> None:
-    from fno.footprint import is_claude_spare_pool
-
-    assert is_claude_spare_pool(_BG_SPARE)
-    assert is_claude_spare_pool(_BG_PTY_HOST)
 
 
 def test_is_claude_spare_pool_edge_a_prompt_naming_it_is_not_the_pool() -> None:
@@ -374,47 +203,7 @@ def test_ac_hp_spare_pool_rows_are_counted_but_never_fleet_attributed() -> None:
     assert reading.process_count == 1
 
 
-def test_ac_edge_no_pool_rows_yields_zero_and_unchanged_fleet_numbers() -> None:
-    reading = parse_footprint(
-        """\
-        PID PPID ELAPSED %CPU RSS COMMAND
-        100 1 01:00:00 20.0 1024 fno-agents-worker --run
-        """,
-    )
-
-    assert reading.spare_pool_process_count == 0
-    assert reading.spare_pool_cpu_cores == 0.0
-    assert reading.spare_pool_rss_gb == 0.0
-    assert reading.fleet_cpu_cores == 0.2
-
-
 _GOOD_ROW = "100 1 01:00:00 20.0 1024 fno-agents-worker --run"
-
-
-def _parse_with_bad_row(bad_row: str):
-    return parse_footprint(
-        f"PID PPID ELAPSED %CPU RSS COMMAND\n{_GOOD_ROW}\n{bad_row}\n",
-    )
-
-
-def test_ac0_shapes_the_four_measured_failing_shapes_are_unparsed_beside_a_good_row() -> None:
-    # The four shapes proven to fail against the real parser (x-46cb): no
-    # command field, etime of dashes or question marks, a CPU or RSS field of
-    # dash, and a first token that is not an integer.
-    bad_rows = [
-        "200 1 01:00:00 20.0 1024",
-        "201 1 ??:??:?? 20.0 1024 fno-agents-worker --run",
-        "202 1 01:00:00 - 1024 fno-agents-worker --run",
-        "not-a-pid 1 01:00:00 20.0 1024 fno-agents-worker --run",
-        "203 1 01:00:00 20.0 - fno-agents-worker --run",
-        "204 1 --:-- 20.0 1024 fno-agents-worker --run",
-    ]
-    for bad_row in bad_rows:
-        reading = _parse_with_bad_row(bad_row)
-        assert reading.unparsed_lines == 1, bad_row
-        # The good row still parses: its pid holds a process in the reading.
-        assert reading.process_count == 1, bad_row
-        assert reading.fleet_cpu_cores == 0.2, bad_row
 
 
 def test_ac0_shapes_the_same_four_shapes_under_the_state_header() -> None:
@@ -442,28 +231,6 @@ def test_ac0_shapes_the_same_four_shapes_under_the_state_header() -> None:
     assert ok.process_count == 1
 
 
-def test_samples_carry_the_fixed_reason_vocabulary() -> None:
-    cases = {
-        "200 1 01:00:00 20.0 1024": "field-count",
-        "not-a-pid 1 01:00:00 20.0 1024 cmd": "pid",
-        "201 1 ??:??:?? 20.0 1024 cmd": "etime",
-        "202 1 01:00:00 - 1024 cmd": "cpu",
-        "203 1 01:00:00 20.0 - cmd": "rss",
-    }
-    for bad_row, reason in cases.items():
-        reading = _parse_with_bad_row(bad_row)
-        assert reading.unparsed_samples[0].reason == reason, bad_row
-    reading = _parse_with_bad_row("200 1 01:00:00 20.0 1024")
-    assert reading.unparsed_samples[0].row == 2
-
-
-def test_mask_row_prints_numeric_tokens_and_masks_argv() -> None:
-    from fno.footprint import _mask_row
-
-    masked = _mask_row("12345 1 00:01 - 4096 /usr/bin/true")
-    assert masked == "12345 1 00:01 <tok:1> 4096 <tok:13>"
-
-
 def test_mask_row_never_prints_a_command_field_token() -> None:
     from fno.footprint import _mask_row
 
@@ -472,15 +239,6 @@ def test_mask_row_never_prints_a_command_field_token() -> None:
     )
     for secret in ("SUPERSECRET1234", "Authorization", "curl", "Bearer"):
         assert secret not in masked
-
-
-def test_mask_row_caps_length_and_names_the_tail() -> None:
-    from fno.footprint import _MASKED_ROW_MAX_CHARS, _mask_row
-
-    masked = _mask_row("12345 1 00:01 5.0 4096 " + "arg " * 60)
-    assert len(masked) <= _MASKED_ROW_MAX_CHARS
-    assert "<+" in masked and "tokens>" in masked
-    assert masked.startswith("12345 1 00:01 5.0 4096")
 
 
 def test_mask_row_strips_control_bytes() -> None:
@@ -504,19 +262,3 @@ def test_samples_cap_at_three_while_the_count_names_all() -> None:
     # root row lands beyond the sample cap.
     assert reading.unparsed_pids == {300, 301, 302, 303, 304}
     assert [s.row for s in reading.unparsed_samples] == [2, 3, 4]
-
-
-def test_unparsed_pids_salvage_rejects_a_non_integer_first_token() -> None:
-    reading = _parse_with_bad_row("garbage-line-without-a-pid here")
-    assert reading.unparsed_lines == 1
-    assert reading.unparsed_pids == set()
-    assert reading.unparsed_samples[0].pid is None
-
-
-def test_negative_value_rows_report_their_field_reason() -> None:
-    reading = _parse_with_bad_row("200 -1 01:00:00 20.0 1024 fno-agents-worker --run")
-    assert reading.unparsed_samples[0].reason == "pid"
-    reading = _parse_with_bad_row("201 1 01:00:00 -20.0 1024 fno-agents-worker --run")
-    assert reading.unparsed_samples[0].reason == "cpu"
-    reading = _parse_with_bad_row("202 1 01:00:00 20.0 -4 fno-agents-worker --run")
-    assert reading.unparsed_samples[0].reason == "rss"

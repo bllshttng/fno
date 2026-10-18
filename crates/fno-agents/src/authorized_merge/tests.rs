@@ -56,6 +56,9 @@ struct Fake {
     take_slot_err: bool,
     take_slot_calls: RefCell<Vec<u64>>,
     release_slot_calls: RefCell<Vec<u64>>,
+    /// Simulated merge-slot metadata: has `mark_slot_retested` fired since
+    /// the slot was last taken (mirrors the real claim's `metadata`).
+    slot_retested: RefCell<bool>,
     /// Facts and checks for a PR other than the one under decision, keyed
     /// by PR number - a holder read in the slot logic.
     other_facts: RefCell<HashMap<u64, PrFacts>>,
@@ -284,8 +287,11 @@ impl Probes for Fake {
     fn merge_result(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.merge_result.clone().unwrap_or(ProbeOutcome::Clear)
     }
-    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+    fn ci_base(&self, _cwd: &Path, _facts: &PrFacts, merge_clean: bool) -> ProbeOutcome {
         *self.ci_base_calls.borrow_mut() += 1;
+        if merge_clean {
+            return ProbeOutcome::Clear;
+        }
         self.ci_base.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {
@@ -303,6 +309,7 @@ impl Probes for Fake {
             return Err("merge slot already held by pr:99".to_string());
         }
         *self.slot.borrow_mut() = Some(pr);
+        *self.slot_retested.borrow_mut() = false;
         Ok(())
     }
     fn release_slot(&self, _cwd: &Path, _base_ref: &str, pr: u64) {
@@ -310,7 +317,14 @@ impl Probes for Fake {
         let mut held = self.slot.borrow_mut();
         if *held == Some(pr) {
             *held = None;
+            *self.slot_retested.borrow_mut() = false;
         }
+    }
+    fn slot_retested(&self, _cwd: &Path, _base_ref: &str, pr: u64) -> bool {
+        *self.slot.borrow() == Some(pr) && *self.slot_retested.borrow()
+    }
+    fn mark_slot_retested(&self, _cwd: &Path, _base_ref: &str, _pr: u64) {
+        *self.slot_retested.borrow_mut() = true;
     }
     fn checks_read(&self, _cwd: &Path, pr: u64) -> ChecksRead {
         let mine = self.facts.as_ref().map(|f| f.number) == Some(pr);
@@ -560,7 +574,8 @@ fn a_holder_with_fresh_ci_clears_and_releases_the_slot_on_merge_while_a_racer_wa
 
 #[test]
 fn a_holder_that_went_red_releases_its_slot_to_a_waiting_stale_pr() {
-    // AC3-EDGE.
+    // AC3-EDGE. Inconclusive merge result: the fold path, so the waiting PR
+    // walks the slot dance instead of merging straight through.
     let fake = Fake {
         slot: RefCell::new(Some(7)),
         facts: Some(PrFacts {
@@ -570,6 +585,9 @@ fn a_holder_that_went_red_releases_its_slot_to_a_waiting_stale_pr() {
         }),
         covered_head: Some("eight".to_string()),
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 4 behind".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
         ..clean()
     };
     fake.other_facts.borrow_mut().insert(
@@ -639,10 +657,14 @@ fn an_inconclusive_hold_read_keeps_the_slot_with_its_holder() {
 
 #[test]
 fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
-    // AC4-ERR.
+    // AC4-ERR. Inconclusive merge result: an unproven merge owes the fold,
+    // so the claims fault falls back to the stale hold.
     let fake = Fake {
         slot_holder_err: true,
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 5 behind".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
         ..clean()
     };
     let req7 = Request {
@@ -654,9 +676,10 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
     assert_eq!(outcome.word(), "held");
     let detail = outcome.detail();
     assert!(detail.contains("ci_base_stale"));
+    assert!(detail.contains("remedy: merge origin/main into the branch"));
     assert!(
-        !detail.contains("merge slot"),
-        "a fail-open read must not mention the slot"
+        !fake.gh_calls.borrow().iter().any(|c| c[0] == "api"),
+        "a faulted read must not side-effect the branch"
     );
     assert!(fake.take_slot_calls.borrow().is_empty());
 }
@@ -670,6 +693,9 @@ fn a_green_pr_whose_ci_predates_main_merges_main_in_and_waits_for_the_retest() {
     let mut fake = Fake {
         ci_base: Some(ProbeOutcome::Refused(
             "ci_base_stale: run predates base".to_string(),
+        )),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
         )),
         ..clean()
     };
@@ -692,15 +718,6 @@ fn a_green_pr_whose_ci_predates_main_merges_main_in_and_waits_for_the_retest() {
         ]]
     );
 
-    fake.gh_calls.borrow_mut().clear();
-    fake.gh_recovery_ok = Some(false);
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held");
-    assert!(outcome.detail().contains("update-branch failed"));
-    assert!(outcome
-        .detail()
-        .contains("merge origin/main into the branch"));
-
     fake.checks = Some("pending".to_string());
     fake.ci_base = Some(ProbeOutcome::Clear);
     assert_eq!(run(&fake, &req).word(), "held");
@@ -709,15 +726,188 @@ fn a_green_pr_whose_ci_predates_main_merges_main_in_and_waits_for_the_retest() {
 }
 
 #[test]
-fn ci_base_freshness_gates_the_chain() {
+fn a_self_held_slot_retests_the_base_at_most_once_then_merges_on_the_next_settle() {
+    // The observed bug (2026-10-17): on a base busy enough that a full CI
+    // run outlasts the next landing, retesting on every settle restarts
+    // CI forever and the slot never converges. One retest per hold; the
+    // settle after that merges on the real `gh pr merge` call instead.
     let fake = Fake {
-        ci_base: Some(ProbeOutcome::Inconclusive("gh unavailable".to_string())),
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
         ..clean()
     };
     let mut req = request(Effect::Merge);
     req.require_checks = true;
-    assert_eq!(run(&fake, &req).word(), "unknown");
+
+    let first = run(&fake, &req);
+    assert_eq!(first.word(), "held");
+    assert!(first.detail().contains("merged main into PR 7's branch"));
+    assert_eq!(fake.gh_calls.borrow().len(), 1);
+
+    // Base keeps moving (still ci_base_stale) and the retested head still
+    // reads green - the exact shape that looped forever before this fix.
+    fake.gh_calls.borrow_mut().clear();
+    let second = run(&fake, &req);
+    assert_eq!(second.word(), "merged", "{second:?}");
+    assert!(
+        fake.gh_calls.borrow().iter().all(|c| c[0] != "api"),
+        "a second settle must not retest the base again: {:?}",
+        fake.gh_calls.borrow()
+    );
+}
+
+#[test]
+fn a_failed_retest_still_counts_as_the_one_attempt_and_the_next_settle_relies_on_the_real_merge_check(
+) {
+    // `update-branch` can fail on a genuine conflict. Marking the attempt
+    // regardless of its own outcome keeps the loop bounded either way; the
+    // real merge call is the backstop that catches an actual conflict.
+    let mut fake = Fake {
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        gh_recovery_ok: Some(false),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let first = run(&fake, &req);
+    assert_eq!(first.word(), "held");
+    assert!(first.detail().contains("update-branch failed"));
+
+    fake.gh_ok = false;
+    fake.gh_output = "not mergeable (conflicts or base changed)".to_string();
+    let second = run(&fake, &req);
+    assert_eq!(second.word(), "failed", "{second:?}");
+    assert_eq!(
+        *fake.slot.borrow(),
+        None,
+        "a durable merge failure must free the slot"
+    );
+}
+
+#[test]
+fn a_proven_stale_pr_merges_without_folding_from_free_slot_or_self_held_alike() {
+    // The proven path of the slot-time rule: green head, merge tree into
+    // the current base clean, repo static step clean. The fold it replaces
+    // restarted a full CI run per settle and never converged on a base
+    // that moves faster than CI. Both slot states land the same way: the
+    // free-slot PR takes no slot, and the self-held PR's merge frees its
+    // own. No fold, no update-branch call.
+    let mut fake = Fake {
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+    assert!(fake.take_slot_calls.borrow().is_empty());
+    assert_eq!(*fake.slot.borrow(), None);
+    assert!(
+        fake.gh_calls.borrow().iter().all(|c| c[0] != "api"),
+        "a proven merge must not fold the base: {:?}",
+        fake.gh_calls.borrow()
+    );
+
+    // The holder path: the slot this PR already holds frees through the
+    // merge instead of feeding another retest.
+    fake = Fake {
+        slot: RefCell::new(Some(7)),
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 4 behind".to_string())),
+        ..clean()
+    };
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+    assert_eq!(*fake.slot.borrow(), None, "the merge frees the held slot");
+    assert!(fake.gh_calls.borrow().iter().all(|c| c[0] != "api"));
+}
+
+#[test]
+fn the_retest_cap_binds_in_the_legacy_slot_window() {
+    // The migration window can hold the live slot in the legacy repo-root
+    // store, and take_slot accepts a self-held legacy row without creating
+    // a primary one. The retest mark must land in the store the slot
+    // actually lives in, or the one-retest cap never engages and the old
+    // per-settle loop runs until the legacy lease ends.
+    let temp = tempfile::TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(init.success());
+
+    let current_root = temp.path().join("current");
+    with_claims_root(&current_root, || {
+        let key = slot_key("main");
+        assert!(matches!(
+            claims::acquire(
+                &key,
+                &slot_holder_key(7),
+                claims::AcquireOpts {
+                    root: Some(repo.clone()),
+                    pid_unavailable: true,
+                    ttl_ms: Some(MERGE_SLOT_TTL_MS),
+                    ..Default::default()
+                }
+            ),
+            claims::AcquireOutcome::Acquired(_)
+        ));
+
+        assert!(!RealProbes.slot_retested(&repo, "main", 7));
+        RealProbes.mark_slot_retested(&repo, "main", 7);
+        assert!(
+            RealProbes.slot_retested(&repo, "main", 7),
+            "the mark must reach the legacy store the self-held slot lives in"
+        );
+    });
+}
+
+#[test]
+fn a_proven_or_retested_stale_preview_reads_no_ci_base_stale_blocker() {
+    // Preview parity: the merge verb merges both shapes, so pr status may
+    // not hold them behind a fold that never runs.
+    let proven = Fake {
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        ..clean()
+    };
+    let req = preview_request(7);
+    assert!(preview_blockers(&proven, &req).is_empty());
+
+    let retested = Fake {
+        slot: RefCell::new(Some(7)),
+        slot_retested: RefCell::new(true),
+        ci_base: Some(ProbeOutcome::Refused("ci_base_stale: 3 behind".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
+        ..clean()
+    };
+    assert!(preview_blockers(&retested, &req).is_empty());
+}
+
+#[test]
+fn ci_base_freshness_gates_the_chain() {
+    let fake = Fake {
+        ci_base: Some(ProbeOutcome::Inconclusive("gh unavailable".to_string())),
+        merge_result: Some(ProbeOutcome::Inconclusive(
+            "merge result unreadable".to_string(),
+        )),
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "held");
+    assert!(outcome.detail().contains("retry later"));
     assert!(fake.gh_calls.borrow().is_empty());
+    assert!(fake.take_slot_calls.borrow().is_empty());
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
         fresh_ci: Some(false),

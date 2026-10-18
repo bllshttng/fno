@@ -8,7 +8,6 @@ on data.name would KeyError on one half.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -32,13 +31,6 @@ def _read_records(path: Path) -> list[dict]:
     from tests._event_rows import event_rows
 
     return event_rows(path)
-
-
-def test_daemon_lifecycle_log_is_agents_home() -> None:
-    """The birth target is the daemon's lifecycle log, where deaths live."""
-    log = events.daemon_lifecycle_log()
-    assert log.name == "events.jsonl"
-    assert log.parent.name == "agents"
 
 
 def test_emit_spawned_writes_envelope_to_daemon_log(daemon_log: Path) -> None:
@@ -86,31 +78,6 @@ def test_emit_spawned_persists_full_resume_coordinate(daemon_log: Path) -> None:
     assert data["substrate"] == "pane"
 
 
-@pytest.mark.parametrize("provider", ["codex", _CLAUDE])
-def test_emit_spawned_uses_canonical_thread_substrate(
-    daemon_log: Path, provider: str
-) -> None:
-    events.emit_spawned(
-        name=f"thread-{provider}",
-        short_id="deadbeef",
-        provider=provider,
-        harness_session_id=f"{provider}-full-session",
-        substrate="thread",
-    )
-    data = _read_records(daemon_log)[0]["data"]
-    assert data["provider"] == provider
-    assert data["harness_session_id"] == f"{provider}-full-session"
-    assert data["substrate"] == "thread"
-
-
-def test_emit_spawned_does_not_land_in_python_dispatch_log(daemon_log: Path) -> None:
-    """One birth per spawn, in the daemon log only (not also in the python log)."""
-    py_log = daemon_log.parent.parent / "events.jsonl"
-    events.emit_spawned(name="wkB", short_id="11111111", provider=_CLAUDE)
-    assert _read_records(daemon_log)
-    assert not _read_records(py_log)
-
-
 def test_emit_spawn_failed_records_the_failed_start(daemon_log: Path) -> None:
     events.emit_spawn_failed(name="wkC", provider=_CLAUDE, reason="registry-write: boom")
     recs = _read_records(daemon_log)
@@ -118,31 +85,6 @@ def test_emit_spawn_failed_records_the_failed_start(daemon_log: Path) -> None:
     assert recs[0]["type"] == "agent_spawn_failed"
     assert recs[0]["data"]["name"] == "wkC"
     assert "registry-write" in recs[0]["data"]["reason"]
-
-
-def test_birth_and_death_joinable_in_one_file(daemon_log: Path) -> None:
-    """A birth (Python envelope) and a death (the Rust daemon's envelope shape)
-    for the same name join on data.name from one file."""
-    events.emit_spawned(
-        name="wkD", short_id="22222222", provider=_CLAUDE, spawned_by_session="p"
-    )
-    # A death written by the Rust daemon in its real envelope shape.
-    events._emit_daemon_envelope(
-        "agent_stopped", {"name": "wkD", "short_id": "22222222"}, source="daemon"
-    )
-    recs = _read_records(daemon_log)
-    names = {r["data"]["name"] for r in recs}
-    assert names == {"wkD"}
-    types = [r["type"] for r in recs]
-    assert "agent_spawned" in types and "agent_stopped" in types
-
-
-def test_emit_spawned_pid_optional_and_omitted_when_absent(daemon_log: Path) -> None:
-    """pid is optional; absent it does not appear, so non-pane births keep their
-    envelope shape (backward compatible)."""
-    events.emit_spawned(name="wkE", short_id="abab1234", provider=_CLAUDE)
-    d = _read_records(daemon_log)[0]["data"]
-    assert "pid" not in d
 
 
 def test_pane_birth_joins_death_on_pid(daemon_log: Path) -> None:

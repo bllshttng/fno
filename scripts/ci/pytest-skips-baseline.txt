@@ -120,38 +120,22 @@ cli/tests/relay/test_roundtrip.py::test_live_deliver_via_daemon_worker::pytest.s
 cli/tests/relay/test_roundtrip.py::test_live_deliver_via_daemon_worker::pytest.skip  # on main before this ratchet
 cli/tests/scoreboard/test_scoreboard.py::test_live_ledger_shape_folds_without_crash::pytest.skip  # on main before this ratchet
 cli/tests/test_autonomy_status.py::test_name_codes_check_prints_rows_and_marker::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_agent_naming.py::test_max_len_matches_the_daemon_contract::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_archive_reads.py::_native_backlog::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_backlog_single_flight.py::iso::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_unresolved_names_the_witness::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_without_session_id_keeps_legacy_stale::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_coverage_gate.py::test_attestation_chain_reads_a_row_that_rotated_out::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_evals_bank.py::test_seed_bank_failure_fixtures_wall_clock_bound_never_cost::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_evals_bank.py::test_seed_bank_loads::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_evals_bank.py::test_seed_bank_new_eval_tasks_load::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_events_schema.py::_require_schema_loaded::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_evidence_refusal_remedy.py::test_law_set_remedy_is_served_by_the_native_front::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_executor_parity_vs_bash.py::test_locked_parity_vs_bash::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_executor_parity_vs_bash.py::test_surface_parity_vs_bash::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_hermetic.py::test_sccache_dir_is_pinned_to_the_mac_default::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_hooks_json_validity.py::test_every_manifest_hook_is_wired_and_pretooluse_launches::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::_build_worker_bin::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_apply_all_kills_through_the_real_command::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_control_live_listener_survives_both::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_control_live_listener_survives_both::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_orphan_named_in_dry_run_and_collected_under_apply_all::mark.skipif  # on main before this ratchet
-cli/tests/unit/test_keeper_lane.py::test_control_orphan_named_in_dry_run_and_collected_under_apply_all::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survives_both::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_control_registry_claimed_keeper_survives_both::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_keyless_smoke.py::test_keyless_dispatch_to_terminal_reports_effect_sequence::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_lane_experiment_contract.py::_require_seed_bank::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_launch_pick.py::TestVerbParity.test_the_argv_the_loop_shells_resolves_to_a_real_command::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_launch_pick.py::TestVerbParity.test_the_argv_the_loop_shells_resolves_to_a_real_command::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_cli.py::test_named_send_ruling_appends_dated_node_block_before_transport::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_mail_keeper_lane.py::test_the_journey_mail_send_delivers_to_a_live_keeper_hosted_thread::mark.xfail  # on main before this ratchet
 cli/tests/unit/test_mail_keeper_lane.py::test_the_journey_mail_send_delivers_to_a_live_keeper_hosted_thread::pytest.skip  # on main before this ratchet
@@ -180,17 +164,12 @@ cli/tests/unit/test_worktree_reap_equivalence.py::_gate_env::pytest.skip  # on m
 cli/tests/graph/test_batched_member_selection.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/integration/test_backlog_alias.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/integration/test_collision.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_backlog_receipt_readback.py::test_update_receipt_names_the_resolved_id::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_reopen.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_backlog_intake_door.py::_intake::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
-cli/tests/unit/test_backlog_intake_door.py::_add::pytest.skip  # native intake door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/unit/test_contain.py::_native_update::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_external_backend_refusals.py::test_tracker_owned_verbs_refuse_under_external::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_graph_provenance.py::test_origin_ac2_edge_update_never_rewrites_birth::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/unit/test_strand.py::test_canonical_done_force_reparents_to_nearest_live_ancestor::pytest.skip  # native update door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
 cli/tests/conftest.py::run_native_create::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary
-cli/tests/unit/test_inbox_path.py::test_capture_add_without_internal_never_materializes_internal::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
-cli/tests/unit/test_backlog_capture_tombstone.py::test_backlog_capture_hidden_but_invocable::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/integration/test_retro_land.py::test_inbox_default_appends_file::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/unit/test_backlog_capture_tombstone.py::_cap_native::pytest.skip  # native capture door: same dev-build dependency as run_native_create, same smoke-shard deletion
 cli/tests/integration/test_graph_concurrency.py::_run_backlog::pytest.skip  # native create door: the smoke shard deletes crates/fno-agents/target, and the subject of these assertions is that binary

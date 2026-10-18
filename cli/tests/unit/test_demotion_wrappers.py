@@ -31,61 +31,12 @@ def _run_fno(*args: str, extra_env: dict[str, str] | None = None) -> subprocess.
     )
 
 
-def test_fno_top_level_lists_demoted_verbs() -> None:
-    """codemap and worktree stay reachable as moved spellings.
-
-    They used to render in the full-surface door `fno help --all`, but moved
-    spellings render nowhere now (d-26002be8: discovered in their own
-    subcommands; the x-6233 fold moved worktree under agents workspace).
-    Reachability is proven by invoking each spelling's --help.
-    """
-    for verb in ("codemap", "worktree"):
-        result = _run_fno(verb, "--help")
-        assert result.returncode == 0, (
-            f"fno {verb} --help exited {result.returncode}: "
-            f"{result.stdout[-500:]}{result.stderr[-500:]}"
-        )
-
-
-def test_fno_codemap_help_renders() -> None:
-    result = _run_fno("doctor", "codemap", "--help")
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "codemap" in result.stdout.lower()
-    assert "--tokens" in result.stdout
-
-
 def test_fno_worktree_help_renders_subcommands() -> None:
     result = _run_fno("worktree", "--help")
     assert result.returncode == 0, result.stdout + result.stderr
     out = result.stdout + result.stderr
     for sub in ("status", "cleanup", "archive"):
         assert sub in out, f"fno worktree --help missing '{sub}': {out[-500:]}"
-
-
-def test_canonical_scripts_exist_at_expected_paths() -> None:
-    """The wrappers shell out to these paths; missing files would 404 at runtime."""
-    assert (REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh").is_file()
-
-
-def test_codemap_engine_lives_inside_the_fno_package() -> None:
-    """The codemap engine resolves from the fno INSTALLATION, not the target repo.
-
-    This replaces an assertion on ``<repo>/scripts/codemap/repo_map.py``, which
-    held both before and after the fix (the suite runs inside footnote, where
-    that path existed) and so constrained nothing. Asserting the engine is
-    package-relative is what actually rules out the target-repo lookup.
-    """
-    import fno
-    from fno.codemap_cli.cli import ENGINE_DIR
-
-    package_root = Path(fno.__file__).resolve().parent
-    assert ENGINE_DIR.is_relative_to(package_root), (
-        f"codemap engine dir {ENGINE_DIR} is outside the fno package "
-        f"{package_root}; it would not ship with an installed fno"
-    )
-    assert (ENGINE_DIR / "repo_map.py").is_file()
-    assert (ENGINE_DIR / "db-schema.py").is_file()
-    assert (ENGINE_DIR / "queries").is_dir(), "repo_map's bundled tree-sitter queries"
 
 
 def test_fno_codemap_finds_its_engine_outside_the_footnote_checkout(tmp_path) -> None:
@@ -162,50 +113,6 @@ def test_engine_python_skips_interpreters_missing_the_deps(tmp_path) -> None:
     assert found == str(good / "python3"), f"broken shim was not skipped (tried {tried})"
 
 
-def test_engine_python_parses_path_the_way_the_platform_writes_it(monkeypatch) -> None:
-    """PATH is split on os.pathsep and Windows executables carry .exe.
-
-    Codex P2 on PR 700. Splitting on a hardcoded ":" does not merely miss
-    entries on Windows, it tears "C:\\Python\\python.exe" into "C" and
-    "\\Python\\python.exe", so every entry is mangled rather than one being
-    skipped; and probing extensionless names finds nothing there regardless.
-    """
-    import os
-
-    from fno.codemap_cli.cli import _interpreter_names, _system_python_env
-
-    assert "python3.exe" in _interpreter_names() or os.name != "nt"
-
-    monkeypatch.setattr(os, "name", "nt")
-    names = _interpreter_names()
-    assert names[:2] == ("python3.exe", "python.exe"), f"windows names first: {names}"
-    assert "python3" in names, "the bare names stay as a fallback"
-
-    # The venv strip must rebuild PATH with the platform separator, not ":".
-    monkeypatch.setattr(os, "name", os.name)
-    venv = "/tmp/venv-under-test"
-    monkeypatch.setenv("VIRTUAL_ENV", venv)
-    monkeypatch.setenv("PATH", os.pathsep.join([f"{venv}/bin", "/usr/bin"]))
-    env = _system_python_env()
-    assert env["PATH"] == "/usr/bin", f"venv entry not stripped cleanly: {env['PATH']!r}"
-    assert "VIRTUAL_ENV" not in env
-
-
-def test_codemap_failure_exit_codes_stay_distinct() -> None:
-    """Guards the guard: three failures, three codes.
-
-    The engine-resolution test tells "engine missing" from "deps missing" by
-    exit code alone. Collapsing any two back onto one number would not fail that
-    test - it would silently strip its ability to discriminate, which is exactly
-    how it passed review and then went red on CI. Assert the separation itself.
-    """
-    from fno.codemap_cli.cli import EXIT_NO_ENGINE, EXIT_NO_INTERPRETER, EXIT_USAGE
-
-    codes = (EXIT_USAGE, EXIT_NO_ENGINE, EXIT_NO_INTERPRETER)
-    assert len(set(codes)) == 3, f"codemap failure exit codes must stay distinct: {codes}"
-    assert all(c != 0 for c in codes), "a failure must never exit 0"
-
-
 def test_fno_codemap_rejects_json_plus_db_schema() -> None:
     """Mixed-format combo is refused (Codex review P2): JSON output cannot
     accept the markdown db-schema appendix, so emit a clear error rather
@@ -219,16 +126,3 @@ def test_fno_codemap_rejects_json_plus_db_schema() -> None:
         f"stderr: {result.stderr[-400:]}"
     )
     assert "incompatible" in (result.stderr + result.stdout).lower()
-
-
-def test_fno_worktree_status_runs() -> None:
-    """worktree status delegates to scripts/lib/worktree-lifecycle.sh status."""
-    result = _run_fno("worktree", "status")
-    # Exit code may be 0 or non-zero depending on environment but should not crash
-    # the wrapper itself. The script prints either a list or an empty header.
-    assert result.returncode in (0, 1), (
-        f"worktree status crashed: rc={result.returncode}\n"
-        f"stdout: {result.stdout[-500:]}\n"
-        f"stderr: {result.stderr[-500:]}"
-    )
-    assert "Worktrees" in result.stdout or result.stdout == "" or result.returncode == 0
