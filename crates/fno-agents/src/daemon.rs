@@ -1931,7 +1931,7 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         Some("report") => run_blocking(ctx, req, handle_report).await,
         // SessionStart report: one thin per-harness hook posts the raw
         // payload; the registry holds id/transcript/source additively.
-        Some("session-report") => {
+        Some(crate::session_report::SESSION_REPORT_VERB) => {
             run_blocking(ctx, req, |ctx: &Ctx, req: &Request| {
                 crate::session_report::handle_session_report(&ctx.home, &ctx.emitter, req)
             })

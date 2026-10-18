@@ -43,6 +43,15 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const SPOOL_CAP_FRAMES: usize = 128;
 /// Raw hook payloads are small; refuse to read more off stdin.
 const MAX_PAYLOAD_BYTES: u64 = 64 * 1024;
+/// The daemon's verb for this report. The daemon arm matches this const and
+/// the client builds its method from it: the two spellings once drifted
+/// (`session_report` vs `session-report`), and every SessionStart report fell
+/// to the unknown-verb arm, so no adopt row was ever minted.
+pub const SESSION_REPORT_VERB: &str = "session-report";
+
+fn session_report_request(params: Value) -> Request {
+    Request::new(1, format!("agent.{SESSION_REPORT_VERB}"), params)
+}
 
 // ---------------------------------------------------------------------------
 // daemon side: agent.session_report
@@ -980,7 +989,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if params.get("origin_only").and_then(Value::as_bool) == Some(true) && record.is_none() {
         return 0;
     }
-    let req = Request::new(1, "agent.session_report", params);
+    let req = session_report_request(params);
     // FIFO: spooled frames go first, so a replayed startup report can never
     // regress the row behind the newer report this invocation carries. The
     // drain no-ops on an empty spool and keeps its frames when the daemon is
@@ -990,7 +999,15 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
         .await
     {
         Err(_) => false,
-        Ok(Ok(_)) => true,
+        Ok(Ok(resp)) => {
+            // A refusal is an answer, not a delivery failure: spooling it
+            // would replay the same refusal forever. Say it where the hook
+            // log keeps it.
+            if let crate::protocol::ResponsePayload::Err(e) = &resp.payload {
+                eprintln!("fno-agents: session-report refused: {}", e.message);
+            }
+            true
+        }
         Ok(Err(crate::client::ClientError::DaemonNotRunning)) => false,
         Ok(Err(crate::client::ClientError::DaemonUnresponsive { .. })) => false,
         Ok(Err(e)) => {
@@ -1025,7 +1042,7 @@ mod tests {
     }
 
     fn req(params: Value) -> Request {
-        Request::new(1, "agent.session_report", params)
+        session_report_request(params)
     }
 
     fn report_params(harness: &str, sid: &str, extra: Value) -> Value {
