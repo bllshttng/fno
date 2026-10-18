@@ -1,6 +1,6 @@
 # footnote readiness manifest. MEASURED AGAINST THE FNH TUI SOURCE, not a
 # live pane: fnh src/tui/view.rs draws the ask band and the busy line, and
-# a fnh TUI test pins both strings (fn-99c4 pane plan, 2026-10-17). The
+# a fnh TUI test pins both strings (the pane loop plan, 2026-10-17). The
 # draw strings are the TUI's own, not transcript content a reply could
 # print, which is why the regexes can pin them whole.
 #
