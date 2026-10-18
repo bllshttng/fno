@@ -1,6 +1,6 @@
 # fno agents — list + logs read surface
 
-Two read verbs sit on top of the registry substrate: `fno agents list` (registry roster + live status) and `fno agents logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both: `list` is the daemon's `agent.list` projection with `render_list_table` drawing the table, and `logs` is `run_logs` in `crates/fno-agents/src/client_verbs.rs` (claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport). The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too: on a checkout with no installed `fno-agents` binary the verb refuses with exit 127 instead of a second Python answer. Both verbs are pure-read - they never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
+Two read verbs sit on top of the registry substrate: `fno agents list` (registry roster + live status) and `fno agents logs <name>` (per-agent transcript tail). The `fno-agents` Rust client serves both. `list` comes from the daemon's `agent.list` projection, and `render_list_table` in `crates/fno-agents/src/bin/client.rs` draws the table. `logs` is `run_logs` in `crates/fno-agents/src/client_verbs.rs`: claude passthrough, codex tee tail, and `logs --follow` over the daemon's WebSocket `agent.logs` transport. The MODEL and PR cells come from `crates/fno-agents/src/list_row.rs`. The Python list lane is deleted, and the Python logs leg is deleted too. On a checkout with no installed `fno-agents` binary the verb refuses with exit 127 instead of a second Python answer. Both verbs are pure-read and never mutate the registry. This doc covers the design. The how-to lives in the [list/logs user guide](../guides/fno-agents-list-logs.md).
 
 Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md). Sibling: [fno-agents-followup.md](fno-agents-followup.md).
 
@@ -60,17 +60,17 @@ run_logs(rest, home)                        crates/fno-agents/src/client_verbs.r
 
 ### Streaming vs capture
 
-Claude `--follow` is an inherited-stdio passthrough: the child prints to the operator's terminal directly, and the parent ignores SIGINT for the duration of the wait so it survives to map the child's status. Ctrl-C is a clean stop (exit 0) on every provider.
+Claude `--follow` is an inherited-stdio passthrough. The child prints to the operator's terminal directly. The parent ignores SIGINT for the duration of the wait, so it survives to map the child's status. Ctrl-C is a clean stop (exit 0) on every provider.
 
 ### Follow-stream end frames
 
-The daemon-side `stream_follow` (crates/fno-agents/src/logs.rs) stats the file each poll and closes the stream with a structured end frame when:
+When a followed log file is truncated, rotated or removed, `stream_follow` in `crates/fno-agents/src/logs.rs` ends the stream with a structured end frame:
 
 - the file disappears (`stat` returns ENOENT) — atomic-rename rotation followed by old unlink
 - the inode changes — atomic-rename rotation where the new file is being written
 - size shrinks below the read offset — truncate-in-place rotation
 
-Without these checks, the stream would hang silently on every common log-rotation strategy. The operator gets a real diagnostic; re-running `logs --follow` attaches to the new file. The tests in `crates/fno-agents/src/logs.rs` prove the end frames; the one-shot bytes the Rust client prints are frozen in `crates/fno-agents/tests/golden/logs`.
+Without these checks the stream hangs silently on every common log-rotation strategy. The operator gets a real diagnostic. Re-running `logs --follow` attaches to the new file. The tests in `crates/fno-agents/src/logs.rs` prove the end frames. The one-shot bytes the Rust client prints are frozen in `crates/fno-agents/tests/golden/logs`.
 
 ## JSON output contract
 
