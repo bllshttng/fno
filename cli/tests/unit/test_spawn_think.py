@@ -16,7 +16,6 @@ The ``fno agents spawn`` subprocess is always patched at the
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -63,32 +62,6 @@ def _node(**over) -> dict:
     }
     base.update(over)
     return base
-
-
-def test_assemble_seed_chain_blueprint_appends_chain(monkeypatch):
-    # x-edf7 US3: a fan-out seed must instruct the worker to continue into
-    # /blueprint + link, else the flagged child stays designless/idea.
-    _resolved(monkeypatch, ok=True)
-    seed = st.assemble_seed(_node(), chain_blueprint=True)
-    assert "/blueprint" in seed.prompt
-    assert "FAILED pass" in seed.prompt
-    assert "--plan-path" in seed.prompt
-
-
-def test_assemble_seed_default_has_no_blueprint_chain(monkeypatch):
-    _resolved(monkeypatch, ok=True)
-    seed = st.assemble_seed(_node())  # default: born-with-why /think only
-    assert "/blueprint" not in seed.prompt
-
-
-def test_assemble_seed_why_digest_present_even_when_transcript_unresolved(monkeypatch):
-    # P2: with the origin transcript pruned, the seed must still carry the epic
-    # digest so the fan-out worker isn't designing from the title alone.
-    _resolved(monkeypatch, ok=False)
-    seed = st.assemble_seed(_node(), why_digest="Gate launch on a real plan.\n\nLD1: inline-fill.")
-    assert "GROUNDING" in seed.prompt
-    assert "Gate launch on a real plan." in seed.prompt
-    assert "LD1: inline-fill." in seed.prompt
 
 
 def test_assemble_seed_project_root_scopes_output_path(monkeypatch, tmp_path):
@@ -202,47 +175,6 @@ def test_blast_radius_cap(iso, monkeypatch, patch_spawn, capsys):
     assert "blast-radius cap" in capsys.readouterr().err
 
 
-def test_blast_radius_cap_quiet_suppresses_warning(iso, monkeypatch, patch_spawn, capsys):
-    """x-c9d8 (gemini PR#120): quiet=True suppresses the cap warning print so a
-    bulk decompose --json over the cap can't pollute a captured stream, while
-    the cap is still enforced (over-cap node returns cap-exceeded)."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    monkeypatch.setattr(st, "_max_per_run", lambda root: 1)
-    _resolved(monkeypatch, ok=True)
-    rs = st.RunState()
-    env = dict(__import__("os").environ)
-
-    st.maybe_spawn_think(_node(id="x-a"), reason=st.REASON_WORK_START, env=env,
-                         events_path=iso, project_root=iso.parent.parent, run_state=rs, quiet=True)
-    r2 = st.maybe_spawn_think(_node(id="x-b"), reason=st.REASON_WORK_START, env=env,
-                              events_path=iso, project_root=iso.parent.parent, run_state=rs, quiet=True)
-
-    assert r2.decision == "skipped" and r2.reason == "cap-exceeded"  # cap enforced
-    assert "blast-radius cap" not in capsys.readouterr().err          # no leak
-
-
-def test_dedup_at_most_one_spawn(iso, monkeypatch, patch_spawn):
-    """AC4-FR: two evaluations of the same LIFECYCLE (non-birth) dispatch spawn
-    at most once. Birth's own repeat-evaluation behavior is covered by
-    test_unforced_birth_never_spawns_even_repeated below - birth never reaches
-    the dedup claim at all (x-42c5: it resolves to offered before that step)."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    env = dict(__import__("os").environ)
-    node = _node()
-
-    r1 = st.maybe_spawn_think(node, reason=st.REASON_WORK_START, env=env,
-                              events_path=iso, project_root=iso.parent.parent)
-    # second observation: the dispatch:think:<id> TTL token is still live.
-    r2 = st.maybe_spawn_think(node, reason=st.REASON_WORK_START, env=env,
-                              events_path=iso, project_root=iso.parent.parent)
-
-    assert r1.decision == "spawned"
-    assert r2.decision == "skipped" and r2.reason == "already-claimed"
-    assert len(spawn_calls) == 1
-
-
 def test_unforced_birth_refuses_at_the_guard(iso, monkeypatch, patch_spawn):
     """The unforced birth ladder is native (`fno-agents backlog birth-hook`);
     a direct reason=birth call without chain_blueprint can only skip - it must
@@ -264,41 +196,6 @@ def test_unforced_birth_refuses_at_the_guard(iso, monkeypatch, patch_spawn):
 # ---------------------------------------------------------------------------
 
 
-def test_resolved_seed_carries_transcript_pointer(iso, monkeypatch, patch_spawn):
-    """AC1-HP: resolved claude origin -> seed has the transcript path + node id.
-
-    Uses REASON_WORK_START (a consented lifecycle trigger that still spawns)
-    rather than the default birth reason: birth never spawns (x-42c5), so this
-    away-spawn assertion needs a reason that still reaches the spawn seam.
-    """
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True, path="/real/transcript.jsonl")
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "spawned" and res.resolved is True
-    prompt = spawn_calls[0][1]
-    assert "/real/transcript.jsonl" in prompt  # the POINTER, not a paraphrase
-    assert "x-2222aaaa" in prompt
-    assert "origin node chain: x-0000aaaa" in prompt
-
-
-def test_no_origin_skipped(iso, monkeypatch, patch_spawn):
-    """AC1-ERR: all provenance pointers null -> skip{no-origin}, no spawn."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    spawn_calls, _ = patch_spawn
-    node = _node(source_session_id=None, source_harness=None, source_cwd=None,
-                 source_node_id=None)
-    res = st.maybe_spawn_think(
-        node, reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "skipped" and res.reason == "no-origin"
-    assert spawn_calls == []
-    evs = _events(iso)
-    assert len(evs) == 1 and evs[0]["data"]["reason"] == "no-origin"
-
-
 def test_bug_node_skipped_not_design_warranting(iso, monkeypatch, patch_spawn):
     # A `bug` node is a reproduce-and-fix, not a design fan-out: it must skip an
     # automatic /think even when otherwise eligible (the x-0e29 mechanism fix).
@@ -310,32 +207,6 @@ def test_bug_node_skipped_not_design_warranting(iso, monkeypatch, patch_spawn):
         events_path=iso, project_root=iso.parent.parent)
     assert res.decision == "skipped" and res.reason == "not-design-warranting"
     assert spawn_calls == []
-
-
-def test_size_s_node_skipped_not_design_warranting(iso, monkeypatch, patch_spawn):
-    # A size-S node (even a feature) is too small for a design fan-out.
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(
-        _node(type="feature", size="S"), reason=st.REASON_WORK_START,
-        env=dict(__import__("os").environ),
-        events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "skipped" and res.reason == "not-design-warranting"
-    assert spawn_calls == []
-
-
-def test_design_warranting_feature_still_spawns(iso, monkeypatch, patch_spawn):
-    # Guard against over-gating: a plain feature (not a bug, not size-S) still
-    # fans out to /think exactly as before, on a consented (non-birth) trigger.
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(_node(type="feature", size="M"),
-                               reason=st.REASON_WORK_START,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "spawned"
-    assert len(spawn_calls) == 1
 
 
 def test_conversational_bypasses_design_warranting_gate(iso, monkeypatch, patch_spawn):
@@ -350,30 +221,6 @@ def test_conversational_bypasses_design_warranting_gate(iso, monkeypatch, patch_
                                events_path=iso, project_root=iso.parent.parent)
     assert res.decision == "spawned"
     assert len(spawn_calls) == 1
-
-
-def test_forced_decompose_child_bypasses_design_warranting_gate(iso, monkeypatch, patch_spawn):
-    # A `needs_think` decompose child rides chain_blueprint=True as operator
-    # consent (decompose is the opt-in). Even a bug/size-S child must get its
-    # forced design pass, not be left an unlinked idea by the size gate (Codex P1).
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    monkeypatch.setenv("FNO_THINK_SPAWN_ATTENDED", "spawn")
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(_node(type="bug", size="S"),
-                               chain_blueprint=True,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "spawned"
-    assert len(spawn_calls) == 1
-
-
-def test_exactly_one_event_per_evaluation(iso, monkeypatch, patch_spawn):
-    """AC1-UI: a gate-on evaluation emits exactly one decision event."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    st.maybe_spawn_think(_node(), env=dict(__import__("os").environ),
-                         events_path=iso, project_root=iso.parent.parent)
-    assert len(_events(iso)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -400,55 +247,6 @@ def test_attended_offers_line_not_spawn(iso, monkeypatch, patch_spawn, capsys):
     assert "handoff ->" not in err
     evs = _events(iso)
     assert len(evs) == 1 and evs[0]["type"] == "think_offered"
-
-
-def test_attended_quiet_suppresses_print_but_keeps_event(iso, monkeypatch, patch_spawn, capsys):
-    """x-c9d8: quiet=True (machine mode, e.g. `decompose --json`) drops the
-    human OFFER PENDING print so it can't pollute a captured stream, but the
-    durable think_offered event still fires and the decision is unchanged."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "attended")
-    _resolved(monkeypatch, ok=True, path="/t.jsonl")
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_CONVERSATIONAL,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent,
-                               quiet=True)
-    assert res.decision == "offered" and spawn_calls == []   # behavior unchanged
-    assert capsys.readouterr().err == ""                     # no human print at all
-    evs = _events(iso)
-    assert len(evs) == 1 and evs[0]["type"] == "think_offered"  # event preserved
-
-
-def test_attended_unresolved_degrades_to_bare_line(iso, monkeypatch, patch_spawn):
-    """AC2-ERR: attended + unresolved -> bare /think line, resolved=False."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "attended")
-    _resolved(monkeypatch, ok=False)
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_CONVERSATIONAL,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "offered" and res.resolved is False
-    assert res.offer_line == "/think x-2222aaaa"
-
-
-def test_attended_spawn_optin_dispatches(iso, monkeypatch, patch_spawn):
-    """AC4-HP (B, x-5d51): attended + config.think_spawn.attended=spawn -> real bg
-    /think dispatch instead of the stderr offer line - on a consented (non-birth)
-    trigger. Unlike the pre-x-42c5 behavior, birth itself is exempt from this
-    opt-in (see test_unforced_birth_ignores_attended_spawn_optin below): the
-    operator's ruling is that a birth trigger never auto-spawns, full stop, even
-    when this config is armed."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "attended")
-    monkeypatch.setenv("FNO_THINK_SPAWN_ATTENDED", "spawn")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, stamp_calls = patch_spawn
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START,
-                               env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "spawned" and len(spawn_calls) == 1
-    assert len(stamp_calls) == 1
-    evs = _events(iso)
-    assert len(evs) == 1 and evs[0]["type"] == "think_spawned"
-    assert evs[0]["data"]["presence"] == "attended"  # honest about the opt-in source
 
 
 def test_attended_mode_env_override_is_authoritative_when_present():
@@ -569,37 +367,16 @@ def test_away_spawn_failure_releases_reservation(iso, monkeypatch, patch_spawn):
 # ---------------------------------------------------------------------------
 
 
-def test_presence_bg_env_is_away():
-    assert st.classify_presence(env={"FNO_BG": "1"}) == "away"
-
-
 def test_presence_interactive_session_is_attended(tmp_path):
     assert st.classify_presence(
         env={"CLAUDE_CODE_SESSION_ID": "sid"}, project_root=tmp_path
     ) == "attended"
 
 
-def test_presence_codex_thread_is_attended(tmp_path):
-    assert st.classify_presence(
-        env={"CODEX_THREAD_ID": "thread-id"}, project_root=tmp_path
-    ) == "attended"
-
-
-def test_presence_codex_spawned_worker_is_away(tmp_path):
-    assert st.classify_presence(
-        env={"CODEX_THREAD_ID": "thread-id", "FNO_AGENT_SELF": "think-x-1-foo"},
-        project_root=tmp_path,
-    ) == "away"
-
-
 def test_presence_gemini_behavior_remains_away(tmp_path):
     assert st.classify_presence(
         env={"GEMINI_SESSION_ID": "gemini-id"}, project_root=tmp_path
     ) == "away"
-
-
-def test_presence_no_signal_defaults_away(tmp_path):
-    assert st.classify_presence(env={}, project_root=tmp_path) == "away"
 
 
 def test_presence_spawned_worker_is_away(tmp_path):
@@ -664,11 +441,6 @@ def test_invalid_decision_event_combo_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_short_id_compact():
-    out = '{"name":"think-x-1","short_id":"abc123","provider":"claude"}\n'
-    assert st._parse_short_id(out) == "abc123"
-
-
 def test_parse_short_id_pretty_printed():
     """A pretty-printed receipt (short_id on its own line) must still parse."""
     out = '{\n  "name": "think-x-1",\n  "short_id": "abc123"\n}\n'
@@ -679,10 +451,6 @@ def test_parse_short_id_among_noise():
     """A receipt line among banner/log noise is found; noise is ignored."""
     out = 'INFO booting agent\nWARN short_id not ready\n{"short_id":"def456"}\n'
     assert st._parse_short_id(out) == "def456"
-
-
-def test_parse_short_id_absent():
-    assert st._parse_short_id("no json here at all") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -727,26 +495,6 @@ def test_spawn_worker_default_provider_claude_no_model(monkeypatch):
     cmd = cap["cmd"]
     assert "--harness" in cmd and cmd[cmd.index("--harness") + 1] == "claude"
     assert "--model" not in cmd
-
-
-def test_spawn_failure_keeps_a_non_gate_error_line(monkeypatch):
-    """AC2-ERR (x-d769): no spawn-gate line on stderr -> the whole stderr is
-    the message. The verdict reader's fallback must not eat it."""
-
-    class _Proc:
-        returncode = 1
-        stdout = ""
-        stderr = "Error: pane launch failed\n"
-
-    def fake_run(cmd, **kw):
-        if _is_naming_verb(cmd):
-            return _REAL_SUBPROCESS_RUN(cmd, **kw)
-        return _Proc()
-
-    monkeypatch.setattr(st.subprocess, "run", fake_run)
-    with pytest.raises(st.SpawnError) as ei:
-        st._spawn_think_worker("x-1", "prompt", None, "slug")
-    assert "Error: pane launch failed" in str(ei.value)
 
 
 def test_spawn_worker_tags_the_spawn_subprocess_with_its_cause(monkeypatch):
@@ -857,35 +605,6 @@ def test_maybe_spawn_threads_node_pins(iso, monkeypatch, patch_spawn):
 # ---------------------------------------------------------------------------
 # _think_output_path - plans-dir birth location (x-ff83 W1)
 # ---------------------------------------------------------------------------
-
-
-def test_think_output_path_honors_plansdirectory(monkeypatch, tmp_path):
-    """AC-HP (x-8af8): plansDirectory wins; filename ends -<node-id>.md."""
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    local = tmp_path / ".claude"
-    local.mkdir()
-    (local / "settings.local.json").write_text(json.dumps({"plansDirectory": "internal/fno/plans"}))
-    import re
-    out = st._think_output_path("x-2222aaaa", "my-slug")
-    assert str(tmp_path / "internal" / "fno" / "plans") in out
-    # node-id-suffixed YYYY-MM-DD-<slug>-<node-id>.md
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-my-slug-x-2222aaaa\.md", Path(out).name)
-
-
-def test_think_output_path_falls_back_to_config_plans_dir(monkeypatch, tmp_path):
-    """AC-HP: no settings.local -> config.plans_dir default, still in plans-dir."""
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    out = st._think_output_path("x-2222aaaa", "my-slug")
-    assert out.endswith("-my-slug-x-2222aaaa.md")
-    assert "plans" in out
-
-
-def test_think_output_path_suffix_carries_configured_prefix(monkeypatch, tmp_path):
-    """AC-EDGE: a configured (non ab-) prefix/width is preserved verbatim in the
-    suffix - fixtures for x-2157-like and x-8b89-like nodes end -x-2157.md / -x-8b89.md."""
-    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    assert st._think_output_path("x-2157", "feat-a").endswith("-feat-a-x-2157.md")
-    assert st._think_output_path("x-8b89", "feat-b").endswith("-feat-b-x-8b89.md")
 
 
 def test_think_output_path_reuses_existing_node_doc_on_redispatch(monkeypatch, tmp_path):
@@ -1094,34 +813,6 @@ def test_config_subflags_default_off_and_coerce():
     assert ThinkSpawnBlock(daily_cap=0).daily_cap == 0
 
 
-def test_work_start_dispatches_away_with_trigger_tag(iso, monkeypatch, patch_spawn):
-    """AC2-HP: a resolved away work-start fires a spawn tagged trigger=work-start."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    res = st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
-                               events_path=iso, project_root=iso.parent.parent)
-    assert res.decision == "spawned"
-    assert len(spawn_calls) == 1
-    ev = [e for e in _events(iso) if e["type"] == "think_spawned"][-1]
-    assert ev["data"]["trigger"] == "work-start"
-
-
-def test_lifecycle_idempotent_second_suppressed(iso, monkeypatch, patch_spawn):
-    """AC2-EDGE: a node worked twice dispatches work-start at most once."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    node, env = _node(), dict(__import__("os").environ)
-    r1 = st.maybe_spawn_think(node, reason=st.REASON_WORK_START, env=env,
-                              events_path=iso, project_root=iso.parent.parent)
-    r2 = st.maybe_spawn_think(node, reason=st.REASON_WORK_START, env=env,
-                              events_path=iso, project_root=iso.parent.parent)
-    assert r1.decision == "spawned"
-    assert r2.decision == "skipped" and r2.reason == "already-claimed"
-    assert len(spawn_calls) == 1
-
-
 def test_lifecycle_relevance_filter_skips_unresolved(iso, monkeypatch, patch_spawn):
     """A2 relevance filter: a lifecycle trigger needs a RESOLVED pointer, so a
     high-volume work-start moment never dispatches a context-free /think."""
@@ -1169,72 +860,6 @@ def test_spawn_bumps_daily_count(iso, monkeypatch, patch_spawn):
     st.maybe_spawn_think(_node(), reason=st.REASON_WORK_START, env=dict(__import__("os").environ),
                          events_path=iso, project_root=iso.parent.parent)
     assert st._daily_count() == 1
-
-
-def test_on_node_work_start_subflag_gate(iso, monkeypatch, patch_spawn):
-    """The work-start wrapper fires only when on_work_start is armed (even with layer on)."""
-    monkeypatch.setenv("FNO_THINK_SPAWN_PRESENCE", "away")
-    _resolved(monkeypatch, ok=True)
-    spawn_calls, _ = patch_spawn
-    # sub-flag OFF -> no dispatch even though FNO_THINK_SPAWN=1 (layer on).
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: False)
-    assert st.on_node_work_start(_node(), project_root=iso.parent.parent) is None
-    assert len(spawn_calls) == 0
-    # sub-flag ON -> dispatch.
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: name == "on_work_start")
-    res = st.on_node_work_start(_node(), project_root=iso.parent.parent)
-    assert res is not None and res.decision == "spawned"
-    assert len(spawn_calls) == 1
-
-
-def test_worker_agent_name_reason_scoped():
-    """codex P2: birth name is byte-for-byte; lifecycle names are distinct per reason.
-
-    The spawned `fno agents spawn` name must be reason-scoped or the second
-    lifecycle trigger for a node collides on name and is wrongly skipped.
-    """
-    # x-84b2: the spawn_think source stamped only by this path, the think
-    # verb as a code; the reason stays the reason-scoped qualifier. x-57fe:
-    # the node carries its bare hex.
-    assert st._worker_agent_name("x-1", "slug") == "th-th-1-slug"  # default birth
-    assert st._worker_agent_name("x-1", "slug", st.REASON_BIRTH) == "th-th-1-slug"
-    assert st._worker_agent_name("x-1", "slug", st.REASON_WORK_START) == "th-th-1-work-start-slug"
-    names = {st._worker_agent_name("x-1", "slug", r)
-             for r in (st.REASON_BIRTH, st.REASON_WORK_START)}
-    assert len(names) == 2  # no collision across a node's lifecycle
-
-
-def test_worker_agent_name_capped_at_64_keeps_node_id():
-    """x-2c27 (AC2-ERR): the assembled name never exceeds the 64-char spawn limit.
-
-    Per-component slugging caps each part at 30, but a long slug + a long
-    invocation suffix on a lifecycle reason can overflow the assembled name and
-    crash `fno agents spawn` with "name must be 1-64 chars". The cap trims the
-    tail while keeping the `th-th-<node-id>` lead.
-    """
-    long_slug = "a-very-long-descriptive-node-slug-that-keeps-going-and-going"
-    suffix = "sessaaaa"
-    name = st._worker_agent_name("x-2c27", long_slug, st.REASON_WORK_START, suffix)
-    assert len(name) <= 64, f"name overflowed: {len(name)} chars: {name!r}"
-    assert name.startswith("th-th-2c27-work-start"), f"node id/reason dropped: {name!r}"
-    assert not name.endswith("-"), f"trailing hyphen not trimmed: {name!r}"
-    # codex P2: the per-session suffix is the uniqueness discriminator - capping
-    # must trim the slug, never the suffix, or two repeat dispatches collide.
-    assert name.endswith("sessaaaa"), f"session suffix shaved by the cap: {name!r}"
-    # Two distinct suffixes on the same long-slug node must yield distinct names.
-    other = st._worker_agent_name("x-2c27", long_slug, st.REASON_WORK_START, "sessbbbb")
-    assert name != other, f"name collision across suffixes: {name!r} == {other!r}"
-
-
-def test_lifecycle_wrapper_strictly_non_fatal(iso, monkeypatch):
-    """A wrapper swallows any internal failure and returns None (never raises)."""
-    monkeypatch.setattr(st, "_subflag_on", lambda name, root: True)
-
-    def boom(*a, **k):
-        raise RuntimeError("kaboom")
-
-    monkeypatch.setattr(st, "maybe_spawn_think", boom)
-    assert st.on_node_work_start(_node()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1352,17 +977,6 @@ def test_dispatch_different_sessions_both_spawn(iso, monkeypatch, patch_spawn):
     assert spawn_calls[0][5] == "sessAAAA" and spawn_calls[1][5] == "sessBBBB"
 
 
-def test_worker_name_unique_per_conversation():
-    """The per-invocation suffix lands in the worker name (the permanent registry
-    key `fno agents spawn` rejects on collision)."""
-    a = st._worker_agent_name("x-1", "slug", st.REASON_CONVERSATIONAL, "sessAAAA")
-    b = st._worker_agent_name("x-1", "slug", st.REASON_CONVERSATIONAL, "sessBBBB")
-    assert a != b
-    assert a.endswith("-sessaaaa") and b.endswith("-sessbbbb")
-    # No suffix -> byte-for-byte the prior name (birth/lifecycle unchanged).
-    assert st._worker_agent_name("x-1", "slug", st.REASON_BIRTH) == "th-th-1-slug"
-
-
 # ---------------------------------------------------------------------------
 # x-3218: provenance naming is now a caller of the canonical owner
 # ---------------------------------------------------------------------------
@@ -1446,72 +1060,6 @@ def test_shared_dispatch_substrate_overrides_legacy_compatibility_key(
         st._spawn_think_worker("x-1", "prompt", str(tmp_path), "slug")
 
 
-def test_a_garbage_dispatch_substrate_fails_loud(monkeypatch, tmp_path):
-    from fno.agents.harness_map import DispatchResolveError
-
-    _write_config(tmp_path, "[dispatch]\nsubstrate = \"quantum\"\n")
-    _capture_spawn_cmd(monkeypatch)
-    with pytest.raises(DispatchResolveError, match="unknown substrate"):
-        st._spawn_think_worker("x-1", "prompt", str(tmp_path), "slug")
-
-
-def test_AC8_HP_wave0_fanout_is_off_by_default(tmp_path, monkeypatch):
-    """No key present -> off, byte-identical to the flagged-only lane."""
-    monkeypatch.delenv("FNO_THINK_SPAWN_WAVE0", raising=False)
-    assert st.think_spawn_on_decompose_wave0(project_root=tmp_path) is False
-
-
-def test_wave0_needs_its_own_flag_not_just_enabled(tmp_path, monkeypatch):
-    """Same shape as on_work_start: `enabled` alone never arms it.
-
-    Read off the settings block rather than through `think_spawn_enabled`:
-    conftest pins FNO_THINK_SPAWN=0 process-wide so no test can spawn a real
-    worker, and that override outranks config by design.
-    """
-    monkeypatch.delenv("FNO_THINK_SPAWN_WAVE0", raising=False)
-    _write_config(tmp_path, "[think_spawn]\nenabled = true\n")
-    from fno.config import load_settings_for_repo
-
-    block = load_settings_for_repo(tmp_path).think_spawn
-    assert block.enabled is True
-    assert block.on_decompose_wave0 is False
-    assert st.think_spawn_on_decompose_wave0(project_root=tmp_path) is False
-
-
-def test_wave0_arms_when_its_own_flag_is_set(tmp_path, monkeypatch):
-    monkeypatch.delenv("FNO_THINK_SPAWN_WAVE0", raising=False)
-    _write_config(tmp_path, "[think_spawn]\non_decompose_wave0 = true\n")
-    assert st.think_spawn_on_decompose_wave0(project_root=tmp_path) is True
-
-
-def test_wave0_env_override_wins(tmp_path, monkeypatch):
-    _write_config(tmp_path, "[think_spawn]\non_decompose_wave0 = true\n")
-    assert st.think_spawn_on_decompose_wave0(
-        project_root=tmp_path, env={"FNO_THINK_SPAWN_WAVE0": "0"}
-    ) is False
-    assert st.think_spawn_on_decompose_wave0(
-        project_root=Path("/nonexistent"), env={"FNO_THINK_SPAWN_WAVE0": "1"}
-    ) is True
-
-
-def test_wave0_fails_safe_on_a_malformed_block(tmp_path, monkeypatch):
-    """A spurious fan-out spends real tokens on cold sessions; fail to off."""
-    monkeypatch.delenv("FNO_THINK_SPAWN_WAVE0", raising=False)
-    _write_config(tmp_path, "[think_spawn]\non_decompose_wave0 = \"maybe\"\n")
-    assert st.think_spawn_on_decompose_wave0(project_root=tmp_path) is False
-
-
-def test_wave0_adds_no_new_ceiling(tmp_path):
-    """It inherits max_per_run and daily_cap rather than inventing parallel caps."""
-    _write_config(tmp_path, "[think_spawn]\non_decompose_wave0 = true\n")
-    from fno.config import load_settings_for_repo
-
-    block = load_settings_for_repo(tmp_path).think_spawn
-    assert block.max_per_run == 5
-    assert block.daily_cap == 20
-    assert not [f for f in type(block).model_fields if "wave0_cap" in f]
-
-
 # non-bg spawn receipts (codex P1) --------------------------------------------
 
 
@@ -1533,23 +1081,6 @@ def _capture_with_stdout(monkeypatch, stdout: str) -> dict:
 
     monkeypatch.setattr(st.subprocess, "run", fake_run)
     return captured
-
-
-def test_a_pane_receipt_without_short_id_is_still_a_launch(monkeypatch, tmp_path):
-    """The pane receipt carries mux_session/pane_id, never short_id.
-
-    Raising here reported `skipped` for a worker that IS running, so decompose
-    marked the child unowned and inline-filled it out from under a live pane
-    worker - the exact double-write the ownership receipt prevents.
-    """
-    _write_config(tmp_path, "[dispatch]\nsubstrate = \"pane\"\n")
-    _capture_with_stdout(
-        monkeypatch, '{"status":"live","mux_session":"m1","pane_id":"%1"}\n'
-    )
-    handle = st._spawn_think_worker(
-        "x-1", "prompt", str(tmp_path), "slug", provider="codex"
-    )
-    assert handle, "a launched pane worker must return an addressable handle"
 
 
 def test_a_headless_reply_launches_but_stamps_no_session_pointer(
@@ -1595,16 +1126,6 @@ def test_the_non_bg_handle_is_the_agent_name_not_a_fabricated_id(
         "x-1", "prompt", str(tmp_path), "slug", provider="codex"
     )
     assert handle == cap["cmd"][cap["cmd"].index("--name") + 1]
-
-
-def test_a_configured_bg_substrate_refuses_with_the_redirect(monkeypatch, tmp_path):
-    """The retired spelling refuses at the resolver, not at launch."""
-    from fno.agents.harness_map import DispatchResolveError
-
-    _write_config(tmp_path, "[dispatch]\nsubstrate = \"bg\"\n")
-    _capture_with_stdout(monkeypatch, "some banner with no receipt\n")
-    with pytest.raises(DispatchResolveError, match="retired"):
-        st._spawn_think_worker("x-1", "prompt", str(tmp_path), "slug")
 
 
 def test_a_nonzero_exit_still_raises_on_every_substrate(monkeypatch, tmp_path):

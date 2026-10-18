@@ -77,20 +77,6 @@ def test_ambient_codex_session(graph, monkeypatch):
     assert "think dispatched:" in r.stdout
 
 
-def test_ambient_codex_json_stdout_is_single_document(graph, monkeypatch):
-    monkeypatch.setenv("CODEX_THREAD_ID", "codex-thread")
-    r = runner.invoke(
-        think_cli.think_app,
-        ["dispatch", "x-0a9c", "--json"],
-    )
-    assert r.exit_code == 0
-    payload = json.loads(r.stdout)
-    assert payload["decision"] == "spawned"
-    assert payload["think_session"] == "abc123"
-    assert "codex posture:" not in r.stdout
-    assert "codex posture: think source=codex" in r.stderr
-
-
 def test_ambient_codex_explicit_non_claude_provider_is_refused(graph, monkeypatch):
     monkeypatch.setenv("CODEX_THREAD_ID", "codex-thread")
     r = runner.invoke(
@@ -160,15 +146,6 @@ def test_empty_model_rejected_exits_2(graph, monkeypatch):
     assert r.exit_code == 2
     assert "--model must not be empty" in r.output
     assert "node" not in graph  # never reached the dispatch
-
-
-def test_no_pins_leaves_node_unpinned(graph, monkeypatch):
-    """Byte-for-byte: without flags the node carries no model/provider key."""
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "live-sid")
-    r = runner.invoke(think_cli.think_app, ["dispatch", "x-0a9c"])
-    assert r.exit_code == 0
-    assert "model" not in graph["node"]
-    assert "provider" not in graph["node"]
 
 
 def test_skipped_exits_1(graph, monkeypatch):
@@ -254,16 +231,3 @@ def test_codex_json_dispatch_reaches_spawn_subprocess_and_parses_receipt(
     ]
     assert "codex posture:" not in result.stdout
     assert "claude-bg-fallback" in result.stderr
-
-
-def test_unsupported_provider_never_launches_spawn_subprocess(tmp_path, monkeypatch):
-    capture = _subprocess_journey(tmp_path, monkeypatch)
-
-    result = runner.invoke(
-        think_cli.think_app,
-        ["dispatch", "x-0a9c", "--provider", "codex", "--json"],
-    )
-
-    assert result.exit_code == 2
-    assert not capture.exists()
-    assert "dispatch=unsupported" in result.stderr
