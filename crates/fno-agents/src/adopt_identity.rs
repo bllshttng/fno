@@ -154,7 +154,8 @@ pub(crate) fn synthesize_and_adopt(
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        return Ok((e.clone(), fno_id, AdoptSource::Registry));
+        let value = refresh_bg_substrate(&registry_path, e).unwrap_or_else(|| e.clone());
+        return Ok((value, fno_id, AdoptSource::Registry));
     }
     // 2. Target manifest.
     if let Ok(Some(id)) = find_manifest_for_session(session_id) {
@@ -169,6 +170,57 @@ pub(crate) fn synthesize_and_adopt(
         Ok(None) => Err(AdoptError::NoEvidence),
         Err(msg) => Err(AdoptError::Io(msg)),
     }
+}
+
+/// A registered claude row that now runs as a live `claude --bg` job gets its
+/// substrate/pid refreshed in place, same rule as the SessionStart report
+/// (`session_report.rs::handle_session_report`), through the same
+/// `to_claude_thread` the explicit pane-to-thread conversion already uses (so
+/// the stale mux pane ref and the old child's `pid_start_time` are cleared
+/// too, not just the two fields this adopt path happens to touch). `None`
+/// (no write, caller keeps the row it already has) when the row is not a
+/// claude row, is not in a live-ish status (a terminal row is never
+/// reanimated by a roster hit on a recycled pid or short id), carries no
+/// session id, the roster shows nothing live for it, or the row already
+/// reads exactly this substrate and pid.
+fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Value> {
+    if e.get("harness").and_then(Value::as_str) != Some("claude") {
+        return None;
+    }
+    let status_liveish = e
+        .get("status")
+        .and_then(|v| serde_json::from_value::<crate::AgentStatus>(v.clone()).ok())
+        .is_some_and(|status| crate::spawn_gate::status_is_liveish(&status));
+    if !status_liveish {
+        return None;
+    }
+    let harness_session_id = e.get("harness_session_id").and_then(Value::as_str)?;
+    let short = crate::client_verbs::derived_short_id(harness_session_id);
+    // Union, not ambient-only: same isolated-account gap as the SessionStart
+    // refresh in `session_report.rs`.
+    let pid = crate::claude_roster::read_all_agents_union().live_bg_pid(&short)?;
+    if e.get("substrate").and_then(Value::as_str) == Some("thread")
+        && e.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
+    {
+        return None;
+    }
+    let harness_session_id = harness_session_id.to_string();
+    crate::state::update_registry(registry_path, |reg| {
+        reg.entries
+            .iter_mut()
+            .find(|row| row.harness_session_id.as_deref() == Some(harness_session_id.as_str()))
+            .and_then(|row| {
+                crate::convert::client_resume::to_claude_thread(
+                    row,
+                    &short,
+                    Some(pid),
+                    &harness_session_id,
+                );
+                serde_json::to_value(&*row).ok()
+            })
+    })
+    .ok()
+    .flatten()
 }
 
 /// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal_scoped`
@@ -260,5 +312,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows.len(), 1, "only the revived session journals");
+    }
+
+    #[test]
+    fn adopt_of_an_existing_claude_row_refreshes_substrate_and_pid() {
+        let _guard = crate::path_test_guard();
+        let dir = adopt_tmpdir();
+        let home = AgentsHome::at(dir.path());
+        std::fs::create_dir_all(home.root()).unwrap();
+        let sid = "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d";
+        let reg = serde_json::json!({
+            "schema_version": 1,
+            "agents": [{
+                "name": "w1",
+                "cwd": "/repo",
+                "status": "live",
+                "created_at": "2026-09-26T00:00:00Z",
+                "harness": "claude",
+                "harness_session_id": sid,
+                "short_id": "3228ccad",
+                "substrate": "pane",
+                "log_path": null
+            }]
+        });
+        std::fs::write(
+            home.registry_json(),
+            serde_json::to_vec_pretty(&reg).unwrap(),
+        )
+        .unwrap();
+
+        let bin_dir = tempfile::tempdir().unwrap();
+        crate::write_exec_stub(
+            bin_dir.path(),
+            "claude",
+            "#!/bin/sh\nprintf '%s\\n' '[{\"kind\":\"background\",\"short_id\":\"3228ccad\",\"state\":\"working\",\"pid\":9999}]'\n",
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(bin_dir.path()));
+
+        let result = crate::adopt_identity::synthesize_and_adopt(sid, &home, false);
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let (row, _fno_id, source) = result.expect("registry row resolves");
+        assert_eq!(source, AdoptSource::Registry);
+        assert_eq!(row["substrate"], "thread");
+        assert_eq!(row["pid"], 9999);
+
+        let persisted = crate::state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(persisted.entries[0].substrate.as_deref(), Some("thread"));
+        assert_eq!(persisted.entries[0].pid, Some(9999));
     }
 }
