@@ -999,7 +999,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
              --lens decisions traces every ruling in the window through four questions\n\
              from records, never model judgment: who issued it, where its authority\n\
-             came from (witnessed_operator, law_citation, reign_event, relayed, or\n\
+             came from (witnessed_operator, law_citation, succession_event, relayed, or\n\
              unsourced - a ruling that reads as the user's word with no witnessed\n\
              submit behind it reads unsourced), whether anything enforced it (a\n\
              decision_span guard in the journal, else prose_only), and whether the\n\

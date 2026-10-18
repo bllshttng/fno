@@ -31,8 +31,8 @@ pub(crate) enum Authority {
     WitnessedOperator,
     /// The ruling cites a law-lane decision id in its text or rationale.
     LawCitation,
-    /// The issuing session appears in a `reign_checkin` succession event.
-    ReignEvent,
+    /// The issuing session appears in the succession check-in journal event.
+    SuccessionEvent,
     /// The authority arrived through an agent/team/role/beastmode lane:
     /// coordination, never law.
     Relayed,
@@ -46,7 +46,7 @@ impl Authority {
         match self {
             Authority::WitnessedOperator => "witnessed_operator",
             Authority::LawCitation => "law_citation",
-            Authority::ReignEvent => "reign_event",
+            Authority::SuccessionEvent => "succession_event",
             Authority::Relayed => "relayed",
             Authority::Unsourced => "unsourced",
         }
@@ -55,12 +55,12 @@ impl Authority {
 
 /// Classify one ruling's authority from its records. `authority` is the
 /// row's `authority_source`; `witnessed` whether the issuing session has a
-/// witnessed submit; `reign_hit` whether the session appears in a
-/// `reign_checkin` event; `cited_law` whether the text cites a law-lane id.
+/// witnessed submit; `succession_hit` whether the session appears in a
+/// succession check-in event; `cited_law` whether the text cites a law-lane id.
 pub(crate) fn classify_authority(
     authority: &str,
     witnessed: bool,
-    reign_hit: bool,
+    succession_hit: bool,
     cited_law: bool,
 ) -> Authority {
     if authority == "operator" || authority == "chat_attested" {
@@ -72,8 +72,8 @@ pub(crate) fn classify_authority(
             Authority::Unsourced
         };
     }
-    if reign_hit {
-        return Authority::ReignEvent;
+    if succession_hit {
+        return Authority::SuccessionEvent;
     }
     if cited_law {
         return Authority::LawCitation;
@@ -114,18 +114,23 @@ pub(crate) fn extract_decision_ids(text: &str) -> Vec<String> {
     out
 }
 
-/// Sessions named by `reign_checkin` journal rows: the row's `session`
+/// Sessions named by the succession check-in journal rows: the row's `session`
 /// data field, or an envelope source that is itself session-shaped. An
-/// issuer absent from this set reads no crown authority; the class never
+/// issuer absent from this set reads no succession grant; the class never
 /// infers one.
-fn reign_sessions(journal: &Path) -> HashSet<String> {
-    let text = crate::event_store::journal_text(journal, &["reign_checkin"]);
+fn succession_sessions(journal: &Path) -> HashSet<String> {
+    let text = crate::event_store::journal_text(
+        journal,
+        &[crate::role_migration::SUCCESSION_CHECKIN_EVENT],
+    );
     let mut out = HashSet::new();
     for line in text.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(Value::as_str) != Some("reign_checkin") {
+        if v.get("type").and_then(Value::as_str)
+            != Some(crate::role_migration::SUCCESSION_CHECKIN_EVENT)
+        {
             continue;
         }
         if let Some(session) = v.pointer("/data/session").and_then(Value::as_str) {
@@ -276,7 +281,7 @@ fn mail_hops(rows: &[crate::provenance::BusRow]) -> (Vec<MailHop>, usize) {
 fn lens_rows(
     rows: &[Value],
     witness: &SubmitIndex,
-    reign: &HashSet<String>,
+    succession: &HashSet<String>,
     span_lines: &[&str],
     cutoff: Option<u64>,
 ) -> (Vec<LensRow>, usize, usize) {
@@ -320,11 +325,11 @@ fn lens_rows(
             Some(secs) => witness.has_submit_near(&issuer, secs),
             None => false,
         };
-        let reign_hit = reign.contains(&issuer);
+        let succession_hit = succession.contains(&issuer);
         let authority = classify_authority(
             authority_src,
             witnessed,
-            reign_hit,
+            succession_hit,
             cites_law(row, &law_ids),
         );
         let span = enforcement_span(id, span_lines);
@@ -372,7 +377,7 @@ pub fn run_lens(days: u64, json: bool) -> i32 {
         }
     };
     let witness = SubmitIndex::load(&journal);
-    let reign = reign_sessions(&journal);
+    let succession = succession_sessions(&journal);
     // Guard spans land in the project journal (emit_span's target), not the
     // agents-home journal the submit witness reads.
     let span_journal = crate::law_match::project_events_journal();
@@ -387,7 +392,8 @@ pub fn run_lens(days: u64, json: bool) -> i32 {
             .unwrap_or(0);
         Some(now.saturating_sub(days * 86_400))
     };
-    let (rulings, unsourced, prose_only) = lens_rows(&raw, &witness, &reign, &span_lines, cutoff);
+    let (rulings, unsourced, prose_only) =
+        lens_rows(&raw, &witness, &succession, &span_lines, cutoff);
     let bus = crate::provenance::BusIndex::load(&crate::intel::bus_log_path(
         &home
             .root()
@@ -502,7 +508,7 @@ mod tests {
         let a = classify_authority("beastmode", false, false, false);
         assert_eq!(a, Authority::Relayed);
         let a = classify_authority("agent", false, true, false);
-        assert_eq!(a, Authority::ReignEvent);
+        assert_eq!(a, Authority::SuccessionEvent);
         let a = classify_authority("agent", false, false, true);
         assert_eq!(a, Authority::LawCitation);
         let a = classify_authority("", false, false, false);
@@ -584,8 +590,8 @@ mod tests {
         ];
         // An empty witness index: no session has a submit.
         let witness = SubmitIndex::empty();
-        let reign = HashSet::new();
-        let (out, unsourced, prose_only) = lens_rows(&rows, &witness, &reign, &[], None);
+        let succession = HashSet::new();
+        let (out, unsourced, prose_only) = lens_rows(&rows, &witness, &succession, &[], None);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].authority, "unsourced");
         assert_eq!(out[1].authority, "relayed");
@@ -608,8 +614,8 @@ mod tests {
             ),
         ];
         let witness = SubmitIndex::empty();
-        let reign = HashSet::new();
-        let (out, _u, _p) = lens_rows(&rows, &witness, &reign, &[], None);
+        let succession = HashSet::new();
+        let (out, _u, _p) = lens_rows(&rows, &witness, &succession, &[], None);
         // d-law00001: operator authority, no witness -> unsourced even in the law lane.
         assert_eq!(out[1].authority, "unsourced");
         // The citing row: agent lane, cites a law-lane id -> law_citation.
